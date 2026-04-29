@@ -13,7 +13,14 @@ class TestEnsureModelLoaded:
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     def test_calls_load_when_model_not_loaded(self, mock_load, mock_status):
-        """Verify load_model is called when model not in loaded_models list."""
+        """Verify load_model is called when model not in loaded_models list.
+
+        Unknown models (not in MODELS registry) default to ctx_size=32768
+        so ChatAgent's >7K-token system prompt isn't truncated by Lemonade's
+        default 4096 ctx — the silent-empty-stream regression that blocked
+        gaia-lite. See _chat_helpers._maybe_load_expected_model + the
+        matching log line in lemonade_client._ensure_model_loaded.
+        """
         # Setup
         client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(

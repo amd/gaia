@@ -393,7 +393,10 @@ def _canonical_agent_type(agent_type: str) -> str:
     registry = _agent_registry
     if registry is None:
         return agent_type
-    return registry.canonical_id(agent_type)
+    try:
+        return registry.canonical_id(agent_type)
+    except Exception:  # pragma: no cover — defensive; canonical_id is pure
+        return agent_type
 
 
 def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):

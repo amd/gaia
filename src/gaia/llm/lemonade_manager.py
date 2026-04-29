@@ -26,6 +26,8 @@ from gaia.logger import get_logger
 # ``DEFAULT_CONTEXT_SIZE`` from this module. Single source of truth lives
 # in ``gaia.llm.lemonade_client``.
 __all__ = ["DEFAULT_CONTEXT_SIZE", "LemonadeManager", "MessageType"]
+# Lemonade v10.1.0+ default port (was 8000 in v10.0.x). PR #865 bumped the
+# minimum supported version, so 13305 is the right default everywhere.
 DEFAULT_LEMONADE_URL = "http://localhost:13305"
 
 
