@@ -87,18 +87,26 @@ class GovernedAgentMixin:
     ) -> None:
         # Prefer the structured config if supplied; fall back to the
         # per-kwarg form so both styles work.
+        # Deep-copy the inner lists so callers cannot mutate the agent's
+        # risk-tag table after construction by holding onto the original
+        # reference (e.g. ``tags = ["review"]; agent = MyAgent(...,
+        # governance_risk_tags={"foo": tags}); tags.append("blocked")``).
         if governance is not None:
             self.governance_adapter = governance.adapter
             self._governance_actor_id = governance.actor_id
             self._governance_workflow_id = governance.workflow_id
-            self._governance_risk_tags = dict(governance.risk_tags)
+            self._governance_risk_tags = {
+                k: list(v) for k, v in governance.risk_tags.items()
+            }
             self._governance_callback = governance.callback
             self._governance_reviewer = governance.reviewer
         else:
             self.governance_adapter = governance_adapter
             self._governance_actor_id = governance_actor_id
             self._governance_workflow_id = governance_workflow_id
-            self._governance_risk_tags = dict(governance_risk_tags or {})
+            self._governance_risk_tags = {
+                k: list(v) for k, v in (governance_risk_tags or {}).items()
+            }
             self._governance_callback = governance_callback
             self._governance_reviewer = governance_reviewer
         super().__init__(*args, **kwargs)

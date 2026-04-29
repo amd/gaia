@@ -81,13 +81,20 @@ class JsonlReceiptService:
         return record.receipt_id
 
     def get_receipt(self, receipt_id: str) -> ReceiptRecord:
-        if receipt_id in self._cache:
-            return self._cache[receipt_id]
+        with self._lock:
+            cached = self._cache.get(receipt_id)
+        if cached is not None:
+            return cached
         # Cold-read path: scan the log. O(n) but acceptable for audit
-        # queries and avoids loading the whole log eagerly.
+        # queries and avoids loading the whole log eagerly. The scan
+        # itself does not hold the lock — the JSONL file is append-only
+        # and `issue_receipt` flushes line-aligned writes — but the
+        # cache install must re-enter the lock so it does not race
+        # with concurrent issuers.
         for record in self._read_all():
             if record.receipt_id == receipt_id:
-                self._cache[receipt_id] = record
+                with self._lock:
+                    self._cache[receipt_id] = record
                 return record
         raise GaiaGovernanceError(f"receipt not found: {receipt_id}")
 
@@ -103,8 +110,13 @@ class JsonlReceiptService:
                 try:
                     data = json.loads(stripped)
                     yield ReceiptRecord(**{k: v for k, v in data.items() if k in known})
-                except (json.JSONDecodeError, TypeError, KeyError):
-                    pass  # Skip malformed or schema-mismatched lines.
+                except (json.JSONDecodeError, TypeError, KeyError) as exc:
+                    # Skip malformed or schema-mismatched lines, but leave
+                    # a breadcrumb for an operator chasing a missing receipt.
+                    logger.debug(
+                        "receipt log: skipping unreadable line (%s)",
+                        type(exc).__name__,
+                    )
                 except Exception:  # pylint: disable=broad-exception-caught
                     logger.warning(
                         "receipt log: unexpected error deserializing line; skipping",

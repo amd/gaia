@@ -3,15 +3,13 @@
 """Static PolicyBinding reference implementation.
 
 Swap for constitutional-swarm's PolicyBinding once the policy control
-plane is in place. The receipt issuer depends on this to stamp
-policy-version + constitution-hash onto every decision.
+plane is in place. The receipt issuer reads ``current_version()`` to
+stamp policy-version + constitution-hash onto every decision.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
-
-from .schemas import PolicyVersionRef, ReceiptRecord, utc_now_iso
+from .schemas import PolicyVersionRef, utc_now_iso
 
 
 class StaticPolicyBindingService:
@@ -28,13 +26,3 @@ class StaticPolicyBindingService:
 
     def current_version(self) -> PolicyVersionRef:
         return self._current
-
-    def bind_receipt(self, record: ReceiptRecord) -> ReceiptRecord:
-        return replace(
-            record,
-            policy_version=self._current.version,
-            metadata={
-                **record.metadata,
-                "constitution_hash": self._current.constitution_hash,
-            },
-        )

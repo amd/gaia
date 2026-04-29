@@ -144,6 +144,6 @@ All four are `@runtime_checkable` Protocols — no inheritance required.
 - Policy control plane; `PolicyBindingProtocol` is static in PR 1.
 - Attestation / trust routing.
 - Precedent memory or validator marketplace.
-- Plan-step / multi-agent workflow transitions (the
-  `workflow_mapper` helper is a forward-compatibility seam for when
-  the base agent starts emitting those events).
+- Plan-step / multi-agent workflow transitions. The mixin only intercepts
+  tool calls today; broader workflow events will arrive in a follow-up PR
+  along with the mapper that turns them into `WorkflowTransition`s.

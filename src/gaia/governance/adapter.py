@@ -41,6 +41,9 @@ def _qualified_type_name(value: Any) -> str:
 
 def _canonical_json_value(value: Any, seen: set[int] | None = None) -> Any:
     """Return a deterministic JSON-safe representation for receipt evidence."""
+    # ``bool`` is checked before ``int`` because bool is a subclass of int —
+    # without the explicit ordering, ``True`` would be canonicalized as ``1``
+    # and lose its type identity in the receipt envelope.
     if value is None or isinstance(value, (str, bool)):
         return value
     if isinstance(value, int):
