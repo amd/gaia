@@ -67,6 +67,22 @@ class TestImports:
             runner, "timezone"
         ), "runner.py is missing 'from datetime import timezone'"
 
+    def test_acquire_eval_lock_windows_noop(self, monkeypatch):
+        """When fcntl is unavailable (Windows), the lock context manager
+        must yield immediately without touching the filesystem.
+
+        Locally we simulate the Windows path by monkeypatching
+        ``runner.fcntl`` to ``None`` — the same state the conditional
+        import produces on win32. Without this guard the eval suite
+        crashes at module load on every Windows runner (#802).
+        """
+        from gaia.eval import runner
+
+        monkeypatch.setattr(runner, "fcntl", None)
+        # Should yield without raising and without opening the lockfile.
+        with runner._acquire_eval_lock():
+            pass
+
 
 class TestAgentEvalScorecard:
     """Tests for the agent eval scorecard module."""

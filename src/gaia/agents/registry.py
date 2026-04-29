@@ -214,6 +214,15 @@ class AgentRegistry:
         else:
             _GAIA_LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Qwen3.5-4B-GGUF"]
 
+        # Memory floor for the gaia-lite agent. Gemma 4 E4B / Qwen3.5-4B Q4_K_M
+        # weights are ~2.5–2.7 GB on disk; add KV-cache for a 32K context window
+        # plus runtime overhead → 5 GB is the comfortable load floor. Below
+        # this the UI surfaces a Memory Warning so the user isn't surprised
+        # by a load failure or heavy swapping mid-session. Update the constant
+        # (not just the registration) if the preferred model list grows a
+        # bigger checkpoint, so the rationale stays adjacent to the number.
+        _GAIA_LITE_MIN_MEMORY_GB = 5.0
+
         def gaia_lite_factory(**kwargs):
             from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
@@ -245,10 +254,7 @@ class AgentRegistry:
                 factory=gaia_lite_factory,
                 agent_dir=None,
                 models=_GAIA_LITE_MODELS,
-                # Gemma 4 E4B Q4 GGUF weights are ~2.7 GB; add KV-cache +
-                # runtime headroom → 5 GB is the comfortable floor. Below
-                # this the UI warns that load may fail or swap heavily.
-                min_memory_gb=5.0,
+                min_memory_gb=_GAIA_LITE_MIN_MEMORY_GB,
             )
         )
         logger.info(

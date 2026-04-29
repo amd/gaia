@@ -17,7 +17,6 @@ Usage:
 
 import contextlib
 import errno
-import fcntl
 import functools
 import json
 import logging
@@ -32,6 +31,14 @@ from pathlib import Path
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# fcntl is POSIX-only — on Windows the eval lock degrades to a no-op (the
+# Lemonade race the lock guards against doesn't happen on a contributor's
+# Windows box, where Lemonade Server isn't typically running concurrent evals).
+if sys.platform == "win32":
+    fcntl = None  # type: ignore[assignment]
+else:
+    import fcntl  # type: ignore[no-redef]
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 EVAL_DIR = REPO_ROOT / "eval"
@@ -90,6 +97,12 @@ def _acquire_eval_lock():
     PID has exited) are reclaimed automatically.
     """
     if os.environ.get(_LOCK_ENV_BYPASS) == "1":
+        yield
+        return
+
+    # Windows: fcntl is unavailable — degrade to a no-op (same shape as the
+    # OSError-on-/tmp short-circuit below).
+    if fcntl is None:
         yield
         return
 

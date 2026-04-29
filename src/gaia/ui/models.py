@@ -47,7 +47,11 @@ class SystemStatus(BaseModel):
     model_loaded: Optional[str] = None
     embedding_model_loaded: bool = False
     disk_space_gb: float = 0.0
-    memory_available_gb: float = 0.0
+    # Optional so the UI can distinguish "psutil reported zero" (unlikely but
+    # possible on a thrashing host) from "we never populated this field".
+    # Memory-warning banners must skip rendering when this is None — otherwise
+    # any agent declaring ``min_memory_gb > 0`` would appear to be over budget.
+    memory_available_gb: Optional[float] = None
     initialized: bool = False
     version: str = _gaia_version
     # Extended Lemonade info (settings modal)

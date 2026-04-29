@@ -117,7 +117,7 @@ export interface SystemStatus {
     model_loaded: string | null;
     embedding_model_loaded: boolean;
     disk_space_gb: number;
-    memory_available_gb: number;
+    memory_available_gb: number | null;
     initialized: boolean;
     version: string;
     // Extended Lemonade info

@@ -262,7 +262,7 @@ class LemonadeProvider(LLMClient):
         # friendly message. Raw payload is preserved on the exception
         # for diagnostic logging.
         if not isinstance(response, dict) or "choices" not in response:
-            classified, is_err = _classify_lemonade_response(
+            classified, _is_err = _classify_lemonade_response(
                 response if isinstance(response, dict) else {}
             )
             if classified is not None:

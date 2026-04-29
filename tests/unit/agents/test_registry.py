@@ -12,6 +12,7 @@ import platform
 import sys
 import textwrap
 import warnings
+from unittest.mock import patch
 
 import pytest
 

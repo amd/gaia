@@ -131,11 +131,9 @@ def _classify_chat_exception(exc: BaseException):
         # If the textual error mentions a small n_ctx, the model was
         # loaded with the wrong context size — reload via pre-flight
         # will fix it, so make the error retryable.
-        import re
-
-        m = re.search(r"context size \((\d+) tokens?\)", text)
+        m = _re.search(r"context size \((\d+) tokens?\)", text)
         if not m:
-            m = re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", text)
+            m = _re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", text)
         if m:
             try:
                 n_ctx = int(m.group(1))
@@ -391,10 +389,7 @@ def _canonical_agent_type(agent_type: str) -> str:
     registry = _agent_registry
     if registry is None:
         return agent_type
-    try:
-        return registry.canonical_id(agent_type)
-    except Exception:  # pragma: no cover — defensive; canonical_id is pure
-        return agent_type
+    return registry.canonical_id(agent_type)
 
 
 def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):

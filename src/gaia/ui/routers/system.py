@@ -610,6 +610,17 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         status.memory_available_gb = round(mem.available / (1024**3), 1)
     except ImportError:
         pass
+    except Exception as exc:
+        # psutil is installed but the syscall failed — seen in containers
+        # under tight seccomp policies, on read-only /proc, etc. Leaving the
+        # field as None (rather than aborting the whole status endpoint) lets
+        # the modal suppress its memory-warning banner instead of rendering
+        # a misleading "0 GB available" panel. Logged loudly so the cause is
+        # traceable rather than silently degraded.
+        logger.warning(
+            "psutil.virtual_memory() failed (%s); memory_available_gb stays None",
+            exc,
+        )
 
     # Initialized check
     init_marker = Path.home() / ".gaia" / "chat" / "initialized"
@@ -769,9 +780,10 @@ async def update_settings(
 
     Setting ``custom_model`` to an **empty string** clears the override
     and reverts to the default model. Sending ``null`` (or omitting the
-    field) is a no-op because Pydantic cannot distinguish an explicit
-    ``null`` from an unset field — callers wanting to clear must send
-    ``""``.
+    field) is a no-op — by GAIA convention only explicit ``""`` clears.
+    Pydantic *can* distinguish an explicit ``null`` from an unset field
+    via ``model_fields_set``; we don't lean on that distinction here so
+    clients have a single, simple rule (omit to keep, ``""`` to clear).
     """
     if request.custom_model is not None:
         value = request.custom_model.strip() if request.custom_model else None

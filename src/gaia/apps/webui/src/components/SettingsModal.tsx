@@ -38,7 +38,7 @@ export function SettingsModal() {
                     model: s.model_loaded || 'none',
                     embedding: s.embedding_model_loaded ? 'yes' : 'no',
                     disk: `${s.disk_space_gb}GB free`,
-                    memory: `${s.memory_available_gb}GB available`,
+                    memory: s.memory_available_gb != null ? `${s.memory_available_gb}GB available` : 'unknown',
                 });
                 if (!s.lemonade_running) {
                     log.system.warn('Lemonade Server is NOT running.');
@@ -234,7 +234,11 @@ export function SettingsModal() {
                                         ok={status.disk_space_gb > 5}
                                         hint={!status.model_loaded && status.disk_space_gb < 30 ? `Models require ~25 GB — only ${status.disk_space_gb} GB available` : undefined}
                                     />
-                                    <StatusRow label="Memory" value={`${status.memory_available_gb} GB available`} ok={status.memory_available_gb > 2} />
+                                    <StatusRow
+                                        label="Memory"
+                                        value={status.memory_available_gb != null ? `${status.memory_available_gb} GB available` : 'unknown'}
+                                        ok={status.memory_available_gb != null && status.memory_available_gb > 2}
+                                    />
                                     {status.processor_name && (
                                         <StatusRow
                                             label="Processor"
@@ -435,9 +439,10 @@ export function SettingsModal() {
                     </section>
 
                     {/* Memory Warnings */}
-                    {status && (() => {
+                    {status && status.memory_available_gb != null && (() => {
+                        const available = status.memory_available_gb;
                         const warnings = agents.filter(
-                            (a) => a.min_memory_gb != null && a.min_memory_gb > status.memory_available_gb,
+                            (a) => a.min_memory_gb != null && a.min_memory_gb > available,
                         );
                         if (warnings.length === 0) return null;
                         return (
