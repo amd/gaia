@@ -1,0 +1,26 @@
+# ORCH-20: SSE Streaming - Bridge Broadcast
+# Proves: SSE bridge fans out events to all connected subscribers
+# Source: routers/orchestrator.py:46 - OrchestratorSSEBridge
+# Feature: SSE Streaming (Phase 2)
+
+$ python -m pytest tests/unit/orchestration/test_orchestrator_api.py::TestSSEStream::test_sse_bridge_broadcast -v
+
+Result:
+  TestSSEStream::test_sse_bridge_broadcast PASSED
+
+Verified:
+  1. Subscribe returns asyncio.Queue
+  2. Broadcast event delivered to queue within 1 second
+  3. Event type and data correctly transmitted
+  4. Unsubscribe removes queue from subscriber set
+
+Event Types Broadcast:
+  - orchestrator_start, orchestrator_complete, orchestrator_error
+  - objective_start, objective_complete, objective_failed
+  - cycle_complete, phase_complete
+  - orchestrator_paused, orchestrator_resumed
+
+Bridge Properties:
+  - Max queue size: 1000 events per client
+  - Dropped events logged when queue full
+  - Thread-safe via asyncio.Lock

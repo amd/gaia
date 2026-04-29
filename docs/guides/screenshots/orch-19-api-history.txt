@@ -1,0 +1,22 @@
+# ORCH-19: REST API - Execution History Endpoint
+# Proves: GET /api/v1/orchestrator/history returns paginated execution history
+# Source: routers/orchestrator.py:352 - get_execution_history()
+# Feature: REST API Layer (Phase 1)
+
+$ curl http://localhost:4200/api/v1/orchestrator/history
+
+Response (200 OK):
+{
+    "history": [],
+    "total": 0,
+    "limit": 20,
+    "offset": 0
+}
+
+Returns execution records in reverse chronological order (newest first).
+Supports pagination via limit (1-200, default 20) and offset (default 0).
+
+After orchestrator run, history entries contain:
+  - cycle: execution cycle number
+  - objective_id: which objective was processed
+  - success: boolean result

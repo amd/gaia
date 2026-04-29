@@ -1,0 +1,26 @@
+# ORCH-13: Worktree Lifecycle - Worktree Cleanup
+# Proves: Worktree directory removed, git branch retained after objective completes
+# Source: engine.py:1338 - _cleanup_worktree()
+# Feature: Worktree Lifecycle (Phase 4D)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestWorktreeLifecycle::test_cleanup_worktree_success -v
+
+Result:
+  TestWorktreeLifecycle::test_cleanup_worktree_success PASSED
+  1 passed in 0.84s
+
+Test Setup:
+  1. Create worktree for obj-001
+  2. Verify .gaia/worktrees/obj-001/ exists
+  3. Call _cleanup_worktree(branch, "obj-001")
+  4. Verify directory removed
+
+Assertions Verified:
+  - cleanup result == True (successful cleanup)
+  - worktree_path.exists() == False (directory removed)
+  - Git branch preserved (not deleted, available for review)
+
+Cleanup Sequence:
+  1. Remove worktree directory
+  2. Keep branch for potential PR creation
+  3. Update state tracking

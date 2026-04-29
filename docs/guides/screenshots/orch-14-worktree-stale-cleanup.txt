@@ -1,0 +1,26 @@
+# ORCH-14: Worktree Lifecycle - Stale Worktree Cleanup
+# Proves: All leftover obj/ worktrees removed at orchestrator run start
+# Source: engine.py:1402 - _cleanup_all_stale_worktrees()
+# Feature: Worktree Lifecycle (Phase 4D)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestWorktreeLifecycle::test_cleanup_stale_worktrees -v
+
+Result:
+  TestWorktreeLifecycle::test_cleanup_stale_worktrees PASSED
+  1 passed in 0.84s
+
+Test Setup:
+  1. Initialize git repo
+  2. Manually create 2 stale worktrees via git worktree add
+     - obj/obj-001-stale-task-one
+     - obj/obj-002-stale-task-two
+  3. Verify both directories exist
+  4. Call _cleanup_all_stale_worktrees()
+
+Assertions Verified:
+  - Both worktree directories removed (exists() == False)
+  - Only obj/ worktrees removed (other worktrees preserved)
+  - Cleanup runs before new worktrees are created
+
+Purpose: Prevents accumulation of orphaned worktrees from
+crashed or interrupted runs.

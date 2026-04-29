@@ -1,0 +1,19 @@
+# ORCH-07: Conflict Detection - No Overlap (False Negative Prevention)
+# Proves: No false positives when objectives edit disjoint files
+# Source: engine.py:1155 - _detect_level_conflicts()
+# Feature: Conflict Detection (Phase 4B)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestConflictDetection::test_detect_conflicts_no_overlap -v
+
+Result:
+  TestConflictDetection::test_detect_conflicts_no_overlap PASSED
+  1 passed in 0.21s
+
+Test Setup:
+  obj-001 edits: ['src/module_a.py']
+  obj-002 edits: ['src/module_b.py']
+  No shared files -> no conflict expected
+
+Assertion: conflicts == []
+Verified: GitSupervisor.detect_changed_files called exactly 2 times
+Conclusion: Disjoint file sets correctly produce empty conflict list

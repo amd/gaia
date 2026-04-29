@@ -1,0 +1,23 @@
+# ORCH-04: Parallel Execution - Configuration Flags
+# Proves: OrchestratorConfig supports parallel execution, rollback, and hook serialization flags
+# Source: engine.py:168 - OrchestratorConfig dataclass
+# Feature: Parallel Execution Engine (Phase 4A)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestOrchestratorConfigParallel -v
+
+Result:
+  TestOrchestratorConfigParallel::test_parallel_defaults PASSED
+  TestOrchestratorConfigParallel::test_parallel_explicit PASSED
+  2 passed in 0.26s
+
+Verified Config Defaults:
+  enable_parallel_execution = False   (opt-in for backward compatibility)
+  max_parallel_objectives   = 10      (concurrency limit)
+  serialize_hooks           = True    (thread-safe hook execution)
+  enable_rollback           = True    (automatic git rollback on failure)
+
+Verified Explicit Configuration:
+  enable_parallel_execution = True
+  max_parallel_objectives   = 5
+  serialize_hooks           = False
+  enable_rollback           = False

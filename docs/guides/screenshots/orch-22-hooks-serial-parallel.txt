@@ -1,0 +1,24 @@
+# ORCH-22: Hook Serialization - Parallel Mode with Lock
+# Proves: Hooks fire with asyncio.Lock when serialize_hooks=True
+# Source: engine.py - _hook_lock acquisition in parallel mode
+# Feature: Hook Serialization (Phase 3)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestHookSerialization::test_hooks_fire_in_parallel_mode -v
+
+Result:
+  TestHookSerialization::test_hooks_fire_in_parallel_mode PASSED
+  1 passed in 0.15s
+
+Test Setup:
+  serialize_hooks = True (default)
+  2 objectives executed in parallel
+  Test hook registered on OBJECTIVE_START event
+
+Assertions Verified:
+  - OBJECTIVE_START event fired (captured in fired_events)
+  - Hook executed for each objective in parallel mode
+  - _hook_lock serializes hook execution (prevents race conditions)
+
+Purpose: When serialize_hooks=True, hook execution is protected
+by asyncio.Lock, ensuring thread-safe access to shared resources
+during parallel objective execution.

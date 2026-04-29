@@ -1,0 +1,24 @@
+# ORCH-12: Worktree Lifecycle - Branch and Worktree Creation
+# Proves: Creates git branch and worktree directory for each objective
+# Source: engine.py:1239 - _create_worktree_for_objective()
+# Feature: Worktree Lifecycle (Phase 4D)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestWorktreeLifecycle::test_create_worktree_for_objective -v
+
+Result:
+  TestWorktreeLifecycle::test_create_worktree_for_objective PASSED
+  1 passed in 0.84s
+
+Test Setup:
+  Git repo initialized in temp directory
+  Single objective: obj-001 (Initialize Project)
+
+Assertions Verified:
+  - Branch created with pattern: "obj/obj-001-initialize-project"
+  - Branch registered in state.objective_branches
+  - Worktree directory exists: .gaia/worktrees/obj-001/
+  - Worktree is a valid directory (is_dir() == True)
+
+Branch Naming Convention:
+  Pattern: obj/{objective_id}-{slugified-title}
+  Example: obj/obj-001-initialize-project

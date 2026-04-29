@@ -1,0 +1,12 @@
+{
+    "objective_id": "obj-001",
+    "title": "Initialize Project",
+    "description": "Set up the project structure and configuration files",
+    "phase": "PLANNING",
+    "status": "queued",
+    "priority": 1,
+    "dependencies": [],
+    "artifacts": [],
+    "branch": null,
+    "error_message": null
+}

@@ -1,0 +1,28 @@
+{
+    "objectives": [
+        {
+            "objective_id": "obj-001",
+            "title": "Initialize Project",
+            "phase": "PLANNING",
+            "status": "queued",
+            "priority": 1
+        },
+        {
+            "objective_id": "obj-002",
+            "title": "Build Core Module",
+            "phase": "DEVELOPMENT",
+            "status": "queued",
+            "priority": 2
+        },
+        {
+            "objective_id": "obj-003",
+            "title": "Write Tests",
+            "phase": "QUALITY",
+            "status": "queued",
+            "priority": 3
+        }
+    ],
+    "total": 5,
+    "limit": 3,
+    "offset": 0
+}

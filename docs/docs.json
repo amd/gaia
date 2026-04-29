@@ -77,7 +77,8 @@
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health",
-                  "guides/pipeline"
+                  "guides/pipeline",
+                  "guides/orchestration"
                 ]
               },
               {

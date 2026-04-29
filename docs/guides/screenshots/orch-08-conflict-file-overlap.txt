@@ -1,0 +1,24 @@
+# ORCH-08: Conflict Detection - File Overlap (Positive Detection)
+# Proves: Correctly identifies when parallel objectives modify the same file
+# Source: engine.py:1155 - _detect_level_conflicts()
+# Feature: Conflict Detection (Phase 4B)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestConflictDetection::test_detect_conflicts_file_overlap -v
+
+Result:
+  TestConflictDetection::test_detect_conflicts_file_overlap PASSED
+  1 passed in 0.21s
+
+Test Setup:
+  obj-001 edits: ['src/shared.py', 'src/module_a.py']
+  obj-002 edits: ['src/shared.py', 'src/module_b.py']
+  Shared file: src/shared.py -> conflict expected
+
+Assertions Verified:
+  - len(conflicts) == 1 (exactly one conflict report)
+  - conflicting_objective_ids == {'obj-001', 'obj-002'}
+  - affected_files == {'src/shared.py'} (intersection correctly computed)
+  - timestamp is populated (auto-generated)
+
+Integration: Conflict report triggers supervisor REMEDIATE verdict
+(see test_evaluate_level_with_conflicts)

@@ -1,0 +1,39 @@
+# ORCH-03: Parallel Execution - Level Partitioning (Kahn Algorithm)
+# Proves: Dependency graph correctly partitions objectives into parallel-executable levels
+# Source: models.py:605 - DependencyGraph.partition_into_levels()
+# Feature: Parallel Execution Engine (Phase 4A)
+
+$ python -c "
+from gaia.orchestration import ProjectOrchestrator
+from gaia.orchestration.models import DependencyGraph, Objective, ProjectObjectives
+
+objectives = [
+    Objective(objective_id='obj-001', title='Initialize Project', phase='PLANNING'),
+    Objective(objective_id='obj-002', title='Build Core Module', phase='DEVELOPMENT', dependencies=['obj-001']),
+    Objective(objective_id='obj-003', title='Write Tests', phase='QUALITY', dependencies=['obj-002']),
+    Objective(objective_id='obj-004', title='Design UI Components', phase='DEVELOPMENT', dependencies=['obj-001']),
+    Objective(objective_id='obj-005', title='Integration Testing', phase='QUALITY', dependencies=['obj-002', 'obj-004']),
+]
+project = ProjectObjectives(project_id='demo-guide', objectives=objectives)
+graph = DependencyGraph(objectives)
+levels = graph.partition_into_levels()
+"
+
+Output:
+  Project: demo-guide
+  Total objectives: 5
+  Partition levels: 3
+
+    Level 0: ['obj-001']
+             -> No dependencies, can start immediately
+    Level 1: ['obj-004', 'obj-002']
+             -> Parallel execution: obj-002 and obj-004 run concurrently
+    Level 2: ['obj-005', 'obj-003']
+             -> Max concurrency: 4 (configurable via max_parallel_objectives)
+
+  Dependency edges:
+    obj-001 <- (no dependencies, root)
+    obj-002 <- ['obj-001']
+    obj-003 <- ['obj-002']
+    obj-004 <- ['obj-001']
+    obj-005 <- ['obj-002', 'obj-004']

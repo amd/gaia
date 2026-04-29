@@ -1,0 +1,25 @@
+# ORCH-23: Hook Serialization - No Lock When Disabled
+# Proves: No lock acquisition when serialize_hooks=False
+# Source: engine.py - conditional lock acquisition based on serialize_hooks
+# Feature: Hook Serialization (Phase 3)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestHookSerialization::test_hooks_fire_without_serialization_mixed -v
+
+Result:
+  TestHookSerialization::test_hooks_fire_without_serialization_mixed PASSED
+  1 passed in 0.15s
+
+Test Setup:
+  serialize_hooks = False (explicitly disabled)
+  Hook returns halt_pipeline=True for obj-001
+  2 objectives: obj-001 halted, obj-002 succeeds
+
+Assertions Verified:
+  - obj-001 status: BLOCKED (hook halted execution)
+  - obj-002 status: COMPLETED (not affected by halt)
+  - objectives_processed == 1, objectives_failed == 1
+  - _hook_lock.__aenter__ NOT called (no serialization)
+
+Purpose: When serialize_hooks=False, hooks execute without lock
+overhead, providing faster execution at the cost of potential
+race conditions. Useful for read-only hooks.

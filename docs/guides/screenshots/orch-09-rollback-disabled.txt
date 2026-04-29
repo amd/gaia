@@ -1,0 +1,20 @@
+# ORCH-09: Rollback Mechanism - Disabled (No-Op When Feature Off)
+# Proves: Rollback returns 0 and does nothing when enable_rollback=False
+# Source: engine.py:1533 - _rollback_failed_objectives()
+# Feature: Rollback Mechanism (Phase 4C)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestRollback::test_rollback_disabled -v
+
+Result:
+  TestRollback::test_rollback_disabled PASSED
+  1 passed in 0.24s
+
+Test Setup:
+  enable_rollback = False
+  2 objectives: obj-001 (root), obj-002 (depends on obj-001)
+  Both objectives fail
+
+Assertions Verified:
+  - rolled_back == 0 (no rollback attempted)
+  - objectives_failed >= 1 (failures still recorded)
+  - No GitSupervisor.rollback() calls made

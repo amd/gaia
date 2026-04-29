@@ -1,0 +1,30 @@
+# ORCH-16: REST API - Orchestrator State Endpoint
+# Proves: GET /api/v1/orchestrator/state returns state + project summary
+# Source: routers/orchestrator.py:161 - get_orchestrator_state()
+# Feature: REST API Layer (Phase 1)
+
+$ curl http://localhost:4200/api/v1/orchestrator/state
+
+Response (200 OK):
+{
+    "orchestrator_state": {
+        "paused": false,
+        "cycle_count": 0,
+        "objectives_processed": 0,
+        "objectives_failed": 0,
+        "execution_history": [],
+        "objective_branches": {}
+    },
+    "project_summary": {
+        "project_id": "demo-guide",
+        "total_objectives": 5,
+        "completed": 0,
+        "failed": 0,
+        "in_progress": 0,
+        "queued": 5,
+        "completion_rate": 0.0
+    }
+}
+
+Includes supervisor_state when supervisor is enabled.
+Returns 503 when orchestrator not initialized.

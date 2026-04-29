@@ -1,0 +1,26 @@
+# ORCH-17: REST API - Objectives List Endpoint
+# Proves: GET /api/v1/orchestrator/objectives returns paginated objectives
+# Source: routers/orchestrator.py:265 - list_objectives()
+# Feature: REST API Layer (Phase 1)
+
+$ curl http://localhost:4200/api/v1/orchestrator/objectives
+
+Response (200 OK):
+{
+    "objectives": [
+        {"objective_id": "obj-001", "title": "Initialize Project", "phase": "PLANNING", "status": "queued", "priority": 1},
+        {"objective_id": "obj-002", "title": "Build Core Module", "phase": "DEVELOPMENT", "status": "queued", "priority": 2},
+        {"objective_id": "obj-003", "title": "Write Tests", "phase": "QUALITY", "status": "queued", "priority": 3},
+        {"objective_id": "obj-004", "title": "Design UI Components", "phase": "DEVELOPMENT", "status": "queued", "priority": 2},
+        {"objective_id": "obj-005", "title": "Integration Testing", "phase": "QUALITY", "status": "queued", "priority": 4}
+    ],
+    "total": 5,
+    "limit": 50,
+    "offset": 0
+}
+
+Supports query parameters:
+  - phase: Filter by phase name (e.g., ?phase=DEVELOPMENT)
+  - status: Filter by status (e.g., ?status=queued)
+  - limit: Max results (1-200, default 50)
+  - offset: Skip N results (default 0)

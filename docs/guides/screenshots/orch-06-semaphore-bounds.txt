@@ -1,0 +1,24 @@
+# ORCH-06: Parallel Execution - Semaphore Bounds Enforcement
+# Proves: max_parallel_objectives correctly limits concurrent execution
+# Source: engine.py:1062 - _bounded() semaphore wrapper
+# Feature: Parallel Execution Engine (Phase 4A)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestSemaphoreBounds -v
+
+Result:
+  TestSemaphoreBounds::test_semaphore_bounds_concurrent_executions PASSED
+  TestSemaphoreBounds::test_semaphore_serializes_at_one PASSED
+  2 passed in 0.67s
+
+Test 1: max_parallel_objectives=2, 5 objectives
+  - Peak concurrent execution: exactly 2 (never exceeded)
+  - All 5 objectives processed: call_count == 5
+  - objectives_processed == 5
+
+Test 2: max_parallel_objectives=1, 5 objectives
+  - Peak concurrent execution: exactly 1 (fully serialized)
+  - All 5 objectives processed: call_count == 5
+  - objectives_processed == 5
+
+Proves: asyncio.Semaphore correctly bounds parallel execution,
+preventing resource exhaustion with large objective sets.

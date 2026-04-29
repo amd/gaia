@@ -1,0 +1,29 @@
+# ORCH-21: SSE Streaming - Endpoint Connection
+# Proves: SSE endpoint returns StreamingResponse with text/event-stream media type
+# Source: routers/orchestrator.py:400 - stream_events()
+# Feature: SSE Streaming (Phase 2)
+
+$ python -m pytest tests/unit/orchestration/test_orchestrator_api.py::TestSSEStream -v
+
+Result:
+  TestSSEStream::test_sse_endpoint_connects PASSED
+  TestSSEStream::test_sse_bridge_broadcast PASSED
+  TestSSEStream::test_sse_bridge_unsubscribe PASSED
+  TestSSEStream::test_sse_generator_handles_cancelled_error PASSED
+  4 passed in 30.32s
+
+Endpoint Response:
+  media_type: "text/event-stream"
+  headers:
+    Cache-Control: "no-cache"
+    Connection: "keep-alive"
+    X-Accel-Buffering: "no"
+
+SSE Generator Behavior:
+  - Subscribes to bridge on connect
+  - Yields "data: {json}\n\n" for each event
+  - Sends ": keepalive\n\n" every 30s (proxy timeout prevention)
+  - Propagates CancelledError on client disconnect
+  - Unsubscribes in finally block (guaranteed cleanup)
+
+Access: GET /api/v1/orchestrator/stream

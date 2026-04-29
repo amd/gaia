@@ -1,0 +1,25 @@
+# ORCH-15: Worktree Lifecycle - Concurrent Git Operations Serialized
+# Proves: _git_op_lock prevents race conditions in parallel worktree creation
+# Source: engine.py lock serialization for git operations
+# Feature: Worktree Lifecycle (Phase 4D)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestWorktreeLifecycle::test_concurrent_git_operations_serialized -v
+
+Result:
+  TestWorktreeLifecycle::test_concurrent_git_operations_serialized PASSED
+  1 passed in 0.84s
+
+Test Setup:
+  2 objectives created concurrently via asyncio.gather():
+    - obj-001 -> feature/obj-001-concurrent-task-one
+    - obj-002 -> feature/obj-002-concurrent-task-two
+
+Assertions Verified:
+  - Both worktree creations succeeded (results all not None)
+  - 2 branches registered in state.objective_branches
+  - Both worktree directories exist
+  - No race condition (git lock serialized operations)
+
+Lock Strategy:
+  _git_op_lock: asyncio.Lock preventing concurrent git CLI calls
+  _hook_lock: asyncio.Lock serializing hook execution

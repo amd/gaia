@@ -1,0 +1,12 @@
+{
+    "status": "healthy",
+    "health_score": 1.0,
+    "components": {
+        "orchestrator_alive": true,
+        "error_rate": 0.0,
+        "supervisor_healthy": true,
+        "objectives_processed": 0,
+        "objectives_failed": 0,
+        "paused": false
+    }
+}

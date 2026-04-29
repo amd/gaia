@@ -1,0 +1,30 @@
+# ORCH-24: Status Transition System - Objective Lifecycle
+# Proves: Valid/invalid status transitions enforced with timestamp updates
+# Source: models.py:38-87 - ObjectiveStatus enum, models.py:162 - transition_to()
+# Feature: Status Transition System
+
+$ python -m pytest tests/unit/orchestration/test_objectives.py::TestObjectiveStatusTransitions tests/unit/orchestration/test_objectives.py::TestObjectiveTransitions -v
+
+Result:
+  TestObjectiveStatusTransitions::test_queued_to_in_progress PASSED
+  TestObjectiveStatusTransitions::test_in_progress_to_completed PASSED
+  TestObjectiveStatusTransitions::test_queued_to_blocked PASSED
+  TestObjectiveStatusTransitions::test_any_to_cancelled PASSED
+  TestObjectiveStatusTransitions::test_completed_is_terminal PASSED
+  TestObjectiveStatusTransitions::test_cancelled_is_terminal PASSED
+  TestObjectiveStatusTransitions::test_completed_to_in_progress_invalid PASSED
+  TestObjectiveTransitions::test_valid_transition_updates_status PASSED
+  TestObjectiveTransitions::test_invalid_transition_raises PASSED
+  TestObjectiveTransitions::test_transition_updates_timestamp PASSED
+  TestObjectiveTransitions::test_add_artifact PASSED
+  11 passed in 0.14s
+
+Status Transition Matrix:
+  QUEUED       -> IN_PROGRESS  (valid: start execution)
+  QUEUED       -> BLOCKED      (valid: dependency failed)
+  IN_PROGRESS  -> COMPLETED    (valid: execution succeeded)
+  IN_PROGRESS  -> BLOCKED      (valid: execution failed)
+  COMPLETED    -> (any)        (INVALID: terminal state)
+  BLOCKED      -> (any)        (INVALID: terminal state)
+  CANCELLED    -> (any)        (INVALID: terminal state)
+  (any)        -> CANCELLED    (valid: user cancellation)

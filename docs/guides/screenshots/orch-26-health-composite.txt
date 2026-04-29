@@ -1,0 +1,30 @@
+# ORCH-26: REST API - Health Score Composite
+# Proves: GET /api/v1/orchestrator/health returns composite health assessment
+# Source: routers/orchestrator.py:211 - get_orchestrator_health()
+# Feature: Health Score
+
+$ curl http://localhost:4200/api/v1/orchestrator/health
+
+Response (200 OK):
+{
+    "status": "healthy",
+    "health_score": 1.0,
+    "components": {
+        "orchestrator_alive": true,
+        "error_rate": 0.0,
+        "supervisor_healthy": true,
+        "objectives_processed": 0,
+        "objectives_failed": 0,
+        "paused": false
+    }
+}
+
+Health Score Calculation:
+  health_score = 0.4 * orchestrator_alive
+               + 0.4 * (1.0 - error_rate)
+               + 0.2 * supervisor_healthy
+
+Status Thresholds:
+  >= 0.8: "healthy"
+  >= 0.5: "degraded"
+  <  0.5: "critical"

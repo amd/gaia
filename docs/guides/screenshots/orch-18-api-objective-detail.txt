@@ -1,0 +1,23 @@
+# ORCH-18: REST API - Objective Detail Endpoint
+# Proves: GET /api/v1/orchestrator/objectives/{id} returns full objective details
+# Source: routers/orchestrator.py:319 - get_objective()
+# Feature: REST API Layer (Phase 1)
+
+$ curl http://localhost:4200/api/v1/orchestrator/objectives/obj-001
+
+Response (200 OK):
+{
+    "objective_id": "obj-001",
+    "title": "Initialize Project",
+    "description": "Set up the project structure and configuration files",
+    "phase": "PLANNING",
+    "status": "queued",
+    "priority": 1,
+    "dependencies": [],
+    "artifacts": [],
+    "branch": null,
+    "error_message": null
+}
+
+Includes worktree branch mapping when branch created.
+Returns 404 when objective not found or no project loaded.

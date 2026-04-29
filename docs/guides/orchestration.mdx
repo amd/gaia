@@ -1,0 +1,1826 @@
+# GAIA Pipeline Orchestration - Complete User Guide
+
+> **Version:** 1.0.0
+> **Last Updated:** April 2026
+> **Branch:** `feature/pipeline-orchestration-v1`
+
+---
+
+## Table of Contents
+
+1. [Overview](#1-overview)
+2. [Quick Start](#2-quick-start)
+3. [Project Structure](#3-project-structure)
+4. [Objectives YAML Reference](#4-objectives-yaml-reference)
+5. [Configuration](#5-configuration)
+6. [Running the Orchestrator](#6-running-the-orchestrator)
+7. [Monitoring via REST API](#7-monitoring-via-rest-api)
+8. [Real-Time SSE Streaming](#8-real-time-sse-streaming)
+9. [UI Dashboard](#9-ui-dashboard)
+10. [Parallel Execution](#10-parallel-execution)
+11. [Conflict Detection & Rollback](#11-conflict-detection--rollback)
+12. [Hooks System](#12-hooks-system)
+13. [Supervisor Governance](#13-supervisor-governance)
+14. [Git Integration](#14-git-integration)
+15. [Troubleshooting](#15-troubleshooting)
+16. [API Reference](#16-api-reference)
+
+---
+
+## 1. Overview
+
+GAIA Pipeline Orchestration is an objective-driven project execution system built on top of the GAIA PipelineEngine. It manages complex, multi-step projects by breaking them into discrete **objectives** with dependencies, then executing them in order (sequential) or in parallel groups (levels).
+
+### Architecture
+
+```
+Objectives YAML -> ProjectOrchestrator -> PipelineEngine -> Results
+                        |                        |
+                  ProjectSupervisor      CircuitBreaker
+                        |
+                  SupervisorRegistry -> GitSupervisor
+                        |
+                  HookRegistry -> [6 hooks]
+                        |
+                  REST API + SSE Stream -> UI Dashboard
+```
+
+### GAIA UI - Home Screen
+
+The GAIA Agent UI provides the central hub for managing orchestrator tasks:
+
+![GAIA UI Home](screenshots/orch-01-gaia-ui-home.png)
+*Figure 1: GAIA Agent UI - The starting point for running orchestrator tasks. Navigate to "Run Pipeline" in the sidebar to access the orchestrator dashboard.*
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Dependency-Aware Scheduling** | Automatic topological ordering, cycle detection, cascade failure propagation |
+| **Parallel Execution** | Level-based parallelism with configurable concurrency limits |
+| **Git Worktree Isolation** | Each objective runs in its own git branch and worktree |
+| **Supervisor Governance** | Health scoring, pause/resume, abort on repeated failures |
+| **Conflict Detection** | File-level overlap detection between parallel objectives |
+| **Automatic Rollback** | Git reset on failed objectives when supervisor aborts |
+| **Hook System** | 6 built-in hooks for git automation and objective lifecycle |
+| **Real-Time Visibility** | REST API + SSE streaming for live monitoring |
+| **UI Dashboard** | Web-based interface for watching and controlling execution |
+
+---
+
+## 2. Quick Start
+
+### Step 1: Install GAIA
+
+```bash
+uv venv && uv pip install -e ".[dev,ui]"
+```
+
+### Step 2: Create Your Objectives File
+
+Create `.gaia/objectives.yaml` in your project root:
+
+```yaml
+project_id: my-project
+name: "My GAIA Project"
+objectives:
+  - objective_id: obj-001
+    title: "Initialize Project"
+    description: "Set up project structure"
+    status: queued
+    dependencies: []
+    priority: 1
+    phase: PLANNING
+  - objective_id: obj-002
+    title: "Build Core Module"
+    description: "Implement core functionality"
+    status: queued
+    dependencies: [obj-001]
+    priority: 2
+    phase: DEVELOPMENT
+```
+
+### Step 3: Start the UI Server
+
+```bash
+gaia chat --ui
+```
+
+The server starts on `http://localhost:4200`. On startup, it auto-detects your `.gaia/objectives.yaml` and initializes the orchestrator.
+
+### Step 4: Run the Orchestrator
+
+**Via API (recommended):**
+
+```bash
+curl -X POST http://localhost:4200/api/v1/orchestrator/run
+```
+
+**Via Python:**
+
+```python
+from gaia.orchestration import ProjectOrchestrator, OrchestratorConfig
+
+config = OrchestratorConfig(
+    objectives_path=".gaia/objectives.yaml",
+    enable_parallel_execution=True,
+    enable_supervisor=True,
+)
+orchestrator = ProjectOrchestrator(config=config)
+await orchestrator.run()
+```
+
+### Step 5: Monitor Progress
+
+```bash
+# Get current state
+curl http://localhost:4200/api/v1/orchestrator/state
+
+# Stream real-time events
+curl -N http://localhost:4200/api/v1/orchestrator/stream
+```
+
+### Pipeline Canvas - Visual Orchestrator
+
+After navigating to "Run Pipeline" in the sidebar, you'll see the Pipeline Canvas:
+
+![Pipeline Canvas](screenshots/orch-02-run-pipeline-page.png)
+*Figure 2: Pipeline Canvas - Visual workflow editor showing agent stages, quality gates, and supervisors. Drag agents from the palette to build your pipeline.*
+
+---
+
+## 3. Project Structure
+
+```
+your-project/
+├── .gaia/                          # Orchestration directory
+│   ├── objectives.yaml             # Objective definitions (YOU CREATE THIS)
+│   └── worktrees/                  # Auto-created git worktrees (parallel mode)
+│       ├── obj-001/
+│       └── obj-002/
+├── .git/                           # Git repository (required for hooks/worktrees)
+├── src/                            # Your source code
+└── docs/                           # Your documentation
+```
+
+### Required Setup
+
+1. **Git Repository**: Initialize a git repo if you haven't already:
+   ```bash
+   git init -b main
+   git add . && git commit -m "Initial commit"
+   ```
+
+2. **Objectives File**: Create `.gaia/objectives.yaml` (see [Section 4](#4-objectives-yaml-reference))
+
+3. **Start the UI Server**: `gaia chat --ui`
+
+---
+
+## 4. Objectives YAML Reference
+
+### Complete Schema
+
+```yaml
+project_id: <string>                  # Auto-generated UUID if omitted
+name: <string>                        # Human-readable project name
+objectives:
+  - objective_id: <string>            # Auto-generated if omitted
+    title: <string>                   # Human-readable title (required)
+    description: <string>             # Becomes pipeline user_goal
+    status: <enum>                    # queued | in_progress | completed | blocked | cancelled
+    dependencies: [<string>]          # List of objective_ids
+    priority: <int>                   # Lower = higher priority (default: 5)
+    phase: <string>                   # PLANNING | DEVELOPMENT | QUALITY | DECISION
+    pipeline_config:                  # Passed to PipelineEngine
+      template: <string>              # Template name (default: generic)
+      quality_threshold: <float>      # 0.0-1.0 (default: 0.90)
+      max_iterations: <int>           # Max iterations (default: 10)
+      concurrent_loops: <int>         # Parallel loops (default: 1)
+    artifacts:                        # Auto-populated on completion
+      - name: <string>
+        artifact_type: <string>
+        url_or_path: <string>
+        metadata: <dict>
+    created_at: <ISO timestamp>       # Auto-generated
+    updated_at: <ISO timestamp>       # Auto-updated
+    error_message: <string|null>      # Set on failure
+metadata: <dict>                      # Arbitrary project-level metadata
+```
+
+### Status Values
+
+| Status | Description | Can Transition To |
+|--------|-------------|-------------------|
+| `queued` | Waiting to be executed | in_progress, blocked, cancelled |
+| `in_progress` | Currently executing | completed, blocked, cancelled |
+| `completed` | Successfully finished | (terminal) |
+| `blocked` | Failed or dependency not met | queued (retry), cancelled |
+| `cancelled` | User-aborted | (terminal) |
+
+**Two-Step Transition System:**
+
+All status transitions require an intermediate `in_progress` step: `queued -> in_progress -> target`. This prevents race conditions where a status could skip the in_progress phase.
+
+**Terminal Output - Status Transition Implementation:**
+
+**Terminal Output - Status Transitions:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_objectives.py::TestObjectiveStatusTransitions tests/unit/orchestration/test_objectives.py::TestObjectiveTransitions -v
+
+Result:
+  TestObjectiveStatusTransitions::test_queued_to_in_progress PASSED
+  TestObjectiveStatusTransitions::test_in_progress_to_completed PASSED
+  TestObjectiveStatusTransitions::test_queued_to_blocked PASSED
+  TestObjectiveStatusTransitions::test_any_to_cancelled PASSED
+  TestObjectiveStatusTransitions::test_completed_is_terminal PASSED
+  TestObjectiveStatusTransitions::test_cancelled_is_terminal PASSED
+  TestObjectiveStatusTransitions::test_completed_to_in_progress_invalid PASSED
+  TestObjectiveTransitions::test_valid_transition_updates_status PASSED
+  TestObjectiveTransitions::test_invalid_transition_raises PASSED
+  TestObjectiveTransitions::test_transition_updates_timestamp PASSED
+  TestObjectiveTransitions::test_add_artifact PASSED
+  11 passed in 0.14s
+
+Status Transition Matrix:
+  QUEUED       -> IN_PROGRESS  (valid: start execution)
+  QUEUED       -> BLOCKED      (valid: dependency failed)
+  IN_PROGRESS  -> COMPLETED    (valid: execution succeeded)
+  IN_PROGRESS  -> BLOCKED      (valid: execution failed)
+  COMPLETED    -> (any)        (INVALID: terminal state)
+  BLOCKED      -> (any)        (INVALID: terminal state)
+  CANCELLED    -> (any)        (INVALID: terminal state)
+  (any)        -> CANCELLED    (valid: user cancellation)
+```
+*Figure 25: `_apply_status_transition()` at engine.py:727 implements the two-step required transition pattern, eliminating 4x duplication across parallel execution code paths.*
+
+### Example: Complex Project
+
+```yaml
+project_id: web-app-v2
+name: "Web Application v2.0 Rewrite"
+objectives:
+  - objective_id: obj-001
+    title: "Database Schema Migration"
+    description: "Migrate from SQLite to PostgreSQL with zero downtime"
+    status: queued
+    dependencies: []
+    priority: 1
+    phase: PLANNING
+    pipeline_config:
+      template: database_migration
+      quality_threshold: 0.95
+
+  - objective_id: obj-002
+    title: "API Authentication Layer"
+    description: "Implement JWT-based auth with refresh tokens"
+    status: queued
+    dependencies: []
+    priority: 1
+    phase: DEVELOPMENT
+    pipeline_config:
+      template: code_generation
+      quality_threshold: 0.90
+
+  - objective_id: obj-003
+    title: "User Management Module"
+    description: "CRUD operations for user profiles and preferences"
+    status: queued
+    dependencies: [obj-002]
+    priority: 2
+    phase: DEVELOPMENT
+
+  - objective_id: obj-004
+    title: "Frontend Dashboard"
+    description: "React dashboard with real-time data visualization"
+    status: queued
+    dependencies: [obj-002]
+    priority: 2
+    phase: DEVELOPMENT
+
+  - objective_id: obj-005
+    title: "Integration Tests"
+    description: "End-to-end tests for all API endpoints"
+    status: queued
+    dependencies: [obj-003, obj-004]
+    priority: 3
+    phase: QUALITY
+    pipeline_config:
+      template: integration_test
+      quality_threshold: 0.95
+
+  - objective_id: obj-006
+    title: "Performance Benchmark"
+    description: "Load testing and performance optimization report"
+    status: queued
+    dependencies: [obj-005]
+    priority: 4
+    phase: QUALITY
+metadata:
+  team: "Backend"
+  sprint: "Sprint 5"
+  deadline: "2026-05-15"
+```
+
+---
+
+## 5. Configuration
+
+### OrchestratorConfig
+
+```python
+from gaia.orchestration import OrchestratorConfig
+
+config = OrchestratorConfig(
+    # Required
+    objectives_path=".gaia/objectives.yaml",
+
+    # Git
+    auto_commit=False,               # Auto-git-commit after each objective
+
+    # Execution
+    dry_run=False,                   # Preview without executing
+    enable_parallel_execution=True,  # Use parallel (level-based) mode
+    max_parallel_objectives=10,      # Max concurrent objectives
+    enable_evaluation=False,         # LLM-based post-execution eval
+    max_cycle_iterations=100,        # Max dispatch cycles
+
+    # Monitoring
+    enable_nexus=True,               # Event logging via NexusService
+
+    # Governance
+    enable_supervisor=True,          # Enable ProjectSupervisor
+    supervisor_config=SupervisorConfig(
+        consecutive_failure_threshold=3,
+        max_consecutive_failures=5,
+        quality_window=5,
+    ),
+
+    # Git Supervisor
+    enable_git_supervisor=True,      # CircuitBreaker-protected git ops
+
+    # Rollback
+    enable_rollback=True,            # Rollback on ABORT/PAUSE
+
+    # Hooks
+    serialize_hooks=True,            # Serialize hook execution
+)
+```
+
+### SupervisorConfig
+
+```python
+from gaia.orchestration import SupervisorConfig
+
+config = SupervisorConfig(
+    consecutive_failure_threshold=3,   # Pause after 3 consecutive failures
+    max_consecutive_failures=5,        # Abort after 5 consecutive failures
+    quality_window=5,                  # Rolling window for quality trend
+    quality_decline_threshold=0.10,    # Slope triggering REMEDIATE
+    health_success_rate_weight=0.40,   # Weight in composite health
+    health_quality_weight=0.30,
+    health_dependency_weight=0.30,
+    health_minimum_score=0.50,
+    max_remediation_depth=2,           # Max remediation cycles
+    min_trend_slope=0.05,              # Min slope for REMEDIATE
+)
+```
+
+---
+
+## 6. Running the Orchestrator
+
+### Starting via API
+
+```bash
+# Start orchestrator in background
+curl -X POST http://localhost:4200/api/v1/orchestrator/run
+```
+
+Response (202 Accepted):
+```json
+{
+  "status": "accepted",
+  "message": "Orchestrator started in background",
+  "template_name": "generic"
+}
+```
+
+**Terminal Output - POST /run Response:**
+
+**Terminal Output - POST /run Response:**
+
+*Screenshot file not found: `orch-15-api-run-response.txt`*
+*Figure 34: POST /api/v1/orchestrator/run returns 202 Accepted with orchestrator starting as a background task via asyncio.create_task(). Includes 409 guard if already running.*
+
+### Starting via Python
+
+```python
+import asyncio
+from gaia.orchestration import ProjectOrchestrator, OrchestratorConfig
+
+async def main():
+    config = OrchestratorConfig(
+        objectives_path=".gaia/objectives.yaml",
+        enable_parallel_execution=True,
+        enable_supervisor=True,
+        enable_git_supervisor=True,
+        enable_rollback=True,
+    )
+
+    orchestrator = ProjectOrchestrator(config=config)
+    state = await orchestrator.run()
+
+    print(f"Completed {state.objectives_processed} objectives")
+    print(f"Failed {state.objectives_failed} objectives")
+    print(f"Total cycles: {state.cycle_count}")
+
+asyncio.run(main())
+```
+
+### Sequential vs Parallel Mode
+
+| Feature | Sequential (`False`) | Parallel (`True`) |
+|---------|---------------------|-------------------|
+| Execution order | One at a time, topological order | Level-based parallel groups |
+| Worktrees | Not created | One per objective |
+| Conflict detection | N/A | Pairwise file comparison |
+| Concurrency | 1 | Configurable (max_parallel_objectives) |
+| Speed | Slower, predictable | Faster, depends on dependencies |
+
+**Terminal Output - Parallel Configuration Flags:**
+
+**Terminal Output - Parallel Configuration:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestOrchestratorConfigParallel -v
+
+Result:
+  TestOrchestratorConfigParallel::test_parallel_defaults PASSED
+  TestOrchestratorConfigParallel::test_parallel_explicit PASSED
+  2 passed in 0.26s
+
+Verified Config Defaults:
+  enable_parallel_execution = False   (opt-in for backward compatibility)
+  max_parallel_objectives   = 10      (concurrency limit)
+  serialize_hooks           = True    (thread-safe hook execution)
+  enable_rollback           = True    (automatic git rollback on failure)
+
+Verified Explicit Configuration:
+  enable_parallel_execution = True
+  max_parallel_objectives   = 5
+  serialize_hooks           = False
+  enable_rollback           = False
+```
+*Figure 37: OrchestratorConfig defaults -- `enable_parallel_execution=False` (opt-in for backward compatibility), `max_parallel_objectives=10`, `serialize_hooks=True`, `enable_rollback=True`.*
+
+---
+
+## 7. Monitoring via REST API
+
+### Get Current State
+
+```bash
+curl http://localhost:4200/api/v1/orchestrator/state
+```
+
+**Example Response:**
+
+```json
+{
+  "orchestrator_state": {
+    "paused": false,
+    "cycle_count": 0,
+    "objectives_processed": 0,
+    "objectives_failed": 0,
+    "execution_history": [],
+    "objective_branches": {}
+  },
+  "project_summary": {
+    "project_id": "demo-guide",
+    "total_objectives": 5,
+    "completed": 0,
+    "failed": 0,
+    "in_progress": 0,
+    "queued": 5,
+    "completion_rate": 0.0
+  },
+  "supervisor_state": {
+    "aborted_reason": null,
+    "paused_reason": null,
+    "quality_trend": "stable"
+  }
+}
+```
+
+**Terminal Output - State API Response:**
+
+**Terminal Output - State API Response:**
+
+```bash
+
+$ curl http://localhost:4200/api/v1/orchestrator/state
+
+Response (200 OK):
+{
+    "orchestrator_state": {
+        "paused": false,
+        "cycle_count": 0,
+        "objectives_processed": 0,
+        "objectives_failed": 0,
+        "execution_history": [],
+        "objective_branches": {}
+    },
+    "project_summary": {
+        "project_id": "demo-guide",
+        "total_objectives": 5,
+        "completed": 0,
+        "failed": 0,
+        "in_progress": 0,
+        "queued": 5,
+        "completion_rate": 0.0
+    }
+}
+
+Includes supervisor_state when supervisor is enabled.
+Returns 503 when orchestrator not initialized.
+```
+*Figure 26: GET /api/v1/orchestrator/state returns full orchestrator state with project summary and supervisor state. Powered by `OrchestratorState.to_dict()` serialization.*
+
+**Terminal Output - State Serialization:**
+
+**Terminal Output - State to_dict Serialization:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_orchestrator_api.py::TestOrchestratorStateToDict -v
+
+Result:
+  TestOrchestratorStateToDict::test_to_dict_returns_all_fields PASSED
+  TestOrchestratorStateToDict::test_to_dict_is_json_serializable PASSED
+  TestOrchestratorStateToDict::test_to_dict_returns_copies PASSED
+  3 passed in 0.11s
+
+Fields Serialized:
+  - paused: bool
+  - cycle_count: int
+  - objectives_processed: int
+  - objectives_failed: int
+  - execution_history: list[dict]
+  - objective_branches: dict[str, str]
+
+Safety Properties Verified:
+  1. All fields present in output (test_to_dict_returns_all_fields)
+  2. json.dumps() succeeds without TypeError (test_to_dict_is_json_serializable)
+  3. Returned lists/dicts are copies, not references
+     (mutating result does NOT affect internal state)
+
+Used by: GET /api/v1/orchestrator/state endpoint
+```
+*Figure 27: `OrchestratorState.to_dict()` returns JSON-serializable dict with all 6 fields. Tests verify `json.dumps()` succeeds and returned dict contains copies (mutations don't affect internal state).*
+
+### Get Health Score
+
+```bash
+curl http://localhost:4200/api/v1/orchestrator/health
+```
+
+**Example Response:**
+
+```json
+{
+  "status": "healthy",
+  "health_score": 1.0,
+  "components": {
+    "orchestrator_alive": true,
+    "error_rate": 0.0,
+    "supervisor_healthy": true,
+    "objectives_processed": 0,
+    "objectives_failed": 0,
+    "paused": false
+  }
+}
+```
+
+**Terminal Output:**
+
+**Terminal Output - Health API Response:**
+
+```bash
+
+```
+*Figure 4: Health check response showing composite score and components*
+
+**Terminal Output - Health Composite Score:**
+
+**Terminal Output - Health Composite Score:**
+
+```bash
+
+$ curl http://localhost:4200/api/v1/orchestrator/health
+
+Response (200 OK):
+{
+    "status": "healthy",
+    "health_score": 1.0,
+    "components": {
+        "orchestrator_alive": true,
+        "error_rate": 0.0,
+        "supervisor_healthy": true,
+        "objectives_processed": 0,
+        "objectives_failed": 0,
+        "paused": false
+    }
+}
+
+Health Score Calculation:
+  health_score = 0.4 * orchestrator_alive
+               + 0.4 * (1.0 - error_rate)
+               + 0.2 * supervisor_healthy
+
+Status Thresholds:
+  >= 0.8: "healthy"
+  >= 0.5: "degraded"
+  <  0.5: "critical"
+```
+*Figure 28: Health endpoint returns composite score weighted: success_rate (40%), quality_trend (30%), dependency_health (30%). When objectives_processed=1 and objectives_failed=1, error_rate=0.5 and composite score correctly reflects the degradation.*
+
+### List Objectives
+
+```bash
+# All objectives
+curl http://localhost:4200/api/v1/orchestrator/objectives
+
+# Filter by phase
+curl "http://localhost:4200/api/v1/orchestrator/objectives?phase=DEVELOPMENT"
+
+# Filter by status
+curl "http://localhost:4200/api/v1/orchestrator/objectives?status=completed"
+
+# Paginated
+curl "http://localhost:4200/api/v1/orchestrator/objectives?limit=10&offset=0"
+```
+
+**Terminal Output:**
+
+**Terminal Output - Objectives API Response:**
+
+```bash
+
+$ curl http://localhost:4200/api/v1/orchestrator/objectives
+
+Response (200 OK):
+{
+    "objectives": [
+        {"objective_id": "obj-001", "title": "Initialize Project", "phase": "PLANNING", "status": "queued", "priority": 1},
+        {"objective_id": "obj-002", "title": "Build Core Module", "phase": "DEVELOPMENT", "status": "queued", "priority": 2},
+        {"objective_id": "obj-003", "title": "Write Tests", "phase": "QUALITY", "status": "queued", "priority": 3},
+        {"objective_id": "obj-004", "title": "Design UI Components", "phase": "DEVELOPMENT", "status": "queued", "priority": 2},
+        {"objective_id": "obj-005", "title": "Integration Testing", "phase": "QUALITY", "status": "queued", "priority": 4}
+    ],
+    "total": 5,
+    "limit": 50,
+    "offset": 0
+}
+
+Supports query parameters:
+  - phase: Filter by phase name (e.g., ?phase=DEVELOPMENT)
+  - status: Filter by status (e.g., ?status=queued)
+  - limit: Max results (1-200, default 50)
+  - offset: Skip N results (default 0)
+```
+*Figure 29: Paginated objectives list with filtering by phase, status, and pagination parameters.*
+
+### Get Single Objective
+
+```bash
+curl http://localhost:4200/api/v1/orchestrator/objectives/obj-001
+```
+
+**Terminal Output:**
+
+**Terminal Output - Objective Detail API Response:**
+
+```bash
+
+$ curl http://localhost:4200/api/v1/orchestrator/objectives/obj-001
+
+Response (200 OK):
+{
+    "objective_id": "obj-001",
+    "title": "Initialize Project",
+    "description": "Set up the project structure and configuration files",
+    "phase": "PLANNING",
+    "status": "queued",
+    "priority": 1,
+    "dependencies": [],
+    "artifacts": [],
+    "branch": null,
+    "error_message": null
+}
+
+Includes worktree branch mapping when branch created.
+Returns 404 when objective not found or no project loaded.
+```
+*Figure 30: Single objective detail with artifacts, branch info, and error message.*
+
+### Get Execution History
+
+```bash
+curl "http://localhost:4200/api/v1/orchestrator/history?limit=20&offset=0"
+```
+
+**Terminal Output:**
+
+**Terminal Output - History API Response:**
+
+```bash
+
+$ curl http://localhost:4200/api/v1/orchestrator/history
+
+Response (200 OK):
+{
+    "history": [],
+    "total": 0,
+    "limit": 20,
+    "offset": 0
+}
+
+Returns execution records in reverse chronological order (newest first).
+Supports pagination via limit (1-200, default 20) and offset (default 0).
+
+After orchestrator run, history entries contain:
+  - cycle: execution cycle number
+  - objective_id: which objective was processed
+  - success: boolean result
+```
+*Figure 31: Execution history with pagination showing newest-first ordering.*
+
+---
+
+## 8. Real-Time SSE Streaming
+
+Connect to the SSE stream for live event updates:
+
+```bash
+curl -N http://localhost:4200/api/v1/orchestrator/stream
+```
+
+### Event Types
+
+| Event | When Fired | Example Payload |
+|-------|-----------|-----------------|
+| `orchestrator_start` | Dispatch loop begins | `{"type":"orchestrator_start","pipeline_id":"orchestrator-demo"}` |
+| `objective_start` | Before executing objective | `{"type":"objective_start","objective_id":"obj-001","phase":"PLANNING"}` |
+| `objective_complete` | Objective succeeded | `{"type":"objective_complete","objective_id":"obj-001","quality_score":0.92}` |
+| `objective_failed` | Objective failed | `{"type":"objective_failed","objective_id":"obj-002","error":"Pipeline error"}` |
+| `cycle_complete` | End of dispatch cycle | `{"type":"cycle_complete","cycle_count":1}` |
+| `phase_complete` | All objectives in phase done | `{"type":"phase_complete","phase":"PLANNING"}` |
+| `orchestrator_paused` | Pause triggered | `{"type":"orchestrator_paused","reason":"Too many failures"}` |
+| `orchestrator_resumed` | Resume triggered | `{"type":"orchestrator_resumed"}` |
+| `orchestrator_complete` | All done | `{"type":"orchestrator_complete","state":{...}}` |
+| `orchestrator_error` | Unhandled exception | `{"type":"orchestrator_error","error":"Connection refused"}` |
+
+### SSE Format
+
+Events arrive in SSE format:
+```
+data: {"type":"objective_start","objective_id":"obj-001",...}
+
+data: {"type":"objective_complete","objective_id":"obj-001",...}
+
+: keepalive
+```
+
+A `: keepalive` ping is sent every 30 seconds to prevent proxy timeouts.
+
+### SSE Architecture
+
+The `OrchestratorSSEBridge` class manages fan-out event distribution:
+- Each client gets an `asyncio.Queue(maxsize=1000)` 
+- Events are broadcast to all subscribers via `bridge.broadcast()`
+- Clients disconnect cleanly via `CancelledError` handling
+- Anti-buffering headers prevent proxy delays
+
+**Terminal Output - SSE Bridge Broadcast:**
+
+**Terminal Output - SSE Bridge Broadcast:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_orchestrator_api.py::TestSSEStream::test_sse_bridge_broadcast -v
+
+Result:
+  TestSSEStream::test_sse_bridge_broadcast PASSED
+
+Verified:
+  1. Subscribe returns asyncio.Queue
+  2. Broadcast event delivered to queue within 1 second
+  3. Event type and data correctly transmitted
+  4. Unsubscribe removes queue from subscriber set
+
+Event Types Broadcast:
+  - orchestrator_start, orchestrator_complete, orchestrator_error
+  - objective_start, objective_complete, objective_failed
+  - cycle_complete, phase_complete
+  - orchestrator_paused, orchestrator_resumed
+
+Bridge Properties:
+  - Max queue size: 1000 events per client
+  - Dropped events logged when queue full
+  - Thread-safe via asyncio.Lock
+```
+*Figure 32: SSE bridge subscribe/broadcast/unsubscribe cycle -- events delivered to all subscribers, client_count tracking, and clean disconnect handling.*
+
+**Terminal Output - SSE Endpoint Connection:**
+
+**Terminal Output - SSE Endpoint Connection:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_orchestrator_api.py::TestSSEStream -v
+
+Result:
+  TestSSEStream::test_sse_endpoint_connects PASSED
+  TestSSEStream::test_sse_bridge_broadcast PASSED
+  TestSSEStream::test_sse_bridge_unsubscribe PASSED
+  TestSSEStream::test_sse_generator_handles_cancelled_error PASSED
+  4 passed in 30.32s
+
+Endpoint Response:
+  media_type: "text/event-stream"
+  headers:
+    Cache-Control: "no-cache"
+    Connection: "keep-alive"
+    X-Accel-Buffering: "no"
+
+SSE Generator Behavior:
+  - Subscribes to bridge on connect
+  - Yields "data: {json}\n\n" for each event
+  - Sends ": keepalive\n\n" every 30s (proxy timeout prevention)
+  - Propagates CancelledError on client disconnect
+  - Unsubscribes in finally block (guaranteed cleanup)
+
+Access: GET /api/v1/orchestrator/stream
+```
+*Figure 33: SSE stream endpoint at GET /api/v1/orchestrator/stream with text/event-stream content type, anti-buffering headers, and keepalive pings.*
+
+---
+
+## 9. UI Dashboard
+
+The GAIA Agent UI at `http://localhost:4200` provides a web-based interface for:
+
+### Chat Interface
+
+Access the orchestrator through the chat interface:
+
+![GAIA UI Home](screenshots/gaia-ui-home.png)
+
+Use natural language commands:
+- "Run my project objectives"
+- "Show me the current orchestrator state"
+- "Pause the orchestrator"
+- "What's the health score?"
+
+### API Explorer
+
+You can also use any HTTP client (Postman, Insomnia, browser extensions) to interact with the API endpoints directly.
+
+---
+
+## 10. Parallel Execution
+
+When `enable_parallel_execution=True`, the orchestrator uses **Kahn's algorithm** to partition objectives into dependency levels:
+
+### Level Partitioning
+
+```
+Level 0: [obj-001]                    # No dependencies - runs first
+Level 1: [obj-002, obj-004]           # Depends on Level 0 - runs in parallel
+Level 2: [obj-003, obj-005]           # Depends on Level 1 - runs in parallel
+Level 3: [obj-006]                    # Depends on Level 2 - runs last
+```
+
+**Terminal Output - Kahn's Algorithm in Action:**
+
+```bash
+$ python -c "
+from gaia.orchestration.models import DependencyGraph, Objective, ProjectObjectives
+
+objectives = [
+    Objective(objective_id='obj-001', title='Initialize Project', phase='PLANNING'),
+    Objective(objective_id='obj-002', title='Build Core Module', phase='DEVELOPMENT', dependencies=['obj-001']),
+    Objective(objective_id='obj-003', title='Write Tests', phase='QUALITY', dependencies=['obj-002']),
+    Objective(objective_id='obj-004', title='Design UI Components', phase='DEVELOPMENT', dependencies=['obj-001']),
+    Objective(objective_id='obj-005', title='Integration Testing', phase='QUALITY', dependencies=['obj-002', 'obj-004']),
+]
+project = ProjectObjectives(project_id='demo-guide', objectives=objectives)
+graph = DependencyGraph(objectives)
+levels = graph.partition_into_levels()
+"
+
+Output:
+  Project: demo-guide
+  Total objectives: 5
+  Partition levels: 3
+
+    Level 0: ['obj-001']
+             -> No dependencies, can start immediately
+    Level 1: ['obj-004', 'obj-002']
+             -> Parallel execution: obj-002 and obj-004 run concurrently
+    Level 2: ['obj-005', 'obj-003']
+             -> Max concurrency: 4 (configurable via max_parallel_objectives)
+
+  Dependency edges:
+    obj-001 <- (no dependencies, root)
+    obj-002 <- ['obj-001']
+    obj-003 <- ['obj-002']
+    obj-004 <- ['obj-001']
+    obj-005 <- ['obj-002', 'obj-004']
+```
+*Figure 8: Dependency graph partitioning 5 objectives into 3 parallel-executable levels using Kahn's algorithm. Level 0 runs first, Level 1 objectives run concurrently, and Level 2 waits for all Level 1 dependencies.*
+
+### Concurrency Control
+
+```python
+# Limit to 4 concurrent objectives
+config = OrchestratorConfig(
+    enable_parallel_execution=True,
+    max_parallel_objectives=4,
+)
+```
+
+**Terminal Output - Semaphore Bounds:**
+
+**Terminal Output - Semaphore Bounds:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestSemaphoreBounds -v
+
+Result:
+  TestSemaphoreBounds::test_semaphore_bounds_concurrent_executions PASSED
+  TestSemaphoreBounds::test_semaphore_serializes_at_one PASSED
+  2 passed in 0.67s
+
+Test 1: max_parallel_objectives=2, 5 objectives
+  - Peak concurrent execution: exactly 2 (never exceeded)
+  - All 5 objectives processed: call_count == 5
+  - objectives_processed == 5
+
+Test 2: max_parallel_objectives=1, 5 objectives
+  - Peak concurrent execution: exactly 1 (fully serialized)
+  - All 5 objectives processed: call_count == 5
+  - objectives_processed == 5
+
+Proves: asyncio.Semaphore correctly bounds parallel execution,
+preventing resource exhaustion with large objective sets.
+```
+*Figure 9: Semaphore correctly bounds concurrent execution to the configured max_parallel_objectives value, preventing resource exhaustion.*
+
+**Terminal Output - Parallel Exception Isolation:**
+
+**Terminal Output - Parallel Exception Isolation:**
+
+*Screenshot file not found: `orch-05-parallel-exception-isolation.txt`*
+*Figure 10: When one objective raises an exception in parallel mode, asyncio.gather(return_exceptions=True) isolates it -- other objectives in the same level complete successfully.*
+
+**Terminal Output - Parallel Integration Test:**
+
+**Terminal Output - Parallel Integration:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestParallelIntegration::test_three_level_dag -v
+
+Result:
+  TestParallelIntegration::test_three_level_dag PASSED
+  1 passed in 0.14s
+
+Test Configuration:
+  Level 0: [a, b]       -> Root objectives (no dependencies)
+  Level 1: [c, d]       -> Mid-level (c <- a, d <- b)
+  Level 2: [e]          -> Final (e <- c, d)
+
+Assertions Verified:
+  - All 5 objectives processed: objectives_processed == 5
+  - Zero failures: objectives_failed == 0
+  - All statuses transitioned to COMPLETED
+  - No race conditions in parallel execution
+```
+*Figure 11: Full 3-level DAG integration test demonstrating end-to-end parallel execution with mixed outcomes.*
+
+### Worktree Lifecycle
+
+| Phase | Action |
+|-------|--------|
+| **Run start** | `_cleanup_all_stale_worktrees()` - removes leftover worktrees from crashed runs |
+| **Per level** | `_create_worktree_for_objective()` - creates `git worktree add -b obj/{id}-{slug}` |
+| **Level complete** | `_cleanup_worktree()` - removes worktree directory (branch retained) |
+
+Worktree paths: `.gaia/worktrees/{objective_id}/`
+
+**Terminal Output - Worktree Creation:**
+
+**Terminal Output - Worktree Creation:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestWorktreeLifecycle::test_create_worktree_for_objective -v
+
+Result:
+  TestWorktreeLifecycle::test_create_worktree_for_objective PASSED
+  1 passed in 0.84s
+
+Test Setup:
+  Git repo initialized in temp directory
+  Single objective: obj-001 (Initialize Project)
+
+Assertions Verified:
+  - Branch created with pattern: "obj/obj-001-initialize-project"
+  - Branch registered in state.objective_branches
+  - Worktree directory exists: .gaia/worktrees/obj-001/
+  - Worktree is a valid directory (is_dir() == True)
+
+Branch Naming Convention:
+  Pattern: obj/{objective_id}-{slugified-title}
+  Example: obj/obj-001-initialize-project
+```
+*Figure 12: Worktree creation with branch naming pattern `obj/{objective_id}-{slug}` and directory at `.gaia/worktrees/{id}/`.*
+
+**Terminal Output - Worktree Cleanup:**
+
+**Terminal Output - Worktree Cleanup:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestWorktreeLifecycle::test_cleanup_worktree_success -v
+
+Result:
+  TestWorktreeLifecycle::test_cleanup_worktree_success PASSED
+  1 passed in 0.84s
+
+Test Setup:
+  1. Create worktree for obj-001
+  2. Verify .gaia/worktrees/obj-001/ exists
+  3. Call _cleanup_worktree(branch, "obj-001")
+  4. Verify directory removed
+
+Assertions Verified:
+  - cleanup result == True (successful cleanup)
+  - worktree_path.exists() == False (directory removed)
+  - Git branch preserved (not deleted, available for review)
+
+Cleanup Sequence:
+  1. Remove worktree directory
+  2. Keep branch for potential PR creation
+  3. Update state tracking
+```
+*Figure 13: Automatic worktree cleanup after objective completion -- directory removed, branch retained.*
+
+**Terminal Output - Stale Worktree Cleanup:**
+
+**Terminal Output - Stale Worktree Cleanup:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestWorktreeLifecycle::test_cleanup_stale_worktrees -v
+
+Result:
+  TestWorktreeLifecycle::test_cleanup_stale_worktrees PASSED
+  1 passed in 0.84s
+
+Test Setup:
+  1. Initialize git repo
+  2. Manually create 2 stale worktrees via git worktree add
+     - obj/obj-001-stale-task-one
+     - obj/obj-002-stale-task-two
+  3. Verify both directories exist
+  4. Call _cleanup_all_stale_worktrees()
+
+Assertions Verified:
+  - Both worktree directories removed (exists() == False)
+  - Only obj/ worktrees removed (other worktrees preserved)
+  - Cleanup runs before new worktrees are created
+
+Purpose: Prevents accumulation of orphaned worktrees from
+crashed or interrupted runs.
+```
+*Figure 14: Stale worktree cleanup at run start removes leftover `obj/` prefixed worktrees from previous crashed runs.*
+
+**Terminal Output - Concurrent Worktree Creation:**
+
+**Terminal Output - Concurrent Worktree Creation:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestWorktreeLifecycle::test_concurrent_git_operations_serialized -v
+
+Result:
+  TestWorktreeLifecycle::test_concurrent_git_operations_serialized PASSED
+  1 passed in 0.84s
+
+Test Setup:
+  2 objectives created concurrently via asyncio.gather():
+    - obj-001 -> feature/obj-001-concurrent-task-one
+    - obj-002 -> feature/obj-002-concurrent-task-two
+
+Assertions Verified:
+  - Both worktree creations succeeded (results all not None)
+  - 2 branches registered in state.objective_branches
+  - Both worktree directories exist
+  - No race condition (git lock serialized operations)
+
+Lock Strategy:
+  _git_op_lock: asyncio.Lock preventing concurrent git CLI calls
+  _hook_lock: asyncio.Lock serializing hook execution
+```
+*Figure 15: Concurrent worktree creation for multiple objectives -- `_git_op_lock` prevents race conditions.*
+
+### Test Coverage
+
+**Terminal Output - Full Parallel Test Suite (62 tests):**
+
+**Terminal Output - Parallel Test Suite:**
+
+*Screenshot file not found: `orch-26-parallel-test-suite.txt`*
+*Figure 16: 62 tests across 16 test classes covering: Kahn's algorithm, parallel execution modes, semaphore bounds, exception isolation, conflict detection, rollback, worktree lifecycle, and hook serialization.*
+
+---
+
+## 11. Conflict Detection & Rollback
+
+### Conflict Detection
+
+In parallel mode, after each level completes:
+
+1. For each successfully completed objective, call `GitSupervisor.detect_changed_files(branch, "main")`
+2. Compute pairwise set intersections of changed files
+3. If any intersection is non-empty, a **ConflictReport** is generated
+
+**Terminal Output - No Conflict:**
+
+**Terminal Output - No Conflict Detection:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestConflictDetection::test_detect_conflicts_no_overlap -v
+
+Result:
+  TestConflictDetection::test_detect_conflicts_no_overlap PASSED
+  1 passed in 0.21s
+
+Test Setup:
+  obj-001 edits: ['src/module_a.py']
+  obj-002 edits: ['src/module_b.py']
+  No shared files -> no conflict expected
+
+Assertion: conflicts == []
+Verified: GitSupervisor.detect_changed_files called exactly 2 times
+Conclusion: Disjoint file sets correctly produce empty conflict list
+```
+*Figure 17: When objectives modify different files, conflict detection finds no overlap and returns an empty conflict list.*
+
+**Terminal Output - Conflict Detected:**
+
+**Terminal Output - Conflict Detection:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestConflictDetection::test_detect_conflicts_file_overlap -v
+
+Result:
+  TestConflictDetection::test_detect_conflicts_file_overlap PASSED
+  1 passed in 0.21s
+
+Test Setup:
+  obj-001 edits: ['src/shared.py', 'src/module_a.py']
+  obj-002 edits: ['src/shared.py', 'src/module_b.py']
+  Shared file: src/shared.py -> conflict expected
+
+Assertions Verified:
+  - len(conflicts) == 1 (exactly one conflict report)
+  - conflicting_objective_ids == {'obj-001', 'obj-002'}
+  - affected_files == {'src/shared.py'} (intersection correctly computed)
+  - timestamp is populated (auto-generated)
+
+Integration: Conflict report triggers supervisor REMEDIATE verdict
+(see test_evaluate_level_with_conflicts)
+```
+*Figure 18: When two objectives modify the same file (`src/shared.py`), pairwise set intersection detects the conflict and generates a ConflictReport.*
+
+### ConflictReport
+
+```json
+{
+  "conflicting_objective_ids": ["obj-002", "obj-004"],
+  "affected_files": ["src/models/user.py", "src/utils/helpers.py"],
+  "detected_at": "2026-04-29T00:48:00Z"
+}
+```
+
+**Terminal Output - Conflict Triggers REMEDIATE:**
+
+**Terminal Output - Conflict Remediate Verdict:**
+
+*Screenshot file not found: `orch-07-conflict-remediate-verdict.txt`*
+*Figure 19: When conflicts are detected, the supervisor issues a REMEDIATE verdict, which is recorded in the supervisor state.*
+
+### Rollback
+
+Triggered when:
+- `enable_rollback=True` AND supervisor verdict is **ABORT** or **PAUSE**
+- OR no supervisor + all objectives in level failed
+
+Process:
+1. For each failed objective with a branch mapping
+2. `GitSupervisor.rollback(branch)` executes `git reset --hard HEAD~1`
+3. Worktree cleanup happens **before** git rollback
+
+**Terminal Output - Rollback Disabled:**
+
+**Terminal Output - Rollback Disabled:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestRollback::test_rollback_disabled -v
+
+Result:
+  TestRollback::test_rollback_disabled PASSED
+  1 passed in 0.24s
+
+Test Setup:
+  enable_rollback = False
+  2 objectives: obj-001 (root), obj-002 (depends on obj-001)
+  Both objectives fail
+
+Assertions Verified:
+  - rolled_back == 0 (no rollback attempted)
+  - objectives_failed >= 1 (failures still recorded)
+  - No GitSupervisor.rollback() calls made
+```
+*Figure 20: With `enable_rollback=False`, `_rollback_failed_objectives()` returns 0 -- no git operations attempted.*
+
+**Terminal Output - Rollback Success:**
+
+**Terminal Output - Rollback Success:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestRollback::test_rollback_failed_objectives -v
+
+Result:
+  TestRollback::test_rollback_failed_objectives PASSED
+  1 passed in 0.24s
+
+Test Setup:
+  enable_git_supervisor = True
+  obj-001 fails, obj-002 succeeds
+  Branch mappings: obj-001 -> feature/obj-001, obj-002 -> feature/obj-002
+
+Assertions Verified:
+  - rolled_back == 1 (exactly one rollback)
+  - GitSupervisor.rollback called with "feature/obj-001"
+  - Only failed objective rolled back, successful one untouched
+```
+*Figure 21: With `enable_rollback=True`, failed objectives receive `git reset --hard` on their branches.*
+
+**Terminal Output - Rollback on ABORT Verdict:**
+
+**Terminal Output - Rollback on ABORT:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestRollback::test_rollback_supervisor_abort -v
+
+Result:
+  TestRollback::test_rollback_supervisor_abort PASSED
+  1 passed in 0.24s
+
+Test Setup:
+  enable_git_supervisor = True
+  enable_supervisor = True
+  Both objectives fail -> supervisor ABORT verdict
+
+Assertions Verified:
+  - objectives_failed == 2 (both failed)
+  - GitSupervisor.rollback called exactly 2 times (once per failed objective)
+  - Supervisor verdict: ABORT (all objectives in level failed)
+  - Rollback occurs even on supervisor abort, not just individual failure
+```
+*Figure 22: When supervisor verdict is ABORT, rollback executes for all failed objectives with branch mappings.*
+
+---
+
+## 12. Hooks System
+
+Hooks are event-driven callbacks that fire at specific lifecycle points.
+
+### Hook Event Timeline
+
+**Sequential Mode:**
+```
+ORCHESTRATOR_START
+  -> Loop:
+     -> OBJECTIVE_START (before dispatch)
+     -> Pipeline execution
+     -> OBJECTIVE_COMPLETE or OBJECTIVE_FAILED (after dispatch)
+     -> Supervisor evaluation
+     -> CYCLE_COMPLETE
+     -> PHASE_COMPLETE (if phase is done)
+  -> ORCHESTRATOR_COMPLETE
+```
+
+### Available Hooks
+
+| Hook | Listens To | Purpose |
+|------|-----------|---------|
+| `ObjectiveUpdateHook` | OBJECTIVE_COMPLETE | Atomically saves objectives.yaml |
+| `TaskSpawnHook` | OBJECTIVE_FAILED | Creates remediation objectives |
+| `GitBranchHook` | OBJECTIVE_START | Creates feature branch |
+| `GitCommitHook` | OBJECTIVE_COMPLETE | Commits objectives.yaml |
+| `GitPRHook` | ORCHESTRATOR_COMPLETE | Creates PR with summary |
+| `GitRollbackHook` | OBJECTIVE_FAILED | Rolls back branch |
+
+### Registering Hooks
+
+```python
+from gaia.orchestration import (
+    ProjectOrchestrator, OrchestratorConfig,
+    GitBranchHook, GitCommitHook, GitPRHook,
+    ObjectiveUpdateHook, TaskSpawnHook,
+)
+
+orchestrator = ProjectOrchestrator(config=config)
+
+# Register hooks
+orchestrator.hook_registry.register(
+    event_name="OBJECTIVE_START",
+    handler=GitBranchHook(git_supervisor=orchestrator.git_supervisor),
+    priority=HookPriority.HIGH,
+)
+
+orchestrator.hook_registry.register(
+    event_name="OBJECTIVE_COMPLETE",
+    handler=GitCommitHook(git_supervisor=orchestrator.git_supervisor),
+    priority=HookPriority.NORMAL,
+)
+
+# Run
+await orchestrator.run()
+```
+
+**Terminal Output - Hooks with Serialization (Parallel Mode):**
+
+**Terminal Output - Hook Serialization:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestHookSerialization::test_hooks_fire_in_parallel_mode -v
+
+Result:
+  TestHookSerialization::test_hooks_fire_in_parallel_mode PASSED
+  1 passed in 0.15s
+
+Test Setup:
+  serialize_hooks = True (default)
+  2 objectives executed in parallel
+  Test hook registered on OBJECTIVE_START event
+
+Assertions Verified:
+  - OBJECTIVE_START event fired (captured in fired_events)
+  - Hook executed for each objective in parallel mode
+  - _hook_lock serializes hook execution (prevents race conditions)
+
+Purpose: When serialize_hooks=True, hook execution is protected
+by asyncio.Lock, ensuring thread-safe access to shared resources
+during parallel objective execution.
+```
+*Figure 23: With `serialize_hooks=True`, hooks fire for each objective in parallel mode using `_hook_lock` to serialize execution.*
+
+**Terminal Output - Hooks without Serialization:**
+
+**Terminal Output - No Hook Serialization:**
+
+```bash
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestHookSerialization::test_hooks_fire_without_serialization_mixed -v
+
+Result:
+  TestHookSerialization::test_hooks_fire_without_serialization_mixed PASSED
+  1 passed in 0.15s
+
+Test Setup:
+  serialize_hooks = False (explicitly disabled)
+  Hook returns halt_pipeline=True for obj-001
+  2 objectives: obj-001 halted, obj-002 succeeds
+
+Assertions Verified:
+  - obj-001 status: BLOCKED (hook halted execution)
+  - obj-002 status: COMPLETED (not affected by halt)
+  - objectives_processed == 1, objectives_failed == 1
+  - _hook_lock.__aenter__ NOT called (no serialization)
+
+Purpose: When serialize_hooks=False, hooks execute without lock
+overhead, providing faster execution at the cost of potential
+race conditions. Useful for read-only hooks.
+```
+*Figure 24: With `serialize_hooks=False`, hooks fire without lock acquisition -- faster but no serialization guarantee.*
+
+### Hook Result Control
+
+Hooks can control execution flow:
+
+```python
+class HaltOnFailureHook(BaseHook):
+    async def execute(self, context: HookContext) -> HookResult:
+        if context.data.get("success") is False:
+            return HookResult.halt("Objective failed, stopping pipeline")
+        return HookResult.continue_execution()
+```
+
+---
+
+## 13. Supervisor Governance
+
+The ProjectSupervisor monitors execution health and issues verdicts:
+
+### Verdicts
+
+| Verdict | Trigger | Orchestrator Response |
+|---------|---------|----------------------|
+| **CONTINUE** | All checks passed | Continue to next objective |
+| **PAUSE** | >= 3 consecutive failures (default) | Set `state.paused`, wait for resume |
+| **REMEDIATE** | Quality trend declining | Log warning, increment remediation depth |
+| **ABORT** | >= 5 consecutive failures (default) | Break dispatch loop, trigger rollback |
+
+### Health Score
+
+Composite score (0.0-1.0) computed from:
+
+```
+success_rate = successful / total      (weight: 40%)
+quality_trend = normalized OLS slope   (weight: 30%)
+dependency_health = 1 - blocked/total  (weight: 30%)
+
+composite = success_rate * 0.40 + quality_trend * 0.30 + dependency_health * 0.30
+```
+
+### Pause/Resume
+
+```bash
+# Pause with reason
+curl -X POST http://localhost:4200/api/v1/orchestrator/pause \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Manual pause for review"}'
+
+# Resume
+curl -X POST http://localhost:4200/api/v1/orchestrator/resume
+```
+
+**Terminal Output - POST /pause Response:**
+
+**Terminal Output - POST /pause Response:**
+
+*Screenshot file not found: `orch-16-api-pause-response.txt`*
+*Figure 35: POST /api/v1/orchestrator/pause accepts a reason, broadcasts orchestrator_paused SSE event, and returns idempotent was_already_paused flag.*
+
+**Terminal Output - POST /resume Response:**
+
+**Terminal Output - POST /resume Response:**
+
+*Screenshot file not found: `orch-17-api-resume-response.txt`*
+*Figure 36: POST /api/v1/orchestrator/resume broadcasts orchestrator_resumed SSE event and returns idempotent was_already_running flag.*
+
+---
+
+## 14. Git Integration
+
+### GitSupervisor
+
+CircuitBreaker-protected git operations:
+
+| Method | Git Command | Returns |
+|--------|------------|---------|
+| `create_branch(name, base)` | `git checkout base && git checkout -b name` | bool |
+| `commit(message, files)` | `git add [files] && git commit -m message` | bool |
+| `push(remote, branch)` | `git push remote branch` | bool |
+| `create_pr(title, body, target, source)` | `git hub pull-request ...` | str (URL) or None |
+| `rollback(branch)` | `git checkout branch && git reset --hard HEAD~1` | bool |
+| `detect_changed_files(source, target)` | `git diff --name-only target...source` | list[str] |
+
+### Circuit Breaker
+
+All git operations are protected by a CircuitBreaker:
+
+```python
+# Default config
+failure_threshold=3,      # Open circuit after 3 failures
+recovery_timeout=60.0,    # Try again after 60 seconds
+success_threshold=2,      # Close circuit after 2 successes
+```
+
+---
+
+## 15. Troubleshooting
+
+### Common Issues
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| **Orchestrator not found** | Server not started or `.gaia/objectives.yaml` missing | Run `gaia chat --ui` and verify YAML exists |
+| **409 Conflict on /run** | Already running or flag not reset | Check if orchestrator is running; restart server if flag stuck |
+| **404 Objective not found** | Wrong objective_id | List objectives with `GET /api/v1/orchestrator/objectives` |
+| **Circular dependency error** | Cycle in objective dependencies | Remove the cycle from your YAML |
+| **All objectives blocked** | Root objective failed or cycle detected | Fix the root cause, then reset status to `queued` |
+| **Hook halts pipeline** | `halt_pipeline=True` returned by hook | Check hook logs for the reason |
+| **Worktree creation fails** | Git not initialized or branch exists | Run `git init` and clean stale branches |
+| **Circuit breaker open** | 3+ consecutive git failures | Wait 60s for recovery, or fix git issues |
+
+### Debug Mode
+
+Enable verbose logging:
+
+```python
+import logging
+logging.getLogger("gaia.orchestration").setLevel(logging.DEBUG)
+```
+
+### Checking State
+
+```bash
+# Quick state check
+curl -s http://localhost:4200/api/v1/orchestrator/state | python -m json.tool
+
+# Health check
+curl -s http://localhost:4200/api/v1/orchestrator/health | python -m json.tool
+
+# List all objectives
+curl -s http://localhost:4200/api/v1/orchestrator/objectives | python -m json.tool
+```
+
+### Resetting After Failure
+
+```python
+# Reset a blocked objective to queued
+obj = orchestrator.project.get_objective("obj-002")
+obj.status = ObjectiveStatus.QUEUED
+obj.error_message = None
+orchestrator.project.save_atomic(config.objectives_path)
+```
+
+---
+
+## 16. API Reference
+
+### REST Endpoints
+
+#### GET `/api/v1/orchestrator/state`
+
+Returns current orchestrator state, project summary, and supervisor state.
+
+**Response 200:**
+```json
+{
+  "orchestrator_state": {
+    "paused": false,
+    "cycle_count": 0,
+    "objectives_processed": 0,
+    "objectives_failed": 0,
+    "execution_history": [],
+    "objective_branches": {}
+  },
+  "project_summary": {
+    "project_id": "demo-guide",
+    "total_objectives": 5,
+    "completed": 0,
+    "failed": 0,
+    "in_progress": 0,
+    "queued": 5,
+    "completion_rate": 0.0
+  },
+  "supervisor_state": {
+    "aborted_reason": null,
+    "paused_reason": null,
+    "quality_trend": "stable"
+  }
+}
+```
+
+**Response 503:** Orchestrator not initialized
+
+---
+
+#### GET `/api/v1/orchestrator/health`
+
+Returns composite health score.
+
+**Response 200:**
+```json
+{
+  "status": "healthy",
+  "health_score": 1.0,
+  "components": {
+    "orchestrator_alive": true,
+    "error_rate": 0.0,
+    "supervisor_healthy": true,
+    "objectives_processed": 0,
+    "objectives_failed": 0,
+    "paused": false
+  }
+}
+```
+
+**Response 503:** Supervisor not enabled
+
+---
+
+#### GET `/api/v1/orchestrator/objectives`
+
+List objectives with optional filtering and pagination.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `phase` | string | - | Filter by phase (PLANNING, DEVELOPMENT, QUALITY, DECISION) |
+| `status` | string | - | Filter by status (queued, in_progress, completed, blocked, cancelled) |
+| `limit` | int | 50 | Max results (1-200) |
+| `offset` | int | 0 | Pagination offset |
+
+**Response 200:**
+```json
+{
+  "objectives": [...],
+  "total": 5,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+**Response 400:** Invalid filter value
+
+---
+
+#### GET `/api/v1/orchestrator/objectives/{objective_id}`
+
+Single objective detail.
+
+**Response 200:**
+```json
+{
+  "objective_id": "obj-001",
+  "title": "Initialize Project",
+  "description": "...",
+  "phase": "PLANNING",
+  "status": "queued",
+  "priority": 1,
+  "dependencies": [],
+  "artifacts": [],
+  "branch": null,
+  "error_message": null
+}
+```
+
+**Response 404:** Objective not found
+
+---
+
+#### GET `/api/v1/orchestrator/history`
+
+Paginated execution history (newest first).
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | 20 | Max results (1-200) |
+| `offset` | int | 0 | Pagination offset |
+
+---
+
+#### GET `/api/v1/orchestrator/stream`
+
+Server-Sent Events stream. Returns `text/event-stream` content type.
+
+**Headers:**
+```
+Cache-Control: no-cache
+Connection: keep-alive
+X-Accel-Buffering: no
+```
+
+---
+
+#### POST `/api/v1/orchestrator/run`
+
+Start orchestrator in background.
+
+**Request Body:**
+```json
+{
+  "template_name": "generic"
+}
+```
+
+**Response 202:**
+```json
+{
+  "status": "accepted",
+  "message": "Orchestrator started in background",
+  "template_name": "generic"
+}
+```
+
+**Response 409:** Already running
+
+**Response 503:** Orchestrator not initialized
+
+---
+
+#### POST `/api/v1/orchestrator/pause`
+
+Pause orchestrator execution.
+
+**Request Body:**
+```json
+{
+  "reason": "Manual pause for review"
+}
+```
+
+**Response 200:**
+```json
+{
+  "status": "paused",
+  "reason": "Manual pause for review"
+}
+```
+
+---
+
+#### POST `/api/v1/orchestrator/resume`
+
+Resume orchestrator execution.
+
+**Response 200:**
+```json
+{
+  "status": "resumed"
+}
+```
+
+---
+
+### SSE Event Schema
+
+All events follow this pattern:
+
+```json
+{
+  "type": "<event_type>",
+  "pipeline_id": "orchestrator-<project_id>",
+  "timestamp": 1714320000.0,
+  ... additional fields
+}
+```
+
+### Error Responses
+
+| Status Code | Description |
+|-------------|-------------|
+| 400 | Bad Request - invalid parameters |
+| 404 | Not Found - objective doesn't exist |
+| 409 | Conflict - orchestrator already running |
+| 500 | Internal Error - failed to load objectives |
+| 503 | Service Unavailable - orchestrator not initialized |
+
+---
+
+## Appendix: Public Python API
+
+```python
+from gaia.orchestration import (
+    # Data models
+    Artifact, ConflictReport, DependencyGraph, LevelResult,
+    Objective, ObjectiveStatus, ProjectObjectives,
+    # Engine
+    ProjectOrchestrator, OrchestratorConfig, OrchestratorPipelineAdapter,
+    # Hooks
+    ObjectiveUpdateHook, TaskSpawnHook,
+    GitBranchHook, GitCommitHook, GitPRHook, GitRollbackHook,
+    # Supervisor
+    HealthScore, ObjectiveOutcome, ProjectSupervisor,
+    SupervisorConfig, Verdict,
+    # Git Supervisor
+    GitOperation, GitSupervisor, SupervisorRegistry,
+)
+```
+
+**Version:** 1.0.0
+
+---
+
+*This guide covers GAIA Pipeline Orchestration v1.0.0. For updates and issues, visit https://github.com/amd/gaia.*

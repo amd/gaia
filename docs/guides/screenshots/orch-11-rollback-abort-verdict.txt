@@ -1,0 +1,21 @@
+# ORCH-11: Rollback Mechanism - Supervisor ABORT Triggers Rollback
+# Proves: Rollback triggered when supervisor returns ABORT verdict
+# Source: engine.py:1533 - _rollback_failed_objectives()
+# Feature: Rollback Mechanism (Phase 4C)
+
+$ python -m pytest tests/unit/orchestration/test_parallel_execution.py::TestRollback::test_rollback_supervisor_abort -v
+
+Result:
+  TestRollback::test_rollback_supervisor_abort PASSED
+  1 passed in 0.24s
+
+Test Setup:
+  enable_git_supervisor = True
+  enable_supervisor = True
+  Both objectives fail -> supervisor ABORT verdict
+
+Assertions Verified:
+  - objectives_failed == 2 (both failed)
+  - GitSupervisor.rollback called exactly 2 times (once per failed objective)
+  - Supervisor verdict: ABORT (all objectives in level failed)
+  - Rollback occurs even on supervisor abort, not just individual failure

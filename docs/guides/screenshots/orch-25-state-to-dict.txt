@@ -1,0 +1,28 @@
+# ORCH-25: State Serialization - JSON-Safe Output
+# Proves: OrchestratorState.to_dict() returns JSON-serializable copies
+# Source: engine.py:132 - OrchestratorState.to_dict()
+# Feature: State Serialization
+
+$ python -m pytest tests/unit/orchestration/test_orchestrator_api.py::TestOrchestratorStateToDict -v
+
+Result:
+  TestOrchestratorStateToDict::test_to_dict_returns_all_fields PASSED
+  TestOrchestratorStateToDict::test_to_dict_is_json_serializable PASSED
+  TestOrchestratorStateToDict::test_to_dict_returns_copies PASSED
+  3 passed in 0.11s
+
+Fields Serialized:
+  - paused: bool
+  - cycle_count: int
+  - objectives_processed: int
+  - objectives_failed: int
+  - execution_history: list[dict]
+  - objective_branches: dict[str, str]
+
+Safety Properties Verified:
+  1. All fields present in output (test_to_dict_returns_all_fields)
+  2. json.dumps() succeeds without TypeError (test_to_dict_is_json_serializable)
+  3. Returned lists/dicts are copies, not references
+     (mutating result does NOT affect internal state)
+
+Used by: GET /api/v1/orchestrator/state endpoint
