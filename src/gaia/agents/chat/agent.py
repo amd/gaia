@@ -1771,20 +1771,8 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
             )
         )
 
-        # Pre-activate RAG bundle when documents are already indexed
-<<<<<<< HEAD
-<<<<<<< HEAD
-        if (
-            hasattr(self, "rag")
-            and self.rag
-            and getattr(self.rag, "indexed_files", None)
-        ):
-=======
+# Pre-activate RAG bundle when documents are already indexed
         if hasattr(self, "rag") and self.rag and getattr(self.rag, "indexed_files", None):
->>>>>>> 2f79fa97 (trying to address the issue in::Tool-registry scaling: resolve scratchpad/memory collision via #688 dynamic loading #800)
-=======
-        if hasattr(self, "rag") and self.rag and getattr(self.rag, "indexed_files", None):
->>>>>>> 2f79fa97 (trying to address the issue in::Tool-registry scaling: resolve scratchpad/memory collision via #688 dynamic loading #800)
             self.tool_loader._state["rag"].activated = True
 
         # ── filesystem: file navigation and search ──────────────────────
