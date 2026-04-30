@@ -17,7 +17,6 @@ import asyncio
 import copy
 import json
 import logging
-import os
 import re as _re
 import threading
 import time as _time
@@ -1887,6 +1886,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             inference_stats = None
             try:
                 import httpx
+
                 from gaia.llm.lemonade_manager import LemonadeManager
 
                 base_url = (
