@@ -1,0 +1,310 @@
+---
+title: "Connectors Framework"
+description: "Typed registry + unified Settings UI for OAuth, MCP servers, and future API-token / composite-form / local-extension integrations. Parent of #915 (Google OAuth) and successor to the Connector Hub track."
+icon: "plug"
+---
+
+# Connectors Framework
+
+<Note>
+**Target:** v0.18.x | **Status:** Spec approved; implementation underway | **Priority:** High
+</Note>
+
+> **Date:** 2026-04-30
+>
+> **Status:** Active spec — implementation in flight on [PR #926](https://github.com/amd/gaia/pull/926) (baseline of #915).
+>
+> **Live tracking issue:** [#927](https://github.com/amd/gaia/issues/927) — the GitHub issue body is the canonical, continuously-updated spec; this document is a stable snapshot for in-repo discovery.
+>
+> **Related issues:** [#915](https://github.com/amd/gaia/issues/915) (OAuth PKCE for Google — first concrete connector); [#735](https://github.com/amd/gaia/issues/735) / [#736](https://github.com/amd/gaia/issues/736) / [#737](https://github.com/amd/gaia/issues/737) / [#738](https://github.com/amd/gaia/issues/738) / [#740](https://github.com/amd/gaia/issues/740) (Connector Hub track — supersede-vs-children call pending @kovtcharov-amd; see #927's Coordination block).
+>
+> **Related plans:** [Agent UI](agent-ui.mdx), [Security Model](security-model.mdx).
+>
+> **Scope:** This spec promotes the OAuth-only `gaia.connections` library shipped in #915 into a generalized **Connectors framework** with a `Settings → Connectors` page modeled on Claude desktop's native UI. The existing 22-entry MCP server catalog (today read-only in Settings) is unified into the same surface. v1 ships the framework with two implemented types (`oauth_pkce` + `mcp_server`); other types (`api_token`, `composite_form`, `local_extension`) are framework-shaped but follow-up.
+
+---
+
+## TL;DR
+
+GAIA already has two parallel mechanisms for "user wires up an external service": MCP server installs (today via `~/.gaia/mcp_servers.json`, read-only Settings panel) and OAuth via `gaia.connections` (just shipped in #915). This spec collapses both into one **typed connector registry** with a single Settings → Connectors page.
+
+Each connector tile knows how to configure itself (OAuth flow, env-block paste form, future API-token paste, …). Per-agent grants gate every credential read, regardless of type. Settings becomes a **navigable page** (no more modal-on-modal); clicking a tile drills **in-place** to a `ConnectorDetailView`. The framework's UI is **type-driven, not connector-driven** — adding a new connector costs one `ConnectorSpec` row, never new React.
+
+v1 ships:
+- **Framework**: `ConnectorSpec` registry, `ConnectorHandler` Protocol, public `get_credential(connector_id, agent_id)` API, FastAPI router with CSRF guard, `gaia connectors` CLI, master-detail UI.
+- **Two implemented types**: `oauth_pkce` (Google, refactored from #915), `mcp_server` (the 22 entries from `src/gaia/ui/routers/mcp.py:_CATALOG` migrated to `ConnectorSpec` rows; secret env stored as `$keyring` references that `MCPClient` resolves at spawn).
+- **Three follow-up types**: `api_token`, `composite_form`, `local_extension` — shape exists, handlers defer to v2 child issues.
+
+---
+
+## Why now
+
+Building the framework now — before either auth pattern grows further — avoids two divergent UX patterns and lets follow-up integrations (GitHub PAT, Anthropic key management, Jira credentials, Microsoft 365) plug into a single typed registry instead of inventing a third pattern.
+
+User-confirmed direction (post-meeting on 2026-04-30):
+
+- **Unify** with MCP — one Settings → Connectors page; the MCP read-only panel goes away.
+- **Framework + Google only in v1** — first PR ships the framework with #915's OAuth refactored under it. Other connectors are follow-up issues.
+- **Per-agent grants for every connector type** — same `~/.gaia/connectors/grants.json` ledger gates `get_credential(connector_id, agent_id)` regardless of type.
+- **Rename** `gaia.connections` → `gaia.connectors`, `~/.gaia/connections/` → `~/.gaia/connectors/`, `ConnectionsSection.tsx` → `ConnectorsSection.tsx`, `gaia connections` CLI → `gaia connectors`. Since #915 is unmerged, no migration shims are needed — direct rename only.
+
+---
+
+## User experience
+
+1. User opens **AgentUI → Settings → Connectors** and sees a grid of tiles: **Google** (OAuth), **Mermaid Chart** (MCP), **Supabase** (MCP), … with status chips ("Not configured" / "Connected" / "Running").
+2. Clicking **Configure** on a tile drills into a type-specific detail view (in-place within the Settings page — no nested modal):
+    - OAuth tile → "Connect" button → system browser → consent → SSE updates UI to "Connected as `<email>`" within 2 seconds (the existing #915 flow).
+    - MCP-server tile → form rendered from the connector's `config_schema` (the env-block fields the MCP server needs). Paste API key → click **Test** → spinner → "Connected, 4 tools detected" → Save.
+3. The detail view also shows a **Per-agent grants** subsection: a list of installed agents whose `REQUIRED_CONNECTORS` match this connector, each with a toggle. The user grants individual agents access; no agent can read a connector's credentials without an explicit grant.
+4. Disconnect / Disable from the same view clears the credential and the per-agent grants in one click. SSE refreshes the UI.
+5. If a refresh token is revoked or an MCP server's API key is rotated remotely, the next agent run hits the failure, AgentUI shows the existing reauth banner, and the user re-configures from the same tile.
+
+---
+
+## Connector type taxonomy
+
+After adversarial review (full panel output in the implementation playbook), the v1 framework supports **two** types — proving extensibility without shipping unused stubs:
+
+| Type | Configures | Stores | `get_credential()` returns |
+|---|---|---|---|
+| `oauth_pkce` | redirect to provider, PKCE flow | refresh_token in keyring; scopes/account email in `state.json` | `{access_token, expires_at, scopes}` |
+| `mcp_server` | env-block fields per the connector's `config_schema` | secret env in keyring; plain env in `state.json`; the same entry mirrored to `~/.gaia/mcp_servers.json` (with **`$keyring` references** for the secret values, not plaintext) for `MCPClient` to consume | `{server_running, tools, command, args, env}` |
+
+Three additional types — `api_token`, `composite_form`, `local_extension` — are framework-shaped (the registry and dispatcher accept them) but **not implemented** in v1. They land in follow-up child issues when concrete catalog entries demand them.
+
+---
+
+## Module layout
+
+New module at `src/gaia/connectors/`:
+
+```
+src/gaia/connectors/
+├── __init__.py              # public re-exports
+├── api.py                   # coordination: get_credential, configure, disconnect, test
+├── spec.py                  # ConnectorSpec, ConfigField, ConnectorRequirement (frozen dataclasses)
+├── registry.py              # catalog loader; id-uniqueness validated at module import
+├── state.py                 # ~/.gaia/connectors/state.json atomic store
+├── grants.py                # ~/.gaia/connectors/grants.json (rekeyed from #915 grants ledger)
+├── store.py                 # OS keyring (re-used from #915 verbatim; service name kept as "gaia.connections")
+├── context.py               # private _agent_context (NOT re-exported)
+├── events.py                # EventEmitter Protocol
+├── errors.py                # ConnectorsError + AuthRequiredError(Reason) + ConnectorTypeMismatchError
+├── cli.py                   # gaia connectors {connect|status|disconnect|grants ...}
+├── handlers/
+│   ├── base.py              # ConnectorHandler Protocol (NOT ABC — matches OAuthProvider style)
+│   ├── oauth_pkce/          # refactor of #915 flow.py + tokens.py + pkce.py
+│   │   ├── __init__.py      # OAuthPkceHandler
+│   │   ├── flow.py
+│   │   ├── tokens.py
+│   │   ├── pkce.py
+│   │   └── base.py          # OAuthProvider Protocol
+│   └── mcp_server.py        # McpServerHandler
+└── catalog/
+    ├── google.py            # Google ConnectorSpec
+    └── mcp_servers.py       # 22 ConnectorSpec rows migrated from src/gaia/ui/routers/mcp.py:_CATALOG
+```
+
+The keyring service name remains `gaia.connections` (NOT renamed to `gaia.connectors.<id>`) — internal constant, not user-visible, and renaming it would orphan dev keyring entries from #915 with no benefit.
+
+---
+
+## Public Python API
+
+```python
+async def get_credential(
+    connector_id: str,
+    *,
+    agent_id: str | None = None,                 # falls back to current_agent_id contextvar
+    required_scopes: list[str] | None = None,    # oauth_pkce only
+    account_id: str | None = None,
+) -> dict:
+    """Return type-specific credential payload after grant + scope check.
+
+    Two-layer authorization:
+      1. Per-agent grant — connector_id → agent_id → ["use" | scope-list]
+      2. Type-specific policy — OAuth scopes coverage; MCP server running
+
+    Raises:
+        AuthRequiredError(Reason)  # NOT_CONNECTED | AGENT_NOT_GRANTED |
+                                   # CONNECTION_MISSING_SCOPES | REAUTH_REQUIRED |
+                                   # CONNECTOR_NOT_CONFIGURED | MCP_SERVER_NOT_RUNNING
+        ConnectorsError            # any other framework error
+    """
+
+def get_credential_sync(...) -> dict          # asyncio.run wrapper with running-loop guard
+
+async def configure(connector_id: str, config: dict) -> dict
+async def disconnect(connector_id: str, *, account_id: str | None = None) -> None
+async def test(connector_id: str) -> dict     # {"ok": bool, "detail": str}
+async def list_installed() -> list[dict]
+def list_catalog() -> list[ConnectorSpec]
+
+# OAuth-specific (still public for the OAuth modal)
+async def start_authorization(connector_id, scopes) -> {auth_url, state}
+async def complete_authorization(state, code) -> {account_id}
+
+# Grants (generalized over connector_id)
+def grant_agent(connector_id, agent_id, scopes)
+def revoke_agent_grant(connector_id, agent_id)
+def list_agent_grants(connector_id) -> dict[str, list[str]]
+def check_agent_grant(connector_id, agent_id, required_scopes) -> bool
+```
+
+`ConnectorHandler` is a `Protocol` (not an ABC) matching `OAuthProvider` and `EventEmitter` from #915 — keeps duck-typed mixin convention consistent.
+
+---
+
+## Storage layout
+
+| Storage | What | Why |
+|---|---|---|
+| OS keychain — service `gaia.connections` (unchanged from #915), username `<connector_id>:<account_id>` | Single JSON blob: refresh tokens, secret env values, account metadata, `client_id_hash` | Encrypted at rest; backend allowlist refuses `PlaintextKeyring` / `EncryptedKeyring` per #915 |
+| `~/.gaia/connectors/state.json` (mode 0600) | Non-secret per-connector state: configured flag, account_id, scope list, last_tested_at | Cheap "is this configured?" check that doesn't prompt the OS keychain (Linux SecretService prompts on every read) |
+| `~/.gaia/connectors/grants.json` (mode 0600) | Per-agent grant map: `{connector_id: {agent_id: [scopes-or-"use"]}}` | Authorization policy, not a secret |
+| `~/.gaia/mcp_servers.json` | MCP server runtime config consumed by `MCPClient` | **Connectors framework is the sole writer; `MCPClient` is read-only consumer.** Secret env values stored as `{"$keyring": "<service>:<key>"}` references — never plaintext |
+| In-process memory only | OAuth access tokens with `expires_at` | Short-lived (~1 hr); never persisted |
+
+---
+
+## API endpoints
+
+`src/gaia/ui/routers/connectors.py`:
+
+```
+GET    /api/connectors/catalog                     → [ConnectorSpec]
+GET    /api/connectors/installed                   → [{id, status, account, ...}]
+POST   /api/connectors/{id}/configure              body: {config: {…}}
+POST   /api/connectors/{id}/oauth/authorize        body: {scopes: [...]}     (oauth_pkce only)
+POST   /api/connectors/{id}/oauth/cancel
+POST   /api/connectors/{id}/test
+DELETE /api/connectors/{id}                        ?account_id=…
+GET    /api/connectors/{id}/grants                 → {agent_id: [scopes]}
+PUT    /api/connectors/{id}/grants/{agent_id}      body: {scopes: [...]}
+DELETE /api/connectors/{id}/grants/{agent_id}
+GET    /api/connectors/events                      SSE stream
+GET    /api/connectors/_debug                      gated by GAIA_DEBUG=1
+```
+
+Every state-changing route is gated by `Depends(_require_ui_header)` (the existing `X-Gaia-UI: 1` CSRF check at `src/gaia/ui/routers/agents.py:58`). The same guard is backfilled on the legacy `/api/mcp/servers` mutating routes — they're missing it today.
+
+Routers accept `connector_id` (a lookup key into the registry) **only** — they never accept `command`, `args`, `mcp_command`, or `test_endpoint` from the request body. The catalog is frozen at module import.
+
+---
+
+## AgentUI surfaces
+
+### Settings is a page, not a modal
+
+Today's `SettingsModal` (a fullscreen overlay rendered on top of the chat view) is replaced by **`SettingsPage`** — a top-level navigable destination that **replaces** the chat view rather than overlaying it.
+
+- **Entry**: clicking the gear icon (currently `setShowSettings(true)`) navigates to the Settings page.
+- **Exit**: a back arrow (← top-left) and/or a close (✕) button returns the user to the chat view. State (chat session, scroll position) is preserved across the round-trip.
+- **No modal stack anywhere in the connectors flow.** Drill-in within Settings is master-detail in-place, not a nested modal — the original `ConfigureModal`-on-`SettingsModal` pattern is eliminated.
+- **Other Settings sections** (System Status, Custom Agents, Privacy & Data) remain as stacked sections in v1. A Claude-style sidebar nav across all of Settings (General / Connectors / Privacy / Account / etc.) is **out of scope for v1** — this PR only converts the modal shell to a page and adds master-detail within Connectors. The sidebar nav is a follow-up child issue.
+
+### Connectors master-detail navigation
+
+1. **Default Settings page** renders all Settings sections stacked, including the **Connectors** section: a grid of `ConnectorTile`s (icon, display name, status chip — `Not configured` / `Connected as <email>` / `Running` — and a Configure / Disconnect button).
+2. **Click a tile** → the Connectors section content swaps **in-place** to the connector's **detail view** (rest of the page is replaced or, implementer's choice, scroll-locks behind it; the rule is "no modal").
+3. **Detail view header**: connector icon + display name + external-link icon (jumps to the provider's product page via `ConnectorSpec.product_url`) + Disconnect button.
+4. **Detail view body**: dispatched by `spec.type` — `OAuthConfigureBody` (lifted from #915's `ConnectionsSection`), `MCPServerConfigureBody` (env form + Test button), and (for v2) `ApiTokenConfigureBody`, `CompositeFormConfigureBody`, `LocalExtensionConfigureBody`.
+5. **Per-agent grants subsection** rendered below the body: lists agents whose `REQUIRED_CONNECTORS` match this connector, with type-aware controls — `oauth_pkce` shows per-scope toggles, `mcp_server` shows a single "use this server" toggle (per-tool toggles are a v2 follow-up; the storage shape already supports them).
+6. **`← All connectors`** link in the detail-view header returns to the tile grid without losing scroll position.
+
+### UI extensibility model
+
+The framework's UI is **type-driven, not connector-driven**. New connectors do NOT introduce custom React components.
+
+- **Adding a new connector** (e.g. GitHub PAT) costs **one `ConnectorSpec` row** in `src/gaia/connectors/catalog/<id>.py` — icon, display name, instructions_md, config_schema, optional product_url. **Zero new React.**
+- **Adding a new type** (e.g. `api_token` in v2) costs **one new handler class** + **one new ConfigureBody component**, shared by every connector of that type. Tile grid, status chips, master-detail navigation, per-agent grants subsection, SSE plumbing — all reused.
+
+For connectors that genuinely support multiple auth methods (e.g. GitHub: PAT or OAuth App), the answer is **two `ConnectorSpec` rows** — `id="github"` (api_token) and `id="github-oauth"` (oauth_pkce) — NOT one connector with custom UI. If a future connector cannot be expressed via the existing types, the right move is to add a new type, not to inject connector-specific React.
+
+The Claude desktop "Tool permissions" matrix (per-tool allow/ask/deny within a connector) is **out of scope for v1**. Its data model is already supported by the existing `grants.json` scope-list shape (store `["search_repos", "create_issue"]` instead of `["use"]`), so the v2 follow-up only adds UI without a storage migration.
+
+### Markdown rendering policy
+
+`instructions_md` (rendered in connector detail view) goes through `react-markdown` with `disallowedElements=['script','iframe','object','embed','style']`, `urlTransform` filtering to `https:` / `http:` / `mailto:` only, **no `rehype-raw`**. No `dangerouslySetInnerHTML` anywhere in the connector pipeline. This is a framework invariant — documented in `docs/sdk/infrastructure/connectors.mdx` so follow-up PRs cannot regress it.
+
+---
+
+## MCP unification
+
+The 22 entries in `src/gaia/ui/routers/mcp.py:_CATALOG` (lines 22–231) become 22 `ConnectorSpec(type="mcp_server", …)` rows in `src/gaia/connectors/catalog/mcp_servers.py`. Each `requires_config` becomes a `config_schema` of secret fields.
+
+`McpServerHandler.configure(config)` writes secret env to keyring, plain env + the connector entry to `state.json`, and writes a corresponding entry into `~/.gaia/mcp_servers.json` where the env block contains **keyring references** (`{"$keyring": "<service>:<key>"}`) for any secret value. `MCPClient` resolves these references in-memory at spawn time — no secret env value lives plaintext on disk.
+
+`MCPClient` **fails closed** when a `$keyring` reference can't be resolved at spawn time (deleted entry, wrong service:key, locked keychain): it raises `ConnectorsError` naming the missing service:key tuple and refuses to spawn the server — never silently spawns with empty env.
+
+After every `configure()` write, the handler calls `MCPClient.reload()` (a new method) so a freshly-configured server's tools materialize without a GAIA restart.
+
+`gaia.mcp.client.config.MCPConfig` becomes read-only: its `add_server`, `remove_server`, and `_save` methods are removed (or hidden behind a deprecated prefix that emits `DeprecationWarning`). The connectors framework is the sole writer to `mcp_servers.json`; the file write itself uses `tempfile.mkstemp` + `os.replace` to match the atomicity guarantees of `grants.json`.
+
+The MCP read-only Settings panel is **deleted** in this PR — users see MCP servers as tiles in the unified Connectors page.
+
+**Naming convention:** MCP-backed connectors use the id-suffix `-mcp` (e.g. `id="github-mcp"`) so a future `id="github"` API-token connector won't collide. `ConnectorRegistry.__init__` validates id uniqueness at module-import time.
+
+---
+
+## Out of scope for v1
+
+Everything below becomes child issues under [#927](https://github.com/amd/gaia/issues/927) once the framework lands:
+
+- **`api_token`, `composite_form`, `local_extension` handler types** — framework-shaped but not implemented in v1.
+- **GitHub PAT, Anthropic API key, OpenAI API key, Hugging Face token, Jira composite credentials** — first batch of follow-up connector child issues once v1 lands.
+- **Microsoft 365 OAuth.** Same `oauth_pkce` machinery; new `ConnectorSpec` + provider class. Separate issue.
+- **MCP per-tool grants.** v1 ships single-toggle "use this server"; per-tool granularity is forward-compatible via the existing scope-list grant key but waits for v2 UX.
+- **Local-extension auto-detection.** The `installed_check` callable design is fine but per-platform implementations (macOS bundle id, Chrome extension probe) are non-trivial. v1 ships the type behind a manual "I installed it" toggle once it returns.
+- **Cross-process refresh-token rotation race.** Known #915 limitation; same applies to API-token rotation. Documented in `docs/security/connectors.mdx`; out of scope for v1.
+- **Custom user-supplied catalog entries.** v1 catalog is frozen at module import — no runtime extensibility API. A future "register custom connector" surface would need a separate threat model.
+- **Settings sidebar nav** (Claude-desktop-style General / Connectors / Privacy / Account in left rail). v1 keeps stacked sections; sidebar is a follow-up.
+
+---
+
+## Acceptance criteria
+
+The full AC list (≈ 50 items across Unit & Integration, API endpoints, End-to-end, UI structure / navigation, Migration / refactor of #915, Security & code review) lives on the [tracking issue](https://github.com/amd/gaia/issues/927#acceptance-criteria) and is the source of truth for what "done" means. Highlights:
+
+- Original 157 #915 OAuth tests pass under the new module name `gaia.connectors`.
+- Every entry in legacy `mcp.py:_CATALOG` has a matching `ConnectorSpec` with `type="mcp_server"`. Every `mcp_server` id ends with `-mcp`.
+- `McpServerHandler.configure(config)` for a connector with secret fields produces a `mcp_servers.json` whose env block contains `{"$keyring": "..."}` references but no plaintext secret value.
+- `MCPClient` fails closed (raises `ConnectorsError`) when a `$keyring` reference can't be resolved at spawn time — asserted by a unit test that pre-seeds `mcp_servers.json` with a dangling reference.
+- `MCPClient.reload()` after `configure()` makes the new server's tools visible to agents without a GAIA restart.
+- Every mutating endpoint requires the `X-Gaia-UI: 1` CSRF header; backfilled on legacy `/api/mcp/servers` routes too.
+- Settings is a top-level page (replacing `SettingsModal`), with back/close affordance. No modal-on-modal anywhere.
+- Adding a new connector requires only a `ConnectorSpec` row — no new React component. Asserted by review checklist + a doc note in `docs/sdk/infrastructure/connectors.mdx`.
+- No secret value (refresh token, MCP env api_key, etc.) appears in any log record, file under `~/.gaia/connectors/`, traceback, Pydantic dump, OpenAPI schema, or SSE event payload.
+
+---
+
+## Implementation playbook
+
+The detailed task list (T-0 through T-9, TDD-paired), the file-level rename map, and the full 6-agent adversarial review (with 11 Critical findings auto-amended into the plan) live at `~/.claude/plans/floating-discovering-gray.md` on the implementation worktree. That file is execution-time material; this document is the public spec.
+
+A condensed sequence:
+
+| Task | Description | Blocking? |
+|---|---|---|
+| T-0 | Repo move + import rewrite (`gaia.connections` → `gaia.connectors`); CodeAgent + packaging + grep checks. | Yes |
+| T-1 | `ConnectorSpec` + `ConfigField` + `ConnectorRequirement` dataclasses + `ConnectorRegistry` (id-uniqueness validated, frozen at import). | Yes |
+| T-2 | `state.json` atomic store + `grants.py` rekey from `provider` → `connector_id`. | Yes |
+| T-3 | `ConnectorHandler` Protocol + `get_credential` dispatcher. | Yes |
+| T-4 | `OAuthPkceHandler` (refactor of #915 flow + tokens + pkce); Google ConnectorSpec. | Parallel after T-3 |
+| T-5 | `McpServerHandler` + 22-entry catalog migration + `$keyring` reference scheme + `MCPClient.reload()` + `MCPConfig` read-only refactor. | Parallel after T-3 |
+| T-6 | FastAPI router `/api/connectors/*` with `_require_ui_header` + `/_debug` refresh. | After handlers |
+| T-7 | `gaia connectors` CLI. | Parallel with T-6 |
+| T-8a | Frontend shell conversion: `SettingsModal` → `SettingsPage`. | Parallel with T-6 |
+| T-8b | Connectors UI: `ConnectorsSection` grid + `ConnectorTile` + `ConnectorDetailView` (in-place replacement) + `OAuthConfigureBody` + `MCPServerConfigureBody` + `ConnectorAgentGrants`. | After T-8a + T-6 |
+| T-9 | Docs (`connectors.mdx` rename + this plan + security model + runbook) + E2E smoke. | Last |
+
+---
+
+## Risks & open coordination
+
+1. **Connector Hub track overlap.** Issues #735 / #736 / #737 / #738 / #740 cover the same destination with a different storage architecture (`vault://` references via #545 vs. OS keyring + `$keyring` references already shipped in #915). **Decision pending @kovtcharov-amd:** close #735–#740 as superseded (re-target #737 as a v2 child of #927), OR demote #927 to a child of #735 as "Phase 0". Either is fine; running both parents in parallel is not. See [#927's Coordination block](https://github.com/amd/gaia/issues/927#dependencies) for the row-by-row mapping.
+2. **PR shape (single vs. split).** Currently #926 carries the #915 baseline; the framework refactor lands on top. With ≈ 50 AC items, splitting into PR-A (rename + framework scaffolding) + PR-B (handlers + UI + MCP unification) probably wins on reviewability — execution-time call.
+3. **MCP `$keyring` reference resolution at spawn.** New surface area; the fail-closed test is the contract guard.
+4. **Cross-process refresh-token rotation race.** Documented as v1 limitation in `docs/security/connectors.mdx` (when that file lands). Same class of issue extends to future API-token rotation.
+5. **Local-extension installed-detection.** Punted to v2 — v1 ships the type behind a manual toggle when it returns.

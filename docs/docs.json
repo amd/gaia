@@ -374,6 +374,7 @@
               "plans/agent-ui",
               "plans/setup-wizard",
               "plans/security-model",
+              "plans/connectors",
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
               "plans/messaging-integrations-plan",
