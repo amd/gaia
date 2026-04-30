@@ -345,9 +345,10 @@ class GovernedAgentMixin:
             ):
                 # Fail closed: REVIEW means "do not run without review".
                 return False, None
-            reviewer = lambda name, args, _decision: console.confirm_tool_execution(
-                name, args
-            )
+
+            def reviewer(name, args, _decision):
+                return console.confirm_tool_execution(name, args)
+
         try:
             return bool(reviewer(tool_name, tool_args, decision)), None
         except Exception as exc:  # pylint: disable=broad-exception-caught
