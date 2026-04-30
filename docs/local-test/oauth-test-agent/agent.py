@@ -11,7 +11,7 @@ Run flow (see ../README.md for the full local-test recipe):
   3. Open Settings → Connections → click "Connect" next to Google.
   4. Complete OAuth in your browser; AgentUI updates within ~2s.
   5. Switch the active agent to "OAuth Test (Gmail)".
-  6. The first message triggers the consent dialog (REQUIRED_CONNECTIONS
+  6. The first message triggers the consent dialog (REQUIRED_CONNECTORS
      surfaces the gmail.readonly scope claim).
   7. Click "Grant" — the agent now has gmail.readonly for your account.
   8. Ask the agent: "list 5 recent subjects". The reply lists subjects
@@ -30,9 +30,9 @@ import requests
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
-from gaia.connections import (
+from gaia.connectors import (
     AuthRequiredError,
-    ConnectionRequirement,
+    ConnectorRequirement,
     get_access_token_sync,
 )
 
@@ -54,8 +54,8 @@ class OAuthTestAgent(Agent):
 
     # Declare the scope claim — the AgentUI consent dialog renders the
     # `reason` field in plain language.
-    REQUIRED_CONNECTIONS: ClassVar[List[ConnectionRequirement]] = [
-        ConnectionRequirement(
+    REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = [
+        ConnectorRequirement(
             provider="google",
             scopes=[GMAIL_READONLY],
             reason="Read your Gmail inbox to summarize the 5 newest message subjects.",

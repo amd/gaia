@@ -230,8 +230,8 @@ class CodeAgent(
         # from the base Agent.process_query's, so the base wrapper can't
         # delegate to a renamed _process_query_impl as it does for other
         # subclasses. ``_agent_context`` is the private helper from
-        # gaia.connections.context — public callers cannot reach it.
-        from gaia.connections.context import _agent_context
+        # gaia.connectors.context — public callers cannot reach it.
+        from gaia.connectors.context import _agent_context
 
         ns_id = getattr(self, "_gaia_namespaced_agent_id", None) or getattr(
             self, "AGENT_ID", None

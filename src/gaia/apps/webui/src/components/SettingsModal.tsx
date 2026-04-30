@@ -10,8 +10,8 @@ import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
 import type { SystemStatus, MCPServerStatus } from '../types';
 import { CustomAgentsSection } from './CustomAgentsSection';
-import { ConnectionsSection } from './ConnectionsSection';
-import './ConnectionsSection.css';
+import { ConnectorsSection } from './ConnectorsSection';
+import './ConnectorsSection.css';
 import './SettingsModal.css';
 
 export function SettingsModal() {
@@ -501,7 +501,7 @@ export function SettingsModal() {
                     <CustomAgentsSection />
 
                     {/* Connections — issue #915 — OAuth (Google) + per-agent grants */}
-                    <ConnectionsSection />
+                    <ConnectorsSection />
 
                     {/* About */}
                     <section className="settings-section">

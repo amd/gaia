@@ -1,0 +1,278 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""
+Keyring-backed persistent storage for OAuth connection records.
+
+Single-blob design (plan amendment A5):
+    Each ``(provider, account_email)`` tuple maps to ONE keyring entry that
+    stores a JSON blob containing ``refresh_token``, ``account_email``,
+    ``scopes``, ``connected_at``, and ``client_id_hash``. A single
+    ``set_password`` call atomically replaces the entry, so a partial-write
+    failure cannot leave us with a fresh token + stale metadata.
+
+Backend allowlist (plan amendment A4):
+    Plaintext or weak file-backed keyring backends (e.g. ``keyrings.alt``'s
+    ``PlaintextKeyring``, ``EncryptedKeyring``, ``Win32CryptoKeyring``) are
+    explicitly refused BEFORE any write. Linux machines without
+    SecretService produce an actionable error pointing at the runbook
+    instead of silently writing tokens to disk in plaintext.
+
+Eager ``client_id_hash`` tripwire (plan amendment from Iteration 1, AC10):
+    Every ``load_connection`` compares the stored hash against the current
+    one. A mismatch means the OAuth client was rotated (or the user moved
+    their installation between machines with different env configurations);
+    we clear the stored entry, emit ``connection.revoked``, and return
+    ``None`` so the caller raises ``REAUTH_REQUIRED``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from typing import List, Optional
+
+import keyring
+import keyring.errors
+
+from gaia.connectors.errors import (
+    AuthRequiredError,
+    ConnectorsError,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# Keyring service name kept as "gaia.connections" intentionally (plan
+# amendment A3): renaming to match the module rename would orphan every
+# dev's existing keyring entries from #915 with zero benefit. The constant
+# is internal — not user-visible — so it does not need to track the
+# Python module name.
+SERVICE_NAME = "gaia.connections"
+
+# v1 default account name used by callers that don't yet plumb a real
+# email through. Multi-account support (forward-compat per A10) writes
+# the real account_email here.
+DEFAULT_ACCOUNT = "default"
+
+# Backend class names we refuse outright. These are the ``keyrings.alt``
+# fallbacks that store in plaintext or with a weak passphrase scheme.
+_REFUSED_BACKEND_CLASS_NAMES: frozenset[str] = frozenset(
+    {
+        "PlaintextKeyring",
+        "EncryptedKeyring",
+        "Win32CryptoKeyring",
+    }
+)
+
+
+def _connection_username(provider: str, account_email: str) -> str:
+    """Build the keyring username key for ``(provider, account_email)``.
+
+    Multi-account forward-compat (A10): the key shape is
+    ``"<provider>:<account_email>"``. v1 always writes
+    ``account_email = "default"`` so the schema can absorb a real email
+    without migration.
+    """
+    return f"{provider}:{account_email}"
+
+
+def verify_keyring_backend() -> None:
+    """
+    Raise ``ConnectorsError`` if the active keyring is one of the refused
+    backends. Called eagerly at every save and at every load — cheap, and
+    closes the silent-plaintext-fallback path (A4).
+    """
+    backend = keyring.get_keyring()
+    cls_name = type(backend).__name__
+    if cls_name in _REFUSED_BACKEND_CLASS_NAMES:
+        raise ConnectorsError(
+            f"Insecure keyring backend {cls_name!r} is in use. GAIA refuses "
+            "to store OAuth refresh tokens in plaintext. Install a secure "
+            "system credential store (gnome-keyring or kwallet on Linux; "
+            "macOS Keychain and Windows Credential Locker are built-in) "
+            "and restart GAIA. See docs/security/connections.mdx."
+        )
+
+
+def _wrap_keyring_call(operation: str):
+    """Decorator-like helper: translate keyring exceptions into
+    ``ConnectorsError`` with actionable text per CLAUDE.md."""
+
+    def wrapper(fn):
+        def inner(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except keyring.errors.KeyringError as e:
+                raise ConnectorsError(
+                    f"Keyring {operation} failed: {e}. Install a system "
+                    "credential store (gnome-keyring on Linux, or rely on "
+                    "the macOS Keychain / Windows Credential Locker), "
+                    "configure it, and restart GAIA. See "
+                    "docs/security/connections.mdx."
+                ) from e
+
+        return inner
+
+    return wrapper
+
+
+def save_connection(
+    *,
+    provider: str,
+    account_email: str,
+    refresh_token: str,
+    scopes: List[str],
+    client_id_hash: str,
+    connected_at: Optional[float] = None,
+) -> None:
+    """
+    Atomically persist a connection record to the keyring.
+
+    The single keyring slot stores a JSON blob — a partial write is
+    impossible because the underlying backend's ``set_password`` is a
+    full-value overwrite at the slot. This is the rotation-safety
+    guarantee (per Iteration 1 fix C5).
+
+    v1 single-account-per-provider scope (per plan amendment A10): the
+    keyring slot is ALWAYS keyed by ``DEFAULT_ACCOUNT``, regardless of
+    the ``account_email`` argument. ``account_email`` is stored inside
+    the JSON blob for display purposes only. **A second
+    ``save_connection`` for the same provider — even with a different
+    email — will overwrite the first.** Multi-account support (separate
+    keyring slots per email) is a v2 follow-up; the username-key shape
+    ``"<provider>:<account_email>"`` is forward-compatible for that
+    migration.
+    """
+    verify_keyring_backend()
+
+    blob = {
+        "account_email": account_email,
+        "refresh_token": refresh_token,
+        "scopes": list(scopes),
+        "connected_at": connected_at if connected_at is not None else time.time(),
+        "client_id_hash": client_id_hash,
+    }
+    payload = json.dumps(blob, sort_keys=True)
+    # v1 single-account per provider (per A10): the keyring KEY is always
+    # built with DEFAULT_ACCOUNT; ``account_email`` lives in the metadata
+    # blob for display. v2 will key by real email without a schema
+    # migration since the username shape already accommodates it.
+    username = _connection_username(provider, DEFAULT_ACCOUNT)
+
+    @_wrap_keyring_call("set_password")
+    def _set():
+        keyring.set_password(SERVICE_NAME, username, payload)
+
+    _set()
+    # Log only metadata — never the refresh token value.
+    logger.debug(
+        "store: saved connection provider=%s account=%s scopes=%d hash=%s…",
+        provider,
+        account_email,
+        len(scopes),
+        client_id_hash[:8],
+    )
+
+
+def load_connection(
+    provider: str,
+    *,
+    current_client_id_hash: str,
+    account_email: str = DEFAULT_ACCOUNT,
+) -> Optional[dict]:
+    """
+    Return the stored connection record, or ``None`` if no entry / tripwire fired.
+
+    The eager ``client_id_hash`` tripwire (AC10) compares the stored hash
+    against ``current_client_id_hash``; on mismatch the entry is cleared
+    and ``None`` is returned. The caller (``tokens.get_access_token``)
+    then raises ``AuthRequiredError(REAUTH_REQUIRED)``.
+    """
+    verify_keyring_backend()
+    username = _connection_username(provider, account_email)
+
+    @_wrap_keyring_call("get_password")
+    def _get():
+        return keyring.get_password(SERVICE_NAME, username)
+
+    raw = _get()
+    if raw is None:
+        return None
+
+    try:
+        blob = json.loads(raw)
+    except json.JSONDecodeError as e:
+        # Should not happen unless the keyring backend was corrupted by
+        # an external writer — clear the entry and surface a useful error.
+        delete_connection(provider, account_email=account_email)
+        raise ConnectorsError(
+            f"Stored connection blob for provider={provider!r} is not valid "
+            "JSON. Cleared the entry; reconnect via Settings → Connections "
+            f"or `gaia connectors connect {provider}`."
+        ) from e
+
+    stored_hash = blob.get("client_id_hash")
+    if stored_hash != current_client_id_hash:
+        # Tripwire fired — clear the stored entry and raise REAUTH_REQUIRED
+        # so the caller (and the router) can distinguish this case from
+        # "user never connected". The unit test in test_store.py asserts
+        # the entry is cleared; the unit test in test_tokens.py asserts
+        # the right Reason flows to the caller.
+        logger.warning(
+            "store: client_id_hash tripwire fired for provider=%s "
+            "(stored=%s…, current=%s…); clearing entry",
+            provider,
+            (stored_hash or "<missing>")[:8],
+            current_client_id_hash[:8],
+        )
+        delete_connection(provider, account_email=account_email)
+        raise AuthRequiredError(
+            AuthRequiredError.Reason.REAUTH_REQUIRED, provider=provider
+        )
+
+    return blob
+
+
+def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) -> None:
+    """Remove the keyring entry for ``provider`` if present. Idempotent."""
+    verify_keyring_backend()
+    username = _connection_username(provider, account_email)
+
+    try:
+        keyring.delete_password(SERVICE_NAME, username)
+        logger.debug(
+            "store: deleted connection provider=%s account=%s",
+            provider,
+            account_email,
+        )
+    except keyring.errors.PasswordDeleteError:
+        # Already gone — fine.
+        pass
+    except keyring.errors.KeyringError as e:
+        raise ConnectorsError(
+            f"Keyring delete_password failed: {e}. See "
+            "docs/security/connections.mdx."
+        ) from e
+
+
+def list_connections() -> List[str]:
+    """
+    Best-effort enumeration of stored providers.
+
+    The ``keyring`` API does not expose a portable "list all entries for
+    service" call. v1 returns the providers we know about (currently
+    just ``google``); future providers extend this.
+    """
+    known = ("google",)
+    found: list[str] = []
+    for provider in known:
+        username = _connection_username(provider, DEFAULT_ACCOUNT)
+        try:
+            if keyring.get_password(SERVICE_NAME, username) is not None:
+                found.append(provider)
+        except keyring.errors.KeyringError:
+            # Translate-and-skip is OK for an enumeration call: a single
+            # failed backend doesn't invalidate the list.
+            continue
+    return found

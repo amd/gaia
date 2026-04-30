@@ -16,7 +16,7 @@ Current fixtures:
 - lemonade_available: Session-scoped fixture checking if Lemonade server is running
 - require_lemonade: Fixture that skips tests if Lemonade is not available
 - in_memory_keyring: Session-scoped fixture installing an in-memory keyring backend
-  (used by tests/unit/connections/ to avoid SecretService prerequisite on Linux CI)
+  (used by tests/unit/connectors/ to avoid SecretService prerequisite on Linux CI)
 - ui_api_client: Function-scoped TestClient against gaia.ui.server.create_app()
 
 Current options:
@@ -310,12 +310,12 @@ def in_memory_keyring():
     Install an in-memory keyring backend for the duration of the test session.
 
     Use as a session-scoped dependency in connections tests. The autouse fixture
-    in tests/unit/connections/conftest.py wraps this to ensure every connections
-    test has the in-memory backend before any gaia.connections module is imported.
+    in tests/unit/connectors/conftest.py wraps this to ensure every connections
+    test has the in-memory backend before any gaia.connectors module is imported.
 
     Linux CI runners ship without SecretService, and the production-default
     keyrings.alt fallback is plaintext — we explicitly refuse that backend in
-    gaia.connections.store. This fixture short-circuits the keyring lookup
+    gaia.connectors.store. This fixture short-circuits the keyring lookup
     chain to a deterministic in-memory backend that no production code uses.
 
     Yields:

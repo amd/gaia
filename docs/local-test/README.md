@@ -55,7 +55,7 @@ In the AgentUI:
 - ✅ OAuth PKCE flow completes; refresh token lands in OS keychain.
 - ✅ Loopback `127.0.0.1:<ephemeral>/callback` round-trips.
 - ✅ SSE event `connection.connected` updates AgentUI in <2s.
-- ✅ `REQUIRED_CONNECTIONS` declared by the custom agent surfaces in
+- ✅ `REQUIRED_CONNECTORS` declared by the custom agent surfaces in
   the consent dialog with plain-language scope text.
 - ✅ Per-agent grant gates `get_access_token_sync` (first call without
   grant raises `AuthRequiredError(AGENT_NOT_GRANTED)`).
@@ -68,8 +68,8 @@ In the AgentUI:
 ## Cleanup
 
 ```bash
-gaia connections disconnect google
-gaia connections grants revoke google "custom:<sha-prefix>:oauth-test"
+gaia connectors disconnect google
+gaia connectors grants revoke google "custom:<sha-prefix>:oauth-test"
 rm -rf ~/.gaia/agents/oauth-test/
 ```
 
@@ -84,11 +84,11 @@ The same primitives work without the UI:
 
 ```bash
 # Connect — opens system browser exactly like the UI does.
-gaia connections connect google \
+gaia connectors connect google \
     --scopes https://www.googleapis.com/auth/gmail.readonly
 
 # Show what's connected.
-gaia connections status
+gaia connectors status
 
 # Grant the test agent.
 # (the namespaced id is printed by registry on agent load — look for
@@ -97,12 +97,12 @@ gaia connections status
 #  _compute_custom_origin_hash; ":".join(["custom",
 #  _compute_custom_origin_hash(Path.home() / ".gaia/agents/oauth-test/agent.py"),
 #  "oauth-test"]).
-gaia connections grants grant google custom:<sha-prefix>:oauth-test \
+gaia connectors grants grant google custom:<sha-prefix>:oauth-test \
     --scopes https://www.googleapis.com/auth/gmail.readonly
 
 # Revoke from the same surface.
-gaia connections grants revoke google custom:<sha-prefix>:oauth-test
-gaia connections disconnect google
+gaia connectors grants revoke google custom:<sha-prefix>:oauth-test
+gaia connectors disconnect google
 ```
 
 ## Troubleshooting

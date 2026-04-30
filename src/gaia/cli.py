@@ -2018,11 +2018,12 @@ Examples:
         help="Skip interactive confirmation prompt (non-interactive/CI use)",
     )
 
-    # OAuth connections (issue #915) — manage Google connections + per-agent grants.
-    # The subparser tree lives in gaia.connections.cli to keep this file lean.
-    from gaia.connections import cli as connections_cli
+    # Connectors framework (issue #927, parent of #915) — manage OAuth +
+    # MCP-server connectors + per-agent grants. The subparser tree lives in
+    # gaia.connectors.cli to keep this file lean.
+    from gaia.connectors import cli as connectors_cli
 
-    connections_cli.add_subparser(subparsers)
+    connectors_cli.add_subparser(subparsers)
 
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
@@ -3137,11 +3138,11 @@ Let me know your answer!
         handle_cache_command(args)
         return
 
-    # Handle Connections command (issue #915)
-    if args.action == "connections":
-        from gaia.connections import cli as connections_cli
+    # Handle Connectors command (issue #927, parent of #915)
+    if args.action == "connectors":
+        from gaia.connectors import cli as connectors_cli
 
-        rc = connections_cli.handle(args)
+        rc = connectors_cli.handle(args)
         sys.exit(rc)
 
     # Handle Diagnostics command

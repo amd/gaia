@@ -23,10 +23,10 @@ import httpx
 import pytest
 import respx
 
-import gaia.connections as connections
-from gaia.connections import cli as connections_cli
-from gaia.connections.providers import _registry
-from gaia.connections.store import save_connection
+import gaia.connectors as connections
+from gaia.connectors import cli as connections_cli
+from gaia.connectors.providers import _registry
+from gaia.connectors.store import save_connection
 
 pytestmark = pytest.mark.integration
 
@@ -35,10 +35,10 @@ pytestmark = pytest.mark.integration
 def env(monkeypatch, tmp_path, in_memory_keyring):  # noqa: F811
     """Configure provider, isolate grants ledger, reset registry, reset cache."""
     monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "multi-caller-test.apps.example")
-    monkeypatch.setattr("gaia.connections.grants.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
     _registry.clear()
     in_memory_keyring._store.clear()
-    from gaia.connections.tokens import _cache
+    from gaia.connectors.tokens import _cache
 
     _cache.clear()
     yield {"home": tmp_path}
@@ -99,10 +99,8 @@ class TestCliPath:
         google = connections.providers.get("google")
         _seed_connection(google)
 
-        # CLI: gaia connections grants grant google builtin:cli-test ...
-        rc = connections_cli.main(
-            [
-                "connections",
+        # CLI: gaia connectors grants grant google builtin:cli-test ...
+        rc = connections_cli.main(["connectors",
                 "grants",
                 "grant",
                 "google",
@@ -136,9 +134,9 @@ class TestUiPath:
         google = connections.providers.get("google")
         _seed_connection(google)
 
-        # UI: PUT /api/connections/google/grants/builtin:ui-test
+        # UI: PUT /api/connectors/google/grants/builtin:ui-test
         resp = ui_api_client.put(
-            "/api/connections/google/grants/builtin:ui-test",
+            "/api/connectors/google/grants/builtin:ui-test",
             json={"scopes": ["gmail.readonly"]},
         )
         assert resp.status_code == 200, resp.text
@@ -158,7 +156,7 @@ class TestUiPath:
         assert token == "MULTI-CALLER-TOKEN"
 
         # And the UI status endpoint reflects it.
-        status = ui_api_client.get("/api/connections/google/grants").json()
+        status = ui_api_client.get("/api/connectors/google/grants").json()
         assert status == {"grants": {"builtin:ui-test": ["gmail.readonly"]}}
 
 
@@ -174,11 +172,11 @@ class TestThreeCallersAgreeOnConnection:
         assert any(r["provider"] == "google" for r in sdk_rows)
 
         # CLI
-        rc = connections_cli.main(["connections", "status", "--json"])
+        rc = connections_cli.main(["connectors", "status", "--json"])
         assert rc == 0
 
         # UI
-        ui_rows = ui_api_client.get("/api/connections").json()["connections"]
+        ui_rows = ui_api_client.get("/api/connectors").json()["connections"]
         assert any(r["provider"] == "google" for r in ui_rows)
 
         # Same email surfaces everywhere.

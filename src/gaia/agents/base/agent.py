@@ -23,7 +23,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.connections.providers.base import ConnectionRequirement
+from gaia.connectors.providers.base import ConnectorRequirement
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -81,10 +81,10 @@ class Agent(abc.ABC):
     # T-X2 (issue #915): declarative external-OAuth scope requirement.
     # Subclasses override this to declare which provider+scopes their tool
     # bodies need. The registry surfaces these to AgentUI's consent dialog and
-    # the CLI ``gaia connections grants`` command, and the runtime gates each
+    # the CLI ``gaia connectors grants`` command, and the runtime gates each
     # ``get_access_token`` call on a per-agent grant for these scopes.
     # Empty list = no external connections required (the default for built-ins).
-    REQUIRED_CONNECTIONS: ClassVar[List[ConnectionRequirement]] = []
+    REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = []
 
     # Response format templates — agents select via response_mode attribute.
     # "planning" (default): JSON-only responses with thought/goal/plan/tool structure.
@@ -1816,9 +1816,9 @@ Do NOT wrap conversational replies in JSON.
         #
         # `_agent_context` is intentionally PRIVATE — imported via the
         # private path so a malicious tool body cannot import it from the
-        # public `gaia.connections` API to forge an agent identity.
+        # public `gaia.connectors` API to forge an agent identity.
         # See plan amendment A9.
-        from gaia.connections.context import _agent_context
+        from gaia.connectors.context import _agent_context
 
         ns_id = getattr(self, "_gaia_namespaced_agent_id", None) or getattr(
             self, "AGENT_ID", None

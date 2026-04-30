@@ -104,13 +104,13 @@ export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number
 
 // -- Connections (issue #915) ---------------------------------------------------
 
-import type { ConnectionInfo } from '../types';
+import type { ConnectorInfo } from '../types';
 
-export async function listConnections(): Promise<{ connections: ConnectionInfo[] }> {
+export async function listConnections(): Promise<{ connections: ConnectorInfo[] }> {
     return apiFetch('GET', '/connections');
 }
 
-export async function getConnection(provider: string): Promise<ConnectionInfo> {
+export async function getConnection(provider: string): Promise<ConnectorInfo> {
     return apiFetch('GET', `/connections/${provider}`);
 }
 

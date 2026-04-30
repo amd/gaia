@@ -161,9 +161,9 @@ class AgentInfo(BaseModel):
     # ``AgentRegistration.min_memory_gb``.
     min_memory_gb: Optional[float] = None
     # T-X2 (issue #915): declared external-OAuth scope claims, surfaced from
-    # ``Agent.REQUIRED_CONNECTIONS``. The AgentUI consent dialog renders these
+    # ``Agent.REQUIRED_CONNECTORS``. The AgentUI consent dialog renders these
     # in plain language (via SCOPE_DESCRIPTIONS in providers/google.py).
-    # Each entry is a serialized ``ConnectionRequirement``:
+    # Each entry is a serialized ``ConnectorRequirement``:
     # {provider: str, scopes: list[str], reason: str}.
     required_connections: List[dict] = Field(default_factory=list)
     # T-X2: opaque grant-ledger key. Built-ins use ``builtin:<id>``; custom

@@ -165,7 +165,7 @@
                     "pages": [
                       "sdk/infrastructure/api-server",
                       "sdk/infrastructure/mcp",
-                      "sdk/infrastructure/connections"
+                      "sdk/infrastructure/connectors"
                     ]
                   },
                   {

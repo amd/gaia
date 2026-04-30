@@ -4,14 +4,14 @@
 **Audience:** GAIA core maintainers and CI operators.
 
 This runbook documents how the Google OAuth client used by
-`gaia.connections` is created, rotated, and consumed. It is **not**
+`gaia.connectors` is created, rotated, and consumed. It is **not**
 user-facing — end users never need to know the `client_id`.
 
 ## What this client is
 
 A "Desktop app" OAuth 2.0 client registered in a Google Cloud project owned
 by AMD. PKCE is used for the authorization code flow (no client secret).
-Tokens are stored in the user's OS keychain by `gaia.connections.store`;
+Tokens are stored in the user's OS keychain by `gaia.connectors.store`;
 nothing about the client travels with the user's data.
 
 ## Configuration
@@ -22,7 +22,7 @@ Set the environment variable before any GAIA process starts:
 export GAIA_GOOGLE_CLIENT_ID="<numeric-id>.apps.googleusercontent.com"
 ```
 
-The connections layer reads this at first use (`gaia.connections.providers.get("google")`).
+The connections layer reads this at first use (`gaia.connectors.providers.get("google")`).
 Missing → the layer raises `ConfigurationError`; the AgentUI surfaces a
 503 on `/api/connections/*`, but the rest of the AgentUI keeps working
 (per plan amendment A3).
@@ -58,7 +58,7 @@ detects the mismatch and clears entries on next read.
 3. Restart all GAIA processes. The lifespan tripwire sweep clears
    stored entries that were bound to the old `client_id_hash`.
 4. Users see a "Reconnect" prompt in AgentUI Settings → Connections (or
-   `gaia connections connect google` from the CLI). They re-authorize.
+   `gaia connectors connect google` from the CLI). They re-authorize.
 5. Once all known users have reconnected (or after the soak window),
    delete the old client in Cloud Console.
 

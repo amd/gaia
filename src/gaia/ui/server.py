@@ -49,7 +49,7 @@ from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
 from .routers import agents as agents_router_mod
 from .routers import chat as chat_router_mod
-from .routers import connections as connections_router_mod
+from .routers import connectors as connectors_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
 from .routers import mcp as mcp_router_mod
@@ -271,7 +271,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         # available; only /api/connections returns 503 until the env
         # var is set.
         try:
-            from gaia.connections.api import tripwire_check
+            from gaia.connectors.api import tripwire_check
 
             tripwire_check()
             logger.info("connections: tripwire sweep complete")
@@ -369,7 +369,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(tunnel_router_mod.router)
     app.include_router(mcp_router_mod.router)
     # Issue #915 — OAuth connections (Settings page + agent grants).
-    app.include_router(connections_router_mod.router)
+    app.include_router(connectors_router_mod.router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.

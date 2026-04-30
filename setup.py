@@ -77,8 +77,8 @@ setup(
         "gaia.api",
         "gaia.code_index",
         "gaia.apps.webui",
-        "gaia.connections",
-        "gaia.connections.providers",
+        "gaia.connectors",
+        "gaia.connectors.providers",
     ],
     package_data={
         "gaia.eval": [
@@ -184,7 +184,7 @@ setup(
             "bandit",
             "responses",
             "requests",
-            # gaia.connections runtime deps surfaced in [dev] so that
+            # gaia.connectors runtime deps surfaced in [dev] so that
             # `pip install -e ".[dev]"` is sufficient to run the unit suite
             # without pulling in the much heavier [ui] extra (faiss, torch).
             "httpx>=0.27.0,<0.29.0",

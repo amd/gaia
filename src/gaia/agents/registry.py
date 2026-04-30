@@ -19,7 +19,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 
 import yaml
 
-from gaia.connections.providers.base import ConnectionRequirement
+from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -115,11 +115,11 @@ class AgentRegistration:
     # surprised by a load failure or heavy swapping mid-session.
     min_memory_gb: Optional[float] = None
     # T-X2 (issue #915):
-    # ``required_connections`` is the agent class's ``REQUIRED_CONNECTIONS``
+    # ``required_connections`` is the agent class's ``REQUIRED_CONNECTORS``
     # ClassVar surfaced into the registry so the AgentUI consent dialog and
-    # the CLI ``gaia connections grants`` command can render the prompt
+    # the CLI ``gaia connectors grants`` command can render the prompt
     # without re-importing the agent module.
-    required_connections: List[ConnectionRequirement] = field(default_factory=list)
+    required_connections: List[ConnectorRequirement] = field(default_factory=list)
     # T-X2 (issue #915, plan amendment A9):
     # ``namespaced_agent_id`` is the grant-ledger key for this agent. Built-in
     # agents use ``builtin:<id>``; custom agents under ``~/.gaia/agents/``
@@ -465,7 +465,7 @@ class AgentRegistry:
 
         # T-X2: collect declarative scope claims and namespaced grant key.
         required_connections = list(
-            getattr(agent_class, "REQUIRED_CONNECTIONS", []) or []
+            getattr(agent_class, "REQUIRED_CONNECTORS", []) or []
         )
         origin_hash = _compute_custom_origin_hash(py_file)
         namespaced_id = f"custom:{origin_hash}:{agent_id}"
