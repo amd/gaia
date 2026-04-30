@@ -29,16 +29,17 @@ Every intercepted tool call drives the full adapter pipeline:
 4. **ALLOW** → the underlying ``_execute_tool`` runs.
 5. **BLOCK** → the tool is short-circuited with a denied result and
    the adapter issues a BLOCK receipt.
-6. **REVIEW** → a checkpoint is opened. The mixin asks the first
-   available reviewer — ``self.console.confirm_tool_execution`` (GAIA's
-   existing confirmation surface) or an explicit
-   ``governance_reviewer`` callback — and resolves the checkpoint
-   APPROVE / REJECT accordingly. An APPROVE runs the tool; a REJECT
-   short-circuits. Either way, a receipt is issued.
+6. **REVIEW** → a checkpoint is opened. The mixin asks an explicit
+   ``governance_reviewer`` callback when one is configured, otherwise
+   it delegates to ``self.console.confirm_tool_execution`` only when
+   that console advertises ``blocking_confirmation = True`` (for
+   example Agent UI's SSE confirmation surface). It then resolves the
+   checkpoint APPROVE / REJECT accordingly. An APPROVE runs the tool; a
+   REJECT short-circuits. Either way, a receipt is issued.
 
-If ``REVIEW`` decisions are returned and neither a console nor a
-reviewer is available, the mixin **fails closed** and rejects the
-tool. This matches the intent of the decision type ("do not execute
+If ``REVIEW`` decisions are returned and neither a reviewer nor a
+blocking console is available, the mixin **fails closed** and rejects
+the tool. This matches the intent of the decision type ("do not execute
 without review") and avoids silent pass-through.
 """
 
@@ -135,6 +136,14 @@ class GovernedAgentMixin:
             return super()._execute_tool(tool_name, tool_args)  # type: ignore[misc]
 
         if outcome.status == "TERMINATED":
+            self._emit_policy_alert(
+                tool_name,
+                decision.decision,
+                decision.reason,
+                decision.rule_ids,
+                decision.policy_version,
+                outcome.metadata.get("receipt_id"),
+            )
             return self._denied_result(
                 tool_name,
                 decision.decision,
@@ -317,27 +326,28 @@ class GovernedAgentMixin:
         decision. ``BaseException`` (KeyboardInterrupt, SystemExit) is
         intentionally NOT caught — those should propagate.
 
-        Only an **explicit** ``governance_reviewer`` callback is
-        honored. GAIA's ``AgentConsole.confirm_tool_execution`` is NOT
-        consulted automatically because its default implementation
-        auto-approves (``OutputHandler.confirm_tool_execution`` returns
-        ``True`` unless a subclass overrides it). Silently treating an
-        auto-approving console as a reviewer would break the
-        fail-closed contract.
-
-        Callers that want console-driven review must pass::
-
-            governance_reviewer=lambda name, args, _d: (
-                self.console.confirm_tool_execution(name, args)
-            )
-
-        when they have verified their console actually blocks
-        (e.g. ``SSEOutputHandler`` which awaits a frontend response).
+        An explicit ``governance_reviewer`` callback takes precedence.
+        Without one, GAIA's ``AgentConsole.confirm_tool_execution`` is
+        consulted only when the console advertises
+        ``blocking_confirmation = True``. The default console returns
+        ``True`` immediately, so silently treating every console as a
+        reviewer would break the fail-closed contract. Agent UI's
+        ``SSEOutputHandler`` sets that flag because it blocks on the
+        frontend permission modal.
         """
         reviewer = self._governance_reviewer
         if reviewer is None:
-            # Fail closed: REVIEW means "do not run without review".
-            return False, None
+            console = getattr(self, "console", None)
+            if (
+                console is None
+                or not getattr(console, "blocking_confirmation", False)
+                or not callable(getattr(console, "confirm_tool_execution", None))
+            ):
+                # Fail closed: REVIEW means "do not run without review".
+                return False, None
+            reviewer = lambda name, args, _decision: console.confirm_tool_execution(
+                name, args
+            )
         try:
             return bool(reviewer(tool_name, tool_args, decision)), None
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -347,6 +357,38 @@ class GovernedAgentMixin:
                 exc_info=True,
             )
             return False, exc
+
+    def _emit_policy_alert(
+        self,
+        tool_name: str,
+        governance_decision: str,
+        reason: str,
+        rule_ids: list[str],
+        policy_version: str,
+        receipt_id: str | None,
+    ) -> None:
+        """Notify capable consoles that governance blocked a tool call."""
+        if governance_decision != "BLOCK":
+            return
+        console = getattr(self, "console", None)
+        alert = getattr(console, "print_policy_alert", None)
+        if not callable(alert):
+            return
+        try:
+            alert(
+                tool_name,
+                governance_decision,
+                reason,
+                rule_ids,
+                policy_version,
+                receipt_id,
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "governance: failed to emit policy alert for tool %r",
+                tool_name,
+                exc_info=True,
+            )
 
     @staticmethod
     def _denied_result(

@@ -34,7 +34,7 @@ denied result to the agent loop.
 |---|---|
 | `ALLOW` | Tool runs as usual. |
 | `BLOCK` | Tool is refused. A receipt is written to the audit log with the full evidence envelope (action, policy version, constitution hash, timestamp). |
-| `REVIEW` | A checkpoint is opened. The mixin asks your `governance_reviewer` callback (or fails closed if none). On `APPROVE` the tool runs; on `REJECT` it is refused. Either way a receipt is written. |
+| `REVIEW` | A checkpoint is opened. The mixin asks your `governance_reviewer` callback, or Agent UI's existing blocking confirmation modal when that is the active console. On `APPROVE` the tool runs; on `REJECT` it is refused. Either way a receipt is written. |
 
 Decisions are produced by a `PolicyEngine`. The shipped
 `RuleBasedPolicyEngine` reads tags from `@govern(risk=...)` and/or a
@@ -93,10 +93,13 @@ agent = MyAgent(
 
 ## Reviewers
 
-When a `REVIEW` decision fires, the mixin calls your
-`governance_reviewer` callback — nothing else. There is no "fall back to
-the console" path, because GAIA's default `AgentConsole.confirm_tool_execution`
-returns `True`, and a silent auto-approve would defeat the decision.
+When a `REVIEW` decision fires, an explicit `governance_reviewer`
+callback takes precedence. If none is configured, the mixin delegates to
+`console.confirm_tool_execution` only when the active console advertises
+`blocking_confirmation = True`. Agent UI's `SSEOutputHandler` sets this flag and
+emits the existing `permission_request` modal. GAIA's default console is not used
+as an implicit reviewer because it returns `True`, and a silent auto-approve
+would defeat the decision.
 
 ```python
 def my_reviewer(tool_name, tool_args, decision) -> bool:
@@ -109,7 +112,17 @@ agent = MyAgent(
 )
 ```
 
-If no reviewer is set, REVIEW decisions **fail closed** (tool denied).
+If no reviewer or blocking console is available, REVIEW decisions **fail closed**
+(tool denied).
+
+## Agent UI policy alerts
+
+When a policy returns `BLOCK`, `GovernedAgentMixin` still refuses the tool before
+the body executes and returns a denied tool result. If the active console
+implements `print_policy_alert`, the mixin also emits a policy alert with the
+blocked tool, decision, reason, rule IDs, policy version, and receipt ID.
+Agent UI's `SSEOutputHandler` sends this as a `policy_alert` SSE event so the
+frontend can distinguish a policy refusal from a generic tool failure.
 
 ## Security properties
 

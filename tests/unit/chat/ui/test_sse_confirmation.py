@@ -33,6 +33,14 @@ def _drain(handler: SSEOutputHandler):
     return events
 
 
+def _wait_for_pending_confirmation(handler: SSEOutputHandler):
+    """Wait until confirm_tool_execution has installed its pending event."""
+    deadline = time.time() + 2.0
+    while handler._confirm_event is None and time.time() < deadline:
+        time.sleep(0.05)
+    assert handler._confirm_event is not None
+
+
 # ===========================================================================
 # confirm_tool_execution — cancellation
 # ===========================================================================
@@ -122,10 +130,7 @@ class TestConfirmToolExecutionApprove:
         t = threading.Thread(target=run_confirm)
         t.start()
 
-        # Wait for the confirmation to be set up
-        deadline = time.time() + 2.0
-        while handler._confirm_result is None and time.time() < deadline:
-            time.sleep(0.05)
+        _wait_for_pending_confirmation(handler)
 
         handler.resolve_tool_confirmation(approved=True)
 
@@ -143,9 +148,7 @@ class TestConfirmToolExecutionApprove:
         t = threading.Thread(target=run_confirm)
         t.start()
 
-        deadline = time.time() + 2.0
-        while handler._confirm_result is None and time.time() < deadline:
-            time.sleep(0.05)
+        _wait_for_pending_confirmation(handler)
 
         handler.resolve_tool_confirmation(approved=True)
         t.join(timeout=3.0)
@@ -173,9 +176,7 @@ class TestConfirmToolExecutionDeny:
         t = threading.Thread(target=run_confirm)
         t.start()
 
-        deadline = time.time() + 2.0
-        while handler._confirm_result is None and time.time() < deadline:
-            time.sleep(0.05)
+        _wait_for_pending_confirmation(handler)
 
         handler.resolve_tool_confirmation(approved=False)
 
