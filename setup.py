@@ -72,6 +72,7 @@ setup(
         "gaia.agents.routing",
         "gaia.agents.sd",
         "gaia.agents.summarize",
+        "gaia.governance",
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
