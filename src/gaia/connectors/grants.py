@@ -6,7 +6,7 @@ Per-agent grants ledger at ``~/.gaia/connectors/grants.json``.
 Schema::
 
     {
-      "<provider>": {
+      "<connector_id>": {
         "<namespaced_agent_id>": ["<scope-1>", "<scope-2>"]
       }
     }
@@ -146,52 +146,56 @@ def _save_grants_locked(data: Dict[str, Dict[str, List[str]]]) -> None:
         raise
 
 
-def grant_agent(provider: str, agent_id: str, scopes: List[str]) -> None:
+def grant_agent(connector_id: str, agent_id: str, scopes: List[str]) -> None:
     """
-    Grant ``agent_id`` (already namespaced) the given scopes for ``provider``.
+    Grant ``agent_id`` (already namespaced) the given scopes for ``connector_id``.
 
-    Overwrites any existing scopes for the same ``(provider, agent_id)`` pair.
+    Overwrites any existing scopes for the same ``(connector_id, agent_id)`` pair.
     The full load-modify-save sequence is performed under the per-process
     write lock so concurrent grants from multiple threads don't lose updates.
     """
     with _write_lock:
         data = load_grants()
-        data.setdefault(provider, {})[agent_id] = list(scopes)
+        data.setdefault(connector_id, {})[agent_id] = list(scopes)
         _save_grants_locked(data)
     logger.debug(
-        "grants: granted provider=%s agent_id=%s scopes=%d",
-        provider,
+        "grants: granted connector_id=%s agent_id=%s scopes=%d",
+        connector_id,
         agent_id,
         len(scopes),
     )
 
 
-def revoke_agent_grant(provider: str, agent_id: str) -> None:
+def revoke_agent_grant(connector_id: str, agent_id: str) -> None:
     """
-    Remove an agent's grant for ``provider``. Idempotent — silently no-ops
+    Remove an agent's grant for ``connector_id``. Idempotent — silently no-ops
     if the agent has no grant.
     """
     with _write_lock:
         data = load_grants()
-        if provider in data and agent_id in data[provider]:
-            del data[provider][agent_id]
-            if not data[provider]:
-                del data[provider]
+        if connector_id in data and agent_id in data[connector_id]:
+            del data[connector_id][agent_id]
+            if not data[connector_id]:
+                del data[connector_id]
             _save_grants_locked(data)
-            logger.debug("grants: revoked provider=%s agent_id=%s", provider, agent_id)
+            logger.debug(
+                "grants: revoked connector_id=%s agent_id=%s", connector_id, agent_id
+            )
 
 
-def list_agent_grants(provider: str) -> Dict[str, List[str]]:
-    """Return ``{agent_id: [scopes]}`` for ``provider``, or empty dict."""
-    return dict(load_grants().get(provider, {}))
+def list_agent_grants(connector_id: str) -> Dict[str, List[str]]:
+    """Return ``{agent_id: [scopes]}`` for ``connector_id``, or empty dict."""
+    return dict(load_grants().get(connector_id, {}))
 
 
-def check_agent_grant(provider: str, agent_id: str, required_scopes: List[str]) -> bool:
+def check_agent_grant(
+    connector_id: str, agent_id: str, required_scopes: List[str]
+) -> bool:
     """
     Return True if ``agent_id`` has been granted a superset of
-    ``required_scopes`` for ``provider``.
+    ``required_scopes`` for ``connector_id``.
     """
-    granted = set(list_agent_grants(provider).get(agent_id, []))
+    granted = set(list_agent_grants(connector_id).get(agent_id, []))
     return set(required_scopes) <= granted
 
 
@@ -199,6 +203,8 @@ def check_agent_grant(provider: str, agent_id: str, required_scopes: List[str]) 
 # sync because file I/O on local disk is fast and the per-process write
 # is rare. Callers in async code can use ``await asyncio.to_thread(...)``
 # if they need to keep the loop unblocked under heavy concurrency.
-async def grant_agent_async(provider: str, agent_id: str, scopes: List[str]) -> None:
+async def grant_agent_async(
+    connector_id: str, agent_id: str, scopes: List[str]
+) -> None:
     """Async wrapper around ``grant_agent`` for native-async callers."""
-    await asyncio.to_thread(grant_agent, provider, agent_id, scopes)
+    await asyncio.to_thread(grant_agent, connector_id, agent_id, scopes)

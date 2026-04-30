@@ -30,6 +30,15 @@ from __future__ import annotations
 from gaia.connectors.registry import REGISTRY, ConnectorRegistry
 from gaia.connectors.spec import ConfigField, ConnectorSpec
 
+# State store — added in T-2.
+from gaia.connectors.state import (
+    clear_connector_state,
+    get_connector_state,
+    list_configured_ids,
+    load_state,
+    set_connector_state,
+)
+
 # Public API — coordination layer.
 from gaia.connectors.api import (
     cancel_flow,
@@ -82,6 +91,12 @@ __all__ = [
     "ConnectorRegistry",
     "ConnectorSpec",
     "REGISTRY",
+    # State store (T-2)
+    "clear_connector_state",
+    "get_connector_state",
+    "list_configured_ids",
+    "load_state",
+    "set_connector_state",
     # Errors
     "AuthRequiredError",
     "ConfigurationError",
