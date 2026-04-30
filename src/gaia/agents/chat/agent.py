@@ -1932,19 +1932,9 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
 
         # Log the bundle configuration
         total = len(_TOOL_REGISTRY)
-<<<<<<< HEAD
-<<<<<<< HEAD
-        bundled = sum(len(b.tools) for b in self.tool_loader._bundles.values())
-=======
         bundled = sum(
             len(b.tools) for b in self.tool_loader._bundles.values()
         )
->>>>>>> 2f79fa97 (trying to address the issue in::Tool-registry scaling: resolve scratchpad/memory collision via #688 dynamic loading #800)
-=======
-        bundled = sum(
-            len(b.tools) for b in self.tool_loader._bundles.values()
-        )
->>>>>>> 2f79fa97 (trying to address the issue in::Tool-registry scaling: resolve scratchpad/memory collision via #688 dynamic loading #800)
         logger.info(
             "ToolLoader configured: %d bundles, %d/%d tools bundled",
             len(self.tool_loader._bundles),
