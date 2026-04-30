@@ -1,0 +1,116 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.connections-section .settings-help {
+    font-size: 0.85rem;
+    color: var(--color-text-secondary, #6b7280);
+    margin-bottom: 0.75rem;
+}
+
+.connections-section .connection-row {
+    border: 1px solid var(--color-border, #e5e7eb);
+    border-radius: 6px;
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.connections-section .connection-row-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.connections-section .connection-name {
+    font-weight: 600;
+}
+
+.connections-section .connection-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.85rem;
+}
+
+.connections-section .connection-status.ok {
+    color: var(--color-success, #10b981);
+}
+
+.connections-section .connection-status.idle {
+    color: var(--color-text-secondary, #6b7280);
+}
+
+.connections-section .connection-actions {
+    margin-left: auto;
+}
+
+.connections-section .connection-grants {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px dashed var(--color-border, #e5e7eb);
+}
+
+.connections-section .grants-header {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    color: var(--color-text-secondary, #6b7280);
+    margin-bottom: 0.25rem;
+}
+
+.connections-section .grants-empty {
+    font-size: 0.85rem;
+    color: var(--color-text-secondary, #6b7280);
+    font-style: italic;
+}
+
+.connections-section .grant-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+    font-size: 0.85rem;
+}
+
+.connections-section .grant-agent {
+    font-weight: 500;
+    min-width: 8rem;
+}
+
+.connections-section .grant-scopes {
+    flex: 1;
+    color: var(--color-text-secondary, #6b7280);
+    word-break: break-all;
+}
+
+.connections-section .btn-link {
+    background: none;
+    border: none;
+    color: var(--color-danger, #ef4444);
+    cursor: pointer;
+    font-size: 0.85rem;
+    padding: 0;
+}
+
+.connections-section .btn-link:hover {
+    text-decoration: underline;
+}
+
+.connections-section .error-banner {
+    background: var(--color-danger-bg, #fee2e2);
+    color: var(--color-danger, #ef4444);
+    padding: 0.5rem;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+}
+
+.connections-section .spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}

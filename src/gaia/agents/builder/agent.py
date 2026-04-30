@@ -192,7 +192,7 @@ class BuilderAgent(Agent):
                 self.console.print_agent_created(created_id)
             return result
 
-    def process_query(  # type: ignore[override]
+    def _process_query_impl(  # type: ignore[override]
         self,
         user_input: str,
         max_steps: Optional[int] = None,
@@ -200,6 +200,10 @@ class BuilderAgent(Agent):
         filename: str = None,
     ) -> Dict[str, Any]:
         """Simplified chat loop for the builder agent.
+
+        Override point for the base ``Agent.process_query`` wrapper —
+        ``process_query`` itself remains sealed so issue #915's agent-context
+        binding is never bypassed by a subclass.
 
         Unlike the base class loop, this implementation:
         - Does NOT inject "ALWAYS BEGIN WITH A PLAN" instructions

@@ -224,6 +224,31 @@ class CodeAgent(
         Returns:
             Execution result summary from the orchestrator
         """
+        # Issue #915: bind the agent identity for the duration of this query
+        # so any tool body's get_access_token_sync(...) call resolves the
+        # per-agent grant. Inline here because CodeAgent's signature differs
+        # from the base Agent.process_query's, so the base wrapper can't
+        # delegate to a renamed _process_query_impl as it does for other
+        # subclasses. ``_agent_context`` is the private helper from
+        # gaia.connections.context — public callers cannot reach it.
+        from gaia.connections.context import _agent_context
+
+        ns_id = getattr(self, "_gaia_namespaced_agent_id", None) or getattr(
+            self, "AGENT_ID", None
+        )
+        if ns_id is None:
+            return self._process_query_inner_code(
+                user_input, workspace_root, progress_callback, **kwargs
+            )
+        with _agent_context(ns_id):
+            return self._process_query_inner_code(
+                user_input, workspace_root, progress_callback, **kwargs
+            )
+
+    def _process_query_inner_code(
+        self, user_input: str, workspace_root=None, progress_callback=None, **kwargs
+    ):
+        """Inner CodeAgent process_query body — see public process_query above."""
         # Extract trace options
         trace = kwargs.get("trace", False)
         trace_filename = kwargs.get("filename")

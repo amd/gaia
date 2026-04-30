@@ -3,6 +3,7 @@
 """Agent registry for discovering, loading, and creating agents."""
 
 import dataclasses
+import hashlib
 import importlib
 import importlib.util
 import inspect
@@ -12,12 +13,13 @@ import re
 import threading
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional
 
 import yaml
 
+from gaia.connections.providers.base import ConnectionRequirement
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -43,6 +45,57 @@ _MANIFEST_FINGERPRINT_KEYS = frozenset(
 )
 
 
+# Reserved agent IDs that custom agents (under ~/.gaia/agents/) must not
+# claim. Loaded lazily by ``_RESERVED_BUILTIN_IDS`` so the list stays in sync
+# with what ``_register_builtin_agents`` actually registers.
+_RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
+    {"chat", "builder", "gaia-lite"}
+)
+
+
+def _wrap_factory_with_namespaced_id(
+    factory: Callable[..., Any], namespaced_id: str
+) -> Callable[..., Any]:
+    """
+    Wrap a registration factory so the resulting Agent instance carries its
+    namespaced ID for ``Agent.process_query`` to read at runtime.
+
+    The base ``Agent.process_query`` reads ``_gaia_namespaced_agent_id`` (and
+    falls back to ``AGENT_ID``) when wrapping the call in the agent context
+    contextvar. Setting this attribute on the instance is what lets a
+    custom-installed agent get its proper ``custom:<sha256>:<id>`` namespace
+    instead of the bare ``AGENT_ID``.
+    """
+
+    def _factory(**kwargs):
+        instance = factory(**kwargs)
+        # Attribute access — use setattr because subclasses may override
+        # __setattr__ to validate fields. We set on the instance, not the
+        # class, so two different registrations of the same class don't
+        # collide.
+        try:
+            instance._gaia_namespaced_agent_id = namespaced_id
+        except (AttributeError, TypeError):
+            # If the agent uses __slots__ without an entry for this field,
+            # we still proceed — process_query will fall back to AGENT_ID.
+            pass
+        return instance
+
+    return _factory
+
+
+def _compute_custom_origin_hash(py_file: Path) -> str:
+    """
+    Compute the custom-agent origin hash used in ``namespaced_agent_id``.
+
+    Hashes the raw bytes of ``agent.py``. A different file (different code)
+    therefore produces a different namespaced id, so a custom agent that
+    later changes its scope claims will get a fresh grant-ledger key — the
+    user re-grants explicitly rather than inheriting the prior grant.
+    """
+    return hashlib.sha256(py_file.read_bytes()).hexdigest()[:16]
+
+
 @dataclass
 class AgentRegistration:
     """Metadata and factory for a registered agent."""
@@ -61,6 +114,19 @@ class AgentRegistration:
     # in Settings when memory_available_gb < min_memory_gb so the user isn't
     # surprised by a load failure or heavy swapping mid-session.
     min_memory_gb: Optional[float] = None
+    # T-X2 (issue #915):
+    # ``required_connections`` is the agent class's ``REQUIRED_CONNECTIONS``
+    # ClassVar surfaced into the registry so the AgentUI consent dialog and
+    # the CLI ``gaia connections grants`` command can render the prompt
+    # without re-importing the agent module.
+    required_connections: List[ConnectionRequirement] = field(default_factory=list)
+    # T-X2 (issue #915, plan amendment A9):
+    # ``namespaced_agent_id`` is the grant-ledger key for this agent. Built-in
+    # agents use ``builtin:<id>``; custom agents under ``~/.gaia/agents/``
+    # use ``custom:<sha256-of-agent.py>:<id>``. This namespacing prevents a
+    # malicious custom agent from claiming a built-in's AGENT_ID to inherit
+    # a previously-granted scope. Always non-empty.
+    namespaced_agent_id: str = ""
 
 
 class AgentRegistry:
@@ -165,9 +231,11 @@ class AgentRegistry:
                     "Search my documents for information about...",
                     "Find files related to...",
                 ],
-                factory=chat_factory,
+                factory=_wrap_factory_with_namespaced_id(chat_factory, "builtin:chat"),
                 agent_dir=None,
                 models=[],
+                required_connections=[],
+                namespaced_agent_id="builtin:chat",
             )
         )
         logger.info("registry: Registered built-in agent: chat (ChatAgent)")
@@ -251,10 +319,14 @@ class AgentRegistry:
                     "Summarize this document",
                     "Search my files for...",
                 ],
-                factory=gaia_lite_factory,
+                factory=_wrap_factory_with_namespaced_id(
+                    gaia_lite_factory, "builtin:gaia-lite"
+                ),
                 agent_dir=None,
                 models=_GAIA_LITE_MODELS,
                 min_memory_gb=_GAIA_LITE_MIN_MEMORY_GB,
+                required_connections=[],
+                namespaced_agent_id="builtin:gaia-lite",
             )
         )
         logger.info(
@@ -283,10 +355,14 @@ class AgentRegistry:
                         "Help me create a custom agent",
                         "I want to build a new agent",
                     ],
-                    factory=builder_factory,
+                    factory=_wrap_factory_with_namespaced_id(
+                        builder_factory, "builtin:builder"
+                    ),
                     agent_dir=None,
                     models=[],
                     hidden=True,
+                    required_connections=[],
+                    namespaced_agent_id="builtin:builder",
                 )
             )
             logger.info("registry: Registered built-in agent: builder (BuilderAgent)")
@@ -377,6 +453,23 @@ class AgentRegistry:
         agent_desc = getattr(agent_class, "AGENT_DESCRIPTION", "")
         starters = getattr(agent_class, "CONVERSATION_STARTERS", [])
 
+        # T-X2 (issue #915, plan amendment A9): block custom agents from
+        # claiming a built-in's reserved AGENT_ID. Without this, a custom
+        # agent with `AGENT_ID = "chat"` could inherit a grant the user
+        # previously gave to the built-in chat agent.
+        if agent_id in _RESERVED_BUILTIN_IDS:
+            raise ValueError(
+                f"AGENT_ID {agent_id!r} is reserved for the built-in agent. "
+                f"Choose a different id in {py_file}."
+            )
+
+        # T-X2: collect declarative scope claims and namespaced grant key.
+        required_connections = list(
+            getattr(agent_class, "REQUIRED_CONNECTIONS", []) or []
+        )
+        origin_hash = _compute_custom_origin_hash(py_file)
+        namespaced_id = f"custom:{origin_hash}:{agent_id}"
+
         # Read optional companion YAML for `models:` metadata.  Anything outside
         # `models:` is a manifest leftover and should be migrated into agent.py.
         models: List[str] = []
@@ -437,9 +530,11 @@ class AgentRegistry:
                 description=agent_desc,
                 source="custom_python",
                 conversation_starters=list(starters),
-                factory=python_factory,
+                factory=_wrap_factory_with_namespaced_id(python_factory, namespaced_id),
                 agent_dir=agent_dir,
                 models=models,
+                required_connections=required_connections,
+                namespaced_agent_id=namespaced_id,
             )
         )
         logger.info(

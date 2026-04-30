@@ -77,6 +77,8 @@ setup(
         "gaia.api",
         "gaia.code_index",
         "gaia.apps.webui",
+        "gaia.connections",
+        "gaia.connections.providers",
     ],
     package_data={
         "gaia.eval": [
@@ -130,6 +132,10 @@ setup(
             "python-multipart>=0.0.9",
             "httpx>=0.27.0",
             "psutil>=5.9.0",
+            # OAuth connections (issue #915): keyring stores refresh tokens in
+            # the OS credential store (macOS Keychain, Windows DPAPI, Linux
+            # SecretService). Pinned upper bound per supply-chain advisory.
+            "keyring>=24.0.0,<26.0.0",
             # RAG runtime deps — gaia.ui.server boots faiss + sentence_transformers
             # eagerly, and gaia.rag.sdk uses pypdf/pymupdf/numpy. See #845.
             # Version specifiers match the standalone "rag" extra; "ui"
@@ -178,6 +184,12 @@ setup(
             "bandit",
             "responses",
             "requests",
+            # gaia.connections runtime deps surfaced in [dev] so that
+            # `pip install -e ".[dev]"` is sufficient to run the unit suite
+            # without pulling in the much heavier [ui] extra (faiss, torch).
+            "httpx>=0.27.0,<0.29.0",
+            "respx>=0.21.0,<0.23.0",
+            "keyring>=24.0.0,<26.0.0",
         ],
         "eval": [
             "anthropic",

@@ -15,7 +15,7 @@ import os
 import re
 import subprocess
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
@@ -23,6 +23,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.connections.providers.base import ConnectionRequirement
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -76,6 +77,14 @@ class Agent(abc.ABC):
     STATE_DIRECT_EXECUTION = "DIRECT_EXECUTION"
     STATE_ERROR_RECOVERY = "ERROR_RECOVERY"
     STATE_COMPLETION = "COMPLETION"
+
+    # T-X2 (issue #915): declarative external-OAuth scope requirement.
+    # Subclasses override this to declare which provider+scopes their tool
+    # bodies need. The registry surfaces these to AgentUI's consent dialog and
+    # the CLI ``gaia connections grants`` command, and the runtime gates each
+    # ``get_access_token`` call on a per-agent grant for these scopes.
+    # Empty list = no external connections required (the default for built-ins).
+    REQUIRED_CONNECTIONS: ClassVar[List[ConnectionRequirement]] = []
 
     # Response format templates — agents select via response_mode attribute.
     # "planning" (default): JSON-only responses with thought/goal/plan/tool structure.
@@ -1801,6 +1810,32 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Dict containing the final result and operation details
         """
+        # T-X2 (issue #915): bind agent identity for the duration of the
+        # query so any tool body's `get_access_token_sync(...)` calls can
+        # resolve the per-agent grant via contextvars.
+        #
+        # `_agent_context` is intentionally PRIVATE — imported via the
+        # private path so a malicious tool body cannot import it from the
+        # public `gaia.connections` API to forge an agent identity.
+        # See plan amendment A9.
+        from gaia.connections.context import _agent_context
+
+        ns_id = getattr(self, "_gaia_namespaced_agent_id", None) or getattr(
+            self, "AGENT_ID", None
+        )
+        if ns_id is None:
+            return self._process_query_impl(user_input, max_steps, trace, filename)
+        with _agent_context(ns_id):
+            return self._process_query_impl(user_input, max_steps, trace, filename)
+
+    def _process_query_impl(
+        self,
+        user_input: str,
+        max_steps: int = None,
+        trace: bool = False,
+        filename: str = None,
+    ) -> Dict[str, Any]:
+        """Inner implementation of ``process_query`` — see public method docstring."""
         import time
 
         start_time = time.time()  # Track query processing start time

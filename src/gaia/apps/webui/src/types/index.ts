@@ -24,6 +24,45 @@ export interface AgentInfo {
     models: string[];
     /** Minimum recommended free RAM in GB for this agent. Null = no declared requirement. */
     min_memory_gb?: number | null;
+    /**
+     * Connection requirements declared by the agent's REQUIRED_CONNECTIONS
+     * (issue #915). The Settings → Connections page renders these so the
+     * user can grant scopes per agent.
+     */
+    required_connections?: ConnectionRequirement[];
+    /**
+     * Opaque grant-ledger key. Built-ins are `builtin:<id>`, custom agents
+     * are `custom:<sha256-prefix>:<id>`. Pass this to the grants endpoint.
+     */
+    namespaced_agent_id?: string;
+}
+
+/**
+ * Issue #915 — declarative scope claim on an agent.
+ */
+export interface ConnectionRequirement {
+    provider: string;
+    scopes: string[];
+    reason: string;
+}
+
+/**
+ * Issue #915 — one stored OAuth connection.
+ */
+export interface ConnectionInfo {
+    provider: string;
+    account_email: string;
+    scopes: string[];
+    connected_at: number | null;
+    error?: string;
+}
+
+/**
+ * Issue #915 — a per-agent grant entry (provider → agent_id → scopes).
+ */
+export interface ConnectionGrant {
+    agent_id: string;
+    scopes: string[];
 }
 
 export interface InferenceStats {
