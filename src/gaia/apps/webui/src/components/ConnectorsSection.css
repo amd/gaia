@@ -1,112 +1,249 @@
 /* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
 
-.connections-section .settings-help {
-    font-size: 0.85rem;
-    color: var(--color-text-secondary, #6b7280);
-    margin-bottom: 0.75rem;
+/* Connectors section — tile grid + expandable detail view (T-8b). */
+
+.connectors-section .settings-help {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    line-height: 1.5;
+    font-family: var(--font-sans);
 }
 
-.connections-section .connection-row {
-    border: 1px solid var(--color-border, #e5e7eb);
-    border-radius: 6px;
-    padding: 0.75rem;
-    margin-bottom: 0.5rem;
+.connectors-loading {
+    display: flex;
+    justify-content: center;
+    padding: 20px;
+    color: var(--text-muted);
 }
 
-.connections-section .connection-row-header {
+.connectors-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* ── Connector tile ───────────────────────────────────────────── */
+
+.connector-tile {
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    overflow: hidden;
+    transition: border-color var(--duration) var(--ease);
+}
+.connector-tile:hover,
+.connector-tile--open {
+    border-color: var(--border);
+}
+
+.connector-tile-header {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 14px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+}
+.connector-tile-header:hover {
+    background: var(--bg-hover, rgba(0,0,0,0.03));
+}
+[data-theme="dark"] .connector-tile-header:hover {
+    background: rgba(255,255,255,0.04);
 }
 
-.connections-section .connection-name {
+.connector-tile-name {
+    font-size: 13px;
     font-weight: 600;
 }
 
-.connections-section .connection-status {
+.connector-tile-type {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+}
+
+.connector-status {
     display: inline-flex;
     align-items: center;
-    gap: 0.25rem;
-    font-size: 0.85rem;
+    gap: 4px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+}
+.connector-status.ok { color: var(--accent-green); }
+.connector-status.idle { color: var(--text-muted); }
+
+.connector-tile-chevron {
+    margin-left: auto;
+    color: var(--text-muted);
+    flex-shrink: 0;
 }
 
-.connections-section .connection-status.ok {
-    color: var(--color-success, #10b981);
+/* ── Detail view ──────────────────────────────────────────────── */
+
+.connector-detail {
+    border-top: 1px solid var(--border-light);
+    padding: 14px;
 }
 
-.connections-section .connection-status.idle {
-    color: var(--color-text-secondary, #6b7280);
+.configure-body { }
+
+.connector-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    font-family: var(--font-sans);
+    margin-bottom: 12px;
 }
 
-.connections-section .connection-actions {
+.configure-error {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--accent-red, #e55);
+    background: rgba(239,68,68,0.08);
+    border: 1px solid rgba(239,68,68,0.2);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    margin-bottom: 10px;
+    font-family: var(--font-sans);
+}
+
+.configure-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.connector-product-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-family: var(--font-sans);
     margin-left: auto;
 }
+.connector-product-link:hover { color: var(--accent); text-decoration: underline; }
 
-.connections-section .connection-grants {
-    margin-top: 0.5rem;
-    padding-top: 0.5rem;
-    border-top: 1px dashed var(--color-border, #e5e7eb);
+/* MCP key inputs */
+.mcp-key-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 10px;
 }
-
-.connections-section .grants-header {
-    font-size: 0.75rem;
+.mcp-key-label {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
     text-transform: uppercase;
-    color: var(--color-text-secondary, #6b7280);
-    margin-bottom: 0.25rem;
+    letter-spacing: 0.5px;
+}
+.mcp-key-input {
+    padding: 7px 10px;
+    font-size: 13px;
+    font-family: var(--font-mono);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color var(--duration) var(--ease);
+}
+.mcp-key-input:focus { border-color: var(--accent); }
+
+/* ── Agent grants ─────────────────────────────────────────────── */
+
+.connection-grants {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--border-light);
 }
 
-.connections-section .grants-empty {
-    font-size: 0.85rem;
-    color: var(--color-text-secondary, #6b7280);
+.grants-header {
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.grants-empty {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
     font-style: italic;
 }
 
-.connections-section .grant-row {
+.grant-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0;
-    font-size: 0.85rem;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 12px;
+    font-family: var(--font-sans);
 }
 
-.connections-section .grant-agent {
+.grant-agent {
     font-weight: 500;
-    min-width: 8rem;
+    min-width: 7rem;
+    color: var(--text-primary);
 }
 
-.connections-section .grant-scopes {
+.grant-scopes {
     flex: 1;
-    color: var(--color-text-secondary, #6b7280);
+    color: var(--text-secondary);
     word-break: break-all;
 }
 
-.connections-section .btn-link {
+.btn-grant-revoke {
     background: none;
     border: none;
-    color: var(--color-danger, #ef4444);
     cursor: pointer;
-    font-size: 0.85rem;
-    padding: 0;
-}
-
-.connections-section .btn-link:hover {
-    text-decoration: underline;
-}
-
-.connections-section .error-banner {
-    background: var(--color-danger-bg, #fee2e2);
-    color: var(--color-danger, #ef4444);
-    padding: 0.5rem;
-    border-radius: 4px;
+    color: var(--text-muted);
+    padding: 2px;
+    border-radius: 3px;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
-    font-size: 0.85rem;
+    transition: color var(--duration) var(--ease);
+    flex-shrink: 0;
+}
+.btn-grant-revoke:hover { color: var(--accent-red, #e55); }
+
+/* ── Shared ───────────────────────────────────────────────────── */
+
+.error-banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(239,68,68,0.08);
+    color: var(--accent-red, #e55);
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(239,68,68,0.2);
+    margin-bottom: 10px;
+    font-size: 12px;
+    font-family: var(--font-sans);
 }
 
-.connections-section .spin {
+.spin {
     animation: spin 1s linear infinite;
 }
 

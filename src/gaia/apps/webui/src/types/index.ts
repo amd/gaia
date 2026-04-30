@@ -65,6 +65,27 @@ export interface ConnectorGrant {
     scopes: string[];
 }
 
+/**
+ * Connector row returned by GET /api/connectors (new framework, T-8b).
+ * Merges ConnectorSpec fields with live state.
+ */
+export interface ConnectorRow {
+    id: string;
+    display_name: string;
+    icon: string | null;
+    category: string;
+    tier: string;
+    type: 'oauth_pkce' | 'mcp_server' | string;
+    description: string;
+    product_url: string | null;
+    configured: boolean;
+    account_id: string | null;
+    scopes: string[];
+    last_tested_at: string | null;
+    mcp_env_keys: string[];
+    default_scopes: string[];
+}
+
 export interface InferenceStats {
     tokens_per_second: number;
     time_to_first_token: number;

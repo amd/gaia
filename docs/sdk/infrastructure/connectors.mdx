@@ -1,36 +1,43 @@
 ---
-title: "Connections SDK"
-description: "OAuth-bound external API access for GAIA agents — Google now, Microsoft and others later."
+title: "Connectors SDK"
+description: "OAuth + MCP server integrations for GAIA agents — per-agent grants, catalog-driven config, keyring-backed secrets."
 ---
 
-# Connections SDK
+# Connectors SDK
 
-`gaia.connectors` is a self-contained OAuth library that any GAIA caller
-can drive. Three caller surfaces are first-class: the **SDK** (direct
-import in any Python script), the **CLI** (`gaia connectors`), and the
-**AgentUI** (Settings → Connections + a FastAPI router). They share the
-same keyring entries and the same per-agent grants file, so a connection
-authenticated via one is immediately usable by the others.
+`gaia.connectors` is GAIA's external-integration layer. It manages two
+kinds of connectors:
 
-## When to use this
+- **OAuth (type `oauth_pkce`)** — user-authorized flows (Google, etc.).
+  Stores refresh tokens in the OS keyring.
+- **MCP server (type `mcp_server`)** — API-key-based connections to
+  third-party MCP servers (GitHub, Brave Search, etc.). Stores keys in
+  the OS keyring as `$keyring` references.
 
-Build an agent (or any other Python program) that needs to call an
-external HTTP API on the user's behalf — Gmail, Calendar, Drive, etc. —
-and you want:
+Three caller surfaces share the same keyring and grants file:
+**SDK** (direct Python import), **CLI** (`gaia connectors …`), and
+**Agent UI** (Settings → Connectors page).
 
-- Refresh tokens stored in the OS credential store, not in your code.
-- Per-agent grants so the user explicitly authorizes each agent rather
-  than blanket-trusting whatever code happens to import the SDK.
-- A consistent failure surface (`AuthRequiredError`, `ConnectionRevokedError`)
-  with actionable messages.
+## Catalog
 
-Don't use it for service-to-service auth (no user is involved) or for
-keys you don't want the user to be able to revoke from their Google
-account UI.
+The catalog is populated at import time by `gaia.connectors.catalog`.
+Every connector is a `ConnectorSpec`:
 
-## SDK use
+```python
+from gaia.connectors.registry import REGISTRY
 
-A short async script that connects, grants, and fetches:
+for spec in REGISTRY.all():
+    print(spec.id, spec.type, spec.display_name)
+# google         oauth_pkce   Google
+# github         mcp_server   GitHub
+# brave          mcp_server   Brave Search
+# ...
+```
+
+Catalog entries cover 23 connectors across `core`, `productivity`,
+`dev`, and `search` tiers.
+
+## SDK use — OAuth
 
 ```python
 import asyncio
@@ -38,9 +45,9 @@ import gaia.connectors as conn
 
 
 async def main():
-    # 1. Run the OAuth flow (opens system browser).
+    # 1. Run the OAuth PKCE flow (opens system browser).
     info = await conn.start_authorization(
-        provider="google",
+        "google",
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
     )
     print("Open this URL:", info["authorization_url"])
@@ -49,16 +56,16 @@ async def main():
 
     # 2. Grant a named agent the scopes it needs.
     conn.grant_agent(
-        provider="google",
-        agent_id="sdk-script",  # arbitrary id you control
+        connector_id="google",
+        agent_id="my-agent",
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
     )
 
     # 3. Fetch a short-lived access token (refresh is automatic).
     token = await conn.get_access_token(
-        provider="google",
+        connector_id="google",
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
-        agent_id="sdk-script",
+        agent_id="my-agent",
     )
     print("Bearer token:", token[:8], "…")
 
@@ -66,72 +73,84 @@ async def main():
 asyncio.run(main())
 ```
 
-`get_access_token` raises `AuthRequiredError` (with a `Reason` enum) on
-the four authorization failure modes:
+`get_access_token` raises `AuthRequiredError` on four failure modes:
 
-- `NOT_CONNECTED` — no connection for this provider.
-- `AGENT_NOT_GRANTED` — the named agent has no per-agent grant.
-- `CONNECTION_MISSING_SCOPES` — connection was authorized for fewer
-  scopes than requested.
-- `REAUTH_REQUIRED` — `client_id_hash` tripwire fired.
+| Reason | Cause |
+|---|---|
+| `NOT_CONNECTED` | No OAuth grant exists for this connector. |
+| `AGENT_NOT_GRANTED` | This agent has no per-agent scope grant. |
+| `CONNECTION_MISSING_SCOPES` | Grant exists but covers fewer scopes. |
+| `REAUTH_REQUIRED` | OAuth client ID was rotated. |
 
-A synchronous wrapper, `get_access_token_sync`, is available for
-non-async callers (sync agent tool bodies, CLI scripts).
+## SDK use — MCP server
+
+MCP server connectors are configured once and then provide their API
+keys via the `get_credential` dispatcher:
+
+```python
+from gaia.connectors.handler import configure, get_credential
+
+# Configure — stores the key in the OS keyring.
+await configure("github", {"GITHUB_TOKEN": "ghp_..."})
+
+# Retrieve — used by the MCP bridge to launch the server.
+creds = await get_credential("github")
+# {"GITHUB_TOKEN": "ghp_..."}
+```
+
+The MCP bridge injects these credentials as environment variables when
+it launches the MCP server process.
 
 ## CLI use
 
-Same primitives, exposed as `gaia connectors ...`:
-
 ```bash
-$ gaia connectors connect google --scopes \
-    https://www.googleapis.com/auth/gmail.readonly
-Open this URL to authorize google:
-  https://accounts.google.com/o/oauth2/v2/auth?...
-Connected as you@gmail.com
-
-$ gaia connectors status
-google: connected as you@gmail.com (scopes: https://www.googleapis.com/auth/gmail.readonly)
-
-$ gaia connectors grants grant google builtin:chat \
+# OAuth: connect and authorize
+gaia connectors connect google \
     --scopes https://www.googleapis.com/auth/gmail.readonly
-Granted google → builtin:chat: https://www.googleapis.com/auth/gmail.readonly
 
-$ gaia connectors grants list google
-google builtin:chat: https://www.googleapis.com/auth/gmail.readonly
+# MCP: supply API key(s)
+gaia connectors configure github --set GITHUB_TOKEN=ghp_…
+gaia connectors configure brave  --set BRAVE_API_KEY=BSA…
 
-$ gaia connectors disconnect google
-Disconnected google.
+# Check status of all connectors
+gaia connectors status
+#  google                          [oauth_pkce]  configured (you@gmail.com)
+#  github                          [mcp_server]  configured
+#  brave                           [mcp_server]  not configured
+
+# Test health of a configured connector
+gaia connectors test github
+
+# Per-agent grants (OAuth only)
+gaia connectors grants grant google builtin:chat \
+    --scopes https://www.googleapis.com/auth/gmail.readonly
+gaia connectors grants list google
+gaia connectors grants revoke google builtin:chat
+
+# Disconnect
+gaia connectors disconnect google
 ```
-
-The CLI uses the same `aiohttp.web` loopback as the AgentUI router, so
-no AgentUI server needs to be running.
 
 ## Agent-author guide
 
-Declare the scopes your agent needs as a class attribute and call
-`get_access_token_sync` from any sync tool body. The runtime
-(AgentUI / CLI / SDK) wraps `process_query` in an `_agent_context` so
-that the call resolves the per-agent grant automatically.
+Declare the connectors your agent needs as `REQUIRED_CONNECTORS`:
 
 ```python
 from typing import ClassVar, List
 from gaia.agents.base.agent import Agent
-from gaia.connectors import (
-    ConnectorRequirement,
-    get_access_token_sync,
-)
+from gaia.connectors import ConnectorRequirement, get_access_token_sync
 from gaia.agents.base.tools import tool
 
 
 class GmailAgent(Agent):
     AGENT_ID = "gmail_demo"
     AGENT_NAME = "Gmail Demo"
-    AGENT_DESCRIPTION = "Demo agent that lists 5 newest Gmail subjects."
+    AGENT_DESCRIPTION = "Lists 5 newest Gmail subjects."
     CONVERSATION_STARTERS = ["List my newest emails"]
 
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = [
         ConnectorRequirement(
-            provider="google",
+            connector_id="google",
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
             reason="Read your inbox to summarize the 5 newest messages",
         ),
@@ -143,7 +162,7 @@ class GmailAgent(Agent):
     @tool(description="List the 5 newest Gmail subjects")
     def _list_recent_subjects(self) -> list[str]:
         token = get_access_token_sync(
-            provider="google",
+            connector_id="google",
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         )
         import requests
@@ -154,67 +173,46 @@ class GmailAgent(Agent):
             timeout=10,
         )
         r.raise_for_status()
-        ids = [m["id"] for m in r.json().get("messages", [])]
-        subjects = []
-        for mid in ids:
-            m = requests.get(
-                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}",
-                params={"format": "metadata", "metadataHeaders": "Subject"},
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10,
-            )
-            m.raise_for_status()
-            for h in m.json().get("payload", {}).get("headers", []):
-                if h.get("name") == "Subject":
-                    subjects.append(h.get("value"))
-                    break
-        return subjects
+        return [m["id"] for m in r.json().get("messages", [])]
 ```
 
-When this agent runs in the AgentUI, the consent dialog renders the
-`reason` in plain language. The user clicks "Grant"; the FastAPI
-router records the grant in `~/.gaia/connectors/grants.json`. The
-next tool call returns a fresh access token transparently.
-
-`get_access_token_sync` calls go through three layers of checks before
-issuing a token: the per-agent grant, the OAuth scope coverage, and the
-`client_id_hash` tripwire. Any failure raises `AuthRequiredError`; the
-runtime surfaces a re-auth prompt.
-
-## Failure modes
-
-| Reason on `AuthRequiredError`         | What to do                                                                |
-| ------------------------------------- | ------------------------------------------------------------------------- |
-| `NOT_CONNECTED`                       | Connect from Settings → Connections (UI), or `gaia connectors connect <provider>`. |
-| `AGENT_NOT_GRANTED`                   | Grant the agent its scopes (UI consent dialog or `gaia connectors grants grant`). |
-| `CONNECTION_MISSING_SCOPES`           | Reconnect with the missing scopes added.                                  |
-| `REAUTH_REQUIRED`                     | OAuth client was rotated. Reconnect.                                      |
-
-`ConnectionRevokedError` (separate type) means the provider rejected the
-refresh token (`invalid_grant`), typically because the user revoked the
-app from their account dashboard. The stored entry is cleared
-automatically; the user reconnects.
+The Agent UI consent dialog renders `reason` in plain language. After
+the user grants the scopes, subsequent `get_access_token_sync` calls
+return fresh tokens transparently.
 
 ## Where things live
 
-- `~/.gaia/connectors/grants.json` — per-agent scope grants (mode 0600
-  on POSIX, JSON, no tokens).
-- OS keychain entries under service `gaia.connections` (kept as-is per
-  plan amendment A3 — internal constant, not user-visible, renaming would
-  orphan #915-era dev keyring entries), username `<connector_id>:default`
-  — encrypted refresh tokens + metadata.
+| Path | Contents |
+|------|----------|
+| `~/.gaia/connectors/state.json` | Non-secret connector metadata (configured, account_id, scopes). Mode 0600. |
+| `~/.gaia/connectors/grants.json` | Per-agent scope grants. Mode 0600. |
+| OS keychain `gaia.connections` | Encrypted refresh tokens + MCP API keys. |
 
-## Adding a new provider
+## Adding a new OAuth provider
 
-1. Create `src/gaia/connectors/providers/<name>.py` with a class that
-   structurally satisfies `OAuthProvider` (auth URL, token URL, client
-   id from env, `authorization_url(...)`, `token_request_body(...)`,
-   `refresh_request_body(...)`, `authorization_params()`).
-2. Register lazily by extending the `if provider_id == "google"` branch
-   in `src/gaia/connectors/providers/__init__.py:get`.
-3. Add a `SCOPE_DESCRIPTIONS` map for the AgentUI consent dialog.
+1. Create `src/gaia/connectors/providers/<name>.py` satisfying the
+   `OAuthProvider` protocol (auth/token URLs, client env vars, etc.).
+2. Register in `src/gaia/connectors/providers/__init__.py:get`.
+3. Add a `ConnectorSpec` entry in `src/gaia/connectors/catalog.py`.
 4. Add unit tests under `tests/unit/connectors/test_providers.py`.
 
-The rest of the module is provider-agnostic; `flow.py`, `tokens.py`,
-`store.py`, and `grants.py` work for any provider that satisfies the
-Protocol.
+## Adding a new MCP server connector
+
+Add one entry to the `_MCP_CATALOG` list in
+`src/gaia/connectors/catalog.py`:
+
+```python
+ConnectorSpec(
+    id="my-service",
+    display_name="My Service",
+    type="mcp_server",
+    category="dev",
+    tier="community",
+    mcp_command=["npx", "-y", "@my/mcp-server"],
+    mcp_env_keys=["MY_SERVICE_API_KEY"],
+    description="Integrates My Service via MCP.",
+),
+```
+
+The MCP bridge will inject `MY_SERVICE_API_KEY` from the keyring as an
+environment variable when launching the server process.
