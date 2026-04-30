@@ -58,6 +58,7 @@ jobs:
   # Auto-review new PRs (including forks)
   pr-review:
     if: |
+      github.repository == 'amd/gaia' &&
       github.event_name == 'pull_request_target' &&
       (github.event.pull_request.draft == false ||
        contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
@@ -312,6 +313,7 @@ jobs:
   # only reads the PR diff and posts comments (no commits to the branch).
   pr-comment:
     if: |
+      github.repository == 'amd/gaia' &&
       github.event_name == 'pull_request_review_comment' &&
       contains(github.event.comment.body, '@claude') &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -427,9 +429,10 @@ jobs:
   # only reads the PR diff and posts comments (no commits to the branch).
   issue-handler:
     if: |
-      github.event_name == 'issues' ||
-      (github.event_name == 'issue_comment' &&
-       contains(github.event.comment.body, '@claude'))
+      github.repository == 'amd/gaia' &&
+      (github.event_name == 'issues' ||
+       (github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, '@claude')))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -620,6 +623,7 @@ jobs:
   # Generate release notes when PyPi workflow completes successfully on a tag
   release-notes:
     if: |
+      github.repository == 'amd/gaia' &&
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
       startsWith(github.event.workflow_run.head_branch, 'v')

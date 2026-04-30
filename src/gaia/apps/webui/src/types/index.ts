@@ -304,6 +304,7 @@ export type StreamEventType =
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
+    | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
     | 'agent_created'; // New agent created — triggers agent list refresh
 
@@ -351,6 +352,16 @@ export interface StreamEvent {
     mcp_server?: string;
     /** Tool call latency in milliseconds (for tool_result). */
     latency_ms?: number;
+    /** Governance decision (for policy_alert). */
+    decision?: string;
+    /** Governance policy reason (for policy_alert). */
+    reason?: string;
+    /** Governance rule IDs (for policy_alert). */
+    rule_ids?: string[];
+    /** Governance policy version (for policy_alert). */
+    policy_version?: string;
+    /** Governance receipt ID (for policy_alert). */
+    receipt_id?: string;
     /** Structured result data (for tool_result with search results, file lists, etc.). */
     result_data?: {
         type: string;
