@@ -380,43 +380,56 @@ function App() {
         }
     }, [addSession, setCurrentSession, setMessages, setSidebarOpen, checkSystemStatus, setPendingPrompt]);
 
-    // Mobile gateway toggle
+    // Mobile gateway toggle: the sidebar button ALWAYS opens the modal
+    // (so the user can re-capture the QR / URL if they missed it the first
+    // time).  Stopping the tunnel is done via the explicit "Stop Tunnel"
+    // button inside the modal (see handleMobileStop).
     const handleMobileToggle = useCallback(async () => {
         if (tunnelActive) {
-            // Stop tunnel
-            log.system.info('Stopping mobile access tunnel...');
-            try {
-                await api.stopTunnel();
-            } catch {
-                // Ignore stop errors
-            }
-            setTunnelActive(false);
-            setShowMobileAccess(false);
-        } else {
-            // Start tunnel
-            log.system.info('Starting mobile access tunnel...');
-            setShowMobileAccess(true);
-            setTunnelLoading(true);
+            // Tunnel already running -- just reopen the modal so the user
+            // can copy the URL or scan the QR again.
+            log.system.info('Reopening mobile access modal (tunnel already running)');
             setTunnelError(null);
-            try {
-                const status = await api.startTunnel();
-                if (status.error) {
-                    log.system.error('Tunnel failed to start:', status.error);
-                    setTunnelActive(false);
-                    setTunnelError(status.error);
-                } else {
-                    setTunnelActive(true);
-                    log.system.info('Tunnel started successfully');
-                }
-            } catch (err) {
-                log.system.error('Tunnel start error:', err);
+            setShowMobileAccess(true);
+            return;
+        }
+
+        // Tunnel is not running -- start it.
+        log.system.info('Starting mobile access tunnel...');
+        setShowMobileAccess(true);
+        setTunnelLoading(true);
+        setTunnelError(null);
+        try {
+            const status = await api.startTunnel();
+            if (status.error) {
+                log.system.error('Tunnel failed to start:', status.error);
                 setTunnelActive(false);
-                setTunnelError(err instanceof Error ? err.message : 'Failed to connect');
-            } finally {
-                setTunnelLoading(false);
+                setTunnelError(status.error);
+            } else {
+                setTunnelActive(true);
+                log.system.info('Tunnel started successfully');
             }
+        } catch (err) {
+            log.system.error('Tunnel start error:', err);
+            setTunnelActive(false);
+            setTunnelError(err instanceof Error ? err.message : 'Failed to connect');
+        } finally {
+            setTunnelLoading(false);
         }
     }, [tunnelActive]);
+
+    // Explicit "Stop Tunnel" action (triggered from inside the modal).
+    const handleMobileStop = useCallback(async () => {
+        log.system.info('Stopping mobile access tunnel...');
+        try {
+            await api.stopTunnel();
+        } catch (err) {
+            log.system.warn('stopTunnel call failed (continuing)', err);
+        }
+        setTunnelActive(false);
+        setTunnelError(null);
+        setShowMobileAccess(false);
+    }, []);
 
     // Sync agent picker to the selected session's agent_type
     useEffect(() => {
@@ -533,6 +546,7 @@ function App() {
                     <MobileAccessModal
                         isOpen={showMobileAccess}
                         onClose={() => setShowMobileAccess(false)}
+                        onStop={handleMobileStop}
                         error={tunnelError}
                     />
                 </AnimatedPresence>
