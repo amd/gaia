@@ -164,7 +164,7 @@ class AgentInfo(BaseModel):
     # ``Agent.REQUIRED_CONNECTORS``. The AgentUI consent dialog renders these
     # in plain language (via SCOPE_DESCRIPTIONS in providers/google.py).
     # Each entry is a serialized ``ConnectorRequirement``:
-    # {provider: str, scopes: list[str], reason: str}.
+    # {connector_id: str, scopes: list[str], reason: str}.
     required_connections: List[dict] = Field(default_factory=list)
     # T-X2: opaque grant-ledger key. Built-ins use ``builtin:<id>``; custom
     # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent

@@ -41,32 +41,32 @@ def _reset_registry():
 class TestConnectorRequirement:
     def test_basic_construction(self):
         req = ConnectorRequirement(
-            provider="google",
+            connector_id="google",
             scopes=["gmail.readonly"],
             reason="Needed to read your inbox",
         )
-        assert req.provider == "google"
+        assert req.connector_id == "google"
         assert req.scopes == ("gmail.readonly",)
         assert req.reason == "Needed to read your inbox"
 
     def test_is_frozen(self):
         # Frozen dataclasses raise FrozenInstanceError on attribute assignment.
         req = ConnectorRequirement(
-            provider="google", scopes=["gmail.readonly"], reason="x"
+            connector_id="google", scopes=["gmail.readonly"], reason="x"
         )
         with pytest.raises(Exception):
-            req.provider = "microsoft"  # type: ignore[misc]
+            req.connector_id = "microsoft"  # type: ignore[misc]
 
     def test_equality_and_hashable(self):
-        a = ConnectorRequirement(provider="google", scopes=["a"], reason="r")
-        b = ConnectorRequirement(provider="google", scopes=["a"], reason="r")
+        a = ConnectorRequirement(connector_id="google", scopes=["a"], reason="r")
+        b = ConnectorRequirement(connector_id="google", scopes=["a"], reason="r")
         assert a == b
         # Hashable so it can live in sets/dict keys.
         assert {a, b} == {a}
 
     def test_scopes_normalized_to_tuple(self):
         # Lists are mutable; storing as tuple preserves equality across copies.
-        req = ConnectorRequirement(provider="google", scopes=["a", "b"], reason="r")
+        req = ConnectorRequirement(connector_id="google", scopes=["a", "b"], reason="r")
         assert isinstance(req.scopes, tuple)
 
 

@@ -26,6 +26,10 @@ without notice. Only the names re-exported here are stable.
 
 from __future__ import annotations
 
+# Spec types + registry — added in T-1 (ConnectorSpec, ConfigField, REGISTRY).
+from gaia.connectors.registry import REGISTRY, ConnectorRegistry
+from gaia.connectors.spec import ConfigField, ConnectorSpec
+
 # Public API — coordination layer.
 from gaia.connectors.api import (
     cancel_flow,
@@ -73,6 +77,11 @@ from gaia.connectors.providers.base import (
 )
 
 __all__ = [
+    # Spec types + registry (T-1)
+    "ConfigField",
+    "ConnectorRegistry",
+    "ConnectorSpec",
+    "REGISTRY",
     # Errors
     "AuthRequiredError",
     "ConfigurationError",

@@ -46,7 +46,7 @@ CUSTOM_AGENT_TEMPLATE = textwrap.dedent("""
         CONVERSATION_STARTERS = []
         REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = [
             ConnectorRequirement(
-                provider="google",
+                connector_id="google",
                 scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                 reason="needed to triage your Gmail inbox",
             ),
@@ -126,7 +126,7 @@ class TestCustomAgentPath:
         assert len(reg.required_connections) == 1
         cr = reg.required_connections[0]
         assert isinstance(cr, ConnectorRequirement)
-        assert cr.provider == "google"
+        assert cr.connector_id == "google"
         assert cr.scopes == ("https://www.googleapis.com/auth/gmail.readonly",)
         assert "Gmail inbox" in cr.reason
 

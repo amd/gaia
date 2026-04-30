@@ -24,12 +24,13 @@ class ConnectorRequirement:
     """
     Declared on agent classes as ``REQUIRED_CONNECTORS = [ConnectorRequirement(...)]``.
 
-    Frozen + hashable so it can live in sets and serve as a dict key. ``scopes``
-    is normalized to a tuple in ``__post_init__`` so two requirements built
-    from different list instances compare equal.
+    ``connector_id`` must match a ``ConnectorSpec.id`` in the catalog (e.g.
+    ``"google"``). Frozen + hashable so it can live in sets and serve as a
+    dict key. ``scopes`` is normalized to a tuple in ``__post_init__`` so two
+    requirements built from different list instances compare equal.
     """
 
-    provider: str
+    connector_id: str
     scopes: Sequence[str]
     reason: str = field(default="")
 

@@ -41,7 +41,7 @@ export interface AgentInfo {
  * Issue #915 — declarative scope claim on an agent.
  */
 export interface ConnectorRequirement {
-    provider: string;
+    connector_id: string;
     scopes: string[];
     reason: string;
 }
