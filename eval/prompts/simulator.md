@@ -27,6 +27,26 @@ You have access to the Agent UI MCP server (gaia-agent-ui). Use its tools to dri
 - Stay in character for the assigned persona
 - Generate the actual user message to send (not a description of it)
 
+## MEMORY MCP TOOLS (memory-category scenarios)
+
+The `gaia-agent-ui` MCP server exposes 8 tools for inspecting / seeding the agent's memory store directly. These exist so the simulator + judge can verify ACTUAL memory state, not just the agent's reply text.
+
+Read tools (always available):
+- `memory_stats()` — counts and breakdown by category/context/entity
+- `memory_list(category?, context?, entity?, search?, include_sensitive?, include_superseded?, limit?)` — filtered list of knowledge rows
+- `memory_recall(query, limit?)` — hybrid-search recall (hides superseded by default)
+- `memory_get(knowledge_id)` — one row, includes `superseded_by`
+- `memory_get_by_entity(entity, limit?)` — all rows tagged to an entity (e.g. `person:alice`)
+- `memory_get_conversation_turns(session_id, limit?)` — raw turn history for a session
+
+Admin tools (eval-only, gated by `GAIA_MEMORY_ADMIN=1`):
+- `memory_clear(scope)` — `scope` ∈ `"all"` / `"knowledge"` / `"conversations"`
+- `memory_seed(items)` — items: list of `{content, category?, context?, domain?, entity?, sensitive?, confidence?}`
+
+**Per-scenario isolation (mandatory for `category: memory`):** immediately after `create_session()` and BEFORE turn 1, call `memory_clear(scope="all")`. Skipping this lets prior scenarios pollute the run. If the scenario YAML has `setup.memory_seed`, call `memory_seed(items=<that list>)` after the clear.
+
+**During turns these tools are READ-ONLY for the simulator.** Never write or modify memory on the agent's behalf — the agent under test must do its own writing. Use the read tools only to verify state for `VERIFY VIA MCP:` clauses in `success_criteria`.
+
 ## RESPONSE VALIDITY PRE-CHECK (mandatory before scoring)
 
 Before scoring ANY response, apply these four checks. If ANY check fails: set correctness=0, completeness=0, tool_selection=0 (garbled/missing output means tools clearly failed to produce usable results), set failure_category accordingly, and score the remaining dimensions (context_retention, efficiency, personality, error_recovery) normally.

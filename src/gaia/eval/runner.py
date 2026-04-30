@@ -27,6 +27,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -691,8 +692,18 @@ def _aggregate_performance(result: dict, scenario_id: str) -> None:
         result["performance_summary"] = None
 
 
-def preflight_check(backend_url):
-    """Check prerequisites before running scenarios."""
+def preflight_check(backend_url, scenarios=None):
+    """Check prerequisites before running scenarios.
+
+    Args:
+        backend_url: Agent UI backend URL.
+        scenarios: Optional iterable of ``(path, scenario_data)`` tuples — when
+            provided, also verifies any category-specific prerequisites (e.g.
+            memory scenarios need ``GAIA_MEMORY_ADMIN=1`` on the backend so
+            the eval simulator can reset state between runs).
+
+    Returns a list of error strings; empty list means preflight passed.
+    """
     import urllib.error
     import urllib.request
 
@@ -721,7 +732,68 @@ def preflight_check(backend_url):
     if result.returncode != 0:
         errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
 
+    # Memory-category preflight — required only when memory scenarios are queued.
+    # Memory scenarios call memory_clear(scope=all) to reset state between turns;
+    # that endpoint is gated by GAIA_MEMORY_ADMIN=1 on the backend process.
+    # Without this, every memory scenario would silently inherit state from the
+    # previous run and produce flaky pass/fail results.
+    has_memory_scenarios = scenarios is not None and any(
+        (sd or {}).get("category") == "memory" for _path, sd in scenarios
+    )
+    if has_memory_scenarios:
+        memory_admin_error = _probe_memory_admin(backend_url)
+        if memory_admin_error:
+            errors.append(memory_admin_error)
+
     return errors
+
+
+def _probe_memory_admin(backend_url: str) -> Optional[str]:
+    """Verify the backend has ``GAIA_MEMORY_ADMIN=1`` set.
+
+    Probes ``POST /api/memory/admin/seed`` with an empty items list — the
+    endpoint short-circuits to ``{"count": 0, "ids": []}`` without writing
+    anything when admin is enabled, or returns 403 with an actionable
+    message when it isn't.
+
+    Returns ``None`` on success, or an error string ready for the preflight
+    error list.
+    """
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{backend_url}/api/memory/admin/seed",
+        data=b'{"items":[]}',
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            if r.status == 200:
+                return None
+            return (
+                f"Memory admin probe returned unexpected HTTP {r.status} "
+                f"from {backend_url}/api/memory/admin/seed"
+            )
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return (
+                "Memory scenarios require GAIA_MEMORY_ADMIN=1 on the backend, "
+                "but the backend at "
+                f"{backend_url} returned 403 from /api/memory/admin/seed. "
+                "Restart the Agent UI backend with that env var set, e.g.:\n"
+                "    GAIA_MEMORY_ADMIN=1 GAIA_MEMORY_MCP_ALWAYS=1 gaia chat --ui"
+            )
+        return (
+            f"Memory admin probe failed with HTTP {e.code} from {backend_url}: "
+            f"{e.reason}"
+        )
+    except urllib.error.URLError as e:
+        return (
+            f"Memory admin probe could not reach {backend_url}: {e}. "
+            "Is the Agent UI backend running?"
+        )
 
 
 def _load_merged_manifest(extra_corpus_dirs=None):
@@ -1633,7 +1705,7 @@ class AgentEvalRunner:
             print(f"[INFO] Targeting agent_type='{self.agent_type}'")
 
         # Pre-flight
-        errors = preflight_check(self.backend_url)
+        errors = preflight_check(self.backend_url, scenarios=scenarios)
         if errors:
             print("[ERROR] Pre-flight check failed:", file=sys.stderr)
             for e in errors:

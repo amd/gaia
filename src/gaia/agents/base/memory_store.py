@@ -1141,6 +1141,21 @@ class MemoryStore:
             cursor = self._conn.execute(sql, (entity, limit))
             return [self._row_to_knowledge_dict(r) for r in cursor.fetchall()]
 
+    def get_item(self, knowledge_id: str) -> Optional[Dict]:
+        """Fetch a single knowledge item by ID, or None if not found.
+
+        Unlike search-style methods, this returns superseded items too — eval
+        and the dashboard need to be able to inspect a row's ``superseded_by``
+        chain to verify supersession behavior.
+
+        Returns the same shape as :meth:`_row_to_knowledge_dict` (17 fields,
+        embedding excluded).
+        """
+        sql = f"SELECT {self._KNOWLEDGE_COLS} FROM knowledge WHERE id = ?"
+        with self._lock:
+            row = self._conn.execute(sql, (knowledge_id,)).fetchone()
+        return self._row_to_knowledge_dict(row) if row else None
+
     def get_upcoming(
         self,
         within_days: int = 7,
@@ -2453,6 +2468,140 @@ class MemoryStore:
             "tool_history": tool_deleted,
             "conversations": conv_deleted,
         }
+
+    def clear_knowledge(self) -> Dict:
+        """Delete all knowledge rows and rebuild the knowledge FTS index.
+
+        Leaves tool_history and conversations untouched.  Used by eval to
+        reset structural state between scenarios while keeping conversation
+        history (or vice versa) for cross-session tests.
+        """
+        with self._lock:
+            try:
+                deleted = self._conn.execute("DELETE FROM knowledge").rowcount
+                self._rebuild_knowledge_fts_locked()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info("[MemoryStore] cleared knowledge: %d rows", deleted)
+        return {"knowledge": deleted}
+
+    def clear_conversations(self) -> Dict:
+        """Delete all conversation turns and rebuild the conversations FTS index.
+
+        Leaves knowledge and tool_history untouched.
+        """
+        with self._lock:
+            try:
+                deleted = self._conn.execute("DELETE FROM conversations").rowcount
+                self._rebuild_conversations_fts_locked()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info("[MemoryStore] cleared conversations: %d rows", deleted)
+        return {"conversations": deleted}
+
+    def seed_bulk(self, items: List[Dict]) -> List[str]:
+        """Bulk-insert knowledge rows, bypassing dedup.
+
+        Eval-only helper for stress scenarios that need a known cluttered
+        memory state (e.g. "200 prior facts — does proactive surfacing still
+        find the relevant one?").  Each item is a dict with the same keys
+        accepted by :meth:`store`.
+
+        Bypassing dedup is the whole point — we want exact rows, not
+        merged-by-similarity rows.  In return, callers are responsible for
+        not seeding contradictory clusters they then expect to find via
+        normal search.
+
+        Returns the list of generated knowledge IDs in input order.
+
+        Raises ValueError on the FIRST malformed item, before any rows are
+        inserted (atomic-or-nothing).
+        """
+        if not items:
+            return []
+
+        # Pre-validate the entire batch so a bad item at index 17 doesn't
+        # leave 16 rows partially inserted.
+        normalized: List[Dict] = []
+        for idx, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise ValueError(f"seed_bulk: item[{idx}] must be a dict")
+            content = item.get("content", "")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError(
+                    f"seed_bulk: item[{idx}].content must be a non-empty string"
+                )
+            category = item.get("category", "fact")
+            if category not in VALID_CATEGORIES:
+                raise ValueError(
+                    f"seed_bulk: item[{idx}].category={category!r} is not in "
+                    f"{sorted(VALID_CATEGORIES)}"
+                )
+            confidence = float(item.get("confidence", 0.7))
+            confidence = max(0.0, min(1.0, confidence))
+            normalized.append(
+                {
+                    "id": str(uuid4()),
+                    "category": category,
+                    "content": content[:MAX_CONTENT_LENGTH],
+                    "domain": item.get("domain") or None,
+                    "source": item.get("source", "seed"),
+                    "confidence": confidence,
+                    "metadata": (
+                        json.dumps(item["metadata"]) if item.get("metadata") else None
+                    ),
+                    "context": item.get("context", "global"),
+                    "sensitive": int(bool(item.get("sensitive", False))),
+                    "entity": item.get("entity") or None,
+                    "due_at": item.get("due_at") or None,
+                }
+            )
+
+        now = _now_iso()
+        ids: List[str] = []
+        with self._lock:
+            try:
+                for n in normalized:
+                    self._conn.execute(
+                        """
+                        INSERT INTO knowledge (
+                            id, category, content, domain, source, confidence,
+                            metadata, use_count, context, sensitive, entity,
+                            created_at, updated_at, last_used, due_at,
+                            reminded_at, superseded_by
+                        ) VALUES (
+                            ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, NULL, ?,
+                            NULL, NULL
+                        )
+                        """,
+                        (
+                            n["id"],
+                            n["category"],
+                            n["content"],
+                            n["domain"],
+                            n["source"],
+                            n["confidence"],
+                            n["metadata"],
+                            n["context"],
+                            n["sensitive"],
+                            n["entity"],
+                            now,
+                            now,
+                            n["due_at"],
+                        ),
+                    )
+                    self._insert_knowledge_fts_locked(n["id"])
+                    ids.append(n["id"])
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info("[MemoryStore] seed_bulk: inserted %d items", len(ids))
+        return ids
 
     def _rebuild_knowledge_fts_locked(self):
         """Rebuild knowledge FTS5 index. Must hold self._lock."""

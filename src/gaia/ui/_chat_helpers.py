@@ -1878,13 +1878,19 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
         # Save complete response to DB (including captured agent steps)
         if full_response:
-            # Fetch last inference stats from Lemonade (non-blocking)
+            # Fetch last inference stats from Lemonade (non-blocking).
+            # Resolve the Lemonade URL via LemonadeManager so we follow the
+            # actually-running instance (matches the resolver used at
+            # _chat_helpers.py:331 and :747); raw os.environ lookup misses
+            # cases where Lemonade is on a non-default port and the env var
+            # isn't set, leaving stats silently empty in eval traces.
             inference_stats = None
             try:
                 import httpx
+                from gaia.llm.lemonade_manager import LemonadeManager
 
-                base_url = os.environ.get(
-                    "LEMONADE_BASE_URL", "http://localhost:13305/api/v1"
+                base_url = (
+                    LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
                 )
                 async with httpx.AsyncClient(timeout=3.0) as stats_client:
                     stats_resp = await stats_client.get(f"{base_url}/stats")
@@ -1900,8 +1906,22 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             "input_tokens": stats_data.get("input_tokens", 0),
                             "output_tokens": stats_data.get("output_tokens", 0),
                         }
-            except Exception:
-                pass
+                    else:
+                        logger.debug(
+                            "Lemonade /stats returned %d at %s — perf telemetry "
+                            "missing for this turn",
+                            stats_resp.status_code,
+                            base_url,
+                        )
+            except Exception as exc:  # pylint: disable=broad-except
+                # Don't fail the user's response if stats fetching breaks; log
+                # at debug so eval-time gaps are diagnosable without spamming
+                # production logs.
+                logger.debug(
+                    "Failed to fetch Lemonade /stats: %s — perf telemetry "
+                    "missing for this turn",
+                    exc,
+                )
 
             msg_id = db.add_message(
                 request.session_id,

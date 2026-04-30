@@ -317,7 +317,20 @@ class MemoryMixin:
         self._faiss_index = None
         self._faiss_id_map: List[str] = []  # faiss_position -> knowledge_id
 
-        # Step 2: Validate Lemonade embedding service connectivity [HARD REQUIREMENT]
+        # Step 2: Validate Lemonade embedding service connectivity.
+        #
+        # Memory v2 needs an embedding service to function (FAISS index, hybrid
+        # search, reconciliation).  Lemonade is the canonical provider — but
+        # if it's unreachable at agent-startup time we degrade to a memory-
+        # disabled session rather than crashing the agent.  Real-world
+        # scenarios that hit this:
+        #   - Fresh AppImage launch before the user has installed Lemonade.
+        #   - CI smoke tests that boot the UI without a Lemonade backend.
+        #   - Agents instantiated during config validation / packaging tests.
+        #
+        # The degrade is loud (WARNING-level), reversible (next agent
+        # instance with Lemonade up will init memory normally), and tracked
+        # via ``_memory_store is None`` checks at every memory operation.
         try:
             self._get_embedder()
             # Validate connectivity with a small test embedding
@@ -331,12 +344,21 @@ class MemoryMixin:
                 "[MemoryMixin] Lemonade embedding service validated (%d-dim)",
                 EMBEDDING_DIM,
             )
-        except RuntimeError:
-            raise
         except Exception as e:
-            raise RuntimeError(
-                f"Lemonade embedding service required for memory system: {e}"
-            ) from e
+            logger.warning(
+                "[MemoryMixin] Lemonade embedding service unreachable — "
+                "memory v2 disabled for this session (start lemonade-server "
+                "and reload to enable). Reason: %s",
+                e,
+            )
+            # Tear down the partially-built state so no later code path tries
+            # to use memory.
+            self._memory_store = None
+            self._auto_extract_enabled = False
+            self._incognito = True
+            self._memory_post_init_pending = False
+            self._memory_session_id = str(uuid4())
+            return
 
         # Step 3: Backfill embeddings for items missing them
         backfilled = self._backfill_embeddings(limit=100)
@@ -1509,9 +1531,10 @@ class MemoryMixin:
 
         This is prepended to the user message each turn (not the system prompt),
         so the system prompt stays frozen for KV-cache reuse.
-        Returns empty string if nothing time-sensitive is active.
+        Returns empty string if nothing time-sensitive is active or if memory
+        was disabled at init time (e.g. Lemonade unreachable).
         """
-        if not hasattr(self, "_memory_store"):
+        if getattr(self, "_memory_store", None) is None:
             return ""
 
         try:
@@ -1749,7 +1772,7 @@ class MemoryMixin:
 
         # Log to tool_history
         try:
-            if hasattr(self, "_memory_store") and not getattr(
+            if getattr(self, "_memory_store", None) is not None and not getattr(
                 self, "_incognito", False
             ):
                 self._memory_store.log_tool_call(
@@ -1804,7 +1827,7 @@ class MemoryMixin:
         Called after process_query() completes (via hook in agent.py).
         Uses _original_user_input so dynamic context prefix is never persisted.
         """
-        if not hasattr(self, "_memory_store"):
+        if getattr(self, "_memory_store", None) is None:
             return
         if getattr(self, "_incognito", False):
             return
@@ -1866,6 +1889,18 @@ class MemoryMixin:
         the previous closures. Avoid running two MemoryMixin agents concurrently
         in the same process.
         """
+        # If memory was disabled at init (Lemonade unreachable or
+        # GAIA_MEMORY_DISABLED=1), there is no store to back the tools and
+        # registering them would only let the LLM hit AttributeError on
+        # ``self._memory_store`` later.  Skip registration so the agent
+        # simply lacks the tools — the system prompt's tool catalogue is
+        # rebuilt from the registry, so this also keeps the prompt accurate.
+        if getattr(self, "_memory_store", None) is None:
+            logger.info(
+                "[MemoryMixin] memory disabled — skipping memory tool registration"
+            )
+            return
+
         from gaia.agents.base.tools import tool
 
         mixin = self  # Capture for closures
@@ -1881,6 +1916,18 @@ class MemoryMixin:
             entity: str = "",
         ) -> dict:
             """Store a fact, preference, or learning in persistent memory.
+
+            CONTENT RULE — preserve detail: pass the user's full statement
+            verbatim or as close to it as possible. DO NOT summarize,
+            paraphrase, or drop attributes. Future recall fails when the
+            stored content is thinner than what the user actually said.
+              GOOD: "API gateway runs on port 8080 and uses basic HTTP auth"
+              BAD:  "API gateway uses 8080" (lost the auth method)
+              BAD:  "user told me about the gateway" (lost everything)
+            If the user gave multiple distinct facts in one message, call
+            remember() once per fact rather than concatenating into a single
+            blob — each fact should be independently retrievable.
+
             Categories: fact, preference, error, skill, note, reminder.
             due_at: ISO 8601 for reminders. context: work/personal scope.
             sensitive=true for private data. entity: person:name, app:name."""

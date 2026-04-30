@@ -5,6 +5,7 @@
 
 import json
 import logging
+import os
 import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -89,6 +90,75 @@ class KnowledgeCreate(BaseModel):
     @classmethod
     def validate_due_at(cls, v: Optional[str]) -> Optional[str]:
         return _validate_iso8601("due_at", v)
+
+
+class AdminClearRequest(BaseModel):
+    """Request body for the eval-only :func:`admin_clear` endpoint.
+
+    ``scope`` selects which subset of memory to wipe.  Defaults to ``all``.
+    """
+
+    scope: str = "all"
+
+    @field_validator("scope")
+    @classmethod
+    def validate_scope(cls, v: str) -> str:
+        allowed = ("all", "knowledge", "conversations")
+        if v not in allowed:
+            raise ValueError(f"scope must be one of {allowed}, got {v!r}")
+        return v
+
+
+class AdminSeedItem(BaseModel):
+    """One row for the eval-only :func:`admin_seed` endpoint.
+
+    The shape mirrors :class:`KnowledgeCreate` but adds ``confidence`` and
+    ``source`` because seeding is meant to plant *known* memory state, not
+    user-generated content.  Dedup is bypassed in :meth:`MemoryStore.seed_bulk`
+    so two near-identical items become two rows — the whole point of seeding.
+    """
+
+    content: str
+    category: str = "fact"
+    domain: Optional[str] = None
+    context: str = "global"
+    entity: Optional[str] = None
+    sensitive: bool = False
+    due_at: Optional[str] = None
+    confidence: float = 0.7
+    source: str = "seed"
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("content must not be empty or whitespace-only")
+        return v
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v: str) -> str:
+        if v not in _VALID_CATEGORIES:
+            raise ValueError(
+                f"category must be one of {sorted(_VALID_CATEGORIES)}, got {v!r}"
+            )
+        return v
+
+    @field_validator("due_at")
+    @classmethod
+    def validate_due_at(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_iso8601("due_at", v)
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"confidence must be in [0.0, 1.0], got {v}")
+        return v
+
+
+class AdminSeedRequest(BaseModel):
+    items: List[AdminSeedItem]
 
 
 class KnowledgeUpdate(BaseModel):
@@ -378,6 +448,107 @@ def delete_knowledge(knowledge_id: str) -> Dict:
     if not success:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
     return {"status": "deleted", "knowledge_id": knowledge_id}
+
+
+@router.get("/api/memory/knowledge/{knowledge_id}")
+def get_knowledge_item(knowledge_id: str) -> Dict:
+    """Fetch one knowledge entry by ID, including superseded rows.
+
+    The list endpoint hides superseded items by default; this endpoint
+    intentionally does not, so eval and the dashboard can verify the
+    supersession chain (``superseded_by`` field) for adversarial scenarios.
+    """
+    item = _get_store().get_item(knowledge_id)
+    if item is None:
+        raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
+    return item
+
+
+# ---------------------------------------------------------------------------
+# Admin (eval-only) — gated by GAIA_MEMORY_ADMIN=1
+# ---------------------------------------------------------------------------
+#
+# These endpoints exist so the agent-eval simulator can wipe state between
+# scenarios and seed known clutter for stress tests.  They are NOT for
+# production use — clearing memory is irreversible and seeding bypasses
+# dedup, both of which are exactly wrong for normal users.
+#
+# Gating policy:
+#   * Disabled by default (any value other than "1" → 403).
+#   * Eval runner sets GAIA_MEMORY_ADMIN=1 in the simulator subprocess env.
+#   * The env var is read on every request so toggling at runtime works
+#     without restarting the backend.
+
+
+def _require_memory_admin() -> None:
+    """Raise HTTP 403 unless ``GAIA_MEMORY_ADMIN=1`` is set in the env.
+
+    Read on each call (no caching) so an eval run can flip the flag mid-process
+    without restarting the FastAPI server.  Kept as a helper rather than a
+    FastAPI ``Depends()`` so the same check works from background tasks.
+    """
+    if os.environ.get("GAIA_MEMORY_ADMIN") != "1":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "memory admin endpoints are disabled — set "
+                "GAIA_MEMORY_ADMIN=1 on the backend process to enable. "
+                "These endpoints are eval-only and irreversible."
+            ),
+        )
+
+
+@router.post("/api/memory/admin/clear")
+def admin_clear(body: AdminClearRequest) -> Dict:
+    """Wipe memory for an eval scenario reset.  Eval-only.
+
+    ``scope=all``           — knowledge + tool_history + conversations
+    ``scope=knowledge``     — knowledge rows only (FTS rebuilt)
+    ``scope=conversations`` — conversation turns only (FTS rebuilt)
+
+    Returns ``{cleared: {<table>: <rows_deleted>}}`` so the caller can verify
+    the wipe took effect.
+
+    Requires ``GAIA_MEMORY_ADMIN=1``.
+    """
+    _require_memory_admin()
+    store = _get_store()
+    if body.scope == "all":
+        cleared = store.clear_all()
+    elif body.scope == "knowledge":
+        cleared = store.clear_knowledge()
+    else:  # conversations — validated to be one of the three above
+        cleared = store.clear_conversations()
+    logger.info("[memory router] admin_clear scope=%s → %s", body.scope, cleared)
+    return {"scope": body.scope, "cleared": cleared}
+
+
+@router.post("/api/memory/admin/seed")
+def admin_seed(body: AdminSeedRequest) -> Dict:
+    """Bulk-insert knowledge items, bypassing dedup.  Eval-only.
+
+    Used to plant a known cluttered state for stress scenarios such as
+    "200 prior facts — does proactive surfacing still find the relevant one?".
+    Each item is inserted verbatim — no near-duplicate merging — because the
+    whole point is to control exactly what's in the store.
+
+    Validation is whole-batch: any malformed item rejects all of them with
+    a 422 before anything is written.
+
+    Returns ``{count: N, ids: [...]}``.
+
+    Requires ``GAIA_MEMORY_ADMIN=1``.
+    """
+    _require_memory_admin()
+    if not body.items:
+        return {"count": 0, "ids": []}
+    items = [item.model_dump() for item in body.items]
+    try:
+        ids = _get_store().seed_bulk(items)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    logger.info("[memory router] admin_seed: inserted %d items", len(ids))
+    return {"count": len(ids), "ids": ids}
 
 
 # ---------------------------------------------------------------------------

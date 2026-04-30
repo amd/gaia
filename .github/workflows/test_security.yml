@@ -159,6 +159,10 @@ jobs:
 
       - name: Run Path Validator Security Tests
         shell: pwsh
+        env:
+          # Skip memory init — Lemonade isn't available in this CI job; the
+          # security tests instantiate ChatAgent but don't exercise memory.
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           Write-Host "================================================================"
           Write-Host "              PATH VALIDATOR SECURITY TESTS"

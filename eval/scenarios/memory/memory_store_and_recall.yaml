@@ -12,6 +12,7 @@ persona: power_user
 
 setup:
   index_documents: []
+  memory_clear: true
 
 turns:
   - turn: 1
@@ -19,14 +20,18 @@ turns:
     user_message: "My name is Jordan and I'm a principal ML engineer at AMD. Please remember this."
     ground_truth:
       expected_answer: "Jordan, principal ML engineer at AMD"
-    success_criteria: "Agent acknowledges storing the fact (calls remember tool or confirms it will remember) and confirms the name Jordan and role ML engineer"
+    success_criteria: |
+      Agent acknowledges storing the fact (calls remember tool or confirms it will remember) and confirms the name Jordan and role ML engineer.
+      VERIFY VIA MCP: call memory_recall(query="Jordan") — expect ≥1 item with content mentioning Jordan and category in {"fact","preference"}.
 
   - turn: 2
     objective: "Ask the agent to recall your name without re-stating it"
     user_message: "What's my name and what do I do?"
     ground_truth:
       expected_answer: "Jordan, principal ML engineer at AMD"
-    success_criteria: "Agent correctly states the name Jordan and role principal ML engineer. FAIL if agent says it doesn't know or asks the user to repeat themselves."
+    success_criteria: |
+      Agent correctly states the name Jordan and role principal ML engineer. FAIL if agent says it doesn't know or asks the user to repeat themselves.
+      VERIFY VIA MCP: memory_recall(query="Jordan") still returns ≥1 active item with Jordan in the content.
 
   - turn: 3
     objective: "Ask the agent what it knows about you"
