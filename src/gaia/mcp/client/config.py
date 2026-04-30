@@ -4,6 +4,7 @@
 
 import json
 import sys
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -146,19 +147,33 @@ class MCPConfig:
     def add_server(self, name: str, config: Dict[str, Any]) -> None:
         """Add or update a server configuration.
 
-        Args:
-            name: Server name
-            config: Server configuration dictionary
+        .. deprecated::
+            Use ``gaia.connectors.mcp_server.McpServerHandler.configure()``
+            instead. The connectors framework is now the sole writer to
+            ``mcp_servers.json`` (plan amendment A6).
         """
+        warnings.warn(
+            "MCPConfig.add_server() is deprecated. Use McpServerHandler.configure() "
+            "to write mcp_servers.json (plan amendment A6).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._servers[name] = config
         self._save()
 
     def remove_server(self, name: str) -> None:
         """Remove a server configuration.
 
-        Args:
-            name: Server name
+        .. deprecated::
+            Use ``gaia.connectors.mcp_server.McpServerHandler.disconnect()``
+            instead (plan amendment A6).
         """
+        warnings.warn(
+            "MCPConfig.remove_server() is deprecated. Use McpServerHandler.disconnect() "
+            "to write mcp_servers.json (plan amendment A6).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if name in self._servers:
             del self._servers[name]
             self._save()

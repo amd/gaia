@@ -18,5 +18,6 @@ things, then add an import here.
 """
 
 from gaia.connectors.catalog import google  # noqa: F401
+from gaia.connectors.catalog import mcp_servers  # noqa: F401
 
-__all__ = ["google"]
+__all__ = ["google", "mcp_servers"]
