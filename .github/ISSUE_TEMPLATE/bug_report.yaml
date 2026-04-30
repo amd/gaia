@@ -25,7 +25,7 @@ body:
           required: false
         - label: I've checked the hardware requirements in the docs
           required: false
-        - label: This issue relates to GAIA UI (Open-WebUI)
+        - label: This issue relates to Gaia Agent UI (`gaia chat --ui`)
           required: false
 
   - type: input

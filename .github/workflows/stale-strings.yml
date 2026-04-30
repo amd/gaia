@@ -1,0 +1,57 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Prevents retired UI terminology from re-entering the repo.
+# Blocks: RAUX, "GAIA UI" (bare), Open-WebUI / openwebui.
+# Correct term: "Gaia Agent UI".
+
+name: Stale strings check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/**'
+      - 'CONTRIBUTING.md'
+      - 'docs/**'
+      - 'README.md'
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/**'
+      - 'CONTRIBUTING.md'
+      - 'docs/**'
+      - 'README.md'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  stale-strings:
+    name: Check for retired UI references
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for retired terminology
+        run: |
+          # Word-boundary patterns block RAUX, bare "GAIA UI", and any spelling of Open-WebUI.
+          # The workflow file itself is excluded to avoid false positives from the pattern strings below.
+          HITS=$(grep -rn -iE '\bRAUX\b|\bGAIA UI\b|\bopen[-]?webui\b' \
+            --exclude="stale-strings.yml" \
+            .github/ CONTRIBUTING.md docs/ README.md 2>/dev/null || true)
+          if [ -n "$HITS" ]; then
+            echo "Retired UI terminology found. Use 'Gaia Agent UI' instead."
+            echo ""
+            echo "$HITS"
+            exit 1
+          fi
+          echo "OK — no retired UI terminology found."

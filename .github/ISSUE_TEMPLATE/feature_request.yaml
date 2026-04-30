@@ -25,7 +25,7 @@ body:
       options:
         - label: I've taken a look at existing feature requests
           required: false
-        - label: This feature request relates to GAIA UI (Open-WebUI)
+        - label: This feature request relates to Gaia Agent UI (`gaia chat --ui`)
           required: false
 
   - type: textarea
