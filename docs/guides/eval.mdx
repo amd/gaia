@@ -1,0 +1,341 @@
+---
+title: "Agent Eval"
+description: "Validate GAIA agent quality with automated scenario-based testing using Claude Code"
+icon: "microscope"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/eval/`](https://github.com/amd/gaia/tree/main/src/gaia/eval)
+</Info>
+
+## What Is Agent Eval?
+
+The Agent Eval framework validates your GAIA agent's quality by running realistic, multi-turn conversations against the live Agent UI. It uses **Claude Code** as both user simulator and judge -- driving conversations through MCP, scoring every response across 7 dimensions, and producing a machine-readable scorecard.
+
+Unlike unit tests that check individual functions, Agent Eval tests the **full system end-to-end**: RAG indexing, tool dispatch, context retention, hallucination resistance, and personality compliance -- through the same interface real users interact with.
+
+**What you get:**
+- Automated multi-turn conversation testing with persona-driven user messages
+- 7-dimension scoring rubric (correctness, tool selection, context retention, completeness, efficiency, personality, error recovery)
+- Deterministic pass/fail with weighted scoring
+- Regression detection via baseline comparison
+- Auto-fix mode that invokes Claude Code to repair failures
+
+---
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install eval dependencies">
+    ```bash
+    uv pip install -e ".[eval]"
+    ```
+  </Step>
+
+  <Step title="Set your Anthropic API key">
+    The benchmark uses Claude as the judge model:
+
+    ```bash
+    export ANTHROPIC_API_KEY=sk-ant-...
+    ```
+  </Step>
+
+  <Step title="Install Claude Code CLI">
+    The runner invokes scenarios via `claude -p` subprocess. Verify it's installed:
+
+    ```bash
+    claude --version
+    ```
+
+    If not installed, see [Claude Code installation](https://docs.anthropic.com/en/docs/claude-code).
+  </Step>
+
+  <Step title="Start the LLM backend">
+    Lemonade Server provides the local LLM and embeddings:
+
+    ```bash
+    lemonade-server serve
+    ```
+  </Step>
+
+  <Step title="Start the Agent UI backend">
+    <Tabs>
+      <Tab title="CLI">
+        ```bash
+        gaia chat --ui
+        ```
+      </Tab>
+      <Tab title="Direct">
+        ```bash
+        uv run python -m gaia.ui.server
+        ```
+      </Tab>
+    </Tabs>
+
+    The Agent UI backend must be running on `http://localhost:4200` (default).
+  </Step>
+</Steps>
+
+---
+
+## Quick Start
+
+Run your first eval in under 5 minutes:
+
+### 1. Run a Single Scenario
+
+Start with a simple RAG factual lookup test:
+
+```bash
+gaia eval agent --scenario simple_factual_rag
+```
+
+This will:
+1. Create a new Agent UI session via MCP
+2. Index the `acme_q3_report.md` document
+3. Ask about Q3 revenue (simulating a `power_user` persona)
+4. Judge the response against the ground truth (`$14.2 million`)
+5. Output a scored result
+
+### 2. Run a Category
+
+Test all RAG quality scenarios:
+
+```bash
+gaia eval agent --category rag_quality
+```
+
+### 3. Run the Full Benchmark
+
+Run all 54 scenarios across 10 categories:
+
+```bash
+gaia eval agent
+```
+
+### 4. Architecture Audit (Free)
+
+Check for structural limitations without making any LLM calls:
+
+```bash
+gaia eval agent --audit-only
+```
+
+---
+
+## Reading the Scorecard
+
+After each run, results are written to `eval/results/<run_id>/`:
+
+| File | Description |
+|------|-------------|
+| `scorecard.json` | Machine-readable results with per-scenario scores and cost |
+| `summary.md` | Human-readable pass/fail report |
+| `traces/<scenario_id>.json` | Full per-scenario trace with turn-level scores and reasoning |
+
+### Understanding Pass / Fail
+
+A scenario **passes** when both conditions are met:
+- Overall score is **6.0 or higher** (out of 10)
+- **No turn** has a correctness score below 4
+
+A scenario **fails** if either:
+- Overall score is below 6.0, OR
+- Any single turn has correctness below 4 (hard fail on hallucination or wrong answer)
+
+### The 7 Scoring Dimensions
+
+Each turn is scored across 7 dimensions. The overall score is a weighted sum:
+
+| Dimension | Weight | What It Measures |
+|-----------|:------:|-----------------|
+| **Correctness** | 25% | Factual accuracy against ground truth. Wrong numbers, wrong names, or hallucinated facts score 0 |
+| **Tool Selection** | 20% | Used the right tools in the right order. Skipping tools or over-calling scores low |
+| **Context Retention** | 20% | Remembered prior turns, resolved pronouns, didn't re-ask established information |
+| **Completeness** | 15% | Answered all parts of the question |
+| **Efficiency** | 10% | Took the optimal path without redundant tool calls |
+| **Personality** | 5% | Concise, direct tone. No sycophancy or generic AI hedging |
+| **Error Recovery** | 5% | Gracefully handled missing files, empty results, or ambiguous queries |
+
+### Status Codes
+
+| Status | Meaning |
+|--------|---------|
+| `PASS` | All criteria met |
+| `FAIL` | Score too low or critical failure (hallucination, wrong answer) |
+| `BLOCKED_BY_ARCHITECTURE` | Agent UI architecture prevents success (e.g., history window too small) |
+| `TIMEOUT` | Scenario exceeded time limit |
+| `BUDGET_EXCEEDED` | Claude API budget cap hit |
+| `INFRA_ERROR` | Agent UI backend unreachable or MCP failure |
+| `SETUP_ERROR` | Document indexing failed (0 chunks) |
+| `SKIPPED_NO_DOCUMENT` | Corpus file not present on disk |
+| `ERRORED` | Eval agent crashed or returned invalid output |
+
+<Note>
+  Only `PASS`, `FAIL`, and `BLOCKED_BY_ARCHITECTURE` count toward the average score and judged pass rate. Infrastructure statuses are excluded from quality metrics.
+</Note>
+
+### Sample Output
+
+```
+# GAIA Agent Eval -- eval-20260322-143000
+**Model:** claude-sonnet-4-6
+
+## Summary
+- Total: 54 scenarios
+- Passed: 34 / Failed: 4 / Blocked: 2
+- Skipped: 14 (real-world docs not on disk)
+- Pass rate (judged): 85%
+- Avg score: 7.4/10
+
+## By Category
+| Category         | Pass | Fail | Avg Score |
+|------------------|------|------|-----------|
+| rag_quality      | 5    | 1    | 7.2       |
+| context_retention| 3    | 1    | 6.8       |
+```
+
+---
+
+## Scenario Categories
+
+The benchmark includes 54 scenarios across 10 categories:
+
+| Category | Count | What It Tests |
+|----------|:-----:|---------------|
+| `rag_quality` | 7 | Factual extraction, hallucination resistance, negation handling, CSV/table data |
+| `context_retention` | 4 | Cross-turn recall, pronoun resolution, multi-document context |
+| `tool_selection` | 4 | Correct tool usage, smart discovery, multi-step planning |
+| `error_recovery` | 3 | Graceful handling of missing files, empty results, vague requests |
+| `adversarial` | 3 | Empty files, large documents (>100k tokens), topic switching |
+| `personality` | 3 | Concise responses, no sycophancy, honest limitations |
+| `vision` | 3 | Screenshot capture, VLM integration |
+| `real_world` | 19 | Real PDFs, XLSX, 10-K filings, RFC specs, datasheets |
+| `web_system` | 6 | Clipboard, desktop notifications, webpage fetching, system info |
+| `captured` | 2 | Golden-path replays from real user sessions |
+
+---
+
+## Common Workflows
+
+### Regression Testing
+
+Save a baseline after a known-good run, then compare future runs:
+
+```bash
+# Save current results as baseline
+gaia eval agent --save-baseline
+
+# Later, compare a new run against the baseline
+gaia eval agent --compare eval/results/latest/scorecard.json
+
+# Explicit two-file comparison
+gaia eval agent --compare eval/results/run_A/scorecard.json eval/results/run_B/scorecard.json
+```
+
+The comparison shows per-scenario deltas, regressions (PASS to FAIL), and improvements (FAIL to PASS).
+
+### Auto-Fix Mode
+
+Let Claude Code automatically diagnose and repair failures:
+
+```bash
+# Fix all failures, up to 3 iterations
+gaia eval agent --fix
+
+# Fix a specific category with custom targets
+gaia eval agent --category rag_quality --fix --max-fix-iterations 5 --target-pass-rate 0.95
+```
+
+Fix mode runs in a loop:
+1. Evaluate all scenarios
+2. Diagnose failures and patch source code
+3. Re-run only the failed scenarios
+4. Compare results -- stop when `--target-pass-rate` is reached
+
+<Warning>
+  Fix mode patches `src/gaia/` source files directly. Always review diffs before committing. Run `python util/lint.py --all --fix` after fix iterations.
+</Warning>
+
+### Capturing Real Sessions
+
+Convert a live Agent UI conversation into a replayable scenario:
+
+```bash
+gaia eval agent --capture-session 29c211c7-31b5-4084-bb3f-1825c0210942
+```
+
+This reads the session from the Agent UI database, extracts turns and indexed documents, and writes a scenario YAML to `eval/scenarios/captured/`. You must then edit the file to add proper `ground_truth` and `success_criteria` fields.
+
+### Filtering by Tags
+
+Run only scenarios with specific tags:
+
+```bash
+# Run scenarios tagged with "healthcare" OR "critical"
+gaia eval agent --tag healthcare --tag critical
+```
+
+### Output Formats
+
+```bash
+# JUnit XML for CI integration
+gaia eval agent --output-format junit
+
+# Markdown summary
+gaia eval agent --output-format markdown
+```
+
+---
+
+## Cost Control
+
+| Control | Flag | Default |
+|---------|------|---------|
+| Budget per scenario | `--budget` | `$2.00` |
+| Timeout per scenario | `--timeout` | `900` seconds |
+| Run specific scenario | `--scenario` | all |
+| Run specific category | `--category` | all |
+
+**Typical costs:**
+- Single scenario: $0.02 -- $0.10
+- Full benchmark (54 scenarios): $1.00 -- $5.00
+- Architecture audit: $0.00 (no LLM calls)
+
+<Tip>
+  Start with `--audit-only` (free) to understand expected failures, then run individual categories to control costs during development.
+</Tip>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Scenario Authoring" icon="file-pen" href="/guides/eval-scenarios">
+    Write custom scenarios with YAML and ground truth
+  </Card>
+
+  <Card title="CI/CD Integration" icon="gears" href="/guides/eval-ci">
+    Run Agent Eval in GitHub Actions with regression detection
+  </Card>
+
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli#agent-eval">
+    Complete flag reference for `gaia eval agent`
+  </Card>
+
+  <Card title="Agent Eval Benchmark" icon="microscope" href="/eval">
+    Deep-dive into architecture, scoring pipeline, and fix mode internals
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

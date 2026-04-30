@@ -216,6 +216,21 @@ gaia mcp status
 python -m gaia.mcp.mcp_bridge
 ```
 
+### IMPORTANT: Run agent evals SERIALLY, never in parallel
+
+**Never run two `gaia eval agent` invocations concurrently against the same Lemonade Server.** Each eval scenario forces Lemonade to load a specific model at a specific `ctx_size`; two concurrent runs will race-evict each other's models and you'll see chaotic failures like:
+- `request (NNNN tokens) exceeds the available context size (4096 tokens)` — one run reloaded the model at a smaller ctx
+- Spurious `BLOCKED_BY_ARCHITECTURE` / `INFRA_ERROR` results — process management collisions
+- `model_load_error: llama-server failed to start` — port conflicts on llama-server children
+
+**Rule of thumb:** at most ONE `gaia eval agent ...` process running at any time, period. If a fix-loop or batch-experiment script needs to chain runs, it must do so sequentially (`run-1 && run-2 && run-3`), never via background `&`. Before kicking off a new eval, verify nothing else is running:
+
+```bash
+ps aux | grep "gaia eval" | grep -v grep | wc -l    # must print "0"
+```
+
+This applies to **all** eval flavours: `gaia eval agent`, `gaia eval --use-claude`, `gaia eval fix-code`, batch experiments. The judge LLM (Claude) can run concurrently across scenarios — the bottleneck is the local Lemonade backend, which is single-tenant per model slot.
+
 ## Development Workflow
 
 **See [`docs/reference/dev.mdx`](docs/reference/dev.mdx)** for complete setup (using uv for fast installs), testing, and linting instructions.
@@ -355,7 +370,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 - **Agent SDK** (`src/gaia/chat/`): AgentSDK class (formerly ChatSDK) for programmatic chat - see [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx)
 - **Agent UI Backend** (`src/gaia/ui/`): FastAPI server with modular routers (chat, documents, files, sessions, system, tunnel), SSE streaming, database - see [`docs/guides/agent-ui.mdx`](docs/guides/agent-ui.mdx)
 - **Agent UI Frontend** (`src/gaia/apps/webui/`): React/TypeScript/Vite desktop app with Electron shell - see [`docs/sdk/sdks/agent-ui.mdx`](docs/sdk/sdks/agent-ui.mdx)
-- **Evaluation** (`src/gaia/eval/`): Batch experiments and ground truth - see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)
+- **Evaluation** (`src/gaia/eval/`): Agent eval benchmark with scenario-based testing - see [`docs/guides/eval.mdx`](docs/guides/eval.mdx)
 
 ### Agent Implementations
 
@@ -543,7 +558,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
    - LLM backend: `src/gaia/llm/` (+ `providers/` for Claude/OpenAI)
    - Audio processing: `src/gaia/audio/` (whisper_asr.py, kokoro_tts.py)
    - RAG system: `src/gaia/rag/` (sdk.py, pdf_utils.py)
-   - Evaluation: `src/gaia/eval/` (eval.py, batch_experiment.py)
+   - Evaluation: `src/gaia/eval/` (runner.py, scorecard.py, audit.py)
    - Applications: `src/gaia/apps/` (webui/, jira/, llm/, summarize/, docker/, example/, _shared/)
    - Agent SDK: `src/gaia/chat/` (AgentSDK class, formerly ChatSDK)
    - Agent UI backend: `src/gaia/ui/` (FastAPI server, routers, SSE handler)

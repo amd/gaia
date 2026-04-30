@@ -22,6 +22,8 @@ export interface AgentInfo {
     source: string;
     conversation_starters: string[];
     models: string[];
+    /** Minimum recommended free RAM in GB for this agent. Null = no declared requirement. */
+    min_memory_gb?: number | null;
 }
 
 export interface InferenceStats {
@@ -88,12 +90,34 @@ export interface Settings {
     model_status: ModelStatus | null;
 }
 
+/**
+ * Live download progress for the default model. Mirrors the backend's
+ * ``DownloadProgress`` schema; populated from Lemonade's ``POST /v1/pull``
+ * SSE stream and surfaced via ``GET /api/system/status``.
+ */
+export interface DownloadProgress {
+    state: 'starting' | 'downloading' | 'complete' | 'error';
+    model_name: string;
+    /** Overall percent across the full multi-file download (0–100). */
+    percent: number;
+    /** Current file being fetched (null between files / on terminal events). */
+    file: string | null;
+    file_index: number;
+    total_files: number;
+    /** Cumulative bytes pulled across every file in this download. */
+    downloaded_bytes: number;
+    /** Sum of every file's ``bytes_total`` in this download. */
+    total_bytes: number;
+    /** Populated only when state === 'error'. */
+    message: string | null;
+}
+
 export interface SystemStatus {
     lemonade_running: boolean;
     model_loaded: string | null;
     embedding_model_loaded: boolean;
     disk_space_gb: number;
-    memory_available_gb: number;
+    memory_available_gb: number | null;
     initialized: boolean;
     version: string;
     // Extended Lemonade info
@@ -113,8 +137,16 @@ export interface SystemStatus {
     context_size_sufficient: boolean;
     model_downloaded: boolean | null;
     default_model_name: string | null;
+    /**
+     * Catalog-reported size of ``default_model_name`` (GB). Used by the
+     * "model not downloaded" banner so the size hint stays in sync with
+     * the actual default — replaces the previously hard-coded "~25 GB".
+     */
+    default_model_size_gb: number | null;
     lemonade_url: string | null;
     expected_model_loaded: boolean;
+    /** Live progress while a model pull is in flight. ``null`` otherwise. */
+    download_progress: DownloadProgress | null;
     // Boot-time initialization tracking
     init_state?: 'initializing' | 'ready' | 'degraded';
     init_tasks?: Array<{ name: string; status: string }>;

@@ -1,0 +1,58 @@
+RFC 7231 — HYPERTEXT TRANSFER PROTOCOL (HTTP/1.1): SEMANTICS AND CONTENT
+(Synthetic paraphrase for evaluation purposes)
+
+This document paraphrases selected sections of RFC 7231, which defines
+the semantics of HTTP/1.1 messages, including request methods, request
+header fields, response status codes, and response header fields.
+
+REQUEST METHODS — REQUIRED METHODS
+
+A general-purpose HTTP/1.1 server is required to support the GET and HEAD
+methods. All other request methods (such as POST, PUT, DELETE, OPTIONS,
+TRACE, and CONNECT) are optional and may be supported when appropriate
+for the resource. GET and HEAD are the only required methods.
+
+REQUEST METHODS — SAFE METHODS
+
+A request method is considered "safe" when its semantics are read-only:
+the client expects the server not to take any state-changing action as
+a direct effect of the request. RFC 7231 classifies the following methods
+as safe:
+
+  GET
+  HEAD
+  OPTIONS
+  TRACE
+
+Other methods, such as POST, PUT, DELETE, and CONNECT, are not safe
+because they may have side effects on the resource or on the server.
+
+IDEMPOTENT METHODS
+
+A request method is considered "idempotent" if multiple identical
+requests have the same intended effect on the server as a single such
+request. PUT, DELETE, and the safe methods (GET, HEAD, OPTIONS, TRACE)
+are idempotent. POST is not, in general, idempotent.
+
+CONTENT NEGOTIATION
+
+RFC 7231 defines the proactive (server-driven) and reactive (agent-driven)
+content negotiation models, including the Accept, Accept-Charset,
+Accept-Encoding, and Accept-Language request header fields.
+
+STATUS CODES
+
+The document defines the meaning of the standard HTTP status code
+classes (1xx informational, 2xx successful, 3xx redirection, 4xx client
+error, 5xx server error) and the precise semantics of common codes such
+as 200 OK, 201 Created, 204 No Content, 301 Moved Permanently, 304 Not
+Modified, 400 Bad Request, 404 Not Found, and 500 Internal Server Error.
+
+NOTE ON REQUEST BODY LIMITS
+
+RFC 7231 does not define a maximum request body size. The maximum size
+of a request payload is implementation-specific and may be configured by
+individual servers, gateways, or intermediaries. Any specific byte limit
+on request bodies is therefore outside the scope of this specification.
+
+END OF EXCERPT

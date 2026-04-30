@@ -22,6 +22,7 @@ import re as _re
 import threading
 import time as _time
 from pathlib import Path
+from typing import Optional
 
 from .database import SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
@@ -87,6 +88,245 @@ _mcp_status_lock = threading.Lock()
 model_load_lock = threading.Lock()
 
 
+# ── Lemonade error classification (chat-side helper) ───────────────────────
+#
+# AgentSDK + the agent loop wrap LLM errors in their own exception types,
+# so a raw ``LemonadeError`` raised by the provider often arrives at the
+# chat layer as ``ValueError("...")`` or ``RuntimeError("...")`` with the
+# original message preserved as text.  We walk the exception chain and
+# also pattern-match the message string so retry decisions don't depend
+# on the exception type bubbling through unchanged.
+
+
+def _classify_chat_exception(exc: BaseException):
+    """Return a typed ``LemonadeError`` instance if *exc* (or anything in
+    its ``__cause__`` chain) corresponds to a known Lemonade failure mode.
+
+    Returns ``None`` when the exception is unrelated.  Used by the chat
+    streaming/non-streaming paths to decide whether to auto-retry and
+    what user-facing message to surface.
+    """
+    from gaia.llm.providers.lemonade import (  # local import to avoid cycle at import time
+        LemonadeContextOverflowError,
+        LemonadeError,
+        LemonadeModelNotLoadedError,
+        LemonadeNetworkError,
+    )
+
+    # 1. Direct typed match anywhere in the cause chain.
+    # Walk both ``__cause__`` (explicit ``raise ... from e``) and ``__context__``
+    # (implicit ``raise ...`` inside an ``except`` block) so we don't lose the
+    # typed-class metadata (e.g. ``LemonadeContextOverflowError.retryable``)
+    # for handlers that re-raise without ``from``.
+    cur: Optional[BaseException] = exc
+    while cur is not None:
+        if isinstance(cur, LemonadeError):
+            return cur
+        cur = cur.__cause__ or cur.__context__
+
+    # 2. Substring match on the stringified exception — covers the case
+    # where AgentSDK re-raises with ``str(original)`` as the message,
+    # losing the typed-class info.
+    text = str(exc).lower()
+    if "no model loaded" in text or "model_not_loaded" in text:
+        return LemonadeModelNotLoadedError()
+    if "exceed_context_size" in text or "exceeds the available context size" in text:
+        err = LemonadeContextOverflowError()
+        # If the textual error mentions a small n_ctx, the model was
+        # loaded with the wrong context size — reload via pre-flight
+        # will fix it, so make the error retryable.
+        m = _re.search(r"context size \((\d+) tokens?\)", text)
+        if not m:
+            m = _re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", text)
+        if m:
+            try:
+                n_ctx = int(m.group(1))
+                if 0 < n_ctx < 32768:
+                    err.retryable = True
+            except ValueError:
+                pass
+        return err
+    if "network_error" in text or "curl error" in text or "timeout was reached" in text:
+        return LemonadeNetworkError()
+    return None
+
+
+# ── Auto-titling ────────────────────────────────────────────────────────────
+#
+# After the agent finishes a turn, kick off a background task that asks the
+# same LLM to generate a 3-6 word title summarising the conversation, then
+# update the session title in the DB. Fires when:
+#   * Title is still the default ("New Chat" / "New Task" / starts with
+#     "Untitled") — first-response pass
+#   * The new user message has low word-overlap with the existing title
+#     (≤ 0.15 Jaccard on lowercase words) AND the message is substantive
+#     (≥ 25 chars) — topic-shift pass
+#
+# Skipped when:
+#   * Title starts with "Eval:" — those are owned by the eval framework
+#   * Title was last updated < 30 s ago — prevents thrash mid-conversation
+#   * No agent / no Lemonade base URL available
+#
+# Throttled by a per-session timestamp dict so concurrent fire-and-forget
+# tasks don't pile up.
+_AUTO_TITLE_DEFAULTS = {
+    "new chat",
+    "new task",
+    "untitled",
+    "untitled session",
+    "chat",
+}
+_AUTO_TITLE_LOCK = threading.Lock()
+_AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
+_AUTO_TITLE_THROTTLE_S = 30.0
+_AUTO_TITLE_RE_NONWORD = _re.compile(r"[^a-z0-9 ]+")
+
+
+def _title_word_set(s: str) -> set[str]:
+    """Lowercase word set for overlap comparison; strips punctuation,
+    drops 1-letter tokens (mostly noise like "a" / "I")."""
+    cleaned = _AUTO_TITLE_RE_NONWORD.sub(" ", (s or "").lower())
+    return {w for w in cleaned.split() if len(w) > 1}
+
+
+def _should_retitle(current_title: str, last_user_msg: str) -> bool:
+    """Decide whether the session deserves a fresh title.
+
+    See module-level comment for the rule set.  Returns True/False; pure
+    function so it's easy to unit-test in isolation.
+    """
+    title = (current_title or "").strip()
+    title_lower = title.lower()
+    if title.startswith("Eval:"):
+        return False  # eval framework owns these
+    if not title or title_lower in _AUTO_TITLE_DEFAULTS:
+        return True  # first-response pass: replace the default
+    # Topic-shift pass: low overlap + substantive new message.
+    user_msg = (last_user_msg or "").strip()
+    if len(user_msg) < 25:
+        return False
+    title_words = _title_word_set(title)
+    user_words = _title_word_set(user_msg)
+    if not title_words:
+        return True
+    overlap = len(title_words & user_words) / len(title_words)
+    return overlap <= 0.15
+
+
+async def _generate_session_title(
+    base_url: str,
+    model_id: str,
+    user_msg: str,
+    assistant_msg: str,
+) -> Optional[str]:
+    """Call Lemonade chat completions to produce a short tab-style title.
+
+    Returns the cleaned title (≤ 64 chars, no quotes, no trailing
+    punctuation) or None on any failure.  Times out at 30 s so a hung
+    LLM doesn't keep the background task alive forever.
+    """
+    import httpx  # pylint: disable=import-outside-toplevel
+
+    prompt = (
+        "Summarise the user's task in 3 to 6 plain words for a tab/window "
+        "title.  Reply with ONLY the title, no quotes, no trailing "
+        "punctuation, no leading verbs like 'Task:' or 'Title:'.\n\n"
+        f"User: {user_msg[:400]}\n"
+        f"Assistant: {(assistant_msg or '')[:200]}\n"
+        "Title:"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                json={
+                    "model": model_id,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 24,
+                    # Low temperature: titles should be deterministic-ish
+                    # for the same conversation.
+                    "temperature": 0.3,
+                },
+            )
+            if resp.status_code != 200:
+                logger.debug(
+                    "Auto-title HTTP %d: %s", resp.status_code, resp.text[:200]
+                )
+                return None
+            data = resp.json()
+            content = (
+                data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+            )
+            title = content.strip().split("\n")[0].strip()
+            # Strip wrapping quotes and trailing punctuation that some
+            # models always add despite the instruction.
+            title = title.strip("\"'`").rstrip(".!?;:,").strip()
+            # Strip stock prefixes models sometimes emit anyway.
+            for prefix in ("title:", "tab:", "summary:"):
+                if title.lower().startswith(prefix):
+                    title = title[len(prefix) :].strip()
+            return title[:64] if title else None
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("Auto-title LLM call failed: %s", exc)
+        return None
+
+
+async def _maybe_update_session_title(
+    db: ChatDatabase,
+    session_id: str,
+    user_msg: str,
+    assistant_msg: str,
+    model_id: Optional[str],
+) -> None:
+    """Best-effort background task: re-title the session if the rules say so.
+
+    Called fire-and-forget after each assistant turn finishes — never
+    blocks the user's response.  Failures are logged at debug level
+    only because nothing user-visible breaks if the title doesn't update.
+    """
+    if not model_id:
+        return
+    # Lookup current session.  If it's gone (deleted while we were
+    # generating), bail silently.
+    session = db.get_session(session_id)
+    if not session:
+        return
+    current_title = session.get("title") or ""
+    if not _should_retitle(current_title, user_msg):
+        return
+
+    # Throttle: don't re-title if we updated within the last 30 s.
+    now = _time.monotonic()
+    with _AUTO_TITLE_LOCK:
+        last = _AUTO_TITLE_LAST_AT.get(session_id, 0.0)
+        if now - last < _AUTO_TITLE_THROTTLE_S:
+            return
+        _AUTO_TITLE_LAST_AT[session_id] = now
+
+    # Use the same Lemonade endpoint the chat just used.
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+    new_title = await _generate_session_title(
+        base_url=base_url,
+        model_id=model_id,
+        user_msg=user_msg,
+        assistant_msg=assistant_msg,
+    )
+    if not new_title or new_title.lower() == current_title.lower():
+        return
+    try:
+        db.update_session(session_id, title=new_title)
+        logger.info(
+            "Auto-titled session %s: %r → %r",
+            session_id[:8],
+            current_title,
+            new_title,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("Auto-title DB update failed: %s", exc)
+
+
 def _build_create_kwargs(
     *,
     custom_model: str | None,
@@ -143,11 +383,31 @@ def get_cached_mcp_status() -> list[dict]:
         return copy.deepcopy(_mcp_status_cache)
 
 
+def _canonical_agent_type(agent_type: str) -> str:
+    """Resolve legacy agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``).
+
+    Keeps the per-session agent cache from thrashing when a client mixes the
+    old and new IDs within the same session — both resolve to the same
+    canonical ID and therefore the same cache entry.
+    """
+    registry = _agent_registry
+    if registry is None:
+        return agent_type
+    try:
+        return registry.canonical_id(agent_type)
+    except Exception:  # pragma: no cover — defensive; canonical_id is pure
+        return agent_type
+
+
 def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
     """Return the cached agent for *session_id* if model and agent_type match, else None.
 
-    Evicts the entry when the model or agent type has changed.
+    Evicts the entry when the model or agent type has changed. Legacy
+    agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``) are normalised
+    before comparison so stored sessions that pre-date a rename continue to
+    hit the cache instead of reconstructing the agent on every turn.
     """
+    canonical = _canonical_agent_type(agent_type)
     with _agent_cache_lock:
         entry = _agent_cache.get(session_id)
         if entry is None:
@@ -158,7 +418,7 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
                 "Agent cache miss (model change) for session %s", session_id[:8]
             )
             return None
-        if entry.get("agent_type", "chat") != agent_type:
+        if _canonical_agent_type(entry.get("agent_type", "chat")) != canonical:
             del _agent_cache[session_id]
             logger.debug(
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
@@ -174,7 +434,12 @@ def _store_agent(
     agent,
     agent_type: str = "chat",
 ) -> None:
-    """Cache *agent* for *session_id*.  Evicts the oldest entry if over the limit."""
+    """Cache *agent* for *session_id*.  Evicts the oldest entry if over the limit.
+
+    The agent_type is stored in canonical form so a later lookup with a
+    legacy alias still matches (see ``_canonical_agent_type``).
+    """
+    canonical = _canonical_agent_type(agent_type)
     with _agent_cache_lock:
         if session_id not in _agent_cache and len(_agent_cache) >= _MAX_CACHED_AGENTS:
             oldest = next(iter(_agent_cache))
@@ -182,14 +447,14 @@ def _store_agent(
             logger.debug("Agent cache full; evicted session %s", oldest[:8])
         _agent_cache[session_id] = {
             "model_id": model_id,
-            "agent_type": agent_type,
+            "agent_type": canonical,
             "document_ids": list(document_ids or []),
             "agent": agent,
         }
         logger.debug(
             "Cached agent for session %s agent_type=%s (cache size: %d)",
             session_id[:8],
-            agent_type,
+            canonical,
             len(_agent_cache),
         )
 
@@ -367,6 +632,36 @@ def _compute_allowed_paths(rag_file_paths: list) -> list:
     return list(dirs)
 
 
+def _session_agent_kwargs(
+    *,
+    rag_file_paths: list,
+    library_paths: list,
+    allowed: list,
+    session_id: str,
+) -> dict:
+    """Build the session-scoped ChatAgentConfig fields.
+
+    Every agent registered in ``AgentRegistry`` that is backed by ChatAgent
+    (e.g. the built-in ``gaia-lite``) needs the same per-session context:
+    which docs to auto-index, which are available on-demand, which paths
+    the PathValidator should allow, and the session ID so ChatAgent can
+    persist state. Collecting them here means both the direct-construction
+    path and the ``registry.create_agent(...)`` call sites forward an
+    identical bundle — this PR's blocker bug was one of them forgetting a
+    field.
+
+    Unknown kwargs are filtered by each factory (manifest agents via
+    ``dataclasses.fields`` / ``AgentManifest``) so this stays safe to pass
+    to agents that don't need RAG or a path validator.
+    """
+    return {
+        "rag_documents": rag_file_paths,
+        "library_documents": library_paths,
+        "allowed_paths": allowed,
+        "ui_session_id": session_id,
+    }
+
+
 def _find_last_tool_step(steps: list) -> dict | None:
     """Find the last tool step in captured_steps, searching backwards."""
     for i in range(len(steps) - 1, -1, -1):
@@ -375,22 +670,46 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+# Tight timeout for pre-flight load_model. The default Lemonade
+# DEFAULT_MODEL_LOAD_TIMEOUT is 12000 s (200 min) — a hung Lemonade
+# would block the chat thread that long. Cold-load of a 4B GGUF on
+# consumer hardware fits comfortably in 120 s; if it hasn't completed
+# in that window something is genuinely wrong and we'd rather surface
+# the failure than hang.
+_PREFLIGHT_LOAD_TIMEOUT_S = 120
+
+
 def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
-    """Ensure a text-generation LLM is active before issuing a chat completion.
+    """Ensure a text-generation LLM is active *with the expected model
+    name and a 32K+ context window* before issuing a chat completion.
 
-    Handles two cases that cause a silent 100-900 second hang:
-    - No model loaded (fresh Lemonade start): Lemonade keeps the HTTP connection
-      open producing zero tokens. No exception is raised so _execute_with_auto_download
-      never fires.
-    - Embedding model active (after document indexing): same silent hang.
+    Handles four failure modes that the chat path would otherwise
+    surface as cryptic errors or hangs:
 
-    In both cases Lemonade returns no error — it just hangs. This pre-flight
-    check detects the problem and does a blocking model swap before process_query
-    is called. VLMs (type='vlm') are treated as valid chat models.
+      1. **No model loaded** (fresh Lemonade start, or post-eviction).
+         Lemonade keeps the connection open producing zero tokens.
+      2. **Embedding model active** (after document indexing).
+         Chat completions silently hang.
+      3. **Wrong chat model active** (e.g. an eval reloaded a
+         different LLM into the slot mid-session).
+      4. **Right model, wrong ctx_size**.  The ChatAgent system
+         prompt is >7K tokens; loading at the legacy 4096 default
+         truncates it and yields empty / context-overflow errors.
+         Cases (3) and (4) used to slip through — the prior guard
+         was ``active_ctx and active_ctx < N`` which short-circuited
+         when ``active_ctx`` was 0 / missing, leaving a 0-ctx model
+         in place.  The new guard treats missing ctx as "needs reload".
 
-    Note: There is a small TOCTOU window between this check and the actual
-    chat request. A model eviction between the two is unlikely but possible;
-    _execute_with_auto_download handles that residual case.
+    On reload we use a tight ``_PREFLIGHT_LOAD_TIMEOUT_S`` (120 s)
+    so a hung Lemonade fails fast instead of blocking the chat thread
+    for the default 200-minute timeout.
+
+    VLMs (``type="vlm"``) count as valid chat models for the model-name
+    check, since the multimodal backbone serves text completions.
+
+    Note: there is a small TOCTOU window between this check and the
+    actual chat request.  An eviction in that window is handled by
+    the one-shot retry in the streaming worker (see ``_run_agent``).
     """
     if not model_id:
         return
@@ -406,17 +725,41 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         data = resp.json()
         all_models = data.get("all_models_loaded", [])
 
-        # Fast path: any LLM or VLM is already active — nothing to do.
-        # Embedding-only or empty list means we must load the expected model.
-        has_chat_model = any(m.get("type") in ("llm", "vlm") for m in all_models)
-        if has_chat_model:
+        expected_lower = model_id.lower()
+        chat_models = [m for m in all_models if m.get("type") in ("llm", "vlm")]
+        active_is_expected = any(
+            (m.get("model_name") or "").lower() == expected_lower for m in chat_models
+        )
+        active_ctx = 0
+        for m in chat_models:
+            if (m.get("model_name") or "").lower() == expected_lower:
+                active_ctx = m.get("recipe_options", {}).get("ctx_size") or 0
+                break
+        # Reload conditions:
+        #   - no chat model active
+        #   - active chat model isn't the one we want
+        #   - active ctx is missing (== 0 from .get() fallback) OR < required
+        # The previous guard ``active_ctx and active_ctx < DEFAULT_CONTEXT_SIZE``
+        # let a 0-ctx state pass through, which is exactly the broken-model
+        # state where reload is most needed.
+        ctx_too_small = active_is_expected and (
+            active_ctx == 0 or active_ctx < DEFAULT_CONTEXT_SIZE
+        )
+        needs_load = not chat_models or not active_is_expected or ctx_too_small
+        if not needs_load:
             return
 
-        logger.info(
-            "No chat-capable model active (loaded=%s); loading: %s",
-            [m.get("type") for m in all_models] or "<none>",
-            model_id,
+        reason = (
+            "no chat model loaded"
+            if not chat_models
+            else (
+                f"wrong model active ({[m.get('model_name') for m in chat_models]}); "
+                f"need {model_id}"
+                if not active_is_expected
+                else f"ctx={active_ctx} < required {DEFAULT_CONTEXT_SIZE}"
+            )
         )
+        logger.info("Pre-flight load: %s → loading %s", reason, model_id)
         if sse_handler is not None:
             sse_handler._emit(
                 {"type": "status", "status": "info", "message": "Loading LLM model..."}
@@ -426,15 +769,30 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
 
         with model_load_lock:
             # Re-check after acquiring the lock: another thread may have
-            # already loaded the model while we were waiting.
+            # already loaded the expected model with sufficient context.
             resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
             if resp2.status_code == 200:
-                all_models2 = resp2.json().get("all_models_loaded", [])
-                if any(m.get("type") in ("llm", "vlm") for m in all_models2):
-                    logger.debug("Model loaded by concurrent thread; skipping load")
+                models2 = [
+                    m
+                    for m in resp2.json().get("all_models_loaded", [])
+                    if m.get("type") in ("llm", "vlm")
+                ]
+                if any(
+                    (m.get("model_name") or "").lower() == expected_lower
+                    and (m.get("recipe_options", {}).get("ctx_size") or 0)
+                    >= DEFAULT_CONTEXT_SIZE
+                    for m in models2
+                ):
+                    logger.debug(
+                        "Expected model loaded with sufficient ctx by concurrent "
+                        "thread; skipping load"
+                    )
                     return
             LemonadeClient(verbose=False).load_model(
-                model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False
+                model_id,
+                ctx_size=DEFAULT_CONTEXT_SIZE,
+                prompt=False,
+                timeout=_PREFLIGHT_LOAD_TIMEOUT_S,
             )
     except Exception as exc:
         logger.warning("Pre-flight model check failed: %s", exc)
@@ -557,15 +915,18 @@ async def _get_chat_response(
                 "chat: Creating new chat agent (ChatAgent) for session %s",
                 session_id[:8],
             )
+            _session_kwargs = _session_agent_kwargs(
+                rag_file_paths=rag_file_paths,
+                library_paths=library_paths,
+                allowed=allowed,
+                session_id=session_id,
+            )
             config = ChatAgentConfig(
                 model_id=model_id,
                 max_steps=10,
                 silent_mode=True,
                 debug=False,
-                rag_documents=rag_file_paths,
-                library_documents=library_paths,
-                allowed_paths=allowed,
-                ui_session_id=session_id,
+                **_session_kwargs,
             )
             agent = ChatAgent(config)
             _store_agent(session_id, model_id, document_ids, agent, agent_type)
@@ -589,15 +950,18 @@ async def _get_chat_response(
                 agent_type = "chat"
                 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
+                _session_kwargs = _session_agent_kwargs(
+                    rag_file_paths=rag_file_paths,
+                    library_paths=library_paths,
+                    allowed=allowed,
+                    session_id=session_id,
+                )
                 config = ChatAgentConfig(
                     model_id=model_id,
                     max_steps=10,
                     silent_mode=True,
                     debug=False,
-                    rag_documents=rag_file_paths,
-                    library_documents=library_paths,
-                    allowed_paths=allowed,
-                    ui_session_id=session_id,
+                    **_session_kwargs,
                 )
                 agent = ChatAgent(config)
                 _store_agent(session_id, model_id, document_ids, agent, agent_type)
@@ -607,10 +971,30 @@ async def _get_chat_response(
                     agent_type,
                     session_id[:8],
                 )
+                # Registered agents backed by ChatAgent (e.g. gaia-lite) need
+                # the same session-scoped context as the built-in path above.
+                # Agent factories that don't recognise a field filter it out
+                # via ``dataclasses.fields``/``AgentManifest`` validation.
+                #
+                # Non-streaming vs streaming asymmetry — read before refactoring:
+                # This path forwards ``rag_file_paths`` (the real list) because
+                # non-streaming has no SSE handler, so ChatAgent's silent
+                # ``_index_documents`` in __init__ is the only indexer and must
+                # see the paths. The STREAMING registered-agent path, by
+                # contrast, passes ``rag_file_paths=[]`` and does the indexing
+                # in ``_index_rag_with_progress`` so the user sees progress
+                # events; forwarding the real list there would double-index
+                # (see the regression test in test_chat_helpers.py).
                 agent = registry.create_agent(
                     agent_type,
                     **_build_create_kwargs(
                         custom_model=custom_model, model_id=model_id
+                    ),
+                    **_session_agent_kwargs(
+                        rag_file_paths=rag_file_paths,
+                        library_paths=library_paths,
+                        allowed=allowed,
+                        session_id=session_id,
                     ),
                 )
                 logger.info(
@@ -648,9 +1032,40 @@ async def _get_chat_response(
         # omitted, the agent's __init__ set model_id via kwargs.setdefault —
         # a value invisible pre-construction. Using _effective_model preserves
         # the existing 100-900s silent-hang protection for all code paths.
-        _maybe_load_expected_model(_effective_model(agent, model_id))
+        effective = _effective_model(agent, model_id)
+        _maybe_load_expected_model(effective)
 
-        result = agent.process_query(request.message)
+        # One automatic retry on transient Lemonade failures (model
+        # evicted between turns, network blip).  Mirror of the streaming
+        # path's retry logic so non-streaming clients get the same
+        # recovery behaviour. See _classify_chat_exception for the
+        # detection rules.
+        try:
+            result = agent.process_query(request.message)
+        except Exception as first_exc:  # pylint: disable=broad-except
+            classified = _classify_chat_exception(first_exc)
+            if classified is None or not classified.retryable:
+                raise
+            logger.warning(
+                "Non-streaming chat hit retryable Lemonade error (%s) — "
+                "reloading model and retrying once. Original: %s",
+                type(classified).__name__,
+                first_exc,
+            )
+            try:
+                _maybe_load_expected_model(effective)
+            except Exception:  # pylint: disable=broad-except
+                pass
+            try:
+                result = agent.process_query(request.message)
+            except Exception as second_exc:  # pylint: disable=broad-except
+                second_classified = _classify_chat_exception(second_exc)
+                if second_classified is not None:
+                    raise type(second_exc)(
+                        second_classified.user_message
+                    ) from second_exc
+                raise
+
         if isinstance(result, dict):
             # process_query returns {"result": "...", "status": "...", ...}
             # Use explicit None check so an intentional empty string isn't
@@ -675,6 +1090,13 @@ async def _get_chat_response(
         return "I took too long thinking about that one. Try breaking your question into simpler parts and I'll do my best."
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
+        # Surface the typed Lemonade error's friendly user_message
+        # when we have one, instead of a stock "trouble connecting"
+        # blob.  Falls back to the generic copy when we can't
+        # classify the exception.
+        classified = _classify_chat_exception(e)
+        if classified is not None:
+            return classified.user_message
         return (
             "I'm having trouble connecting to the language model right now. "
             "Please make sure Lemonade Server is running and try again."
@@ -748,6 +1170,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 model_id,
             )
             model_id = custom_model
+        # ``session_model`` is the model_id we expect to drive the
+        # session with, captured here in the outer scope so the
+        # auto-title background task at the bottom of this generator
+        # can read it without needing access to the inner producer
+        # thread's ``agent`` variable.
+        session_model = model_id
 
         stored_agent_type = session.get("agent_type") or "chat"
         agent_type = request.agent_type or stored_agent_type
@@ -847,16 +1275,19 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         "chat: Creating new chat agent (ChatAgent) for session %s",
                         session_id[:8],
                     )
+                    _session_kwargs = _session_agent_kwargs(
+                        rag_file_paths=[],  # streaming path indexes separately below
+                        library_paths=library_paths,
+                        allowed=allowed,
+                        session_id=session_id,
+                    )
                     config = ChatAgentConfig(
                         model_id=model_id,
                         max_steps=10,
                         streaming=True,
                         silent_mode=False,
                         debug=False,
-                        rag_documents=[],
-                        library_documents=library_paths,
-                        allowed_paths=allowed,
-                        ui_session_id=session_id,
+                        **_session_kwargs,
                     )
 
                     t_construct = _time.monotonic()
@@ -956,10 +1387,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             streaming=True,
                             silent_mode=False,
                             debug=False,
-                            rag_documents=[],
-                            library_documents=library_paths,
-                            allowed_paths=allowed,
-                            ui_session_id=session_id,
+                            **_session_agent_kwargs(
+                                rag_file_paths=[],
+                                library_paths=library_paths,
+                                allowed=allowed,
+                                session_id=session_id,
+                            ),
                         )
                         agent = ChatAgent(config)
                         agent.console = sse_handler
@@ -975,12 +1408,30 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             session_id[:8],
                         )
                         t_construct = _time.monotonic()
+                        # Same session-scoped kwargs as the built-in Chat
+                        # streaming path. Registered agents backed by ChatAgent
+                        # (e.g. gaia-lite) need these so session docs are
+                        # reachable and PathValidator accepts absolute paths.
+                        #
+                        # IMPORTANT: pass ``rag_file_paths=[]`` so ChatAgent
+                        # doesn't silently auto-index in ``__init__`` — we do
+                        # the indexing below via ``_index_rag_with_progress``
+                        # so the user sees progress events. Otherwise the file
+                        # would be indexed twice on every cache miss, surfacing
+                        # a noisy "Used tool index_documents" card for a
+                        # 0-work hash-cache hit on casual chat turns.
                         agent = registry.create_agent(
                             agent_type,
                             **_build_create_kwargs(
                                 custom_model=custom_model,
                                 model_id=model_id,
                                 streaming=True,
+                            ),
+                            **_session_agent_kwargs(
+                                rag_file_paths=[],
+                                library_paths=library_paths,
+                                allowed=allowed,
+                                session_id=session_id,
                             ),
                         )
                         agent.console = sse_handler
@@ -995,7 +1446,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         if sse_handler.cancelled.is_set():
                             return
 
-                        # Index session-attached RAG docs
+                        # Index session-attached RAG docs (single pass, with SSE progress).
                         if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                             _index_rag_with_progress(agent, rag_file_paths, sse_handler)
 
@@ -1062,9 +1513,56 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     _effective_model(agent, model_id), sse_handler
                 )
 
-                # -- Phase 5: Query processing --
+                # -- Phase 5: Query processing.  One automatic retry on
+                # known-transient Lemonade errors (model evicted between
+                # turns, network blip, etc.). The retry forces a fresh
+                # model reload at our 32K ctx_size before re-issuing the
+                # query so we don't replay against a still-broken backend.
                 t_query = _time.monotonic()
-                result = agent.process_query(request.message)
+                try:
+                    result = agent.process_query(request.message)
+                except Exception as first_exc:  # pylint: disable=broad-except
+                    classified = _classify_chat_exception(first_exc)
+                    if classified is None or not classified.retryable:
+                        raise
+                    logger.warning(
+                        "Chat hit retryable Lemonade error (%s) — reloading "
+                        "model and retrying once. Original: %s",
+                        type(classified).__name__,
+                        first_exc,
+                    )
+                    # Force a reload at the canonical ctx; this is the
+                    # same helper the pre-flight uses but called
+                    # mid-conversation when the model got evicted.
+                    try:
+                        _maybe_load_expected_model(
+                            _effective_model(agent, model_id), sse_handler
+                        )
+                    except Exception:  # pylint: disable=broad-except
+                        # Reload failure is non-fatal — the retry might
+                        # still succeed if Lemonade caught up on its own.
+                        pass
+                    # Surface a brief status line to the SSE so the user
+                    # sees we're recovering, not silently retrying.
+                    sse_handler._emit(
+                        {
+                            "type": "status",
+                            "status": "info",
+                            "message": "Model reloaded — retrying...",
+                        }
+                    )
+                    # One more attempt. If THIS fails, surface the
+                    # friendlier classified message.
+                    try:
+                        result = agent.process_query(request.message)
+                    except Exception as second_exc:  # pylint: disable=broad-except
+                        second_classified = _classify_chat_exception(second_exc)
+                        msg = (
+                            second_classified.user_message
+                            if second_classified is not None
+                            else str(second_exc)
+                        )
+                        raise type(second_exc)(msg) from second_exc
                 logger.info(
                     "PERF process_query session=%s took=%.3fs",
                     session_id[:8],
@@ -1079,7 +1577,15 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     result_holder["answer"] = str(result) if result else ""
             except Exception as e:
                 logger.error("Agent error: %s", e, exc_info=True)
-                result_holder["error"] = str(e)
+                # Prefer the typed Lemonade error's user_message over the
+                # raw exception string. ``_classify_chat_exception`` walks
+                # the exception chain so we catch errors raised inside
+                # AgentSDK that wrap the original LemonadeError.
+                classified = _classify_chat_exception(e)
+                if classified is not None:
+                    result_holder["error"] = classified.user_message
+                else:
+                    result_holder["error"] = str(e)
             finally:
                 sse_handler.signal_done()
 
@@ -1359,6 +1865,33 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 full_response,
                 agent_steps=captured_steps if captured_steps else None,
                 inference_stats=inference_stats,
+            )
+            # Fire-and-forget auto-titling: GAIA renames its own session
+            # once the response is complete. Skips Eval: titles, throttled
+            # to 30 s/session, runs on the same Lemonade slot the chat
+            # just used. Never blocks the user's response.
+            #
+            # NB: ``agent`` lives inside the producer thread's scope and
+            # isn't accessible here. We pass ``session_model`` (set
+            # before the producer started) instead — it's the same
+            # value ``_effective_model`` would have returned for the
+            # default agent factories that honour ``model_id`` kwarg.
+            _bg = asyncio.create_task(
+                _maybe_update_session_title(
+                    db=db,
+                    session_id=request.session_id,
+                    user_msg=request.message,
+                    assistant_msg=full_response,
+                    model_id=session_model,
+                )
+            )
+            # Hold a reference so the GC doesn't kill the task before
+            # it completes; discard on done.
+            _active_sse_handlers.setdefault(f"_titlebg:{request.session_id}", _bg)
+            _bg.add_done_callback(
+                lambda _t, _sid=request.session_id: _active_sse_handlers.pop(
+                    f"_titlebg:{_sid}", None
+                )
             )
             done_event: dict = {
                 "type": "done",

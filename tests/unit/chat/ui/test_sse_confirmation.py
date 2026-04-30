@@ -130,6 +130,9 @@ class TestConfirmToolExecutionApprove:
         t = threading.Thread(target=run_confirm)
         t.start()
 
+        # Wait for the worker to have set up _confirm_event before we resolve.
+        # Polling _confirm_result was wrong because it starts at False; the
+        # shared helper waits for the event registration point instead.
         _wait_for_pending_confirmation(handler)
 
         handler.resolve_tool_confirmation(approved=True)
@@ -176,6 +179,8 @@ class TestConfirmToolExecutionDeny:
         t = threading.Thread(target=run_confirm)
         t.start()
 
+        # See note in test_approve_returns_true: wait for _confirm_event, not
+        # _confirm_result. The latter is False from the start.
         _wait_for_pending_confirmation(handler)
 
         handler.resolve_tool_confirmation(approved=False)

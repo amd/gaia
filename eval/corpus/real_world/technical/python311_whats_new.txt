@@ -1,0 +1,57 @@
+WHAT'S NEW IN PYTHON 3.11 — SYNTHETIC SUMMARY
+(Paraphrased changelog for evaluation purposes)
+
+Python 3.11 was released on October 24, 2022. The release focused on
+performance, error reporting, and standard-library additions. Below is a
+condensed list of representative changes; the full changelog is published
+separately on python.org.
+
+PERFORMANCE
+
+CPython 3.11 is approximately 1.25x faster (about 25% faster) than
+CPython 3.10 across a broad range of workloads, as measured with the
+pyperformance benchmark suite. The performance gains come from work in
+the "Faster CPython" project, including specializing adaptive
+interpreter, smaller and cheaper Python frames, and a "zero-cost"
+exception model.
+
+EXCEPTION GROUPS AND except*
+
+PEP 654 introduces ExceptionGroup and BaseExceptionGroup along with the
+new "except*" syntax for handling multiple unrelated exceptions raised
+together (for example, by concurrent code).
+
+FINER-GRAINED ERROR LOCATIONS
+
+Tracebacks now point to the specific expression on a line that caused an
+error, instead of just the line number, making complex one-liners easier
+to debug.
+
+NEW STANDARD-LIBRARY MODULE — TOML SUPPORT
+
+Python 3.11 added a new standard-library module for parsing TOML files:
+tomllib. The module was introduced by PEP 680 and provides a read-only
+TOML parser implemented in pure Python. tomllib makes parsing
+pyproject.toml and other TOML configuration files possible without
+third-party dependencies.
+
+TYPING IMPROVEMENTS
+
+Several typing improvements landed in 3.11, including PEP 646 (variadic
+generics), PEP 655 (Required and NotRequired in TypedDict), PEP 673
+(Self type), and PEP 675 (LiteralString).
+
+ASYNCIO TASKGROUP
+
+asyncio.TaskGroup is added to manage groups of concurrent tasks with
+structured concurrency semantics that interoperate with the new
+ExceptionGroup type.
+
+NOTE ON SCOPE
+
+This document covers Python 3.11 only. Information about subsequent
+releases — including the release date of Python 3.12 — is not included
+in this Python 3.11 changelog and is published separately when those
+versions are released.
+
+END OF DOCUMENT
