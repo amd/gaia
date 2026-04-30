@@ -16,13 +16,13 @@ import pytest
 
 from gaia.connectors import cli as connections_cli
 from gaia.connectors.providers import _registry
-from gaia.connectors.store import save_connection
 
 
 @pytest.fixture(autouse=True)
 def fake_home(tmp_path, monkeypatch):
-    """Isolated grants ledger per test."""
+    """Isolated grants/state dirs per test."""
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gaia.connectors.state.Path.home", lambda: tmp_path)
     monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
     _registry.clear()
     yield
@@ -47,20 +47,20 @@ def _run(*argv) -> tuple[int, str, str]:
 
 class TestStatus:
     def test_status_empty(self):
+        # list/status shows catalog entries; google is always in the catalog
         rc, out, _err = _run("connectors", "status")
         assert rc == 0
-        assert "No connections" in out
+        assert "google" in out
+        assert "not configured" in out
 
     def test_status_seeded(self):
-        from gaia.connectors.providers import get as get_provider
+        from gaia.connectors.state import set_connector_state
 
-        provider = get_provider("google")
-        save_connection(
-            provider="google",
-            account_email="alice@example.com",
-            refresh_token="x",
+        set_connector_state(
+            "google",
+            configured=True,
+            account_id="alice@example.com",
             scopes=["s"],
-            client_id_hash=provider.client_id_hash,
         )
         rc, out, _err = _run("connectors", "status")
         assert rc == 0
@@ -68,22 +68,12 @@ class TestStatus:
         assert "google" in out
 
     def test_status_json(self):
-        from gaia.connectors.providers import get as get_provider
-
         sentinel_token = "TOKEN-MUST-NOT-LEAK-12345"
-        provider = get_provider("google")
-        save_connection(
-            provider="google",
-            account_email="alice@example.com",
-            refresh_token=sentinel_token,
-            scopes=["s"],
-            client_id_hash=provider.client_id_hash,
-        )
         rc, out, _err = _run("connectors", "status", "--json")
         assert rc == 0
         rows = json.loads(out)
-        assert any(row["provider"] == "google" for row in rows)
-        # Refresh token MUST NOT leak into the CLI output.
+        assert any(row["id"] == "google" for row in rows)
+        # Credentials must not appear in the output.
         assert sentinel_token not in out
         assert "refresh_token" not in out
 

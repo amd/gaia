@@ -1,20 +1,15 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-CLI for ``gaia connectors {connect|status|disconnect|grants ...}``.
+CLI for ``gaia connectors {list|connect|configure|test|disconnect|grants ...}``.
 
-Each subcommand is a thin wrapper that calls into ``gaia.connectors.api``.
-The CLI drives the same primitives the AgentUI router and the SDK use:
-
-- ``connect``      → ``start_authorization`` + ``complete_authorization``
-- ``status``       → ``list_connections`` / ``get_connection``
-- ``disconnect``   → ``revoke_connection``
-- ``grants list``  → ``list_agent_grants``
-- ``grants grant`` → ``grant_agent``
-- ``grants revoke``→ ``revoke_agent_grant``
-
-Output is plain text on stdout and actionable errors on stderr. Used by
-``gaia connectors ...`` from the top-level CLI dispatcher.
+Subcommands:
+- ``list``        → catalog entries with configured/not status
+- ``connect``     → OAuth PKCE browser flow (oauth_pkce type)
+- ``configure``   → configure via the handler dispatcher (KEY=VALUE or --json)
+- ``test``        → health check for a configured connector
+- ``disconnect``  → remove credentials and reset connector state
+- ``grants list|grant|revoke`` → per-agent scope grants ledger
 """
 
 from __future__ import annotations
@@ -25,18 +20,10 @@ import json
 import sys
 from typing import Sequence
 
-from gaia.connectors import (
+from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
     ConnectorsError,
-    complete_authorization,
-    get_connection,
-    grant_agent,
-    list_agent_grants,
-    list_connections,
-    revoke_agent_grant,
-    revoke_connection,
-    start_authorization,
 )
 
 
@@ -47,8 +34,8 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="Manage external connectors (OAuth, MCP servers) and per-agent grants",
         description=(
             "Manage external connectors (OAuth providers, MCP servers, "
-            "future API tokens) and per-agent grants. Connect once, then "
-            "grant individual agents the scopes they need."
+            "API tokens) and per-agent grants. Configure once, then grant "
+            "individual agents the scopes they need."
         ),
     )
     sub = p.add_subparsers(
@@ -57,49 +44,84 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="Subcommand",
     )
 
-    # connect
-    p_conn = sub.add_parser("connect", help="Authorize a provider (opens browser)")
-    p_conn.add_argument("provider", help="Provider id (e.g. 'google')")
-    p_conn.add_argument(
-        "--scopes",
-        nargs="+",
-        help="OAuth scopes to request (provider-specific)",
+    # list
+    p_list = sub.add_parser(
+        "list", help="List all connectors in the catalog with their status"
     )
-
-    # status
-    p_status = sub.add_parser(
-        "status", help="Show connected providers and their account email"
-    )
-    p_status.add_argument(
-        "provider",
+    p_list.add_argument(
+        "connector_id",
         nargs="?",
-        help="Provider id to inspect; default: list all",
+        help="Connector id to inspect; default: list all",
     )
-    p_status.add_argument(
+    p_list.add_argument(
         "--json",
         action="store_true",
         dest="as_json",
         help="Emit machine-readable JSON",
     )
 
+    # status (alias for list — backward compatibility)
+    p_status = sub.add_parser("status", help="Alias for 'list'")
+    p_status.add_argument("connector_id", nargs="?")
+    p_status.add_argument("--json", action="store_true", dest="as_json")
+
+    # connect (OAuth PKCE)
+    p_conn = sub.add_parser(
+        "connect", help="Authorize an OAuth connector (opens browser)"
+    )
+    p_conn.add_argument("connector_id", help="Connector id (e.g. 'google')")
+    p_conn.add_argument(
+        "--scopes",
+        nargs="+",
+        help="OAuth scopes to request (connector-specific)",
+    )
+
+    # configure (generic dispatcher)
+    p_cfg = sub.add_parser(
+        "configure",
+        help="Configure a connector (MCP API keys, OAuth client creds, etc.)",
+    )
+    p_cfg.add_argument("connector_id", help="Connector id")
+    p_cfg.add_argument(
+        "--set",
+        action="append",
+        metavar="KEY=VALUE",
+        dest="config_pairs",
+        help="Config key=value pair (repeatable, e.g. --set GITHUB_TOKEN=ghp_…)",
+    )
+    p_cfg.add_argument(
+        "--json",
+        metavar="JSON_OBJECT",
+        dest="config_json",
+        help="Config as a JSON object (alternative to --set)",
+    )
+
+    # test
+    p_test = sub.add_parser(
+        "test", help="Run health check for a configured connector"
+    )
+    p_test.add_argument("connector_id", help="Connector id")
+
     # disconnect
-    p_disc = sub.add_parser("disconnect", help="Revoke a stored connection")
-    p_disc.add_argument("provider")
+    p_disc = sub.add_parser(
+        "disconnect", help="Remove credentials and reset a connector's state"
+    )
+    p_disc.add_argument("connector_id")
 
     # grants
     p_grants = sub.add_parser("grants", help="Manage per-agent scope grants")
     g = p_grants.add_subparsers(dest="grants_action", metavar="<subcommand>")
 
-    p_gl = g.add_parser("list", help="List agent grants for a provider")
+    p_gl = g.add_parser("list", help="List agent grants for a connector")
     p_gl.add_argument(
-        "provider",
+        "connector_id",
         nargs="?",
         default="google",
-        help="Provider id (default: google)",
+        help="Connector id (default: google)",
     )
 
-    p_gg = g.add_parser("grant", help="Grant an agent scopes for a provider")
-    p_gg.add_argument("provider")
+    p_gg = g.add_parser("grant", help="Grant an agent scopes for a connector")
+    p_gg.add_argument("connector_id")
     p_gg.add_argument(
         "agent_id",
         help="Namespaced agent id, e.g. 'builtin:chat' or 'custom:abc:inbox'",
@@ -108,11 +130,11 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--scopes",
         nargs="+",
         required=True,
-        help="OAuth scopes to grant (provider-specific URLs)",
+        help="Scopes to grant (connector-specific)",
     )
 
-    p_gr = g.add_parser("revoke", help="Revoke an agent's grant for a provider")
-    p_gr.add_argument("provider")
+    p_gr = g.add_parser("revoke", help="Revoke an agent's grant for a connector")
+    p_gr.add_argument("connector_id")
     p_gr.add_argument("agent_id")
 
 
@@ -121,15 +143,20 @@ def handle(args: argparse.Namespace) -> int:
     action = getattr(args, "connectors_action", None)
     if action is None:
         sys.stderr.write(
-            "gaia connectors: missing subcommand. " "Try 'gaia connectors --help'.\n"
+            "gaia connectors: missing subcommand. "
+            "Try 'gaia connectors --help'.\n"
         )
         return 2
 
     try:
+        if action in ("list", "status"):
+            return _handle_list(args)
         if action == "connect":
             return _handle_connect(args)
-        if action == "status":
-            return _handle_status(args)
+        if action == "configure":
+            return _handle_configure(args)
+        if action == "test":
+            return _handle_test(args)
         if action == "disconnect":
             return _handle_disconnect(args)
         if action == "grants":
@@ -141,18 +168,69 @@ def handle(args: argparse.Namespace) -> int:
         sys.stderr.write(f"Authorization required: {e}\n")
         return 4
     except ConnectorsError as e:
-        sys.stderr.write(f"Connections error: {e}\n")
+        sys.stderr.write(f"Connectors error: {e}\n")
         return 5
 
     sys.stderr.write(f"gaia connectors: unknown subcommand {action!r}\n")
     return 2
 
 
+def _handle_list(args: argparse.Namespace) -> int:
+    import gaia.connectors.catalog  # noqa: F401 — populates REGISTRY
+    from gaia.connectors.registry import REGISTRY
+    from gaia.connectors.state import get_connector_state
+
+    specs = REGISTRY.all()
+    connector_id = getattr(args, "connector_id", None)
+    if connector_id:
+        try:
+            specs = [REGISTRY.get(connector_id)]
+        except KeyError:
+            sys.stderr.write(
+                f"gaia connectors: unknown connector {connector_id!r}\n"
+            )
+            return 1
+
+    rows = []
+    for spec in specs:
+        state = get_connector_state(spec.id) or {}
+        rows.append(
+            {
+                "id": spec.id,
+                "display_name": spec.display_name,
+                "type": spec.type,
+                "category": spec.category,
+                "tier": spec.tier,
+                "configured": state.get("configured", False),
+                "account_id": state.get("account_id"),
+                "scopes": state.get("scopes", []),
+            }
+        )
+
+    if getattr(args, "as_json", False):
+        sys.stdout.write(json.dumps(rows, indent=2) + "\n")
+        return 0
+
+    if not rows:
+        sys.stdout.write("No connectors in catalog.\n")
+        return 0
+
+    for row in rows:
+        status = "configured" if row["configured"] else "not configured"
+        acct = f" ({row['account_id']})" if row.get("account_id") else ""
+        sys.stdout.write(f"{row['id']:<30}  [{row['type']}]  {status}{acct}\n")
+    return 0
+
+
 def _handle_connect(args: argparse.Namespace) -> int:
+    from gaia.connectors.api import complete_authorization, start_authorization
+
     async def _run() -> str:
-        info = await start_authorization(args.provider, scopes=args.scopes or [])
+        info = await start_authorization(
+            args.connector_id, scopes=args.scopes or []
+        )
         sys.stdout.write(
-            f"Open this URL to authorize {args.provider}:\n"
+            f"Open this URL to authorize {args.connector_id}:\n"
             f"  {info['authorization_url']}\n"
         )
         sys.stdout.flush()
@@ -164,55 +242,113 @@ def _handle_connect(args: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_status(args: argparse.Namespace) -> int:
-    rows = list_connections()
-    if args.provider:
-        row = get_connection(args.provider)
-        rows = [row] if row else []
+def _handle_configure(args: argparse.Namespace) -> int:
+    from gaia.connectors.handler import configure
 
-    if args.as_json:
-        sys.stdout.write(json.dumps(rows, indent=2) + "\n")
-        return 0
+    config: dict = {}
+    if getattr(args, "config_json", None):
+        try:
+            config = json.loads(args.config_json)
+        except json.JSONDecodeError as e:
+            sys.stderr.write(f"gaia connectors configure: invalid JSON: {e}\n")
+            return 2
+    for pair in getattr(args, "config_pairs", None) or []:
+        if "=" not in pair:
+            sys.stderr.write(
+                f"gaia connectors configure: --set requires KEY=VALUE, got {pair!r}\n"
+            )
+            return 2
+        key, _, value = pair.partition("=")
+        config[key.strip()] = value
 
-    if not rows:
-        sys.stdout.write("No connections.\n")
-        return 0
+    async def _run():
+        return await configure(args.connector_id, config)
 
-    for row in rows:
-        scopes = ", ".join(row.get("scopes", []) or []) or "<none>"
+    try:
+        result = asyncio.run(_run())
+    except KeyError:
+        sys.stderr.write(
+            f"gaia connectors configure: unknown connector {args.connector_id!r}\n"
+        )
+        return 1
+
+    sys.stdout.write(f"Configured {args.connector_id}.\n")
+    if result.get("authorization_url"):
         sys.stdout.write(
-            f"{row['provider']}: connected as "
-            f"{row.get('account_email') or '<unknown>'} "
-            f"(scopes: {scopes})\n"
+            f"Complete OAuth flow at:\n  {result['authorization_url']}\n"
         )
     return 0
 
 
+def _handle_test(args: argparse.Namespace) -> int:
+    from gaia.connectors.handler import health_check
+
+    async def _run():
+        return await health_check(args.connector_id)
+
+    try:
+        result = asyncio.run(_run())
+    except KeyError:
+        sys.stderr.write(
+            f"gaia connectors test: unknown connector {args.connector_id!r}\n"
+        )
+        return 1
+
+    ok = result.get("ok", False)
+    detail = result.get("detail", "")
+    status = "OK" if ok else "FAIL"
+    sys.stdout.write(f"{args.connector_id}: {status}  {detail}\n")
+    return 0 if ok else 1
+
+
 def _handle_disconnect(args: argparse.Namespace) -> int:
-    revoke_connection(args.provider)
-    sys.stdout.write(f"Disconnected {args.provider}.\n")
+    from gaia.connectors.handler import disconnect
+
+    async def _run():
+        await disconnect(args.connector_id)
+
+    try:
+        asyncio.run(_run())
+    except KeyError:
+        sys.stderr.write(
+            f"gaia connectors disconnect: unknown connector {args.connector_id!r}\n"
+        )
+        return 1
+
+    sys.stdout.write(f"Disconnected {args.connector_id}.\n")
     return 0
 
 
 def _handle_grants(args: argparse.Namespace) -> int:
+    from gaia.connectors.grants import (
+        grant_agent,
+        list_agent_grants,
+        revoke_agent_grant,
+    )
+
     sub = getattr(args, "grants_action", None)
     if sub == "list":
-        listing = list_agent_grants(args.provider)
+        listing = list_agent_grants(args.connector_id)
         if not listing:
-            sys.stdout.write(f"No grants for {args.provider}.\n")
+            sys.stdout.write(f"No grants for {args.connector_id}.\n")
             return 0
         for agent_id, scopes in sorted(listing.items()):
-            sys.stdout.write(f"{args.provider} {agent_id}: {', '.join(scopes)}\n")
+            sys.stdout.write(
+                f"{args.connector_id} {agent_id}: {', '.join(scopes)}\n"
+            )
         return 0
     if sub == "grant":
-        grant_agent(args.provider, args.agent_id, args.scopes)
+        grant_agent(args.connector_id, args.agent_id, args.scopes)
         sys.stdout.write(
-            f"Granted {args.provider} → {args.agent_id}: " f"{', '.join(args.scopes)}\n"
+            f"Granted {args.connector_id} → {args.agent_id}: "
+            f"{', '.join(args.scopes)}\n"
         )
         return 0
     if sub == "revoke":
-        revoke_agent_grant(args.provider, args.agent_id)
-        sys.stdout.write(f"Revoked grant for {args.provider} → {args.agent_id}.\n")
+        revoke_agent_grant(args.connector_id, args.agent_id)
+        sys.stdout.write(
+            f"Revoked grant for {args.connector_id} → {args.agent_id}.\n"
+        )
         return 0
 
     sys.stderr.write(
@@ -223,9 +359,8 @@ def _handle_grants(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Standalone entry point — useful for ``python -m gaia.connectors.cli``
-    or hand-driven testing."""
-    parser = argparse.ArgumentParser(prog="gaia-connections")
+    """Standalone entry point — useful for ``python -m gaia.connectors.cli``."""
+    parser = argparse.ArgumentParser(prog="gaia-connectors")
     sub = parser.add_subparsers(dest="action")
     add_subparser(sub)
     args = parser.parse_args(argv)
