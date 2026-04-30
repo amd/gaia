@@ -3,9 +3,9 @@ from typing import Optional
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.tools import ScreenshotToolsMixin
-from gaia.vlm.mixin import VLMToolsMixin
-from gaia.sd.mixin import SDToolsMixin
 from gaia.mcp.mixin import MCPClientMixin
+from gaia.sd.mixin import SDToolsMixin
+from gaia.vlm.mixin import VLMToolsMixin
 
 
 @dataclass
@@ -18,7 +18,9 @@ class ChatAgentLiteConfig:
     max_steps: int = 10
 
 
-class ChatAgentLite(Agent, VLMToolsMixin, SDToolsMixin, ScreenshotToolsMixin, MCPClientMixin):
+class ChatAgentLite(
+    Agent, VLMToolsMixin, SDToolsMixin, ScreenshotToolsMixin, MCPClientMixin
+):
     """Lightweight ChatAgent: conversational only, minimal tools.
 
     This agent is intended to be a slim conversational assistant without

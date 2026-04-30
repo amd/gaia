@@ -1,6 +1,10 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
+# Pylint: optional native libs (Pillow) can produce false `no-member` warnings
+# for attributes like `PIL.Image.LANCZOS` in some lint environments.
+# pylint: disable=no-member
+
 import json
 import logging
 import subprocess

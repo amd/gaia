@@ -383,8 +383,6 @@ async def upload_document_blob(
                         )
                     hasher.update(chunk)
                     out.write(chunk)
-        except HTTPException:
-            raise
         except OSError as e:
             logger.error("Failed to write blob upload to %s: %s", partial_path, e)
             raise HTTPException(status_code=500, detail="Failed to save uploaded file")

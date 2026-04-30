@@ -1,6 +1,10 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
+# Pylint: optional native libs (Pillow) can produce false `no-member` warnings
+# for attributes like `PIL.Image.LANCZOS` in some lint environments.
+# pylint: disable=no-member
+
 """MCP server that wraps the GAIA Agent UI REST API.
 
 Allows MCP clients (like Claude Code) to interact with the GAIA Chat Agent

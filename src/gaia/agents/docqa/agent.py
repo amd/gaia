@@ -1,8 +1,14 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""
+DocumentQAAgent — RAG-focused agent scaffold.
+"""
+
 from dataclasses import dataclass
 from typing import Optional
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.chat.tools import RAGToolsMixin, FileToolsMixin, ShellToolsMixin
+from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
 from gaia.agents.tools import FileSearchToolsMixin
 from gaia.mcp.mixin import MCPClientMixin

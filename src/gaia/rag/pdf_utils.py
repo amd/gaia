@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+# Pylint: optional native deps (pymupdf/fitz) can cause false `no-member` warnings
+# in linting environments without PyMuPDF installed.
+# pylint: disable=no-member
 
 """
 PDF image extraction utilities for multi-modal RAG.
