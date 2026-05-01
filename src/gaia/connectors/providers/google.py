@@ -9,8 +9,10 @@ module does not register anything — registration happens in
 ``providers/__init__.py`` lazily on first ``get("google")`` call (or via an
 explicit ``register()`` call from a caller that wants strict startup).
 
-PKCE-only — there is no client secret. The Cloud Console "Desktop app" client
-type is the correct one for this flow.
+Desktop-app PKCE flow. Google requires ``client_secret`` even for Desktop-type
+clients — it is "not truly confidential" for installed apps but the token
+endpoint rejects requests that omit it. Set ``GAIA_GOOGLE_CLIENT_SECRET`` to
+the value shown in Cloud Console → Credentials → your Desktop client.
 
 Per AC23, ``SCOPE_DESCRIPTIONS`` pins the plain-language label for each scope
 so the AgentUI consent dialog and the CLI grant subcommand both render the
@@ -64,7 +66,7 @@ class GoogleOAuthProvider:
         "https://www.googleapis.com/auth/userinfo.email",
     )
 
-    def __init__(self, client_id: str | None = None):
+    def __init__(self, client_id: str | None = None, client_secret: str | None = None):
         resolved = (
             client_id
             if client_id is not None
@@ -80,6 +82,12 @@ class GoogleOAuthProvider:
             )
         self.client_id: str = resolved
         self.client_id_hash: str = hashlib.sha256(resolved.encode()).hexdigest()
+        # Google requires client_secret even for Desktop-type PKCE clients.
+        self.client_secret: str = (
+            client_secret
+            if client_secret is not None
+            else os.environ.get("GAIA_GOOGLE_CLIENT_SECRET", "")
+        )
 
     def authorization_params(self) -> dict:
         """
@@ -114,17 +122,23 @@ class GoogleOAuthProvider:
         return f"{self.auth_url}?{urlencode(params)}"
 
     def token_request_body(self, code: str, verifier: str, redirect_uri: str) -> dict:
-        return {
+        body: dict = {
             "grant_type": "authorization_code",
             "code": code,
             "code_verifier": verifier,
             "redirect_uri": redirect_uri,
             "client_id": self.client_id,
         }
+        if self.client_secret:
+            body["client_secret"] = self.client_secret
+        return body
 
     def refresh_request_body(self, refresh_token: str) -> dict:
-        return {
+        body: dict = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": self.client_id,
         }
+        if self.client_secret:
+            body["client_secret"] = self.client_secret
+        return body

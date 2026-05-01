@@ -327,7 +327,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     if response.status_code != 200:
         raise ConnectorsError(
             f"Token exchange for {flow.provider_id} failed with status "
-            f"{response.status_code}. See docs/security/connections.mdx."
+            f"{response.status_code}: {response.text}. See docs/security/connections.mdx."
         )
     payload = response.json()
     refresh_token = payload.get("refresh_token")
