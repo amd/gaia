@@ -194,7 +194,10 @@ describe("installSafetyNet", () => {
     const after1 = JSON.parse(fs.readFileSync(counterPath, "utf8"));
     expect(after1.count).toBe(1);
 
-    // Reset re-entry guard so we can fire a second fatal.
+    // Each installSafetyNet() call creates a fresh closure with its own
+    // _inFatalHandler flag. The resetModules()+re-require here creates a
+    // second independent instance so the second fatal() call is not blocked
+    // by the first instance's re-entry guard.
     jest.resetModules();
     const { installSafetyNet: installSafetyNet2 } = require(SAFETY_NET_PATH);
     installSafetyNet2({

@@ -54,6 +54,10 @@ try {
     try { process.exit(1); } catch { }
   };
   app.exit(1);
+  // Stop loading service modules synchronously — app.exit() is scheduled,
+  // not instant, so execution would otherwise continue into the requires
+  // below with no uncaughtException handler installed.
+  process.exit(1);
 }
 
 // Services (loaded after app.whenReady)

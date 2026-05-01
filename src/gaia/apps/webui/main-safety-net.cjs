@@ -24,8 +24,8 @@ const os = require("os");
 // ── Counter helpers ───────────────────────────────────────────────────────────
 // The counter is currently forensic only — post-mortem grep of
 // ~/.gaia/electron-startup-failures.json.
-// TODO(#934-follow-up): on next launch, if count >= 3, skip log-tee init
-// and show a "reset state?" dialog (safe-mode entry point).
+// TODO(#938): on next launch, if count >= 3, skip log-tee init and show
+// a "reset state?" dialog (safe-mode entry point).
 
 function counterPath(homedir) {
   return path.join(homedir(), ".gaia", "electron-startup-failures.json");
