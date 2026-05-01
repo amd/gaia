@@ -18,6 +18,38 @@ Custom agents can have their own:
 - **Preferred models** (override the server default)
 - **Conversation starters** (suggestion chips in the UI)
 - **MCP servers** (any Model Context Protocol server)
+- **Connectors** ([Google, GitHub, and more](/connectors)) — give your agent permission to read your real email, calendar, repos, etc.
+
+---
+
+## Using GAIA connectors
+
+If your agent needs to act on your behalf — read your inbox, list your
+calendar events, query GitHub, post to Slack, etc. — wire it up to a
+**GAIA connector** rather than asking users to paste API tokens into
+your code.
+
+A connector lets users:
+
+1. **Authenticate once** in Settings → Connections (OAuth flow for
+   Google-style providers, paste-an-API-key for MCP servers).
+2. **Grant scopes per agent** so each agent only sees the data it
+   actually needs. The Agent UI surfaces this when a user first picks
+   your agent.
+3. **Trust that secrets stay in the OS keyring**, never in plaintext
+   files or env vars baked into your code.
+
+Declare what your agent needs by setting `REQUIRED_CONNECTORS` on the
+class, and call `get_credential_sync(connector_id, agent_id, required_scopes=[...])`
+from inside a tool to get a usable token. The
+[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/src/gaia/agents/connectors_demo/agent.py)
+is a working reference for both `oauth_pkce` (Google) and `mcp_server`
+(GitHub) connectors.
+
+<Card title="Read the connectors guide" icon="plug" href="/connectors">
+  Walks through what connectors are, how the OAuth + MCP flows differ,
+  per-agent grants, and a step-by-step setup for Google and GitHub.
+</Card>
 
 ---
 
@@ -339,6 +371,9 @@ If you used a manifest with `mcp_servers:`, the BuilderAgent's MCP template emit
   </Card>
   <Card title="MCP Integration" icon="plug" href="/sdk/infrastructure/mcp">
     Connect any MCP server to extend your agent with external tools
+  </Card>
+  <Card title="GAIA Connectors" icon="key" href="/connectors">
+    Give your agent permission to read Gmail, GitHub, Slack, and more — without baking API keys into code
   </Card>
   <Card title="RAG SDK" icon="magnifying-glass" href="/sdk/sdks/rag">
     Add document Q&A to your agent with the RAG SDK

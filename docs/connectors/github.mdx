@@ -35,10 +35,6 @@ MCP server uses.
 4. **Expiration**: pick something — 90 days is a sensible default.
    GitHub will email you before it expires.
 
-<Frame caption="Generate new token in GitHub settings">
-  <img src="/assets/connectors/github/generate-token.png" alt="Generate token" />
-</Frame>
-
 ### Pick scopes
 
 The scopes you grant the token are the **maximum** GAIA can do. Per-
@@ -54,10 +50,6 @@ agent grants further narrow it from there.
 For a typical setup, tick **`repo`** and **`read:user`**. Add
 `workflow` if you want agents to interact with Actions.
 
-<Frame caption="Token scopes — pick the minimum your agents need">
-  <img src="/assets/connectors/github/token-scopes.png" alt="Token scopes" />
-</Frame>
-
 5. Scroll to the bottom and click **Generate token**.
 6. **Copy the token now** — GitHub will not show it again. It looks
    like `ghp_…` followed by 36 characters.
@@ -68,10 +60,6 @@ For a typical setup, tick **`repo`** and **`read:user`**. Add
 2. **Settings** (gear) → **Connections** → click the **GitHub** tile.
 3. Paste the PAT into the **GitHub Personal Access Token** field.
 4. Click **Save**.
-
-<Frame caption="The Configure form for the GitHub connector">
-  <img src="/assets/connectors/github/agent-ui-form.png" alt="GitHub configure form" />
-</Frame>
 
 GAIA will:
 

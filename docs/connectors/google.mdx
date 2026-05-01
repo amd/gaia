@@ -29,10 +29,6 @@ Otherwise:
 2. Click the project dropdown at the top → **New project**.
 3. Name it something like `gaia-personal` and click **Create**.
 
-<Frame caption="New project dialog in Google Cloud Console">
-  <img src="/assets/connectors/google/new-project.png" alt="Create new project" />
-</Frame>
-
 ## Step 2 — Enable the APIs you want to use
 
 GAIA only sees the Google APIs you explicitly enable on the project.
@@ -44,10 +40,6 @@ For a typical setup enable at least:
 
 In the Cloud Console, go to **APIs & Services → Library**, search for
 each API by name, click it, and click **Enable**.
-
-<Frame caption="Enable the Gmail API in the Library">
-  <img src="/assets/connectors/google/enable-api.png" alt="Enable API" />
-</Frame>
 
 ## Step 3 — Configure the OAuth consent screen
 
@@ -63,10 +55,6 @@ issue OAuth credentials, even for personal-use apps.
 4. Click **Save and Continue** through the Scopes and Test users
    pages — leave them empty for now. You'll add yourself as a test
    user in the next step.
-
-<Frame caption="OAuth consent screen — minimum required fields">
-  <img src="/assets/connectors/google/consent-screen.png" alt="Consent screen" />
-</Frame>
 
 ### Add yourself as a test user
 
@@ -95,10 +83,6 @@ This is the credential GAIA uses.
    Secret**. **Copy both** — you'll paste them into GAIA in a moment.
    You can also download the JSON.
 
-<Frame caption="The OAuth client credentials dialog">
-  <img src="/assets/connectors/google/client-credentials.png" alt="Client credentials" />
-</Frame>
-
 <Warning>
   Even though "Desktop app" clients are technically public (the secret
   isn't a real secret in the cryptographic sense), Google's token
@@ -113,10 +97,6 @@ This is the credential GAIA uses.
 3. Click the **Google** tile to expand it.
 4. Paste the **Client ID** and **Client Secret** from Step 4.
 5. Click **Save & Connect**.
-
-<Frame caption="The Save & Connect form in the Agent UI">
-  <img src="/assets/connectors/google/agent-ui-form.png" alt="Save and Connect" />
-</Frame>
 
 GAIA will:
 
