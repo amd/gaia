@@ -83,7 +83,8 @@
                 "pages": [
                   "connectors/index",
                   "connectors/google",
-                  "connectors/github"
+                  "connectors/github",
+                  "security/connections"
                 ]
               },
               {
