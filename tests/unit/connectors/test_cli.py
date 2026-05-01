@@ -20,12 +20,27 @@ from gaia.connectors.providers import _registry
 
 @pytest.fixture(autouse=True)
 def fake_home(tmp_path, monkeypatch):
-    """Isolated grants/state dirs per test."""
+    """Isolated grants/mcp_servers dirs per test."""
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
-    monkeypatch.setattr("gaia.connectors.state.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
     monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
     _registry.clear()
     yield
+
+
+def _seed_google(account_email: str) -> None:
+    """Helper: write a Google keyring blob (the source of truth for
+    ``configured`` after the state.json removal)."""
+    from gaia.connectors.providers import get as get_provider
+    from gaia.connectors.store import save_connection
+
+    save_connection(
+        provider="google",
+        account_email=account_email,
+        refresh_token="seed",
+        scopes=["s"],
+        client_id_hash=get_provider("google").client_id_hash,
+    )
 
 
 def _run(*argv) -> tuple[int, str, str]:
@@ -54,14 +69,7 @@ class TestStatus:
         assert "not configured" in out
 
     def test_status_seeded(self):
-        from gaia.connectors.state import set_connector_state
-
-        set_connector_state(
-            "google",
-            configured=True,
-            account_id="alice@example.com",
-            scopes=["s"],
-        )
+        _seed_google("alice@example.com")
         rc, out, _err = _run("connectors", "status")
         assert rc == 0
         assert "alice@example.com" in out

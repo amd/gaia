@@ -226,6 +226,54 @@ def load_connection(
     return blob
 
 
+def peek_connection(
+    provider: str,
+    *,
+    account_email: str = DEFAULT_ACCOUNT,
+) -> Optional[dict]:
+    """
+    Return the stored connection blob for display, or ``None`` if absent.
+
+    Read-only sibling of ``load_connection`` for UI/CLI catalog rendering:
+    no tripwire, no side effects, no exceptions for a missing entry. The
+    blob includes ``account_email``, ``scopes``, ``connected_at``, and
+    ``client_id_hash``; the secret ``refresh_token`` field is also
+    present, so callers MUST NOT log the result wholesale.
+
+    **Tripwire semantics**: ``peek_connection`` returns the blob even
+    when its ``client_id_hash`` no longer matches the live provider —
+    i.e. the catalog tile will keep showing "configured" right up until
+    the next auth-path read (``load_connection`` via ``tokens.get_or_refresh``)
+    fires the tripwire and clears the entry. That is intentional: a
+    catalog render is a side-effect-free operation, and clearing
+    credentials from a list-call would be surprising. Use
+    ``load_connection`` for auth-path reads where the tripwire is
+    required.
+
+    **Corrupt blob**: returns ``None`` and leaves the keyring entry in
+    place. ``load_connection`` (auth path) clears corrupt entries; we
+    don't here for the same side-effect-free reason.
+    """
+    verify_keyring_backend()
+    username = _connection_username(provider, account_email)
+
+    @_wrap_keyring_call("get_password")
+    def _get():
+        return keyring.get_password(SERVICE_NAME, username)
+
+    raw = _get()
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # Corrupt blob — caller treats as "not configured" without
+        # rewriting state. ``load_connection`` (auth path) still clears
+        # the corrupt entry; we don't here because peek_connection is
+        # called during catalog render and must be side-effect-free.
+        return None
+
+
 def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) -> None:
     """Remove the keyring entry for ``provider`` if present. Idempotent."""
     verify_keyring_backend()

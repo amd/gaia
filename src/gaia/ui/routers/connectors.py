@@ -64,8 +64,9 @@ from gaia.connectors.grants import (
     revoke_agent_grant,
 )
 from gaia.connectors.handler import configure, disconnect, get_credential, health_check
+from gaia.connectors.mcp_server import is_mcp_server_configured
 from gaia.connectors.registry import REGISTRY
-from gaia.connectors.state import get_connector_state, list_configured_ids
+from gaia.connectors.store import peek_connection
 
 logger = logging.getLogger(__name__)
 
@@ -211,12 +212,18 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
 def _connector_summary(connector_id: str) -> Dict[str, Any]:
     """Build a summary dict for one connector: spec fields + live state.
 
-    For ``oauth_pkce`` connectors we also probe the OAuth provider
-    registry — if the provider can't be instantiated (e.g.
-    ``GAIA_GOOGLE_CLIENT_ID`` is unset), we surface that as
-    ``configurable=False`` + ``config_error="..."`` so the AgentUI can
-    render a friendly "needs setup" tile state instead of letting the
-    user click Connect and then blowing up with a 503.
+    No state cache: ``configured`` / ``account_id`` / ``scopes`` are
+    derived live from the source-of-truth store on every call —
+    ``store.peek_connection`` (keyring) for ``oauth_pkce`` and
+    ``mcp_servers.json`` for ``mcp_server``. This guarantees the catalog
+    UI never shows stale data after an external change (e.g. the user
+    cleared their keyring or edited mcp_servers.json by hand).
+
+    For ``oauth_pkce`` we also probe the OAuth provider registry — if
+    the provider can't be instantiated (e.g. ``GAIA_GOOGLE_CLIENT_ID``
+    is unset), surface ``configurable=False`` + ``config_error="..."``
+    so the AgentUI renders a friendly "needs setup" tile rather than
+    letting the user click Connect and hit a 503.
     """
     try:
         spec = REGISTRY.get(connector_id)
@@ -224,10 +231,17 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         raise HTTPException(
             status_code=404, detail=f"Unknown connector: {connector_id!r}"
         )
-    state = get_connector_state(connector_id) or {}
 
+    configured = False
+    account_id: Optional[str] = None
+    scopes: list = []
     configurable = True
     config_error: Optional[str] = None
+
+    # TODO: when a 3rd connector type lands, push this if/elif into a
+    # Handler.summary(spec) method so this becomes a single polymorphic
+    # call. The same dispatch lives in cli.py:_handle_list — refactor
+    # both together.
     if spec.type == "oauth_pkce":
         # Lazy import to avoid pulling provider modules at router import time.
         from gaia.connectors.providers import get as get_provider
@@ -239,12 +253,23 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
             configurable = False
             config_error = str(e)
         except KeyError:
-            # Catalog references an unknown provider — surface as not configurable.
             configurable = False
             config_error = (
                 f"OAuth provider {provider_ref!r} is not registered. "
                 "This is a catalog/code mismatch; please file a bug."
             )
+
+        # Derive configured/account/scopes from the keyring blob — that
+        # IS the source of truth. peek_connection is read-only and never
+        # raises on missing entries.
+        blob = peek_connection(provider_ref)
+        if blob is not None:
+            configured = True
+            account_id = blob.get("account_email")
+            scopes = list(blob.get("scopes", []))
+
+    elif spec.type == "mcp_server":
+        configured = is_mcp_server_configured(spec.id)
 
     return {
         "id": spec.id,
@@ -255,12 +280,11 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "type": spec.type,
         "description": spec.description,
         "product_url": spec.product_url,
-        "configured": state.get("configured", False),
+        "configured": configured,
         "configurable": configurable,
         "config_error": config_error,
-        "account_id": state.get("account_id"),
-        "scopes": state.get("scopes", []),
-        "last_tested_at": state.get("last_tested_at"),
+        "account_id": account_id,
+        "scopes": scopes,
         "mcp_env_keys": list(spec.mcp_env_keys),
         "default_scopes": list(spec.default_scopes),
     }
@@ -323,6 +347,14 @@ async def debug_state() -> Dict[str, Any]:
     except OSError:
         pass
 
+    # Derive configured ids live by walking the catalog and asking the
+    # source-of-truth store for each type.
+    configured_ids: list[str] = []
+    for spec in REGISTRY.all():
+        summary = _connector_summary(spec.id)
+        if summary["configured"]:
+            configured_ids.append(spec.id)
+
     return {
         "provider_registered": "google" in provider_registry,
         "env_var_present": bool(os.environ.get("GAIA_GOOGLE_CLIENT_ID")),
@@ -331,7 +363,7 @@ async def debug_state() -> Dict[str, Any]:
         "grants_path_writable": grants_writable,
         "in_flight_flow_count": len(_flow_pending),
         "catalog_size": len(REGISTRY.all()),
-        "configured_ids": list_configured_ids(),
+        "configured_ids": configured_ids,
     }
 
 

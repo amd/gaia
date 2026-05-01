@@ -24,10 +24,10 @@ UI_HEADER = {"x-gaia-ui": "1"}
 
 @pytest.fixture(autouse=True)
 def google_provider_env(monkeypatch, tmp_path):
-    """Provide a configured Google provider + isolated grants/state dirs."""
+    """Provide a configured Google provider + isolated grants/mcp_servers dirs."""
     monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
-    monkeypatch.setattr("gaia.connectors.state.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
     _registry.clear()
     yield
 

@@ -32,7 +32,6 @@ import keyring
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec
-from gaia.connectors.state import clear_connector_state, set_connector_state
 from gaia.connectors.store import SERVICE_NAME
 
 logger = logging.getLogger(__name__)
@@ -83,6 +82,19 @@ def _read_mcp_servers_json() -> Dict[str, Any]:
             f"mcp_servers.json at {path} is unreadable: {e}. "
             "Delete to reset or fix the JSON."
         ) from e
+
+
+def is_mcp_server_configured(connector_id: str) -> bool:
+    """
+    True if ``connector_id`` has an entry in ``mcp_servers.json``.
+
+    Source-of-truth lookup for the catalog UI / `gaia connectors list` —
+    no separate state cache is maintained for MCP servers; the file
+    written by ``configure`` is itself the configured-state ledger. A
+    corrupt mcp_servers.json bubbles up as ``ConnectorsError`` so the
+    UI can show an actionable error rather than a silent "not configured".
+    """
+    return connector_id in _read_mcp_servers_json()
 
 
 class McpServerHandler:
@@ -184,9 +196,6 @@ class McpServerHandler:
         }
         _write_mcp_servers_json(servers)
 
-        # Update state.json metadata.
-        set_connector_state(spec.id, configured=True)
-
         logger.info(
             "mcp_server: configured connector_id=%s command=%s",
             spec.id,
@@ -224,7 +233,6 @@ class McpServerHandler:
             except keyring.errors.PasswordDeleteError:
                 pass  # already absent — idempotent
 
-        clear_connector_state(spec.id)
         logger.info("mcp_server: disconnected connector_id=%s", spec.id)
 
         if self._reload is not None:

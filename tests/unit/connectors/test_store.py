@@ -30,6 +30,7 @@ from gaia.connectors.store import (
     delete_connection,
     list_connections,
     load_connection,
+    peek_connection,
     save_connection,
     verify_keyring_backend,
 )
@@ -283,6 +284,63 @@ class TestSecretHygiene:
         caplog.set_level("DEBUG")
         load_connection("google", current_client_id_hash="h")
         assert SENTINEL_REFRESH_TOKEN not in caplog.text
+
+
+class TestPeekConnection:
+    """``peek_connection`` is the read-only sibling of ``load_connection``
+    used by the catalog UI/CLI to render "configured" without firing the
+    client_id_hash tripwire — must be totally side-effect-free."""
+
+    def test_returns_none_for_missing_entry(self):
+        assert peek_connection("google") is None
+
+    def test_returns_blob_when_present(self):
+        save_connection(
+            provider="google",
+            account_email="peek@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["openid"],
+            client_id_hash="hash-A",
+        )
+        blob = peek_connection("google")
+        assert blob is not None
+        assert blob["account_email"] == "peek@example.com"
+        assert blob["scopes"] == ["openid"]
+
+    def test_returns_blob_even_when_client_id_hash_stale(self):
+        # Catalog render must NOT fire the tripwire — the user keeps
+        # seeing "configured" until the next auth-path read.
+        save_connection(
+            provider="google",
+            account_email="stale@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["openid"],
+            client_id_hash="OLD-HASH",
+        )
+        blob = peek_connection("google")
+        assert blob is not None
+        assert blob["client_id_hash"] == "OLD-HASH"
+        # And the entry is still there — peek did not clear it.
+        assert (
+            keyring.get_password(
+                SERVICE_NAME, _connection_username("google", "default")
+            )
+            is not None
+        )
+
+    def test_corrupt_blob_returns_none_without_clearing(self):
+        # A corrupt blob (not valid JSON) is treated as "not configured"
+        # but the entry stays put — clearing is load_connection's job.
+        keyring.set_password(
+            SERVICE_NAME, _connection_username("google", "default"), "{not json"
+        )
+        assert peek_connection("google") is None
+        assert (
+            keyring.get_password(
+                SERVICE_NAME, _connection_username("google", "default")
+            )
+            is not None
+        )
 
 
 class TestConstants:

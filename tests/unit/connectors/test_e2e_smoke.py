@@ -18,7 +18,6 @@ import pytest
 from gaia.connectors import cli as connectors_cli
 from gaia.connectors.providers import _registry as _oauth_provider_registry
 
-
 # ─────────────────────────────────────────────────────────────────
 # Shared helpers
 # ─────────────────────────────────────────────────────────────────
@@ -49,11 +48,30 @@ def _run(*argv) -> tuple[int, str, str]:
 def isolated_env(tmp_path, monkeypatch):
     """Isolate filesystem and env for every smoke test."""
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
-    monkeypatch.setattr("gaia.connectors.state.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
     monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
     # Clear the OAuth provider cache (not the catalog registry).
     _oauth_provider_registry.clear()
     yield
+
+
+def _seed_google_connection(account_email: str, scopes=("openid",)) -> None:
+    """Helper: write a Google keyring blob the same way the OAuth flow
+    would, so live readers (CLI status, router catalog) see the
+    connector as configured. Replaces the old ``set_connector_state``
+    seeding pattern now that the keyring blob is the source of truth.
+    """
+    from gaia.connectors.providers import get as get_provider
+    from gaia.connectors.store import save_connection
+
+    provider = get_provider("google")
+    save_connection(
+        provider="google",
+        account_email=account_email,
+        refresh_token="seed-refresh",
+        scopes=list(scopes),
+        client_id_hash=provider.client_id_hash,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -95,8 +113,13 @@ class TestGrantsSmoke:
     def test_grant_and_list(self):
         """Grant a scope then verify it appears in the list."""
         rc, _, _ = _run(
-            "connectors", "grants", "grant", "google", "builtin:chat",
-            "--scopes", "https://www.googleapis.com/auth/gmail.readonly",
+            "connectors",
+            "grants",
+            "grant",
+            "google",
+            "builtin:chat",
+            "--scopes",
+            "https://www.googleapis.com/auth/gmail.readonly",
         )
         assert rc == 0
 
@@ -108,8 +131,13 @@ class TestGrantsSmoke:
     def test_revoke_clears_grant(self):
         """Revoke removes the grant from the ledger."""
         _run(
-            "connectors", "grants", "grant", "google", "builtin:chat",
-            "--scopes", "gmail.readonly",
+            "connectors",
+            "grants",
+            "grant",
+            "google",
+            "builtin:chat",
+            "--scopes",
+            "gmail.readonly",
         )
         rc, _, _ = _run("connectors", "grants", "revoke", "google", "builtin:chat")
         assert rc == 0
@@ -132,29 +160,15 @@ class TestGrantsSmoke:
 
 class TestStateSyncSmoke:
     def test_seeded_state_appears_in_cli_status(self):
-        """State written by the SDK layer is reflected in CLI status."""
-        from gaia.connectors.state import set_connector_state
-
-        set_connector_state(
-            "google",
-            configured=True,
-            account_id="smoke@example.com",
-            scopes=["openid"],
-        )
+        """A keyring-saved connection is reflected in CLI status."""
+        _seed_google_connection("smoke@example.com")
         rc, out, _ = _run("connectors", "status")
         assert rc == 0
         assert "smoke@example.com" in out
 
     def test_seeded_state_appears_in_json(self):
-        """JSON status output reflects seeded state."""
-        from gaia.connectors.state import set_connector_state
-
-        set_connector_state(
-            "google",
-            configured=True,
-            account_id="json@example.com",
-            scopes=["openid"],
-        )
+        """JSON status output reflects keyring-saved connection."""
+        _seed_google_connection("json@example.com")
         rc, out, _ = _run("connectors", "status", "--json")
         assert rc == 0
         rows = json.loads(out)
@@ -176,17 +190,17 @@ class TestDisconnectSmoke:
         assert rc == 0
 
     def test_disconnect_clears_state(self):
-        """Disconnect removes a previously seeded state entry."""
-        from gaia.connectors.state import get_connector_state, set_connector_state
+        """Disconnect removes a previously seeded keyring entry."""
+        from gaia.connectors.store import peek_connection
 
-        set_connector_state("google", configured=True, account_id="bye@example.com")
-        assert get_connector_state("google") is not None
+        _seed_google_connection("bye@example.com")
+        assert peek_connection("google") is not None
 
         rc, _, _ = _run("connectors", "disconnect", "google")
         assert rc == 0
 
-        state = get_connector_state("google")
-        assert state is None, f"Expected state cleared after disconnect, got: {state}"
+        blob = peek_connection("google")
+        assert blob is None, f"Expected entry cleared after disconnect, got: {blob}"
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -196,22 +210,13 @@ class TestDisconnectSmoke:
 
 class TestRouterSyncSmoke:
     def test_router_lists_catalog_after_cli_configure(self, ui_api_client):
-        """State written by CLI status is visible through the HTTP router."""
-        from gaia.connectors.state import set_connector_state
-
-        set_connector_state(
-            "google",
-            configured=True,
-            account_id="router@example.com",
-            scopes=["openid"],
-        )
+        """A keyring-saved connection is visible through the HTTP router."""
+        _seed_google_connection("router@example.com")
         r = ui_api_client.get("/api/connectors")
         assert r.status_code == 200
         data = r.json()
         assert "connectors" in data
-        google = next(
-            (c for c in data["connectors"] if c["id"] == "google"), None
-        )
+        google = next((c for c in data["connectors"] if c["id"] == "google"), None)
         assert google is not None
         assert google["configured"] is True
         assert google["account_id"] == "router@example.com"
@@ -229,4 +234,6 @@ class TestRouterSyncSmoke:
         assert r.status_code == 200
         grants = r.json()["grants"]
         assert "builtin:chat" in grants
-        assert "https://www.googleapis.com/auth/gmail.readonly" in grants["builtin:chat"]
+        assert (
+            "https://www.googleapis.com/auth/gmail.readonly" in grants["builtin:chat"]
+        )

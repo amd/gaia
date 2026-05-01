@@ -50,7 +50,7 @@ def isolated_registry(monkeypatch, tmp_path):
     monkeypatch.setattr("gaia.ui.routers.connectors.REGISTRY", fresh)
     monkeypatch.setattr("gaia.connectors.handler.REGISTRY", fresh)
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
-    monkeypatch.setattr("gaia.connectors.state.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
     yield fresh
 
 

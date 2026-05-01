@@ -189,25 +189,18 @@ class TestTimeout:
             await complete_authorization(info["flow_id"])
 
 
-class TestStateWriteOnSuccess:
-    """`_exchange_code_for_tokens` is the single point where every
-    successful flow lands — keyring + state.json must always commit
-    together so the AgentUI tile and `gaia connectors list` never lag
-    behind the keyring."""
+class TestKeyringIsSourceOfTruth:
+    """After a successful flow, the keyring blob — and *only* the
+    keyring blob — must reflect the new connection. There is no
+    separate state.json cache to keep in sync; the catalog UI reads
+    ``configured`` / ``account_id`` / ``scopes`` live via
+    ``store.peek_connection``."""
 
     @respx.mock
-    async def test_successful_flow_writes_state_json(
-        self, google_provider, monkeypatch
-    ):
+    async def test_successful_flow_makes_peek_return_blob(self, google_provider):
+        from gaia.connectors.store import peek_connection
+
         _mock_token_endpoint()
-        captured: dict = {}
-
-        def fake_set(connector_id, **kwargs):
-            captured["connector_id"] = connector_id
-            captured.update(kwargs)
-
-        # Patch where flow.py looked it up at import time, not the source.
-        monkeypatch.setattr("gaia.connectors.flow.set_connector_state", fake_set)
 
         info = await start_authorization("google", scopes=["openid"])
         params = parse_qs(urlparse(info["authorization_url"]).query)
@@ -218,10 +211,10 @@ class TestStateWriteOnSuccess:
             await c.get(f"{redirect_uri}?code=ok&state={state}")
         await asyncio.wait_for(complete_authorization(info["flow_id"]), timeout=2.0)
 
-        assert captured["connector_id"] == "google"
-        assert captured["configured"] is True
-        assert captured["account_id"] == "alice@example.com"
-        assert captured["scopes"] == ["openid"]
+        blob = peek_connection("google")
+        assert blob is not None
+        assert blob["account_email"] == "alice@example.com"
+        assert blob["scopes"] == ["openid"]
 
 
 class TestStaleFlowEviction:

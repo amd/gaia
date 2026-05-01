@@ -174,8 +174,9 @@ def handle(args: argparse.Namespace) -> int:
 
 def _handle_list(args: argparse.Namespace) -> int:
     import gaia.connectors.catalog  # noqa: F401 — populates REGISTRY
+    from gaia.connectors.mcp_server import is_mcp_server_configured
     from gaia.connectors.registry import REGISTRY
-    from gaia.connectors.state import get_connector_state
+    from gaia.connectors.store import peek_connection
 
     specs = REGISTRY.all()
     connector_id = getattr(args, "connector_id", None)
@@ -186,9 +187,27 @@ def _handle_list(args: argparse.Namespace) -> int:
             sys.stderr.write(f"gaia connectors: unknown connector {connector_id!r}\n")
             return 1
 
+    # Derive configured/account/scopes live from the source-of-truth
+    # store per type — keyring blob for OAuth, mcp_servers.json for MCP.
+    # TODO: when a 3rd connector type lands, push this into a
+    # Handler.summary(spec) -> {configured, account_id, scopes} method
+    # so this list-call collapses to one polymorphic call. The same
+    # if/elif lives in routers/connectors.py:_connector_summary; the
+    # two should refactor together.
     rows = []
     for spec in specs:
-        state = get_connector_state(spec.id) or {}
+        configured = False
+        account_id = None
+        scopes: list = []
+        if spec.type == "oauth_pkce":
+            blob = peek_connection(spec.oauth_provider_ref or spec.id)
+            if blob is not None:
+                configured = True
+                account_id = blob.get("account_email")
+                scopes = list(blob.get("scopes", []))
+        elif spec.type == "mcp_server":
+            configured = is_mcp_server_configured(spec.id)
+
         rows.append(
             {
                 "id": spec.id,
@@ -196,9 +215,9 @@ def _handle_list(args: argparse.Namespace) -> int:
                 "type": spec.type,
                 "category": spec.category,
                 "tier": spec.tier,
-                "configured": state.get("configured", False),
-                "account_id": state.get("account_id"),
-                "scopes": state.get("scopes", []),
+                "configured": configured,
+                "account_id": account_id,
+                "scopes": scopes,
             }
         )
 
@@ -218,10 +237,6 @@ def _handle_list(args: argparse.Namespace) -> int:
 
 
 def _handle_connect(args: argparse.Namespace) -> int:
-    # state.json is written by flow._exchange_code_for_tokens, so callers
-    # don't need to write it explicitly — the flow layer is the single
-    # source of truth ("successful flow ⇒ keyring + state always commit
-    # together").
     from gaia.connectors.api import complete_authorization, start_authorization
 
     async def _run() -> str:

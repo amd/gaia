@@ -26,19 +26,6 @@ without notice. Only the names re-exported here are stable.
 
 from __future__ import annotations
 
-# Spec types + registry — added in T-1 (ConnectorSpec, ConfigField, REGISTRY).
-from gaia.connectors.registry import REGISTRY, ConnectorRegistry
-from gaia.connectors.spec import ConfigField, ConnectorSpec
-
-# State store — added in T-2.
-from gaia.connectors.state import (
-    clear_connector_state,
-    get_connector_state,
-    list_configured_ids,
-    load_state,
-    set_connector_state,
-)
-
 # Public API — coordination layer.
 from gaia.connectors.api import (
     cancel_flow,
@@ -85,18 +72,16 @@ from gaia.connectors.providers.base import (
     OAuthProvider,
 )
 
+# Spec types + registry — added in T-1 (ConnectorSpec, ConfigField, REGISTRY).
+from gaia.connectors.registry import REGISTRY, ConnectorRegistry
+from gaia.connectors.spec import ConfigField, ConnectorSpec
+
 __all__ = [
     # Spec types + registry (T-1)
     "ConfigField",
     "ConnectorRegistry",
     "ConnectorSpec",
     "REGISTRY",
-    # State store (T-2)
-    "clear_connector_state",
-    "get_connector_state",
-    "list_configured_ids",
-    "load_state",
-    "set_connector_state",
     # Errors
     "AuthRequiredError",
     "ConfigurationError",

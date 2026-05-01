@@ -30,7 +30,6 @@ from gaia.connectors.flow import (
 )
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec
-from gaia.connectors.state import clear_connector_state
 from gaia.connectors.store import DEFAULT_ACCOUNT, delete_connection
 from gaia.connectors.tokens import get_or_refresh
 
@@ -46,8 +45,9 @@ class OAuthPkceHandler:
       ``{"access_token": str, "expires_at": int, "scopes": [str]}``
 
     This class is stateless — it delegates all persistent state to
-    ``tokens.py`` (in-memory cache), ``store.py`` (keyring), and
-    ``state.json`` (metadata).
+    ``tokens.py`` (in-memory cache) and ``store.py`` (keyring; the
+    keyring blob is also the source of truth for the catalog UI's
+    "configured" state via ``store.peek_connection``).
     """
 
     # ------------------------------------------------------------------
@@ -91,9 +91,9 @@ class OAuthPkceHandler:
         the method starts a new flow and returns ``{"flow_id": ...,
         "authorization_url": ...}`` for the caller to open in a browser.
 
-        state.json is written by ``flow._exchange_code_for_tokens`` (the
-        single point every successful flow passes through), so this
-        method does not call ``set_connector_state`` itself.
+        The keyring blob written by ``flow._exchange_code_for_tokens`` is
+        the source of truth for "configured" — there is no separate
+        state cache to update here.
         """
         provider_id = spec.oauth_provider_ref or spec.id
         scopes = config.get("scopes") or list(spec.default_scopes)
@@ -111,11 +111,12 @@ class OAuthPkceHandler:
         *,
         account_id: Optional[str] = None,
     ) -> None:
-        """Remove stored tokens and clear connector state."""
+        """Remove stored tokens. The keyring deletion is the source of
+        truth — once the blob is gone, ``store.peek_connection`` returns
+        ``None`` and the catalog UI shows "not configured" automatically."""
         provider_id = spec.oauth_provider_ref or spec.id
         account_email = account_id or DEFAULT_ACCOUNT
         delete_connection(provider_id, account_email=account_email)
-        clear_connector_state(spec.id)
         logger.info(
             "oauth_pkce: disconnected connector_id=%s provider=%s",
             spec.id,

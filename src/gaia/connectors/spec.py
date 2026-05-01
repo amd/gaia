@@ -34,8 +34,8 @@ class ConfigField:
     A single field in a connector's configure form.
 
     ``secret=True`` means the value is stored in the OS keyring, not in
-    ``state.json``. The UI renders it as a password input and never shows
-    the stored value after first save.
+    ``mcp_servers.json``. The UI renders it as a password input and
+    never shows the stored value after first save.
     """
 
     key: str

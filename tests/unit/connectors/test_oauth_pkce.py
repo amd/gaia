@@ -180,25 +180,22 @@ class TestConfigure:
 
 class TestDisconnect:
     @pytest.mark.asyncio
-    async def test_deletes_connection_and_clears_state(self):
+    async def test_deletes_connection(self):
+        # The keyring blob IS the configured-state for OAuth connectors
+        # (no separate state.json), so disconnect just needs to delete
+        # the keyring entry. peek_connection returning None afterward is
+        # what makes the catalog UI flip back to "not configured".
         spec = _make_spec()
         handler = OAuthPkceHandler()
-        with (
-            patch("gaia.connectors.oauth_pkce.delete_connection") as mock_del,
-            patch("gaia.connectors.oauth_pkce.clear_connector_state") as mock_clear,
-        ):
+        with patch("gaia.connectors.oauth_pkce.delete_connection") as mock_del:
             await handler.disconnect(spec)
         mock_del.assert_called_once()
-        mock_clear.assert_called_once_with(spec.id)
 
     @pytest.mark.asyncio
     async def test_disconnect_uses_provider_ref(self):
         spec = _make_spec(id="gmail", oauth_provider_ref="google")
         handler = OAuthPkceHandler()
-        with (
-            patch("gaia.connectors.oauth_pkce.delete_connection") as mock_del,
-            patch("gaia.connectors.oauth_pkce.clear_connector_state"),
-        ):
+        with patch("gaia.connectors.oauth_pkce.delete_connection") as mock_del:
             await handler.disconnect(spec)
         # provider_id passed to delete_connection should be "google", not "gmail"
         args = mock_del.call_args[0]

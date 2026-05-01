@@ -51,7 +51,6 @@ from gaia.mcp.client.mcp_client import _resolve_keyring_refs
 @pytest.fixture(autouse=True)
 def fake_home(tmp_path, monkeypatch):
     monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
-    monkeypatch.setattr("gaia.connectors.state.Path.home", lambda: tmp_path)
     return tmp_path
 
 
@@ -453,3 +452,38 @@ class TestCatalog:
                 assert (
                     spec.config_schema
                 ), f"Spec '{spec.id}' has mcp_env_keys but no config_schema"
+
+
+class TestIsMcpServerConfigured:
+    """``is_mcp_server_configured`` is the source-of-truth lookup for
+    the catalog UI's "configured" tile state — must reflect whatever is
+    in mcp_servers.json without any caching of its own."""
+
+    def test_returns_false_when_file_missing(self, tmp_path, monkeypatch):
+        from gaia.connectors.mcp_server import is_mcp_server_configured
+
+        monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
+        assert is_mcp_server_configured("mcp-github") is False
+
+    def test_returns_true_when_entry_present(self, tmp_path, monkeypatch):
+        import json
+
+        from gaia.connectors.mcp_server import is_mcp_server_configured
+
+        monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
+        path = tmp_path / ".gaia" / "mcp_servers.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"mcpServers": {"mcp-github": {"command": "x"}}}))
+        assert is_mcp_server_configured("mcp-github") is True
+        assert is_mcp_server_configured("mcp-other") is False
+
+    def test_corrupt_file_raises_connectors_error(self, tmp_path, monkeypatch):
+        from gaia.connectors.errors import ConnectorsError
+        from gaia.connectors.mcp_server import is_mcp_server_configured
+
+        monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
+        path = tmp_path / ".gaia" / "mcp_servers.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json")
+        with pytest.raises(ConnectorsError):
+            is_mcp_server_configured("mcp-github")
