@@ -218,8 +218,11 @@ def _handle_list(args: argparse.Namespace) -> int:
 
 
 def _handle_connect(args: argparse.Namespace) -> int:
+    # state.json is written by flow._exchange_code_for_tokens, so callers
+    # don't need to write it explicitly — the flow layer is the single
+    # source of truth ("successful flow ⇒ keyring + state always commit
+    # together").
     from gaia.connectors.api import complete_authorization, start_authorization
-    from gaia.connectors.state import set_connector_state
 
     async def _run() -> str:
         info = await start_authorization(args.connector_id, scopes=args.scopes or [])
@@ -229,12 +232,6 @@ def _handle_connect(args: argparse.Namespace) -> int:
         )
         sys.stdout.flush()
         result = await complete_authorization(info["flow_id"])
-        set_connector_state(
-            args.connector_id,
-            configured=True,
-            account_id=result.get("account_email"),
-            scopes=result.get("scopes", []),
-        )
         return result.get("account_email") or "<unknown>"
 
     email = asyncio.run(_run())

@@ -43,8 +43,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-import gaia.connectors.catalog  # noqa: F401 — triggers REGISTRY + handler registration
 import gaia.connectors as connections
+import gaia.connectors.catalog  # noqa: F401 — triggers REGISTRY + handler registration
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -57,7 +57,12 @@ from gaia.connectors.errors import (
 )
 from gaia.connectors.events import EventEmitter, set_emitter
 from gaia.connectors.flow import _pending as _flow_pending
-from gaia.connectors.grants import GRANTS_FILE, grant_agent, list_agent_grants, revoke_agent_grant
+from gaia.connectors.grants import (
+    GRANTS_FILE,
+    grant_agent,
+    list_agent_grants,
+    revoke_agent_grant,
+)
 from gaia.connectors.handler import configure, disconnect, get_credential, health_check
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.state import get_connector_state, list_configured_ids
@@ -204,12 +209,43 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
 
 
 def _connector_summary(connector_id: str) -> Dict[str, Any]:
-    """Build a summary dict for one connector: spec fields + live state."""
+    """Build a summary dict for one connector: spec fields + live state.
+
+    For ``oauth_pkce`` connectors we also probe the OAuth provider
+    registry — if the provider can't be instantiated (e.g.
+    ``GAIA_GOOGLE_CLIENT_ID`` is unset), we surface that as
+    ``configurable=False`` + ``config_error="..."`` so the AgentUI can
+    render a friendly "needs setup" tile state instead of letting the
+    user click Connect and then blowing up with a 503.
+    """
     try:
         spec = REGISTRY.get(connector_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Unknown connector: {connector_id!r}")
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
     state = get_connector_state(connector_id) or {}
+
+    configurable = True
+    config_error: Optional[str] = None
+    if spec.type == "oauth_pkce":
+        # Lazy import to avoid pulling provider modules at router import time.
+        from gaia.connectors.providers import get as get_provider
+
+        provider_ref = spec.oauth_provider_ref or spec.id
+        try:
+            get_provider(provider_ref)
+        except ConfigurationError as e:
+            configurable = False
+            config_error = str(e)
+        except KeyError:
+            # Catalog references an unknown provider — surface as not configurable.
+            configurable = False
+            config_error = (
+                f"OAuth provider {provider_ref!r} is not registered. "
+                "This is a catalog/code mismatch; please file a bug."
+            )
+
     return {
         "id": spec.id,
         "display_name": spec.display_name,
@@ -220,6 +256,8 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "description": spec.description,
         "product_url": spec.product_url,
         "configured": state.get("configured", False),
+        "configurable": configurable,
+        "config_error": config_error,
         "account_id": state.get("account_id"),
         "scopes": state.get("scopes", []),
         "last_tested_at": state.get("last_tested_at"),
@@ -320,7 +358,9 @@ async def configure_connector(
     try:
         result = await configure(connector_id, body.config)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Unknown connector: {connector_id!r}")
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
 
@@ -337,24 +377,34 @@ async def test_connector(connector_id: str) -> Dict[str, Any]:
     try:
         result = await health_check(connector_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Unknown connector: {connector_id!r}")
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
 
     await _emitter.emit(
         "connector.tested",
-        {"connector_id": connector_id, "ok": result.get("ok"), "detail": result.get("detail")},
+        {
+            "connector_id": connector_id,
+            "ok": result.get("ok"),
+            "detail": result.get("detail"),
+        },
     )
     return result
 
 
-@router.delete("/{connector_id}", status_code=204, dependencies=[Depends(_require_ui_header)])
+@router.delete(
+    "/{connector_id}", status_code=204, dependencies=[Depends(_require_ui_header)]
+)
 async def disconnect_connector(connector_id: str) -> Response:
     """Disconnect a connector — removes credentials and (for MCP) removes from mcp_servers.json."""
     try:
         await disconnect(connector_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Unknown connector: {connector_id!r}")
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
 

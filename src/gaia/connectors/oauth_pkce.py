@@ -30,7 +30,7 @@ from gaia.connectors.flow import (
 )
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec
-from gaia.connectors.state import clear_connector_state, set_connector_state
+from gaia.connectors.state import clear_connector_state
 from gaia.connectors.store import DEFAULT_ACCOUNT, delete_connection
 from gaia.connectors.tokens import get_or_refresh
 
@@ -90,24 +90,20 @@ class OAuthPkceHandler:
         ``flow_id`` and ``code`` in ``config``. When ``flow_id`` is absent
         the method starts a new flow and returns ``{"flow_id": ...,
         "authorization_url": ...}`` for the caller to open in a browser.
+
+        state.json is written by ``flow._exchange_code_for_tokens`` (the
+        single point every successful flow passes through), so this
+        method does not call ``set_connector_state`` itself.
         """
         provider_id = spec.oauth_provider_ref or spec.id
         scopes = config.get("scopes") or list(spec.default_scopes)
 
         if "flow_id" in config and "code" in config:
             # Caller has already handled the browser step.
-            result = await complete_authorization(config["flow_id"])
-            set_connector_state(
-                spec.id,
-                configured=True,
-                account_id=result.get("account_email"),
-                scopes=scopes,
-            )
-            return result
+            return await complete_authorization(config["flow_id"])
 
         # Start a new PKCE flow; caller will open the URL.
-        flow_info = await start_authorization(provider_id, scopes=scopes)
-        return flow_info
+        return await start_authorization(provider_id, scopes=scopes)
 
     async def disconnect(
         self,

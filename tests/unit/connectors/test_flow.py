@@ -189,6 +189,62 @@ class TestTimeout:
             await complete_authorization(info["flow_id"])
 
 
+class TestStateWriteOnSuccess:
+    """`_exchange_code_for_tokens` is the single point where every
+    successful flow lands — keyring + state.json must always commit
+    together so the AgentUI tile and `gaia connectors list` never lag
+    behind the keyring."""
+
+    @respx.mock
+    async def test_successful_flow_writes_state_json(
+        self, google_provider, monkeypatch
+    ):
+        _mock_token_endpoint()
+        captured: dict = {}
+
+        def fake_set(connector_id, **kwargs):
+            captured["connector_id"] = connector_id
+            captured.update(kwargs)
+
+        # Patch where flow.py looked it up at import time, not the source.
+        monkeypatch.setattr("gaia.connectors.flow.set_connector_state", fake_set)
+
+        info = await start_authorization("google", scopes=["openid"])
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        state = params["state"][0]
+
+        async with httpx.AsyncClient() as c:
+            await c.get(f"{redirect_uri}?code=ok&state={state}")
+        await asyncio.wait_for(complete_authorization(info["flow_id"]), timeout=2.0)
+
+        assert captured["connector_id"] == "google"
+        assert captured["configured"] is True
+        assert captured["account_id"] == "alice@example.com"
+        assert captured["scopes"] == ["openid"]
+
+
+class TestStaleFlowEviction:
+    """`start_authorization` self-heals when a previous flow was
+    abandoned (e.g. user picked the wrong Google account, never got
+    redirected back to the loopback). User re-clicking Connect = the
+    previous flow is dead; evict and proceed."""
+
+    async def test_re_starting_evicts_stale_pending_flow(self, google_provider):
+        first = await start_authorization("google", scopes=["openid"])
+        # Don't complete the first flow — simulate the wrong-account case.
+        second = await start_authorization("google", scopes=["openid"])
+
+        from gaia.connectors.flow import _pending
+
+        assert second["flow_id"] != first["flow_id"]
+        assert first["flow_id"] not in _pending
+        assert second["flow_id"] in _pending
+        assert len(_pending) == 1
+
+        await cancel_flow(second["flow_id"])
+
+
 class TestBrowserOpenNonBlocking:
     """A8: webbrowser.open must NOT block the event loop. We assert that
     start_authorization returns even when the browser-open callable

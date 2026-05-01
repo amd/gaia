@@ -13,6 +13,7 @@ import { useEffect, useState, useCallback } from 'react';
 import {
     CheckCircle2,
     AlertCircle,
+    Info,
     Loader2,
     ExternalLink,
     ChevronDown,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
+import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
 import type { ConnectorRow } from '../types';
 import './ConnectorsSection.css';
 
@@ -58,6 +60,24 @@ export function ConnectorsSection() {
             void load();
         }
     }, [load]);
+
+    // Live updates: refresh when the backend notifies us a connector's
+    // state changed. Without this the OAuth tile only refreshes via the
+    // window-focus listener inside OAuthConfigureBody — which means the
+    // user has to alt-tab back to the app to see the "Connected" state.
+    useConnectorsSSE(
+        useCallback(
+            (event) => {
+                if (event.connectorId) {
+                    void onChanged(event.connectorId);
+                } else {
+                    // No connector_id in payload — fall back to a full reload.
+                    void load();
+                }
+            },
+            [onChanged, load],
+        ),
+    );
 
     return (
         <section className="settings-section connectors-section">
@@ -202,10 +222,25 @@ function OAuthConfigureBody({
         }
     };
 
+    // When the backend has reported that this connector can't be
+    // instantiated (e.g. ``GAIA_GOOGLE_CLIENT_ID`` is unset), surface the
+    // reason inline as informational and disable Connect — clicking it
+    // would only return a 503 with the same message.
+    const blocked = connector.configurable === false;
+
     return (
         <div className="configure-body">
             {connector.description && (
                 <p className="connector-desc">{connector.description}</p>
+            )}
+            {blocked && connector.config_error && (
+                <div className="configure-info">
+                    <Info size={12} />
+                    <span>
+                        This connector needs setup before you can connect:{' '}
+                        {connector.config_error}
+                    </span>
+                </div>
             )}
             {err && (
                 <div className="configure-error">
@@ -221,6 +256,13 @@ function OAuthConfigureBody({
                     >
                         {busy ? <Loader2 size={12} className="spin" /> : 'Disconnect'}
                     </button>
+                ) : blocked ? (
+                    <span
+                        className="connector-setup-required"
+                        title={connector.config_error ?? undefined}
+                    >
+                        Setup required
+                    </span>
                 ) : (
                     <button
                         className="btn-primary"

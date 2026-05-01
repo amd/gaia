@@ -52,6 +52,7 @@ from gaia.connectors.errors import (
 from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
 from gaia.connectors.providers import get as get_provider
+from gaia.connectors.state import set_connector_state
 from gaia.connectors.store import save_connection
 
 logger = logging.getLogger(__name__)
@@ -142,13 +143,22 @@ async def start_authorization(
     to wait for the redirect.
     """
     if _pending:
-        # v1: only one flow at a time. Surface a FlowInProgressError so
-        # the AgentUI can show a "another flow is pending" message
-        # rather than silently overwriting state.
-        raise FlowInProgressError(
-            "An OAuth flow is already pending. Wait for it to complete or "
-            "call cancel_flow(flow_id) first."
+        # User re-clicking Connect signals the previous flow is dead.
+        # Common case: Google blocks the auth (wrong account / consent
+        # denied / closed tab) and never redirects to the loopback
+        # callback, so complete_authorization is never awaited and
+        # _teardown_flow never runs. Evict any stale entries and proceed
+        # — single-active-flow semantics are preserved because we tear
+        # down before starting fresh. FlowInProgressError remains in the
+        # public API for explicit-cancel callers (cancel_flow).
+        stale_ids = list(_pending.keys())
+        logger.info(
+            "flow: evicting %d stale pending flow(s) on new start_authorization: %s",
+            len(stale_ids),
+            stale_ids,
         )
+        for stale_id in stale_ids:
+            await _teardown_flow(stale_id)
 
     provider = get_provider(provider_id)
     scopes_list = list(scopes) or list(provider.default_scopes)
@@ -350,6 +360,31 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         client_id_hash=provider.client_id_hash,
     )
 
+    # Persist the non-secret state.json entry that drives the catalog UI
+    # ("configured" tile, account_email display, scopes list) and the
+    # `gaia connectors list` CLI. Doing it here — at the single point
+    # every successful flow passes through, regardless of caller (CLI,
+    # AgentUI, future SDK) — is the source of truth: keyring + state
+    # always commit together.
+    #
+    # Ordering: secrets first (save_connection above), metadata second.
+    # If set_connector_state raises, we leave an orphan keyring entry
+    # but the catalog UI shows "not configured" — recoverable on retry.
+    # The reverse would leave state pointing to a non-existent secret
+    # and make get_credential blow up confusingly.
+    #
+    # v2 NOTE: assumes provider_id == connector_id (true for every
+    # spec in the catalog today). When multi-account or multi-connector
+    # per provider lands, the catalog connector_id needs to be threaded
+    # through _PendingFlow so this call uses it instead of the OAuth
+    # provider_id.
+    set_connector_state(
+        flow.provider_id,
+        configured=True,
+        account_id=account_email or "default",
+        scopes=list(flow.scopes),
+    )
+
     # Google's token endpoint does not return a ``connected_at`` field
     # (RFC 6749 has no such concept) — record the local wall-clock at
     # exchange time. ``save_connection`` does the same for the keyring blob.
@@ -361,6 +396,17 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         "scopes": flow.scopes,
         "connected_at": _time.time(),
     }
+    # Emit both the new framework event-name (matches the SSE router
+    # docstring and what the AgentUI listens for) and the legacy name
+    # for any older subscribers. The keys ``connector_id`` /
+    # ``account_email`` match the router-documented payload.
+    await emit(
+        "connector.oauth.completed",
+        {
+            "connector_id": flow.provider_id,
+            "account_email": state_dict["account_email"],
+        },
+    )
     await emit(
         "connection.connected",
         {"provider": flow.provider_id, "account_email": state_dict["account_email"]},

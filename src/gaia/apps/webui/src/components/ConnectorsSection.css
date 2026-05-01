@@ -121,6 +121,43 @@
     font-family: var(--font-sans);
 }
 
+/* Informational missing-config notice — not an error, just "you need to
+ * set GAIA_GOOGLE_CLIENT_ID before you can connect". Pairs with the
+ * disabled "Setup required" badge in OAuthConfigureBody. */
+.configure-info {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    margin-bottom: 10px;
+    font-family: var(--font-sans);
+    line-height: 1.4;
+}
+.configure-info svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--text-muted);
+}
+
+.connector-setup-required {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 3px 10px;
+    cursor: default;
+}
+
 .configure-actions {
     display: flex;
     align-items: center;

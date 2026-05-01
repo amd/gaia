@@ -2,20 +2,30 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Issue #915 — subscribe to /api/connectors/events and update the store.
+ * Subscribe to ``/api/connectors/events`` and notify the caller when a
+ * connector's state changes server-side.
  *
- * The router emits five event types:
- *   - connection.connected   {provider, account_email}
- *   - connection.revoked     {provider}
- *   - grant.added            {provider, agent_id, scopes}
- *   - grant.removed          {provider, agent_id}
- *   - flow.*                 (flow lifecycle — currently informational)
+ * The router emits these event types (see
+ * ``src/gaia/ui/routers/connectors.py:_connector_events``):
+ *
+ *   - ``connector.configured``        ({connector_id, account_id})
+ *   - ``connector.disconnected``      ({connector_id})
+ *   - ``connector.tested``            ({connector_id, ok, detail})
+ *   - ``connector.oauth.completed``   ({connector_id, account_email})
+ *   - ``connector.oauth.error``       ({connector_id, error})
+ *   - ``connector.grant.changed``     ({connector_id, agent_id, scopes})
+ *
+ * For backwards compatibility, the legacy event names emitted by
+ * ``src/gaia/connectors/flow.py`` (``connection.connected`` /
+ * ``connection.revoked``) are also recognised and treated as
+ * connector-state changes — until flow.py is migrated to the new names,
+ * the OAuth-completion path emits the legacy event and we still need to
+ * refresh on it.
  *
  * Connection failures retry with exponential backoff up to 30 seconds.
  */
 
-import { useEffect } from 'react';
-import { useConnectionsStore } from '../stores/connectorsStore';
+import { useEffect, useRef } from 'react';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -26,14 +36,71 @@ interface SseEnvelope {
     payload: Record<string, unknown>;
 }
 
-export function useConnectorsSSE() {
-    const refresh = useConnectionsStore((s) => s.refresh);
-    const removeConnection = useConnectionsStore((s) => s.removeConnection);
-    const addGrant = useConnectionsStore((s) => s.addGrant);
-    const removeGrant = useConnectionsStore((s) => s.removeGrant);
+/** Reasons we'd want a consumer to re-fetch a connector. */
+export type ConnectorChangeReason =
+    | 'configured'
+    | 'disconnected'
+    | 'oauth_completed'
+    | 'oauth_error'
+    | 'tested'
+    | 'grant_changed';
+
+export interface ConnectorChangeEvent {
+    /** Which connector changed, if the payload identified one. */
+    connectorId: string | null;
+    reason: ConnectorChangeReason;
+    /** Raw envelope payload — caller can extract typed fields if needed. */
+    payload: Record<string, unknown>;
+}
+
+/**
+ * Map a raw SSE event type to a normalised ``ConnectorChangeReason``.
+ * Returns ``null`` for events the UI doesn't need to react to.
+ */
+function reasonFor(eventType: string): ConnectorChangeReason | null {
+    switch (eventType) {
+        case 'connector.configured':
+            return 'configured';
+        case 'connector.disconnected':
+            // Legacy flow.py emits ``connection.revoked`` for the same intent.
+            return 'disconnected';
+        case 'connection.revoked':
+            return 'disconnected';
+        case 'connector.oauth.completed':
+            return 'oauth_completed';
+        // Legacy: flow.py currently emits ``connection.connected`` after a
+        // successful OAuth exchange. Treat it as oauth_completed so the
+        // tile refreshes without waiting for a window-focus event.
+        case 'connection.connected':
+            return 'oauth_completed';
+        case 'connector.oauth.error':
+            return 'oauth_error';
+        case 'connector.tested':
+            return 'tested';
+        case 'connector.grant.changed':
+            return 'grant_changed';
+        default:
+            return null;
+    }
+}
+
+/**
+ * Subscribe to the connector SSE stream. ``onChange`` is invoked for every
+ * event the UI cares about; the caller decides whether to re-fetch one
+ * connector or the whole list.
+ */
+export function useConnectorsSSE(
+    onChange: (event: ConnectorChangeEvent) => void,
+): void {
+    // Stable ref so the EventSource isn't torn down/rebuilt every render
+    // when the caller passes an inline arrow function.
+    const onChangeRef = useRef(onChange);
+    useEffect(() => {
+        onChangeRef.current = onChange;
+    }, [onChange]);
 
     useEffect(() => {
-        const url = `${getApiBase()}/connections/events`;
+        const url = `${getApiBase()}/connectors/events`;
         let es: EventSource | null = null;
         let backoff = 1000;
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -43,36 +110,31 @@ export function useConnectorsSSE() {
             if (cancelled) return;
             es = new EventSource(url);
 
+            es.onopen = () => {
+                // Reset backoff once the stream is healthy.
+                backoff = 1000;
+            };
+
             es.onmessage = (event) => {
                 try {
                     const env = JSON.parse(event.data) as SseEnvelope;
-                    const { type, payload } = env;
-                    switch (type) {
-                        case 'connection.connected':
-                            // Easier than reconciling — refetch authoritative state.
-                            void refresh();
-                            break;
-                        case 'connection.revoked':
-                            removeConnection(payload.provider as string);
-                            break;
-                        case 'grant.added':
-                            addGrant(
-                                payload.provider as string,
-                                payload.agent_id as string,
-                                (payload.scopes as string[]) ?? [],
-                            );
-                            break;
-                        case 'grant.removed':
-                            removeGrant(
-                                payload.provider as string,
-                                payload.agent_id as string,
-                            );
-                            break;
-                        default:
-                            logger.debug('connections-sse: ignoring event', type);
+                    const reason = reasonFor(env.type);
+                    if (reason === null) {
+                        logger.debug('connectors-sse: ignoring event', env.type);
+                        return;
                     }
+                    const payload = env.payload ?? {};
+                    const rawId =
+                        (payload.connector_id as string | undefined) ??
+                        (payload.provider as string | undefined) ??
+                        null;
+                    onChangeRef.current({
+                        connectorId: rawId,
+                        reason,
+                        payload,
+                    });
                 } catch (e) {
-                    logger.warn('connections-sse: malformed event', e);
+                    logger.warn('connectors-sse: malformed event', e);
                 }
             };
 
@@ -92,5 +154,5 @@ export function useConnectorsSSE() {
             if (timer) clearTimeout(timer);
             es?.close();
         };
-    }, [refresh, removeConnection, addGrant, removeGrant]);
+    }, []);
 }

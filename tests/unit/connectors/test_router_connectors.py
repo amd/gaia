@@ -84,6 +84,42 @@ class TestListConnectors:
         assert entry["configured"] is False
 
 
+class TestConfigurableField:
+    """The summary endpoint surfaces ``configurable`` + ``config_error``
+    so the AgentUI can render a friendly "needs setup" tile when the
+    OAuth provider can't be instantiated (typically because
+    ``GAIA_GOOGLE_CLIENT_ID`` isn't set), instead of letting the user
+    click Connect and then surfacing a raw 503.
+    """
+
+    def test_configurable_false_when_provider_missing_env(
+        self, ui_api_client, monkeypatch
+    ):
+        # Ensure the provider can't init: clear the env var AND the
+        # cached provider instance from any earlier test that primed it.
+        monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
+        from gaia.connectors.providers import _registry
+
+        _registry.pop("google", None)
+
+        resp = ui_api_client.get("/api/connectors/google")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["configurable"] is False
+        assert "GAIA_GOOGLE_CLIENT_ID" in (body["config_error"] or "")
+
+    def test_configurable_true_when_provider_ok(self, ui_api_client, monkeypatch):
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
+        from gaia.connectors.providers import _registry
+
+        _registry.pop("google", None)
+
+        resp = ui_api_client.get("/api/connectors/google")
+        body = resp.json()
+        assert body["configurable"] is True
+        assert body["config_error"] is None
+
+
 # ---------------------------------------------------------------------------
 # GET /api/connectors/{connector_id}
 # ---------------------------------------------------------------------------
@@ -107,7 +143,9 @@ class TestGetConnector:
 
 class TestCsrfGuard:
     def test_configure_without_header_is_403(self, ui_api_client):
-        resp = ui_api_client.post("/api/connectors/google/configure", json={"config": {}})
+        resp = ui_api_client.post(
+            "/api/connectors/google/configure", json={"config": {}}
+        )
         assert resp.status_code == 403
 
     def test_disconnect_without_header_is_403(self, ui_api_client):

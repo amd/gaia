@@ -141,45 +141,36 @@ class TestConfigure:
 
     @pytest.mark.asyncio
     async def test_complete_flow_calls_complete_authorization(self):
+        # state.json writes have moved to flow._exchange_code_for_tokens —
+        # the handler is now a thin pass-through.
         spec = _make_spec()
         handler = OAuthPkceHandler()
         completion = {"account_email": "user@example.com", "scopes": ["openid"]}
-        with (
-            patch(
-                "gaia.connectors.oauth_pkce.complete_authorization",
-                new=AsyncMock(return_value=completion),
-            ),
-            patch("gaia.connectors.oauth_pkce.set_connector_state") as mock_set_state,
-        ):
+        with patch(
+            "gaia.connectors.oauth_pkce.complete_authorization",
+            new=AsyncMock(return_value=completion),
+        ) as mock_complete:
             result = await handler.configure(
                 spec, {"flow_id": "flow-123", "code": "auth-code"}
             )
+        mock_complete.assert_awaited_once_with("flow-123")
         assert result["account_email"] == "user@example.com"
-        mock_set_state.assert_called_once_with(
-            spec.id,
-            configured=True,
-            account_id="user@example.com",
-            scopes=list(spec.default_scopes),
-        )
 
     @pytest.mark.asyncio
     async def test_configure_uses_scopes_from_config(self):
+        # The handler hands scopes to start_authorization; state-writes
+        # happen inside flow.py, so we assert at the start_authorization
+        # boundary instead.
         spec = _make_spec(default_scopes=("openid",))
         handler = OAuthPkceHandler()
-        completion = {"account_email": "u@e.com"}
-        with (
-            patch(
-                "gaia.connectors.oauth_pkce.complete_authorization",
-                new=AsyncMock(return_value=completion),
-            ),
-            patch("gaia.connectors.oauth_pkce.set_connector_state") as mock_set_state,
-        ):
-            await handler.configure(
-                spec,
-                {"flow_id": "f", "code": "c", "scopes": ["openid", "email"]},
-            )
-        call_kwargs = mock_set_state.call_args[1]
-        assert "email" in call_kwargs["scopes"]
+        flow_info = {"flow_id": "f", "authorization_url": "https://example/"}
+        with patch(
+            "gaia.connectors.oauth_pkce.start_authorization",
+            new=AsyncMock(return_value=flow_info),
+        ) as mock_start:
+            await handler.configure(spec, {"scopes": ["openid", "email"]})
+        called_scopes = mock_start.call_args.kwargs["scopes"]
+        assert "email" in called_scopes
 
 
 # ---------------------------------------------------------------------------

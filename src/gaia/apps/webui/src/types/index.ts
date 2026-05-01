@@ -79,6 +79,19 @@ export interface ConnectorRow {
     description: string;
     product_url: string | null;
     configured: boolean;
+    /**
+     * ``false`` when the connector cannot be instantiated as configured —
+     * for example, an ``oauth_pkce`` provider whose required environment
+     * variables (``GAIA_GOOGLE_CLIENT_ID`` etc.) aren't set. The UI uses
+     * this to disable the Connect button up-front instead of letting the
+     * user click and see a raw 503 error inline.
+     */
+    configurable: boolean;
+    /**
+     * Human-readable explanation of why ``configurable`` is ``false``.
+     * Populated only when ``configurable === false``; null otherwise.
+     */
+    config_error: string | null;
     account_id: string | null;
     scopes: string[];
     last_tested_at: string | null;
