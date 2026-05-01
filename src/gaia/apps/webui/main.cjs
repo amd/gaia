@@ -19,6 +19,59 @@ const fs = require("fs");
 const os = require("os");
 const { spawn } = require("child_process");
 
+// ── T0 minimal safety net (issue #934) ─────────────────────────────────────
+// Install bare-minimum top-level error handlers BEFORE any service module is
+// required. Without these, a synchronous throw at service-module-load time
+// (missing native dep, malformed JSON in agent-seeder, missing VC++ runtime,
+// etc.) escapes to Electron's default handler, which on a packaged Windows
+// build either dies silently (no console attached) or shows the bare
+// "A JavaScript error occurred in the main process" dialog with no GAIA
+// branding and no actionable info. That is the v0.17.4 fresh-install
+// failure mode that #934 is tracking.
+//
+// This block is intentionally minimal (Path A in the 934 plan): just enough
+// to (a) write the full stack to ~/.gaia/electron-main.log so we have
+// post-mortem evidence, and (b) show a native error box that survives the
+// pre-app-ready window. dialog.showErrorBox works before app.ready fires;
+// dialog.showMessageBoxSync silently no-ops on Windows in that window.
+// Full per-stage labelling, crash-loop guard, and diagnostics-bundle button
+// land in the T2-T11 hardening once T0 has captured a real stack trace.
+const _T0_LOG_PATH = path.join(os.homedir(), ".gaia", "electron-main.log");
+function _t0WriteLog(level, msg) {
+  try {
+    fs.mkdirSync(path.dirname(_T0_LOG_PATH), { recursive: true });
+  } catch { /* ignore */ }
+  try {
+    fs.appendFileSync(
+      _T0_LOG_PATH,
+      `[${new Date().toISOString()}] ${level} ${msg}\n`
+    );
+  } catch { /* last-resort: no logging available */ }
+}
+let _t0InHandler = false;
+function _t0FatalHandler(label, err) {
+  if (_t0InHandler) {
+    // Re-entry: the dialog/log path itself threw. Bail without recursing.
+    try { process.exit(2); } catch { /* ignore */ }
+    return;
+  }
+  _t0InHandler = true;
+  const stack = (err && err.stack) ? err.stack : String(err);
+  _t0WriteLog("FATAL", `${label}: ${stack}`);
+  try {
+    dialog.showErrorBox(
+      "GAIA failed to start",
+      `${label}\n\n${stack}\n\nThe full log is at:\n${_T0_LOG_PATH}`
+    );
+  } catch { /* dialog itself may fail pre-ready on some platforms */ }
+  try { process.exit(1); } catch { /* ignore */ }
+}
+process.on("uncaughtException", (err) => _t0FatalHandler("uncaughtException", err));
+process.on("unhandledRejection", (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  _t0FatalHandler("unhandledRejection", err);
+});
+
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
@@ -737,6 +790,12 @@ app.whenReady().then(async () => {
       mainWindow.show();
     }
   });
+}).catch((err) => {
+  // T0 (issue #934): without this .catch(), any throw inside the whenReady
+  // chain becomes an unhandledRejection that Node logs and may exit on
+  // silently. Route through the same fatal handler so the user gets a
+  // dialog and we get a stack trace in ~/.gaia/electron-main.log.
+  _t0FatalHandler("app.whenReady", err);
 });
 
 // ── Window-all-closed (C4 fix) ────────────────────────────────────────────
