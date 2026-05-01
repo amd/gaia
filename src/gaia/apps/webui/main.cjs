@@ -175,6 +175,11 @@ let backendStderrTail = [];
 let isIntentionalKill = false;
 let mainWindow = null;
 
+// True until createWindow() runs. Guards window-all-closed from firing app.quit()
+// while the backend-installer progress dialog is open (it's the only window during
+// bootstrap, so destroying it would trigger a premature quit — issue #934).
+let isBootstrapping = true;
+
 /** @type {TrayManager | null} */
 let trayManager = null;
 
@@ -699,6 +704,7 @@ app.whenReady().then(async () => {
 
   // Create the window (hidden until ready-to-show)
   createWindow();
+  isBootstrapping = false; // progress dialog is gone; window-all-closed may now quit
 
   // Initialize services (tray, agent manager, notifications)
   initializeServices();
@@ -771,6 +777,12 @@ app.whenReady().then(async () => {
 // ── Window-all-closed (C4 fix) ────────────────────────────────────────────
 // Don't quit when window is hidden — tray keeps app alive
 app.on("window-all-closed", () => {
+  // During bootstrap the progress dialog is the only open window. Destroying
+  // it (progress.close()) fires this event before the main window exists, which
+  // would trigger a premature app.quit() that races with the startup sequence
+  // and causes loadURL() to fail with ERR_FAILED (-2) — issue #934.
+  if (isBootstrapping) return;
+
   // If minimize-to-tray is active, the window is just hidden, not closed.
   // Only quit on macOS if the user explicitly quit (Cmd+Q).
   const trayActive = trayManager && trayManager.minimizeToTray;
