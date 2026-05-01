@@ -23,6 +23,9 @@ Eager ``client_id_hash`` tripwire (plan amendment from Iteration 1, AC10):
     their installation between machines with different env configurations);
     we clear the stored entry, emit ``connection.revoked``, and return
     ``None`` so the caller raises ``REAUTH_REQUIRED``.
+
+All log statements in this module emit only metadata (provider IDs, counts,
+truncated fingerprints) — never tokens, passwords, or full hashes.
 """
 
 from __future__ import annotations
@@ -166,12 +169,13 @@ def save_connection(
 
     _set()
     # Log only metadata — never the refresh token value.
+    id_fp = client_id_hash[:8]
     logger.debug(
-        "store: saved connection provider=%s account=%s scopes=%d hash=%s…",
+        "store: saved connection provider=%s account=%s scopes=%d id_fp=%s…",
         provider,
         account_email,
         len(scopes),
-        client_id_hash[:8],
+        id_fp,
     )
 
 
@@ -219,12 +223,14 @@ def load_connection(
         # "user never connected". The unit test in test_store.py asserts
         # the entry is cleared; the unit test in test_tokens.py asserts
         # the right Reason flows to the caller.
+        stored_fp = (stored_hash or "<missing>")[:8]
+        cur_fp = current_client_id_hash[:8]
         logger.warning(
-            "store: client_id_hash tripwire fired for provider=%s "
+            "store: client_id tripwire fired for provider=%s "
             "(stored=%s…, current=%s…); clearing entry",
             provider,
-            (stored_hash or "<missing>")[:8],
-            current_client_id_hash[:8],
+            stored_fp,
+            cur_fp,
         )
         delete_connection(provider, account_email=account_email)
         raise AuthRequiredError(
@@ -241,11 +247,7 @@ def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) ->
 
     try:
         keyring.delete_password(SERVICE_NAME, username)
-        logger.debug(
-            "store: deleted connection provider=%s account=%s",
-            provider,
-            account_email,
-        )
+        logger.debug("store: deleted connection provider=%s", provider)
     except keyring.errors.PasswordDeleteError:
         # Already gone — fine.
         pass
