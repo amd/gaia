@@ -18,6 +18,39 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { spawn } = require("child_process");
+const { pathToFileURL } = require("url");
+
+// ── Shared log path ───────────────────────────────────────────────────────────
+// Single source of truth used by installSafetyNet AND installMainLogTee so
+// both write to the same file without independent path computations that
+// could drift apart.
+const _GAIA_DIR = path.join(os.homedir(), ".gaia");
+const _MAIN_LOG_PATH = path.join(_GAIA_DIR, "electron-main.log");
+
+// ── Safety net (issue #934) ───────────────────────────────────────────────────
+// Install top-level error handlers BEFORE any service module is required so
+// that synchronous throws at module-load time are caught and shown as a
+// GAIA-branded error box instead of Electron's bare JS-error dialog.
+// Extracted into main-safety-net.cjs so tests can require it without
+// triggering main.cjs side effects (Electron modules, service requires).
+// Wrapped in try/catch: a corrupt ASAR or bad path would otherwise bypass the
+// very handler we are trying to install, falling through to Electron's bare
+// JS-error dialog.
+let installSafetyNet, installLogTee, _fatalHandler;
+try {
+  ({ installSafetyNet, installLogTee } = require("./main-safety-net.cjs"));
+  ({ fatal: _fatalHandler } = installSafetyNet({
+    logPath: _MAIN_LOG_PATH,
+    dialogModule: dialog,
+    appModule: app,
+  }));
+} catch (err) {
+  try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
+  try { dialog.showErrorBox("GAIA failed to start", String((err && err.stack) || err)); } catch { }
+  // Synchronous exit: service module requires below have no uncaughtException
+  // handler installed, so execution cannot safely continue.
+  process.exit(1);
+}
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
@@ -53,9 +86,8 @@ if (process.platform === "linux") {
 // diagnostics bundler has something to attach.
 (function installMainLogTee() {
   try {
-    const gaiaDir = path.join(os.homedir(), ".gaia");
-    try { fs.mkdirSync(gaiaDir, { recursive: true }); } catch { /* ignore */ }
-    const logPath = path.join(gaiaDir, "electron-main.log");
+    try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
+    const logPath = _MAIN_LOG_PATH;
 
     // Rotate if > 5 MB — truncate to last ~5 MB on startup.
     try {
@@ -81,6 +113,10 @@ if (process.platform === "linux") {
     }
 
     const stream = fs.createWriteStream(logPath, { flags: "a" });
+    // Root-cause fix for #934: stream.write() after end emits 'error'
+    // asynchronously — the try/catch in wrap() below doesn't catch it.
+    // This listener absorbs the event before it becomes uncaughtException.
+    installLogTee({ stream, logPath });
     stream.write(
       `\n──── electron-main opened (${new Date().toISOString()}) pid=${process.pid} ────\n`
     );
@@ -155,6 +191,11 @@ let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
 let backendStderrTail = [];
 let isIntentionalKill = false;
 let mainWindow = null;
+
+// True until createWindow() runs. Guards window-all-closed from firing app.quit()
+// while the backend-installer progress dialog is open (it's the only window during
+// bootstrap, so destroying it would trigger a premature quit — issue #934).
+let isBootstrapping = true;
 
 /** @type {TrayManager | null} */
 let trayManager = null;
@@ -428,7 +469,12 @@ async function loadApp() {
     const indexPath = path.join(distPath, "index.html");
     const indexQuery = buildIndexQuery(backendPort);
     console.log("Loading app from:", indexPath, "api:", indexQuery.api);
-    await mainWindow.loadFile(indexPath, { query: indexQuery });
+    // Use pathToFileURL so the file:// URL always has forward slashes on
+    // Windows — Chromium 130+ (Electron 40) rejects backslash file URLs
+    // that Node's url.format() (used by loadFile) produces on Windows.
+    const fileUrl = pathToFileURL(indexPath);
+    fileUrl.search = new URLSearchParams(indexQuery).toString();
+    await mainWindow.loadURL(fileUrl.href);
   } else {
     // Show a simple loading/error page
     mainWindow.loadURL(
@@ -674,6 +720,7 @@ app.whenReady().then(async () => {
 
   // Create the window (hidden until ready-to-show)
   createWindow();
+  isBootstrapping = false; // progress dialog is gone; window-all-closed may now quit
 
   // Initialize services (tray, agent manager, notifications)
   initializeServices();
@@ -737,11 +784,21 @@ app.whenReady().then(async () => {
       mainWindow.show();
     }
   });
+}).catch((err) => {
+  // Route explicit rejection through the safety-net so the user gets a
+  // GAIA-branded dialog and a stack trace in the log (issue #934).
+  _fatalHandler(err);
 });
 
 // ── Window-all-closed (C4 fix) ────────────────────────────────────────────
 // Don't quit when window is hidden — tray keeps app alive
 app.on("window-all-closed", () => {
+  // During bootstrap the progress dialog is the only open window. Destroying
+  // it (progress.close()) fires this event before the main window exists, which
+  // would trigger a premature app.quit() that races with the startup sequence
+  // and causes loadURL() to fail with ERR_FAILED (-2) — issue #934.
+  if (isBootstrapping) return;
+
   // If minimize-to-tray is active, the window is just hidden, not closed.
   // Only quit on macOS if the user explicitly quit (Cmd+Q).
   const trayActive = trayManager && trayManager.minimizeToTray;
