@@ -232,6 +232,40 @@ test("main.cjs spawn args and index query share the same backendPort", () => {
   );
 });
 
+// ─── isBootstrapping guard (issue #934 layer 3) ──────────────────────
+//
+// The window-all-closed handler must check isBootstrapping so the progress
+// dialog being destroyed during backend install does not fire a premature
+// app.quit() before createWindow() runs. If someone removes the guard or
+// moves `isBootstrapping = false` earlier, the timing race silently returns.
+
+test("window-all-closed handler checks isBootstrapping (issue #934 layer 3)", () => {
+  const src = fs.readFileSync(mainCjsPath, "utf8");
+  const handlerMatch = src.match(
+    /app\.on\("window-all-closed",\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s*\}\)/
+  );
+  assert.ok(handlerMatch, "window-all-closed handler must exist in main.cjs");
+  assert.match(
+    handlerMatch[1],
+    /isBootstrapping/,
+    "window-all-closed must check isBootstrapping (issue #934 layer 3)"
+  );
+});
+
+test("isBootstrapping is set false after createWindow() runs", () => {
+  const src = fs.readFileSync(mainCjsPath, "utf8");
+  // The assignment must appear AFTER the createWindow() call so the guard
+  // is only lifted once the main window exists.
+  const createWindowIdx = src.indexOf("createWindow()");
+  assert.ok(createWindowIdx !== -1, "main.cjs must call createWindow()");
+  const afterCreate = src.slice(createWindowIdx);
+  assert.match(
+    afterCreate,
+    /isBootstrapping\s*=\s*false/,
+    "isBootstrapping must be set false after createWindow() (issue #934 layer 3)"
+  );
+});
+
 // ─── pathToFileURL: forward-slash contract (issue #934 layer 2) ──────
 //
 // Chromium 130+ (Electron 40) rejects backslash file URLs that

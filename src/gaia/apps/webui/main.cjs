@@ -47,6 +47,12 @@ try {
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
   try { dialog.showErrorBox("GAIA failed to start", String(err && err.stack || err)); } catch { }
+  // Inline fallback so any later .catch(_fatalHandler) still has something callable
+  // if app.exit(1) hasn't taken effect yet (app.exit schedules, not instant).
+  _fatalHandler = (e) => {
+    try { dialog.showErrorBox("GAIA crashed", String(e && e.stack || e)); } catch { }
+    try { process.exit(1); } catch { }
+  };
   app.exit(1);
 }
 

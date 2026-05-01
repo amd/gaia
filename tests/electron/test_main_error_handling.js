@@ -56,8 +56,6 @@ const SAFETY_NET_PATH = "../../src/gaia/apps/webui/main-safety-net.cjs";
 describe("installSafetyNet", () => {
   let tmpDir;
   let logPath;
-  let origUncaughtException;
-  let origUnhandledRejection;
   let addedListeners;
 
   beforeEach(() => {
