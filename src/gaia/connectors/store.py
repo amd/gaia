@@ -169,9 +169,9 @@ def save_connection(
 
     _set()
     # Log only non-sensitive metadata.
-    logger.debug(
-        "store: saved connection provider=%s scopes=%d", provider, len(scopes)
-    )  # lgtm[py/clear-text-logging-sensitive-data]
+    # fmt: off
+    logger.debug("store: saved connection provider=%s scopes=%d", provider, len(scopes))  # lgtm[py/clear-text-logging-sensitive-data]
+    # fmt: on
 
 
 def load_connection(
