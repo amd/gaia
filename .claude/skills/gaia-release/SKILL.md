@@ -20,6 +20,33 @@ Accept one argument in any of these shapes:
 
 Normalise to the bare form internally (`0.17.5`) and the tag form externally (`v0.17.5`). If the user gives a version that is **older than or equal to** the current `__version__`, stop and ask — never silently roll backwards.
 
+## Resume detection (run before any phase)
+
+The skill is reinvocation-safe — releases span days, and the user will return mid-flow. Before doing *anything* else, detect where in the flow we are and skip phases that already landed:
+
+```bash
+git fetch origin --tags
+git checkout main && git pull
+NOTES_ON_MAIN=$(git ls-tree -r origin/main --name-only | grep -c "^docs/releases/v<version>\.mdx$" || true)
+PR_OPEN=$(gh pr list --repo amd/gaia --search "Release v<version> in:title" --state open --json number --jq '.[0].number' || true)
+PR_MERGED=$(gh pr list --repo amd/gaia --search "Release v<version> in:title" --state merged --json number --jq '.[0].number' || true)
+TAG_EXISTS=$(git tag --list "v<version>")
+RELEASE_EXISTS=$(gh release view "v<version>" --repo amd/gaia --json tagName --jq '.tagName' 2>/dev/null || true)
+```
+
+Resume table:
+
+| State | Action |
+|-------|--------|
+| `RELEASE_EXISTS` matches | Release already shipped. Skip to Phase 6 (smoke test + announcement) only. |
+| `TAG_EXISTS`, no release | Tag pushed, publish workflow in progress or failed. Resume at Phase 5 (monitor). |
+| `PR_MERGED`, no tag | Notes on `main`. Resume at Phase 3 (pre-tag verification). **Do not re-run Phase 1** — never overwrite merged notes. |
+| `PR_OPEN` | PR still open. Tell user "PR #N already open at <url> — waiting for merge." Exit. |
+| `NOTES_ON_MAIN` ≥ 1 but no PR | Half-finished prior attempt landed notes without a PR (rare). Stop and ask the user before continuing. |
+| Nothing matches | Fresh release. Start at Phase 1. |
+
+Always announce the resume decision before continuing: *"Detected `v<version>` state: PR #831 merged, no tag yet. Resuming at Phase 3 (pre-tag verification)."*
+
 ## Hard rules (do not violate)
 
 These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
@@ -40,14 +67,28 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
 
 ### Steps
 
-1. **Survey commits since previous tag.**
+1. **Survey commits since previous tag, then sanity-check the version request against scope.**
    ```bash
    PREV=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
    echo "Previous tag: $PREV"
    git log "$PREV..HEAD" --pretty=format:'%h  %s'
-   git log "$PREV..HEAD" --pretty=format:'%h  %s' | wc -l
+   echo
+   echo "Total: $(git log $PREV..HEAD --oneline | wc -l) commits"
+   echo "Feat:  $(git log $PREV..HEAD --oneline | grep -cE '^[a-f0-9]+ feat') feat commits"
+   echo "Fix:   $(git log $PREV..HEAD --oneline | grep -cE '^[a-f0-9]+ fix')  fix commits"
    ```
    Group commits by theme (features, fixes, infra, docs). Extract the PR number from each subject (`(#NNN)`). For each non-trivial entry, open the linked PR or commit body to get the *why* — release notes need motivation, not just titles.
+
+   **Scope-vs-version sanity check (do not skip):** apply this rubric against the requested target version:
+
+   | Commit shape | Suggested release shape |
+   |--------------|--------------------------|
+   | Only `fix`/`docs`/`chore`/`ci`, no `feat` | Patch (`vX.Y.Z+1`) ✓ |
+   | 1–2 `feat` commits, small scope | Patch acceptable, mention them as "What's New" |
+   | 3+ `feat` commits, or any commit titled `... vX.Y.Z milestone`, default-model swap, breaking change, package layout change | **Minor** (`vX.Y+1.0`) — push back |
+   | Removal of a public API, CLI flag deletion, config schema break, version-pin floor raised in a non-additive way | **Major** (`vX+1.0.0`) — push back |
+
+   If the requested version doesn't match the rubric, **stop and surface the mismatch**: *"You asked for `v<requested>` (patch). I see N feat commits since `<prev>` including `<one or two examples>` — this looks minor-shaped. Continue as patch, or bump to `v<suggested>`?"* Do not silently proceed.
 
 2. **Read the last 2–3 release notes** to match style and length.
    - [docs/releases/v0.17.4.mdx](docs/releases/v0.17.4.mdx)
@@ -114,11 +155,11 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
    ```
    The post-prior-release bump usually handles this, but a squash-merge can revert it silently. If it's wrong, edit it. If it's right but reverted later (see Phase 3), the validator will catch it.
 
-7. **Validate.**
+7. **Validate.** Run from the repo's activated venv (`source .venv/bin/activate` on Linux/macOS, `.venv\Scripts\activate` on Windows; the bare-`python` Microsoft Store stub will fail). If you're working from a git worktree without its own venv, run from the parent checkout's venv.
    ```bash
    python util/validate_release_notes.py
    ```
-   Must exit 0 — this is the gate the publish workflow runs on tag push. Fix any errors before continuing. If it fails for reasons unrelated to your changes, stop and surface that — do not silently bypass.
+   Must exit 0 — this is the gate the publish workflow runs on tag push. Fix any errors before continuing. If it fails for reasons unrelated to your changes (missing dep, broken import), stop and surface that — do not silently bypass. Re-running the validator with `--verbose` (if supported) helps localise the failure.
 
 ### Gate 1 — show the user the draft
 
@@ -151,12 +192,31 @@ Show the diff (`git diff --stat` plus the new `.mdx` file inline). Ask: **"Appro
    ```
    Use that as the structural template for *this* PR body — same opening, same checklist, same section order. Do not invent a new shape.
 
-3. **Open the PR.** Title: `Release v<version>`. Body: paste the release notes (the body of the `.mdx` file with the frontmatter stripped) plus a `## Release checklist` section copied from the previous release PR.
+3. **Prepare the PR body file.** Build it by stripping the MDX frontmatter from the release notes and appending the `Release checklist` section copied from the previous release PR.
+
+   ```bash
+   # Strip the YAML frontmatter (everything between the first two '---' lines)
+   awk '/^---$/{c++; next} c>=2' docs/releases/v<version>.mdx > /tmp/release-body.md
+
+   # Append the Release checklist section from the previous release PR
+   PREV_PR=$(gh pr list --repo amd/gaia --state merged --search "Release v in:title" --limit 1 --json number --jq '.[0].number')
+   gh pr view "$PREV_PR" --repo amd/gaia --json body --jq '.body' \
+     | awk '/^## Release checklist/{found=1} found' \
+     >> /tmp/release-body.md
+
+   # Sanity-check the body before opening the PR
+   head -3 /tmp/release-body.md   # should start with "# GAIA v<version> Release Notes"
+   tail -10 /tmp/release-body.md  # should end with the checklist
+   ```
+
+   If the awk pipeline produces an empty file, the previous PR didn't have a `## Release checklist` heading — fall back to copying the entire body and editing it manually before continuing.
+
+4. **Open the PR.** Title: `Release v<version>`. Body: the file you just built.
 
    ```bash
    gh pr create --repo amd/gaia \
      --title "Release v<version>" \
-     --body-file <path-to-prepared-body.md> \
+     --body-file /tmp/release-body.md \
      --reviewer kovtcharov-amd
    ```
 
