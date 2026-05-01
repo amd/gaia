@@ -1001,7 +1001,15 @@ def _build_dataset(
         rng=rng,
         html_body="<p>Olá, atualização com caracteres acentuados.</p>",
     )
-    non_ascii_msg.set_charset("iso-8859-1")
+    # The message may be multipart (text + html). Set charset only on text
+    # parts to avoid calling set_charset on a multipart container.
+    for part in non_ascii_msg.walk():
+        try:
+            if part.get_content_maintype() == "text":
+                part.set_charset("iso-8859-1")
+        except Exception:
+            # Be tolerant in test fixture generation environments.
+            pass
     records[-1] = (non_ascii_msg, meta, message_id)
 
     # Validate persona repeat ranges for core personas.

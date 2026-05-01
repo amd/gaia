@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
-from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
@@ -217,11 +216,6 @@ Do NOT wrap conversational replies in JSON.
         self.total_plan_steps = 0
         self.plan_iterations = 0  # Track number of plan cycles
 
-        # Bundle-based tool loading (opt-in: subclasses set self.tool_loader
-        # before calling super().__init__ or in _register_tools).
-        if not hasattr(self, "tool_loader"):
-            self.tool_loader: Optional[ToolLoader] = None
-
         # Initialize the console/output handler for display
         # If output_handler is provided, use it; otherwise create based on silent_mode
         if output_handler is not None:
@@ -315,15 +309,9 @@ Do NOT wrap conversational replies in JSON.
 
         return prompts
 
-    def _compose_system_prompt(
-        self, tool_registry: Optional[Dict[str, dict]] = None
-    ) -> str:
+    def _compose_system_prompt(self) -> str:
         """
         Compose final system prompt from mixin fragments + agent custom + tools + format.
-
-        Parameters:
-            tool_registry: If provided, use this filtered tool dict instead of the
-                full ``_TOOL_REGISTRY``.  Passed through to ``_format_tools_for_prompt``.
 
         Override this method for complete control over prompt composition order.
 
@@ -352,7 +340,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Add tool descriptions (if tools registered)
         if hasattr(self, "_format_tools_for_prompt"):
-            tools_description = self._format_tools_for_prompt(registry=tool_registry)
+            tools_description = self._format_tools_for_prompt()
             if tools_description:
                 parts.append(f"==== AVAILABLE TOOLS ====\n{tools_description}")
 
@@ -433,20 +421,11 @@ Do NOT wrap conversational replies in JSON.
         """
         raise NotImplementedError("Subclasses must implement _register_tools")
 
-    def _format_tools_for_prompt(self, registry: Optional[Dict[str, dict]] = None) -> str:
-        """Format the registered tools into a string for the prompt.
-
-        Parameters
-        ----------
-        registry:
-            If provided, use this dict of tools instead of the global
-            ``_TOOL_REGISTRY``.  ``ToolLoader.resolve()`` returns such a
-            filtered dict each turn.
-        """
-        source = registry if registry is not None else _TOOL_REGISTRY
+    def _format_tools_for_prompt(self) -> str:
+        """Format the registered tools into a string for the prompt."""
         tool_descriptions = []
 
-        for name, tool_info in source.items():
+        for name, tool_info in _TOOL_REGISTRY.items():
             params_str = ", ".join(
                 [
                     f"{param_name}{'' if param_info['required'] else '?'}: {param_info['type']}"
@@ -494,22 +473,6 @@ Do NOT wrap conversational replies in JSON.
         # Recompose the full system prompt via _compose_system_prompt() so that
         # mixin prompts, tool descriptions, and response format are all included.
         self._system_prompt_cache = self._compose_system_prompt()
-
-    def resolve_tools_for_turn(self, user_message: str) -> None:
-        """Re-evaluate tool bundles for the current turn and rebuild the prompt.
-
-        If no ``tool_loader`` is configured this is a no-op, preserving the
-        existing behaviour (all registered tools always visible).
-
-        Called at the top of ``process_query`` before the first LLM call so
-        that keyword-activated bundles can match the current user message.
-        """
-        if self.tool_loader is None:
-            return
-        filtered = self.tool_loader.resolve(user_message, _TOOL_REGISTRY)
-        self._system_prompt_cache = self._compose_system_prompt(
-            tool_registry=filtered
-        )
 
     def list_tools(self, verbose: bool = True) -> None:
         """
@@ -1388,9 +1351,6 @@ Do NOT wrap conversational replies in JSON.
         try:
             result = tool(**tool_args)
             logger.debug(f"Tool execution result: {result}")
-            # Record usage so bundle-based loader can keep the owning bundle warm
-            if self.tool_loader is not None:
-                self.tool_loader.record_tool_use(tool_name)
             return result
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout specifically
@@ -1726,11 +1686,6 @@ Do NOT wrap conversational replies in JSON.
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
-
-        # Re-evaluate which tool bundles should be visible for this turn.
-        # Keyword-activated bundles match against user_input; session bundles
-        # that were used in prior turns stay warm automatically.
-        self.resolve_tools_for_turn(user_input)
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []
