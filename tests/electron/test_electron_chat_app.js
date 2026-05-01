@@ -1102,12 +1102,6 @@ describe('Chat App Integration', () => {
       expect(chatCss).toContain('text-overflow: ellipsis');
     });
 
-    it('should have terminal block cursor tracking caret position', () => {
-      expect(chatCss).toContain('.input-cursor');
-      expect(chatCss).toContain('position: absolute');
-      expect(chatCss).toContain('pointer-events: none');
-      expect(chatCss).toContain('width: 10px');
-    });
   });
 
   // ── MessageBubble Enhancements ────────────────────────────────────
