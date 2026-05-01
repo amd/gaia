@@ -97,9 +97,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     )
 
     # test
-    p_test = sub.add_parser(
-        "test", help="Run health check for a configured connector"
-    )
+    p_test = sub.add_parser("test", help="Run health check for a configured connector")
     p_test.add_argument("connector_id", help="Connector id")
 
     # disconnect
@@ -143,8 +141,7 @@ def handle(args: argparse.Namespace) -> int:
     action = getattr(args, "connectors_action", None)
     if action is None:
         sys.stderr.write(
-            "gaia connectors: missing subcommand. "
-            "Try 'gaia connectors --help'.\n"
+            "gaia connectors: missing subcommand. " "Try 'gaia connectors --help'.\n"
         )
         return 2
 
@@ -186,9 +183,7 @@ def _handle_list(args: argparse.Namespace) -> int:
         try:
             specs = [REGISTRY.get(connector_id)]
         except KeyError:
-            sys.stderr.write(
-                f"gaia connectors: unknown connector {connector_id!r}\n"
-            )
+            sys.stderr.write(f"gaia connectors: unknown connector {connector_id!r}\n")
             return 1
 
     rows = []
@@ -224,17 +219,22 @@ def _handle_list(args: argparse.Namespace) -> int:
 
 def _handle_connect(args: argparse.Namespace) -> int:
     from gaia.connectors.api import complete_authorization, start_authorization
+    from gaia.connectors.state import set_connector_state
 
     async def _run() -> str:
-        info = await start_authorization(
-            args.connector_id, scopes=args.scopes or []
-        )
+        info = await start_authorization(args.connector_id, scopes=args.scopes or [])
         sys.stdout.write(
             f"Open this URL to authorize {args.connector_id}:\n"
             f"  {info['authorization_url']}\n"
         )
         sys.stdout.flush()
         result = await complete_authorization(info["flow_id"])
+        set_connector_state(
+            args.connector_id,
+            configured=True,
+            account_id=result.get("account_email"),
+            scopes=result.get("scopes", []),
+        )
         return result.get("account_email") or "<unknown>"
 
     email = asyncio.run(_run())
@@ -243,6 +243,7 @@ def _handle_connect(args: argparse.Namespace) -> int:
 
 
 def _handle_configure(args: argparse.Namespace) -> int:
+    import gaia.connectors.catalog  # noqa: F401 — populates REGISTRY + handler registration
     from gaia.connectors.handler import configure
 
     config: dict = {}
@@ -274,13 +275,12 @@ def _handle_configure(args: argparse.Namespace) -> int:
 
     sys.stdout.write(f"Configured {args.connector_id}.\n")
     if result.get("authorization_url"):
-        sys.stdout.write(
-            f"Complete OAuth flow at:\n  {result['authorization_url']}\n"
-        )
+        sys.stdout.write(f"Complete OAuth flow at:\n  {result['authorization_url']}\n")
     return 0
 
 
 def _handle_test(args: argparse.Namespace) -> int:
+    import gaia.connectors.catalog  # noqa: F401 — populates REGISTRY + handler registration
     from gaia.connectors.handler import health_check
 
     async def _run():
@@ -334,9 +334,7 @@ def _handle_grants(args: argparse.Namespace) -> int:
             sys.stdout.write(f"No grants for {args.connector_id}.\n")
             return 0
         for agent_id, scopes in sorted(listing.items()):
-            sys.stdout.write(
-                f"{args.connector_id} {agent_id}: {', '.join(scopes)}\n"
-            )
+            sys.stdout.write(f"{args.connector_id} {agent_id}: {', '.join(scopes)}\n")
         return 0
     if sub == "grant":
         grant_agent(args.connector_id, args.agent_id, args.scopes)
@@ -347,9 +345,7 @@ def _handle_grants(args: argparse.Namespace) -> int:
         return 0
     if sub == "revoke":
         revoke_agent_grant(args.connector_id, args.agent_id)
-        sys.stdout.write(
-            f"Revoked grant for {args.connector_id} → {args.agent_id}.\n"
-        )
+        sys.stdout.write(f"Revoked grant for {args.connector_id} → {args.agent_id}.\n")
         return 0
 
     sys.stderr.write(
