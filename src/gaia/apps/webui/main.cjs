@@ -31,8 +31,8 @@ const _MAIN_LOG_PATH = path.join(_GAIA_DIR, "electron-main.log");
 // Install top-level error handlers BEFORE any service module is required so
 // that synchronous throws at module-load time are caught and shown as a
 // GAIA-branded error box instead of Electron's bare JS-error dialog.
-// Extracted into main-safety-net.cjs (CR-6) so tests can require it
-// without triggering main.cjs side effects.
+// Extracted into main-safety-net.cjs so tests can require it without
+// triggering main.cjs side effects (Electron modules, service requires).
 // Wrapped in try/catch: a corrupt ASAR or bad path would otherwise bypass the
 // very handler we are trying to install, falling through to Electron's bare
 // JS-error dialog.
@@ -47,15 +47,8 @@ try {
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
   try { dialog.showErrorBox("GAIA failed to start", String((err && err.stack) || err)); } catch { }
-  // Inline fallback: app.whenReady().catch(_fatalHandler) at line ~800 still
-  // has something callable in the narrow window before process.exit() below
-  // terminates the process.
-  _fatalHandler = (e) => {
-    try { dialog.showErrorBox("GAIA crashed", String((e && e.stack) || e)); } catch { }
-    try { process.exit(1); } catch { }
-  };
-  // Synchronous exit stops service module requires from running with no
-  // uncaughtException handler — app.exit() is scheduled, not instant.
+  // Synchronous exit: service module requires below have no uncaughtException
+  // handler installed, so execution cannot safely continue.
   process.exit(1);
 }
 

@@ -5,7 +5,7 @@
  * main-safety-net.cjs — Hardened Electron main-process error handling.
  *
  * Extracted from main.cjs so tests can require this module without triggering
- * main.cjs side effects (CR-6). All Electron objects are dependency-injected.
+ * main.cjs side effects. All Electron objects are dependency-injected.
  *
  * Fixes for issue #934 (ERR_STREAM_WRITE_AFTER_END after fresh install):
  *   - process.on('uncaughtException') catches stream 'error' events that
@@ -95,8 +95,8 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
     // Increment crash-loop counter.
     writeCount(readCount(homedir) + 1, homedir);
 
-    // CR-2: showErrorBox works pre-app.ready on Windows; showMessageBoxSync
-    // silently no-ops before app is ready.
+    // Pre-app.ready on Windows, showMessageBoxSync silently no-ops;
+    // showErrorBox is the only dialog that works in that window.
     try {
       if (appModule.isReady()) {
         dialogModule.showMessageBoxSync({
@@ -120,12 +120,12 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
     fatal(err);
   });
 
-  // CR-4: reset counter on the first successful user interaction, not on
-  // module load — resetting at loadApp() is too early (user may crash before
-  // first focus).
+  // Reset counter on the first successful user interaction. Resetting at
+  // loadApp() is too early — the user may crash before their first focus.
   appModule.on("browser-window-focus", () => writeCount(0, homedir));
 
-  // CR-5: renderer and GPU-process crashes don't fire uncaughtException.
+  // Renderer and GPU-process crashes don't fire uncaughtException — route
+  // them through fatal() so they get the same dialog + counter treatment.
   appModule.on("render-process-gone", (_event, _webContents, details) => {
     fatal(new Error(`render-process-gone: reason=${details && details.reason}`));
   });
@@ -149,8 +149,9 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
  * @param {object} opts
  * @param {EventEmitter} opts.stream   - The writable stream to guard.
  * @param {string}       opts.logPath  - Path for fallback error logging.
- * @note Must be called at most once per stream instance. The internal WeakSet
- *       guard enforces this — a second call on the same stream is a no-op.
+ * @note The internal WeakSet guard is module-scoped, so idempotency is
+ *       process-global. A second call on the same stream is a no-op regardless
+ *       of which caller site invokes it.
  */
 const _teedStreams = new WeakSet();
 function installLogTee({ stream, logPath }) {

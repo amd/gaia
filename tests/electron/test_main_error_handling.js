@@ -10,7 +10,7 @@
  * handler, this shows Electron's bare "A JavaScript error occurred" dialog.
  *
  * Tests are hermetic: all I/O is in a tmp directory; dialog and app are injected.
- * Tests import main-safety-net.cjs directly (no main.cjs side effects — CR-6).
+ * Tests import main-safety-net.cjs directly (no main.cjs side effects).
  */
 
 "use strict";
@@ -139,7 +139,7 @@ describe("installSafetyNet", () => {
   });
 
   // ── Test 4: showErrorBox used when app is NOT ready ────────────────────────
-  // dialog.showMessageBoxSync silently no-ops on Windows pre-app.ready (CR-2).
+  // Pre-app.ready on Windows, showMessageBoxSync silently no-ops;
   // showErrorBox must be used in that window.
 
   test("uses showErrorBox (not showMessageBoxSync) when app.isReady() is false", () => {
@@ -218,8 +218,8 @@ describe("installSafetyNet", () => {
   });
 
   // ── Test 7: counter resets on browser-window-focus (NOT after loadApp) ─────
-  // CR-4: resetting after loadApp() is too early — user may crash before first
-  // interaction. Reset must happen on 'browser-window-focus' instead.
+  // Resetting after loadApp() is too early — the user may crash before their
+  // first interaction. Reset must happen on 'browser-window-focus' instead.
 
   test("crash-loop counter resets on browser-window-focus, not on module load", () => {
     const { installSafetyNet } = require(SAFETY_NET_PATH);
@@ -253,7 +253,7 @@ describe("installSafetyNet", () => {
   });
 
   // ── Test 8: render-process-gone handler installed ─────────────────────────
-  // CR-5: renderer crashes don't fire uncaughtException; they fire
+  // Renderer crashes don't fire uncaughtException; they fire
   // app.on('render-process-gone'). Must be routed through fatal handler.
 
   test("installs render-process-gone handler on app", () => {
@@ -272,7 +272,7 @@ describe("installSafetyNet", () => {
   });
 
   // ── Test 9: child-process-gone handler installed ───────────────────────────
-  // CR-5: GPU-process crashes fire app.on('child-process-gone').
+  // GPU-process crashes fire app.on('child-process-gone'), not uncaughtException.
 
   test("installs child-process-gone handler on app", () => {
     const { installSafetyNet } = require(SAFETY_NET_PATH);
@@ -329,6 +329,13 @@ describe("installSafetyNet", () => {
     // The stream must have at least one 'error' listener so errors don't
     // become uncaughtException.
     expect(mockStream.listenerCount("error")).toBeGreaterThan(0);
+
+    // The listener must actually write to logPath — this is the root-cause fix
+    // for #934, not just its prerequisite.
+    mockStream.emit("error", new Error("boom"));
+    const logContent = fs.readFileSync(logPath, "utf8");
+    expect(logContent).toMatch(/STREAM_ERROR/);
+    expect(logContent).toMatch(/boom/);
   });
 
   // ── Test 12: unhandledRejection wraps non-Error reasons ───────────────────
