@@ -302,6 +302,7 @@ def _handle_test(args: argparse.Namespace) -> int:
 
 
 def _handle_disconnect(args: argparse.Namespace) -> int:
+    import gaia.connectors.catalog  # noqa: F401 — populates REGISTRY + handler registration
     from gaia.connectors.handler import disconnect
 
     async def _run():

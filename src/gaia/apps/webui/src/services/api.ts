@@ -21,8 +21,8 @@ function getFriendlyError(status: number, detail: string): string {
         case 404: return detail || 'The requested item was not found.';
         case 413: return detail || 'File too large to process.';
         case 500: return 'Server error. Please try again.';
-        case 502:
-        case 503: return 'Service unavailable. Is the backend running?';
+        case 502: return 'Service unavailable. Is the backend running?';
+        case 503: return detail || 'Service unavailable.';
         default: return detail || `Request failed (HTTP ${status})`;
     }
 }
