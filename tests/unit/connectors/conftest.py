@@ -60,3 +60,21 @@ def _autouse_reset_token_cache():
     yield
     if hasattr(tokens, "_cache"):
         tokens._cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _autouse_isolate_home(tmp_path, monkeypatch):
+    """
+    Redirect ``Path.home()`` for every state/grants reader+writer to a
+    per-test ``tmp_path`` so connector tests can never contaminate the
+    developer's real ``~/.gaia/connectors/state.json`` (or grants.json).
+
+    Without this fixture, any test that exercises the full OAuth flow
+    path through ``_exchange_code_for_tokens`` writes to the real home
+    directory — which has bitten us once already (a fixture email
+    leaked into a developer's UI). Belt-and-braces: explicit per-file
+    ``fake_home`` fixtures in ``test_state.py`` / ``test_grants.py``
+    still work; this one just guarantees nothing slips through.
+    """
+    monkeypatch.setattr("gaia.connectors.state.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)

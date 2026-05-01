@@ -233,7 +233,7 @@ function OAuthConfigureBody({
             {connector.description && (
                 <p className="connector-desc">{connector.description}</p>
             )}
-            {blocked && connector.config_error && (
+            {blocked && !connector.configured && connector.config_error && (
                 <div className="configure-info">
                     <Info size={12} />
                     <span>
