@@ -169,7 +169,9 @@ def save_connection(
 
     _set()
     # Log only non-sensitive metadata.
-    logger.debug("store: saved connection provider=%s scopes=%d", provider, len(scopes))
+    logger.debug(
+        "store: saved connection provider=%s scopes=%d", provider, len(scopes)
+    )  # lgtm[py/clear-text-logging-sensitive-data]
 
 
 def load_connection(
@@ -216,7 +218,7 @@ def load_connection(
         # "user never connected". The unit test in test_store.py asserts
         # the entry is cleared; the unit test in test_tokens.py asserts
         # the right Reason flows to the caller.
-        logger.warning(
+        logger.warning(  # lgtm[py/clear-text-logging-sensitive-data]
             "store: client_id tripwire fired for provider=%s; clearing entry",
             provider,
         )
