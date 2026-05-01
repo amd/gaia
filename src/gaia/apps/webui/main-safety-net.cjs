@@ -153,6 +153,8 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
  *       registers a second 'error' listener and doubles log entries per error.
  */
 function installLogTee({ stream, logPath }) {
+  if (stream._gaiaLogTeeBound) return;
+  stream._gaiaLogTeeBound = true;
   stream.on("error", (err) => {
     const detail = (err && err.message) || (err && err.stack) || String(err);
     appendLog(logPath, `[${new Date().toISOString()}] STREAM_ERROR ${detail}`);

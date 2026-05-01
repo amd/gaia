@@ -35,6 +35,7 @@
     "bin/",
     "dist/",
     "main.cjs",
+    "main-safety-net.cjs",
     "preload.cjs",
     "services/",
     "assets/",

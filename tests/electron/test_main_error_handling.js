@@ -109,29 +109,31 @@ describe("installSafetyNet", () => {
   });
 
   // ── Test 3: re-entry guard ─────────────────────────────────────────────────
-  // If the fatal handler is somehow called recursively (e.g. dialog.showErrorBox
-  // itself throws), the second invocation must call process.exit(2) and NOT
-  // call dialog.showErrorBox again.
+  // fatal() must not recurse if it is re-invoked while already running.
+  // We trigger genuine re-entry by emitting a second uncaughtException from
+  // inside showErrorBox — at that point _inFatalHandler is true, so the
+  // second invocation must call process.exit(2) without touching the dialog.
 
   test("re-entry guard prevents recursive dialog on second call", () => {
     const { installSafetyNet } = require(SAFETY_NET_PATH);
     const dialog = mockDialog();
-    // Make showErrorBox throw on first call to trigger re-entry.
-    dialog.showErrorBox.mockImplementationOnce(() => {
-      throw new Error("dialog exploded");
-    });
     const app = mockApp(false);
     const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
 
     installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
 
-    // Simulate uncaughtException.
+    // Trigger re-entry: the first showErrorBox call emits a second
+    // uncaughtException synchronously while _inFatalHandler is still true.
+    dialog.showErrorBox.mockImplementationOnce(() => {
+      process.emit("uncaughtException", new Error("re-entrant error"));
+    });
+
     process.emit("uncaughtException", new Error("original error"));
 
-    // showErrorBox called exactly once (second re-entry bails via process.exit).
+    // showErrorBox called exactly once — re-entrant call bailed before dialog.
     expect(dialog.showErrorBox).toHaveBeenCalledTimes(1);
-    // process.exit called (either code 1 or 2).
-    expect(exitSpy).toHaveBeenCalled();
+    // process.exit called with 2 for the re-entrant bail, then 1 for the outer.
+    expect(exitSpy).toHaveBeenCalledWith(2);
 
     exitSpy.mockRestore();
   });
