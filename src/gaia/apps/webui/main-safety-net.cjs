@@ -97,6 +97,8 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
 
     // Pre-app.ready on Windows, showMessageBoxSync silently no-ops;
     // showErrorBox is the only dialog that works in that window.
+    // Bare catch: intentional swallow — we are already in the fatal-exit
+    // path with no upstream caller to surface errors to.
     try {
       if (appModule.isReady()) {
         dialogModule.showMessageBoxSync({
@@ -108,9 +110,9 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
       } else {
         dialogModule.showErrorBox("GAIA failed to start", stack);
       }
-    } catch { }
+    } catch { } // intentional: fatal path, no upstream
 
-    try { process.exit(1); } catch { }
+    try { process.exit(1); } catch { } // intentional: fatal path
   }
 
   // Wire process-level handlers.
@@ -131,8 +133,12 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
   });
 
   appModule.on("child-process-gone", (_event, details) => {
+    const reason = details && details.reason;
+    // Ignore expected terminations during shutdown so the crash dialog
+    // doesn't flash on a clean quit.
+    if (reason === "clean-exit" || reason === "killed") return;
     fatal(new Error(
-      `child-process-gone: type=${details && details.type} reason=${details && details.reason}`
+      `child-process-gone: type=${details && details.type} reason=${reason}`
     ));
   });
 
