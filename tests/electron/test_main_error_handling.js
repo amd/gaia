@@ -40,7 +40,6 @@ function mockDialog() {
 function mockApp(isReady = false) {
   const emitter = new EventEmitter();
   emitter.isReady = jest.fn(() => isReady);
-  emitter.exit = jest.fn();
   return emitter;
 }
 

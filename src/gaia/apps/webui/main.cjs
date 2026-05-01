@@ -18,6 +18,7 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { spawn } = require("child_process");
+const { pathToFileURL } = require("url");
 
 // ── Shared log path ───────────────────────────────────────────────────────────
 // Single source of truth used by installSafetyNet AND installMainLogTee so
@@ -32,12 +33,22 @@ const _MAIN_LOG_PATH = path.join(_GAIA_DIR, "electron-main.log");
 // GAIA-branded error box instead of Electron's bare JS-error dialog.
 // Extracted into main-safety-net.cjs (CR-6) so tests can require it
 // without triggering main.cjs side effects.
-const { installSafetyNet, installLogTee } = require("./main-safety-net.cjs");
-const { fatal: _fatalHandler } = installSafetyNet({
-  logPath: _MAIN_LOG_PATH,
-  dialogModule: dialog,
-  appModule: app,
-});
+// Wrapped in try/catch: a corrupt ASAR or bad path would otherwise bypass the
+// very handler we are trying to install, falling through to Electron's bare
+// JS-error dialog.
+let installSafetyNet, installLogTee, _fatalHandler;
+try {
+  ({ installSafetyNet, installLogTee } = require("./main-safety-net.cjs"));
+  ({ fatal: _fatalHandler } = installSafetyNet({
+    logPath: _MAIN_LOG_PATH,
+    dialogModule: dialog,
+    appModule: app,
+  }));
+} catch (err) {
+  try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
+  try { dialog.showErrorBox("GAIA failed to start", String(err && err.stack || err)); } catch { }
+  app.exit(1);
+}
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
@@ -459,7 +470,6 @@ async function loadApp() {
     // Use pathToFileURL so the file:// URL always has forward slashes on
     // Windows — Chromium 130+ (Electron 40) rejects backslash file URLs
     // that Node's url.format() (used by loadFile) produces on Windows.
-    const { pathToFileURL } = require("url");
     const fileUrl = pathToFileURL(indexPath);
     fileUrl.search = new URLSearchParams(indexQuery).toString();
     await mainWindow.loadURL(fileUrl.href);

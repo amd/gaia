@@ -22,6 +22,10 @@ const path = require("path");
 const os = require("os");
 
 // ── Counter helpers ───────────────────────────────────────────────────────────
+// The counter is currently forensic only — post-mortem grep of
+// ~/.gaia/electron-startup-failures.json.
+// TODO(#934-follow-up): on next launch, if count >= 3, skip log-tee init
+// and show a "reset state?" dialog (safe-mode entry point).
 
 function counterPath(homedir) {
   return path.join(homedir(), ".gaia", "electron-startup-failures.json");
@@ -145,6 +149,8 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
  * @param {object} opts
  * @param {EventEmitter} opts.stream   - The writable stream to guard.
  * @param {string}       opts.logPath  - Path for fallback error logging.
+ * @note Must be called at most once per stream instance. Calling it twice
+ *       registers a second 'error' listener and doubles log entries per error.
  */
 function installLogTee({ stream, logPath }) {
   stream.on("error", (err) => {
