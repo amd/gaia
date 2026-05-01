@@ -40,7 +40,9 @@ function writeCount(n, homedir) {
   try {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, JSON.stringify({ count: n }), { encoding: "utf8" });
-  } catch { }
+  } catch (err) {
+    try { process.stderr.write(`[safety-net] writeCount failed: ${err.message}\n`); } catch { }
+  }
 }
 
 // ── Log helper ────────────────────────────────────────────────────────────────
@@ -49,7 +51,9 @@ function appendLog(logPath, msg) {
   try {
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     fs.appendFileSync(logPath, msg + "\n", { encoding: "utf8" });
-  } catch { }
+  } catch (err) {
+    try { process.stderr.write(`[safety-net] log append failed: ${err.message}\n`); } catch { }
+  }
 }
 
 // ── Core installer ────────────────────────────────────────────────────────────

@@ -32,7 +32,7 @@ const _MAIN_LOG_PATH = path.join(_GAIA_DIR, "electron-main.log");
 // GAIA-branded error box instead of Electron's bare JS-error dialog.
 // Extracted into main-safety-net.cjs (CR-6) so tests can require it
 // without triggering main.cjs side effects.
-const { installSafetyNet } = require("./main-safety-net.cjs");
+const { installSafetyNet, installLogTee } = require("./main-safety-net.cjs");
 const { fatal: _fatalHandler } = installSafetyNet({
   logPath: _MAIN_LOG_PATH,
   dialogModule: dialog,
@@ -103,7 +103,6 @@ if (process.platform === "linux") {
     // Root-cause fix for #934: stream.write() after end emits 'error'
     // asynchronously — the try/catch in wrap() below doesn't catch it.
     // This listener absorbs the event before it becomes uncaughtException.
-    const { installLogTee } = require("./main-safety-net.cjs");
     installLogTee({ stream, logPath });
     stream.write(
       `\n──── electron-main opened (${new Date().toISOString()}) pid=${process.pid} ────\n`
