@@ -168,15 +168,8 @@ def save_connection(
         keyring.set_password(SERVICE_NAME, username, payload)
 
     _set()
-    # Log only metadata — never the refresh token value.
-    id_fp = client_id_hash[:8]
-    logger.debug(
-        "store: saved connection provider=%s account=%s scopes=%d id_fp=%s…",
-        provider,
-        account_email,
-        len(scopes),
-        id_fp,
-    )
+    # Log only non-sensitive metadata.
+    logger.debug("store: saved connection provider=%s scopes=%d", provider, len(scopes))
 
 
 def load_connection(
@@ -223,14 +216,9 @@ def load_connection(
         # "user never connected". The unit test in test_store.py asserts
         # the entry is cleared; the unit test in test_tokens.py asserts
         # the right Reason flows to the caller.
-        stored_fp = (stored_hash or "<missing>")[:8]
-        cur_fp = current_client_id_hash[:8]
         logger.warning(
-            "store: client_id tripwire fired for provider=%s "
-            "(stored=%s…, current=%s…); clearing entry",
+            "store: client_id tripwire fired for provider=%s; clearing entry",
             provider,
-            stored_fp,
-            cur_fp,
         )
         delete_connection(provider, account_email=account_email)
         raise AuthRequiredError(
