@@ -27,11 +27,15 @@ from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 from gaia.connectors.store import (
     SERVICE_NAME,
     _connection_username,
+    _provider_credentials_username,
+    clear_provider_credentials,
     delete_connection,
     list_connections,
     load_connection,
     peek_connection,
+    peek_provider_credentials,
     save_connection,
+    save_provider_credentials,
     verify_keyring_backend,
 )
 
@@ -341,6 +345,62 @@ class TestPeekConnection:
             )
             is not None
         )
+
+
+class TestProviderCredentials:
+    """Provider credentials (the *app's* OAuth client_id+client_secret)
+    are stored in the keyring under a separate username namespace from
+    the connection blob, so users can self-onboard via the AgentUI
+    without ever touching env vars."""
+
+    def test_username_namespace_does_not_collide_with_connection(self):
+        # Connection: "google:default"; provider creds: "provider:google".
+        # Both keyed under SERVICE_NAME but the username distinguishes them.
+        assert _connection_username("google", "default") == "google:default"
+        assert _provider_credentials_username("google") == "provider:google"
+
+    def test_save_and_peek_roundtrip(self):
+        save_provider_credentials(
+            "google",
+            client_id="abc.apps.googleusercontent.com",
+            client_secret="GOCSPX-secret",
+        )
+        creds = peek_provider_credentials("google")
+        assert creds == {
+            "client_id": "abc.apps.googleusercontent.com",
+            "client_secret": "GOCSPX-secret",
+        }
+
+    def test_peek_returns_none_when_absent(self):
+        assert peek_provider_credentials("google") is None
+
+    def test_clear_is_idempotent(self):
+        save_provider_credentials("google", client_id="x", client_secret="y")
+        clear_provider_credentials("google")
+        assert peek_provider_credentials("google") is None
+        # Second call must not raise.
+        clear_provider_credentials("google")
+
+    def test_save_rejects_empty_client_id(self):
+        with pytest.raises(ConnectorsError, match="client_id is empty"):
+            save_provider_credentials("google", client_id="", client_secret="x")
+
+    def test_save_does_not_disturb_connection_blob(self):
+        # Saving provider creds and a connection blob for the same provider
+        # must both land — different keyring slots.
+        save_connection(
+            provider="google",
+            account_email="a@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["s"],
+            client_id_hash="h",
+        )
+        save_provider_credentials("google", client_id="cid", client_secret="cs")
+        assert peek_connection("google") is not None
+        assert peek_provider_credentials("google") == {
+            "client_id": "cid",
+            "client_secret": "cs",
+        }
 
 
 class TestConstants:

@@ -13,7 +13,6 @@ import { useEffect, useState, useCallback } from 'react';
 import {
     CheckCircle2,
     AlertCircle,
-    Info,
     Loader2,
     ExternalLink,
     ChevronDown,
@@ -177,6 +176,7 @@ function OAuthConfigureBody({
 }) {
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<string | null>(null);
+    const [setupValues, setSetupValues] = useState<Record<string, string>>({});
 
     // Refresh the tile when the user returns to the window after completing OAuth.
     useEffect(() => {
@@ -184,6 +184,20 @@ function OAuthConfigureBody({
         window.addEventListener('focus', handleFocus);
         return () => window.removeEventListener('focus', handleFocus);
     }, [onChanged]);
+
+    // Open the OAuth URL in a real browser (Electron prefers the system
+    // browser via the IPC bridge; fall back to window.open for the
+    // dev-server case).
+    const openAuthUrl = (url: string) => {
+        const anyWindow = window as unknown as {
+            gaia?: { openExternal?: (url: string) => void };
+        };
+        if (anyWindow.gaia?.openExternal) {
+            anyWindow.gaia.openExternal(url);
+        } else {
+            window.open(url, '_blank', 'noopener');
+        }
+    };
 
     const handleConnect = async () => {
         setBusy(true);
@@ -193,14 +207,7 @@ function OAuthConfigureBody({
                 connector.id,
                 connector.default_scopes,
             );
-            const anyWindow = window as unknown as {
-                gaia?: { openExternal?: (url: string) => void };
-            };
-            if (anyWindow.gaia?.openExternal) {
-                anyWindow.gaia.openExternal(r.authorization_url);
-            } else {
-                window.open(r.authorization_url, '_blank', 'noopener');
-            }
+            openAuthUrl(r.authorization_url);
             // onChanged is called via the 'focus' listener when the user returns.
         } catch (e) {
             setErr(e instanceof Error ? e.message : String(e));
@@ -222,24 +229,82 @@ function OAuthConfigureBody({
         }
     };
 
-    // When the backend has reported that this connector can't be
-    // instantiated (e.g. ``GAIA_GOOGLE_CLIENT_ID`` is unset), surface the
-    // reason inline as informational and disable Connect — clicking it
-    // would only return a 503 with the same message.
-    const blocked = connector.configurable === false;
+    // First-time setup: persist the OAuth client credentials, then
+    // start the browser flow in one shot. The configure endpoint
+    // returns {flow_id, authorization_url} once the credentials land
+    // and start_authorization succeeds.
+    const handleSaveAndConnect = async () => {
+        const missing = (connector.oauth_setup_fields ?? [])
+            .filter((f) => f.required !== false && !setupValues[f.key]?.trim())
+            .map((f) => f.label);
+        if (missing.length) {
+            setErr(`Required: ${missing.join(', ')}`);
+            return;
+        }
+        setBusy(true);
+        setErr(null);
+        try {
+            const result = await api.configureConnector(connector.id, setupValues);
+            const url =
+                typeof result.authorization_url === 'string'
+                    ? result.authorization_url
+                    : null;
+            if (url) {
+                openAuthUrl(url);
+            }
+            // Catalog row will refresh via SSE / window-focus.
+            onChanged();
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const setupFields = connector.oauth_setup_fields ?? [];
+    // Show the setup form when the backend says the provider can't be
+    // instantiated AND the user hasn't already completed an OAuth flow
+    // (a stale-but-still-configured connection should keep its
+    // Disconnect button — credential rotation is a separate path).
+    const showSetupForm =
+        connector.configurable === false &&
+        !connector.configured &&
+        setupFields.length > 0;
 
     return (
         <div className="configure-body">
             {connector.description && (
                 <p className="connector-desc">{connector.description}</p>
             )}
-            {blocked && !connector.configured && connector.config_error && (
-                <div className="configure-info">
-                    <Info size={12} />
-                    <span>
-                        This connector needs setup before you can connect:{' '}
-                        {connector.config_error}
-                    </span>
+            {showSetupForm && (
+                <div className="oauth-setup-form">
+                    <p className="connector-desc">
+                        First-time setup — provide your OAuth client credentials
+                        below. They&rsquo;re stored encrypted in your OS keyring
+                        and reused for future connections.
+                    </p>
+                    {setupFields.map((field) => (
+                        <label key={field.key} className="oauth-setup-field">
+                            <span className="oauth-setup-label">{field.label}</span>
+                            <input
+                                type={field.kind === 'secret' ? 'password' : 'text'}
+                                className="oauth-setup-input"
+                                placeholder={field.placeholder}
+                                value={setupValues[field.key] ?? ''}
+                                onChange={(e) =>
+                                    setSetupValues((prev) => ({
+                                        ...prev,
+                                        [field.key]: e.target.value,
+                                    }))
+                                }
+                                autoComplete="off"
+                                spellCheck={false}
+                            />
+                            {field.help_md && (
+                                <span className="oauth-setup-help">{field.help_md}</span>
+                            )}
+                        </label>
+                    ))}
                 </div>
             )}
             {err && (
@@ -256,7 +321,19 @@ function OAuthConfigureBody({
                     >
                         {busy ? <Loader2 size={12} className="spin" /> : 'Disconnect'}
                     </button>
-                ) : blocked ? (
+                ) : showSetupForm ? (
+                    <button
+                        className="btn-primary"
+                        disabled={busy}
+                        onClick={() => void handleSaveAndConnect()}
+                    >
+                        {busy ? (
+                            <Loader2 size={12} className="spin" />
+                        ) : (
+                            <><ExternalLink size={12} /> Save &amp; Connect</>
+                        )}
+                    </button>
+                ) : connector.configurable === false ? (
                     <span
                         className="connector-setup-required"
                         title={connector.config_error ?? undefined}

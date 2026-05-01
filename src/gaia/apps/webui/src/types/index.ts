@@ -97,6 +97,29 @@ export interface ConnectorRow {
     last_tested_at: string | null;
     mcp_env_keys: string[];
     default_scopes: string[];
+    /**
+     * First-time setup fields the user fills in to provide OAuth-app
+     * client credentials (e.g. Google Cloud Console client_id +
+     * client_secret). When ``configurable`` is ``false`` and this list
+     * is non-empty, the UI renders the form inline; submitting it
+     * stores the credentials in the OS keyring and triggers the OAuth
+     * browser flow. Empty for connectors that don't require user-side
+     * provider credentials.
+     */
+    oauth_setup_fields: ConnectorConfigField[];
+}
+
+/**
+ * One field in a connector's first-time setup form. Mirrors
+ * ``gaia.connectors.spec.ConfigField`` on the backend.
+ */
+export interface ConnectorConfigField {
+    key: string;
+    label: string;
+    kind: 'text' | 'secret' | 'url' | 'email' | 'select' | 'bool' | 'textarea';
+    required: boolean;
+    placeholder: string;
+    help_md: string;
 }
 
 export interface InferenceStats {

@@ -80,6 +80,16 @@ def _connection_username(provider: str, account_email: str) -> str:
     return f"{provider}:{account_email}"
 
 
+def _provider_credentials_username(provider: str) -> str:
+    """Keyring username for the *app's* OAuth client credentials.
+
+    Distinct namespace from connection blobs so an installation token
+    (user's refresh_token, keyed ``<provider>:<account>``) and the
+    application's OAuth client (``provider:<provider>``) cannot collide.
+    """
+    return f"provider:{provider}"
+
+
 def verify_keyring_backend() -> None:
     """
     Raise ``ConnectorsError`` if the active keyring is one of the refused
@@ -284,6 +294,71 @@ def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) ->
         logger.debug("store: deleted connection provider=%s", provider)
     except keyring.errors.PasswordDeleteError:
         # Already gone — fine.
+        pass
+    except keyring.errors.KeyringError as e:
+        raise ConnectorsError(
+            f"Keyring delete_password failed: {e}. See "
+            "docs/security/connections.mdx."
+        ) from e
+
+
+def save_provider_credentials(
+    provider: str, *, client_id: str, client_secret: str = ""
+) -> None:
+    """Persist the *application's* OAuth client credentials for *provider*.
+
+    Stores ``{"client_id": ..., "client_secret": ...}`` as a single JSON
+    blob in the keyring, distinct from any connection blob. Lets users
+    self-onboard via the AgentUI without ever touching env vars; the
+    blob is encrypted at rest by the OS credential store.
+    """
+    verify_keyring_backend()
+    if not client_id:
+        raise ConnectorsError(
+            f"save_provider_credentials({provider!r}): client_id is empty"
+        )
+    payload = json.dumps(
+        {"client_id": client_id, "client_secret": client_secret}, sort_keys=True
+    )
+    username = _provider_credentials_username(provider)
+
+    @_wrap_keyring_call("set_password")
+    def _set():
+        keyring.set_password(SERVICE_NAME, username, payload)
+
+    _set()
+
+
+def peek_provider_credentials(provider: str) -> Optional[dict]:
+    """Return the stored OAuth client credentials, or ``None`` if absent.
+
+    Side-effect-free read used by ``GoogleOAuthProvider.__init__`` (and
+    siblings) to find the persisted ``client_id`` / ``client_secret``
+    before falling back to env vars.
+    """
+    verify_keyring_backend()
+    username = _provider_credentials_username(provider)
+
+    @_wrap_keyring_call("get_password")
+    def _get():
+        return keyring.get_password(SERVICE_NAME, username)
+
+    raw = _get()
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
+def clear_provider_credentials(provider: str) -> None:
+    """Remove the stored OAuth client credentials for *provider*. Idempotent."""
+    verify_keyring_backend()
+    username = _provider_credentials_username(provider)
+    try:
+        keyring.delete_password(SERVICE_NAME, username)
+    except keyring.errors.PasswordDeleteError:
         pass
     except keyring.errors.KeyringError as e:
         raise ConnectorsError(

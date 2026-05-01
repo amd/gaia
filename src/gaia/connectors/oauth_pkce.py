@@ -84,18 +84,41 @@ class OAuthPkceHandler:
         config: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Start and complete an OAuth PKCE flow.
+        Persist OAuth-client credentials (if supplied), then start a PKCE flow.
 
-        For API callers that drive the browser step themselves, pass
-        ``flow_id`` and ``code`` in ``config``. When ``flow_id`` is absent
-        the method starts a new flow and returns ``{"flow_id": ...,
-        "authorization_url": ...}`` for the caller to open in a browser.
+        Three call shapes:
+          1. ``{client_id, client_secret}`` — first-run path from the
+             AgentUI "Save & Connect" form. We persist the app
+             credentials in the keyring, evict the cached provider
+             instance, then start a fresh PKCE flow.
+          2. ``{flow_id, code}`` — completion path for callers that
+             drove the browser step themselves.
+          3. ``{}`` (or just ``scopes``) — start a new PKCE flow using
+             whatever provider credentials are already on disk
+             (keyring / env vars).
 
-        The keyring blob written by ``flow._exchange_code_for_tokens`` is
-        the source of truth for "configured" — there is no separate
-        state cache to update here.
+        The keyring blob written by ``flow._exchange_code_for_tokens``
+        remains the source of truth for "configured"; this method does
+        not write the connection blob itself.
         """
         provider_id = spec.oauth_provider_ref or spec.id
+
+        # First-run "Save & Connect": persist client credentials and
+        # invalidate the provider cache so the next get_provider() call
+        # picks up the new id/secret instead of a stale instance.
+        client_id = config.get("client_id")
+        client_secret = config.get("client_secret", "")
+        if client_id:
+            from gaia.connectors.providers import _registry as _provider_registry
+            from gaia.connectors.store import save_provider_credentials
+
+            save_provider_credentials(
+                provider_id,
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+            _provider_registry.pop(provider_id, None)
+
         scopes = config.get("scopes") or list(spec.default_scopes)
 
         if "flow_id" in config and "code" in config:

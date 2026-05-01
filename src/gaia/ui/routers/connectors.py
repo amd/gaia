@@ -287,6 +287,19 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "scopes": scopes,
         "mcp_env_keys": list(spec.mcp_env_keys),
         "default_scopes": list(spec.default_scopes),
+        # OAuth setup form (e.g. Google client_id/client_secret) — empty
+        # tuple for connectors that don't need first-time provider creds.
+        "oauth_setup_fields": [
+            {
+                "key": f.key,
+                "label": f.label,
+                "kind": f.kind,
+                "required": f.required,
+                "placeholder": f.placeholder,
+                "help_md": f.help_md,
+            }
+            for f in spec.oauth_setup_fields
+        ],
     }
 
 

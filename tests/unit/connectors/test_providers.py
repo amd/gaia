@@ -110,13 +110,34 @@ class TestRegistry:
         # Second call returns the SAME instance (cached in registry).
         assert providers.get("google") is prov
 
-    def test_lazy_google_missing_env_raises_configuration_error(self, monkeypatch):
+    def test_lazy_google_missing_creds_raises_configuration_error(self, monkeypatch):
+        # No env vars and no keyring entry → ConfigurationError that
+        # points the user to the AgentUI setup form.
         monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GAIA_GOOGLE_CLIENT_SECRET", raising=False)
         with pytest.raises(ConfigurationError) as exc:
             providers.get("google")
         msg = str(exc.value)
-        assert "GAIA_GOOGLE_CLIENT_ID" in msg
+        assert "Settings" in msg
+        assert "Connections" in msg
         assert "docs/runbooks/google-oauth-client.md" in msg
+
+    def test_google_loads_from_keyring_without_env(self, monkeypatch):
+        # New AgentUI path: user pasted client_id/client_secret into the
+        # setup form; the next get_provider() call should pick them up
+        # without needing env vars.
+        from gaia.connectors.store import save_provider_credentials
+
+        monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GAIA_GOOGLE_CLIENT_SECRET", raising=False)
+        save_provider_credentials(
+            "google",
+            client_id="from-keyring.apps.googleusercontent.com",
+            client_secret="GOCSPX-from-keyring",
+        )
+        prov = providers.get("google")
+        assert prov.client_id == "from-keyring.apps.googleusercontent.com"
+        assert prov.client_secret == "GOCSPX-from-keyring"
 
 
 class TestOAuthProviderProtocol:

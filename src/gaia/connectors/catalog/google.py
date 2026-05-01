@@ -9,7 +9,7 @@ imports ``oauth_pkce`` so its handler is registered into ``_HANDLER_REGISTRY``.
 
 import gaia.connectors.oauth_pkce  # noqa: F401 — triggers register_handler("oauth_pkce", ...)
 from gaia.connectors.registry import REGISTRY
-from gaia.connectors.spec import ConnectorSpec
+from gaia.connectors.spec import ConfigField, ConnectorSpec
 
 GOOGLE_SPEC = ConnectorSpec(
     id="google",
@@ -42,6 +42,33 @@ GOOGLE_SPEC = ConnectorSpec(
         "https://www.googleapis.com/auth/drive.file",
     ),
     oauth_provider_ref="google",
+    # First-time setup form rendered by the AgentUI when the user has
+    # not yet provided OAuth client credentials. Submitted values are
+    # stored in the OS keyring (encrypted at rest) and reused across
+    # connect/disconnect cycles. Power users may bypass the form by
+    # exporting GAIA_GOOGLE_CLIENT_ID / GAIA_GOOGLE_CLIENT_SECRET before
+    # launch.
+    oauth_setup_fields=(
+        ConfigField(
+            key="client_id",
+            label="OAuth Client ID",
+            kind="text",
+            help_md=(
+                "From Google Cloud Console → APIs & Services → Credentials → "
+                "your Desktop-app OAuth 2.0 Client. Looks like "
+                "<digits>-<hash>.apps.googleusercontent.com."
+            ),
+        ),
+        ConfigField(
+            key="client_secret",
+            label="OAuth Client Secret",
+            kind="secret",
+            help_md=(
+                "From the same Desktop-app OAuth client. Required by Google "
+                "even for PKCE flows. Stored encrypted in your OS keyring."
+            ),
+        ),
+    ),
 )
 
 REGISTRY.register(GOOGLE_SPEC)

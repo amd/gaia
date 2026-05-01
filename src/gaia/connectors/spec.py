@@ -87,6 +87,15 @@ class ConnectorSpec:
     default_scopes: tuple[str, ...] = field(default_factory=tuple)
     available_scopes: tuple[str, ...] = field(default_factory=tuple)
     oauth_provider_ref: str | None = None
+    # OAuth-app credentials the user pastes in once during first-time
+    # setup (e.g. Google Cloud Console "Desktop client" client_id +
+    # client_secret). Empty tuple = no setup form required (provider is
+    # pre-configured at deploy time). Distinct from ``config_schema``,
+    # which is reserved for connection-time fields like API keys for
+    # MCP servers — those persist as the connection itself, while OAuth
+    # setup fields persist as *provider* credentials reused across many
+    # connect/disconnect cycles.
+    oauth_setup_fields: tuple[ConfigField, ...] = field(default_factory=tuple)
     # mcp_server only
     mcp_command: str | None = None
     mcp_args: tuple[str, ...] = field(default_factory=tuple)
@@ -105,5 +114,6 @@ class ConnectorSpec:
         object.__setattr__(self, "config_schema", tuple(self.config_schema))
         object.__setattr__(self, "default_scopes", tuple(self.default_scopes))
         object.__setattr__(self, "available_scopes", tuple(self.available_scopes))
+        object.__setattr__(self, "oauth_setup_fields", tuple(self.oauth_setup_fields))
         object.__setattr__(self, "mcp_args", tuple(self.mcp_args))
         object.__setattr__(self, "mcp_env_keys", tuple(self.mcp_env_keys))

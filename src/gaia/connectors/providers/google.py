@@ -67,26 +67,45 @@ class GoogleOAuthProvider:
     )
 
     def __init__(self, client_id: str | None = None, client_secret: str | None = None):
-        resolved = (
+        # Resolution order (per AC; user-friendliness first):
+        #   1. Explicit kwargs (used by tests and library callers).
+        #   2. Keyring-stored credentials saved via the AgentUI's
+        #      Settings → Connections → Google → "Save & Connect" form.
+        #      This is the path real users take.
+        #   3. Env vars (GAIA_GOOGLE_CLIENT_ID / GAIA_GOOGLE_CLIENT_SECRET)
+        #      kept as a fallback for CI, scripted setups, and existing
+        #      install bases — never required for new users.
+        if client_id is None or client_secret is None:
+            # Lazy import to avoid a connectors → providers → store cycle
+            # at module load time.
+            from gaia.connectors.store import peek_provider_credentials
+
+            stored = peek_provider_credentials("google") or {}
+        else:
+            stored = {}
+
+        resolved_id = (
             client_id
             if client_id is not None
-            else os.environ.get("GAIA_GOOGLE_CLIENT_ID", "")
+            else stored.get("client_id") or os.environ.get("GAIA_GOOGLE_CLIENT_ID", "")
         )
-        if not resolved:
+        if not resolved_id:
             raise ConfigurationError(
-                "GAIA_GOOGLE_CLIENT_ID is not set. The Google OAuth provider "
-                "cannot be initialized without a Cloud Console Desktop-app "
-                "client id. Set the env var, or document the value in "
-                "docs/runbooks/google-oauth-client.md and source it before "
-                "starting GAIA. See docs/runbooks/google-oauth-client.md."
+                "Google OAuth client is not configured. Open Settings → "
+                "Connections → Google in the AgentUI and paste the Client ID "
+                "and Client Secret from your Google Cloud Console Desktop-app "
+                "OAuth client. (Power users may also set the "
+                "GAIA_GOOGLE_CLIENT_ID and GAIA_GOOGLE_CLIENT_SECRET env vars "
+                "before launching GAIA.) See docs/runbooks/google-oauth-client.md."
             )
-        self.client_id: str = resolved
-        self.client_id_hash: str = hashlib.sha256(resolved.encode()).hexdigest()
+        self.client_id: str = resolved_id
+        self.client_id_hash: str = hashlib.sha256(resolved_id.encode()).hexdigest()
         # Google requires client_secret even for Desktop-type PKCE clients.
         self.client_secret: str = (
             client_secret
             if client_secret is not None
-            else os.environ.get("GAIA_GOOGLE_CLIENT_SECRET", "")
+            else stored.get("client_secret")
+            or os.environ.get("GAIA_GOOGLE_CLIENT_SECRET", "")
         )
 
     def authorization_params(self) -> dict:

@@ -165,6 +165,53 @@
     margin-top: 10px;
 }
 
+/* First-time OAuth setup form (e.g. Google client_id / client_secret).
+   Shown inline when the provider hasn't been configured yet. */
+.oauth-setup-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 8px 0 4px 0;
+    padding: 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+}
+
+.oauth-setup-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+}
+
+.oauth-setup-label {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.oauth-setup-input {
+    padding: 6px 8px;
+    border: 1px solid var(--border-light);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.oauth-setup-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.oauth-setup-help {
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
 .connector-product-link {
     display: inline-flex;
     align-items: center;

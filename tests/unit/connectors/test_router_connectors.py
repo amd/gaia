@@ -120,6 +120,71 @@ class TestConfigurableField:
         assert body["config_error"] is None
 
 
+class TestOauthSetupFieldsExposed:
+    """The summary surfaces ``oauth_setup_fields`` so the AgentUI can
+    render a first-time setup form when ``configurable=false``. This is
+    the user-facing self-onboarding path that replaces the env-var
+    requirement."""
+
+    def test_default_summary_omits_setup_fields_for_bare_spec(self, ui_api_client):
+        # The fixture spec has no oauth_setup_fields (empty default).
+        resp = ui_api_client.get("/api/connectors/google")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "oauth_setup_fields" in body
+        assert body["oauth_setup_fields"] == []
+
+    def test_setup_fields_serialised_with_metadata(
+        self, ui_api_client, isolated_registry
+    ):
+        # Replace the fixture spec with one that declares setup fields.
+        from gaia.connectors.spec import ConfigField, ConnectorSpec
+
+        spec_with_fields = ConnectorSpec(
+            id="google",
+            display_name="Google",
+            icon="G",
+            category="productivity",
+            tier=1,
+            type="oauth_pkce",
+            description="Google OAuth",
+            default_scopes=("openid",),
+            oauth_provider_ref="google",
+            oauth_setup_fields=(
+                ConfigField(
+                    key="client_id",
+                    label="OAuth Client ID",
+                    kind="text",
+                    help_md="from Cloud Console",
+                ),
+                ConfigField(
+                    key="client_secret",
+                    label="OAuth Client Secret",
+                    kind="secret",
+                ),
+            ),
+        )
+        # Replace and re-register.
+        from gaia.connectors.registry import ConnectorRegistry
+
+        fresh = ConnectorRegistry()
+        fresh.register(spec_with_fields)
+        # Substitute the registry the router reads.
+        import gaia.ui.routers.connectors as router_mod
+
+        router_mod.REGISTRY = fresh
+
+        resp = ui_api_client.get("/api/connectors/google")
+        body = resp.json()
+        fields = body["oauth_setup_fields"]
+        assert len(fields) == 2
+        assert fields[0]["key"] == "client_id"
+        assert fields[0]["kind"] == "text"
+        assert fields[0]["help_md"] == "from Cloud Console"
+        assert fields[1]["key"] == "client_secret"
+        assert fields[1]["kind"] == "secret"
+
+
 # ---------------------------------------------------------------------------
 # GET /api/connectors/{connector_id}
 # ---------------------------------------------------------------------------

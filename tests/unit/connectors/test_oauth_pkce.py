@@ -172,6 +172,52 @@ class TestConfigure:
         called_scopes = mock_start.call_args.kwargs["scopes"]
         assert "email" in called_scopes
 
+    @pytest.mark.asyncio
+    async def test_first_run_persists_client_credentials(self, monkeypatch):
+        # First-time setup path: client_id + client_secret in config land
+        # in the keyring, the cached provider instance is evicted so the
+        # next get_provider() call re-reads from the new credentials, and
+        # the OAuth flow then starts as usual. This is what the AgentUI
+        # "Save & Connect" form submits.
+        spec = _make_spec()
+        handler = OAuthPkceHandler()
+
+        from gaia.connectors.providers import _registry as _provider_registry
+
+        # Pre-populate cache to verify eviction.
+        _provider_registry["google"] = "STALE-INSTANCE"
+
+        saved: dict = {}
+
+        def fake_save(provider, *, client_id, client_secret):
+            saved["provider"] = provider
+            saved["client_id"] = client_id
+            saved["client_secret"] = client_secret
+
+        monkeypatch.setattr(
+            "gaia.connectors.store.save_provider_credentials", fake_save
+        )
+
+        with patch(
+            "gaia.connectors.oauth_pkce.start_authorization",
+            new=AsyncMock(return_value={"flow_id": "f", "authorization_url": "u"}),
+        ):
+            await handler.configure(
+                spec,
+                {
+                    "client_id": "abc.apps.googleusercontent.com",
+                    "client_secret": "GOCSPX-x",
+                },
+            )
+
+        assert saved == {
+            "provider": "google",
+            "client_id": "abc.apps.googleusercontent.com",
+            "client_secret": "GOCSPX-x",
+        }
+        # Cache evicted so the next get_provider() picks up new creds.
+        assert "google" not in _provider_registry
+
 
 # ---------------------------------------------------------------------------
 # disconnect
