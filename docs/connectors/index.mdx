@@ -1,0 +1,97 @@
+---
+title: "Connectors"
+icon: "plug"
+description: "Connect GAIA agents to your accounts and external services."
+---
+
+## What connectors do
+
+Connectors give GAIA agents permission to act on your behalf — read your
+Gmail, list your GitHub issues, post to Slack, query a Postgres
+database, and so on. You configure each connector **once**, then grant
+individual agents the specific scopes they need. An agent can never see
+or use a credential you haven't granted it.
+
+There are two flavors:
+
+- **OAuth providers** (e.g. Google) — you authenticate through the
+  provider's own consent screen. GAIA stores a refresh token in your OS
+  keyring, never on disk.
+- **MCP servers** (e.g. GitHub, Slack, Postgres) — an external Model
+  Context Protocol server exposes the API as tools. You provide the
+  required API tokens once; GAIA stores them in the keyring and passes
+  them to the MCP server at launch.
+
+All credentials live in your OS credential store (macOS Keychain,
+gnome-keyring/kwallet on Linux, Credential Locker on Windows). GAIA
+never writes a token to a plaintext file.
+
+<Frame caption="Settings → Connections in the Agent UI">
+  <img src="/assets/connectors/connections-panel.png" alt="Connectors panel showing Google and GitHub" />
+</Frame>
+
+## How to set up a connector
+
+1. Launch the Agent UI: `gaia chat --ui`.
+2. Click **Settings** (gear icon) → **Connections**.
+3. Find the connector you want and click its tile to expand it.
+4. Either click **Connect** (OAuth) or fill in the credentials form
+   (MCP). Step-by-step instructions for the most common ones below.
+
+## Documented connectors
+
+<CardGroup cols={2}>
+  <Card title="Google" icon="google" href="/connectors/google">
+    Gmail, Calendar, Drive, and other Google Workspace APIs via OAuth.
+  </Card>
+  <Card title="GitHub" icon="github" href="/connectors/github">
+    Repos, PRs, issues, and Actions via the official GitHub MCP server.
+  </Card>
+</CardGroup>
+
+## Coming soon
+
+The connectors below ship in the catalog and work today, but their
+setup pages are still being written. Track progress and request
+priorities at [issue #937](https://github.com/amd/gaia/issues/937).
+
+In the meantime, the **Configure** form for each connector includes
+inline help with where to obtain the required token or API key.
+
+- **Microsoft 365** — `mcp-outlook`
+- **Calendars** — `mcp-google-calendar`
+- **Email** — `mcp-gmail`, `mcp-sendgrid`
+- **Productivity** — `mcp-notion`, `mcp-linear`, `mcp-jira`,
+  `mcp-slack`
+- **Developer tools** — `mcp-git`, `mcp-postgres`,
+  `mcp-desktop-commander`
+- **Web** — `mcp-fetch`, `mcp-brave-search`, `mcp-context7`,
+  `mcp-playwright`, `mcp-microsoft-learn`
+- **Other** — `mcp-spotify`, `mcp-stripe`, `mcp-memory`,
+  `mcp-filesystem`, `mcp-windows-automation`
+
+## Per-agent grants
+
+After you connect an account, grant individual agents the scopes they
+need:
+
+```bash
+# CLI
+gaia connectors grants grant google builtin:chat \
+  --scopes https://www.googleapis.com/auth/gmail.readonly
+
+# Or in the UI: open the connector tile → "Per-agent grants" section.
+```
+
+Agents that don't have a grant for a scope they request will fail with
+`AGENT_NOT_GRANTED` and tell you exactly what scope to add. The same
+flow protects you whether the agent is built-in, custom, or installed
+from the Agent Hub.
+
+## See also
+
+- [Connectors security model](/security/connections) — what is stored
+  where, how revocation works, and the threat model.
+- [Building agents that use connectors](/sdk/sdks/connectors) — how
+  to declare `REQUIRED_CONNECTORS` and call `get_credential` from a
+  custom agent.

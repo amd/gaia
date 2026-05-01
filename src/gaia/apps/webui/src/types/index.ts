@@ -78,6 +78,14 @@ export interface ConnectorRow {
     type: 'oauth_pkce' | 'mcp_server' | string;
     description: string;
     product_url: string | null;
+    /**
+     * GAIA documentation URL — what the AgentUI's "Learn more" link
+     * points at. Tells users where to obtain client credentials, API
+     * tokens, and any other setup specifics. ``null`` means the
+     * connector hasn't shipped a docs page yet; the UI falls back to
+     * ``product_url`` in that case.
+     */
+    docs_url: string | null;
     configured: boolean;
     /**
      * ``false`` when the connector cannot be instantiated as configured —

@@ -353,9 +353,9 @@ function OAuthConfigureBody({
                         )}
                     </button>
                 )}
-                {connector.product_url && (
+                {(connector.docs_url || connector.product_url) && (
                     <a
-                        href={connector.product_url}
+                        href={connector.docs_url || connector.product_url || '#'}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="connector-product-link"

@@ -79,6 +79,14 @@
                 ]
               },
               {
+                "group": "Connectors",
+                "pages": [
+                  "connectors/index",
+                  "connectors/google",
+                  "connectors/github"
+                ]
+              },
+              {
                 "group": "Agent Eval",
                 "pages": [
                   "guides/eval",

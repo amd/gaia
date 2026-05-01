@@ -83,6 +83,11 @@ class ConnectorSpec:
     config_schema: tuple[ConfigField, ...] = field(default_factory=tuple)
     test_endpoint: str | None = None
     product_url: str | None = None
+    # GAIA documentation URL the AgentUI's "Learn more" link points at.
+    # Should walk users through obtaining client credentials, API tokens,
+    # or whatever else the connector needs. Falls back to ``product_url``
+    # in the UI when ``None``, but every connector should set it.
+    docs_url: str | None = None
     # oauth_pkce only
     default_scopes: tuple[str, ...] = field(default_factory=tuple)
     available_scopes: tuple[str, ...] = field(default_factory=tuple)

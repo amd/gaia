@@ -280,6 +280,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "type": spec.type,
         "description": spec.description,
         "product_url": spec.product_url,
+        "docs_url": spec.docs_url,
         "configured": configured,
         "configurable": configurable,
         "config_error": config_error,

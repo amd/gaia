@@ -58,6 +58,7 @@ _GITHUB = ConnectorSpec(
     tier=1,
     type="mcp_server",
     description="Repos, PRs, issues, workflows — full GitHub access.",
+    docs_url="https://amd-gaia.ai/connectors/github",
     mcp_command="npx",
     mcp_args=("-y", "@modelcontextprotocol/server-github"),
     mcp_env_keys=("GITHUB_TOKEN",),
