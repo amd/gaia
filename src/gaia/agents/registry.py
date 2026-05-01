@@ -48,9 +48,7 @@ _MANIFEST_FINGERPRINT_KEYS = frozenset(
 # Reserved agent IDs that custom agents (under ~/.gaia/agents/) must not
 # claim. Loaded lazily by ``_RESERVED_BUILTIN_IDS`` so the list stays in sync
 # with what ``_register_builtin_agents`` actually registers.
-_RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
-    {"chat", "builder", "gaia-lite"}
-)
+_RESERVED_BUILTIN_IDS: frozenset[str] = frozenset({"chat", "builder", "gaia-lite"})
 
 
 def _wrap_factory_with_namespaced_id(
@@ -333,6 +331,62 @@ class AgentRegistry:
             "registry: Registered built-in agent: gaia-lite (ChatAgent, primary %s)",
             _GAIA_LITE_MODELS[0],
         )
+
+        # --- ConnectorsDemoAgent ---
+        # Demo agent that uses Google + GitHub connectors end-to-end so
+        # the per-agent grant flow has a real consumer to validate it.
+        # Visible in the AgentUI dropdown — users can select it to test
+        # their connector setup.
+        try:
+            from gaia.agents.connectors_demo.agent import (
+                ConnectorsDemoAgent,
+                ConnectorsDemoAgentConfig,
+            )
+
+            def connectors_demo_factory(**kwargs):
+                valid_fields = {
+                    f.name for f in dataclasses.fields(ConnectorsDemoAgentConfig)
+                }
+                config = ConnectorsDemoAgentConfig(
+                    **{k: v for k, v in kwargs.items() if k in valid_fields}
+                )
+                return ConnectorsDemoAgent(config=config)
+
+            self._register(
+                AgentRegistration(
+                    id="connectors-demo",
+                    name="Connectors Demo",
+                    description=(
+                        "Demonstrates the connectors framework — pulls real "
+                        "data from your connected Google account and GitHub PAT."
+                    ),
+                    source="builtin",
+                    conversation_starters=[
+                        "What's in my inbox?",
+                        "What's on my calendar today?",
+                        "List my recent Drive files",
+                        "List my GitHub repositories",
+                    ],
+                    factory=_wrap_factory_with_namespaced_id(
+                        connectors_demo_factory, "builtin:connectors-demo"
+                    ),
+                    agent_dir=None,
+                    models=[],
+                    required_connections=[
+                        # Surfaced in the UI so users see "this agent
+                        # needs Google + GitHub" before granting scopes.
+                        "google",
+                        "mcp-github",
+                    ],
+                    namespaced_agent_id="builtin:connectors-demo",
+                )
+            )
+            logger.info(
+                "registry: Registered built-in agent: connectors-demo "
+                "(ConnectorsDemoAgent)"
+            )
+        except ImportError as e:
+            logger.debug("registry: ConnectorsDemoAgent not available, skipping: %s", e)
 
         # --- BuilderAgent ---
         try:

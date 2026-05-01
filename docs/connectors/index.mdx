@@ -70,6 +70,33 @@ inline help with where to obtain the required token or API key.
 - **Other** — `mcp-spotify`, `mcp-stripe`, `mcp-memory`,
   `mcp-filesystem`, `mcp-windows-automation`
 
+## Try it: the Connectors Demo agent
+
+GAIA ships a built-in **Connectors Demo** agent that exercises the
+full grant flow against your real Google account and GitHub PAT —
+useful for verifying your setup or seeing the per-agent grants flow
+in action.
+
+After connecting Google + GitHub:
+
+1. In the AgentUI agent dropdown (top of the chat panel), pick
+   **Connectors Demo**.
+2. Settings → Connections → Google → **Per-agent grants** → grant
+   the demo agent the `gmail.readonly`, `calendar.readonly`, and
+   `drive.readonly` scopes. Same for GitHub (`use`).
+3. Ask: *"What's in my inbox?"*, *"What's on my calendar today?"*,
+   *"List my recent Drive files"*, or *"List my GitHub repos"*. The
+   agent calls the matching tool and surfaces the result.
+
+If you skip a grant, the demo will surface an actionable error like
+`AGENT_NOT_GRANTED: open Settings → Connections → google → Per-agent
+grants and grant <scope>`.
+
+The agent's source —
+[`src/gaia/agents/connectors_demo/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/connectors_demo/agent.py)
+— is a working reference for any custom agent that needs to call
+external services.
+
 ## Per-agent grants
 
 After you connect an account, grant individual agents the scopes they
