@@ -132,6 +132,16 @@ The companion `agent.yaml` sidecar that declares `models:` next to a Python agen
 
 ---
 
+## Breaking Changes
+
+- **YAML manifest agent format removed** (PR [#914](https://github.com/amd/gaia/pull/914)) — Custom agents declared only via `agent.yaml` (no sibling `agent.py`) are no longer registered; a `DeprecationWarning` is emitted and the directory is skipped. Convert to a Python `agent.py` class. The `agent.yaml` sidecar that declares `models:` next to a Python agent is still supported.
+- **`gaia index` top-level CLI removed** (PR [#721](https://github.com/amd/gaia/pull/721)) — Use `gaia-code index` (and `search`, `status`, `clear`, `chat`) instead.
+- **Eval CLI surface trimmed** (PR [#779](https://github.com/amd/gaia/pull/779)) — `gaia groundtruth`, `gaia report`, `gaia visualize`, `gaia create-template`, `gaia batch-experiment`, and `gaia synthetic-data` are removed in favour of the consolidated `gaia eval` toolchain.
+- **`[code-index]` extras folded into `[rag]`** — Use `pip install -e '.[rag]'` instead of `pip install -e '.[code-index]'`.
+- **Minimum Lemonade version is now 10.2.0**, and Lemonade's default port moves from 8000 to 13305.
+
+---
+
 ## Full Changelog
 
 **27 commits** since v0.17.4:
