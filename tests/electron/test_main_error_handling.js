@@ -196,10 +196,11 @@ describe("installSafetyNet", () => {
     const after1 = JSON.parse(fs.readFileSync(counterPath, "utf8"));
     expect(after1.count).toBe(1);
 
-    // Each installSafetyNet() call creates a fresh closure with its own
-    // _inFatalHandler flag. The resetModules()+re-require here creates a
-    // second independent instance so the second fatal() call is not blocked
-    // by the first instance's re-entry guard.
+    // Remove instance 1's listeners so instance 2's fatal() runs cleanly
+    // without relying on instance 1's _inFatalHandler being stuck true.
+    addedListeners.forEach(({ event, handler }) => process.removeListener(event, handler));
+    addedListeners.length = 0;
+
     jest.resetModules();
     const { installSafetyNet: installSafetyNet2 } = require(SAFETY_NET_PATH);
     installSafetyNet2({
@@ -351,5 +352,20 @@ describe("installSafetyNet", () => {
     expect(detail).toContain("plain string rejection");
 
     exitSpy.mockRestore();
+  });
+
+  // ── Test 13: installSafetyNet returns { fatal } ────────────────────────────
+  // main.cjs destructures { fatal: _fatalHandler } and routes
+  // app.whenReady().catch() through it. If a refactor stops returning fatal,
+  // _fatalHandler becomes undefined and the catch silently no-ops.
+
+  test("returns { fatal } function so main.cjs can route .catch() through it", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const result = installSafetyNet({
+      logPath,
+      dialogModule: mockDialog(),
+      appModule: mockApp(false),
+    });
+    expect(typeof result.fatal).toBe("function");
   });
 });

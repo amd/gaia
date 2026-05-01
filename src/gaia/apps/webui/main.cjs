@@ -46,17 +46,16 @@ try {
   }));
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
-  try { dialog.showErrorBox("GAIA failed to start", String(err && err.stack || err)); } catch { }
-  // Inline fallback so any later .catch(_fatalHandler) still has something callable
-  // if app.exit(1) hasn't taken effect yet (app.exit schedules, not instant).
+  try { dialog.showErrorBox("GAIA failed to start", String((err && err.stack) || err)); } catch { }
+  // Inline fallback: app.whenReady().catch(_fatalHandler) at line ~800 still
+  // has something callable in the narrow window before process.exit() below
+  // terminates the process.
   _fatalHandler = (e) => {
-    try { dialog.showErrorBox("GAIA crashed", String(e && e.stack || e)); } catch { }
+    try { dialog.showErrorBox("GAIA crashed", String((e && e.stack) || e)); } catch { }
     try { process.exit(1); } catch { }
   };
-  app.exit(1);
-  // Stop loading service modules synchronously — app.exit() is scheduled,
-  // not instant, so execution would otherwise continue into the requires
-  // below with no uncaughtException handler installed.
+  // Synchronous exit stops service module requires from running with no
+  // uncaughtException handler — app.exit() is scheduled, not instant.
   process.exit(1);
 }
 

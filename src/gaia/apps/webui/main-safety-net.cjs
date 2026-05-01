@@ -149,12 +149,13 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
  * @param {object} opts
  * @param {EventEmitter} opts.stream   - The writable stream to guard.
  * @param {string}       opts.logPath  - Path for fallback error logging.
- * @note Must be called at most once per stream instance. Calling it twice
- *       registers a second 'error' listener and doubles log entries per error.
+ * @note Must be called at most once per stream instance. The internal WeakSet
+ *       guard enforces this — a second call on the same stream is a no-op.
  */
+const _teedStreams = new WeakSet();
 function installLogTee({ stream, logPath }) {
-  if (stream._gaiaLogTeeBound) return;
-  stream._gaiaLogTeeBound = true;
+  if (_teedStreams.has(stream)) return;
+  _teedStreams.add(stream);
   stream.on("error", (err) => {
     const detail = (err && err.message) || (err && err.stack) || String(err);
     appendLog(logPath, `[${new Date().toISOString()}] STREAM_ERROR ${detail}`);
