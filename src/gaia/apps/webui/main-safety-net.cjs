@@ -38,10 +38,6 @@ function readCount(homedir) {
 function writeCount(n, homedir) {
   const p = counterPath(homedir);
   try {
-    // CR-3: refuse to write through a symlink — prevents symlink-planting attack.
-    try {
-      if (fs.lstatSync(p).isSymbolicLink()) fs.unlinkSync(p);
-    } catch { }
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, JSON.stringify({ count: n }), { encoding: "utf8" });
   } catch { }
@@ -70,7 +66,8 @@ function appendLog(logPath, msg) {
 function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
   const homedir = homedirFn || (() => os.homedir());
 
-  // CR-1: module-scoped re-entry guard.
+  // Per-handler re-entry guard (closure-scoped — each installSafetyNet
+  // call gets its own, intentionally; see test_main_error_handling.js).
   let _inFatalHandler = false;
 
   function fatal(err) {
@@ -147,7 +144,8 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
  */
 function installLogTee({ stream, logPath }) {
   stream.on("error", (err) => {
-    appendLog(logPath, `[${new Date().toISOString()}] STREAM_ERROR ${err && err.message}`);
+    const detail = (err && err.message) || (err && err.stack) || String(err);
+    appendLog(logPath, `[${new Date().toISOString()}] STREAM_ERROR ${detail}`);
   });
 }
 

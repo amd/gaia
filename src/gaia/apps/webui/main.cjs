@@ -19,6 +19,13 @@ const fs = require("fs");
 const os = require("os");
 const { spawn } = require("child_process");
 
+// ── Shared log path ───────────────────────────────────────────────────────────
+// Single source of truth used by installSafetyNet AND installMainLogTee so
+// both write to the same file without independent path computations that
+// could drift apart.
+const _GAIA_DIR = path.join(os.homedir(), ".gaia");
+const _MAIN_LOG_PATH = path.join(_GAIA_DIR, "electron-main.log");
+
 // ── Safety net (issue #934) ───────────────────────────────────────────────────
 // Install top-level error handlers BEFORE any service module is required so
 // that synchronous throws at module-load time are caught and shown as a
@@ -26,9 +33,8 @@ const { spawn } = require("child_process");
 // Extracted into main-safety-net.cjs (CR-6) so tests can require it
 // without triggering main.cjs side effects.
 const { installSafetyNet } = require("./main-safety-net.cjs");
-const _SAFETY_NET_LOG = path.join(os.homedir(), ".gaia", "electron-main.log");
 const { fatal: _fatalHandler } = installSafetyNet({
-  logPath: _SAFETY_NET_LOG,
+  logPath: _MAIN_LOG_PATH,
   dialogModule: dialog,
   appModule: app,
 });
@@ -67,9 +73,8 @@ if (process.platform === "linux") {
 // diagnostics bundler has something to attach.
 (function installMainLogTee() {
   try {
-    const gaiaDir = path.join(os.homedir(), ".gaia");
-    try { fs.mkdirSync(gaiaDir, { recursive: true }); } catch { /* ignore */ }
-    const logPath = path.join(gaiaDir, "electron-main.log");
+    try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
+    const logPath = _MAIN_LOG_PATH;
 
     // Rotate if > 5 MB — truncate to last ~5 MB on startup.
     try {

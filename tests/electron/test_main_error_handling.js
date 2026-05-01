@@ -316,10 +316,7 @@ describe("installSafetyNet", () => {
 
   test("installLogTee attaches an error listener to the write stream", () => {
     const { installLogTee } = require(SAFETY_NET_PATH);
-    if (!installLogTee) {
-      // If installLogTee is not exported, skip — implementation detail may vary.
-      return;
-    }
+    expect(typeof installLogTee).toBe("function");
     const mockStream = new EventEmitter();
     mockStream.write = jest.fn();
     mockStream.end = jest.fn();
