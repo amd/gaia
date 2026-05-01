@@ -30,6 +30,7 @@ directories:
 # but as an include list (which is what electron-builder expects).
 files:
   - main.cjs
+  - main-safety-net.cjs
   - preload.cjs
   - bin/**/*
   - services/**/*

@@ -19,57 +19,18 @@ const fs = require("fs");
 const os = require("os");
 const { spawn } = require("child_process");
 
-// ── T0 minimal safety net (issue #934) ─────────────────────────────────────
-// Install bare-minimum top-level error handlers BEFORE any service module is
-// required. Without these, a synchronous throw at service-module-load time
-// (missing native dep, malformed JSON in agent-seeder, missing VC++ runtime,
-// etc.) escapes to Electron's default handler, which on a packaged Windows
-// build either dies silently (no console attached) or shows the bare
-// "A JavaScript error occurred in the main process" dialog with no GAIA
-// branding and no actionable info. That is the v0.17.4 fresh-install
-// failure mode that #934 is tracking.
-//
-// This block is intentionally minimal (Path A in the 934 plan): just enough
-// to (a) write the full stack to ~/.gaia/electron-main.log so we have
-// post-mortem evidence, and (b) show a native error box that survives the
-// pre-app-ready window. dialog.showErrorBox works before app.ready fires;
-// dialog.showMessageBoxSync silently no-ops on Windows in that window.
-// Full per-stage labelling, crash-loop guard, and diagnostics-bundle button
-// land in the T2-T11 hardening once T0 has captured a real stack trace.
-const _T0_LOG_PATH = path.join(os.homedir(), ".gaia", "electron-main.log");
-function _t0WriteLog(level, msg) {
-  try {
-    fs.mkdirSync(path.dirname(_T0_LOG_PATH), { recursive: true });
-  } catch { /* ignore */ }
-  try {
-    fs.appendFileSync(
-      _T0_LOG_PATH,
-      `[${new Date().toISOString()}] ${level} ${msg}\n`
-    );
-  } catch { /* last-resort: no logging available */ }
-}
-let _t0InHandler = false;
-function _t0FatalHandler(label, err) {
-  if (_t0InHandler) {
-    // Re-entry: the dialog/log path itself threw. Bail without recursing.
-    try { process.exit(2); } catch { /* ignore */ }
-    return;
-  }
-  _t0InHandler = true;
-  const stack = (err && err.stack) ? err.stack : String(err);
-  _t0WriteLog("FATAL", `${label}: ${stack}`);
-  try {
-    dialog.showErrorBox(
-      "GAIA failed to start",
-      `${label}\n\n${stack}\n\nThe full log is at:\n${_T0_LOG_PATH}`
-    );
-  } catch { /* dialog itself may fail pre-ready on some platforms */ }
-  try { process.exit(1); } catch { /* ignore */ }
-}
-process.on("uncaughtException", (err) => _t0FatalHandler("uncaughtException", err));
-process.on("unhandledRejection", (reason) => {
-  const err = reason instanceof Error ? reason : new Error(String(reason));
-  _t0FatalHandler("unhandledRejection", err);
+// ── Safety net (issue #934) ───────────────────────────────────────────────────
+// Install top-level error handlers BEFORE any service module is required so
+// that synchronous throws at module-load time are caught and shown as a
+// GAIA-branded error box instead of Electron's bare JS-error dialog.
+// Extracted into main-safety-net.cjs (CR-6) so tests can require it
+// without triggering main.cjs side effects.
+const { installSafetyNet } = require("./main-safety-net.cjs");
+const _SAFETY_NET_LOG = path.join(os.homedir(), ".gaia", "electron-main.log");
+const { fatal: _fatalHandler } = installSafetyNet({
+  logPath: _SAFETY_NET_LOG,
+  dialogModule: dialog,
+  appModule: app,
 });
 
 // Services (loaded after app.whenReady)
@@ -134,6 +95,11 @@ if (process.platform === "linux") {
     }
 
     const stream = fs.createWriteStream(logPath, { flags: "a" });
+    // Root-cause fix for #934: stream.write() after end emits 'error'
+    // asynchronously — the try/catch in wrap() below doesn't catch it.
+    // This listener absorbs the event before it becomes uncaughtException.
+    const { installLogTee } = require("./main-safety-net.cjs");
+    installLogTee({ stream, logPath });
     stream.write(
       `\n──── electron-main opened (${new Date().toISOString()}) pid=${process.pid} ────\n`
     );
@@ -481,7 +447,13 @@ async function loadApp() {
     const indexPath = path.join(distPath, "index.html");
     const indexQuery = buildIndexQuery(backendPort);
     console.log("Loading app from:", indexPath, "api:", indexQuery.api);
-    await mainWindow.loadFile(indexPath, { query: indexQuery });
+    // Use pathToFileURL so the file:// URL always has forward slashes on
+    // Windows — Chromium 130+ (Electron 40) rejects backslash file URLs
+    // that Node's url.format() (used by loadFile) produces on Windows.
+    const { pathToFileURL } = require("url");
+    const fileUrl = pathToFileURL(indexPath);
+    fileUrl.search = new URLSearchParams(indexQuery).toString();
+    await mainWindow.loadURL(fileUrl.href);
   } else {
     // Show a simple loading/error page
     mainWindow.loadURL(
@@ -791,11 +763,9 @@ app.whenReady().then(async () => {
     }
   });
 }).catch((err) => {
-  // T0 (issue #934): without this .catch(), any throw inside the whenReady
-  // chain becomes an unhandledRejection that Node logs and may exit on
-  // silently. Route through the same fatal handler so the user gets a
-  // dialog and we get a stack trace in ~/.gaia/electron-main.log.
-  _t0FatalHandler("app.whenReady", err);
+  // Route explicit rejection through the safety-net so the user gets a
+  // GAIA-branded dialog and a stack trace in the log (issue #934).
+  _fatalHandler(err);
 });
 
 // ── Window-all-closed (C4 fix) ────────────────────────────────────────────
