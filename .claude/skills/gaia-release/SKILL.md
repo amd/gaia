@@ -54,7 +54,7 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
 - **No Claude attribution anywhere** — not in PR titles, PR bodies, commit messages (no `Co-Authored-By: Claude ...` trailer), release notes, code comments, or the Discord announcement.
 - **No silent fallbacks** — if a validator fails, a step times out, or a workflow run isn't found, stop with an actionable error. Do not retry blindly. Do not "proceed anyway."
 - **Match house style for release notes** — factual, not opinionated. No "finally", "silently", "no more crashes", "we're excited to announce". Read the **last 2–3 release notes** before drafting. Patch releases do **not** include a `pip install` block. Use the `Why upgrade:` framing with a short bullet list, then `## What's New`, then `## Bug Fixes`, then `## Full Changelog`.
-- **Match the previous release PR body shape exactly** — read the most recent merged `Release vX.Y.Z` PR (e.g. `gh pr list --repo amd/gaia --state merged --search "Release v" --limit 3`). Open with `# GAIA vX.Y.Z Release Notes` (no MDX frontmatter in the PR body), end with a `Release checklist` section. Style drift here costs review cycles.
+- **Match the previous release PR body shape exactly** — read the most recent merged `Release vX.Y.Z` PR (e.g. `gh pr list --repo amd/gaia --state merged --search "Release v in:title" --limit 3`). Open with `# GAIA vX.Y.Z Release Notes` (no MDX frontmatter in the PR body), end with a `Release checklist` section. Style drift here costs review cycles.
 - **Bulletproof commits only** — every change made by this skill must satisfy the four criteria in CLAUDE.md (validated, critiqued, scope-clean, no half-finished work) before being committed.
 - **Pushing tags is irreversible.** Always confirm the SHA the tag will point to and the green status of the pre-tag verification run before `git push origin v<version>`.
 - **Manual approval gate at the publish step** is human-only — Claude cannot click the GitHub environment "approve" button. Surface the run URL and stop.
@@ -141,7 +141,7 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
 
 4. **Update [docs/docs.json](docs/docs.json):**
    - Add `releases/v<version>` to the Releases tab.
-   - Bump the navbar label (e.g. `v0.17.4 · Lemonade 10.2.0` → `v0.17.5 · Lemonade <version>`). Read [src/gaia/version.py](src/gaia/version.py) for `LEMONADE_VERSION`.
+   - Bump the navbar label (e.g. `v<previous-version> · Lemonade <previous-lemonade>` → `v<version> · Lemonade <current-lemonade>`). Read [src/gaia/version.py](src/gaia/version.py) for the `LEMONADE_VERSION` constant — it is the source of truth, and the navbar may be drifted from it (Lemonade bumps land outside release PRs).
 
 5. **Sync the UI package version.**
    ```bash
@@ -236,12 +236,17 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
 
 ### Steps
 
-1. **Sync local main to the merged commit.**
+1. **Sync local main to the merged commit, and capture the SHA from the release PR (not just the local HEAD).**
    ```bash
    git checkout main && git pull
-   MERGED_SHA=$(git rev-parse HEAD)
-   echo "Will tag: $MERGED_SHA"
+   # Re-derive from the release PR — survives gate pauses across sessions/shells.
+   RELEASE_PR=$(gh pr list --repo amd/gaia --state merged --search "Release v<version> in:title" --json number --jq '.[0].number')
+   MERGED_SHA=$(gh pr view "$RELEASE_PR" --repo amd/gaia --json mergeCommitOid -q .mergeCommitOid)
+   echo "Will tag: $MERGED_SHA (from PR #$RELEASE_PR)"
+   test "$(git rev-parse HEAD)" = "$MERGED_SHA" || { echo "Local main ($( git rev-parse HEAD)) does not match merged release PR SHA ($MERGED_SHA) — pull, or main has moved past the release commit"; exit 1; }
    ```
+
+   When you reach Gate 3 below, **carry both `$RELEASE_PR` and `$MERGED_SHA` into the gate question text** so Phase 4 can re-derive them from the answer rather than depending on shell variables that don't survive the pause.
 
 2. **Re-verify `__version__` post-merge.** Squash-merges have silently reverted this. If it doesn't match the target version, **stop** — open a follow-up PR to fix it before tagging. Never tag a wrong version.
    ```bash
@@ -257,9 +262,11 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    ```bash
    gh workflow run "Build Installers" --repo amd/gaia --ref main
    sleep 5
-   gh run list --repo amd/gaia --workflow "Build Installers" --limit 1
+   RUN_ID=$(gh run list --repo amd/gaia --workflow "Build Installers" --limit 1 --json databaseId -q '.[0].databaseId')
+   echo "Watching run $RUN_ID"
+   gh run watch "$RUN_ID" --repo amd/gaia
    ```
-   Watch it. **AppImage smoke jobs (`distro-matrix`, `userns-restricted`) are the most flaky** — `userns-restricted` has a 90s `state: ready` poll that can race a model download. On real failure, **stop** and fix root cause; on transient flake (timeout-only, no logic error), `gh run rerun <run-id> --failed` is acceptable.
+   **AppImage smoke jobs (`distro-matrix`, `userns-restricted`) are the most flaky** — `userns-restricted` has a 90s `state: ready` poll that can race a model download. On real failure, **stop** and fix root cause; on transient flake (timeout-only, no logic error), `gh run rerun $RUN_ID --failed` is acceptable.
 
 ### Gate 3 — green run on the merged commit
 
@@ -269,7 +276,7 @@ Required before continuing:
 - `validate_release_notes.py` passes.
 - Build Installers run on the merged commit is **green** (not yellow, not "mostly green except smoke tests").
 
-Show the user the run URL and the SHA. Ask: **"Pre-tag verification green on `<sha>`. Push tag `v<version>`?"**
+Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the **merged SHA** (`$MERGED_SHA`). Ask: **"Pre-tag verification green on `<sha>` (release PR #N). Push tag `v<version>`?"** — the SHA and PR number being in the question text means Phase 4 can re-derive them even if the user resumes in a fresh shell.
 
 ---
 
@@ -279,11 +286,13 @@ Show the user the run URL and the SHA. Ask: **"Pre-tag verification green on `<s
 
 ### Steps
 
-1. **Confirm you are on `main` at the verified SHA.**
+1. **Confirm you are on `main` at the verified SHA.** Re-derive `$MERGED_SHA` from the release PR (the SHA from Gate 3) — do not trust shell state across the gate pause.
    ```bash
    git checkout main
    git pull
-   test "$(git rev-parse HEAD)" = "$MERGED_SHA" || { echo "main moved — re-verify"; exit 1; }
+   # Re-derive from the release PR — the PR number was in the Gate 3 question.
+   MERGED_SHA=$(gh pr view <release-pr-number> --repo amd/gaia --json mergeCommitOid -q .mergeCommitOid)
+   test "$(git rev-parse HEAD)" = "$MERGED_SHA" || { echo "main moved past verified SHA $MERGED_SHA — re-verify (Phase 3) before tagging"; exit 1; }
    ```
 
 2. **Tag and push.**
