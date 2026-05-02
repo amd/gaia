@@ -1135,6 +1135,38 @@ async function installBackend(opts = {}) {
   log(`Verified gaia binary: ${verifiedBin} (version=${installedVersion || "unknown"})`);
   report(STAGES.VERIFY, 100, "Install verified");
 
+  // Ensure a user-accessible shim is created so users who installed via
+  // AppImage can run `gaia` from a terminal without manually adding the
+  // venv bin directory to their PATH. Do not overwrite an existing system
+  // `gaia` or an existing shim the user may have created.
+  try {
+    // Only create shims on POSIX-like systems (AppImage target).
+    if (process.platform !== "win32") {
+      const userBin = process.env.XDG_BIN_HOME || path.join(os.homedir(), ".local", "bin");
+      const shimPath = path.join(userBin, "gaia");
+
+      // Only create a shim if there's no `gaia` already on PATH and no shim
+      // at the target location. This avoids clobbering system packages.
+      if (!commandExists("gaia") && !fs.existsSync(shimPath)) {
+        try {
+          fs.mkdirSync(userBin, { recursive: true });
+          const wrapper = `#!/bin/sh\nexec \"${verifiedBin}\" \"$@\"\n`;
+          fs.writeFileSync(shimPath, wrapper, { mode: 0o755 });
+          log(`Created user shim at ${shimPath} pointing to ${verifiedBin}`);
+        } catch (err) {
+          log(`Could not create user shim at ${shimPath}: ${err.message}`);
+        }
+      } else if (fs.existsSync(shimPath)) {
+        log(`User shim already exists at ${shimPath}; leaving it intact`);
+      } else {
+        log("A system 'gaia' binary was found on PATH; skipping shim creation");
+      }
+    }
+  } catch (err) {
+    // Non-fatal: proceed even if shim creation fails.
+    log(`Shim creation check failed: ${err.message}`);
+  }
+
   setState(STATES.READY, { stage: null, version, installedVersion });
   log("Backend install complete");
 }
