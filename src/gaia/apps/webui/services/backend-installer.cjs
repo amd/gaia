@@ -1149,10 +1149,18 @@ async function installBackend(opts = {}) {
       // at the target location. This avoids clobbering system packages.
       if (!commandExists("gaia") && !fs.existsSync(shimPath)) {
         try {
-          fs.mkdirSync(userBin, { recursive: true });
-          const wrapper = `#!/bin/sh\nexec \"${verifiedBin}\" \"$@\"\n`;
-          fs.writeFileSync(shimPath, wrapper, { mode: 0o755 });
-          log(`Created user shim at ${shimPath} pointing to ${verifiedBin}`);
+          // Basic sanity-check on the target path to avoid writing a
+          // wrapper that could execute an arbitrary command. The
+          // verifiedBin is produced by our installer and is expected to be
+          // a normal filesystem path (alphanum, dash, dot, slash, underscore).
+          if (!/^[\w\-./]+$/.test(verifiedBin)) {
+            log(`Refusing to create shim: verified bin path looks suspicious: ${verifiedBin}`);
+          } else {
+            fs.mkdirSync(userBin, { recursive: true });
+            const wrapper = `#!/bin/sh\nexec \"${verifiedBin}\" \"$@\"\n`;
+            fs.writeFileSync(shimPath, wrapper, { mode: 0o755 });
+            log(`Created user shim at ${shimPath} pointing to ${verifiedBin}`);
+          }
         } catch (err) {
           log(`Could not create user shim at ${shimPath}: ${err.message}`);
         }

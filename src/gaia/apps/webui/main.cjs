@@ -17,7 +17,7 @@ const { app, BrowserWindow, dialog, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const { pathToFileURL } = require("url");
 
 // ── Shared log path ───────────────────────────────────────────────────────────
@@ -248,8 +248,6 @@ async function startBackend() {
     backendPort = DEFAULT_BACKEND_PORT;
   }
   healthCheckUrl = `http://localhost:${backendPort}/api/health`;
-  console.log(`Starting backend: ${gaiaCmd} chat --ui --ui-port ${backendPort}`);
-
   // Clean up any stale backend PID left from previous runs. The AppImage
   // may be double-clicked multiple times or crash, leaving orphaned
   // backend processes. We store a PID file under ~/.gaia/backend.pid and
@@ -260,12 +258,46 @@ async function startBackend() {
       try {
         const existingPid = parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
         if (!Number.isNaN(existingPid)) {
-          console.log(`[main] Found existing backend pidfile (${existingPid}) — attempting cleanup`);
+          console.log(`[main] Found existing backend pidfile (${existingPid}) — verifying process identity`);
+
+          // Verify the PID belongs to a GAIA backend before signalling it.
+          // Prefer a conservative match on the process command to avoid
+          // accidentally killing unrelated user processes (TOCTOU mitigation).
+          let isBackend = false;
           try {
-            await portManager.killBackend(existingPid);
-            console.log(`[main] Cleaned up previous backend pid ${existingPid}`);
+            if (process.platform === "linux") {
+              const procCmd = `/proc/${existingPid}/cmdline`;
+              if (fs.existsSync(procCmd)) {
+                const raw = fs.readFileSync(procCmd, "utf8");
+                // /proc/<pid>/cmdline is NUL-separated; check for gaia keywords.
+                if (raw.includes("gaia") || raw.includes("gaia-desktop") || raw.includes("python")) {
+                  isBackend = true;
+                }
+              }
+            } else if (process.platform === "darwin") {
+              try {
+                const out = spawnSync("ps", ["-p", String(existingPid), "-o", "command="], { encoding: "utf8" });
+                const cmd = (out && out.stdout) ? out.stdout : "";
+                if (cmd.includes("gaia") || cmd.includes("gaia-desktop") || cmd.includes("python")) {
+                  isBackend = true;
+                }
+              } catch {
+                // fallthrough
+              }
+            }
           } catch (err) {
-            console.warn(`[main] Could not clean previous backend pid ${existingPid}: ${err.message}`);
+            console.warn(`[main] Could not verify pid ${existingPid}: ${err.message}`);
+          }
+
+          if (!isBackend) {
+            console.log(`[main] PID ${existingPid} does not appear to be a GAIA backend; skipping kill`);
+          } else {
+            try {
+              await portManager.killBackend(existingPid);
+              console.log(`[main] Cleaned up previous backend pid ${existingPid}`);
+            } catch (err) {
+              console.warn(`[main] Could not clean previous backend pid ${existingPid}: ${err.message}`);
+            }
           }
         }
       } catch (err) {

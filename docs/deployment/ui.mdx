@@ -119,14 +119,14 @@ export PATH="$HOME/.local/bin:$PATH"
 ```bash
 ls -l ~/.local/bin/gaia
 ```
-4. To collect logs for a bug report:
+5. To collect logs for a bug report:
 ```bash
 gaia diagnostics
 ```
 Attach the resulting `~/.gaia/diagnostics-*.tgz` to your GitHub issue.
 
-Troubleshooting — zombie backend processes
-------------------------------------------
+
+## Troubleshooting — zombie backend processes
 
 If the Electron front-end crashes or is force-quit, the Python backend
 process may remain running (listening on a random port). The AppImage
@@ -145,8 +145,7 @@ If you repeatedly see leftover backends, please attach the diagnostics
 bundle produced by `gaia diagnostics` to your issue and include the
 output of `ps aux | grep -E 'python.*gaia'`.
 
-Arch Linux and AppImage notes
-----------------------------
+## Arch Linux and AppImage notes
 
 Arch and some rolling-release distros may ship significantly newer
 glibc or system libraries than the Ubuntu runner used to produce the
