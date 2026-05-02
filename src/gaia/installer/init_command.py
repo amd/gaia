@@ -530,6 +530,18 @@ class InitCommand:
             if not self._verify_setup():
                 return 1
 
+            # Drop the init marker so the Agent UI's WelcomeScreen stops
+            # advising "First time? Run gaia init". The frontend probes
+            # /api/system/status, which checks for ~/.gaia/chat/initialized
+            # (src/gaia/ui/routers/system.py); without this touch the banner
+            # is permanently sticky no matter how many times init runs.
+            try:
+                marker = Path.home() / ".gaia" / "chat" / "initialized"
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.touch(exist_ok=True)
+            except OSError as e:
+                self._print_warning(f"Could not write init marker {marker}: {e}")
+
             # Success!
             self._print_completion()
             return 0
