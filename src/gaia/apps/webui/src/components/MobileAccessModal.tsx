@@ -140,10 +140,10 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                         }`} />
                         <span>
                             {status?.active
-                                ? 'Tunnel active'
+                                ? (status.mode === 'local' ? 'Local Wi-Fi pairing active' : 'Tunnel active')
                                 : error
                                     ? 'Connection failed'
-                                    : 'Starting tunnel...'}
+                                    : 'Starting...'}
                         </span>
                         {!status?.active && !error && <span className="tunnel-spinner" />}
                     </div>
@@ -189,8 +189,8 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                         </div>
                     )}
 
-                    {/* Tunnel password hint (for random ngrok URLs with interstitial) */}
-                    {status?.active && status?.publicIp && status?.url &&
+                    {/* Tunnel password hint (ngrok-only — paid custom domains show an interstitial) */}
+                    {status?.active && status?.mode === 'ngrok' && status?.publicIp && status?.url &&
                      !status.url.includes('ngrok-free.app') && (
                         <div className="tunnel-password-hint">
                             <label>Tunnel Password</label>
@@ -204,12 +204,15 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAcce
                     {/* Instructions */}
                     <div className="mobile-instructions">
                         <ol>
+                            <li>Make sure your phone is on the same Wi-Fi as this machine</li>
                             <li>Scan the QR code with your phone&apos;s camera</li>
-                            {status?.url && !status.url.includes('ngrok-free.app') && (
+                            {status?.mode === 'ngrok' && status?.url && !status.url.includes('ngrok-free.app') && (
                                 <li>Enter the tunnel password shown above when prompted</li>
                             )}
                             <li>Chat with GAIA from your mobile device</li>
-                            <li>Your data stays secure via encrypted tunnel</li>
+                            {status?.mode === 'local'
+                                ? <li>Stays on your local network — never leaves the LAN</li>
+                                : <li>Your data stays secure via encrypted tunnel</li>}
                         </ol>
                     </div>
 

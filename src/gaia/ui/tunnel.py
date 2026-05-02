@@ -3,9 +3,13 @@
 
 """Tunnel manager for mobile access to GAIA Agent UI.
 
-Manages an ngrok tunnel to expose the local GAIA server for remote/mobile
-access. Generates a UUID-based authentication token and provides QR code
-data for easy mobile onboarding.
+Two modes:
+- ``ngrok``: spawns an ngrok process for public-internet mobile access.
+- ``local``: no subprocess; mints a token and emits a LAN URL
+  (``http://<lan_ip>:<port>``) so phones on the same Wi-Fi can connect
+  without leaving the local network.
+Both share the same token machinery, so ``TunnelAuthMiddleware`` gates
+non-localhost ``/api/*`` requests identically.
 """
 
 import asyncio
@@ -15,6 +19,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import uuid
 from datetime import datetime, timezone
@@ -298,11 +303,15 @@ class TunnelManager:
         self._started_at: Optional[str] = None
         self._error: Optional[str] = None
         self._public_ip: Optional[str] = None
+        self._mode: Optional[str] = None
+        self._local_active: bool = False
         self._start_lock = asyncio.Lock()
 
     @property
     def active(self) -> bool:
         """Whether the tunnel is currently active."""
+        if self._local_active:
+            return self._url is not None
         return (
             self._process is not None
             and self._process.poll() is None
@@ -322,6 +331,7 @@ class TunnelManager:
             "startedAt": self._started_at,
             "error": self._error,
             "publicIp": self._public_ip,
+            "mode": self._mode if self.active else None,
         }
 
     def validate_token(self, token: str) -> bool:
@@ -347,17 +357,75 @@ class TunnelManager:
             return False
         return hmac.compare_digest(token, self._token)
 
-    async def start(self) -> dict:
-        """Start the ngrok tunnel.
+    async def start(self, mode: str = "ngrok") -> dict:
+        """Start a tunnel.
+
+        Args:
+            mode: ``"ngrok"`` (public tunnel) or ``"local"`` (LAN-only,
+                no subprocess — emits ``http://<lan_ip>:<port>``).
 
         Returns:
             Tunnel status dict with url, token, etc.
-
-        Raises:
-            RuntimeError: If ngrok is not installed or tunnel fails to start.
         """
         async with self._start_lock:
+            if mode == "local":
+                return await self._start_local()
             return await self._start_unlocked()
+
+    async def _start_local(self) -> dict:
+        """Start a LAN-only pseudo-tunnel.
+
+        Mints a UUID token and sets ``_url`` to the host's LAN address.
+        No subprocess is spawned. The UI server must already be bound on
+        the LAN interface (``--ui-host 0.0.0.0``).
+        """
+        if self.active:
+            logger.info("Tunnel already active at %s", self._url)
+            return self.get_status()
+
+        # Reset state
+        self._error = None
+        self._url = None
+
+        host = self._detect_lan_host()
+        if not host:
+            self._error = (
+                "Could not determine LAN address. Set GAIA_LAN_HOST to "
+                "the IP your phone should connect to (e.g. 10.0.0.10)."
+            )
+            logger.error(self._error)
+            return self.get_status()
+
+        self._token = str(uuid.uuid4())
+        self._url = f"http://{host}:{self.port}"
+        self._mode = "local"
+        self._local_active = True
+        self._started_at = datetime.now(timezone.utc).isoformat()
+        logger.info(
+            "Local tunnel active: %s (token: %s...)", self._url, self._token[:8]
+        )
+        return self.get_status()
+
+    @staticmethod
+    def _detect_lan_host() -> Optional[str]:
+        """Resolve the LAN IP to put in the QR URL.
+
+        Honors ``GAIA_LAN_HOST`` first; otherwise opens an unconnected
+        UDP socket toward a public address to discover the source IP of
+        the default route. No packets are sent.
+        """
+        env = os.environ.get("GAIA_LAN_HOST")
+        if env and env.strip():
+            return env.strip()
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect(("8.8.8.8", 80))
+                return s.getsockname()[0]
+            finally:
+                s.close()
+        except Exception:
+            return None
 
     async def _start_unlocked(self) -> dict:
         """Internal start implementation (caller must hold _start_lock)."""
@@ -369,6 +437,7 @@ class TunnelManager:
         # Reset state
         self._error = None
         self._url = None
+        self._mode = "ngrok"
 
         # Check ngrok installation
         ngrok_path = self._find_ngrok()
@@ -496,6 +565,8 @@ class TunnelManager:
         self._url = None
         self._started_at = None
         self._error = None
+        self._local_active = False
+        self._mode = None
         logger.info("Tunnel stopped")
 
     def _find_ngrok(self) -> Optional[str]:

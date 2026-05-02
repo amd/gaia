@@ -27,6 +27,48 @@ function getFriendlyError(status: number, detail: string): string {
     }
 }
 
+// ── Mobile-pairing token bootstrap ─────────────────────────────────────────
+//
+// When the desktop hands a QR-paired phone a URL like `http://host/?token=…`,
+// the SPA loads via the static-file path (no auth required), then has to
+// send a `Authorization: Bearer <token>` on every API call so the server's
+// TunnelAuthMiddleware lets it through. We pull the token out of the URL
+// once on first read, persist it in localStorage so a refresh keeps working,
+// and strip it from the address bar so it doesn't leak via screenshots or
+// history sync.
+const TOKEN_STORAGE_KEY = 'gaia.tunnelToken';
+let _tokenCache: string | null | undefined; // undefined = not yet read
+
+function getApiToken(): string | null {
+    if (_tokenCache !== undefined) return _tokenCache;
+    if (typeof window === 'undefined') {
+        _tokenCache = null;
+        return null;
+    }
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const fromUrl = params.get('token');
+        if (fromUrl) {
+            window.localStorage.setItem(TOKEN_STORAGE_KEY, fromUrl);
+            params.delete('token');
+            const qs = params.toString();
+            const newUrl = window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash;
+            window.history.replaceState(null, '', newUrl);
+            _tokenCache = fromUrl;
+            return fromUrl;
+        }
+        _tokenCache = window.localStorage.getItem(TOKEN_STORAGE_KEY);
+    } catch {
+        _tokenCache = null;
+    }
+    return _tokenCache;
+}
+
+function authHeaders(): Record<string, string> {
+    const tok = getApiToken();
+    return tok ? { Authorization: `Bearer ${tok}` } : {};
+}
+
 /** Fetch wrapper with logging, timing, and error handling. */
 async function apiFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${API_BASE}${path}`;
@@ -34,9 +76,11 @@ async function apiFetch<T>(method: string, path: string, body?: unknown): Promis
 
     log.api.info(`${method} ${url}`, body !== undefined ? { body } : '');
 
+    const headers: Record<string, string> = { ...authHeaders() };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
     const init: RequestInit = {
         method,
-        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+        headers,
         body: body !== undefined ? JSON.stringify(body) : undefined,
     };
 
@@ -199,7 +243,7 @@ export function sendMessageStream(
 
     fetch(`${API_BASE}/chat/send`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
             session_id: sessionId,
             message,
@@ -477,8 +521,8 @@ export async function previewFile(path: string, lines?: number): Promise<{
 
 // -- Mobile Access / Tunnel -------------------------------------------------------
 
-export async function startTunnel(): Promise<TunnelStatus> {
-    return apiFetch('POST', '/tunnel/start');
+export async function startTunnel(opts?: { mode?: 'local' | 'ngrok' }): Promise<TunnelStatus> {
+    return apiFetch('POST', '/tunnel/start', opts ?? undefined);
 }
 
 export async function stopTunnel(): Promise<{ active: boolean }> {

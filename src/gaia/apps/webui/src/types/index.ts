@@ -218,7 +218,7 @@ export interface MCPServerStatus {
 
 // ── Mobile Access / Tunnel Types ─────────────────────────────────────────
 
-/** Status of the ngrok tunnel for mobile access. */
+/** Status of the mobile-access tunnel (ngrok public or LAN-local). */
 export interface TunnelStatus {
     active: boolean;
     url: string | null;
@@ -226,6 +226,7 @@ export interface TunnelStatus {
     startedAt: string | null;
     error: string | null;
     publicIp: string | null;
+    mode?: 'local' | 'ngrok' | null;
 }
 
 // ── Agent Activity Types ──────────────────────────────────────────────────
