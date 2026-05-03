@@ -380,27 +380,19 @@ function App() {
         }
     }, [addSession, setCurrentSession, setMessages, setSidebarOpen, checkSystemStatus, setPendingPrompt]);
 
-    // Mobile gateway toggle: the sidebar button ALWAYS opens the modal
-    // (so the user can re-capture the QR / URL if they missed it the first
-    // time).  Stopping the tunnel is done via the explicit "Stop Tunnel"
-    // button inside the modal (see handleMobileStop).
+    // Mobile gateway toggle: the sidebar button ALWAYS opens the modal AND
+    // (re)starts the tunnel in local mode. If the tunnel is already running
+    // we restart it so the user gets fresh credentials/URL; if it isn't, we
+    // start it fresh. Stopping is done via the explicit "Stop Tunnel" button
+    // inside the modal (see handleMobileStop).
     const handleMobileToggle = useCallback(async () => {
-        if (tunnelActive) {
-            // Tunnel already running -- just reopen the modal so the user
-            // can copy the URL or scan the QR again.
-            log.system.info('Reopening mobile access modal (tunnel already running)');
-            setTunnelError(null);
-            setShowMobileAccess(true);
-            return;
-        }
-
-        // Tunnel is not running -- start it.
-        log.system.info('Starting mobile access tunnel...');
+        const action = tunnelActive ? 'Restarting' : 'Starting';
+        log.system.info(`${action} mobile access tunnel (mode: local)...`);
         setShowMobileAccess(true);
         setTunnelLoading(true);
         setTunnelError(null);
         try {
-            const status = await api.startTunnel();
+            const status = await api.startTunnel({ mode: 'local' });
             if (status.error) {
                 log.system.error('Tunnel failed to start:', status.error);
                 setTunnelActive(false);

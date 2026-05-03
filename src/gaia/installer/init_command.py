@@ -530,6 +530,18 @@ class InitCommand:
             if not self._verify_setup():
                 return 1
 
+            # Drop the init marker so the Agent UI's WelcomeScreen stops
+            # advising "First time? Run gaia init". The frontend probes
+            # /api/system/status, which checks for ~/.gaia/chat/initialized
+            # (src/gaia/ui/routers/system.py); without this touch the banner
+            # is permanently sticky no matter how many times init runs.
+            try:
+                marker = Path.home() / ".gaia" / "chat" / "initialized"
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.touch(exist_ok=True)
+            except OSError as e:
+                self._print_warning(f"Could not write init marker {marker}: {e}")
+
             # Success!
             self._print_completion()
             return 0
@@ -1383,19 +1395,26 @@ class InitCommand:
                     return (False, "Empty embedding")
                 return (False, "Invalid response format")
             else:
-                # Test LLM with a minimal chat request
+                # Test LLM with a minimal chat request.
+                # Append `/no_think` to suppress thinking-mode (Qwen3+ family etc.)
+                # and give enough budget for a short thinking block to complete.
                 response = client.chat_completions(
                     model=model_id,
-                    messages=[{"role": "user", "content": "Say 'ok'"}],
-                    max_tokens=10,
+                    messages=[{"role": "user", "content": "Say 'ok' /no_think"}],
+                    max_tokens=64,
                     temperature=0,
                 )
                 # Check if we got a valid response
                 if response and response.get("choices"):
-                    content = (
-                        response["choices"][0].get("message", {}).get("content", "")
-                    )
+                    choice = response["choices"][0]
+                    content = choice.get("message", {}).get("content", "")
+                    finish = choice.get("finish_reason")
                     if content:
+                        return (True, None)
+                    # Thinking models may have spent the budget on <think> tokens.
+                    # Treat finish_reason="length" with empty content as a soft pass —
+                    # the model was generating, the budget was just too tight.
+                    if finish == "length":
                         return (True, None)
                     return (False, "Empty response")
                 return (False, "Invalid response format")

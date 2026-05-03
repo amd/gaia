@@ -68,8 +68,12 @@ logger = logging.getLogger(__name__)
 # Default port for agent UI server
 DEFAULT_PORT = 4200
 
-# Localhost addresses that bypass tunnel authentication (Electron app)
+# Localhost addresses that bypass tunnel authentication (Electron app +
+# desktop browser opening the LAN URL on the same machine that hosts gaia).
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_lan_host_env = os.environ.get("GAIA_LAN_HOST", "").strip()
+if _lan_host_env:
+    _LOCAL_HOSTS.add(_lan_host_env)
 
 # API paths that bypass tunnel authentication (monitoring / preflight)
 _AUTH_EXEMPT_PATHS = {"/api/health"}
@@ -354,7 +358,14 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.state.max_indexed_files = int(os.environ.get("GAIA_MAX_INDEXED_FILES", "0"))
 
     # Initialize tunnel manager for mobile access
-    tunnel = TunnelManager(port=DEFAULT_PORT)
+    # Honor GAIA_UI_PORT (set by _launch_agent_ui) so the QR URL points at the
+    # actual runtime port, not the compile-time DEFAULT_PORT.
+    _ui_port_env = os.environ.get("GAIA_UI_PORT")
+    try:
+        _runtime_port = int(_ui_port_env) if _ui_port_env else DEFAULT_PORT
+    except ValueError:
+        _runtime_port = DEFAULT_PORT
+    tunnel = TunnelManager(port=_runtime_port)
     app.state.tunnel = tunnel
 
     # Concurrency control for /api/chat/send

@@ -687,15 +687,28 @@ def _ensure_webui_built(log=None):
     )
 
 
-def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist=None):
+def _launch_agent_ui(
+    port=4200,
+    base_url=None,
+    log=None,
+    debug=False,
+    webui_dist=None,
+    host="127.0.0.1",
+):
     """Launch the Agent UI server (FastAPI + uvicorn).
 
     Reused by top-level --ui, gaia chat --ui, and the interactive menu.
+    Pass ``host="0.0.0.0"`` (or a specific LAN IP) to expose the server
+    on the LAN — needed for the local-mode mobile pairing flow.
     """
     if log is None:
         log = get_logger(__name__)
 
     _ensure_webui_built(log=log)
+
+    # Tell the UI server which port we'll bind on, so the mobile-access QR
+    # URL is built with the runtime port (not the compile-time default).
+    os.environ["GAIA_UI_PORT"] = str(port)
 
     try:
         from gaia.ui.server import create_app
@@ -724,7 +737,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         app = create_app(webui_dist=webui_dist)
         uvicorn.run(
             app,
-            host="127.0.0.1",
+            host=host,
             port=port,
             log_level="debug" if debug else "info",
             access_log=debug,
@@ -876,6 +889,14 @@ def main():
         type=int,
         default=4200,
         help="Port for the Agent UI server (default: 4200, used with --ui)",
+    )
+    parser.add_argument(
+        "--ui-host",
+        default="127.0.0.1",
+        help=(
+            "Interface to bind the Agent UI server (default: 127.0.0.1)."
+            " Use 0.0.0.0 to expose on the LAN for the local-mode mobile QR."
+        ),
     )
     parser.add_argument(
         "--ui-dist",
@@ -1053,6 +1074,14 @@ def main():
         type=int,
         default=4200,
         help="Port for the Agent UI server (default: 4200)",
+    )
+    chat_parser.add_argument(
+        "--ui-host",
+        default="127.0.0.1",
+        help=(
+            "Interface to bind the Agent UI server (default: 127.0.0.1)."
+            " Use 0.0.0.0 to expose on the LAN for the local-mode mobile QR."
+        ),
     )
     chat_parser.add_argument(
         "--ui-dist",
@@ -2118,6 +2147,7 @@ Examples:
                 log=log,
                 debug=getattr(args, "debug", False),
                 webui_dist=getattr(args, "ui_dist", None),
+                host=getattr(args, "ui_host", "127.0.0.1"),
             )
             return
 
@@ -2133,6 +2163,7 @@ Examples:
             log=log,
             debug=getattr(args, "debug", False),
             webui_dist=getattr(args, "ui_dist", None),
+            host=getattr(args, "ui_host", "127.0.0.1"),
         )
         return
 
@@ -2153,6 +2184,7 @@ Examples:
             log=log,
             debug=getattr(args, "debug", False),
             webui_dist=getattr(args, "ui_dist", None),
+            host=getattr(args, "ui_host", "127.0.0.1"),
         )
         return
 

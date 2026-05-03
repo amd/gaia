@@ -729,12 +729,24 @@ app.whenReady().then(async () => {
   // a 10s delay inside the module so it never competes with app launch.
   // Any failure here is logged and swallowed — the app continues to run
   // even if auto-update is unavailable.
-  try {
-    autoUpdater.init(mainWindow);
-  } catch (err) {
-    console.error(
-      "[main] Failed to init auto-updater:",
-      err && err.message ? err.message : err
+  //
+  // Fork builds skip auto-update by default: the updater points at upstream
+  // amd/gaia's release channel, so a successful "update" overwrites the
+  // forked binary with upstream's, silently destroying any fork divergence
+  // (e.g. mobile-QR pairing, packaging tweaks). Set GAIA_ENABLE_AUTOUPDATE=1
+  // in the environment to opt back in on builds tracking upstream releases.
+  if (process.env.GAIA_ENABLE_AUTOUPDATE === "1") {
+    try {
+      autoUpdater.init(mainWindow);
+    } catch (err) {
+      console.error(
+        "[main] Failed to init auto-updater:",
+        err && err.message ? err.message : err
+      );
+    }
+  } else {
+    console.log(
+      "[main] auto-updater disabled (set GAIA_ENABLE_AUTOUPDATE=1 to enable)"
     );
   }
 

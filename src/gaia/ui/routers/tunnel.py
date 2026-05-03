@@ -3,12 +3,17 @@
 
 """Mobile access tunnel endpoints for GAIA Agent UI.
 
-Manages ngrok tunnels for remote/mobile access to the local server.
+Supports two modes:
+- ``ngrok``: public-internet tunnel for off-LAN access.
+- ``local``: LAN-only QR pairing — no external service, mints a token
+  and points the QR at the host's LAN IP.
 """
 
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel
 
 from ..dependencies import get_tunnel
 from ..tunnel import TunnelManager
@@ -18,12 +23,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["tunnel"])
 
 
+class TunnelStartRequest(BaseModel):
+    mode: str = "ngrok"
+
+
 @router.post("/api/tunnel/start")
-async def start_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
-    """Start ngrok tunnel for mobile access."""
+async def start_tunnel(
+    body: Optional[TunnelStartRequest] = Body(default=None),
+    tunnel: TunnelManager = Depends(get_tunnel),
+):
+    """Start a mobile-access tunnel.
+
+    Body: ``{"mode": "ngrok" | "local"}``. Default is ``ngrok`` for
+    backward compat with older frontends that POST without a body.
+    """
+    mode = (body.mode if body else "ngrok") or "ngrok"
+    if mode not in ("ngrok", "local"):
+        raise HTTPException(status_code=400, detail=f"Unknown tunnel mode: {mode}")
     try:
-        logger.info("Starting mobile access tunnel...")
-        status = await tunnel.start()
+        logger.info("Starting mobile access tunnel (mode=%s)...", mode)
+        status = await tunnel.start(mode=mode)
         return status
     except Exception as e:
         logger.error("Failed to start tunnel: %s", e, exc_info=True)
