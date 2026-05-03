@@ -1714,6 +1714,46 @@ Do NOT wrap conversational replies in JSON.
             "content": [{"type": "text", "text": text_content}],
         }
 
+    def _build_assistant_message(
+        self, raw_response: str, parsed: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Construct the assistant message to append to the LLM context.
+
+        For native ``tool_calls`` responses (issue #944) we MUST emit a
+        proper OpenAI-shape assistant turn — ``content`` (string or
+        null) plus ``tool_calls`` carrying the original ids — so that
+        the subsequent ``role=tool`` messages can correlate by
+        ``tool_call_id``. Stuffing the raw ``{"__tool_calls__": ...}``
+        sentinel envelope into ``content`` (the pre-fix behaviour) is
+        rejected by spec-strict providers and breaks parallel-call
+        result-to-call matching.
+
+        For embedded-JSON / plain-text responses we keep passing the raw
+        response text through unchanged.
+        """
+        tc_list = parsed.get("tool_calls")
+        if not tc_list:
+            return {"role": "assistant", "content": raw_response}
+        return {
+            "role": "assistant",
+            "content": parsed.get("content"),
+            "tool_calls": [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(
+                            tc["tool_args"],
+                            default=self._json_serialize_fallback,
+                        ),
+                    },
+                }
+                for tc in tc_list
+            ],
+        }
+
     def _json_serialize_fallback(self, obj: Any) -> Any:
         """
         Fallback serializer for JSON encoding non-standard types.
@@ -2604,40 +2644,10 @@ Do NOT wrap conversational replies in JSON.
             logger.debug(f"Parsed response: {parsed}")
             conversation.append({"role": "assistant", "content": parsed})
 
-            # Add assistant response to messages for chat history.
-            #
-            # For native tool_calls (issue #944) we MUST emit a proper
-            # OpenAI-shape assistant message — ``content`` (string or null)
-            # plus ``tool_calls`` carrying the original ids — so that the
-            # subsequent ``role=tool`` messages can correlate by
-            # ``tool_call_id`` on the next LLM round. The previous code path
-            # passed back the raw sentinel envelope ``{"__tool_calls__": ...}``
-            # as a string ``content``, which any spec-strict provider would
-            # reject and which broke parallel-call result-to-call matching.
-            tc_list = parsed.get("tool_calls")
-            if tc_list:
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": parsed.get("content"),
-                        "tool_calls": [
-                            {
-                                "id": tc["id"],
-                                "type": "function",
-                                "function": {
-                                    "name": tc["name"],
-                                    "arguments": json.dumps(
-                                        tc["tool_args"],
-                                        default=self._json_serialize_fallback,
-                                    ),
-                                },
-                            }
-                            for tc in tc_list
-                        ],
-                    }
-                )
-            else:
-                messages.append({"role": "assistant", "content": response})
+            # Add assistant response to messages for chat history (OpenAI
+            # shape for native tool_calls, raw text otherwise — see
+            # ``_build_assistant_message`` for the why).
+            messages.append(self._build_assistant_message(response, parsed))
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -2747,8 +2757,16 @@ Do NOT wrap conversational replies in JSON.
                 logger.debug(f"Parsed plan response: {parsed_plan}")
                 conversation.append({"role": "assistant", "content": parsed_plan})
 
-                # Add plan response to messages for chat history
-                messages.append({"role": "assistant", "content": plan_response})
+                # Add plan response to messages for chat history. Same
+                # OpenAI-shape rule as the main-response append (issue
+                # #944): a tool-calling-trained planner can emit native
+                # ``tool_calls`` instead of (or alongside) the expected
+                # plan JSON — those must be preserved as a structured
+                # assistant turn so the fan-out below can correlate
+                # results back via ``tool_call_id``.
+                messages.append(
+                    self._build_assistant_message(plan_response, parsed_plan)
+                )
 
                 # Display the agent's reasoning for the plan
                 self.console.print_thought(parsed_plan.get("thought", "Creating plan"))
