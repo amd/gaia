@@ -1491,7 +1491,6 @@ Do NOT wrap conversational replies in JSON.
                 break
         if consecutive_count >= self.max_consecutive_repeats:
             self.console.stop_progress()
-            final_answer = f"Task completed with {tool_name}. No further action needed."
             self.console.print_repeated_tool_warning()
             return (None, None, False, None)
 
@@ -1511,7 +1510,9 @@ Do NOT wrap conversational replies in JSON.
         if tool_name in _QUERY_TOOLS:
             try:
                 result_key = f"{tool_name}:{hash(str(tool_result))}"
-                query_result_cache[result_key] = query_result_cache.get(result_key, 0) + 1
+                query_result_cache[result_key] = (
+                    query_result_cache.get(result_key, 0) + 1
+                )
                 if query_result_cache[result_key] >= 2:
                     logger.debug(
                         "[DEDUP] Same query result returned %d times — injecting stop signal",
@@ -1542,7 +1543,9 @@ Do NOT wrap conversational replies in JSON.
         self.console.pretty_print_json(tool_result, "Result")
         self.console.print_tool_complete()
 
-        previous_outputs.append({"tool": tool_name, "args": tool_args, "result": truncated_result})
+        previous_outputs.append(
+            {"tool": tool_name, "args": tool_args, "result": truncated_result}
+        )
         step_results.append(tool_result)
 
         # Share tool output with subsequent LLM calls
@@ -2708,7 +2711,10 @@ Do NOT wrap conversational replies in JSON.
                 conversation.append(
                     {
                         "role": "assistant",
-                        "content": json.dumps({"tool_calls": parsed}, default=self._json_serialize_fallback),
+                        "content": json.dumps(
+                            {"tool_calls": parsed},
+                            default=self._json_serialize_fallback,
+                        ),
                     }
                 )
                 # Preserve raw assistant response for history
@@ -2720,18 +2726,22 @@ Do NOT wrap conversational replies in JSON.
 
                     tool_name = call["tool"]
                     tool_args = call["tool_args"]
-                    logger.debug(f"Sequential native tool call: {tool_name} {tool_args}")
+                    logger.debug(
+                        f"Sequential native tool call: {tool_name} {tool_args}"
+                    )
 
-                    tool_result, truncated_result, is_error, last_error = self._execute_parsed_tool_call(
-                        tool_name,
-                        tool_args,
-                        conversation,
-                        messages,
-                        tool_call_history,
-                        tool_call_log,
-                        previous_outputs,
-                        step_results,
-                        query_result_cache,
+                    tool_result, truncated_result, is_error, last_error = (
+                        self._execute_parsed_tool_call(
+                            tool_name,
+                            tool_args,
+                            conversation,
+                            messages,
+                            tool_call_history,
+                            tool_call_log,
+                            previous_outputs,
+                            step_results,
+                            query_result_cache,
+                        )
                     )
 
                     if is_error:
@@ -2988,16 +2998,18 @@ Do NOT wrap conversational replies in JSON.
                 logger.debug(f"Tool call detected: {tool_name} with args {tool_args}")
 
                 # Unified execution of a single parsed tool call
-                tool_result, truncated_result, is_error, last_error = self._execute_parsed_tool_call(
-                    tool_name,
-                    tool_args,
-                    conversation,
-                    messages,
-                    tool_call_history,
-                    tool_call_log,
-                    previous_outputs,
-                    step_results,
-                    query_result_cache,
+                tool_result, truncated_result, is_error, last_error = (
+                    self._execute_parsed_tool_call(
+                        tool_name,
+                        tool_args,
+                        conversation,
+                        messages,
+                        tool_call_history,
+                        tool_call_log,
+                        previous_outputs,
+                        step_results,
+                        query_result_cache,
+                    )
                 )
 
                 # For single-step plans, we still need to let the LLM process the result

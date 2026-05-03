@@ -28,7 +28,9 @@ def test_parallel_calls_with_error(monkeypatch):
         _TOOL_REGISTRY, "ok1", {"function": t_ok1, "parameters": {}, "description": ""}
     )
     monkeypatch.setitem(
-        _TOOL_REGISTRY, "errtool", {"function": t_err, "parameters": {}, "description": ""}
+        _TOOL_REGISTRY,
+        "errtool",
+        {"function": t_err, "parameters": {}, "description": ""},
     )
     monkeypatch.setitem(
         _TOOL_REGISTRY, "ok2", {"function": t_ok2, "parameters": {}, "description": ""}
@@ -75,7 +77,9 @@ def test_plan_then_native_tool_calls(monkeypatch):
     def q(a=""):
         return {"status": "success", "value": f"q:{a}"}
 
-    monkeypatch.setitem(_TOOL_REGISTRY, "q", {"function": q, "parameters": {}, "description": ""})
+    monkeypatch.setitem(
+        _TOOL_REGISTRY, "q", {"function": q, "parameters": {}, "description": ""}
+    )
 
     agent = _make_agent(monkeypatch)
 

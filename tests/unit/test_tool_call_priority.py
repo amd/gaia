@@ -306,9 +306,13 @@ def test_parse_native_parallel_calls_raises():
         "finish_reason": "tool_calls",
     }
     response = json.dumps(envelope)
-
-    with pytest.raises(NotImplementedError, match="[Pp]arallel tool calls"):
-        agent._parse_llm_response(response)
+    # Multiple native tool_calls are supported: the parser returns a list
+    # of parsed call dicts (one per tool_call) instead of raising.
+    result = agent._parse_llm_response(response)
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert result[0]["tool"] == "tool_a"
+    assert result[1]["tool"] == "tool_b"
 
 
 def test_parse_native_malformed_arguments_raises():
