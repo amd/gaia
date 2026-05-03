@@ -1449,6 +1449,128 @@ Do NOT wrap conversational replies in JSON.
                 "plan_step": self.current_step + 1 if self.current_plan else None,
             }
 
+    def _execute_parsed_tool_call(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        conversation: List[Dict[str, Any]],
+        messages: List[Dict[str, Any]],
+        tool_call_history: List[tuple],
+        tool_call_log: List[tuple],
+        previous_outputs: List[Dict[str, Any]],
+        step_results: List[Dict[str, Any]],
+        query_result_cache: dict,
+    ) -> tuple:
+        """
+        Unified execution path for a parsed tool call.
+
+        Returns a tuple (tool_result, truncated_result, is_error, last_error).
+        This centralises printing, progress, dedup, post-processing and
+        conversation/messages appends so plan and single-call flows share logic.
+        """
+        # Display the tool call in real-time
+        self.console.print_tool_usage(tool_name)
+        if tool_args:
+            self.console.pretty_print_json(tool_args, "Arguments")
+
+        # Start progress indicator
+        self.console.start_progress(f"Executing {tool_name}")
+
+        # Track call history and detect repeats
+        current_call = (tool_name, str(tool_args))
+        tool_call_history.append(current_call)
+        tool_call_log.append(current_call)
+        if len(tool_call_history) > 5:
+            tool_call_history.pop(0)
+
+        consecutive_count = 0
+        for c in reversed(tool_call_history):
+            if c == current_call:
+                consecutive_count += 1
+            else:
+                break
+        if consecutive_count >= self.max_consecutive_repeats:
+            self.console.stop_progress()
+            final_answer = f"Task completed with {tool_name}. No further action needed."
+            self.console.print_repeated_tool_warning()
+            return (None, None, False, None)
+
+        # Execute the tool
+        tool_result = self._execute_tool(tool_name, tool_args)
+
+        # Stop progress indicator
+        self.console.stop_progress()
+
+        # Result-based dedup: if this tool (query family) returns the same result
+        # it returned in a prior call, inject a correction so the agent stops looping.
+        _QUERY_TOOLS = (
+            "query_documents",
+            "query_specific_file",
+            "query_indexed_documents",
+        )
+        if tool_name in _QUERY_TOOLS:
+            try:
+                result_key = f"{tool_name}:{hash(str(tool_result))}"
+                query_result_cache[result_key] = query_result_cache.get(result_key, 0) + 1
+                if query_result_cache[result_key] >= 2:
+                    logger.debug(
+                        "[DEDUP] Same query result returned %d times — injecting stop signal",
+                        query_result_cache[result_key],
+                    )
+                    dedup_msg = (
+                        f"[SYSTEM] You have received this same result from {tool_name} "
+                        f"{query_result_cache[result_key]} times. "
+                        "Querying again will not yield new information. "
+                        "STOP querying and answer directly from what you have retrieved, "
+                        "OR check your prior turn responses for relevant data, "
+                        "OR state that the information was not found in the document."
+                    )
+                    messages.append({"role": "user", "content": dedup_msg})
+            except Exception:
+                # Non-fatal: hashing or state update failed; continue
+                pass
+
+        # Domain-specific post-processing
+        self._post_process_tool_result(tool_name, tool_args, tool_result)
+
+        # Handle and append large tool results
+        truncated_result = self._handle_large_tool_result(
+            tool_name, tool_result, conversation, tool_args
+        )
+
+        # Display the tool result
+        self.console.pretty_print_json(tool_result, "Result")
+        self.console.print_tool_complete()
+
+        previous_outputs.append({"tool": tool_name, "args": tool_args, "result": truncated_result})
+        step_results.append(tool_result)
+
+        # Share tool output with subsequent LLM calls
+        messages.append(self._create_tool_message(tool_name, truncated_result))
+
+        # Determine if tool_result is an error
+        is_error = isinstance(tool_result, dict) and (
+            tool_result.get("status") == "error"
+            or tool_result.get("success") is False
+            or tool_result.get("has_errors") is True
+            or tool_result.get("return_code", 0) != 0
+        )
+
+        last_error = None
+        if is_error:
+            last_error = (
+                tool_result.get("error_brief")
+                or tool_result.get("error")
+                or tool_result.get("stderr")
+                or tool_result.get("hint")
+                or tool_result.get("suggested_fix")
+                or f"Command failed with return code {tool_result.get('return_code')}"
+            )
+            if not tool_result.get("error_displayed"):
+                self.console.print_error(last_error)
+
+        return (tool_result, truncated_result, is_error, last_error)
+
     def _generate_max_steps_message(
         self, conversation: List[Dict], steps_taken: int, steps_limit: int
     ) -> str:
@@ -2529,7 +2651,7 @@ Do NOT wrap conversational replies in JSON.
             # nudge the model to retry with simpler args, and continue the loop.
             try:
                 parsed = self._parse_llm_response(response)
-            except (ValueError, NotImplementedError) as parse_exc:
+            except ValueError as parse_exc:
                 logger.warning(
                     "Tool-call parse failed (step %d): %s — recovering with retry prompt",
                     steps_taken,
@@ -2562,38 +2684,18 @@ Do NOT wrap conversational replies in JSON.
                 messages.append(recovery_assistant)
                 conversation.append(recovery_assistant)
 
-                # Provide different guidance depending on the parse failure type.
-                if isinstance(parse_exc, NotImplementedError):
-                    # NotImplementedError historically meant "multiple tool_calls"
-                    # when native tool-calling models returned parallel calls.
-                    # Give the model a clear instruction to either emit a single
-                    # tool call or a JSON `plan` describing multiple steps.
-                    recovery_user = {
-                        "role": "user",
-                        "content": (
-                            "Your last response contained MULTIPLE tool calls in a single reply. "
-                            "This agent prefers either a single tool call per response, "
-                            "or a structured JSON 'plan' containing an ordered array of steps. "
-                            "Please either: (A) output a single tool call JSON object, "
-                            'or (B) output a JSON plan in the format: {"plan": [{"tool": "name", "tool_args": {...}}]}. '
-                            "If you don't need to call a tool, answer in plain text."
-                        ),
-                    }
-                    messages.append(recovery_user)
-                    conversation.append(recovery_user)
-                else:
-                    # ValueError or other parse errors usually mean malformed args.
-                    recovery_user = {
-                        "role": "user",
-                        "content": (
-                            "Your last tool call had malformed arguments. "
-                            "Please try again. Use ONLY the documented enum "
-                            "values for each argument (e.g. 'brief', 'detailed', 'bullets'). "
-                            "If you don't need a tool, answer in plain text."
-                        ),
-                    }
-                    messages.append(recovery_user)
-                    conversation.append(recovery_user)
+                # Generic recovery guidance for malformed tool-call responses.
+                recovery_user = {
+                    "role": "user",
+                    "content": (
+                        "Your last tool call could not be parsed. "
+                        "Please retry with a single valid tool call JSON object, "
+                        "or, if you intended multiple steps, output a structured JSON 'plan' with an ordered array of steps. "
+                        "If you do not need to call a tool, reply in plain text."
+                    ),
+                }
+                messages.append(recovery_user)
+                conversation.append(recovery_user)
 
                 steps_taken += 1
                 continue
@@ -2602,9 +2704,12 @@ Do NOT wrap conversational replies in JSON.
             # If the parser returned multiple native tool calls, execute them
             # sequentially in this same LLM turn (one LLM turn -> N tool turns).
             if isinstance(parsed, list):
-                # Record assistant turn containing multiple tool_calls
+                # Record assistant turn containing multiple tool_calls (store as string)
                 conversation.append(
-                    {"role": "assistant", "content": {"tool_calls": parsed}}
+                    {
+                        "role": "assistant",
+                        "content": json.dumps({"tool_calls": parsed}, default=self._json_serialize_fallback),
+                    }
                 )
                 # Preserve raw assistant response for history
                 messages.append({"role": "assistant", "content": response})
@@ -2615,93 +2720,27 @@ Do NOT wrap conversational replies in JSON.
 
                     tool_name = call["tool"]
                     tool_args = call["tool_args"]
-                    logger.debug(
-                        f"Sequential native tool call: {tool_name} {tool_args}"
+                    logger.debug(f"Sequential native tool call: {tool_name} {tool_args}")
+
+                    tool_result, truncated_result, is_error, last_error = self._execute_parsed_tool_call(
+                        tool_name,
+                        tool_args,
+                        conversation,
+                        messages,
+                        tool_call_history,
+                        tool_call_log,
+                        previous_outputs,
+                        step_results,
+                        query_result_cache,
                     )
 
-                    # Display the tool call in real-time
-                    self.console.print_tool_usage(tool_name)
-                    if tool_args:
-                        self.console.pretty_print_json(tool_args, "Arguments")
-
-                    # Start progress indicator for tool execution
-                    self.console.start_progress(f"Executing {tool_name}")
-
-                    # Track call history and detect repeats
-                    current_call = (tool_name, str(tool_args))
-                    tool_call_history.append(current_call)
-                    tool_call_log.append(current_call)
-                    if len(tool_call_history) > 5:
-                        tool_call_history.pop(0)
-
-                    consecutive_count = 0
-                    for c in reversed(tool_call_history):
-                        if c == current_call:
-                            consecutive_count += 1
-                        else:
-                            break
-                    if consecutive_count >= self.max_consecutive_repeats:
-                        self.console.stop_progress()
-                        final_answer = f"Task completed with {tool_name}. No further action needed."
-                        self.console.print_repeated_tool_warning()
-                        break
-
-                    # Execute the tool
-                    tool_result = self._execute_tool(tool_name, tool_args)
-
-                    # Stop progress indicator
-                    self.console.stop_progress()
-
-                    # Domain-specific post-processing
-                    self._post_process_tool_result(tool_name, tool_args, tool_result)
-
-                    # Handle and append large tool results
-                    truncated_result = self._handle_large_tool_result(
-                        tool_name, tool_result, conversation, tool_args
-                    )
-
-                    # Display the tool result
-                    self.console.pretty_print_json(tool_result, "Result")
-                    self.console.print_tool_complete()
-
-                    previous_outputs.append(
-                        {
-                            "tool": tool_name,
-                            "args": tool_args,
-                            "result": truncated_result,
-                        }
-                    )
-                    step_results.append(tool_result)
-
-                    # Share tool output with subsequent LLM calls
-                    messages.append(
-                        self._create_tool_message(tool_name, truncated_result)
-                    )
-
-                    # Error handling
-                    is_error = isinstance(tool_result, dict) and (
-                        tool_result.get("status") == "error"
-                        or tool_result.get("success") is False
-                        or tool_result.get("has_errors") is True
-                        or tool_result.get("return_code", 0) != 0
-                    )
                     if is_error:
                         error_count += 1
-                        last_error = (
-                            tool_result.get("error_brief")
-                            or tool_result.get("error")
-                            or tool_result.get("stderr")
-                            or tool_result.get("hint")
-                            or tool_result.get("suggested_fix")
-                            or f"Command failed with return code {tool_result.get('return_code')}"
-                        )
                         logger.warning(
                             f"Tool execution error in sequential calls (count: {error_count}): {last_error}"
                         )
-                        if not tool_result.get("error_displayed"):
-                            self.console.print_error(last_error)
                         self.execution_state = self.STATE_ERROR_RECOVERY
-                        # Continue processing remaining calls (or break?) — prefer to continue
+                        # Continue processing remaining calls so partial results are available to the LLM
 
                 # After executing all sequential native calls, continue the main loop
                 # so the LLM can process the combined tool results.
@@ -2948,100 +2987,18 @@ Do NOT wrap conversational replies in JSON.
                 tool_args = parsed["tool_args"]
                 logger.debug(f"Tool call detected: {tool_name} with args {tool_args}")
 
-                # Display the tool call in real-time
-                self.console.print_tool_usage(tool_name)
-
-                if tool_args:
-                    self.console.pretty_print_json(tool_args, "Arguments")
-
-                # Start progress indicator for tool execution
-                self.console.start_progress(f"Executing {tool_name}")
-
-                # Check for repeated tool calls (allow up to 3 identical calls)
-                current_call = (tool_name, str(tool_args))
-                tool_call_history.append(current_call)
-                tool_call_log.append(
-                    current_call
-                )  # Full unbounded log for workflow guards
-
-                # Keep only last 5 calls for loop detection
-                if len(tool_call_history) > 5:
-                    tool_call_history.pop(0)
-
-                # Count consecutive identical calls
-                consecutive_count = 0
-                for call in reversed(tool_call_history):
-                    if call == current_call:
-                        consecutive_count += 1
-                    else:
-                        break
-
-                # Stop after max_consecutive_repeats identical calls
-                if consecutive_count >= self.max_consecutive_repeats:
-                    # Stop progress indicator
-                    self.console.stop_progress()
-
-                    # Force a final answer if the same tool is called repeatedly
-                    final_answer = (
-                        f"Task completed with {tool_name}. No further action needed."
-                    )
-
-                    self.console.print_repeated_tool_warning()
-                    break
-
-                # Execute the tool
-                tool_result = self._execute_tool(tool_name, tool_args)
-
-                # Stop progress indicator
-                self.console.stop_progress()
-
-                # Result-based dedup: if this tool (query family) returns the same result
-                # it returned in a prior call, inject a correction so the agent stops looping.
-                _QUERY_TOOLS = (
-                    "query_documents",
-                    "query_specific_file",
-                    "query_indexed_documents",
+                # Unified execution of a single parsed tool call
+                tool_result, truncated_result, is_error, last_error = self._execute_parsed_tool_call(
+                    tool_name,
+                    tool_args,
+                    conversation,
+                    messages,
+                    tool_call_history,
+                    tool_call_log,
+                    previous_outputs,
+                    step_results,
+                    query_result_cache,
                 )
-                if tool_name in _QUERY_TOOLS:
-                    result_key = f"{tool_name}:{hash(str(tool_result))}"
-                    query_result_cache[result_key] = (
-                        query_result_cache.get(result_key, 0) + 1
-                    )
-                    if query_result_cache[result_key] >= 2:
-                        logger.debug(
-                            "[DEDUP] Same query result returned %d times — injecting stop signal",
-                            query_result_cache[result_key],
-                        )
-                        dedup_msg = (
-                            f"[SYSTEM] You have received this same result from {tool_name} "
-                            f"{query_result_cache[result_key]} times. "
-                            "Querying again will not yield new information. "
-                            "STOP querying and answer directly from what you have retrieved, "
-                            "OR check your prior turn responses for relevant data, "
-                            "OR state that the information was not found in the document."
-                        )
-                        messages.append({"role": "user", "content": dedup_msg})
-
-                # Handle domain-specific post-processing
-                self._post_process_tool_result(tool_name, tool_args, tool_result)
-
-                # Handle large tool results
-                truncated_result = self._handle_large_tool_result(
-                    tool_name, tool_result, conversation, tool_args
-                )
-
-                # Display the tool result in real-time (show full result to user).
-                # Emit result BEFORE complete so SSE latency is captured.
-                self.console.pretty_print_json(tool_result, "Result")
-                self.console.print_tool_complete()
-
-                # Store the truncated output for future context
-                previous_outputs.append(
-                    {"tool": tool_name, "args": tool_args, "result": truncated_result}
-                )
-
-                # Share tool output with subsequent LLM calls
-                messages.append(self._create_tool_message(tool_name, truncated_result))
 
                 # For single-step plans, we still need to let the LLM process the result
                 # This is especially important for RAG queries where the LLM needs to

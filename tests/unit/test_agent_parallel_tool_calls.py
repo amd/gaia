@@ -12,16 +12,24 @@ def test_process_query_executes_multiple_native_tool_calls(monkeypatch):
     def tool_two(b=""):
         return {"status": "success", "value": f"two:{b}"}
 
-    _TOOL_REGISTRY["tool_one"] = {
-        "function": tool_one,
-        "parameters": {"a": {"type": "str", "required": False}},
-        "description": "Test tool one",
-    }
-    _TOOL_REGISTRY["tool_two"] = {
-        "function": tool_two,
-        "parameters": {"b": {"type": "str", "required": False}},
-        "description": "Test tool two",
-    }
+    monkeypatch.setitem(
+        _TOOL_REGISTRY,
+        "tool_one",
+        {
+            "function": tool_one,
+            "parameters": {"a": {"type": "str", "required": False}},
+            "description": "Test tool one",
+        },
+    )
+    monkeypatch.setitem(
+        _TOOL_REGISTRY,
+        "tool_two",
+        {
+            "function": tool_two,
+            "parameters": {"b": {"type": "str", "required": False}},
+            "description": "Test tool two",
+        },
+    )
 
     class DummyAgent(Agent):
         def _register_tools(self):

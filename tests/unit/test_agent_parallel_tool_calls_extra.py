@@ -24,9 +24,15 @@ def test_parallel_calls_with_error(monkeypatch):
     def t_ok2(z=""):
         return {"status": "success", "value": f"ok2:{z}"}
 
-    _TOOL_REGISTRY["ok1"] = {"function": t_ok1, "parameters": {}, "description": ""}
-    _TOOL_REGISTRY["errtool"] = {"function": t_err, "parameters": {}, "description": ""}
-    _TOOL_REGISTRY["ok2"] = {"function": t_ok2, "parameters": {}, "description": ""}
+    monkeypatch.setitem(
+        _TOOL_REGISTRY, "ok1", {"function": t_ok1, "parameters": {}, "description": ""}
+    )
+    monkeypatch.setitem(
+        _TOOL_REGISTRY, "errtool", {"function": t_err, "parameters": {}, "description": ""}
+    )
+    monkeypatch.setitem(
+        _TOOL_REGISTRY, "ok2", {"function": t_ok2, "parameters": {}, "description": ""}
+    )
 
     agent = _make_agent(monkeypatch)
 
@@ -69,7 +75,7 @@ def test_plan_then_native_tool_calls(monkeypatch):
     def q(a=""):
         return {"status": "success", "value": f"q:{a}"}
 
-    _TOOL_REGISTRY["q"] = {"function": q, "parameters": {}, "description": ""}
+    monkeypatch.setitem(_TOOL_REGISTRY, "q", {"function": q, "parameters": {}, "description": ""})
 
     agent = _make_agent(monkeypatch)
 
@@ -105,11 +111,11 @@ def test_plan_then_native_tool_calls(monkeypatch):
 def test_notimplementederror_recovery_message(monkeypatch):
     agent = _make_agent(monkeypatch)
 
-    # Make the parser raise NotImplementedError
+    # Make the parser raise ValueError (malformed tool-call) to exercise recovery
     monkeypatch.setattr(
         agent,
         "_parse_llm_response",
-        lambda r: (_ for _ in ()).throw(NotImplementedError("multiple")),
+        lambda r: (_ for _ in ()).throw(ValueError("multiple")),
     )
 
     # Make send_messages return something (will be ignored by parser)
@@ -123,10 +129,11 @@ def test_notimplementederror_recovery_message(monkeypatch):
 
     result = agent.process_query("trigger parse error", max_steps=3)
 
-    # Last user message in conversation should instruct about multiple tool calls
+    # Last user message in conversation should instruct retrying parsing or using a plan
     user_msgs = [m for m in result["conversation"] if m.get("role") == "user"]
     assert any(
-        "MULTIPLE tool calls" in str(m.get("content"))
-        or "single tool call" in str(m.get("content"))
+        "could not be parsed" in str(m.get("content")).lower()
+        or "single valid tool call" in str(m.get("content")).lower()
+        or "structured json 'plan'" in str(m.get("content")).lower()
         for m in user_msgs
     )
