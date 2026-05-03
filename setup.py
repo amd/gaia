@@ -160,6 +160,9 @@ setup(
             "starlette",
             "uvicorn",
         ],
+        "telegram": [
+            "python-telegram-bot>=20.3",
+        ],
         "dev": [
             "pytest",
             "pytest-benchmark",
