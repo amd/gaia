@@ -4,7 +4,7 @@ import tempfile
 
 sys.path.insert(0, os.path.abspath("src"))
 
-from gaia.messaging.ingest import ingest_image_to_vlm, ingest_document_to_rag
+from gaia.messaging.ingest import ingest_document_to_rag, ingest_image_to_vlm
 
 
 class DummyVLM:

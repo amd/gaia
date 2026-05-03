@@ -14,12 +14,11 @@ import asyncio
 import logging
 import os
 import signal
-import socket
 import threading
-from typing import Optional, Set, Dict
+from typing import Dict, Optional, Set
 
-from gaia.chat.sdk import AgentSDK, AgentConfig
-from gaia.messaging.ingest import ingest_image_to_vlm, ingest_document_to_rag
+from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.messaging.ingest import ingest_document_to_rag, ingest_image_to_vlm
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +82,9 @@ class TelegramAdapter:
                 # Optionally include a short excerpt in the conversation
                 excerpt = vlm_result.get("text", "").strip()
                 if excerpt:
-                    media_note += " - " + (excerpt[:400] + "..." if len(excerpt) > 400 else excerpt)
+                    media_note += " - " + (
+                        excerpt[:400] + "..." if len(excerpt) > 400 else excerpt
+                    )
             else:
                 media_note = "[photo uploaded - VLM failed]"
         elif update.message.document:
@@ -161,10 +162,14 @@ class TelegramAdapter:
         except Exception as e:  # pragma: no cover - dependency missing
             # If running in background mode (tests or dry-run), allow import to be missing
             if background:
-                log.warning("python-telegram-bot not installed; running in dry/background mode")
+                log.warning(
+                    "python-telegram-bot not installed; running in dry/background mode"
+                )
                 self.application = None
                 return
-            raise RuntimeError("python-telegram-bot is required for Telegram support") from e
+            raise RuntimeError(
+                "python-telegram-bot is required for Telegram support"
+            ) from e
 
         app = ApplicationBuilder().token(token).build()
 
@@ -191,7 +196,7 @@ class TelegramAdapter:
 
             # Simple health server
             def _health_server(stop_event: threading.Event):
-                from http.server import HTTPServer, BaseHTTPRequestHandler
+                from http.server import BaseHTTPRequestHandler, HTTPServer
 
                 class HealthHandler(BaseHTTPRequestHandler):
                     def do_GET(self):
@@ -214,7 +219,9 @@ class TelegramAdapter:
                     server.handle_request()
 
             stop_event = threading.Event()
-            hs_thread = threading.Thread(target=_health_server, args=(stop_event,), daemon=True)
+            hs_thread = threading.Thread(
+                target=_health_server, args=(stop_event,), daemon=True
+            )
             hs_thread.start()
 
             # If GAIA_TEST_MODE is set, avoid running the real polling loop
@@ -246,7 +253,9 @@ class TelegramAdapter:
         app.run_polling()
 
 
-def run_telegram(token: str, allowed_users: Optional[Set[int]] = None, background: bool = False):
+def run_telegram(
+    token: str, allowed_users: Optional[Set[int]] = None, background: bool = False
+):
     """Entrypoint used by the CLI to start the Telegram adapter.
 
     This builds the `Application`, registers handlers, and runs polling.

@@ -3,11 +3,12 @@
 Provides small, testable wrappers around `VLMClient` and `RAGSDK` so
 messaging adapters can hand off downloaded files for processing.
 """
+
 from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, Any
+from typing import Any, Dict
 
 from gaia.llm.vlm_client import VLMClient
 from gaia.rag.sdk import RAGSDK, RAGConfig
@@ -33,7 +34,9 @@ def ingest_image_to_vlm(image_path: str, vlm_model: str = None) -> Dict[str, Any
         return {"status": "error", "error": str(e), "path": image_path}
 
 
-def ingest_document_to_rag(file_path: str, config: RAGConfig | None = None) -> Dict[str, Any]:
+def ingest_document_to_rag(
+    file_path: str, config: RAGConfig | None = None
+) -> Dict[str, Any]:
     """Index a document into the RAG index via RAGSDK.index_document.
 
     Returns whatever `RAGSDK.index_document` returns (a dict of stats).

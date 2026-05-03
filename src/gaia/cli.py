@@ -1434,7 +1434,9 @@ def main():
     )
 
     # Stop subcommand
-    t_stop = telegram_subparsers.add_parser("stop", help="Stop background Telegram adapter")
+    t_stop = telegram_subparsers.add_parser(
+        "stop", help="Stop background Telegram adapter"
+    )
     t_stop.add_argument(
         "--force",
         action="store_true",
@@ -1442,12 +1444,19 @@ def main():
     )
 
     # Status subcommand
-    t_status = telegram_subparsers.add_parser("status", help="Show status of Telegram adapter")
-    t_status.add_argument(
-        "--health-host", default="127.0.0.1", help="Health server host (default: 127.0.0.1)"
+    t_status = telegram_subparsers.add_parser(
+        "status", help="Show status of Telegram adapter"
     )
     t_status.add_argument(
-        "--health-port", type=int, default=8765, help="Health server port (default: 8765)"
+        "--health-host",
+        default="127.0.0.1",
+        help="Health server host (default: 127.0.0.1)",
+    )
+    t_status.add_argument(
+        "--health-port",
+        type=int,
+        default=8765,
+        help="Health server port (default: 8765)",
     )
 
     telegram_parser.set_defaults(action="telegram")
@@ -2214,12 +2223,23 @@ Examples:
             allowed = None
             if getattr(args, "allowed_users", None):
                 try:
-                    allowed = set(int(x.strip()) for x in args.allowed_users.split(",") if x.strip())
+                    allowed = set(
+                        int(x.strip())
+                        for x in args.allowed_users.split(",")
+                        if x.strip()
+                    )
                 except Exception:
-                    print("Invalid --allowed-users format; expected comma-separated integers", file=sys.stderr)
+                    print(
+                        "Invalid --allowed-users format; expected comma-separated integers",
+                        file=sys.stderr,
+                    )
                     sys.exit(2)
 
-            run_telegram(token=args.token, allowed_users=allowed, background=getattr(args, "background", False))
+            run_telegram(
+                token=args.token,
+                allowed_users=allowed,
+                background=getattr(args, "background", False),
+            )
             return
 
         if action == "stop":
@@ -2254,8 +2274,8 @@ Examples:
 
         if action == "status":
             # Prefer health endpoint; fallback to pid file existence
-            import urllib.request
             import urllib.error
+            import urllib.request
 
             host = getattr(args, "health_host", "127.0.0.1")
             port = getattr(args, "health_port", 8765)
@@ -2271,12 +2291,17 @@ Examples:
 
             pid_path = os.path.expanduser("~/.gaia/telegram.pid")
             if os.path.exists(pid_path):
-                print("Telegram adapter: PID file exists, but health check failed (may be starting or unhealthy).")
+                print(
+                    "Telegram adapter: PID file exists, but health check failed (may be starting or unhealthy)."
+                )
             else:
                 print("Telegram adapter: not running")
             return
 
-        print("No telegram action specified. Use: gaia telegram start|stop|status", file=sys.stderr)
+        print(
+            "No telegram action specified. Use: gaia telegram start|stop|status",
+            file=sys.stderr,
+        )
         return
 
     # Handle core Gaia CLI commands

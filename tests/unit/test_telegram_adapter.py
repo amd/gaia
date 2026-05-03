@@ -1,6 +1,5 @@
-import pytest
-import sys
 import os
+import sys
 
 
 def test_run_telegram_scaffold_returns_adapter():
@@ -10,7 +9,9 @@ def test_run_telegram_scaffold_returns_adapter():
 
     # Run in background mode so the function does not block; in CI the
     # python-telegram-bot runtime may not be available, so guard accordingly.
-    adapter = run_telegram(token="fake-token-123", allowed_users={12345}, background=True)
+    adapter = run_telegram(
+        token="fake-token-123", allowed_users={12345}, background=True
+    )
     assert adapter is not None
     assert getattr(adapter, "token", None) == "fake-token-123"
     assert 12345 in getattr(adapter, "allowed_users")
