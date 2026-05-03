@@ -152,6 +152,29 @@ class TelegramAdapter:
         run (caller can manage its lifecycle). Otherwise, this call blocks and
         runs `run_polling()` until interrupted.
         """
+        # If running in background mode, create PID/log files early so tests
+        # and supervisor systems can detect the process even if the
+        # `python-telegram-bot` dependency is not installed (tests set
+        # `GAIA_TEST_MODE` and CI may not have the package).
+        pid_path = None
+        if background:
+            pid_dir = os.path.expanduser("~/.gaia")
+            os.makedirs(pid_dir, exist_ok=True)
+            pid_path = os.path.join(pid_dir, "telegram.pid")
+            try:
+                with open(pid_path, "w", encoding="utf-8") as f:
+                    f.write(str(os.getpid()))
+            except Exception:
+                log.exception("Failed to write PID file for telegram adapter")
+
+            log_path = os.path.join(pid_dir, "telegram.log")
+            try:
+                fh = open(log_path, "a", encoding="utf-8")
+                fh.write("Starting telegram adapter in background\n")
+                fh.flush()
+            except Exception:
+                log.exception("Failed to open telegram log file")
+
         try:
             from telegram.ext import (
                 ApplicationBuilder,
@@ -183,16 +206,12 @@ class TelegramAdapter:
         if background:
             # Background/daemon mode: write PID file, start health server,
             # and run polling in a thread unless GAIA_TEST_MODE is set.
-            pid_dir = os.path.expanduser("~/.gaia")
-            os.makedirs(pid_dir, exist_ok=True)
-            pid_path = os.path.join(pid_dir, "telegram.pid")
-            with open(pid_path, "w", encoding="utf-8") as f:
-                f.write(str(os.getpid()))
-
-            log_path = os.path.join(pid_dir, "telegram.log")
-            fh = open(log_path, "a", encoding="utf-8")
-            fh.write("Starting telegram adapter in background\n")
-            fh.flush()
+            # PID/log already created above when background True; ensure
+            # we have the same `pid_path` variable in this scope.
+            if not pid_path:
+                pid_dir = os.path.expanduser("~/.gaia")
+                os.makedirs(pid_dir, exist_ok=True)
+                pid_path = os.path.join(pid_dir, "telegram.pid")
 
             # Simple health server
             def _health_server(stop_event: threading.Event):
