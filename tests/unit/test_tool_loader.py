@@ -237,9 +237,7 @@ class TestKeywordActivation:
 
     def test_browser_activated_by_url(self, loader, full_registry):
         loader.register_bundles(ALL_BUNDLES)
-        result = loader.resolve(
-            "Fetch https://example.com/data", full_registry
-        )
+        result = loader.resolve("Fetch https://example.com/data", full_registry)
         assert "fetch_page" in result
         assert "search_web" in result
 
@@ -338,9 +336,7 @@ class TestDisambiguation:
     ):
         """'What did I learn about FTS5 last week?' → recall, not query_data."""
         loader.register_bundles(ALL_BUNDLES)
-        result = loader.resolve(
-            "What did I learn about FTS5 last week?", full_registry
-        )
+        result = loader.resolve("What did I learn about FTS5 last week?", full_registry)
         assert "recall" in result
         # Scratchpad should NOT be active (never used, no keywords)
         assert "query_data" not in result
