@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GAIA — Voice Test (Lemonade STT/TTS)</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --dim: #8b949e; --accent: #58a6ff; --good: #3fb950; --warn: #f0883e; --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px 24px; background: var(--bg); color: var(--text);
+         font-family: ui-sans-serif, system-ui, sans-serif; line-height: 1.5;
+         max-width: 800px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 0 0 8px; }
+  h2 { font-size: 14px; color: var(--dim); margin: 24px 0 8px;
+       letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
+  p { color: var(--dim); font-size: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border);
+          border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  button { font: inherit; background: var(--panel); color: var(--text);
+           border: 1px solid var(--border); border-radius: 4px;
+           padding: 8px 16px; cursor: pointer; transition: 0.15s; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+  button.recording { background: var(--bad); border-color: var(--bad); color: white; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: 0.7; } }
+  input, select, textarea {
+    font: inherit; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; width: 100%;
+  }
+  textarea { min-height: 80px; resize: vertical; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+  .row label { min-width: 140px; font-size: 13px; color: var(--dim); }
+  .row > select, .row > input { flex: 1; }
+  .out { background: #0a0e14; border: 1px solid var(--border); border-radius: 4px;
+         padding: 12px; min-height: 40px; font-family: ui-monospace, monospace;
+         font-size: 13px; white-space: pre-wrap; word-break: break-word; margin-top: 8px; }
+  .status { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot.good { background: var(--good); }
+  .dot.warn { background: var(--warn); }
+  .dot.bad  { background: var(--bad); }
+  .small { font-size: 11px; color: var(--dim); }
+  audio { width: 100%; margin-top: 8px; }
+  code { background: #0a0e14; padding: 1px 5px; border-radius: 3px;
+         font-family: ui-monospace, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>🍋 GAIA Voice Test — STT/TTS</h1>
+<p>Smoke-test the audio pipeline through GAIA's <code>/voice/*</code> endpoints. Backend is selected via the <code>GAIA_VOICE_BACKEND</code> env var (<code>lemonade</code> default, <code>in-process</code> for macOS / when Lemonade audio recipes are unavailable).</p>
+<p class="small">Active backend (from <code>/voice/health</code>): <strong id="active-backend" style="color:var(--accent);">checking…</strong></p>
+
+<div class="card">
+  <h2>Health</h2>
+  <button onclick="checkHealth()">Probe /voice/health</button>
+  <div id="health" class="status" style="margin-left:12px;"><span class="dot warn"></span>not checked yet</div>
+  <div id="health-out" class="out small" style="display:none;"></div>
+</div>
+
+<div class="card">
+  <h2>1 · Speech-to-Text</h2>
+  <p>Click record, speak for ~5 seconds, click stop. Audio uploads to <code>POST /voice/transcribe</code> which forwards to Lemonade.</p>
+  <div class="row">
+    <label for="stt-model">Whisper model</label>
+    <select id="stt-model">
+      <option value="Whisper-Small" selected>Whisper-Small (default)</option>
+      <option value="Whisper-Tiny">Whisper-Tiny (fastest)</option>
+      <option value="Whisper-Base">Whisper-Base</option>
+      <option value="Whisper-Large">Whisper-Large (most accurate)</option>
+    </select>
+  </div>
+  <div class="row">
+    <label for="stt-lang">Language</label>
+    <input id="stt-lang" value="en" placeholder="ISO 639-1 (en, es, …) or empty for auto">
+  </div>
+  <div class="row" style="margin-top:16px;">
+    <button id="record-btn" class="primary" onclick="toggleRecord()">🎤 Record</button>
+    <span id="record-status" class="status"><span class="dot bad"></span>idle</span>
+  </div>
+  <div id="stt-out" class="out">(transcription will appear here)</div>
+  <audio id="stt-playback" controls style="display:none;"></audio>
+</div>
+
+<div class="card">
+  <h2>2 · Text-to-Speech</h2>
+  <p>Synthesize text via <code>POST /voice/speech</code> (forwards to Lemonade Kokoro).</p>
+  <div class="row">
+    <label for="tts-text">Text</label>
+  </div>
+  <textarea id="tts-text">The Beacons are lit. Gondor calls for aid.</textarea>
+  <div class="row">
+    <label for="tts-voice">Voice</label>
+    <select id="tts-voice">
+      <option value="shimmer" selected>shimmer (OpenAI default)</option>
+      <option value="alloy">alloy</option>
+      <option value="ash">ash</option>
+      <option value="echo">echo</option>
+      <option value="af_sky">af_sky (Kokoro)</option>
+      <option value="am_echo">am_echo (Kokoro)</option>
+    </select>
+  </div>
+  <div class="row">
+    <label for="tts-format">Format</label>
+    <select id="tts-format">
+      <option value="mp3" selected>mp3</option>
+      <option value="wav">wav</option>
+      <option value="opus">opus</option>
+      <option value="pcm">pcm</option>
+    </select>
+  </div>
+  <div class="row">
+    <label for="tts-speed">Speed</label>
+    <input id="tts-speed" type="number" value="1.0" min="0.25" max="4.0" step="0.05">
+  </div>
+  <div class="row" style="margin-top:16px;">
+    <button class="primary" onclick="synthesize()">▶ Synthesize</button>
+    <span id="tts-status" class="status"><span class="dot bad"></span>not run</span>
+  </div>
+  <audio id="tts-playback" controls style="display:none;"></audio>
+</div>
+
+<p class="small">Endpoints under test: <code>POST /voice/transcribe</code>, <code>POST /voice/speech</code>, <code>GET /voice/health</code>. All proxy to Lemonade <code>/v1/audio/*</code>.</p>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const setStatus = (id, kind, text) => {
+    $(id).innerHTML = `<span class="dot ${kind}"></span>${text}`;
+  };
+
+  async function checkHealth() {
+    const out = $("health-out");
+    setStatus("health", "warn", "checking…");
+    out.style.display = "block";
+    out.textContent = "";
+    try {
+      const r = await fetch("/voice/health");
+      const body = await r.json();
+      out.textContent = JSON.stringify(body, null, 2);
+      const backend = body.backend || "?";
+      $("active-backend").textContent = backend;
+      if (r.ok) {
+        const ready = body.ready ?? true;
+        setStatus("health", ready ? "good" : "warn",
+          ready ? `${backend} backend ready` : `${backend} backend deps missing`);
+      } else {
+        setStatus("health", "bad", `HTTP ${r.status}`);
+      }
+    } catch (e) {
+      setStatus("health", "bad", `error: ${e.message}`);
+      $("active-backend").textContent = "unknown";
+    }
+  }
+
+  // ─── STT ───
+  let mediaRecorder = null;
+  let chunks = [];
+
+  async function toggleRecord() {
+    const btn = $("record-btn");
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+      mediaRecorder.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true }
+      });
+      mediaRecorder = new MediaRecorder(stream);
+      chunks = [];
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      mediaRecorder.onstop = onRecordingStopped;
+      mediaRecorder.start();
+      btn.classList.add("recording");
+      btn.textContent = "■ Stop";
+      setStatus("record-status", "warn", "recording…");
+    } catch (e) {
+      setStatus("record-status", "bad", `mic denied: ${e.message}`);
+    }
+  }
+
+  async function onRecordingStopped() {
+    const btn = $("record-btn");
+    btn.classList.remove("recording");
+    btn.textContent = "🎤 Record";
+    const blob = new Blob(chunks, { type: chunks[0]?.type || "audio/webm" });
+
+    // Show the original recording
+    const url = URL.createObjectURL(blob);
+    $("stt-playback").src = url;
+    $("stt-playback").style.display = "block";
+
+    // Convert to WAV in-browser via OfflineAudioContext (Lemonade requires WAV).
+    setStatus("record-status", "warn", "converting to WAV…");
+    let wavBlob;
+    try {
+      wavBlob = await blobToWav(blob, 16000);
+    } catch (e) {
+      setStatus("record-status", "bad", `wav convert failed: ${e.message}`);
+      return;
+    }
+
+    // Upload
+    setStatus("record-status", "warn", "transcribing via Lemonade…");
+    const fd = new FormData();
+    fd.append("audio", wavBlob, "recording.wav");
+    fd.append("model", $("stt-model").value);
+    const lang = $("stt-lang").value.trim();
+    if (lang) fd.append("language", lang);
+
+    try {
+      const t0 = performance.now();
+      const r = await fetch("/voice/transcribe", { method: "POST", body: fd });
+      const dt = ((performance.now() - t0) / 1000).toFixed(1);
+      const body = await r.json();
+      if (r.ok) {
+        $("stt-out").textContent = body.text || "(empty transcription)";
+        setStatus("record-status", "good", `done (${dt}s, ${$("stt-model").value})`);
+      } else {
+        $("stt-out").textContent = JSON.stringify(body, null, 2);
+        setStatus("record-status", "bad", `HTTP ${r.status}`);
+      }
+    } catch (e) {
+      setStatus("record-status", "bad", `error: ${e.message}`);
+    }
+  }
+
+  // Convert any browser Blob to a 16kHz mono WAV using AudioContext.
+  async function blobToWav(blob, sampleRate) {
+    const buf = await blob.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const decoded = await ctx.decodeAudioData(buf);
+    // Downsample to 16 kHz mono. OfflineAudioContext requires an integer length;
+    // decoded.duration * sampleRate can be fractional (Safari is strict here).
+    const length = Math.max(1, Math.floor(decoded.duration * sampleRate));
+    const offline = new OfflineAudioContext(1, length, sampleRate);
+    const src = offline.createBufferSource();
+    src.buffer = decoded;
+    src.connect(offline.destination);
+    src.start();
+    const rendered = await offline.startRendering();
+    return audioBufferToWav(rendered);
+  }
+
+  function audioBufferToWav(buffer) {
+    const numCh = buffer.numberOfChannels;
+    const sr = buffer.sampleRate;
+    const samples = buffer.getChannelData(0);
+    const len = samples.length;
+    const wav = new ArrayBuffer(44 + len * 2);
+    const v = new DataView(wav);
+    let p = 0;
+    function ws(s) { for (let i = 0; i < s.length; i++) v.setUint8(p++, s.charCodeAt(i)); }
+    function w16(x) { v.setUint16(p, x, true); p += 2; }
+    function w32(x) { v.setUint32(p, x, true); p += 4; }
+    ws("RIFF"); w32(36 + len * 2); ws("WAVE"); ws("fmt "); w32(16);
+    w16(1); w16(numCh); w32(sr); w32(sr * numCh * 2); w16(numCh * 2); w16(16);
+    ws("data"); w32(len * 2);
+    for (let i = 0; i < len; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      v.setInt16(p, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      p += 2;
+    }
+    return new Blob([wav], { type: "audio/wav" });
+  }
+
+  // ─── TTS ───
+  async function synthesize() {
+    const text = $("tts-text").value.trim();
+    if (!text) { setStatus("tts-status", "bad", "empty text"); return; }
+    setStatus("tts-status", "warn", "synthesizing via Lemonade…");
+    const payload = {
+      input: text,
+      voice: $("tts-voice").value,
+      response_format: $("tts-format").value,
+      speed: parseFloat($("tts-speed").value || "1.0"),
+    };
+    try {
+      const t0 = performance.now();
+      const r = await fetch("/voice/speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const dt = ((performance.now() - t0) / 1000).toFixed(1);
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        setStatus("tts-status", "bad", `HTTP ${r.status}: ${body.detail || ""}`);
+        return;
+      }
+      const audioBlob = await r.blob();
+      $("tts-playback").src = URL.createObjectURL(audioBlob);
+      $("tts-playback").style.display = "block";
+      $("tts-playback").play();
+      setStatus("tts-status", "good", `done (${dt}s, ${(audioBlob.size / 1024).toFixed(1)} KB)`);
+    } catch (e) {
+      setStatus("tts-status", "bad", `error: ${e.message}`);
+    }
+  }
+
+  // Probe health on page load
+  checkHealth();
+</script>
+</body>
+</html>

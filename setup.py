@@ -103,6 +103,11 @@ setup(
             "dist/*.txt",
             "dist/assets/*",
         ],
+        # Voice-test harness for the audio router (/voice/test). Standalone
+        # HTML page with the WAV converter + mic recorder, no JS bundle needed.
+        "gaia.ui": [
+            "static/*.html",
+        ],
     },
     install_requires=[
         "openai",

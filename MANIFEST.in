@@ -18,6 +18,10 @@ include README.md
 # util/verify_wheel_dist.py asserts the wheel actually contains these files.
 recursive-include src/gaia/apps/webui/dist *.html *.js *.css *.svg *.png *.jpg *.jpeg *.webp *.ico *.webmanifest *.json *.woff *.woff2 *.ttf *.txt
 
+# Voice-test harness served by the audio router at /voice/test. Standalone
+# HTML page (no bundling, no React); ships as a single file.
+recursive-include src/gaia/ui/static *.html
+
 # Backstop deny-list — these patterns must never reach a published wheel even
 # if a developer accidentally checks them in or `npm run build` emits them.
 prune src/gaia/apps/webui/dist/node_modules
