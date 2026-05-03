@@ -1,5 +1,4 @@
 import json
-import pytest
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -43,7 +42,11 @@ def test_parallel_calls_with_error(monkeypatch):
     # make send_messages return envelope
     responses = [type("R", (), {"text": json.dumps(envelope), "stats": {}})()]
 
-    monkeypatch.setattr(agent.chat, "send_messages", lambda messages, system_prompt, tools: responses.pop(0))
+    monkeypatch.setattr(
+        agent.chat,
+        "send_messages",
+        lambda messages, system_prompt, tools: responses.pop(0),
+    )
 
     result = agent.process_query("run three tools", max_steps=10)
 
@@ -55,7 +58,10 @@ def test_parallel_calls_with_error(monkeypatch):
     # Find the errtool result and ensure it's an error
     err_entry = next((t for t in tool_entries if t.get("name") == "errtool"), None)
     assert err_entry is not None
-    assert isinstance(err_entry.get("content"), dict) and err_entry["content"].get("status") == "error"
+    assert (
+        isinstance(err_entry.get("content"), dict)
+        and err_entry["content"].get("status") == "error"
+    )
 
 
 def test_plan_then_native_tool_calls(monkeypatch):
@@ -100,13 +106,27 @@ def test_notimplementederror_recovery_message(monkeypatch):
     agent = _make_agent(monkeypatch)
 
     # Make the parser raise NotImplementedError
-    monkeypatch.setattr(agent, "_parse_llm_response", lambda r: (_ for _ in ()).throw(NotImplementedError("multiple")))
+    monkeypatch.setattr(
+        agent,
+        "_parse_llm_response",
+        lambda r: (_ for _ in ()).throw(NotImplementedError("multiple")),
+    )
 
     # Make send_messages return something (will be ignored by parser)
-    monkeypatch.setattr(agent.chat, "send_messages", lambda messages, system_prompt, tools: type("R", (), {"text": "{\"bad\":1}", "stats": {}})())
+    monkeypatch.setattr(
+        agent.chat,
+        "send_messages",
+        lambda messages, system_prompt, tools: type(
+            "R", (), {"text": '{"bad":1}', "stats": {}}
+        )(),
+    )
 
     result = agent.process_query("trigger parse error", max_steps=3)
 
     # Last user message in conversation should instruct about multiple tool calls
     user_msgs = [m for m in result["conversation"] if m.get("role") == "user"]
-    assert any("MULTIPLE tool calls" in str(m.get("content")) or "single tool call" in str(m.get("content")) for m in user_msgs)
+    assert any(
+        "MULTIPLE tool calls" in str(m.get("content"))
+        or "single tool call" in str(m.get("content"))
+        for m in user_msgs
+    )

@@ -1004,12 +1004,14 @@ Do NOT wrap conversational replies in JSON.
                             f"str or dict, got {type(arguments_raw).__name__}"
                         )
 
-                    parsed_calls.append({
-                        "thought": "",
-                        "goal": "",
-                        "tool": name,
-                        "tool_args": tool_args,
-                    })
+                    parsed_calls.append(
+                        {
+                            "thought": "",
+                            "goal": "",
+                            "tool": name,
+                            "tool_args": tool_args,
+                        }
+                    )
                 logger.debug(
                     "[PARSE] Native tool_calls: returning %d parsed calls",
                     len(parsed_calls),
@@ -2573,7 +2575,7 @@ Do NOT wrap conversational replies in JSON.
                             "This agent prefers either a single tool call per response, "
                             "or a structured JSON 'plan' containing an ordered array of steps. "
                             "Please either: (A) output a single tool call JSON object, "
-                            "or (B) output a JSON plan in the format: {\"plan\": [{\"tool\": \"name\", \"tool_args\": {...}}]}. "
+                            'or (B) output a JSON plan in the format: {"plan": [{"tool": "name", "tool_args": {...}}]}. '
                             "If you don't need to call a tool, answer in plain text."
                         ),
                     }
@@ -2601,7 +2603,9 @@ Do NOT wrap conversational replies in JSON.
             # sequentially in this same LLM turn (one LLM turn -> N tool turns).
             if isinstance(parsed, list):
                 # Record assistant turn containing multiple tool_calls
-                conversation.append({"role": "assistant", "content": {"tool_calls": parsed}})
+                conversation.append(
+                    {"role": "assistant", "content": {"tool_calls": parsed}}
+                )
                 # Preserve raw assistant response for history
                 messages.append({"role": "assistant", "content": response})
 
@@ -2611,7 +2615,9 @@ Do NOT wrap conversational replies in JSON.
 
                     tool_name = call["tool"]
                     tool_args = call["tool_args"]
-                    logger.debug(f"Sequential native tool call: {tool_name} {tool_args}")
+                    logger.debug(
+                        f"Sequential native tool call: {tool_name} {tool_args}"
+                    )
 
                     # Display the tool call in real-time
                     self.console.print_tool_usage(tool_name)
@@ -2658,11 +2664,19 @@ Do NOT wrap conversational replies in JSON.
                     self.console.pretty_print_json(tool_result, "Result")
                     self.console.print_tool_complete()
 
-                    previous_outputs.append({"tool": tool_name, "args": tool_args, "result": truncated_result})
+                    previous_outputs.append(
+                        {
+                            "tool": tool_name,
+                            "args": tool_args,
+                            "result": truncated_result,
+                        }
+                    )
                     step_results.append(tool_result)
 
                     # Share tool output with subsequent LLM calls
-                    messages.append(self._create_tool_message(tool_name, truncated_result))
+                    messages.append(
+                        self._create_tool_message(tool_name, truncated_result)
+                    )
 
                     # Error handling
                     is_error = isinstance(tool_result, dict) and (
@@ -2681,7 +2695,9 @@ Do NOT wrap conversational replies in JSON.
                             or tool_result.get("suggested_fix")
                             or f"Command failed with return code {tool_result.get('return_code')}"
                         )
-                        logger.warning(f"Tool execution error in sequential calls (count: {error_count}): {last_error}")
+                        logger.warning(
+                            f"Tool execution error in sequential calls (count: {error_count}): {last_error}"
+                        )
                         if not tool_result.get("error_displayed"):
                             self.console.print_error(last_error)
                         self.execution_state = self.STATE_ERROR_RECOVERY

@@ -1,5 +1,4 @@
 import json
-import pytest
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -53,6 +52,8 @@ def test_process_query_executes_multiple_native_tool_calls(monkeypatch):
     result = agent.process_query("execute both tools", max_steps=6)
 
     # Verify both tool results were appended to conversation
-    tool_names = [m.get("name") for m in result["conversation"] if m.get("role") == "tool"]
+    tool_names = [
+        m.get("name") for m in result["conversation"] if m.get("role") == "tool"
+    ]
     assert "tool_one" in tool_names
     assert "tool_two" in tool_names
