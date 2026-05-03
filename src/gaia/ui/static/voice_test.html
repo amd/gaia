@@ -50,8 +50,9 @@
 </style>
 </head>
 <body>
-<h1>🍋 GAIA Voice Test — Lemonade STT/TTS</h1>
-<p>Smoke-test the Lemonade audio pipeline through GAIA's <code>/voice/*</code> endpoints. Useful when validating Beacon or any other agent that depends on Lemonade-hosted Whisper + Kokoro.</p>
+<h1>🍋 GAIA Voice Test — STT/TTS</h1>
+<p>Smoke-test the audio pipeline through GAIA's <code>/voice/*</code> endpoints. Backend is selected via the <code>GAIA_VOICE_BACKEND</code> env var (<code>lemonade</code> default, <code>in-process</code> for macOS / when Lemonade audio recipes are unavailable).</p>
+<p class="small">Active backend (from <code>/voice/health</code>): <strong id="active-backend" style="color:var(--accent);">checking…</strong></p>
 
 <div class="card">
   <h2>Health</h2>
@@ -139,13 +140,18 @@
       const r = await fetch("/voice/health");
       const body = await r.json();
       out.textContent = JSON.stringify(body, null, 2);
+      const backend = body.backend || "?";
+      $("active-backend").textContent = backend;
       if (r.ok) {
-        setStatus("health", "good", "Lemonade reachable");
+        const ready = body.ready ?? true;
+        setStatus("health", ready ? "good" : "warn",
+          ready ? `${backend} backend ready` : `${backend} backend deps missing`);
       } else {
         setStatus("health", "bad", `HTTP ${r.status}`);
       }
     } catch (e) {
       setStatus("health", "bad", `error: ${e.message}`);
+      $("active-backend").textContent = "unknown";
     }
   }
 
