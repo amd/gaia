@@ -21,6 +21,7 @@ from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
 from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
@@ -28,7 +29,6 @@ from gaia.sd.mixin import SDToolsMixin
 from gaia.security import PathValidator
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 logger = get_logger(__name__)
 
