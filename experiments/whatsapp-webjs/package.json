@@ -1,0 +1,12 @@
+{
+  "name": "whatsapp-webjs-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "whatsapp-web.js": "^1.19.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}
