@@ -941,6 +941,22 @@ Do NOT wrap conversational replies in JSON.
         - Plain JSON string `{"thought": ..., "tool": ..., "tool_args": ...}` — embedded format
         - Plain text — conversational answer
 
+        Native tool_calls return shape (issue #944):
+            {
+                "thought": "", "goal": "",
+                "tool_calls": [
+                    {"id": str, "name": str, "tool_args": dict},
+                    ...  # 1 or more — N>1 is the "parallel tool calls" case
+                ],
+                "content": str | None,  # assistant text emitted alongside calls
+                # Backwards-compat: when N==1 the legacy single-call fields
+                # ("tool", "tool_args") are also populated so older consumers
+                # keep working unchanged. Newer code paths SHOULD prefer
+                # ``tool_calls`` since it's the only field set when N>1.
+                "tool": <name when N==1>,
+                "tool_args": <args when N==1>,
+            }
+
         Args:
             response: Raw string from LLM (or sentinel-encoded tool_calls)
 
@@ -958,7 +974,7 @@ Do NOT wrap conversational replies in JSON.
                 raise ValueError(
                     f"Malformed native tool_calls envelope: {exc}"
                 ) from exc
-            tool_calls = envelope["__tool_calls__"]
+            raw_tool_calls = envelope["__tool_calls__"]
             finish_reason = envelope.get("finish_reason", "")
             if finish_reason == "length":
                 # ``finish_reason="length"`` from the OpenAI completions API
@@ -975,42 +991,70 @@ Do NOT wrap conversational replies in JSON.
                     f"Model {self.model_id} ran out of output tokens before "
                     f"finishing the call — increase AgentConfig.max_tokens."
                 )
-            if len(tool_calls) > 1:
-                raise NotImplementedError(
-                    "Parallel tool calls (multiple tool_calls in one response) are not yet supported. "
-                    f"Received {len(tool_calls)} tool calls."
-                )
-            tc = tool_calls[0]
-            name = tc["function"]["name"]
-            arguments_raw = tc["function"].get("arguments")
-            # ``arguments`` is canonically a JSON string per OpenAI spec, but
-            # llama.cpp 4B-class models occasionally emit it pre-parsed as a
-            # dict. Accept both shapes — only call ``json.loads`` when it's
-            # actually a string.
-            if arguments_raw is None or arguments_raw == "":
-                tool_args = {}
-            elif isinstance(arguments_raw, dict):
-                tool_args = arguments_raw
-            elif isinstance(arguments_raw, (str, bytes, bytearray)):
-                try:
-                    tool_args = json.loads(arguments_raw)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(
-                        f"Malformed tool_call arguments for '{name}': {exc}. "
-                        f"Raw arguments: {str(arguments_raw)[:200]}"
-                    ) from exc
-            else:
-                # Unexpected shape (list / int / None-ish) — treat as malformed
-                # so the recovery layer in process_query nudges the model to
-                # retry with valid arguments.
+            if not raw_tool_calls:
                 raise ValueError(
-                    f"Malformed tool_call arguments for '{name}': expected "
-                    f"str or dict, got {type(arguments_raw).__name__}"
+                    "Native tool_calls envelope contained an empty tool_calls list."
                 )
+            # Normalise every entry. Tool-calling-trained models routinely
+            # emit multiple tool_calls per response when a user utterance
+            # contains multiple distinct intents (issue #944). Each call gets
+            # parsed independently so a single bad-arguments entry only
+            # poisons that one call's parse, not the others.
+            normalised: list[Dict[str, Any]] = []
+            for idx, tc in enumerate(raw_tool_calls):
+                name = tc["function"]["name"]
+                arguments_raw = tc["function"].get("arguments")
+                # ``arguments`` is canonically a JSON string per OpenAI spec,
+                # but llama.cpp 4B-class models occasionally emit it
+                # pre-parsed as a dict. Accept both shapes — only call
+                # ``json.loads`` when it's actually a string.
+                if arguments_raw is None or arguments_raw == "":
+                    tool_args: Dict[str, Any] = {}
+                elif isinstance(arguments_raw, dict):
+                    tool_args = arguments_raw
+                elif isinstance(arguments_raw, (str, bytes, bytearray)):
+                    try:
+                        tool_args = json.loads(arguments_raw)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            f"Malformed tool_call arguments for '{name}': {exc}. "
+                            f"Raw arguments: {str(arguments_raw)[:200]}"
+                        ) from exc
+                else:
+                    # Unexpected shape (list / int / None-ish) — treat as
+                    # malformed so the recovery layer in process_query nudges
+                    # the model to retry with valid arguments.
+                    raise ValueError(
+                        f"Malformed tool_call arguments for '{name}': expected "
+                        f"str or dict, got {type(arguments_raw).__name__}"
+                    )
+                # Use the model-supplied id when present so tool result
+                # messages can be correlated back to their originating call;
+                # synthesise one when absent (some llama.cpp builds omit it).
+                tc_id = tc.get("id") or f"call_{idx}_{uuid.uuid4().hex[:8]}"
+                normalised.append({"id": tc_id, "name": name, "tool_args": tool_args})
+            content = envelope.get("content")
             logger.debug(
-                "[PARSE] tool_call_path=native model_id=%s tool=%s", self.model_id, name
+                "[PARSE] tool_call_path=native model_id=%s n_calls=%d tools=%s",
+                self.model_id,
+                len(normalised),
+                [tc["name"] for tc in normalised],
             )
-            return {"thought": "", "goal": "", "tool": name, "tool_args": tool_args}
+            parsed: Dict[str, Any] = {
+                "thought": "",
+                "goal": "",
+                "tool_calls": normalised,
+                "content": content,
+            }
+            # Backwards-compat: populate the legacy single-call fields when
+            # there's exactly one call so existing consumers (and the
+            # embedded-JSON code path in process_query) keep working without
+            # change. The legacy fields are intentionally absent for N>1 to
+            # force callers into the fan-out path.
+            if len(normalised) == 1:
+                parsed["tool"] = normalised[0]["name"]
+                parsed["tool_args"] = normalised[0]["tool_args"]
+            return parsed
 
         # Check for empty responses
         if not response or not response.strip():
@@ -1632,9 +1676,26 @@ Do NOT wrap conversational replies in JSON.
                 shrunk_rest.append(m)
         return [first] + shrunk_rest
 
-    def _create_tool_message(self, tool_name: str, tool_output: Any) -> Dict[str, Any]:
+    def _create_tool_message(
+        self,
+        tool_name: str,
+        tool_output: Any,
+        tool_call_id: str | None = None,
+    ) -> Dict[str, Any]:
         """
         Build a message structure representing a tool output for downstream LLM calls.
+
+        Args:
+            tool_name: The name of the tool that produced the output.
+            tool_output: The raw tool output (str / dict / list / etc).
+            tool_call_id: Optional id from the originating ``tool_calls`` array.
+                When provided, the tool message references the model's
+                actual call id so OpenAI-spec consumers can correlate
+                results to calls — this matters for parallel tool_calls
+                (issue #944) where multiple results need to be matched to
+                multiple calls in the prior assistant turn. When omitted,
+                a fresh uuid is synthesised for backward compatibility
+                with embedded-JSON paths that don't carry an id.
         """
         if isinstance(tool_output, str):
             text_content = tool_output
@@ -1649,7 +1710,7 @@ Do NOT wrap conversational replies in JSON.
         return {
             "role": "tool",
             "name": tool_name,
-            "tool_call_id": uuid.uuid4().hex,
+            "tool_call_id": tool_call_id or uuid.uuid4().hex,
             "content": [{"type": "text", "text": text_content}],
         }
 
@@ -2543,8 +2604,40 @@ Do NOT wrap conversational replies in JSON.
             logger.debug(f"Parsed response: {parsed}")
             conversation.append({"role": "assistant", "content": parsed})
 
-            # Add assistant response to messages for chat history
-            messages.append({"role": "assistant", "content": response})
+            # Add assistant response to messages for chat history.
+            #
+            # For native tool_calls (issue #944) we MUST emit a proper
+            # OpenAI-shape assistant message — ``content`` (string or null)
+            # plus ``tool_calls`` carrying the original ids — so that the
+            # subsequent ``role=tool`` messages can correlate by
+            # ``tool_call_id`` on the next LLM round. The previous code path
+            # passed back the raw sentinel envelope ``{"__tool_calls__": ...}``
+            # as a string ``content``, which any spec-strict provider would
+            # reject and which broke parallel-call result-to-call matching.
+            tc_list = parsed.get("tool_calls")
+            if tc_list:
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": parsed.get("content"),
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": json.dumps(
+                                        tc["tool_args"],
+                                        default=self._json_serialize_fallback,
+                                    ),
+                                },
+                            }
+                            for tc in tc_list
+                        ],
+                    }
+                )
+            else:
+                messages.append({"role": "assistant", "content": response})
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -2753,8 +2846,194 @@ Do NOT wrap conversational replies in JSON.
                     f"New plan created with {self.total_plan_steps} steps: {self.current_plan}"
                 )
 
-            # If the response contains a tool call, execute it
-            if parsed.get("tool") and "tool_args" in parsed:
+            # === Native parallel tool_calls fan-out (issue #944) ===
+            #
+            # Tool-calling-trained models (Gemma-4-E4B-it-GGUF — GAIA's
+            # default per #865 — and the Qwen3-Instruct line) routinely emit
+            # multiple ``tool_calls`` in a single response when the user
+            # utterance contains multiple distinct intents. We drain them
+            # sequentially within the same loop iteration, appending one
+            # ``role=tool`` message per call (with its real ``tool_call_id``)
+            # before re-prompting the LLM. This matches the OpenAI Chat
+            # Completions tools API contract and makes parallel calls
+            # behave like N independent sequential calls without the
+            # overhead of N LLM round-trips.
+            #
+            # The legacy single-tool path below ONLY fires for embedded
+            # JSON responses (no ``tool_calls`` field set) so that for
+            # native single calls we still get proper ``tool_call_id``
+            # linkage on the result message.
+            if parsed.get("tool_calls"):
+                tc_list = parsed["tool_calls"]
+                any_error = False
+                last_error = None
+                fanout_repeat_break = False
+
+                for fan_idx, tc in enumerate(tc_list):
+                    tool_name = tc["name"]
+                    tool_args = tc["tool_args"]
+                    tool_call_id = tc["id"]
+                    logger.debug(
+                        "Tool call %d/%d: %s with args %s",
+                        fan_idx + 1,
+                        len(tc_list),
+                        tool_name,
+                        tool_args,
+                    )
+
+                    # Display the tool call in real-time
+                    self.console.print_tool_usage(tool_name)
+                    if tool_args:
+                        self.console.pretty_print_json(tool_args, "Arguments")
+                    self.console.start_progress(f"Executing {tool_name}")
+
+                    # Loop detection — same shape as legacy path so
+                    # repeated calls across iterations are still caught.
+                    current_call = (tool_name, str(tool_args))
+                    tool_call_history.append(current_call)
+                    tool_call_log.append(current_call)
+                    if len(tool_call_history) > 5:
+                        tool_call_history.pop(0)
+                    consecutive_count = 0
+                    for prior in reversed(tool_call_history):
+                        if prior == current_call:
+                            consecutive_count += 1
+                        else:
+                            break
+                    if consecutive_count >= self.max_consecutive_repeats:
+                        self.console.stop_progress()
+                        final_answer = (
+                            f"Task completed with {tool_name}. "
+                            "No further action needed."
+                        )
+                        self.console.print_repeated_tool_warning()
+                        fanout_repeat_break = True
+                        break
+
+                    # Execute
+                    tool_result = self._execute_tool(tool_name, tool_args)
+                    self.console.stop_progress()
+
+                    # Result-based dedup for query family tools
+                    _QUERY_TOOLS = (
+                        "query_documents",
+                        "query_specific_file",
+                        "query_indexed_documents",
+                    )
+                    if tool_name in _QUERY_TOOLS:
+                        result_key = f"{tool_name}:{hash(str(tool_result))}"
+                        query_result_cache[result_key] = (
+                            query_result_cache.get(result_key, 0) + 1
+                        )
+                        if query_result_cache[result_key] >= 2:
+                            logger.debug(
+                                "[DEDUP] Same query result returned %d times "
+                                "— injecting stop signal",
+                                query_result_cache[result_key],
+                            )
+                            dedup_msg = (
+                                f"[SYSTEM] You have received this same result "
+                                f"from {tool_name} "
+                                f"{query_result_cache[result_key]} times. "
+                                "Querying again will not yield new "
+                                "information. STOP querying and answer "
+                                "directly from what you have retrieved, "
+                                "OR check your prior turn responses for "
+                                "relevant data, OR state that the "
+                                "information was not found in the document."
+                            )
+                            messages.append({"role": "user", "content": dedup_msg})
+
+                    # Domain hooks
+                    self._post_process_tool_result(tool_name, tool_args, tool_result)
+
+                    # Truncate large results before logging
+                    truncated_result = self._handle_large_tool_result(
+                        tool_name, tool_result, conversation, tool_args
+                    )
+
+                    self.console.pretty_print_json(tool_result, "Result")
+                    self.console.print_tool_complete()
+
+                    previous_outputs.append(
+                        {
+                            "tool": tool_name,
+                            "args": tool_args,
+                            "result": truncated_result,
+                        }
+                    )
+
+                    # Append the tool result message with the *real*
+                    # tool_call_id from the originating call so the next
+                    # LLM round can correlate this result with the right
+                    # call in the prior assistant turn (issue #944).
+                    messages.append(
+                        self._create_tool_message(
+                            tool_name,
+                            truncated_result,
+                            tool_call_id=tool_call_id,
+                        )
+                    )
+
+                    # Track errors but DON'T break early — drain all N
+                    # tool calls first so conversation history reflects
+                    # the full set, per #944 acceptance criterion (b).
+                    is_error = isinstance(tool_result, dict) and (
+                        tool_result.get("status") == "error"
+                        or tool_result.get("success") is False
+                        or tool_result.get("has_errors") is True
+                        or tool_result.get("return_code", 0) != 0
+                    )
+                    if is_error:
+                        error_count += 1
+                        last_error = (
+                            tool_result.get("error_brief")
+                            or tool_result.get("error")
+                            or tool_result.get("stderr")
+                            or tool_result.get("hint")
+                            or tool_result.get("suggested_fix")
+                            or (
+                                "Command failed with return code "
+                                f"{tool_result.get('return_code')}"
+                            )
+                        )
+                        logger.warning(
+                            "Tool execution error in parallel call "
+                            "%d/%d (count: %d): %s",
+                            fan_idx + 1,
+                            len(tc_list),
+                            error_count,
+                            last_error,
+                        )
+                        if not tool_result.get("error_displayed"):
+                            self.console.print_error(last_error)
+                        any_error = True
+
+                if fanout_repeat_break:
+                    break  # break outer while
+
+                if any_error:
+                    # All N results have been appended. Now transition to
+                    # error recovery so the next LLM round can react.
+                    self.execution_state = self.STATE_ERROR_RECOVERY
+                    self.console.print_state_info(
+                        "ERROR RECOVERY: Handling tool execution failure"
+                    )
+                    continue
+
+                # Otherwise fall through to stats / answer / next iter.
+                # The legacy ``if parsed.get("tool")`` branch below is
+                # gated to skip when ``tool_calls`` is set so it won't
+                # double-execute the first call.
+
+            # If the response contains a tool call, execute it (legacy
+            # embedded-JSON path). Skipped when ``tool_calls`` is set —
+            # those have already been dispatched by the fan-out above.
+            if (
+                parsed.get("tool")
+                and "tool_args" in parsed
+                and not parsed.get("tool_calls")
+            ):
 
                 # Display the current plan with the current step highlighted
                 if self.current_plan:

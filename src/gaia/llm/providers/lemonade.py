@@ -293,16 +293,32 @@ class LemonadeProvider(LLMClient):
 
         if tool_calls:
             logger.debug(
-                "tool_call_path=native model_id=%s tool_calling_flag=%s finish_reason=%s",
+                "tool_call_path=native model_id=%s tool_calling_flag=%s "
+                "finish_reason=%s n_tool_calls=%d",
                 effective_model,
                 tool_capable,
                 finish_reason,
+                len(tool_calls),
             )
+            # Some tool-calling models (e.g. Gemma-4-E4B) emit assistant text
+            # alongside tool_calls in the same response. Surface that text in
+            # the envelope so the agent loop can attach it to the assistant
+            # message and not silently drop it. Per OpenAI spec, ``content``
+            # may be null when only tool_calls are emitted — pass it through
+            # unchanged so callers can distinguish "no content" from "empty
+            # string content".
+            tc_content = message.get("content")
+            if tc_content is None:
+                # Some llama.cpp builds put text in ``reasoning_content``
+                # instead of ``content`` when the model emits a thought
+                # before a tool call. Treat that as content too.
+                tc_content = message.get("reasoning_content")
             # Encode as JSON string so callers can keep treating responses as str.
             return json.dumps(
                 {
                     _NATIVE_TC_KEY: tool_calls,
                     "finish_reason": finish_reason,
+                    "content": tc_content,
                 }
             )
 

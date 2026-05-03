@@ -241,6 +241,12 @@ def test_tools_not_passed_for_non_tool_calling_model():
 
 
 def test_parse_native_single_tool_call():
+    """Single-call native envelope returns BOTH the legacy single-tool
+    fields (``tool``/``tool_args`` for backward compatibility) AND the
+    new ``tool_calls`` list shape introduced for parallel-call support
+    (issue #944). The list always carries a ``tool_call_id`` so result
+    messages can correlate back to the originating call.
+    """
     agent = _make_bare_agent(model_id="Gemma-4-E4B-it-GGUF")
     envelope = {
         _NATIVE_TC_KEY: [
@@ -259,12 +265,20 @@ def test_parse_native_single_tool_call():
 
     result = agent._parse_llm_response(response)
 
-    assert result == {
-        "thought": "",
-        "goal": "",
-        "tool": "some_tool",
-        "tool_args": {"arg1": "val"},
-    }
+    # Legacy single-call fields preserved for backward compatibility.
+    assert result["thought"] == ""
+    assert result["goal"] == ""
+    assert result["tool"] == "some_tool"
+    assert result["tool_args"] == {"arg1": "val"}
+    # New normalised tool_calls list also populated.
+    assert result["tool_calls"] == [
+        {"id": "call_0", "name": "some_tool", "tool_args": {"arg1": "val"}}
+    ]
+    # ``content`` defaults to None when no assistant text accompanies
+    # the tool_calls (legacy envelopes from before the content carry-
+    # through landed have no ``content`` key — None is the expected
+    # value for both).
+    assert result.get("content") is None
 
 
 def test_parse_native_finish_reason_length_raises():
@@ -288,14 +302,19 @@ def test_parse_native_finish_reason_length_raises():
         agent._parse_llm_response(response)
 
 
-def test_parse_native_parallel_calls_raises():
+def test_parse_native_parallel_calls_returns_list():
+    """Parallel native tool_calls used to raise ``NotImplementedError``,
+    breaking GAIA's own default model (Gemma-4-E4B) on multi-intent
+    inputs (issue #944). They now parse into a normalised ``tool_calls``
+    list with ids preserved for downstream correlation.
+    """
     agent = _make_bare_agent(model_id="Gemma-4-E4B-it-GGUF")
     envelope = {
         _NATIVE_TC_KEY: [
             {
                 "id": "call_0",
                 "type": "function",
-                "function": {"name": "tool_a", "arguments": "{}"},
+                "function": {"name": "tool_a", "arguments": '{"x": 1}'},
             },
             {
                 "id": "call_1",
@@ -307,8 +326,101 @@ def test_parse_native_parallel_calls_raises():
     }
     response = json.dumps(envelope)
 
-    with pytest.raises(NotImplementedError, match="[Pp]arallel tool calls"):
-        agent._parse_llm_response(response)
+    result = agent._parse_llm_response(response)
+
+    assert result["tool_calls"] == [
+        {"id": "call_0", "name": "tool_a", "tool_args": {"x": 1}},
+        {"id": "call_1", "name": "tool_b", "tool_args": {}},
+    ]
+    # Legacy single-call fields are intentionally absent for N>1 — the
+    # fan-out path in process_query MUST consume ``tool_calls`` and
+    # treating ``tool``/``tool_args`` as authoritative would silently
+    # drop calls 1..N-1.
+    assert "tool" not in result
+    assert "tool_args" not in result
+
+
+def test_parse_native_three_calls_with_mixed_args():
+    """Three parallel calls, one with empty args and one with dict-shape
+    args (some llama.cpp builds emit pre-parsed dicts). All three must
+    survive the parse path with their ids intact.
+    """
+    agent = _make_bare_agent(model_id="Gemma-4-E4B-it-GGUF")
+    envelope = {
+        _NATIVE_TC_KEY: [
+            {
+                "id": "tc-A",
+                "type": "function",
+                "function": {"name": "alpha", "arguments": '{"k": "v"}'},
+            },
+            {
+                "id": "tc-B",
+                "type": "function",
+                "function": {"name": "beta", "arguments": ""},
+            },
+            {
+                "id": "tc-C",
+                "type": "function",
+                "function": {"name": "gamma", "arguments": {"already": "dict"}},
+            },
+        ],
+        "finish_reason": "tool_calls",
+    }
+
+    result = agent._parse_llm_response(json.dumps(envelope))
+
+    assert [tc["id"] for tc in result["tool_calls"]] == ["tc-A", "tc-B", "tc-C"]
+    assert result["tool_calls"][1]["tool_args"] == {}
+    assert result["tool_calls"][2]["tool_args"] == {"already": "dict"}
+
+
+def test_parse_native_content_alongside_tool_calls():
+    """Some tool-calling models (notably Gemma-4-E4B) emit assistant
+    text *and* tool_calls in the same response. The provider now
+    surfaces that text in the envelope's ``content`` field; the parser
+    propagates it so the agent loop can attach it to the assistant
+    message instead of silently discarding it.
+    """
+    agent = _make_bare_agent(model_id="Gemma-4-E4B-it-GGUF")
+    envelope = {
+        _NATIVE_TC_KEY: [
+            {
+                "id": "call_0",
+                "type": "function",
+                "function": {"name": "tool_a", "arguments": "{}"},
+            }
+        ],
+        "finish_reason": "tool_calls",
+        "content": "Got it — running tool_a now.",
+    }
+
+    result = agent._parse_llm_response(json.dumps(envelope))
+
+    assert result["content"] == "Got it — running tool_a now."
+    assert result["tool_calls"][0]["name"] == "tool_a"
+
+
+def test_parse_native_synthesises_id_when_missing():
+    """If llama.cpp ever omits ``id`` (some forks do), the parser
+    synthesises one rather than crashing — otherwise downstream tool
+    result correlation would silently fail.
+    """
+    agent = _make_bare_agent(model_id="Gemma-4-E4B-it-GGUF")
+    envelope = {
+        _NATIVE_TC_KEY: [
+            {
+                "type": "function",
+                "function": {"name": "tool_a", "arguments": "{}"},
+            }
+        ],
+        "finish_reason": "tool_calls",
+    }
+
+    result = agent._parse_llm_response(json.dumps(envelope))
+
+    tc_id = result["tool_calls"][0]["id"]
+    assert isinstance(tc_id, str) and tc_id, "synthesised id must be non-empty"
+    assert tc_id.startswith("call_0_")
 
 
 def test_parse_native_malformed_arguments_raises():
