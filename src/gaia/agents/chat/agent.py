@@ -24,6 +24,7 @@ from gaia.agents.tools import BrowserToolsMixin  # Web browsing and search
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
@@ -44,7 +45,7 @@ class ChatAgentConfig:
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None
-    model_id: Optional[str] = None  # None = use default Qwen3.5-35B-A3B
+    model_id: Optional[str] = None  # None = use default model (Gemma)
 
     # Execution settings
     max_steps: int = 10
@@ -157,8 +158,8 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use Qwen3.5-35B-A3B by default for better tool-calling
-        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-GGUF"
+        # Use the configured default model (Gemma) when no explicit model is set
+        effective_model_id = config.model_id or DEFAULT_MODEL_NAME
 
         # Debug logging for model selection
         logger.debug(
