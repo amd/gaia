@@ -857,7 +857,10 @@ jobs:
           xvfb-run --auto-servernum "${APPIMAGE}" \
             >/tmp/stdout.log 2>/tmp/stderr.log &
           APP_PID=$!
-          for i in $(seq 1 90); do
+          # 300s timeout matches the structural and distro-matrix smoke
+          # jobs — fresh installs download Lemonade + a ~3GB model on
+          # first run, so 90s starves model-download cases out.
+          for i in $(seq 1 300); do
             if grep -q "state: ready" /tmp/stdout.log 2>/dev/null; then
               break
             fi

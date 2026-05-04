@@ -2,203 +2,91 @@
 # SPDX-License-Identifier: MIT
 
 name: Bug Report
-description: Help us improve GAIA by sharing your experience. We appreciate your feedback!
+description: Report something that is broken in GAIA.
 title: '[Bug]: '
 labels: ['bug', 'triage']
 body:
   - type: markdown
     attributes:
       value: |
-        # Welcome! 👋
-
-        Thanks for taking the time to help improve GAIA! Before submitting, you might want to check our [Issues](https://github.com/amd/gaia/issues) to see if someone else has reported something similar
-        
-        Don't worry if you can't fill out all the fields - just share what you can and we'll work together to figure it out!
+        Thanks for taking the time to report a bug! Please [search existing issues](https://github.com/amd/gaia/issues) first — your bug may already be tracked.
 
   - type: checkboxes
-    id: issue-check
+    id: quick-check
     attributes:
-      label: Quick Check ✨
-      description: Let us know if you've had a chance to look around
+      label: Quick check
+      description: Help us route this faster.
       options:
-        - label: I've taken a look at existing issues and discussions
+        - label: I've searched existing issues and didn't find a duplicate.
           required: false
-        - label: I've checked the hardware requirements in the docs
+        - label: This issue relates to **Gaia Agent UI** (`gaia chat --ui`).
           required: false
-        - label: This issue relates to GAIA UI (Open-WebUI)
+        - label: This issue relates to a CLI command (`gaia ...`) or the SDK.
           required: false
 
   - type: input
     id: gaia-version
     attributes:
-      label: Which version of GAIA are you using?
-      description: For example, v0.8 - don't worry if you're not sure!
+      label: GAIA version
+      description: Output of `gaia --version`, or the installer/release you used.
+      placeholder: e.g. v0.19.0
     validations:
       required: false
 
   - type: textarea
-    id: reproduction-details
+    id: what-happened
     attributes:
-      label: Details to help us reproduce the issue
-      description: Please provide as much information as possible to help us understand what's happening
+      label: What happened?
+      description: Steps to reproduce, plus what you observed. Include error messages, logs, screenshots, or model/prompt details if relevant.
       placeholder: |
         Steps to reproduce:
-        1. Open GAIA
-        2. Click on '...'
-        3. Try to '...'
-        4. See error '...'
-        
-        Model used (if applicable): 
-        For example, Mistral-7B-Instruct-v0.3 or Llama3.1:8b
-        
-        Prompt used (if relevant):
-        Share what you asked the model
-        
-        Response received (if relevant):
-        Share what response you got back
-        
-        Error messages or screenshots:
-        - Installation logs (usually in C:\Users\<username>\AppData\Local\GAIA\gaia_install.log)
-        - Screenshots of Task Manager showing hardware usage
-        - Any error messages you saw
-    validations:
-      required: false
+        1. Run `gaia ...`
+        2. ...
+        3. See error: ...
 
-  - type: textarea
-    id: actual-behavior
-    attributes:
-      label: What actually happened?
-      description: Share what you observed instead
-      placeholder: For example, "I got an error message saying 'Connection failed'..." or "The application crashed when I tried to..."
+        Model used (if applicable): e.g. Qwen3.5-35B-A3B-GGUF
+        Prompt used (if relevant): ...
+        Error / log output: ...
     validations:
-      required: false
+      required: true
 
   - type: textarea
     id: expected-behavior
     attributes:
       label: What did you expect to happen?
-      description: Tell us what you were trying to do
-      placeholder: For example, "I expected the model to load when I clicked..."
+      placeholder: e.g. The model should have loaded and responded.
     validations:
       required: false
 
-  - type: dropdown
-    id: installation-method
+  - type: textarea
+    id: acceptance-criteria
     attributes:
-      label: How did you install GAIA?
-      description: This helps us understand your setup better
-      options:
-        - Installer
-        - Git Clone
-        - Manual Setup
+      label: Acceptance criteria
+      description: How will we know this is fixed? 1–3 short bullets, if you can.
+      placeholder: |
+        - `gaia chat` exits cleanly when Lemonade is unreachable
+        - User sees an actionable error pointing to `gaia init`
     validations:
       required: false
 
-  - type: dropdown
-    id: mode-selection
+  - type: textarea
+    id: environment
     attributes:
-      label: Which mode are you running?
-      description: Let us know how in what configuration you're running GAIA
-      options:
-        - Hybrid
-        - Generic
-        - NPU
-    validations:
-      required: false
-
-  - type: dropdown
-    id: cpu-model
-    attributes:
-      label: What's your CPU?
-      description: Tell us about your processor - please specify your exact model in the additional info section if selecting "Other". The current list of supported CPUs can be found [here](https://www.amd.com/en/products/software/ryzen-ai-software.html#tabs-2733982b05-item-7720bb7a69-tab).
-      options:
-        - AMD Ryzen AI 9 HX 9845HS
-        - AMD Ryzen AI 9 HX 9945HS
-        - AMD Ryzen AI 9 HX 370
-        - AMD Ryzen AI 9 365
-        - AMD Ryzen AI 7 HX 9745HS
-        - AMD Ryzen AI 7 HX 9845HS
-        - AMD Ryzen AI 7 HX 370
-        - AMD Ryzen AI 7 365
-        - AMD Ryzen AI 5 HX 9645HS
-        - AMD Ryzen AI 5 365
-        - AMD Ryzen 9 7945HX
-        - AMD Ryzen 9 7940HS
-        - AMD Ryzen 7 7840HS
-        - AMD Ryzen 5 7640HS
-        - Other (please specify in comments)
-    validations:
-      required: false
-
-  - type: dropdown
-    id: gpu-info
-    attributes:
-      label: What about your GPU setup?
-      description: Tell us about your graphics configuration. If selecting dGPU or Other, please provide more details in the additional info section
-      options:
-        - Integrated GPU (iGPU) only
-        - Discrete AMD GPU (dGPU)
-        - External GPU via Oculink/Thunderbolt
-        - NVIDIA GPU
-        - Intel GPU
-        - Other
-    validations:
-      required: false
-
-  - type: input
-    id: gpu-driver-version
-    attributes:
-      label: AMD GPU Driver Version
-      description: What's your AMD GPU driver version? To find this, go to Device Manager > Display adapters > AMD Radeon Graphics > Right-click Properties > Driver tab > Driver Version, or check in AMD Software.
-      placeholder: For example, 32.0.12033.1030
-    validations:
-      required: false
-
-  - type: input
-    id: npu-driver-version
-    attributes:
-      label: NPU Driver Version
-      description: What's your NPU driver version? To find this, go to Device Manager > System Devices > Neural Processing Unit > NPU Compute Accelerator Device > Right-click Properties > Driver tab > Driver Version.
-      placeholder: For example, 32.0.203.257
-    validations:
-      required: false
-
-  - type: input
-    id: lemonade-version
-    attributes:
-      label: Lemonade Version (if applicable)
-      description: If you're using Lemonade, which version? You can find this version by following the instructions [here](https://github.com/aigdat/genai/blob/8f034613f8d0acf18cf1846e1ea0090406c76546/docs/lemonade/server_integration.md#identifying-existing-installation).
-      placeholder: For example, v0.6.1.3
-    validations:
-      required: false
-
-  - type: input
-    id: operating-system
-    attributes:
-      label: What's your operating system?
+      label: Environment
       description: |
-        Which OS are you running GAIA on?
-        
-        For Windows: Right-click on Start > System > About, or press Win+I > System > About
-        For Linux: Open Terminal and type `lsb_release -a` or `cat /etc/os-release`
-      placeholder: For example, Windows 11 22H2, Windows 10 21H2, Ubuntu 22.04
+        Anything about your setup that could matter — OS, CPU/NPU model, GPU, driver versions, Lemonade Server version, install method (Installer / Git Clone / Manual), mode (Hybrid / Generic / NPU). Skip what doesn't apply. Please redact any tokens or credentials before pasting logs.
+      placeholder: |
+        OS: Windows 11 23H2
+        CPU / NPU: AMD Ryzen AI 9 HX 370
+        GPU: iGPU only
+        Lemonade: v0.6.1
+        Install: Installer
+        Mode: Hybrid
     validations:
       required: false
 
   - type: markdown
     attributes:
       value: |
-        ## Thank You! 🙌
-        
-        Your feedback helps make GAIA better for everyone! We'll look into this as soon as we can.
-        
-        The more details you can share, the better we can help, but don't worry if you can't provide everything.
-        Key things that often help us investigate:
-        - Steps to reproduce what you're seeing
-        - Any error messages or logs
-        - Your hardware and software setup
-        - Driver versions (if using NPU or GPU features)
-        
-        Feel free to check our [README.md](https://github.com/amd/gaia/blob/main/README.md) and [FAQ.md](https://github.com/amd/gaia/blob/main/FAQ.md) while you wait for a response.
-        
-        We appreciate your help in improving GAIA! 💫
+        ---
+        Need a hand? See the [README](https://github.com/amd/gaia/blob/main/README.md), [FAQ](https://amd-gaia.ai/reference/faq), and [troubleshooting guide](https://amd-gaia.ai/reference/troubleshooting). Thanks for helping make GAIA better!

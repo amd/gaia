@@ -2,55 +2,59 @@
 # SPDX-License-Identifier: MIT
 
 name: Feature Request
-description: Share your ideas to help make GAIA even better! 💡
+description: Suggest an improvement or new capability for GAIA.
 title: 'feat: '
-labels: ['triage', 'enhancement']
+labels: ['enhancement', 'triage']
 body:
   - type: markdown
     attributes:
       value: |
-        # Welcome! 👋 
-
-        Thanks for thinking about ways to improve GAIA! Your ideas help make this project better for everyone.
-        
-        Before sharing your idea, you might want to check our [Issues](https://github.com/amd/gaia/issues) to see if someone else has suggested something similar.
-        
-        We love hearing new ideas and appreciate constructive feedback! 🌟
+        Thanks for sharing your idea! Please [search existing issues](https://github.com/amd/gaia/issues) first — your idea may already be tracked or in progress.
 
   - type: checkboxes
-    id: existing-issue
+    id: quick-check
     attributes:
-      label: Quick Check ✨
-      description: Let us know if you've had a chance to look around
+      label: Quick check
+      description: Help us route this faster.
       options:
-        - label: I've taken a look at existing feature requests
+        - label: I've searched existing issues and didn't find a duplicate.
           required: false
-        - label: This feature request relates to GAIA UI (Open-WebUI)
+        - label: This relates to **Gaia Agent UI** (`gaia chat --ui`).
+          required: false
+        - label: This relates to the SDK, CLI, or a specific agent.
           required: false
 
   - type: textarea
-    id: feature-description
+    id: problem
     attributes:
-      label: What's on your mind?
-      description: |
-        Share what challenge you're facing and your proposed solution. For example:
-        - "It would be helpful if... because I often need to..."
-        - "I wish GAIA could... which would work by..."
-        - Feel free to include examples, similar features from other tools, or mockups
+      label: What problem are you trying to solve?
+      description: Describe the underlying need — the user, the workflow, what's painful or impossible today. Focus on the problem, not the solution.
+      placeholder: |
+        e.g. "When I run `gaia chat --ui` on a machine without an NPU, the error message doesn't tell me what to do — I have to dig through logs to figure out I need a different mode."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: If you have an idea for how to address it, share it here. Sketches, examples from other tools, and rough API shapes are all welcome.
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: How will we know this is done? 1–3 short bullets, if you can.
+      placeholder: |
+        - `gaia chat --ui` on a non-NPU machine prints an actionable error
+        - The error names the supported alternatives and links to setup docs
     validations:
       required: false
 
   - type: markdown
     attributes:
       value: |
-        ## Thank You! 🙌
-        
-        We really appreciate you taking the time to share your ideas with us! Your feedback helps shape the future of GAIA.
-        
-        While we review all suggestions, please understand that we need to prioritize based on various factors and resources.
-        Feel free to:
-        - Add comments if you think of additional details
-        - Share more context or examples
-        - Help others by commenting on their ideas too
-        
-        Together, we can make GAIA even better! ✨
+        ---
+        Thanks for helping shape GAIA! We review every suggestion and prioritize based on impact and capacity.

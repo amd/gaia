@@ -21,22 +21,32 @@ function getFriendlyError(status: number, detail: string): string {
         case 404: return detail || 'The requested item was not found.';
         case 413: return detail || 'File too large to process.';
         case 500: return 'Server error. Please try again.';
-        case 502:
-        case 503: return 'Service unavailable. Is the backend running?';
+        case 502: return 'Service unavailable. Is the backend running?';
+        case 503: return detail || 'Service unavailable.';
         default: return detail || `Request failed (HTTP ${status})`;
     }
 }
 
 /** Fetch wrapper with logging, timing, and error handling. */
-async function apiFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function apiFetch<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    extraHeaders?: Record<string, string>,
+): Promise<T> {
     const url = `${API_BASE}${path}`;
     const t = log.api.time();
 
     log.api.info(`${method} ${url}`, body !== undefined ? { body } : '');
 
+    const baseHeaders: Record<string, string> = body !== undefined
+        ? { 'Content-Type': 'application/json' }
+        : {};
     const init: RequestInit = {
         method,
-        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+        // extraHeaders first so Content-Type cannot be accidentally overridden
+        // by a caller for body requests.
+        headers: { ...extraHeaders, ...baseHeaders },
         body: body !== undefined ? JSON.stringify(body) : undefined,
     };
 
@@ -100,6 +110,123 @@ export async function downloadModel(modelName: string, force = false): Promise<{
 
 export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number }> {
     return apiFetch('GET', '/agents');
+}
+
+// -- Connections (issue #915) ---------------------------------------------------
+
+import type { ConnectorInfo, ConnectorRow } from '../types';
+
+// New framework endpoints (T-8b) — /api/connectors
+const UI_HEADER = { 'x-gaia-ui': '1' };
+
+export async function listConnectors(): Promise<{ connectors: ConnectorRow[] }> {
+    return apiFetch('GET', '/connectors');
+}
+
+export async function getConnector(connectorId: string): Promise<ConnectorRow> {
+    return apiFetch('GET', `/connectors/${connectorId}`);
+}
+
+export async function authorizeConnector(
+    connectorId: string,
+    scopes: string[],
+): Promise<{ flow_id: string; authorization_url: string }> {
+    return apiFetch('POST', `/connectors/${connectorId}/authorize`, { scopes }, UI_HEADER);
+}
+
+export async function configureConnector(
+    connectorId: string,
+    config: Record<string, string>,
+): Promise<Record<string, unknown>> {
+    return apiFetch('POST', `/connectors/${connectorId}/configure`, { config }, UI_HEADER);
+}
+
+export async function testConnector(
+    connectorId: string,
+): Promise<{ ok: boolean; detail: string }> {
+    return apiFetch('POST', `/connectors/${connectorId}/test`, {}, UI_HEADER);
+}
+
+export async function disconnectConnector(connectorId: string): Promise<void> {
+    await apiFetch<unknown>('DELETE', `/connectors/${connectorId}`, undefined, UI_HEADER);
+}
+
+export async function listConnectorGrants(connectorId: string): Promise<{
+    grants: Record<string, string[]>;
+}> {
+    return apiFetch('GET', `/connectors/${connectorId}/grants`);
+}
+
+export async function grantConnectorAgent(
+    connectorId: string,
+    agentId: string,
+    scopes: string[],
+): Promise<void> {
+    await apiFetch<unknown>(
+        'PUT',
+        `/connectors/${connectorId}/grants/${encodeURIComponent(agentId)}`,
+        { scopes },
+        UI_HEADER,
+    );
+}
+
+export async function revokeConnectorAgentGrant(
+    connectorId: string,
+    agentId: string,
+): Promise<void> {
+    await apiFetch<unknown>(
+        'DELETE',
+        `/connectors/${connectorId}/grants/${encodeURIComponent(agentId)}`,
+        undefined,
+        UI_HEADER,
+    );
+}
+
+export async function listConnections(): Promise<{ connections: ConnectorInfo[] }> {
+    return apiFetch('GET', '/connections');
+}
+
+export async function getConnection(provider: string): Promise<ConnectorInfo> {
+    return apiFetch('GET', `/connections/${provider}`);
+}
+
+export async function authorizeConnection(
+    provider: string,
+    scopes: string[],
+): Promise<{ flow_id: string; authorization_url: string }> {
+    return apiFetch('POST', `/connections/${provider}/authorize`, { scopes });
+}
+
+export async function revokeConnection(provider: string): Promise<void> {
+    await apiFetch<unknown>('DELETE', `/connections/${provider}`);
+}
+
+export async function listAgentGrants(provider: string): Promise<{
+    grants: Record<string, string[]>;
+}> {
+    return apiFetch('GET', `/connections/${provider}/grants`);
+}
+
+export async function grantAgent(
+    provider: string,
+    agentId: string,
+    scopes: string[],
+): Promise<{ provider: string; agent_id: string; scopes: string[] }> {
+    return apiFetch(
+        'PUT',
+        `/connections/${provider}/grants/${encodeURIComponent(agentId)}`,
+        { scopes },
+    );
+}
+
+export async function revokeAgentGrant(
+    provider: string,
+    agentId: string,
+): Promise<void> {
+    await apiFetch<unknown>(
+        'DELETE',
+        `/connections/${provider}/grants/${encodeURIComponent(agentId)}`,
+    );
 }
 
 // -- Sessions ------------------------------------------------------------------

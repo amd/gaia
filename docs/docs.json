@@ -79,6 +79,15 @@
                 ]
               },
               {
+                "group": "Connectors",
+                "pages": [
+                  "connectors/index",
+                  "connectors/google",
+                  "connectors/github",
+                  "security/connections"
+                ]
+              },
+              {
                 "group": "Agent Eval",
                 "pages": [
                   "guides/eval",
@@ -165,7 +174,8 @@
                     "group": "Infrastructure",
                     "pages": [
                       "sdk/infrastructure/api-server",
-                      "sdk/infrastructure/mcp"
+                      "sdk/infrastructure/mcp",
+                      "sdk/infrastructure/connectors"
                     ]
                   },
                   {
@@ -374,6 +384,7 @@
               "plans/agent-ui",
               "plans/setup-wizard",
               "plans/security-model",
+              "plans/connectors",
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
               "plans/messaging-integrations-plan",
@@ -413,6 +424,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.17.5",
               "releases/v0.17.4",
               "releases/v0.17.3",
               "releases/v0.17.2",
@@ -461,7 +473,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.17.4 \u00b7 Lemonade 10.0.0",
+        "label": "v0.17.5 \u00b7 Lemonade 10.2.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

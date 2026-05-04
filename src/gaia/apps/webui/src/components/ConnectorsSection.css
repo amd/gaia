@@ -1,0 +1,337 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* Connectors section — tile grid + expandable detail view (T-8b). */
+
+.connectors-section .settings-help {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    line-height: 1.5;
+    font-family: var(--font-sans);
+}
+
+.connectors-loading {
+    display: flex;
+    justify-content: center;
+    padding: 20px;
+    color: var(--text-muted);
+}
+
+.connectors-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* ── Connector tile ───────────────────────────────────────────── */
+
+.connector-tile {
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    overflow: hidden;
+    transition: border-color var(--duration) var(--ease);
+}
+.connector-tile:hover,
+.connector-tile--open {
+    border-color: var(--border);
+}
+
+.connector-tile-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 14px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+}
+.connector-tile-header:hover {
+    background: var(--bg-hover, rgba(0,0,0,0.03));
+}
+[data-theme="dark"] .connector-tile-header:hover {
+    background: rgba(255,255,255,0.04);
+}
+
+.connector-tile-name {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.connector-tile-type {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+}
+
+.connector-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+}
+.connector-status.ok { color: var(--accent-green); }
+.connector-status.idle { color: var(--text-muted); }
+
+.connector-tile-chevron {
+    margin-left: auto;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+/* ── Detail view ──────────────────────────────────────────────── */
+
+.connector-detail {
+    border-top: 1px solid var(--border-light);
+    padding: 14px;
+}
+
+.configure-body { }
+
+.connector-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    font-family: var(--font-sans);
+    margin-bottom: 12px;
+}
+
+.configure-error {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--accent-red, #e55);
+    background: rgba(239,68,68,0.08);
+    border: 1px solid rgba(239,68,68,0.2);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    margin-bottom: 10px;
+    font-family: var(--font-sans);
+}
+
+/* Informational missing-config notice — not an error, just "you need to
+ * set GAIA_GOOGLE_CLIENT_ID before you can connect". Pairs with the
+ * disabled "Setup required" badge in OAuthConfigureBody. */
+.configure-info {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    margin-bottom: 10px;
+    font-family: var(--font-sans);
+    line-height: 1.4;
+}
+.configure-info svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--text-muted);
+}
+
+.connector-setup-required {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 3px 10px;
+    cursor: default;
+}
+
+.configure-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+/* First-time OAuth setup form (e.g. Google client_id / client_secret).
+   Shown inline when the provider hasn't been configured yet. */
+.oauth-setup-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 8px 0 4px 0;
+    padding: 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+}
+
+.oauth-setup-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+}
+
+.oauth-setup-label {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.oauth-setup-input {
+    padding: 6px 8px;
+    border: 1px solid var(--border-light);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.oauth-setup-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.oauth-setup-help {
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.connector-product-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-family: var(--font-sans);
+    margin-left: auto;
+}
+.connector-product-link:hover { color: var(--accent); text-decoration: underline; }
+
+/* MCP key inputs */
+.mcp-key-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 10px;
+}
+.mcp-key-label {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.mcp-key-input {
+    padding: 7px 10px;
+    font-size: 13px;
+    font-family: var(--font-mono);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color var(--duration) var(--ease);
+}
+.mcp-key-input:focus { border-color: var(--accent); }
+
+/* ── Agent grants ─────────────────────────────────────────────── */
+
+.connection-grants {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--border-light);
+}
+
+.grants-header {
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.grants-empty {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-style: italic;
+}
+
+.grant-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 12px;
+    font-family: var(--font-sans);
+}
+
+.grant-agent {
+    font-weight: 500;
+    min-width: 7rem;
+    color: var(--text-primary);
+}
+
+.grant-scopes {
+    flex: 1;
+    color: var(--text-secondary);
+    word-break: break-all;
+}
+
+.btn-grant-revoke {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 2px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    transition: color var(--duration) var(--ease);
+    flex-shrink: 0;
+}
+.btn-grant-revoke:hover { color: var(--accent-red, #e55); }
+
+/* ── Shared ───────────────────────────────────────────────────── */
+
+.error-banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(239,68,68,0.08);
+    color: var(--accent-red, #e55);
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(239,68,68,0.2);
+    margin-bottom: 10px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+}
+
+.spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
