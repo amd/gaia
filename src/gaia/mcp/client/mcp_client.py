@@ -6,8 +6,6 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-import keyring
-
 from gaia.logger import get_logger
 
 from .transports.base import MCPTransport
@@ -30,6 +28,8 @@ def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
     """
     if not env:
         return {}
+    import keyring  # pylint: disable=import-outside-toplevel
+
     resolved: Dict[str, str] = {}
     missing: list[str] = []
     for key, value in env.items():
