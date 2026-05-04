@@ -163,7 +163,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         agents, activeAgentId, setActiveAgentId,
     } = useChatStore();
 
-    const { addNotification } = useNotificationStore();
+    const addNotification = useNotificationStore((s) => s.addNotification);
     const showNotificationPanel = useNotificationStore((s) => s.showPanel);
     const setNotificationPanelVisible = useNotificationStore((s) => s.setShowPanel);
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
