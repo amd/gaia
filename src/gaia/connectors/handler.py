@@ -105,8 +105,10 @@ def register_handler(connector_type: ConnectorType, handler: ConnectorHandler) -
             f"Existing: {_HANDLER_REGISTRY[connector_type]!r}"
         )
     _HANDLER_REGISTRY[connector_type] = handler
-    logger.debug(  # lgtm[py/clear-text-logging-sensitive-data]
-        "handler: registered type=%s handler=%r", connector_type, handler
+    logger.debug(
+        "handler: registered type=%s handler=%r",
+        connector_type,  # lgtm[py/clear-text-logging-sensitive-data]
+        handler,
     )
 
 

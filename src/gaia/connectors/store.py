@@ -224,10 +224,6 @@ def load_connection(
         # "user never connected". The unit test in test_store.py asserts
         # the entry is cleared; the unit test in test_tokens.py asserts
         # the right Reason flows to the caller.
-        logger.warning(  # lgtm[py/clear-text-logging-sensitive-data]
-            "store: client_id tripwire fired for provider=%s; clearing entry",
-            provider,
-        )
         delete_connection(provider, account_email=account_email)
         raise AuthRequiredError(
             AuthRequiredError.Reason.REAUTH_REQUIRED, provider=provider
@@ -291,9 +287,6 @@ def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) ->
 
     try:
         keyring.delete_password(SERVICE_NAME, username)
-        logger.debug(  # lgtm[py/clear-text-logging-sensitive-data]
-            "store: deleted connection provider=%s", provider
-        )
     except keyring.errors.PasswordDeleteError:
         # Already gone — fine.
         pass
