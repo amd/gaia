@@ -13,32 +13,50 @@ import pytest
 from tests.fixtures.email.generate_mbox import generate
 
 EMAIL_FIXTURE_DIR = Path(__file__).resolve().parent
-MBOX_PATH = EMAIL_FIXTURE_DIR / "synthetic_inbox.mbox"
-GT_PATH = EMAIL_FIXTURE_DIR / "ground_truth.json"
+CHECKIN_MBOX = EMAIL_FIXTURE_DIR / "synthetic_inbox.mbox"
+CHECKIN_GT = EMAIL_FIXTURE_DIR / "ground_truth.json"
 
 
-def _ensure_generated() -> None:
-    if MBOX_PATH.exists() and GT_PATH.exists():
+def _ensure_generated_to(out_mbox: Path, out_gt: Path) -> None:
+    """Generate fixtures deterministically into the provided paths."""
+    if out_mbox.exists() and out_gt.exists():
         return
-    generate(MBOX_PATH, GT_PATH)
+    generate(out_mbox, out_gt)
 
 
 @pytest.fixture(scope="session")
-def synthetic_mbox() -> mailbox.mbox:
-    """Load the pre-built synthetic mbox fixture."""
-    _ensure_generated()
-    if not MBOX_PATH.exists():
-        raise FileNotFoundError(f"Missing fixture: {MBOX_PATH}")
-    return mailbox.mbox(str(MBOX_PATH), create=False)
+def synthetic_mbox(tmp_path_factory) -> mailbox.mbox:
+    """Load the synthetic mbox fixture.
+
+    If checked-in fixtures exist under the fixtures directory, use them.
+    Otherwise generate deterministic fixtures into a temporary directory so
+    test runs do not mutate the repository working tree.
+    """
+    if CHECKIN_MBOX.exists() and CHECKIN_GT.exists():
+        return mailbox.mbox(str(CHECKIN_MBOX), create=False)
+
+    td = tmp_path_factory.mktemp("email_fixtures")
+    out_mbox = td / "synthetic_inbox.mbox"
+    out_gt = td / "ground_truth.json"
+    _ensure_generated_to(out_mbox, out_gt)
+    return mailbox.mbox(str(out_mbox), create=False)
 
 
 @pytest.fixture(scope="session")
-def email_ground_truth() -> dict[str, dict[str, Any]]:
-    """Load Message-ID keyed ground truth metadata."""
-    _ensure_generated()
-    if not GT_PATH.exists():
-        raise FileNotFoundError(f"Missing fixture: {GT_PATH}")
-    return json.loads(GT_PATH.read_text(encoding="utf-8"))
+def email_ground_truth(tmp_path_factory) -> dict[str, dict[str, Any]]:
+    """Load Message-ID keyed ground truth metadata.
+
+    Mirrors the generation strategy used by ``synthetic_mbox`` so the
+    mbox and ground-truth remain paired when generated into a temp dir.
+    """
+    if CHECKIN_MBOX.exists() and CHECKIN_GT.exists():
+        return json.loads(CHECKIN_GT.read_text(encoding="utf-8"))
+
+    td = tmp_path_factory.mktemp("email_fixtures")
+    out_mbox = td / "synthetic_inbox.mbox"
+    out_gt = td / "ground_truth.json"
+    _ensure_generated_to(out_mbox, out_gt)
+    return json.loads(out_gt.read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="session")

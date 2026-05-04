@@ -400,11 +400,15 @@ def _mailbox_from_records(
     box.flush()
     box.close()
 
-    # Append malformed messages directly as raw mbox entries.
+    # Append malformed messages directly as raw mbox entries. Use a
+    # deterministic timestamp on the From_ line so generated mbox files are
+    # reproducible across runs.
+    deterministic_from_time = datetime(2026, 3, 2, 0, 0, tzinfo=timezone.utc)
     with out_mbox.open("ab") as f:
         for raw_msg, meta, message_id in malformed_raw:
             from_line = (
-                "From malformed@example.com " f"{datetime.now(timezone.utc).ctime()}\n"
+                "From malformed@example.com "
+                f"{deterministic_from_time.ctime()}\n"
             )
             payload = raw_msg.replace("\n", "\n").encode("utf-8", errors="replace")
             if not payload.endswith(b"\n"):
@@ -1000,8 +1004,30 @@ def _build_dataset(
         rng=rng,
         html_body="<p>Olá, atualização com caracteres acentuados.</p>",
     )
-    non_ascii_msg.set_charset("iso-8859-1")
-    records[-1] = (non_ascii_msg, meta, message_id)
+    # Avoid calling set_charset on multipart messages (Message.get_payload()
+    # may be a list for multipart), instead set charset on text parts.
+    if non_ascii_msg.is_multipart():
+        for part in non_ascii_msg.walk():
+            if part.get_content_maintype() == "text":
+                try:
+                    part.set_charset("iso-8859-1")
+                except Exception:
+                    # Be defensive: on some stdlib versions this may raise.
+                    pass
+    else:
+        non_ascii_msg.set_charset("iso-8859-1")
+    # Insert the non-ASCII message by replacing the first informational
+    # record, keeping the total message counts stable and preserving
+    # category distribution.
+    replaced = False
+    for i, (_msg, _meta, _mid) in enumerate(records):
+        if _meta.get("category") == "informational":
+            records[i] = (non_ascii_msg, meta, message_id)
+            replaced = True
+            break
+    if not replaced:
+        # Fallback: append if no informational slot found (shouldn't happen)
+        records.append((non_ascii_msg, meta, message_id))
 
     # Validate persona repeat ranges for core personas.
     core_personas = [

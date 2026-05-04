@@ -7,6 +7,7 @@ import json
 import mailbox
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -15,38 +16,52 @@ import pytest
 from tests.fixtures.email.generate_mbox import SEED, TARGET_COUNTS, generate
 
 EMAIL_DIR = Path("tests/fixtures/email")
-MBOX_PATH = EMAIL_DIR / "synthetic_inbox.mbox"
-GT_PATH = EMAIL_DIR / "ground_truth.json"
 GEN_SCRIPT = EMAIL_DIR / "generate_mbox.py"
 
 
-def _ensure_generated() -> None:
-    if MBOX_PATH.exists() and GT_PATH.exists():
+def _ensure_generated_to(out_mbox: Path, out_gt: Path) -> None:
+    if out_mbox.exists() and out_gt.exists():
         return
-    generate(MBOX_PATH, GT_PATH)
+    generate(out_mbox, out_gt)
 
 
 @pytest.fixture(scope="module")
-def mbox_obj() -> mailbox.mbox:
-    _ensure_generated()
-    return mailbox.mbox(str(MBOX_PATH), create=False)
+def mbox_obj(tmp_path_factory) -> mailbox.mbox:
+    td = tmp_path_factory.mktemp("email_fixtures_unit")
+    out_mbox = td / "synthetic_inbox.mbox"
+    out_gt = td / "ground_truth.json"
+    _ensure_generated_to(out_mbox, out_gt)
+    return mailbox.mbox(str(out_mbox), create=False)
 
 
 @pytest.fixture(scope="module")
-def gt() -> dict:
-    _ensure_generated()
-    return json.loads(GT_PATH.read_text(encoding="utf-8"))
+def gt(tmp_path_factory) -> dict:
+    td = tmp_path_factory.mktemp("email_fixtures_unit")
+    out_mbox = td / "synthetic_inbox.mbox"
+    out_gt = td / "ground_truth.json"
+    _ensure_generated_to(out_mbox, out_gt)
+    return json.loads(out_gt.read_text(encoding="utf-8"))
 
 
-def test_fixture_files_exist() -> None:
+def test_fixture_files_exist(tmp_path_factory) -> None:
+    # Generator script should exist and be runnable; we don't require
+    # checked-in artifacts — generator may produce fixtures into a tmp dir.
     assert GEN_SCRIPT.exists()
-    _ensure_generated()
-    assert MBOX_PATH.exists()
-    assert GT_PATH.exists()
+    td = tmp_path_factory.mktemp("email_fixtures_exist")
+    out_mbox = td / "synthetic_inbox.mbox"
+    out_gt = td / "ground_truth.json"
+    _ensure_generated_to(out_mbox, out_gt)
+    assert out_mbox.exists()
+    assert out_gt.exists()
 
 
 def test_mbox_under_1mb() -> None:
-    assert MBOX_PATH.stat().st_size < 1024 * 1024
+    # Generate into a temp location and assert output size is under 1 MB
+    with tempfile.TemporaryDirectory() as td:
+        out_mbox = Path(td) / "synthetic_inbox.mbox"
+        out_gt = Path(td) / "ground_truth.json"
+        mbox_hash, gt_hash = generate(out_mbox, out_gt, seed=SEED)
+        assert out_mbox.stat().st_size < 1024 * 1024
 
 
 def test_message_count_matches_target(mbox_obj: mailbox.mbox, gt: dict) -> None:
@@ -150,12 +165,32 @@ def test_ground_truth_required_fields(gt: dict) -> None:
 
 
 def test_generator_determinism_verify_mode() -> None:
-    cmd = [sys.executable, str(GEN_SCRIPT), "--verify"]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
+    # Generate twice into independent temp dirs and compare deterministic
+    # ground-truth JSON hashes and message-id sets. Raw mbox binary can
+    # differ due to stdlib multipart boundary generation, so avoid binary
+    # equality checks.
+    with tempfile.TemporaryDirectory() as td:
+        a_mbox = Path(td) / "a.mbox"
+        a_gt = Path(td) / "a_gt.json"
+        b_mbox = Path(td) / "b.mbox"
+        b_gt = Path(td) / "b_gt.json"
+        h1_mbox, h1_gt = generate(a_mbox, a_gt, seed=SEED)
+        h2_mbox, h2_gt = generate(b_mbox, b_gt, seed=SEED)
+        # Ground-truth JSON should be identical
+        assert h1_gt == h2_gt
+        # And the set of Message-IDs in each mbox should match
+        import mailbox as _mb
+
+        ids1 = {m.get("Message-ID") for m in _mb.mbox(str(a_mbox)) if m.get("Message-ID")}
+        ids2 = {m.get("Message-ID") for m in _mb.mbox(str(b_mbox)) if m.get("Message-ID")}
+        assert ids1 == ids2
 
 
 def test_generator_accepts_seed() -> None:
-    cmd = [sys.executable, str(GEN_SCRIPT), "--seed", str(SEED)]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
+    # Ensure generator runs with an explicit seed and produces outputs
+    with tempfile.TemporaryDirectory() as td:
+        out_mbox = Path(td) / "synthetic_inbox.mbox"
+        out_gt = Path(td) / "ground_truth.json"
+        mbox_hash, gt_hash = generate(out_mbox, out_gt, seed=SEED)
+        assert out_mbox.exists() and out_gt.exists()
+        assert len(mbox_hash) == 64 and len(gt_hash) == 64

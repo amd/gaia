@@ -225,6 +225,18 @@ class ToolLoader:
         """Return the bundle name that owns *tool_name*, or ``None``."""
         return self._tool_to_bundle.get(tool_name)
 
+    def force_activate(self, bundle_name: str) -> None:
+        """Force-activate a bundle for the current session.
+
+        This is a public API for callers that need to mark a bundle active
+        without reaching into ``_state`` directly.
+        """
+        if bundle_name not in self._state:
+            raise KeyError(f"Unknown bundle: {bundle_name}")
+        now = time.time()
+        self._state[bundle_name].activated = True
+        self._state[bundle_name].last_used_ts = now
+
     def reset_session(self) -> None:
         """Clear per-session state (call between conversations)."""
         for state in self._state.values():
