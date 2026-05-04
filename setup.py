@@ -79,7 +79,9 @@ setup(
         "gaia.code_index",
         "gaia.apps.webui",
         "gaia.connectors",
+        "gaia.connectors.catalog",
         "gaia.connectors.providers",
+        "gaia.agents.connectors_demo",
     ],
     package_data={
         "gaia.eval": [
