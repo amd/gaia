@@ -318,8 +318,10 @@ async def list_connectors() -> Dict[str, Any]:
     for s in specs:
         try:
             summaries.append(_connector_summary(s.id))
-        except Exception:
-            logger.exception("connectors-list: failed to build summary for %s", s.id)
+        except Exception as exc:
+            logger.warning(
+                "connectors-list: summary failed for %s (%s)", s.id, type(exc).__name__
+            )
             summaries.append({"id": s.id, "error": "unavailable"})
     return {"connectors": summaries}
 
@@ -403,8 +405,12 @@ async def get_connector(connector_id: str) -> Dict[str, Any]:
         raise HTTPException(
             status_code=404, detail=f"Unknown connector: {connector_id!r}"
         )
-    except Exception:
-        logger.exception("connectors-get: failed to build summary for %s", connector_id)
+    except Exception as exc:
+        logger.warning(
+            "connectors-get: summary failed for %s (%s)",
+            connector_id,
+            type(exc).__name__,
+        )
         raise HTTPException(status_code=500, detail="Connector unavailable")
 
 
