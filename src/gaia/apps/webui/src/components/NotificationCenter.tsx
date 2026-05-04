@@ -36,6 +36,11 @@ const NOTIFICATION_META: Record<
     colorClass: 'notif-type-permission',
     label: 'Permission',
   },
+  policy_alert: {
+    icon: <ShieldAlert size={16} />,
+    colorClass: 'notif-type-policy',
+    label: 'Policy',
+  },
   security_alert: {
     icon: <AlertTriangle size={16} />,
     colorClass: 'notif-type-security',
@@ -142,6 +147,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
   const filterTypes: Array<{ key: NotificationType | null; label: string }> = [
     { key: null, label: 'All' },
     { key: 'permission_request', label: 'Permissions' },
+    { key: 'policy_alert', label: 'Policy' },
     { key: 'error', label: 'Errors' },
     { key: 'security_alert', label: 'Security' },
     { key: 'status_change', label: 'Status' },
@@ -195,6 +201,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
             return (
               <div
                 className={`notification-item ${!n.read ? 'unread' : ''} ${meta.colorClass}`}
+                id={n.type === 'policy_alert' && n.receiptId ? `policy-receipt-${encodeURIComponent(n.receiptId)}` : undefined}
                 key={n.id}
                 onClick={() => handleClick(n.id)}
                 role="button"
@@ -227,6 +234,39 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                     <span className="notification-tool">
                       Tool: <code>{n.tool}</code>
                     </span>
+                  )}
+
+                  {n.type === 'policy_alert' && (
+                    <div className="notification-policy-details">
+                      {n.tool && (
+                        <span className="notification-tool">
+                          Tool: <code>{n.tool}</code>
+                        </span>
+                      )}
+                      {n.reason && (
+                        <span className="notification-policy-reason">
+                          Reason: {n.reason}
+                        </span>
+                      )}
+                      {n.ruleIds && n.ruleIds.length > 0 && (
+                        <span className="notification-tool">
+                          Rules: <code>{n.ruleIds.join(', ')}</code>
+                        </span>
+                      )}
+                      {n.policyVersion && (
+                        <span className="notification-tool">
+                          Policy: <code>{n.policyVersion}</code>
+                        </span>
+                      )}
+                      <span className="notification-tool">
+                        Receipt:{' '}
+                        {n.receiptId ? (
+                          <code>{n.receiptId}</code>
+                        ) : (
+                          <em>Receipt unavailable</em>
+                        )}
+                      </span>
+                    </div>
                   )}
 
                   {/* Permission actions */}

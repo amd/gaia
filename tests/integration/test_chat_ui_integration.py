@@ -1469,6 +1469,334 @@ class TestStreamingGeneratorEdgeCases:
         assert msgs[0]["role"] == "user"
         assert msgs[0]["content"] == "Should be saved"
 
+    def test_policy_alert_only_block_persists_for_message_reload(
+        self, client, session_id
+    ):
+        """Policy-only BLOCK streams must survive reload via the messages API."""
+
+        class PolicyBlockedAgent:
+            model_id = "TestModel-GGUF"
+
+            def __init__(self):
+                self.indexed_files = set()
+                self.conversation_history = []
+
+            def _register_tools(self):
+                return None
+
+            def process_query(self, _message):
+                self.console.print_policy_alert(
+                    tool_name="drop_table",
+                    decision="BLOCK",
+                    reason="Production DB protection active.",
+                    rule_ids=["governance.block.destructive_db"],
+                    policy_version="v1.2.0",
+                    receipt_id="rcpt_abcd_1234",
+                )
+                return ""
+
+        class StatsClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, _url):
+                response = MagicMock()
+                response.status_code = 404
+                return response
+
+        async def no_title_update(**_kwargs):
+            return None
+
+        with (
+            patch(
+                "gaia.ui._chat_helpers._get_cached_agent",
+                return_value=PolicyBlockedAgent(),
+            ),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+            patch("gaia.ui._chat_helpers._maybe_update_session_title", no_title_update),
+            patch("httpx.AsyncClient", return_value=StatsClient()),
+        ):
+            stream_resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": session_id,
+                    "message": "Drop the production table",
+                    "stream": True,
+                },
+            )
+
+        assert stream_resp.status_code == 200
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in stream_resp.text.splitlines()
+            if line.startswith("data: ")
+        ]
+        assert any(event["type"] == "policy_alert" for event in events)
+        assert any(
+            event["type"] == "done" and event["content"].startswith("Blocked:")
+            for event in events
+        )
+
+        messages_resp = client.get(f"/api/sessions/{session_id}/messages")
+        assert messages_resp.status_code == 200
+        messages = messages_resp.json()["messages"]
+        assistant_messages = [
+            message for message in messages if message["role"] == "assistant"
+        ]
+        assert len(assistant_messages) == 1
+
+        assistant_message = assistant_messages[0]
+        assert assistant_message["content"] == (
+            "Blocked: drop_table is restricted by policy."
+        )
+        assert assistant_message["agent_steps"][0]["type"] == "policy_alert"
+        assert assistant_message["agent_steps"][0]["tool"] == "drop_table"
+        assert assistant_message["agent_steps"][0]["decision"] == "BLOCK"
+        assert assistant_message["agent_steps"][0]["reason"] == (
+            "Production DB protection active."
+        )
+        assert assistant_message["agent_steps"][0]["ruleIds"] == [
+            "governance.block.destructive_db"
+        ]
+        assert assistant_message["agent_steps"][0]["policyVersion"] == "v1.2.0"
+        assert assistant_message["agent_steps"][0]["receiptId"] == "rcpt_abcd_1234"
+
+    def test_multiple_policy_alert_blocks_persist_for_message_reload(
+        self, client, session_id
+    ):
+        """Multiple BLOCK receipts in one stream must all survive reload."""
+
+        class MultiplePolicyBlockedAgent:
+            model_id = "TestModel-GGUF"
+
+            def __init__(self):
+                self.indexed_files = set()
+                self.conversation_history = []
+
+            def _register_tools(self):
+                return None
+
+            def process_query(self, _message):
+                self.console.print_policy_alert(
+                    tool_name="drop_table",
+                    decision="BLOCK",
+                    reason="Production DB protection active.",
+                    rule_ids=["governance.block.destructive_db"],
+                    policy_version="v1.2.0",
+                    receipt_id="rcpt_drop_table_1234",
+                )
+                self.console.print_policy_alert(
+                    tool_name="rm_rf",
+                    decision="BLOCK",
+                    reason="File deletion protection active.",
+                    rule_ids=["governance.block.destructive_files"],
+                    policy_version="v1.2.0",
+                    receipt_id="rcpt_rm_rf_1234",
+                )
+                return ""
+
+        class StatsClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, _url):
+                response = MagicMock()
+                response.status_code = 404
+                return response
+
+        async def no_title_update(**_kwargs):
+            return None
+
+        with (
+            patch(
+                "gaia.ui._chat_helpers._get_cached_agent",
+                return_value=MultiplePolicyBlockedAgent(),
+            ),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+            patch("gaia.ui._chat_helpers._maybe_update_session_title", no_title_update),
+            patch("httpx.AsyncClient", return_value=StatsClient()),
+        ):
+            stream_resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": session_id,
+                    "message": "Drop the table and delete files",
+                    "stream": True,
+                },
+            )
+
+        assert stream_resp.status_code == 200
+        messages_resp = client.get(f"/api/sessions/{session_id}/messages")
+        assert messages_resp.status_code == 200
+        assistant_messages = [
+            message
+            for message in messages_resp.json()["messages"]
+            if message["role"] == "assistant"
+        ]
+        assert len(assistant_messages) == 1
+
+        assistant_message = assistant_messages[0]
+        assert assistant_message["content"] == (
+            "Blocked: drop_table, rm_rf are restricted by policy."
+        )
+        policy_steps = [
+            step
+            for step in assistant_message["agent_steps"]
+            if step["type"] == "policy_alert"
+        ]
+        assert [step["tool"] for step in policy_steps] == ["drop_table", "rm_rf"]
+        assert [step["receiptId"] for step in policy_steps] == [
+            "rcpt_drop_table_1234",
+            "rcpt_rm_rf_1234",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_policy_alert_block_persists_when_client_disconnects(
+        self, db, session_id
+    ):
+        """A BLOCK receipt remains reloadable even if the SSE client disconnects."""
+        from gaia.ui._chat_helpers import _active_sse_handlers, _stream_chat_response
+        from gaia.ui.models import ChatRequest
+
+        class PolicyBlockedAgent:
+            model_id = "TestModel-GGUF"
+
+            def __init__(self):
+                self.indexed_files = set()
+                self.conversation_history = []
+
+            def _register_tools(self):
+                return None
+
+            def process_query(self, _message):
+                self.console.print_policy_alert(
+                    tool_name="drop_table",
+                    decision="BLOCK",
+                    reason="Production DB protection active.",
+                    rule_ids=["governance.block.destructive_db"],
+                    policy_version="v1.2.0",
+                    receipt_id="rcpt_disconnect_1234",
+                )
+                return ""
+
+        request = ChatRequest(
+            session_id=session_id,
+            message="Drop the production table",
+            stream=True,
+        )
+
+        with (
+            patch(
+                "gaia.ui._chat_helpers._get_cached_agent",
+                return_value=PolicyBlockedAgent(),
+            ),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+        ):
+            stream = _stream_chat_response(db, db.get_session(session_id), request)
+            async for chunk in stream:
+                if '"type": "policy_alert"' in chunk:
+                    assert session_id in _active_sse_handlers
+                    break
+            await stream.aclose()
+
+        assert session_id not in _active_sse_handlers
+
+        assistant_messages = [
+            message
+            for message in db.get_messages(session_id)
+            if message["role"] == "assistant"
+        ]
+        assert len(assistant_messages) == 1
+        assert assistant_messages[0]["content"] == (
+            "Blocked: drop_table is restricted by policy."
+        )
+        assert assistant_messages[0]["agent_steps"][0]["type"] == "policy_alert"
+        assert assistant_messages[0]["agent_steps"][0]["receiptId"] == (
+            "rcpt_disconnect_1234"
+        )
+
+    def test_policy_alert_block_with_agent_explanation_does_not_duplicate_message(
+        self, client, session_id
+    ):
+        """A BLOCK plus final explanation should save one assistant response."""
+
+        class PolicyBlockedWithExplanationAgent:
+            model_id = "TestModel-GGUF"
+
+            def __init__(self):
+                self.indexed_files = set()
+                self.conversation_history = []
+
+            def _register_tools(self):
+                return None
+
+            def process_query(self, _message):
+                self.console.print_policy_alert(
+                    tool_name="drop_table",
+                    decision="BLOCK",
+                    reason="Production DB protection active.",
+                    rule_ids=["governance.block.destructive_db"],
+                    policy_version="v1.2.0",
+                    receipt_id="rcpt_explanation_1234",
+                )
+                return "I can't drop that table because policy blocks it."
+
+        class StatsClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, _url):
+                response = MagicMock()
+                response.status_code = 404
+                return response
+
+        async def no_title_update(**_kwargs):
+            return None
+
+        with (
+            patch(
+                "gaia.ui._chat_helpers._get_cached_agent",
+                return_value=PolicyBlockedWithExplanationAgent(),
+            ),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+            patch("gaia.ui._chat_helpers._maybe_update_session_title", no_title_update),
+            patch("httpx.AsyncClient", return_value=StatsClient()),
+        ):
+            stream_resp = client.post(
+                "/api/chat/send",
+                json={
+                    "session_id": session_id,
+                    "message": "Drop the production table",
+                    "stream": True,
+                },
+            )
+
+        assert stream_resp.status_code == 200
+        assistant_messages = [
+            message
+            for message in client.get(f"/api/sessions/{session_id}/messages").json()[
+                "messages"
+            ]
+            if message["role"] == "assistant"
+        ]
+        assert len(assistant_messages) == 1
+        assert assistant_messages[0]["content"] == (
+            "I can't drop that table because policy blocks it."
+        )
+        assert assistant_messages[0]["agent_steps"][0]["type"] == "policy_alert"
+        assert assistant_messages[0]["agent_steps"][0]["receiptId"] == (
+            "rcpt_explanation_1234"
+        )
+
     @patch("gaia.ui.server._get_chat_response")
     def test_non_streaming_saves_both_messages(self, mock_chat, client, db, session_id):
         """Non-streaming saves both user and assistant messages to DB."""

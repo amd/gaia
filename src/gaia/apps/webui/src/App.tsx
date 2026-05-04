@@ -13,7 +13,9 @@ import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { PermissionPrompt } from './components/PermissionPrompt';
+import { NotificationCenter } from './components/NotificationCenter';
 import { useChatStore } from './stores/chatStore';
+import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash, findSessionByHash } from './utils/format';
@@ -71,6 +73,8 @@ function App() {
         setBackendConnected,
         setAgents,
     } = useChatStore();
+    const showNotificationPanel = useNotificationStore((s) => s.showPanel);
+    const setShowNotificationPanel = useNotificationStore((s) => s.setShowPanel);
 
     // Load agent list on mount, then poll every 30s.
     // Fingerprinting avoids re-renders when the list is unchanged.
@@ -525,6 +529,11 @@ function App() {
             </AnimatedPresence>
             <AnimatedPresence show={showSettings}>
                 <SettingsModal />
+            </AnimatedPresence>
+            <AnimatedPresence show={showNotificationPanel}>
+                <div className="notification-center-popover">
+                    <NotificationCenter onClose={() => setShowNotificationPanel(false)} />
+                </div>
             </AnimatedPresence>
 
             {/* Mobile Access Modal */}

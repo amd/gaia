@@ -105,6 +105,14 @@ const SAMPLE_CONFIG = {
   tray: {},
 };
 
+const NO_RESTART_CONFIG = {
+  agents: {
+    "test-agent": { autoStart: true, restartOnCrash: false },
+    "second-agent": { autoStart: false, restartOnCrash: false },
+  },
+  tray: {},
+};
+
 /** Set up fs mocks so manifest and config are loadable. */
 function setupFsMocks({ manifest, config } = {}) {
   const manifestJson = JSON.stringify(manifest || SAMPLE_MANIFEST);
@@ -194,13 +202,19 @@ describe("AgentProcessManager", () => {
   });
 
   afterEach(() => {
-    // Clean up real setInterval handles (health-check timers) from any started agents
+    // Clean up real timers from any started agents.
     for (const mgr of _activeManagers) {
       if (mgr.processes) {
         for (const [, entry] of Object.entries(mgr.processes)) {
           if (entry && entry.healthTimer) {
             clearInterval(entry.healthTimer);
             entry.healthTimer = null;
+          }
+          if (entry && entry.pendingRpc) {
+            for (const pending of Object.values(entry.pendingRpc)) {
+              clearTimeout(pending.timer);
+            }
+            entry.pendingRpc = {};
           }
         }
       }
@@ -567,7 +581,7 @@ describe("AgentProcessManager", () => {
 
   describe("stdout handling", () => {
     it("should parse newline-delimited JSON-RPC messages", async () => {
-      const { manager, mainWindow } = createManager();
+      const { manager, mainWindow } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
 
       const msg = { jsonrpc: "2.0", method: "notification/send", params: { text: "hello" } };
@@ -583,7 +597,7 @@ describe("AgentProcessManager", () => {
     });
 
     it("should resolve pending RPC on matching response id", async () => {
-      const { manager } = createManager();
+      const { manager } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
 
       // Set up a pending RPC
@@ -602,7 +616,7 @@ describe("AgentProcessManager", () => {
     });
 
     it("should reject pending RPC on error response", async () => {
-      const { manager } = createManager();
+      const { manager } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
 
       const rpcPromise = manager.sendJsonRpc("test-agent", "bad-method", {});
@@ -662,7 +676,7 @@ describe("AgentProcessManager", () => {
     });
 
     it("should discard buffer on overflow (> 1MB)", async () => {
-      const { manager } = createManager();
+      const { manager } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
 
       // Send a huge chunk without any newlines to trigger overflow
@@ -701,7 +715,7 @@ describe("AgentProcessManager", () => {
     });
 
     it("should emit agent-notification event for notification/send method", async () => {
-      const { manager } = createManager();
+      const { manager } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
 
       const notifications = [];
@@ -722,7 +736,7 @@ describe("AgentProcessManager", () => {
     });
 
     it("should not crash if process entry was deleted before data arrives", async () => {
-      const { manager } = createManager();
+      const { manager } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
 
       // Clean up health timer before deleting the entry
@@ -841,7 +855,7 @@ describe("AgentProcessManager", () => {
     });
 
     it("should send agent:crashed to renderer on unexpected exit", async () => {
-      const { manager, mainWindow } = createManager();
+      const { manager, mainWindow } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
 
       mainWindow.webContents.send.mockClear();
@@ -858,7 +872,7 @@ describe("AgentProcessManager", () => {
     });
 
     it("should log crash for non-zero exit code", async () => {
-      const { manager } = createManager();
+      const { manager } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
 
       mockChild.emit("exit", 42, null);
@@ -881,7 +895,7 @@ describe("AgentProcessManager", () => {
     });
 
     it("should clean up process entry after unexpected exit", async () => {
-      const { manager } = createManager();
+      const { manager } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
 
       mockChild.emit("exit", 1, null);
@@ -890,7 +904,7 @@ describe("AgentProcessManager", () => {
     });
 
     it("should emit stopped status on unexpected exit", async () => {
-      const { manager } = createManager();
+      const { manager } = createManager({ config: NO_RESTART_CONFIG });
       await startMockAgent(manager);
 
       const statusEvents = [];
@@ -1589,7 +1603,7 @@ describe("AgentProcessManager", () => {
     });
 
     it("should reject all pending RPCs on process cleanup", async () => {
-      const { manager } = createManager();
+      const { manager } = createManager({ config: NO_RESTART_CONFIG });
       const { mockChild } = await startMockAgent(manager);
 
       // Create some pending RPCs
