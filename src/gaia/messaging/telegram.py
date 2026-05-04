@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 import signal
+import tempfile
 import threading
 from typing import Dict, Optional, Set
 
@@ -73,7 +74,8 @@ class TelegramAdapter:
         if update.message.photo:
             media_note = "[photo uploaded]"
             file = await update.message.photo[-1].get_file()
-            tmp_path = os.path.join("/tmp", f"gaia_telegram_{file.file_id}.jpg")
+            tmp_dir = tempfile.gettempdir()
+            tmp_path = os.path.join(tmp_dir, f"gaia_telegram_{file.file_id}.jpg")
             await file.download_to_drive(tmp_path)
             # Hand tmp_path to VLM ingestion pipeline (async-safe wrapper)
             vlm_result = ingest_image_to_vlm(tmp_path)
@@ -90,7 +92,8 @@ class TelegramAdapter:
         elif update.message.document:
             media_note = f"[file uploaded: {update.message.document.file_name}]"
             file = await update.message.document.get_file()
-            tmp_path = os.path.join("/tmp", f"gaia_telegram_{file.file_id}")
+            tmp_dir = tempfile.gettempdir()
+            tmp_path = os.path.join(tmp_dir, f"gaia_telegram_{file.file_id}")
             await file.download_to_drive(tmp_path)
             # Hand tmp_path to RAG ingestion pipeline
             rag_result = ingest_document_to_rag(tmp_path)
@@ -111,9 +114,8 @@ class TelegramAdapter:
 
         def run_generation():
             try:
-                # Create AgentSDK synchronously in thread
-                config = AgentConfig()
-                chat = AgentSDK(config)
+                # Reuse per-user AgentSDK synchronously in thread
+                chat = get_or_create_session(user.id)
                 full = ""
                 for chunk in chat.send_stream(user_input):
                     full += chunk.text
@@ -122,6 +124,11 @@ class TelegramAdapter:
                 # Signal completion
                 loop.call_soon_threadsafe(queue.put_nowait, (full, True))
             except Exception as e:  # pragma: no cover - runtime errors bubble up
+                log.exception(
+                    "Error during generation for user %s: %s",
+                    getattr(user, "id", None),
+                    e,
+                )
                 loop.call_soon_threadsafe(queue.put_nowait, (f"Error: {e}", True))
 
         # Start generator in thread to avoid blocking the asyncio loop
@@ -136,9 +143,21 @@ class TelegramAdapter:
                 # Edit the reply with the latest accumulated text (Telegram rate limits apply)
                 try:
                     await reply.edit_text(accumulated)
-                except Exception:
-                    # Ignore transient edit failures (rate limits)
-                    pass
+                except Exception as e:
+                    # Ignore transient edit failures (rate limits) where possible,
+                    # but log for observability. Classify common telegram errors if available.
+                    try:
+                        from telegram.error import NetworkError, RetryAfter, TimedOut
+
+                        if isinstance(e, (TimedOut, RetryAfter, NetworkError)):
+                            log.debug("Transient telegram edit failure: %s", e)
+                        else:
+                            log.exception(
+                                "Unexpected error editing telegram message: %s", e
+                            )
+                    except Exception:
+                        # If telegram isn't available in this environment, fall back
+                        log.debug("Failed to edit telegram message: %s", e)
                 if done:
                     break
         finally:
@@ -164,16 +183,16 @@ class TelegramAdapter:
             try:
                 with open(pid_path, "w", encoding="utf-8") as f:
                     f.write(str(os.getpid()))
-            except Exception:
-                log.exception("Failed to write PID file for telegram adapter")
+            except OSError as e:
+                log.exception("Failed to write PID file for telegram adapter: %s", e)
 
             log_path = os.path.join(pid_dir, "telegram.log")
             try:
-                fh = open(log_path, "a", encoding="utf-8")
-                fh.write("Starting telegram adapter in background\n")
-                fh.flush()
-            except Exception:
-                log.exception("Failed to open telegram log file")
+                with open(log_path, "a", encoding="utf-8") as fh:
+                    fh.write("Starting telegram adapter in background\n")
+                    fh.flush()
+            except OSError as e:
+                log.exception("Failed to open telegram log file: %s", e)
 
         try:
             from telegram.ext import (
@@ -182,7 +201,7 @@ class TelegramAdapter:
                 MessageHandler,
                 filters,
             )
-        except Exception as e:  # pragma: no cover - dependency missing
+        except ImportError as e:  # pragma: no cover - dependency missing
             # If running in background mode (tests or dry-run), allow import to be missing
             if background:
                 log.warning(
@@ -262,9 +281,9 @@ class TelegramAdapter:
             try:
                 signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
                 signal.signal(signal.SIGINT, lambda *_: stop_event.set())
-            except Exception:
+            except (ValueError, OSError) as e:
                 # Not all environments allow signal registration
-                pass
+                log.debug("Signal registration skipped: %s", e)
 
             return
 
