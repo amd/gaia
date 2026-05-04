@@ -1717,16 +1717,17 @@ def create_app(
             raise HTTPException(status_code=400, detail="Invalid watch directory")
         validated_watch_dir = m.group(0)
 
-        # Resolve via pathlib directly — os.path.normpath + abspath
-        # round-trip was attempted but added more CodeQL flags than it
-        # removed (the normpath call itself is flagged), so stick with
-        # the simpler Path chain. The symlink / home-prefix / sensitive-
-        # dir chain below provides the real security guarantee.
-        new_dir = Path(validated_watch_dir).expanduser().resolve()
+        # Expand ~ and normalize to an absolute, canonical path using
+        # os.path.normpath + os.path.abspath — CodeQL's taint engine
+        # recognises this pair as a PathNormalization barrier, which
+        # (together with the .startswith() prefix check below) fully
+        # breaks the taint flow for py/path-injection.
+        _expanded = os.path.expanduser(validated_watch_dir)
+        new_dir_str = os.path.normpath(os.path.abspath(_expanded))
 
         # Validate resolved path matches realpath to prevent symlink attacks
-        real_path = os.path.realpath(str(new_dir))
-        if real_path != str(new_dir):
+        real_path = os.path.realpath(new_dir_str)
+        if real_path != new_dir_str:
             raise HTTPException(
                 status_code=400,
                 detail="Symbolic links in watch directory paths are not allowed",
@@ -1736,18 +1737,21 @@ def create_app(
         # Use ``<home>/`` as the prefix check so ``/Users/alice`` can't
         # match ``/Users/alice-evil`` — same defense-in-depth pattern used
         # in WebClient.download and PathValidator.is_write_blocked.
-        user_home = Path.home().resolve()
-        home_prefix = str(user_home).rstrip(os.sep) + os.sep
-        new_dir_str = str(new_dir)
-        if not (new_dir_str == str(user_home) or new_dir_str.startswith(home_prefix)):
+        # NOTE: the .startswith() here is the SafeAccessCheck that pairs
+        # with the normpath() above to satisfy CodeQL's py/path-injection.
+        user_home = os.path.normpath(os.path.abspath(os.path.expanduser("~")))
+        home_prefix = user_home.rstrip(os.sep) + os.sep
+        if not (new_dir_str == user_home or new_dir_str.startswith(home_prefix)):
             raise HTTPException(
                 status_code=400,
                 detail="Watch directory must be under the user's home directory",
             )
 
+        # Convert to Path for subsequent operations
+        new_dir = Path(new_dir_str)
+
         # Validate the path doesn't traverse to sensitive system directories
         sensitive_dirs = ["/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys"]
-        new_dir_str = str(new_dir)
         for sensitive in sensitive_dirs:
             if new_dir_str == sensitive or new_dir_str.startswith(sensitive + "/"):
                 raise HTTPException(
