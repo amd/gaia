@@ -8,7 +8,7 @@ import { ChatView } from './components/ChatView';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { FileBrowser } from './components/FileBrowser';
-import { SettingsModal } from './components/SettingsModal';
+import { SettingsPage } from './components/SettingsPage';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
@@ -454,7 +454,7 @@ function App() {
     }, [showDocLibrary]);
 
     useEffect(() => {
-        if (showSettings) log.ui.info('Settings modal opened');
+        if (showSettings) log.ui.info('Settings page opened');
     }, [showSettings]);
 
     // Reactive mobile detection — updates on resize
@@ -514,20 +514,26 @@ function App() {
             />
 
             <div className="main-content">
-                {/* Connection / LLM status banner */}
-                <ConnectionBanner onRetry={checkSystemStatus} />
+                {showSettings ? (
+                    <SettingsPage />
+                ) : (
+                    <>
+                        {/* Connection / LLM status banner */}
+                        <ConnectionBanner onRetry={checkSystemStatus} />
 
-                <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
-                    {displayedSessionId ? (
-                        <ChatView key={displayedSessionId} sessionId={displayedSessionId} onCreateAgent={handleNewBuilderTask} onAgentChange={handleAgentChange} />
-                    ) : (
-                        <WelcomeScreen
-                            onNewTask={handleNewTask}
-                            onSendPrompt={handleNewTaskWithPrompt}
-                            onCreateAgent={handleNewBuilderTask}
-                        />
-                    )}
-                </div>
+                        <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
+                            {displayedSessionId ? (
+                                <ChatView key={displayedSessionId} sessionId={displayedSessionId} onCreateAgent={handleNewBuilderTask} onAgentChange={handleAgentChange} />
+                            ) : (
+                                <WelcomeScreen
+                                    onNewTask={handleNewTask}
+                                    onSendPrompt={handleNewTaskWithPrompt}
+                                    onCreateAgent={handleNewBuilderTask}
+                                />
+                            )}
+                        </div>
+                    </>
+                )}
             </div>
 
             <AnimatedPresence show={showDocLibrary}>
@@ -535,9 +541,6 @@ function App() {
             </AnimatedPresence>
             <AnimatedPresence show={showFileBrowser}>
                 <FileBrowser />
-            </AnimatedPresence>
-            <AnimatedPresence show={showSettings}>
-                <SettingsModal />
             </AnimatedPresence>
 
             {/* Mobile Access Modal */}

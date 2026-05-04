@@ -1,0 +1,138 @@
+---
+title: "GitHub"
+icon: "github"
+description: "Connect GAIA agents to GitHub repos, PRs, issues, and Actions."
+---
+
+<Info>
+  **Connector ID:** `mcp-github` · **Type:** `mcp_server` · **Catalog entry:** [`src/gaia/connectors/catalog/mcp_servers.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/mcp_servers.py)
+</Info>
+
+## What you'll need
+
+The GitHub connector is an **MCP server** — GAIA spawns the official
+[`@modelcontextprotocol/server-github`](https://github.com/github/github-mcp-server)
+process on demand and routes tool calls through it. It needs a single
+secret: a **GitHub Personal Access Token (PAT)** with the scopes you
+want agents to use.
+
+You will create one PAT, paste it into the GAIA Agent UI, and you're
+done. The token lives encrypted in your OS keyring; the MCP server
+process reads it via a `$keyring` reference at launch time.
+
+## Step 1 — Create a Personal Access Token
+
+GitHub has two PAT types. **Use the classic token unless you know
+otherwise** — fine-grained tokens don't yet support every endpoint the
+MCP server uses.
+
+1. Go to <a
+   href="https://github.com/settings/tokens"
+   target="_blank">github.com/settings/tokens</a> (Settings → Developer
+   settings → Personal access tokens → Tokens (classic)).
+2. **Generate new token** → **Generate new token (classic)**.
+3. **Note**: `gaia-personal` (or whatever helps you find it later).
+4. **Expiration**: pick something — 90 days is a sensible default.
+   GitHub will email you before it expires.
+
+### Pick scopes
+
+The scopes you grant the token are the **maximum** GAIA can do. Per-
+agent grants further narrow it from there.
+
+| Scope | What it lets agents do |
+|---|---|
+| `repo` | Read/write to all your repos. The default for most agents. |
+| `read:user` | Read your profile (used by `whoami`-style tools). |
+| `workflow` | View and trigger GitHub Actions runs. |
+| `read:org` | List orgs you belong to. |
+
+For a typical setup, tick **`repo`** and **`read:user`**. Add
+`workflow` if you want agents to interact with Actions.
+
+5. Scroll to the bottom and click **Generate token**.
+6. **Copy the token now** — GitHub will not show it again. It looks
+   like `ghp_…` followed by 36 characters.
+
+## Step 2 — Paste it into GAIA
+
+1. Launch the Agent UI: `gaia chat --ui`.
+2. **Settings** (gear) → **Connections** → click the **GitHub** tile.
+3. Paste the PAT into the **GitHub Personal Access Token** field.
+4. Click **Save**.
+
+GAIA will:
+
+1. Store the token in your OS keyring (single slot, distinct from any
+   other connector).
+2. Write `~/.gaia/mcp_servers.json` with a `$keyring:gaia.connections:mcp-github:GITHUB_TOKEN`
+   reference — the actual token never lives in plaintext on disk.
+3. Hot-reload the MCP client manager so the GitHub tools are
+   immediately available to agents.
+
+Click the **Test** button on the tile to verify GAIA can find the
+token in the keyring.
+
+## Step 3 — Grant scopes to specific agents
+
+Each agent must be granted access individually. The GitHub MCP server
+exposes its tools (e.g. `list_issues`, `create_pull_request`); GAIA's
+agent grants are at the **MCP-tool level**.
+
+```bash
+# Grant the chat agent the ability to use any GitHub tool
+gaia connectors grants grant mcp-github builtin:chat --scopes "*"
+
+# Or grant specific tools only:
+gaia connectors grants grant mcp-github builtin:chat \
+  --scopes list_issues list_pull_requests
+```
+
+(In the UI: open the connector tile → **Per-agent grants** section.)
+
+## Common issues
+
+### `Bad credentials` from the MCP server
+
+The token in your keyring is wrong, expired, or revoked. Click
+**Disconnect** on the tile and re-paste a fresh token.
+
+### `npx: command not found`
+
+The GitHub MCP server is a Node package launched via `npx`. Install
+Node 18+ and ensure `npx` is on your `PATH`:
+
+```bash
+node --version   # must be >= 18
+which npx        # must resolve to a real path
+```
+
+### `Resource not accessible by personal access token`
+
+Your token doesn't have a scope the agent is trying to use. Either
+regenerate the token with broader scopes, or revoke the agent's grant
+for that tool.
+
+### Tokens for organization-owned repos
+
+Classic PATs scoped to `repo` work for any repo you have push access
+to, including org-owned repos. If your org enforces SSO, click
+**Configure SSO** next to the token in
+[github.com/settings/tokens](https://github.com/settings/tokens) and
+authorize each org you want the token to reach.
+
+## Revoking access
+
+- **From GAIA**: Settings → Connections → GitHub → **Disconnect**. The
+  PAT is removed from the keyring and the MCP server entry is dropped
+  from `mcp_servers.json`.
+- **From GitHub**: [github.com/settings/tokens](https://github.com/settings/tokens) →
+  the row for `gaia-personal` → **Delete**. Use this if the laptop
+  with the keyring is lost.
+
+## See also
+
+- [Connectors overview](/connectors)
+- [GitHub MCP server](https://github.com/github/github-mcp-server)
+- [Managing your personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
+- [Connectors security model](/security/connections)
