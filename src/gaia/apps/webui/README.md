@@ -55,7 +55,7 @@ Then open [http://localhost:4200](http://localhost:4200) in your browser.
 ## Architecture
 
 ```
-Browser  <-->  Python Backend (FastAPI, port 4200)  <-->  Lemonade Server (LLM, port 8000)
+Browser  <-->  Python Backend (FastAPI, port 4200)  <-->  Lemonade Server (LLM, port 13305)
                     |
                 SQLite DB (~/.gaia/chat/)
 ```

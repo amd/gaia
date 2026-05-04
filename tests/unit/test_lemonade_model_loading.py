@@ -13,11 +13,18 @@ class TestEnsureModelLoaded:
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     def test_calls_load_when_model_not_loaded(self, mock_load, mock_status):
-        """Verify load_model is called when model not in loaded_models list."""
+        """Verify load_model is called when model not in loaded_models list.
+
+        Unknown models (not in MODELS registry) default to ctx_size=32768
+        so ChatAgent's >7K-token system prompt isn't truncated by Lemonade's
+        default 4096 ctx — the silent-empty-stream regression that blocked
+        gaia-lite. See _chat_helpers._maybe_load_expected_model + the
+        matching log line in lemonade_client._ensure_model_loaded.
+        """
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(
-            url="http://localhost:8000",
+            url="http://localhost:13305",
             running=True,
             loaded_models=[{"id": "model-a"}],
         )
@@ -25,9 +32,39 @@ class TestEnsureModelLoaded:
         # Execute
         client._ensure_model_loaded("model-b", auto_download=True)
 
-        # Verify - should call with prompt=False and ctx_size from MODELS (None for unknown models)
+        # Verify: model is not in the built-in MODELS registry, so the
+        # 32K fallback kicks in (ChatAgent's prompt is >7K tokens; loading
+        # at Lemonade's 4K default would silently truncate it).
         mock_load.assert_called_once_with(
-            "model-b", auto_download=True, prompt=False, ctx_size=None
+            "model-b", auto_download=True, prompt=False, ctx_size=32768
+        )
+
+    @patch.object(LemonadeClient, "get_status")
+    @patch.object(LemonadeClient, "load_model")
+    def test_known_model_uses_registry_ctx_size(self, mock_load, mock_status):
+        """Verify a model in the built-in MODELS registry loads at the
+        registry's ``min_ctx_size``, NOT the 32K fallback.
+
+        The fallback only fires for models *not* in MODELS — see
+        ``lemonade_client.py:_ensure_model_loaded`` "Model not in MODELS
+        registry" branch. This test prevents a silent regression where a
+        future refactor breaks the registry-lookup loop and every model
+        ends up at 32K (wasting memory on small models like Qwen3 0.6B).
+        """
+        client = LemonadeClient(host="localhost", port=13305)
+        mock_status.return_value = LemonadeStatus(
+            url="http://localhost:13305",
+            running=True,
+            loaded_models=[{"id": "some-other-model"}],
+        )
+
+        # Qwen3-0.6B-GGUF is in MODELS with min_ctx_size=4096 — the
+        # smallest of the registered models, so a regression that always
+        # picks 32K is detectable here.
+        client._ensure_model_loaded("Qwen3-0.6B-GGUF", auto_download=True)
+
+        mock_load.assert_called_once_with(
+            "Qwen3-0.6B-GGUF", auto_download=True, prompt=False, ctx_size=4096
         )
 
     @patch.object(LemonadeClient, "get_status")
@@ -35,9 +72,9 @@ class TestEnsureModelLoaded:
     def test_skips_load_when_model_already_loaded(self, mock_load, mock_status):
         """Verify no load_model call when model already in loaded_models list."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(
-            url="http://localhost:8000",
+            url="http://localhost:13305",
             running=True,
             loaded_models=[{"id": "model-a"}],
         )
@@ -53,7 +90,7 @@ class TestEnsureModelLoaded:
     def test_skips_check_when_auto_download_disabled(self, mock_load, mock_status):
         """Verify method returns early when auto_download=False."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
 
         # Execute
         client._ensure_model_loaded("model-a", auto_download=False)
@@ -67,7 +104,7 @@ class TestEnsureModelLoaded:
     def test_handles_status_check_error_gracefully(self, mock_load, mock_status):
         """Verify errors during status check are logged but don't fail."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_status.side_effect = Exception("Connection failed")
 
         # Execute - should not raise
@@ -87,7 +124,7 @@ class TestStreamCompletionsModelLoading:
     ):
         """Verify _ensure_model_loaded is called before making the API request."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_openai_instance = MagicMock()
         mock_openai_class.return_value = mock_openai_instance
 
@@ -129,7 +166,7 @@ class TestStreamChatCompletionsModelLoading:
     ):
         """Verify _ensure_model_loaded is called before making the API request."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_openai_instance = MagicMock()
         mock_openai_class.return_value = mock_openai_instance
 
@@ -175,9 +212,9 @@ class TestNoPromptBehavior:
     def test_ensure_model_loaded_passes_prompt_false(self, mock_load, mock_status):
         """Verify _ensure_model_loaded passes prompt=False to avoid user prompts."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(
-            url="http://localhost:8000",
+            url="http://localhost:13305",
             running=True,
             loaded_models=[],  # No models loaded
         )
@@ -203,11 +240,11 @@ class TestModelLoadingIntegration:
     ):
         """Integration test: model is loaded when not in loaded_models list."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
 
         # Mock status to show model NOT loaded
         mock_status.return_value = LemonadeStatus(
-            url="http://localhost:8000",
+            url="http://localhost:13305",
             running=True,
             loaded_models=[{"id": "different-model"}],
         )
@@ -234,9 +271,11 @@ class TestModelLoadingIntegration:
             )
         )
 
-        # Verify load_model was called to download/load the model WITHOUT prompting
+        # Verify load_model was called to download/load the model WITHOUT prompting.
+        # Same 32K fallback as above: "new-model" isn't in MODELS, so the
+        # default ctx is bumped from Lemonade's 4K up to 32K.
         mock_load.assert_called_once_with(
-            "new-model", auto_download=True, prompt=False, ctx_size=None
+            "new-model", auto_download=True, prompt=False, ctx_size=32768
         )
 
     @patch.object(LemonadeClient, "get_status")
@@ -247,11 +286,11 @@ class TestModelLoadingIntegration:
     ):
         """Integration test: no load when model already in loaded_models list."""
         # Setup
-        client = LemonadeClient(host="localhost", port=8000)
+        client = LemonadeClient(host="localhost", port=13305)
 
         # Mock status to show model IS loaded
         mock_status.return_value = LemonadeStatus(
-            url="http://localhost:8000",
+            url="http://localhost:13305",
             running=True,
             loaded_models=[{"id": "existing-model"}],
         )

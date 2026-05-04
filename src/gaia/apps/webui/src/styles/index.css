@@ -199,13 +199,17 @@ input, textarea { font: inherit; color: var(--text-primary); background: var(--b
 a { color: var(--amd-red); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* Text selection -- AMD red tint for brand cohesion */
+/* Text selection — neutral cool-blue tint.
+ * Was AMD-red rgba(237,28,36,0.18). The red selection on top of red
+ * left-bar message bubbles + red error banners + red focus rings made
+ * every interaction feel like a warning state. Standard cool-blue
+ * selection reads as a normal text selection — what the user expects. */
 ::selection {
-    background: rgba(237, 28, 36, 0.18);
+    background: rgba(56, 132, 255, 0.22);
     color: inherit;
 }
 ::-moz-selection {
-    background: rgba(237, 28, 36, 0.18);
+    background: rgba(56, 132, 255, 0.22);
     color: inherit;
 }
 

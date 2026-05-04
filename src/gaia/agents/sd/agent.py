@@ -33,8 +33,8 @@ class SDAgentConfig:
     use_claude: bool = False
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
-    base_url: str = "http://localhost:8000/api/v1"
-    model_id: str = "Qwen3-8B-GGUF"  # 8B model for robust agentic reasoning
+    base_url: str = "http://localhost:13305/api/v1"
+    model_id: str = "Gemma-4-E4B-it-GGUF"  # Multimodal model for agentic reasoning
 
     # Execution settings
     max_steps: int = 10
@@ -117,10 +117,10 @@ class SDAgent(Agent, SDToolsMixin, VLMToolsMixin):
         )
 
         # Initialize VLM tools (auto-registers tools)
-        self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
+        self.init_vlm(model="Gemma-4-E4B-it-GGUF")
 
         logger.debug(
-            f"SD Agent initialized with SD model: {config.sd_model}, VLM: Qwen3-VL-4B"
+            f"SD Agent initialized with SD model: {config.sd_model}, VLM: Gemma-4-E4B"
         )
 
     def _get_system_prompt(self) -> str:

@@ -70,7 +70,7 @@ gaia --cli      # Launch interactive CLI chat instead
 | `--ui-port <port>` | Port for the Agent UI server (default: 4200) |
 | `--ui-dist <path>` | Serve an alternative prebuilt Agent UI bundle (e.g., a PR preview) instead of the one shipped in the installed package |
 | `--cli` | Launch interactive CLI chat |
-| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:8000/api/v1`). Also accepted as a global option on most subcommands (e.g. `gaia chat --base-url ...`). |
+| `--base-url <url>` | Use a remote Lemonade server (e.g. `https://host:13305/api/v1`). Also accepted as a global option on most subcommands (e.g. `gaia chat --base-url ...`). |
 
 **Examples:**
 
@@ -88,7 +88,7 @@ gaia --cli
 ```
 
 ```bash Remote Lemonade Server
-gaia --ui --base-url https://your-server:8000/api/v1
+gaia --ui --base-url https://your-server:13305/api/v1
 ```
 </CodeGroup>
 
@@ -191,7 +191,7 @@ gaia init --remote
 ```
 
 ```bash Remote via Environment Variable
-LEMONADE_BASE_URL=http://192.168.1.100:8000/api/v1 gaia init
+LEMONADE_BASE_URL=http://192.168.1.100:13305/api/v1 gaia init
 ```
 
 ```bash Force Reinstall Lemonade
@@ -220,7 +220,7 @@ GAIA works with Lemonade Server in two modes:
   </Tab>
   <Tab title="Remote Mode">
     Enable with `--remote`, or set `LEMONADE_BASE_URL` to a remote URL
-    (e.g., `http://192.168.1.100:8000/api/v1`). The environment variable auto-detects
+    (e.g., `http://192.168.1.100:13305/api/v1`). The environment variable auto-detects
     remote mode when the hostname is not localhost/127.0.0.1/::1.
 
     1. **Checks Remote Server** — Verifies remote Lemonade server version via API
@@ -350,6 +350,56 @@ gaia kill --port 8080
 
 <Note>
 On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tray.exe` processes.
+</Note>
+
+### Agent Command
+
+Manage custom agents installed under `~/.gaia/agents/`. Supports exporting every custom agent into a single `.zip` bundle and importing a bundle produced on another machine.
+
+```bash
+gaia agent export [--output PATH]
+gaia agent import PATH [--yes]
+```
+
+**Export options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--output <path>` | string | Destination `.zip` file (default: `~/.gaia/export.zip`) |
+
+**Import options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `path` | string | Path to the `.zip` bundle to import (positional, required) |
+| `--yes, -y` | flag | Skip the interactive trust prompt (required in non-interactive/CI contexts) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Export all custom agents
+gaia agent export
+```
+
+```bash Export to a custom path
+gaia agent export --output ./my-agents.zip
+```
+
+```bash Import a bundle (interactive)
+gaia agent import ./my-agents.zip
+```
+
+```bash Import non-interactively (CI)
+gaia agent import ./my-agents.zip --yes
+```
+</CodeGroup>
+
+<Warning>
+Exported bundles contain your agent source files as-is. Any API keys or credentials present in `agent.py` will be included. Review bundles before sharing.
+</Warning>
+
+<Note>
+Importing a bundle runs third-party Python code on your machine. `gaia agent import` shows the agent IDs in the bundle and requires explicit `y`/`yes` confirmation (or `--yes`) before proceeding.
 </Note>
 
 ---
@@ -589,6 +639,33 @@ gaia-code "Create a REST API" --use-claude
 </CodeGroup>
 
 [→ Full Code Agent Documentation](/guides/code)
+
+#### Code Index
+
+`gaia-code index` builds and queries a local FAISS-backed semantic index over a repository. Embeddings run on AMD NPU/GPU through Lemonade Server. Requires the `[rag]` extras.
+
+```bash
+# Build / refresh the index for the current repo
+gaia-code index
+
+# Index a specific repo, capping discovery
+gaia-code index --repo /path/to/repo --max-files 2000
+
+# Semantic search
+gaia-code index search "where do we mint JWT tokens"
+gaia-code index search "auth flow" --scope code --top-k 5
+
+# Inspect / wipe the cache
+gaia-code index status
+gaia-code index clear
+
+# Interactive Q&A (CodeAgent + code_index tools)
+gaia-code index chat
+```
+
+Common flags at the `index` level: `--repo`, `--max-files`, `--model`, `--base-url`, `--no-lemonade-check`, `--use-claude`, `--use-chatgpt`.
+
+[→ Full Code Index Documentation](/guides/code-index)
 
 ---
 
@@ -1145,6 +1222,105 @@ gaia visualize
 
 ---
 
+### Agent Eval
+
+<Card title="Agent Eval Benchmark" icon="microscope" href="/guides/eval">
+  Scenario-based end-to-end testing of the GAIA Agent UI
+</Card>
+
+Run automated multi-turn conversation tests against the live Agent UI. The eval agent (Claude Code) simulates user personas, drives conversations via MCP, and judges every response across 7 scoring dimensions.
+
+```bash
+gaia eval agent [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--scenario` | string | all | Run a specific scenario by ID |
+| `--category` | string | all | Run all scenarios in a category |
+| `--backend` | string | `http://localhost:4200` | Agent UI backend URL |
+| `--model` | string | `claude-sonnet-4-6` | Judge/simulator model |
+| `--budget` | string | `2.00` | Maximum USD spend per scenario |
+| `--timeout` | integer | `900` | Per-scenario timeout in seconds (auto-scaled for complex scenarios) |
+| `--audit-only` | flag | false | Run architecture audit without LLM calls (free) |
+| `--generate-corpus` | flag | false | Regenerate corpus documents and validate `manifest.json` |
+| `--fix` | flag | false | Auto-invoke Claude Code to diagnose and repair failures, then re-evaluate |
+| `--max-fix-iterations` | integer | `3` | Maximum repair cycles in `--fix` mode |
+| `--target-pass-rate` | float | `0.90` | Stop fix iterations when judged pass rate reaches this threshold |
+| `--compare` | string(s) | -- | Compare two scorecard files, or one scorecard against saved baseline |
+| `--save-baseline` | flag | false | Save this run's scorecard as `eval/results/baseline.json` |
+| `--capture-session` | string | -- | Convert an Agent UI session (by UUID) into a YAML scenario file |
+| `--scenario-dir` | string | -- | Additional scenario directory to scan (repeatable) |
+| `--corpus-dir` | string | -- | Additional corpus directory to scan (repeatable) |
+| `--tag` | string | -- | Run only scenarios with this tag (repeatable, OR logic) |
+| `--output-format` | choice | -- | Output format: `json`, `markdown`, or `junit` |
+
+**Examples:**
+
+<CodeGroup>
+```bash Single Scenario
+gaia eval agent --scenario simple_factual_rag
+```
+
+```bash Run Category
+gaia eval agent --category rag_quality
+```
+
+```bash Full Benchmark
+gaia eval agent
+```
+
+```bash Architecture Audit (Free)
+gaia eval agent --audit-only
+```
+
+```bash Auto-Fix Mode
+gaia eval agent --fix --max-fix-iterations 5 --target-pass-rate 0.95
+```
+
+```bash Save Baseline
+gaia eval agent --save-baseline
+```
+
+```bash Compare Against Baseline
+gaia eval agent --compare eval/results/latest/scorecard.json
+```
+
+```bash Explicit Two-File Comparison
+gaia eval agent --compare eval/results/run_A/scorecard.json eval/results/run_B/scorecard.json
+```
+
+```bash Capture Session to Scenario
+gaia eval agent --capture-session 29c211c7-31b5-4084-bb3f-1825c0210942
+```
+
+```bash Budget and Timeout Control
+gaia eval agent --category rag_quality --budget 1.00 --timeout 300
+```
+
+```bash Filter by Tags
+gaia eval agent --tag healthcare --tag critical
+```
+
+```bash JUnit Output for CI
+gaia eval agent --output-format junit
+```
+
+```bash Custom Scenario Directory
+gaia eval agent --scenario-dir ~/my-project/eval-scenarios
+```
+</CodeGroup>
+
+<Note>
+  The eval agent requires Claude Code CLI (`claude` command), an Anthropic API key, and the Agent UI backend running. See the [Agent Eval Guide](/guides/eval) for full setup instructions.
+</Note>
+
+[→ Full Agent Eval Guide](/guides/eval) · [→ Scenario Authoring](/guides/eval-scenarios) · [→ CI/CD Integration](/guides/eval-ci)
+
+---
+
 ### Visualize Command
 
 Launch interactive web-based visualizer for comparing evaluation results.
@@ -1375,6 +1551,45 @@ This command will:
 - Find the process ID (PID) bound to the specified port
 - Forcefully terminate that process
 - Provide feedback about success or failure
+
+---
+
+### Diagnostics Command
+
+Bundle system info and logs into a tarball for bug reports.
+
+```bash
+gaia diagnostics [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--output` | path | `~/.gaia/diagnostics-<YYYYMMDD-HHMMSS>.tgz` | Destination path for the tarball |
+| `--no-logs` | flag | false | Omit log files (useful for public bug reports) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Full Bundle
+gaia diagnostics
+# → ~/.gaia/diagnostics-20260422-173000.tgz
+```
+
+```bash Without Logs
+gaia diagnostics --no-logs
+```
+
+```bash Custom Output Path
+gaia diagnostics --output /tmp/my-bundle.tgz
+```
+</CodeGroup>
+
+The bundle includes:
+- System info snapshot (`uname -a`, distro, relevant env vars, all TCP listeners via `ss -tlnp`)
+- State files from `~/.gaia/` (config, session data — no chat content)
+- Log files: `~/.gaia/gaia.log` and `~/.gaia/electron-main.log` (omitted with `--no-logs`)
 
 ---
 

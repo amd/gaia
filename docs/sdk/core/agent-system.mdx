@@ -354,7 +354,7 @@ agent = MyAgent(
     # If both are False, uses local Lemonade Server
 
     # === Local LLM Settings ===
-    base_url="http://localhost:8000/api/v1",  # Lemonade server URL
+    base_url="http://localhost:13305/api/v1",  # Lemonade server URL
     model_id="Qwen3.5-35B-A3B-GGUF",  # Model to use
 
     # === Cloud LLM Settings ===
@@ -384,7 +384,7 @@ agent = MyAgent()
 
 # Or explicitly configure
 agent = MyAgent(
-    base_url="http://localhost:8000/api/v1",
+    base_url="http://localhost:13305/api/v1",
     model_id="Qwen3.5-35B-A3B-GGUF"
 )
 ```

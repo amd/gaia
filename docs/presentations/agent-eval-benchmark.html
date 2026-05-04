@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GAIA Agent Eval Benchmark</title>
+<style>
+  :root {
+    --amd-red: #ED1C24;
+    --amd-dark: #1a1a2e;
+    --amd-darker: #0f0f1a;
+    --accent: #ff4757;
+    --accent-soft: #ff6b81;
+    --text: #e8e8f0;
+    --text-muted: #8888a0;
+    --surface: #22223a;
+    --surface-light: #2a2a4a;
+    --green: #2ed573;
+    --yellow: #ffa502;
+    --blue: #3742fa;
+    --code-bg: #16162a;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--amd-darker);
+    color: var(--text);
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  .deck {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+  }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    padding: 60px 100px;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
+
+  .slide.active {
+    display: flex;
+    opacity: 1;
+  }
+
+  /* --- Title Slide --- */
+  .slide-title {
+    align-items: center;
+    text-align: center;
+    background: linear-gradient(135deg, var(--amd-darker) 0%, #1a1a3e 50%, var(--amd-dark) 100%);
+  }
+
+  .slide-title .logo-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+
+  .slide-title .logo-bar .amd-badge {
+    background: var(--amd-red);
+    color: #fff;
+    font-weight: 800;
+    font-size: 18px;
+    padding: 6px 16px;
+    border-radius: 4px;
+    letter-spacing: 2px;
+  }
+
+  .slide-title .logo-bar .product {
+    font-size: 20px;
+    color: var(--text-muted);
+    font-weight: 300;
+    letter-spacing: 1px;
+  }
+
+  .slide-title h1 {
+    font-size: 64px;
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 20px;
+    background: linear-gradient(135deg, #fff 0%, var(--accent-soft) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .slide-title .subtitle {
+    font-size: 24px;
+    color: var(--text-muted);
+    font-weight: 300;
+    max-width: 700px;
+    line-height: 1.5;
+  }
+
+  .slide-title .version-badge {
+    margin-top: 40px;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    color: var(--accent-soft);
+    padding: 8px 24px;
+    border-radius: 100px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 1px;
+  }
+
+  /* --- Content Slides --- */
+  .slide-content {
+    background: var(--amd-darker);
+  }
+
+  .slide-content h2 {
+    font-size: 44px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: #fff;
+  }
+
+  .slide-content .section-line {
+    width: 80px;
+    height: 4px;
+    background: var(--amd-red);
+    border-radius: 2px;
+    margin-bottom: 40px;
+  }
+
+  .slide-content p {
+    font-size: 20px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    max-width: 900px;
+    margin-bottom: 20px;
+  }
+
+  /* Grid layouts */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    margin-top: 20px;
+  }
+
+  .grid-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 24px;
+    margin-top: 20px;
+  }
+
+  .grid-4 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 20px;
+    margin-top: 20px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    padding: 28px;
+    transition: border-color 0.2s;
+  }
+
+  .card:hover {
+    border-color: var(--accent);
+  }
+
+  .card .card-icon {
+    font-size: 32px;
+    margin-bottom: 12px;
+  }
+
+  .card h3 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #fff;
+  }
+
+  .card p {
+    font-size: 15px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin-bottom: 0;
+  }
+
+  .card .metric {
+    font-size: 36px;
+    font-weight: 800;
+    color: var(--accent-soft);
+    margin-bottom: 4px;
+  }
+
+  /* Code block */
+  pre {
+    background: var(--code-bg);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 24px 28px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 15px;
+    line-height: 1.7;
+    overflow-x: auto;
+    color: var(--text);
+    margin-top: 16px;
+  }
+
+  pre .comment { color: #5c6370; }
+  pre .keyword { color: #c678dd; }
+  pre .string { color: #98c379; }
+  pre .flag { color: #61afef; }
+  pre .status-pass { color: #2ed573; font-weight: 700; }
+  pre .status-fail { color: #ff4757; font-weight: 700; }
+  pre .dim { color: #5c6370; }
+  pre .number { color: #d19a66; }
+
+  /* Flow diagram */
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-top: 24px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .flow-step {
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 20px 24px;
+    text-align: center;
+    min-width: 160px;
+  }
+
+  .flow-step .step-num {
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: 2px;
+    margin-bottom: 6px;
+  }
+
+  .flow-step h4 {
+    font-size: 16px;
+    color: #fff;
+    margin-bottom: 4px;
+  }
+
+  .flow-step p {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 0;
+  }
+
+  .flow-arrow {
+    font-size: 24px;
+    color: var(--text-muted);
+    padding: 0 8px;
+  }
+
+  /* Scoring table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 16px;
+  }
+
+  th {
+    text-align: left;
+    font-size: 13px;
+    color: var(--text-muted);
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 12px 16px;
+    border-bottom: 2px solid rgba(255,255,255,0.08);
+  }
+
+  td {
+    padding: 14px 16px;
+    font-size: 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+
+  tr:hover td {
+    background: rgba(255,255,255,0.02);
+  }
+
+  .weight-bar {
+    display: inline-block;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--accent);
+    vertical-align: middle;
+    margin-left: 8px;
+  }
+
+  /* Tag pills */
+  .tag {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 100px;
+    font-size: 13px;
+    font-weight: 600;
+    margin: 2px 4px;
+  }
+
+  .tag-green { background: rgba(46,213,115,0.15); color: var(--green); }
+  .tag-red { background: rgba(255,71,87,0.15); color: var(--accent); }
+  .tag-yellow { background: rgba(255,165,2,0.15); color: var(--yellow); }
+  .tag-blue { background: rgba(55,66,250,0.15); color: #5e6fff; }
+
+  /* Navigation */
+  .nav {
+    position: fixed;
+    bottom: 24px;
+    right: 32px;
+    display: flex;
+    gap: 8px;
+    z-index: 100;
+  }
+
+  .nav button {
+    width: 44px;
+    height: 44px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+  }
+
+  .nav button:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  .progress-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 3px;
+    background: var(--amd-red);
+    transition: width 0.4s ease;
+    z-index: 100;
+  }
+
+  .slide-counter {
+    position: fixed;
+    bottom: 30px;
+    left: 32px;
+    font-size: 14px;
+    color: var(--text-muted);
+    font-weight: 500;
+    z-index: 100;
+  }
+
+  /* Flywheel diagram */
+  .flywheel {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 32px 0;
+  }
+
+  .flywheel-node {
+    background: var(--surface);
+    border: 2px solid var(--accent);
+    border-radius: 12px;
+    padding: 16px 20px;
+    text-align: center;
+    min-width: 140px;
+  }
+
+  .flywheel-node h4 { font-size: 14px; color: var(--accent-soft); }
+  .flywheel-node p { font-size: 12px; color: var(--text-muted); margin-bottom: 0; }
+
+  .flywheel-arrow {
+    font-size: 20px;
+    color: var(--accent);
+    padding: 0 6px;
+  }
+
+  /* Lists */
+  ul.feature-list {
+    list-style: none;
+    padding: 0;
+  }
+
+  ul.feature-list li {
+    padding: 10px 0;
+    font-size: 18px;
+    color: var(--text);
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  ul.feature-list li::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-top: 8px;
+    flex-shrink: 0;
+  }
+
+  .highlight {
+    color: var(--accent-soft);
+    font-weight: 600;
+  }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px;
+    align-items: start;
+  }
+</style>
+</head>
+<body>
+
+<div class="deck" id="deck">
+
+  <!-- SLIDE 1: Title -->
+  <div class="slide slide-title active" data-index="0">
+    <div class="logo-bar">
+      <span class="amd-badge">AMD</span>
+      <span class="product">GAIA Framework</span>
+    </div>
+    <h1>Agent Eval<br>Benchmark</h1>
+    <p class="subtitle">
+      Automated quality validation for AI agents using
+      Claude Code as user simulator and judge
+    </p>
+    <div class="version-badge">v0.18.0 &mdash; Agent Eval Benchmark</div>
+  </div>
+
+  <!-- SLIDE 2: Problem Statement -->
+  <div class="slide slide-content" data-index="1">
+    <h2>The Problem</h2>
+    <div class="section-line"></div>
+    <p>
+      How do you know your AI agent actually works? Manual testing doesn't scale,
+      unit tests can't catch hallucinations, and users find the bugs first.
+    </p>
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-icon">&#x1F50D;</div>
+        <h3>Invisible Failures</h3>
+        <p>Tool-calling failures, hallucinated facts, and format errors slip through code review and unit tests.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F4C9;</div>
+        <h3>Quality Regressions</h3>
+        <p>A prompt tweak that fixes one scenario silently breaks three others. No regression detection means surprises in production.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x231B;</div>
+        <h3>Slow Feedback Loop</h3>
+        <p>Manual testing takes hours per release. Engineers avoid touching agent code because the blast radius is unknown.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 3: Solution Overview -->
+  <div class="slide slide-content" data-index="2">
+    <h2>The Solution</h2>
+    <div class="section-line"></div>
+    <p>An automated eval harness that uses Claude Code as both <span class="highlight">user simulator</span> and <span class="highlight">judge</span> to validate agent quality against real-world scenarios.</p>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="step-num">STEP 1</div>
+        <h4>Define Scenario</h4>
+        <p>YAML-based multi-turn conversations</p>
+      </div>
+      <span class="flow-arrow">&#x2192;</span>
+      <div class="flow-step">
+        <div class="step-num">STEP 2</div>
+        <h4>Simulate User</h4>
+        <p>Claude plays the persona, sends messages via MCP</p>
+      </div>
+      <span class="flow-arrow">&#x2192;</span>
+      <div class="flow-step">
+        <div class="step-num">STEP 3</div>
+        <h4>Judge Response</h4>
+        <p>7-dimension scoring with ground truth</p>
+      </div>
+      <span class="flow-arrow">&#x2192;</span>
+      <div class="flow-step">
+        <div class="step-num">STEP 4</div>
+        <h4>Scorecard</h4>
+        <p>Pass/fail per scenario, regression detection</p>
+      </div>
+    </div>
+    <pre style="margin-top: 32px"><span class="comment"># Run your first eval in one command</span>
+<span class="keyword">$</span> gaia eval agent <span class="flag">--scenario</span> <span class="string">simple_factual_rag</span>
+
+<span class="dim">Running scenario: simple_factual_rag (rag_quality)</span>
+<span class="dim">  Turn 1/3: Indexing document...        </span><span class="status-pass">PASS</span> <span class="dim">(correctness: 5/5)</span>
+<span class="dim">  Turn 2/3: Factual question...          </span><span class="status-pass">PASS</span> <span class="dim">(correctness: 5/5)</span>
+<span class="dim">  Turn 3/3: Follow-up with context...    </span><span class="status-pass">PASS</span> <span class="dim">(correctness: 4/5)</span>
+
+<span class="status-pass">PASS</span>  simple_factual_rag  <span class="number">8.2/10</span>  <span class="dim">($0.34, 45s)</span></pre>
+  </div>
+
+  <!-- SLIDE 4: Architecture -->
+  <div class="slide slide-content" data-index="3">
+    <h2>Architecture</h2>
+    <div class="section-line"></div>
+    <div class="two-col">
+      <div>
+        <h3 style="font-size: 22px; margin-bottom: 16px; color: #fff;">How It Works</h3>
+        <ul class="feature-list">
+          <li><span class="highlight">Scenario YAML</span> defines persona, setup documents, multi-turn conversation, and ground truth facts</li>
+          <li><span class="highlight">Claude subprocess</span> (<code>claude -p</code>) acts as both user simulator and judge in a single pass</li>
+          <li><span class="highlight">MCP protocol</span> connects to the Agent UI backend for real end-to-end testing</li>
+          <li><span class="highlight">Scorecard engine</span> aggregates results with deterministic weighted scoring</li>
+          <li><span class="highlight">Fix mode</span> auto-invokes Claude Code to diagnose and fix failures</li>
+        </ul>
+      </div>
+      <div>
+        <pre style="font-size: 13px;"><span class="comment"># Scenario YAML format</span>
+<span class="keyword">id:</span> <span class="string">cross_turn_file_recall</span>
+<span class="keyword">category:</span> <span class="string">context_retention</span>
+<span class="keyword">persona:</span> <span class="string">data_analyst</span>
+
+<span class="keyword">setup:</span>
+  <span class="keyword">index_documents:</span>
+    - <span class="keyword">path:</span> <span class="string">eval/corpus/docs/report.html</span>
+
+<span class="keyword">turns:</span>
+  - <span class="keyword">turn:</span> <span class="number">1</span>
+    <span class="keyword">objective:</span> <span class="string">Index document</span>
+    <span class="keyword">user_message:</span> <span class="string">"Read report.html"</span>
+    <span class="keyword">success_criteria:</span> <span class="string">"Agent reads file"</span>
+
+  - <span class="keyword">turn:</span> <span class="number">2</span>
+    <span class="keyword">objective:</span> <span class="string">Ask about content</span>
+    <span class="keyword">user_message:</span> <span class="string">"What was the Q3 revenue?"</span>
+    <span class="keyword">ground_truth:</span>
+      <span class="keyword">facts:</span> [<span class="string">"$4.2M"</span>]
+      <span class="keyword">source_files:</span> [<span class="string">"report.html"</span>]</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 5: Scoring System -->
+  <div class="slide slide-content" data-index="4">
+    <h2>7-Dimension Scoring</h2>
+    <div class="section-line"></div>
+    <p>Every scenario is scored across 7 dimensions. Scores are deterministically recomputed from dimension weights&mdash;no LLM arithmetic.</p>
+    <table>
+      <thead>
+        <tr><th>Dimension</th><th>Weight</th><th style="width: 50%">What It Measures</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Correctness</strong></td>
+          <td>25% <span class="weight-bar" style="width: 125px"></span></td>
+          <td>Factual accuracy against ground truth</td>
+        </tr>
+        <tr>
+          <td><strong>Tool Selection</strong></td>
+          <td>20% <span class="weight-bar" style="width: 100px"></span></td>
+          <td>Chose the right tools, avoided unnecessary ones</td>
+        </tr>
+        <tr>
+          <td><strong>Context Retention</strong></td>
+          <td>20% <span class="weight-bar" style="width: 100px"></span></td>
+          <td>Maintained context across conversation turns</td>
+        </tr>
+        <tr>
+          <td><strong>Completeness</strong></td>
+          <td>15% <span class="weight-bar" style="width: 75px"></span></td>
+          <td>Addressed all parts of the user's question</td>
+        </tr>
+        <tr>
+          <td><strong>Efficiency</strong></td>
+          <td>10% <span class="weight-bar" style="width: 50px"></span></td>
+          <td>Concise response, no unnecessary tool calls</td>
+        </tr>
+        <tr>
+          <td><strong>Personality</strong></td>
+          <td>5% <span class="weight-bar" style="width: 25px"></span></td>
+          <td>Matched the persona's communication style</td>
+        </tr>
+        <tr>
+          <td><strong>Error Recovery</strong></td>
+          <td>5% <span class="weight-bar" style="width: 25px"></span></td>
+          <td>Graceful handling of missing data or tool failures</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top: 20px; font-size: 16px;">
+      <span class="tag tag-green">PASS</span> score &ge; 6.0 AND all turns correctness &ge; 4
+      &nbsp;&nbsp;
+      <span class="tag tag-red">FAIL</span> score &lt; 6.0 OR any turn correctness &lt; 4
+    </p>
+  </div>
+
+  <!-- SLIDE 6: Scenario Categories -->
+  <div class="slide slide-content" data-index="5">
+    <h2>Scenario Library</h2>
+    <div class="section-line"></div>
+    <p>54+ scenarios across 10 categories covering the full agent capability surface.</p>
+    <div class="grid-4" style="margin-top: 24px;">
+      <div class="card">
+        <h3>RAG Quality</h3>
+        <p class="metric">7</p>
+        <p>Factual retrieval, table extraction, hallucination resistance, CSV analysis</p>
+      </div>
+      <div class="card">
+        <h3>Context Retention</h3>
+        <p class="metric">4</p>
+        <p>Multi-turn memory, pronoun resolution, conversation summary</p>
+      </div>
+      <div class="card">
+        <h3>Tool Selection</h3>
+        <p class="metric">4</p>
+        <p>Smart discovery, no-tools-needed, multi-step planning</p>
+      </div>
+      <div class="card">
+        <h3>Error Recovery</h3>
+        <p class="metric">3</p>
+        <p>File not found, empty search, vague request clarification</p>
+      </div>
+      <div class="card">
+        <h3>Adversarial</h3>
+        <p class="metric">3</p>
+        <p>Empty files, large documents, topic switching</p>
+      </div>
+      <div class="card">
+        <h3>Personality</h3>
+        <p class="metric">3</p>
+        <p>No sycophancy, concise responses, honest limitations</p>
+      </div>
+      <div class="card">
+        <h3>Real World</h3>
+        <p class="metric">19</p>
+        <p>Financial reports, specs, production documents</p>
+      </div>
+      <div class="card">
+        <h3>Web + Vision</h3>
+        <p class="metric">9</p>
+        <p>TTS, system info, clipboard, VLM graceful degradation</p>
+      </div>
+    </div>
+    <p style="margin-top: 16px; font-size: 16px;">
+      <span class="tag tag-blue">5 Personas</span>
+      casual_user &middot; power_user &middot; confused_user &middot; adversarial_user &middot; data_analyst
+    </p>
+  </div>
+
+  <!-- SLIDE 7: Fix Mode & Regression -->
+  <div class="slide slide-content" data-index="6">
+    <h2>Fix Mode &amp; Regression Detection</h2>
+    <div class="section-line"></div>
+    <div class="two-col">
+      <div>
+        <h3 style="font-size: 22px; margin-bottom: 16px; color: #fff;">Auto-Fix Loop</h3>
+        <p>When a scenario fails, the <code>--fix</code> flag invokes Claude Code to diagnose the root cause and apply a fix, then re-evaluates automatically.</p>
+        <pre style="font-size: 13px;"><span class="keyword">$</span> gaia eval agent <span class="flag">--fix</span> \
+    <span class="flag">--max-fix-iterations</span> <span class="number">3</span> \
+    <span class="flag">--target-pass-rate</span> <span class="number">0.90</span>
+
+<span class="dim">Iteration 1: 45/54 passed (83%)</span>
+<span class="dim">  Fixing: hallucination_resistance...</span>
+<span class="dim">  Applied: prompt guard in agent.py</span>
+<span class="dim">Iteration 2: 49/54 passed (91%)</span>
+<span class="status-pass">Target pass rate reached!</span></pre>
+
+        <h3 style="font-size: 22px; margin-top: 28px; margin-bottom: 16px; color: #fff;">Baseline Comparison</h3>
+        <pre style="font-size: 13px;"><span class="keyword">$</span> gaia eval agent <span class="flag">--save-baseline</span>
+<span class="keyword">$</span> <span class="comment"># ... make changes ...</span>
+<span class="keyword">$</span> gaia eval agent <span class="flag">--compare</span> <span class="string">baseline.json</span>
+
+<span class="dim">Regressions (2):</span>
+  <span class="status-fail">REGRESSED</span> cross_turn_file_recall <span class="number">8.4 -> 5.2</span>
+  <span class="status-fail">REGRESSED</span> table_extraction       <span class="number">7.1 -> 4.8</span>
+<span class="dim">Improvements (3):</span>
+  <span class="status-pass">IMPROVED</span>  csv_analysis            <span class="number">5.5 -> 7.8</span></pre>
+      </div>
+      <div>
+        <h3 style="font-size: 22px; margin-bottom: 16px; color: #fff;">Architecture Audit</h3>
+        <p>Zero-cost deterministic checks that identify structural issues without any LLM calls.</p>
+        <pre style="font-size: 13px;"><span class="keyword">$</span> gaia eval agent <span class="flag">--audit-only</span>
+
+<span class="dim">Architecture Audit Results:</span>
+
+<span class="keyword">tool_results_in_history:</span> <span class="status-pass">true</span>
+<span class="keyword">max_history_pairs:</span>      <span class="number">10</span> <span class="status-pass">OK</span>
+<span class="keyword">max_msg_chars:</span>          <span class="number">4000</span> <span class="status-pass">OK</span>
+
+<span class="dim">Blocked Scenarios:</span> <span class="number">0</span>
+<span class="dim">Recommendations:</span> <span class="number">0</span></pre>
+
+        <h3 style="font-size: 22px; margin-top: 28px; margin-bottom: 16px; color: #fff;">Session Capture</h3>
+        <p>Convert real Agent UI conversations into reproducible eval scenarios.</p>
+        <pre style="font-size: 13px;"><span class="keyword">$</span> gaia eval agent \
+    <span class="flag">--capture-session</span> <span class="string">abc123</span>
+
+<span class="dim">Captured 5 turns from session abc123</span>
+<span class="dim">Saved: eval/scenarios/captured/abc123.yaml</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 8: Extensibility -->
+  <div class="slide slide-content" data-index="7">
+    <h2>Extensibility</h2>
+    <div class="section-line"></div>
+    <p>Third-party developers can extend the eval framework without modifying GAIA source code.</p>
+    <div class="grid-2" style="margin-top: 24px;">
+      <div>
+        <div class="card" style="margin-bottom: 20px;">
+          <h3>Custom Scenarios</h3>
+          <p>Drop YAML files in your own directory and they're auto-discovered alongside built-in scenarios.</p>
+          <pre style="font-size: 13px; margin-top: 12px;"><span class="keyword">$</span> gaia eval agent \
+    <span class="flag">--scenario-dir</span> <span class="string">~/my-project/eval/</span></pre>
+        </div>
+        <div class="card">
+          <h3>Custom Corpus</h3>
+          <p>Add your own documents and manifests for domain-specific testing.</p>
+          <pre style="font-size: 13px; margin-top: 12px;"><span class="keyword">$</span> gaia eval agent \
+    <span class="flag">--corpus-dir</span> <span class="string">~/my-project/corpus/</span></pre>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom: 20px;">
+          <h3>Scenario Tags</h3>
+          <p>Tag scenarios with metadata for selective runs.</p>
+          <pre style="font-size: 13px; margin-top: 12px;"><span class="comment"># In scenario YAML:</span>
+<span class="keyword">tags:</span> [<span class="string">healthcare</span>, <span class="string">critical</span>]
+
+<span class="comment"># Run only tagged scenarios:</span>
+<span class="keyword">$</span> gaia eval agent <span class="flag">--tag</span> <span class="string">healthcare</span></pre>
+        </div>
+        <div class="card">
+          <h3>CI/CD Integration</h3>
+          <p>JUnit XML output for GitHub Actions, Jenkins, and other CI systems.</p>
+          <pre style="font-size: 13px; margin-top: 12px;"><span class="keyword">$</span> gaia eval agent \
+    <span class="flag">--output-format</span> <span class="string">junit</span></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 9: Quality Flywheel -->
+  <div class="slide slide-content" data-index="8">
+    <h2>The Quality Flywheel</h2>
+    <div class="section-line"></div>
+    <p>Eval results feed directly into the fine-tuning pipeline. Every failure becomes training data. Every improvement is verified automatically.</p>
+    <div class="flywheel">
+      <div class="flywheel-node">
+        <h4>Eval Runs</h4>
+        <p>54+ scenarios tested</p>
+      </div>
+      <span class="flywheel-arrow">&#x2192;</span>
+      <div class="flywheel-node">
+        <h4>Identify Failures</h4>
+        <p>Scorecard + traces</p>
+      </div>
+      <span class="flywheel-arrow">&#x2192;</span>
+      <div class="flywheel-node">
+        <h4>Training Data</h4>
+        <p>Failures become examples</p>
+      </div>
+      <span class="flywheel-arrow">&#x2192;</span>
+      <div class="flywheel-node">
+        <h4>GRPO Fine-tuning</h4>
+        <p>Model improves (v0.19.0)</p>
+      </div>
+      <span class="flywheel-arrow">&#x2192;</span>
+      <div class="flywheel-node">
+        <h4>Re-evaluate</h4>
+        <p>Confirm improvement</p>
+      </div>
+    </div>
+    <div style="text-align: center; margin-top: 8px;">
+      <span class="flywheel-arrow" style="font-size: 40px;">&#x21BA;</span>
+    </div>
+    <div class="grid-3" style="margin-top: 32px;">
+      <div class="card" style="text-align: center;">
+        <p class="metric">54+</p>
+        <p>Scenarios in ground truth suite</p>
+      </div>
+      <div class="card" style="text-align: center;">
+        <p class="metric">10</p>
+        <p>Capability categories tested</p>
+      </div>
+      <div class="card" style="text-align: center;">
+        <p class="metric">~$2</p>
+        <p>Cost per scenario evaluation</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 10: What Ships -->
+  <div class="slide slide-content" data-index="9">
+    <h2>What Ships in v0.18.0</h2>
+    <div class="section-line"></div>
+    <div class="grid-2">
+      <div>
+        <h3 style="font-size: 22px; margin-bottom: 20px; color: #fff;">Deliverables</h3>
+        <ul class="feature-list">
+          <li>Claude Code-based eval harness (user simulator + judge)</li>
+          <li>54+ scenario ground truth test suite across 10 categories</li>
+          <li>7-dimension scoring with deterministic weighted aggregation</li>
+          <li>Fix mode with auto-diagnosis and re-evaluation loop</li>
+          <li>Baseline comparison and regression detection</li>
+          <li>Architecture audit (zero-cost structural validation)</li>
+          <li>Extensibility API: custom scenarios, corpus, tags, personas</li>
+          <li>JUnit XML output for CI/CD integration</li>
+          <li>Session capture: real conversations to eval scenarios</li>
+          <li>Comprehensive documentation and guides</li>
+        </ul>
+      </div>
+      <div>
+        <h3 style="font-size: 22px; margin-bottom: 20px; color: #fff;">Getting Started</h3>
+        <pre style="font-size: 14px;"><span class="comment"># Install GAIA</span>
+<span class="keyword">$</span> pip install gaia-ai
+
+<span class="comment"># Start Agent UI backend</span>
+<span class="keyword">$</span> gaia chat <span class="flag">--ui</span>
+
+<span class="comment"># Run all eval scenarios</span>
+<span class="keyword">$</span> gaia eval agent
+
+<span class="comment"># Run a specific category</span>
+<span class="keyword">$</span> gaia eval agent <span class="flag">--category</span> <span class="string">rag_quality</span>
+
+<span class="comment"># Architecture audit (free)</span>
+<span class="keyword">$</span> gaia eval agent <span class="flag">--audit-only</span>
+
+<span class="comment"># Save as baseline for regressions</span>
+<span class="keyword">$</span> gaia eval agent <span class="flag">--save-baseline</span>
+
+<span class="comment"># Compare after changes</span>
+<span class="keyword">$</span> gaia eval agent <span class="flag">--compare</span> <span class="string">baseline.json</span>
+
+<span class="comment"># Auto-fix failures</span>
+<span class="keyword">$</span> gaia eval agent <span class="flag">--fix</span></pre>
+        <p style="margin-top: 20px; font-size: 16px;">
+          Documentation: <a href="https://amd-gaia.ai/guides/eval" style="color: var(--accent-soft);">amd-gaia.ai/guides/eval</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Navigation -->
+<div class="progress-bar" id="progress"></div>
+<div class="slide-counter" id="counter">1 / 10</div>
+<div class="nav">
+  <button onclick="navigate(-1)" title="Previous (Left Arrow)">&#x2190;</button>
+  <button onclick="navigate(1)" title="Next (Right Arrow)">&#x2192;</button>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let current = 0;
+
+  function showSlide(index) {
+    slides.forEach(s => s.classList.remove('active'));
+    slides[index].classList.add('active');
+    current = index;
+
+    // Update progress bar
+    const pct = ((index + 1) / slides.length) * 100;
+    document.getElementById('progress').style.width = pct + '%';
+    document.getElementById('counter').textContent = (index + 1) + ' / ' + slides.length;
+  }
+
+  function navigate(dir) {
+    const next = current + dir;
+    if (next >= 0 && next < slides.length) {
+      showSlide(next);
+    }
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); navigate(1); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); navigate(-1); }
+    if (e.key === 'Home') { e.preventDefault(); showSlide(0); }
+    if (e.key === 'End') { e.preventDefault(); showSlide(slides.length - 1); }
+  });
+
+  showSlide(0);
+</script>
+
+</body>
+</html>

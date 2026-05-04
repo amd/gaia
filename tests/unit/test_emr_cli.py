@@ -51,7 +51,7 @@ class TestCLIArgumentParsing(unittest.TestCase):
 
         self.assertEqual(args.watch_dir, "./intake_forms")
         self.assertEqual(args.db, "./data/patients.db")
-        self.assertEqual(args.vlm_model, "Qwen3-VL-4B-Instruct-GGUF")
+        self.assertEqual(args.vlm_model, "Gemma-4-E4B-it-GGUF")
         self.assertFalse(args.debug)
 
     def test_watch_command_parses_custom_args(self):

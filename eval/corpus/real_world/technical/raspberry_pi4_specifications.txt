@@ -1,0 +1,57 @@
+RASPBERRY PI 4 MODEL B — PRODUCT SPECIFICATIONS
+(Synthetic datasheet excerpt for evaluation purposes)
+
+The Raspberry Pi 4 Model B is a single-board computer produced by the
+Raspberry Pi Foundation. The specifications below summarize key technical
+characteristics of the board.
+
+SYSTEM-ON-CHIP (SoC)
+
+The Raspberry Pi 4 uses a Broadcom BCM2711 system-on-chip. The SoC
+contains a quad-core ARM Cortex-A72 (ARM v8) 64-bit application processor
+clocked at 1.5 GHz, paired with a VideoCore VI GPU and integrated memory
+and I/O controllers.
+
+MEMORY
+
+The Raspberry Pi 4 ships in four RAM variants:
+  1 GB LPDDR4-3200 SDRAM
+  2 GB LPDDR4-3200 SDRAM
+  4 GB LPDDR4-3200 SDRAM
+  8 GB LPDDR4-3200 SDRAM
+
+All four variants use LPDDR4-3200 SDRAM. RAM is soldered to the board and
+is not user-upgradeable.
+
+NETWORKING
+
+  Gigabit Ethernet (1 Gbps, RJ45)
+  Dual-band 802.11ac wireless LAN (2.4 GHz and 5 GHz)
+  Bluetooth 5.0, BLE
+
+USB AND I/O
+
+  2x USB 3.0 ports
+  2x USB 2.0 ports
+  2x micro-HDMI ports (each up to 4Kp60)
+  1x USB-C port (used for power input only)
+  40-pin GPIO header (compatible with earlier Raspberry Pi boards)
+
+POWER
+
+The board is powered via the USB-C port at 5 V / 3 A (15 W). A
+Raspberry Pi-branded USB-C power supply is recommended.
+
+OPERATING SYSTEM
+
+The board is supported by Raspberry Pi OS (Debian-based) and a number of
+third-party Linux distributions, as well as several Unix-like and
+embedded operating systems.
+
+NOTE ON COMMERCIAL INFORMATION
+
+This datasheet describes hardware specifications only. Retail pricing for
+the Raspberry Pi 4 (including the 8 GB model) is set by authorized
+resellers and is not part of this technical specification document.
+
+END OF DATASHEET

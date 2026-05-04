@@ -63,6 +63,111 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         if (shouldReset) setDismissed(false);
     }, [systemStatus, hasActiveConversation]);
 
+    // ── Top-priority: an active model download ──────────────────────────
+    // Render the download banner BEFORE every other check (init,
+    // dismiss, active-conversation, lemonade-down, etc.). A model pull
+    // takes minutes and the user needs to see it progressing — burying
+    // it under a generic "Preparing AI system…" or even a dismissed
+    // state would silently look like the app froze. Same reasoning for
+    // suppressing during an active conversation: if the download fails
+    // mid-chat we still want to surface the failure prominently.
+    const activeProgress = systemStatus?.download_progress ?? null;
+    const isActiveDownload =
+        isDownloadingModel ||
+        activeProgress?.state === 'downloading' ||
+        activeProgress?.state === 'starting';
+    if (isActiveDownload || activeProgress?.state === 'error') {
+        const sizeHint = systemStatus?.default_model_size_gb
+            ? `~${systemStatus.default_model_size_gb.toFixed(1)} GB`
+            : 'large download';
+        const isError = activeProgress?.state === 'error';
+        return (
+            <div
+                className={`connection-banner ${
+                    isError ? 'connection-banner--error' : 'connection-banner--warning'
+                }`}
+                role={isError ? 'alert' : 'status'}
+            >
+                <div className="connection-banner__icon">
+                    {isError ? <AlertTriangle size={16} /> : <Download size={16} />}
+                </div>
+                <div className="connection-banner__text">
+                    {isError ? (
+                        <>
+                            Download of <strong>{modelName}</strong> failed.{' '}
+                            {activeProgress?.message && (
+                                <span className="connection-banner__hint">{activeProgress.message}</span>
+                            )}
+                        </>
+                    ) : (
+                        <>
+                            Downloading <strong>{modelName}</strong> ({sizeHint}).
+                            {activeProgress?.state === 'downloading' && activeProgress.file && (
+                                <>
+                                    {' '}
+                                    <span className="connection-banner__hint">
+                                        File {activeProgress.file_index} / {activeProgress.total_files}: <code>{activeProgress.file}</code>
+                                    </span>
+                                </>
+                            )}
+                        </>
+                    )}
+                </div>
+                {isError ? (
+                    <button
+                        className="connection-banner__retry"
+                        onClick={() => downloadModel(false)}
+                    >
+                        Retry
+                    </button>
+                ) : (
+                    <span className="connection-banner__loading connection-banner__progress">
+                        {activeProgress && activeProgress.state === 'downloading' && activeProgress.total_bytes > 0 ? (
+                            <>
+                                <span
+                                    className="connection-banner__progress-bar"
+                                    role="progressbar"
+                                    aria-valuenow={activeProgress.percent}
+                                    aria-valuemin={0}
+                                    aria-valuemax={100}
+                                    aria-label="Download progress"
+                                >
+                                    <span
+                                        className="connection-banner__progress-fill"
+                                        style={{ width: `${activeProgress.percent}%` }}
+                                    />
+                                </span>
+                                <span className="connection-banner__progress-label">
+                                    {activeProgress.percent}% &middot;{' '}
+                                    {(activeProgress.downloaded_bytes / 1e9).toFixed(2)} /{' '}
+                                    {(activeProgress.total_bytes / 1e9).toFixed(2)} GB
+                                </span>
+                            </>
+                        ) : (
+                            <>
+                                <Loader2 size={13} className="connection-banner__spinner" />
+                                {activeProgress?.state === 'starting' ? 'Starting download…' : 'Downloading…'}
+                            </>
+                        )}
+                    </span>
+                )}
+                {/* No dismiss while a download is in flight — accidentally
+                    closing it during a 5-minute pull is the exact UX we're
+                    trying to fix. The error path is dismissable so the user
+                    can clear stale failures. */}
+                {isError && (
+                    <button
+                        className="connection-banner__dismiss"
+                        onClick={() => setDismissed(true)}
+                        aria-label="Dismiss"
+                    >
+                        <X size={14} />
+                    </button>
+                )}
+            </div>
+        );
+    }
+
     // Case 0: Boot-time initialization in progress.
     // Takes priority over all other cases (including dismiss and active-conversation suppression)
     // because the system is not yet ready to serve requests.
@@ -138,35 +243,34 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         );
     }
 
-    // Case 3: Lemonade is running but the required default model is not downloaded
+    // Case 3: Lemonade is running but the required default model is not
+    // downloaded AND no download is currently in flight. (The
+    // top-priority block above handles ``downloading``/``starting``/
+    // ``error`` states regardless of init or dismiss state.)
     if (
         systemStatus &&
         systemStatus.lemonade_running &&
         !systemStatus.model_loaded &&
         systemStatus.model_downloaded === false
     ) {
+        const sizeHint = systemStatus.default_model_size_gb
+            ? `~${systemStatus.default_model_size_gb.toFixed(1)} GB`
+            : 'large download';
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
                     <Download size={16} />
                 </div>
                 <div className="connection-banner__text">
-                    Required model <strong>{modelName}</strong> is not downloaded (~25 GB).
+                    Required model <strong>{modelName}</strong> is not downloaded ({sizeHint}).
                 </div>
-                {isDownloadingModel ? (
-                    <span className="connection-banner__loading">
-                        <Loader2 size={13} className="connection-banner__spinner" />
-                        Downloading…
-                    </span>
-                ) : (
-                    <button
-                        className="connection-banner__retry"
-                        onClick={() => downloadModel(false)}
-                    >
-                        Download
-                    </button>
-                )}
-                {onRetry && !isDownloadingModel && (
+                <button
+                    className="connection-banner__retry"
+                    onClick={() => downloadModel(false)}
+                >
+                    Download
+                </button>
+                {onRetry && (
                     <button className="connection-banner__retry connection-banner__retry--secondary" onClick={onRetry}>
                         Recheck
                     </button>
@@ -244,7 +348,7 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
         systemStatus.context_size_sufficient === false
     ) {
         const current = systemStatus.model_context_size ?? 0;
-        const lemonadeUI = systemStatus.lemonade_url ?? 'http://localhost:8000';
+        const lemonadeUI = systemStatus.lemonade_url ?? 'http://localhost:13305';
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
