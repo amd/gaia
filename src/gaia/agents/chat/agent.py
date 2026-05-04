@@ -1805,11 +1805,11 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
                 policy=ActivationPolicy.KEYWORD,
                 keywords=frozenset(
                     {
-                            r"\b(?:file|folder|directory|path|find|search|browse|tree|ls|dir)\b",
-                            r"\.[a-z]{1,5}\b",  # file extensions like .py, .json
-                            r"\b(?:[A-Za-z]:\\|/)",  # absolute or drive-letter paths
-                            r"\b(?:write|edit|save|create).*file|\bmodify\b",
-                        }
+                        r"\b(?:file|folder|directory|path|find|search|browse|tree|ls|dir)\b",
+                        r"\.[a-z]{1,5}\b",  # file extensions like .py, .json
+                        r"\b(?:[A-Za-z]:\\|/)",  # absolute or drive-letter paths
+                        r"\b(?:write|edit|save|create).*file|\bmodify\b",
+                    }
                 ),
             )
         )
@@ -1828,7 +1828,7 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
                 ),
                 policy=ActivationPolicy.KEYWORD,
                 keywords=frozenset(
-                        {
+                    {
                         r"\bhttps?://",
                         r"\b(?:url|website|webpage|web\s*page|browse|internet)\b",
                         r"\bsearch\s+(?:the\s+)?web\b|\bgoogle\b|\blook\s+up\b",

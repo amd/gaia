@@ -407,8 +407,7 @@ def _mailbox_from_records(
     with out_mbox.open("ab") as f:
         for raw_msg, meta, message_id in malformed_raw:
             from_line = (
-                "From malformed@example.com "
-                f"{deterministic_from_time.ctime()}\n"
+                "From malformed@example.com " f"{deterministic_from_time.ctime()}\n"
             )
             payload = raw_msg.replace("\n", "\n").encode("utf-8", errors="replace")
             if not payload.endswith(b"\n"):

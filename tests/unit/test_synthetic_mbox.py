@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import json
 import mailbox
-import subprocess
-import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -181,8 +179,12 @@ def test_generator_determinism_verify_mode() -> None:
         # And the set of Message-IDs in each mbox should match
         import mailbox as _mb
 
-        ids1 = {m.get("Message-ID") for m in _mb.mbox(str(a_mbox)) if m.get("Message-ID")}
-        ids2 = {m.get("Message-ID") for m in _mb.mbox(str(b_mbox)) if m.get("Message-ID")}
+        ids1 = {
+            m.get("Message-ID") for m in _mb.mbox(str(a_mbox)) if m.get("Message-ID")
+        }
+        ids2 = {
+            m.get("Message-ID") for m in _mb.mbox(str(b_mbox)) if m.get("Message-ID")
+        }
         assert ids1 == ids2
 
 
