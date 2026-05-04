@@ -80,6 +80,15 @@
                 ]
               },
               {
+                "group": "Connectors",
+                "pages": [
+                  "connectors/index",
+                  "connectors/google",
+                  "connectors/github",
+                  "security/connections"
+                ]
+              },
+              {
                 "group": "Agent Eval",
                 "pages": [
                   "guides/eval",
@@ -166,7 +175,8 @@
                     "group": "Infrastructure",
                     "pages": [
                       "sdk/infrastructure/api-server",
-                      "sdk/infrastructure/mcp"
+                      "sdk/infrastructure/mcp",
+                      "sdk/infrastructure/connectors"
                     ]
                   },
                   {
@@ -375,6 +385,7 @@
               "plans/agent-ui",
               "plans/setup-wizard",
               "plans/security-model",
+              "plans/connectors",
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
               "plans/messaging-integrations-plan",

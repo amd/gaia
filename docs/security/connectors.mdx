@@ -1,0 +1,139 @@
+---
+title: "Connections — security model"
+description: "OAuth connection threat model, refresh-token hygiene, and what GAIA does and does not protect against."
+---
+
+# Connections — security model
+
+GAIA's `gaia.connectors` package implements OAuth 2.0 PKCE
+(RFC 7636/8252) for desktop authorization flows. This page describes the
+threat model, what we protect against, and the residual risks a user or
+operator should know about.
+
+## What we protect
+
+**Refresh tokens never leave the OS credential store.** The
+`gaia.connectors.store` module writes to:
+
+- macOS Keychain (built-in)
+- Windows Credential Locker (built-in)
+- Linux SecretService (gnome-keyring or kwallet)
+
+Plaintext fallbacks (`keyrings.alt.PlaintextKeyring`,
+`EncryptedKeyring`) are explicitly **refused** at the entry of every
+save and load (plan amendment A4). A Linux user without SecretService
+sees an actionable error pointing at this page rather than silently
+writing tokens to disk.
+
+**Refresh tokens never cross a public API or response body.** The public
+`gaia.connectors.list_connections()` returns only metadata
+(`provider`, `account_email`, `scopes`, `connected_at`). The FastAPI
+router enforces the same boundary on every JSON response. The OpenAPI
+schema is exercised in `tests/unit/connectors/test_secret_hygiene.py`
+to enforce this in CI.
+
+**OAuth state parameter is per-flow random and compared in
+constant time.** `state = secrets.token_urlsafe(32)`; the callback
+handler compares received state with `hmac.compare_digest`. Mismatched
+or missing state returns 400 with a static error page — no echoed user
+input.
+
+**Loopback redirect on `127.0.0.1`, not `localhost`.** Prevents DNS
+rebinding. Bound on an ephemeral port (`port=0`) per flow.
+
+**Two-layer authorization for `get_access_token`.** Before any access
+token is returned to a tool body:
+
+1. The named agent must have a per-agent grant covering the requested
+   scopes (in `~/.gaia/connectors/grants.json`).
+2. The stored OAuth connection must actually carry those scopes
+   (the user authorized them).
+
+A missing grant raises `AuthRequiredError(AGENT_NOT_GRANTED)`; a
+missing OAuth scope raises `AuthRequiredError(CONNECTION_MISSING_SCOPES)`.
+Either is surfaced to the user; nothing falls through silently.
+
+**Eager `client_id_hash` tripwire.** Every load of a stored connection
+verifies that the OAuth client id under which it was issued matches
+the current configuration. A mismatch (e.g. after rotation) clears the
+stored entry and raises `AuthRequiredError(REAUTH_REQUIRED)`. Users
+reconnect explicitly; we never use a stale connection.
+
+## What we do not protect
+
+**A malicious agent that the user has explicitly granted a scope can
+use that scope.** This is by design — the user gave the agent the
+keys. The grants ledger and the AgentUI consent dialog exist so that
+"explicitly" is a high bar. Operators concerned about prompt-injection-
+driven scope escalation should review:
+
+- The agent's `REQUIRED_CONNECTORS` declaration before granting (visible
+  in the consent dialog).
+- The CLI grants list (`gaia connectors grants list google`) at any time.
+- Periodic revocation of unused grants
+  (`gaia connectors grants revoke <provider> <agent_id>`).
+
+**A custom agent that ships its own `agent.py` can call
+`get_access_token_sync` directly.** That call still goes through the
+two-layer authorization check. To bypass it the agent would need to
+forge an agent identity, which is why `_agent_context` is private (plan
+amendment A9). The grant-ledger key for custom agents is
+`custom:<sha256-of-agent.py>:<id>`, so a custom agent that changes its
+code gets a new key and cannot inherit a previous grant.
+
+**An attacker with read access to the user's home directory can read
+`~/.gaia/connectors/grants.json`.** Grants are per-agent scope
+declarations only — they do NOT contain tokens. Tokens are in the OS
+keychain, which is encrypted by the OS (Keychain on macOS, DPAPI on
+Windows, SecretService on Linux). The grants file is mode 0600 and the
+parent directory 0700 on POSIX systems.
+
+**An attacker with read access to the OS keychain.** Refresh tokens are
+visible to a process with the user's keychain access (e.g. malware
+running as the user). This is the limit of OS-level credential storage
+and is the same posture as every other app that stores OAuth tokens
+locally (browsers, native mail clients, etc.).
+
+**Concurrent processes refreshing the same provider's token.** Two GAIA
+processes running as the same user (e.g. `gaia chat --ui` and
+`gaia connectors status`) each maintain their own in-memory access-
+token cache and share the keyring. If both refresh concurrently and
+Google rotates the refresh token, one process may observe
+`invalid_grant` and the user reconnects transparently. We do not yet
+implement inter-process locking. Track this in the followup issues if
+the failure becomes common.
+
+## Threats considered
+
+| Threat                           | Mitigation                                                                             |
+| -------------------------------- | -------------------------------------------------------------------------------------- |
+| Refresh-token exfiltration       | Tokens never leave OS keychain; refused plaintext fallback                             |
+| `state` CSRF on callback         | Random `state` + `hmac.compare_digest`; missing state → 400                            |
+| XSS on success page              | Static HTML literal — no echoed user input                                             |
+| Prompt-injection scope escalation | Per-agent grants gate every token fetch; no implicit consent                           |
+| Malicious custom agent claim AGENT_ID | Reserved built-in IDs blocked; grants keyed by `(origin_hash, id)`                     |
+| Forged agent identity in tool body | `_agent_context` is private (not in `gaia.connectors.__init__`)                       |
+| Keychain backend regression      | Backend allowlist refuses `Plaintext*Keyring` / `Encrypted*Keyring`                    |
+| Stale token after rotation       | Eager `client_id_hash` tripwire on every load                                          |
+| Inconsistent rotation write      | Single keyring slot per connection, atomic backend overwrite                           |
+| Loopback hijack                  | `127.0.0.1` literal binding (not `localhost`); single-shot listener                    |
+| Browser-open blocks event loop   | `webbrowser.open` dispatched via `run_in_executor`                                     |
+| Logged refresh token             | No log statement names the value; cross-cutting `test_secret_hygiene.py`               |
+
+## Operator checklist
+
+- [ ] `GAIA_GOOGLE_CLIENT_ID` is set in every environment that runs GAIA.
+- [ ] OS credential store is configured (built-in on macOS/Windows;
+  `gnome-keyring` or `kwallet` on Linux).
+- [ ] Production users do not see `keyrings.alt` plaintext fallback —
+  if they do, the connections module raises `ConnectorsError` with
+  this page in the message.
+- [ ] Periodically review `~/.gaia/connectors/grants.json` for
+  unexpected grants. The CLI command
+  `gaia connectors grants list google` enumerates them.
+- [ ] Privacy policy is published and linked from the OAuth consent
+  screen (required for Google verification).
+- [ ] Sensitive-scope verification is submitted for the production
+  client id (4–6 wk timeline).
+
+See also: [Google OAuth Client runbook](../runbooks/google-oauth-client.md).
