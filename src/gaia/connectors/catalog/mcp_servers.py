@@ -9,7 +9,7 @@ this module also imports ``gaia.connectors.mcp_server`` so the handler is
 registered before any dispatch call.
 """
 
-import gaia.connectors.mcp_server  # noqa: F401 — triggers register_handler("mcp_server", ...)
+import gaia.connectors.mcp_server  # noqa: F401  # pylint: disable=unused-import
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.spec import ConfigField, ConnectorSpec
 

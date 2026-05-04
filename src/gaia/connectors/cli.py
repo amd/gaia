@@ -141,7 +141,7 @@ def handle(args: argparse.Namespace) -> int:
     action = getattr(args, "connectors_action", None)
     if action is None:
         sys.stderr.write(
-            "gaia connectors: missing subcommand. " "Try 'gaia connectors --help'.\n"
+            "gaia connectors: missing subcommand. Try 'gaia connectors --help'.\n"
         )
         return 2
 
@@ -173,7 +173,7 @@ def handle(args: argparse.Namespace) -> int:
 
 
 def _handle_list(args: argparse.Namespace) -> int:
-    import gaia.connectors.catalog  # noqa: F401 — populates REGISTRY
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     from gaia.connectors.mcp_server import is_mcp_server_configured
     from gaia.connectors.registry import REGISTRY
     from gaia.connectors.store import peek_connection
@@ -255,7 +255,7 @@ def _handle_connect(args: argparse.Namespace) -> int:
 
 
 def _handle_configure(args: argparse.Namespace) -> int:
-    import gaia.connectors.catalog  # noqa: F401 — populates REGISTRY + handler registration
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     from gaia.connectors.handler import configure
 
     config: dict = {}
@@ -292,7 +292,7 @@ def _handle_configure(args: argparse.Namespace) -> int:
 
 
 def _handle_test(args: argparse.Namespace) -> int:
-    import gaia.connectors.catalog  # noqa: F401 — populates REGISTRY + handler registration
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     from gaia.connectors.handler import health_check
 
     async def _run():
@@ -314,7 +314,7 @@ def _handle_test(args: argparse.Namespace) -> int:
 
 
 def _handle_disconnect(args: argparse.Namespace) -> int:
-    import gaia.connectors.catalog  # noqa: F401 — populates REGISTRY + handler registration
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     from gaia.connectors.handler import disconnect
 
     async def _run():

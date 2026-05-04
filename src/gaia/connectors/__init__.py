@@ -26,23 +26,6 @@ without notice. Only the names re-exported here are stable.
 
 from __future__ import annotations
 
-# Public API — coordination layer.
-from gaia.connectors.api import (
-    cancel_flow,
-    complete_authorization,
-    get_access_token,
-    get_access_token_sync,
-    get_connection,
-    grant_agent,
-    list_agent_grants,
-    list_connections,
-    load_grants,
-    revoke_agent_grant,
-    revoke_connection,
-    start_authorization,
-    tripwire_check,
-)
-
 # Read-only contextvar accessor — public by design; agents and tools may
 # read the current agent identity but cannot set it. The setter
 # (``_agent_context``) is intentionally NOT re-exported.
@@ -76,6 +59,38 @@ from gaia.connectors.providers.base import (
 from gaia.connectors.registry import REGISTRY, ConnectorRegistry
 from gaia.connectors.spec import ConfigField, ConnectorSpec
 
+# Deferred API names — require ``keyring`` transitively (api→flow→store→keyring).
+# Imported lazily via __getattr__ so that ``import gaia.connectors`` does NOT
+# pull in keyring at package-load time. This allows ``gaia eval --help`` and
+# other subcommands to work on environments where keyring is not installed.
+_API_NAMES: frozenset[str] = frozenset(
+    {
+        "cancel_flow",
+        "complete_authorization",
+        "get_access_token",
+        "get_access_token_sync",
+        "get_connection",
+        "grant_agent",
+        "list_agent_grants",
+        "list_connections",
+        "load_grants",
+        "revoke_agent_grant",
+        "revoke_connection",
+        "start_authorization",
+        "tripwire_check",
+    }
+)
+
+
+def __getattr__(name: str):  # pylint: disable=invalid-name
+    if name in _API_NAMES:
+        import importlib
+
+        _api = importlib.import_module("gaia.connectors.api")
+        return getattr(_api, name)
+    raise AttributeError(f"module 'gaia.connectors' has no attribute {name!r}")
+
+
 __all__ = [
     # Spec types + registry (T-1)
     "ConfigField",
@@ -94,21 +109,12 @@ __all__ = [
     # Provider abstraction
     "ConnectorRequirement",
     "OAuthProvider",
-    # Public API
-    "cancel_flow",
-    "complete_authorization",
+    # current_agent_id is eagerly imported above; the OAuth API functions
+    # (cancel_flow, get_access_token, etc.) are available via explicit import
+    # ``from gaia.connectors import <name>`` but are omitted from __all__
+    # because they are provided lazily via __getattr__ and Pylint's static
+    # analysis would flag them as undefined-all-variable (E0603).
     "current_agent_id",
-    "get_access_token",
-    "get_access_token_sync",
-    "get_connection",
-    "grant_agent",
-    "list_agent_grants",
-    "list_connections",
-    "load_grants",
-    "revoke_agent_grant",
-    "revoke_connection",
-    "start_authorization",
-    "tripwire_check",
     # Event-emitter Protocol (router wires its impl)
     "EventEmitter",
     "set_emitter",

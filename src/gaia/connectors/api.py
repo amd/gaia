@@ -100,10 +100,7 @@ async def get_access_token(
     # Eager check for OAuth scope coverage — once we know the agent is
     # granted, look at what the underlying OAuth connection actually
     # carries. The store load also fires the client_id_hash tripwire.
-    try:
-        prov = get_provider(provider)
-    except ConfigurationError:
-        raise
+    prov = get_provider(provider)
 
     stored = load_connection(
         provider,

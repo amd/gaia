@@ -39,7 +39,6 @@ import httpx
 
 from gaia.connectors.errors import (
     AuthRequiredError,
-    ConfigurationError,
     ConnectionRevokedError,
     ConnectorsError,
 )
@@ -95,11 +94,7 @@ async def get_or_refresh(
     second check inside the locked block prevents N+1 refreshes when 10
     callers race.
     """
-    try:
-        provider = get_provider(provider_id)
-    except ConfigurationError:
-        # Surfaced loudly to the caller; the router maps this to a 503.
-        raise
+    provider = get_provider(provider_id)
 
     key = _cache_key(provider_id, account_email)
     entry = _cache.get(key)
