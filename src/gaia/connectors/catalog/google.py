@@ -7,7 +7,7 @@ Registers the Google OAuth PKCE ConnectorSpec into the global REGISTRY and
 imports ``oauth_pkce`` so its handler is registered into ``_HANDLER_REGISTRY``.
 """
 
-import gaia.connectors.oauth_pkce  # noqa: F401 — triggers register_handler("oauth_pkce", ...)
+import gaia.connectors.oauth_pkce  # noqa: F401  # pylint: disable=unused-import
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.spec import ConfigField, ConnectorSpec
 

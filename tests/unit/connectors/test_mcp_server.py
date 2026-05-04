@@ -24,10 +24,8 @@ Tests cover:
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
-from typing import Any, Dict
-from unittest.mock import MagicMock, patch
+from typing import Dict
+from unittest.mock import patch
 
 import pytest
 
@@ -35,7 +33,6 @@ from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import _HANDLER_REGISTRY
 from gaia.connectors.mcp_server import (
     McpServerHandler,
-    _keyring_ref,
     _read_mcp_servers_json,
     _write_mcp_servers_json,
 )

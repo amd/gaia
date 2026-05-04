@@ -46,7 +46,6 @@ from aiohttp import web
 from gaia.connectors.errors import (
     ConnectorsError,
     ConsentDeniedError,
-    FlowInProgressError,
     FlowTimeoutError,
 )
 from gaia.connectors.events import emit

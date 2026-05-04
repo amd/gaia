@@ -25,7 +25,6 @@ import respx
 
 from gaia.connectors import (
     AuthRequiredError,
-    ScopeMismatchError,
     get_access_token,
     grant_agent,
     list_agent_grants,

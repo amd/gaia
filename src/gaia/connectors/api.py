@@ -29,7 +29,6 @@ from gaia.connectors.context import current_agent_id
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
-    ScopeMismatchError,
 )
 from gaia.connectors.flow import (
     cancel_flow,
@@ -52,7 +51,7 @@ from gaia.connectors.store import list_connections as _store_list
 from gaia.connectors.store import (
     load_connection,
 )
-from gaia.connectors.tokens import get_or_refresh, get_or_refresh_sync
+from gaia.connectors.tokens import get_or_refresh
 
 logger = logging.getLogger(__name__)
 

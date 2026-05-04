@@ -17,7 +17,6 @@ import json
 from unittest.mock import patch
 
 import httpx
-import pytest
 
 from gaia.agents.connectors_demo.agent import (
     AGENT_NAMESPACED_ID,

@@ -18,8 +18,7 @@ Tests cover:
 
 from __future__ import annotations
 
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

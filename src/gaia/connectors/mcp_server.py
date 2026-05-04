@@ -119,7 +119,7 @@ class McpServerHandler:
     # ConnectorHandler Protocol implementation
     # ------------------------------------------------------------------
 
-    async def get_credential(
+    async def get_credential(  # pylint: disable=unused-argument
         self,
         spec: ConnectorSpec,
         *,
@@ -212,7 +212,7 @@ class McpServerHandler:
             "args": list(spec.mcp_args),
         }
 
-    async def disconnect(
+    async def disconnect(  # pylint: disable=unused-argument
         self,
         spec: ConnectorSpec,
         *,

@@ -17,7 +17,7 @@ Fields that belong only to one type are ``None`` / empty on the other.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Sequence
+from typing import Literal
 
 # v1 connector types only (per plan amendment A1)
 ConnectorType = Literal["oauth_pkce", "mcp_server"]

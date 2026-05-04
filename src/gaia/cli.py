@@ -3140,7 +3140,7 @@ Let me know your answer!
 
     # Handle Connectors command (issue #927, parent of #915)
     if args.action == "connectors":
-        from gaia.connectors import cli as connectors_cli
+        from gaia.connectors import cli as connectors_cli  # pylint: disable=reimported
 
         rc = connectors_cli.handle(args)
         sys.exit(rc)

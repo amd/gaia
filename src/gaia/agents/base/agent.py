@@ -4,6 +4,8 @@
 Generic Agent class for building domain-specific agents.
 """
 
+from __future__ import annotations
+
 # Standard library imports
 import abc
 import ast
@@ -15,7 +17,7 @@ import os
 import re
 import subprocess
 import uuid
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
@@ -23,7 +25,9 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.connectors.providers.base import ConnectorRequirement
+
+if TYPE_CHECKING:
+    from gaia.connectors.providers.base import ConnectorRequirement
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

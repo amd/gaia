@@ -44,7 +44,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import gaia.connectors as connections
-import gaia.connectors.catalog  # noqa: F401 — triggers REGISTRY + handler registration
+import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -55,7 +55,7 @@ from gaia.connectors.errors import (
     FlowTimeoutError,
     ScopeMismatchError,
 )
-from gaia.connectors.events import EventEmitter, set_emitter
+from gaia.connectors.events import set_emitter
 from gaia.connectors.flow import _pending as _flow_pending
 from gaia.connectors.grants import (
     GRANTS_FILE,
@@ -63,7 +63,7 @@ from gaia.connectors.grants import (
     list_agent_grants,
     revoke_agent_grant,
 )
-from gaia.connectors.handler import configure, disconnect, get_credential, health_check
+from gaia.connectors.handler import configure, disconnect, health_check
 from gaia.connectors.mcp_server import is_mcp_server_configured
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.store import peek_connection

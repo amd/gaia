@@ -77,11 +77,19 @@ class TestAgentBaseClassDefault:
         assert isinstance(Agent.REQUIRED_CONNECTORS, list)
 
 
+# Agents that intentionally declare REQUIRED_CONNECTORS — they exist to
+# demonstrate or exercise the connectors framework and are exempt from the
+# "no connector requirements for built-ins" invariant.
+_CONNECTOR_DEMO_AGENTS: frozenset[str] = frozenset({"connectors-demo"})
+
+
 class TestBuiltinPath:
     def test_chat_builder_have_empty_required_connections(self):
         registry = AgentRegistry()
         registry._register_builtin_agents()
         for reg in registry.list():
+            if reg.id in _CONNECTOR_DEMO_AGENTS:
+                continue
             assert reg.required_connections == [], (
                 f"Built-in agent {reg.id} unexpectedly declares "
                 f"required_connections={reg.required_connections}"
