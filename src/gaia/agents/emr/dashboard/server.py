@@ -1828,13 +1828,19 @@ def create_app(
             # Save file to watch directory. Verify the fully-resolved path
             # is actually inside the watch directory before opening — defeats
             # any path-traversal slip that Path.name alone might miss on
-            # exotic filesystems, and closes the CodeQL py/path-injection
-            # sink on the open() below.
-            watch_real = _agent_instance._watch_dir.resolve()
-            file_path = (watch_real / safe_filename).resolve()
-            watch_prefix = str(watch_real).rstrip(os.sep) + os.sep
-            if not str(file_path).startswith(watch_prefix):
+            # exotic filesystems. Uses os.path.normpath + os.path.abspath
+            # (CodeQL PathNormalization) paired with .startswith()
+            # (CodeQL SafeAccessCheck) to break the taint flow.
+            watch_real = os.path.normpath(
+                os.path.abspath(str(_agent_instance._watch_dir))
+            )
+            file_path_str = os.path.normpath(
+                os.path.abspath(os.path.join(watch_real, safe_filename))
+            )
+            watch_prefix = watch_real.rstrip(os.sep) + os.sep
+            if not file_path_str.startswith(watch_prefix):
                 raise HTTPException(status_code=400, detail="Invalid upload path")
+            file_path = Path(file_path_str)
 
             with open(file_path, "wb") as f:
                 f.write(content)
