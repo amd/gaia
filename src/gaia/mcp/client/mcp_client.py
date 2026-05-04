@@ -14,6 +14,44 @@ from .transports.stdio import StdioTransport
 logger = get_logger(__name__)
 
 
+def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """
+    Resolve ``{"$keyring": "service:username"}`` references in *env*.
+
+    Each value that is a dict with a ``"$keyring"`` key is resolved via
+    ``keyring.get_password(service, username)`` where the reference string
+    is split on the first ``:`` as ``<service>:<username>``.
+
+    Raises ``RuntimeError`` if any referenced keyring entry is absent —
+    the server is refused to spawn (plan amendment A5b: fail-closed).
+    Plain string values pass through unchanged.
+    """
+    if not env:
+        return {}
+    import keyring  # pylint: disable=import-outside-toplevel
+
+    resolved: Dict[str, str] = {}
+    missing: list[str] = []
+    for key, value in env.items():
+        if isinstance(value, dict) and "$keyring" in value:
+            ref = value["$keyring"]
+            service, _, username = ref.partition(":")
+            password = keyring.get_password(service, username)
+            if password is None:
+                missing.append(ref)
+            else:
+                resolved[key] = password
+        else:
+            resolved[key] = str(value)
+    if missing:
+        raise RuntimeError(
+            f"MCPClient: refusing to spawn — missing keyring entries: {missing!r}. "
+            "Reconfigure the connector via Settings → Connectors or "
+            "`gaia connectors configure <id>`."
+        )
+    return resolved
+
+
 @dataclass
 class MCPTool:
     """Represents an MCP tool with its schema.
@@ -119,10 +157,14 @@ class MCPClient:
         if "command" not in config:
             raise ValueError("Config must include 'command' field")
 
+        # Resolve any $keyring references before spawning; raises RuntimeError
+        # if a reference is dangling (fail-closed per plan amendment A5b).
+        resolved_env = _resolve_keyring_refs(config.get("env"))
+
         transport = StdioTransport(
             command=config["command"],
             args=config.get("args"),
-            env=config.get("env"),
+            env=resolved_env or None,
             timeout=timeout,
             debug=debug,
         )

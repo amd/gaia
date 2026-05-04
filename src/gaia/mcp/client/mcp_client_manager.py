@@ -163,6 +163,19 @@ class MCPClientManager:
         self._clients.clear()
         self._failed.clear()
 
+    def reload(self) -> None:
+        """Hot-reload server config without restarting GAIA.
+
+        Disconnects all currently running servers, re-reads
+        ``mcp_servers.json``, and reconnects all enabled servers.
+        Called by ``McpServerHandler`` after ``configure`` / ``disconnect``
+        (plan amendment A5).
+        """
+        logger.debug("MCPClientManager: reloading server config")
+        self.disconnect_all()
+        self.config._load()
+        self.load_from_config()
+
     def load_from_config(self) -> None:
         """Load and connect to all servers from configuration.
 
