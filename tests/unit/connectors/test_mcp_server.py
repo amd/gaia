@@ -309,9 +309,7 @@ class TestHealthCheck:
 
 class TestResolveKeyringRefs:
     def test_resolves_reference(self):
-        with patch(
-            "gaia.mcp.client.mcp_client.keyring.get_password", return_value="resolved"
-        ):
+        with patch("keyring.get_password", return_value="resolved"):
             result = _resolve_keyring_refs({"KEY": {"$keyring": "svc:user:KEY"}})
         assert result["KEY"] == "resolved"
 
@@ -320,9 +318,7 @@ class TestResolveKeyringRefs:
         assert result["KEY"] == "plain"
 
     def test_fails_closed_on_missing_entry(self):
-        with patch(
-            "gaia.mcp.client.mcp_client.keyring.get_password", return_value=None
-        ):
+        with patch("keyring.get_password", return_value=None):
             with pytest.raises(RuntimeError, match="missing keyring entries"):
                 _resolve_keyring_refs({"KEY": {"$keyring": "svc:user:KEY"}})
 
@@ -334,9 +330,7 @@ class TestResolveKeyringRefs:
         def fake_get(service, username):
             return {"svc:key1": "val1", "svc:key2": "val2"}.get(f"{service}:{username}")
 
-        with patch(
-            "gaia.mcp.client.mcp_client.keyring.get_password", side_effect=fake_get
-        ):
+        with patch("keyring.get_password", side_effect=fake_get):
             result = _resolve_keyring_refs(
                 {
                     "K1": {"$keyring": "svc:key1"},

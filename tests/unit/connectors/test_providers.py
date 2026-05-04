@@ -14,12 +14,12 @@ Coverage:
   (NOT at module import) and surfaces a ``ConfigurationError`` when missing.
 - ``authorization_params()`` returns Google-specific extras (``access_type``,
   ``prompt``).
-- ``client_id_hash`` is a stable sha256 of the client id.
+- ``client_id_hash`` is a stable CRC32 fingerprint of the client id.
 """
 
 from __future__ import annotations
 
-import hashlib
+import zlib
 
 import pytest
 
@@ -155,11 +155,11 @@ class TestGoogleProvider:
         assert prov.auth_url == "https://accounts.google.com/o/oauth2/v2/auth"
         assert prov.token_url == "https://oauth2.googleapis.com/token"
 
-    def test_client_id_hash_is_stable_sha256(self, monkeypatch):
+    def test_client_id_hash_is_stable_crc32(self, monkeypatch):
         client_id = "test.apps.googleusercontent.com"
         monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", client_id)
         prov = providers.get("google")
-        expected = hashlib.sha256(client_id.encode()).hexdigest()
+        expected = format(zlib.crc32(client_id.encode()), "08x")
         assert prov.client_id_hash == expected
 
     def test_authorization_params_includes_offline_and_consent(self, monkeypatch):

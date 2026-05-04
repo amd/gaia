@@ -23,8 +23,8 @@ same human-readable string for a given scope. A unit test in
 
 from __future__ import annotations
 
-import hashlib
 import os
+import zlib
 from typing import Iterable, Sequence
 from urllib.parse import urlencode
 
@@ -99,11 +99,9 @@ class GoogleOAuthProvider:
                 "before launching GAIA.) See docs/runbooks/google-oauth-client.md."
             )
         self.client_id: str = resolved_id
-        # SHA-256 used for non-cryptographic fingerprinting (log correlation /
-        # comparison), NOT password hashing or signing — flagged false-positive.
-        self.client_id_hash: str = hashlib.sha256(  # noqa: S324
-            resolved_id.encode()  # lgtm[py/weak-cryptographic-algorithm]
-        ).hexdigest()
+        # CRC32 fingerprint for log correlation / tripwire comparison only.
+        # Non-cryptographic by design — not used for security.
+        self.client_id_hash: str = format(zlib.crc32(resolved_id.encode()), "08x")
         # Google requires client_secret even for Desktop-type PKCE clients.
         self.client_secret: str = (
             client_secret
