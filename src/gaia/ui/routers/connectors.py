@@ -251,7 +251,13 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
             get_provider(provider_ref)
         except ConfigurationError as e:
             configurable = False
-            config_error = str(e)
+            logger.info("connectors: provider %s not configured: %s", provider_ref, e)
+            _pref = provider_ref.upper()
+            config_error = (
+                f"OAuth credentials for {provider_ref!r} are not configured. "
+                f"Set GAIA_{_pref}_CLIENT_ID and GAIA_{_pref}_CLIENT_SECRET, "
+                "or use Settings → Connections to configure them."
+            )
         except KeyError:
             configurable = False
             config_error = (
