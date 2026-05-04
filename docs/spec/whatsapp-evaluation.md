@@ -1,7 +1,11 @@
-# WhatsApp Evaluation — Decision Document
+# WhatsApp Evaluation - Decision Document
 
-Status: draft
+Status: accepted
 Date: 2026-05-03
+
+Decision: Defer WhatsApp for v0.20.0 and prioritize shipping a Telegram adapter for Phase 0.
+  - If a funded business case requires WhatsApp earlier, implement via the
+    WhatsApp Business Cloud API through a partner (Twilio or 360dialog) only.
 
 Summary
 - Goal: evaluate WhatsApp as a messaging surface for GAIA and recommend a Phase 1 path (integration/not-ready/deferral).
