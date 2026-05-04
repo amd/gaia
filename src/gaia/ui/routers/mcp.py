@@ -21,6 +21,7 @@ def _require_ui_header(request: Request) -> None:
     if request.headers.get("x-gaia-ui") != "1":
         raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
+
 # ---------------------------------------------------------------------------
 # Curated MCP server catalog (Tier 1–4 popular servers)
 # ---------------------------------------------------------------------------
@@ -307,7 +308,9 @@ async def list_mcp_servers():
     return {"servers": [s.model_dump() for s in result]}
 
 
-@router.post("/api/mcp/servers", status_code=201, dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/api/mcp/servers", status_code=201, dependencies=[Depends(_require_ui_header)]
+)
 async def add_mcp_server(body: MCPServerCreateRequest):
     """Add a new MCP server configuration (persisted to ~/.gaia/mcp_servers.json)."""
     if not body.name or not body.name.strip():
@@ -342,7 +345,9 @@ async def remove_mcp_server(name: str):
     return {"status": "removed", "name": name}
 
 
-@router.post("/api/mcp/servers/{name}/enable", dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/api/mcp/servers/{name}/enable", dependencies=[Depends(_require_ui_header)]
+)
 async def enable_mcp_server(name: str):
     """Enable a previously disabled MCP server."""
     config = _load_config()
@@ -356,7 +361,9 @@ async def enable_mcp_server(name: str):
     return {"status": "enabled", "name": name}
 
 
-@router.post("/api/mcp/servers/{name}/disable", dependencies=[Depends(_require_ui_header)])
+@router.post(
+    "/api/mcp/servers/{name}/disable", dependencies=[Depends(_require_ui_header)]
+)
 async def disable_mcp_server(name: str):
     """Disable an MCP server without removing its configuration."""
     config = _load_config()

@@ -221,7 +221,7 @@ async def start_authorization(
 
     asyncio.ensure_future(_open_browser())
 
-    logger.info(
+    logger.info(  # lgtm[py/clear-text-logging-sensitive-data]
         "flow: started provider=%s scopes=%d redirect=%s flow_id=%s",
         provider_id,
         len(scopes_list),

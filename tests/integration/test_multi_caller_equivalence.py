@@ -100,7 +100,9 @@ class TestCliPath:
         _seed_connection(google)
 
         # CLI: gaia connectors grants grant google builtin:cli-test ...
-        rc = connections_cli.main(["connectors",
+        rc = connections_cli.main(
+            [
+                "connectors",
                 "grants",
                 "grant",
                 "google",

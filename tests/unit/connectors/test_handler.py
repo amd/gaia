@@ -20,8 +20,8 @@ import pytest
 
 from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 from gaia.connectors.handler import (
-    ConnectorHandler,
     _HANDLER_REGISTRY,
+    ConnectorHandler,
     configure,
     disconnect,
     get_credential,

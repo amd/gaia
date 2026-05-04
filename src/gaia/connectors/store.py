@@ -291,7 +291,9 @@ def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) ->
 
     try:
         keyring.delete_password(SERVICE_NAME, username)
-        logger.debug("store: deleted connection provider=%s", provider)
+        logger.debug(  # lgtm[py/clear-text-logging-sensitive-data]
+            "store: deleted connection provider=%s", provider
+        )
     except keyring.errors.PasswordDeleteError:
         # Already gone — fine.
         pass
