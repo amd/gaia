@@ -1,0 +1,165 @@
+---
+title: "Governance: Optional Policy Layer for Agents"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/governance/`](https://github.com/amd/gaia/blob/main/src/gaia/governance/)
+</Info>
+
+The governance layer is an **opt-in** module that intercepts every tool call and
+applies a policy decision (ALLOW / BLOCK / REVIEW) before the tool runs. It adds
+zero overhead when not activated.
+
+## Quick start
+
+```python
+from gaia import Agent, tool
+from gaia.governance import GaiaGovernanceAdapter, GovernedAgentMixin, govern
+
+
+@tool
+@govern(risk="blocked", reason="destructive")
+def wipe_disk() -> dict:
+    return {"status": "ok"}
+
+
+class MyAgent(GovernedAgentMixin, Agent):
+    ...
+
+
+agent = MyAgent(governance_adapter=GaiaGovernanceAdapter.default())
+```
+
+When the model calls `wipe_disk`, governance short-circuits the call,
+issues a signed receipt to `receipts.jsonl`, and returns a denied result.
+
+## Decision outcomes
+
+| Decision | Effect |
+|---|---|
+| `ALLOW` | Tool runs as usual. |
+| `BLOCK` | Tool is refused. A receipt is written with the full evidence envelope. |
+| `REVIEW` | A checkpoint is opened. Governance calls your `governance_reviewer` callback, or Agent UI's blocking confirmation modal when that is the active console. APPROVE -> tool runs; REJECT -> tool is refused. Either way a receipt is written. |
+
+If `REVIEW` fires and neither a reviewer nor a blocking console is available,
+the mixin **fails closed** — the tool is denied without executing.
+
+## Tagging tools
+
+**Decorator style** (colocates policy with the tool):
+
+```python
+@tool
+@govern(risk="review", reason="sends money")
+def transfer(amount: float): ...
+```
+
+**Dict style** (centralizes policy on the agent):
+
+```python
+agent = MyAgent(
+    governance_adapter=GaiaGovernanceAdapter.default(),
+    governance_risk_tags={"transfer": ["review"]},
+)
+```
+
+Tags from both sources are **additive** (union, deduplicated): decorator tags come
+first, then dict tags are appended. A tool with `"review"` from a decorator and
+`"blocked"` from the dict will carry both tags.
+
+## Configuration
+
+```python
+from gaia.governance import GovernanceConfig
+
+# Structured config object
+agent = MyAgent(governance=GovernanceConfig(
+    adapter=GaiaGovernanceAdapter.default(),
+    actor_id="alice",
+    workflow_id="session-42",
+    risk_tags={"delete_record": ["blocked"]},
+    reviewer=my_reviewer,
+))
+
+# Individual kwargs (equivalent)
+agent = MyAgent(
+    governance_adapter=GaiaGovernanceAdapter.default(),
+    governance_actor_id="alice",
+    governance_risk_tags={"delete_record": ["blocked"]},
+    governance_reviewer=my_reviewer,
+)
+```
+
+## Reviewers
+
+```python
+def my_reviewer(tool_name, tool_args, decision) -> bool:
+    return input(f"approve {tool_name}? [y/N]: ") == "y"
+
+agent = MyAgent(
+    governance_adapter=GaiaGovernanceAdapter.default(),
+    governance_reviewer=my_reviewer,
+)
+```
+
+An explicit `governance_reviewer` takes precedence. If none is configured,
+governance delegates to `console.confirm_tool_execution` only when the console
+advertises `blocking_confirmation = True`; Agent UI's `SSEOutputHandler` does
+this and emits the existing `permission_request` modal. GAIA's default console is
+not consulted because its confirmation method auto-approves.
+
+When a policy returns `BLOCK`, the governed tool body is not executed and the
+adapter writes a BLOCK receipt. If the active console supports
+`print_policy_alert`, GAIA also emits a user-visible policy alert. Agent UI's
+`SSEOutputHandler` sends this as a `policy_alert` SSE event with the blocked
+tool, decision, reason, rule IDs, policy version, and receipt ID.
+
+## Observability callbacks
+
+```python
+def on_decision(tool_name, tool_args, action, decision):
+    print(f"{tool_name}: {decision.decision}")
+
+agent = MyAgent(
+    governance_adapter=GaiaGovernanceAdapter.default(),
+    governance_callback=on_decision,
+)
+```
+
+Callback exceptions are logged as warnings and never interrupt tool execution.
+
+## Security properties
+
+- **Canonical name resolution** — governance resolves registered tool names before
+  checking risk tags, so an LLM cannot bypass a tag on `mcp_time_get_current_time`
+  by calling the alias `get_current_time`.
+- **Envelope-bound receipts** — each receipt's `payload_hash` is a SHA-256 of the
+  full evidence envelope (action, decision, policy version, constitution hash, actor,
+  timestamp) in strict canonical JSON. Any tampered field changes the hash.
+- **Workflow-bound checkpoints** — the adapter refuses to resolve a checkpoint under
+  a `workflow_id` that differs from the one recorded when the checkpoint was opened.
+- **Fail-closed REVIEW** — no reviewer registered means deny.
+
+## Extension points
+
+| Interface | Shipped reference | Swap with |
+|---|---|---|
+| `PolicyEngine` | `RuleBasedPolicyEngine` | ACGS-lite, LLM judge, OPA |
+| `CheckpointRuntime` | `InMemoryCheckpointBridge` | constitutional-swarm checkpoint service |
+| `ReceiptServiceProtocol` | `InMemoryReceiptService` / `JsonlReceiptService` | DB, log forwarder, chain anchor |
+| `PolicyBindingProtocol` | `StaticPolicyBindingService` | constitutional-swarm policy control plane |
+
+All four are `@runtime_checkable` Protocols — no inheritance required.
+
+## Audit log
+
+`JsonlReceiptService` writes one JSON object per line to a path you choose
+(`receipts.jsonl` by default). The log survives process exit and is trivially
+`grep`-able:
+
+```bash
+grep '"decision":"BLOCK"' receipts.jsonl | jq .
+```
+
+For multi-process deployments, replace `JsonlReceiptService` with a dedicated log
+forwarder or database-backed receipt service.

@@ -14,10 +14,12 @@ let QRCodeLib: any = null;
 interface MobileAccessModalProps {
     isOpen: boolean;
     onClose: () => void;
+    /** Explicitly stop the tunnel (shown only while the tunnel is active). */
+    onStop?: () => void;
     error?: string | null;
 }
 
-export function MobileAccessModal({ isOpen, onClose, error }: MobileAccessModalProps) {
+export function MobileAccessModal({ isOpen, onClose, onStop, error }: MobileAccessModalProps) {
     const [status, setStatus] = useState<TunnelStatus | null>(null);
     const [copied, setCopied] = useState(false);
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -213,6 +215,15 @@ export function MobileAccessModal({ isOpen, onClose, error }: MobileAccessModalP
 
                     {/* Actions */}
                     <div className="mobile-access-actions">
+                        {status?.active && onStop && (
+                            <button
+                                className="btn-danger"
+                                onClick={onStop}
+                                title="Close the tunnel and revoke the mobile URL"
+                            >
+                                Stop Tunnel
+                            </button>
+                        )}
                         <button className="btn-secondary" onClick={onClose}>Close</button>
                     </div>
                 </div>

@@ -390,7 +390,6 @@ class TestCanonicalAgentType:
             set_agent_registry(None)
 
 
-
 # ── Regression: registered-agent streaming path must not double-index ─────
 
 

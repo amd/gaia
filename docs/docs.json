@@ -166,7 +166,8 @@
                       "sdk/sdks/mcp",
                       "sdk/sdks/llm",
                       "sdk/sdks/vlm",
-                      "sdk/sdks/audio"
+                      "sdk/sdks/audio",
+                      "sdk/sdks/governance"
                     ]
                   },
                   {
@@ -423,6 +424,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.17.5",
               "releases/v0.17.4",
               "releases/v0.17.3",
               "releases/v0.17.2",
@@ -471,7 +473,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.17.4 \u00b7 Lemonade 10.0.0",
+        "label": "v0.17.5 \u00b7 Lemonade 10.2.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {
