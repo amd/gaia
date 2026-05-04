@@ -101,11 +101,9 @@ class GoogleOAuthProvider:
         self.client_id: str = resolved_id
         # SHA-256 used for non-cryptographic fingerprinting (log correlation /
         # comparison), NOT password hashing or signing — flagged false-positive.
-        self.client_id_hash: str = (
-            hashlib.sha256(  # lgtm[py/weak-cryptographic-algorithm]  # noqa: S324
-                resolved_id.encode()
-            ).hexdigest()
-        )
+        self.client_id_hash: str = hashlib.sha256(  # noqa: S324
+            resolved_id.encode()  # lgtm[py/weak-cryptographic-algorithm]
+        ).hexdigest()
         # Google requires client_secret even for Desktop-type PKCE clients.
         self.client_secret: str = (
             client_secret

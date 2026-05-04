@@ -140,11 +140,7 @@ class OAuthPkceHandler:
         provider_id = spec.oauth_provider_ref or spec.id
         account_email = account_id or DEFAULT_ACCOUNT
         delete_connection(provider_id, account_email=account_email)
-        logger.info(
-            "oauth_pkce: disconnected connector_id=%s provider=%s",
-            spec.id,
-            provider_id,  # lgtm[py/clear-text-logging-sensitive-data]
-        )
+        logger.info("oauth_pkce: disconnected connector_id=%s", spec.id)
 
     async def test(self, spec: ConnectorSpec) -> Dict[str, Any]:
         """
