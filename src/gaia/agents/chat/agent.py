@@ -21,7 +21,6 @@ from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
 from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
@@ -42,7 +41,7 @@ class ChatAgentConfig:
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None
-    model_id: Optional[str] = None  # None = use default model (Gemma)
+    model_id: Optional[str] = None  # None = use default Qwen3.5-35B-A3B
 
     # Execution settings
     max_steps: int = 10
@@ -136,8 +135,8 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use the configured default model (Gemma) when no explicit model is set
-        effective_model_id = config.model_id or DEFAULT_MODEL_NAME
+        # Use Qwen3.5-35B-A3B by default for better tool-calling
+        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-GGUF"
 
         # Debug logging for model selection
         logger.debug(
@@ -406,21 +405,10 @@ No documents are currently indexed.
 - You have opinions and you share them. You're not afraid to be playful, sarcastic (lightly), or funny.
 - You keep it short. One good sentence beats three mediocre ones. Don't ramble.
 - Match your response length to the complexity of the question. For short questions, greetings, or simple factual lookups, reply in 1-2 sentences. Only expand to multiple paragraphs for complex analysis requests.
-- **GREETING RULE (ABSOLUTE):** When user sends a short greeting ("Hi!", "Hello", "Hey", "Hi there", etc.) as their first message: respond with 1-2 sentences MAXIMUM. NEVER list features, tools, or capabilities. NEVER mention Stable Diffusion, image generation, or any specific feature unprompted. Just greet back and invite them in.
-  **VARY YOUR PHRASING** — do not default to a single canned greeting. Repeating the same opener every turn gets stale fast. Pick something natural and a little different each time. Examples (rotate, riff, don't lock onto one):
-    - "Hey! What's the move today?"
-    - "Yo. What are we digging into?"
-    - "Hi! Anything I can help unblock?"
-    - "Hey there — got something on your plate?"
-    - "What's up? What can I take a swing at?"
-    - "Morning / afternoon — what brings you in?"
-    - "Hey. Whatcha working on?"
-    - "Howdy! What'll it be?"
-    - "Hi — what's the question?"
-    - "Hey! Drop it on me."
+- **GREETING RULE (ABSOLUTE):** When user sends a short greeting ("Hi!", "Hello", "Hey", "Hi there", etc.) as their first message: respond with 1-2 sentences MAXIMUM. NEVER list features, tools, or capabilities. NEVER mention Stable Diffusion, image generation, or any specific feature unprompted. Just greet back and ask what they need.
   WRONG: "Hey! What are you working on? I'm here to assist with document analysis, code editing, data work, and general research. If you're looking to generate images using Stable Diffusion, here are examples: - A futuristic robot kitten..." ← BANNED, verbose feature pitch on a greeting
-  WRONG: Returning the IDENTICAL greeting every conversation ("Hey! What are you working on?" every single time) — feels robotic, makes the user feel like they're talking to a script.
-  RIGHT: Any of the rotation examples above, or a fresh riff in the same spirit (warm, curious, brief, no feature pitch).
+  RIGHT: "Hey! What are you working on?"
+  RIGHT: "Hey — what do you need?"
 - HARD LIMIT: For capability questions ("what can you help with?", "what can you help me with?", "what do you do?", "what can you do?", "what do you help with?"): EXACTLY 1-2 sentences. STOP after 2 sentences. No exceptions, no follow-up questions, no paragraph breaks, no bullet lists.
   WRONG (too long): "I can help with a ton of stuff — from answering questions to analyzing files.\\n\\nIf you've got documents, I can look at them.\\n\\nNeed help writing? Want to explore ideas? Just tell me." ← 5 sentences, FAIL
   RIGHT: "I help with document Q&A, file analysis, writing, data work, and general research — what are you working on?"
@@ -749,20 +737,6 @@ When the document simply does NOT cover a topic, you MUST say so plainly. NEVER 
   RIGHT: (turn 1: contractors not eligible) → (turn 3: "The document states EAP is for employees; contractors were defined as not eligible for company benefits, so this does not apply to them.")
   CRITICAL EAP/ALL-EMPLOYEES TRAP: If the document says "available to all employees (full-time, part-time, and temporary)" and omits contractors, contractors are NOT included. "All employees regardless of classification" means among employee types — NOT non-employee contractors. NEVER write "contractors may have access to EAP" or any similar speculative benefit extension. If the document enumerates employee types and does NOT list contractors, the omission IS the answer: contractors are excluded.
   WORST PATTERN (BANNED): "while contractors don't receive standard benefits, they may still have access to EAP/X which is available to all employees regardless of classification" ← HALLUCINATION. The correct response: "The document does not specify any benefits that contractors are eligible for."
-
-**OUT-OF-SCOPE QUESTION RULE (CRITICAL — prevents reasoning loops on hallucination traps):**
-When the user asks for a specific fact (number, date, dollar amount, percentage, penalty figure) that may not be in the indexed document's scope (e.g. asking about Article 17 penalties when the document is GDPR Article 17 itself; asking about Python 3.12 release date in a Python 3.11 doc; asking about a max body size in a spec that defines none):
-1. Call query_documents or query_specific_file ONCE — exactly one query — to verify.
-2. If no relevant chunks come back, IMMEDIATELY produce your final answer in one short paragraph: "That [number/date/figure] is not in this document. [The document covers X, but not Y]." Then STOP.
-3. NEVER engage in extended reasoning or multiple speculative chains about what the answer might be from general knowledge. A single tool call followed by a 1-2 sentence final answer is the entire response.
-4. NEVER write "but approximately X...", "typically X is around...", "based on general knowledge X is..." after saying "not in document". Saying "not in document" is the COMPLETE answer — do NOT supplement.
-5. If the question references content from a DIFFERENT regulatory article, version, RFC, or spec section than the indexed document (e.g. "Article 17 penalties" when penalties are in Article 83; "Python 3.12 features" in a 3.11 doc), state the redirect plainly: "This document covers only [X]; [Y] is defined in [other source]." Do NOT estimate Y from training data.
-- WRONG: User asks GDPR Article 17 penalty. Agent reasons silently for 10 minutes about penalty frameworks. ← REASONING LOOP — never do this.
-- RIGHT: query_documents("Article 17 penalty fine euros") → no chunks → "Financial penalties for GDPR violations are defined in Article 83, not Article 17. This document does not include penalty figures."
-- WRONG: "The federal comment period duration is not in this document, but approximately 60 days based on standard rulemaking." ← SUPPLEMENT after disclaim is BANNED.
-- RIGHT: "The public comment period duration is not stated in this document."
-- WRONG: User asks Python 3.12 release date. Agent invents "October 2023". ← HALLUCINATION.
-- RIGHT: "This document covers Python 3.11 only. The Python 3.12 release date is not included here."
 
 **ALWAYS COMPLETE YOUR RESPONSE AFTER TOOL USE:**
 After calling any tool, you MUST write the full answer to the user. Never end your response with an internal note like "I need to provide a definitive answer" or "I need to state the findings" — that IS your internal thought, not an answer.
@@ -1528,51 +1502,6 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
                     }
                 except Exception as e:
                     return {"status": "error", "error": str(e)}
-            elif system == "Darwin":
-                # macOS: AppleScript via osascript (always present on Mac).
-                # System Events returns every visible (non-background) process,
-                # which is the equivalent of "open apps" for users.
-                try:
-                    import subprocess
-
-                    script = (
-                        'tell application "System Events" to get name of '
-                        "every process whose background only is false"
-                    )
-                    result = subprocess.run(
-                        ["osascript", "-e", script],
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                        check=False,
-                    )
-                    if result.returncode == 0 and result.stdout.strip():
-                        # osascript returns names comma-space-separated.
-                        names = [
-                            x.strip()
-                            for x in result.stdout.strip().split(",")
-                            if x.strip()
-                        ]
-                        for nm in names:
-                            windows.append({"title": nm, "process": nm})
-                        return {
-                            "status": "success",
-                            "windows": windows,
-                            "count": len(windows),
-                            "note": (
-                                "macOS: visible apps from System Events "
-                                "(Mission Control equivalent)"
-                            ),
-                        }
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
-                return {
-                    "status": "error",
-                    "error": (
-                        "Window listing failed on macOS. osascript may "
-                        "have been blocked by accessibility permissions."
-                    ),
-                }
             else:
                 try:
                     import subprocess
@@ -1704,6 +1633,11 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
             except Exception as _mcp_err:
                 logger.warning("MCP server load failed: %s", _mcp_err)
 
+        # Set up bundle-based tool loading (#688 Phase 1).
+        # All tools remain registered in _TOOL_REGISTRY; the loader decides
+        # which subset appears in the LLM prompt each turn.
+        self._setup_tool_bundles()
+
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools
     # - FileToolsMixin (file_tools.py): Directory monitoring
@@ -1773,6 +1707,241 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
         logger.debug(
             f"External tools: search_documentation={'registered' if has_npx else 'skipped (no npx)'},"
             f" search_web={'registered' if has_perplexity else 'skipped (no PERPLEXITY_API_KEY)'}"
+        )
+
+    def _setup_tool_bundles(self) -> None:
+        """Configure bundle-based tool loading for ChatAgent (#688 Phase 1).
+
+        Groups the ~30+ registered tools into semantic bundles so the
+        ToolLoader can gate which ones appear in the LLM prompt each turn.
+        Tools that are not assigned to any bundle remain always-visible
+        (backwards compatible).
+        """
+        from gaia.agents.base.tool_loader import (
+            ActivationPolicy,
+            ToolBundle,
+            ToolLoader,
+        )
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        self.tool_loader = ToolLoader()
+
+        # ── always-on: core tools the LLM needs every turn ──────────────
+        self.tool_loader.register_bundle(
+            ToolBundle(
+                name="core",
+                tools=frozenset(
+                    {
+                        "read_file",
+                        "list_files",
+                        "run_shell_command",
+                        "get_system_info",
+                    }
+                ),
+                policy=ActivationPolicy.ALWAYS,
+            )
+        )
+
+        # ── RAG bundle: active when docs are indexed or user asks about docs ─
+        self.tool_loader.register_bundle(
+            ToolBundle(
+                name="rag",
+                tools=frozenset(
+                    {
+                        "query_documents",
+                        "query_specific_file",
+                        "search_indexed_chunks",
+                        "evaluate_retrieval",
+                        "index_document",
+                        "list_indexed_documents",
+                        "rag_status",
+                        "summarize_document",
+                        "dump_document",
+                        "index_directory",
+                    }
+                ),
+                policy=ActivationPolicy.KEYWORD,
+                keywords=frozenset(
+                    {
+                        r"document|pdf|index|search.*file|rag|chunk|summarize|summary",
+                        r"what does .+ say",
+                        r"find.*in .+(report|handbook|manual|doc)",
+                    }
+                ),
+            )
+        )
+
+        # Pre-activate RAG bundle when documents are already indexed
+        if (
+            hasattr(self, "rag")
+            and self.rag
+            and getattr(self.rag, "indexed_files", None)
+        ):
+            self.tool_loader._state["rag"].activated = True
+
+        # ── filesystem: file navigation and search ──────────────────────
+        self.tool_loader.register_bundle(
+            ToolBundle(
+                name="filesystem",
+                tools=frozenset(
+                    {
+                        "search_file",
+                        "search_directory",
+                        "search_file_content",
+                        "browse_directory",
+                        "get_file_info",
+                        "list_recent_files",
+                        "add_watch_directory",
+                        "write_file",
+                        "edit_file",
+                    }
+                ),
+                policy=ActivationPolicy.KEYWORD,
+                keywords=frozenset(
+                    {
+                        r"file|folder|directory|path|find|search|browse|tree|ls\b|dir\b",
+                        r"\.[a-z]{1,5}\b",  # file extensions like .py, .json
+                        r"[/\\]",  # path separators
+                        r"write|edit|save|create.*file|modify",
+                    }
+                ),
+            )
+        )
+
+        # ── browser: web fetching and URL tools ─────────────────────────
+        self.tool_loader.register_bundle(
+            ToolBundle(
+                name="browser",
+                tools=frozenset(
+                    {
+                        "open_url",
+                        "fetch_webpage",
+                        "search_web",
+                        "search_documentation",
+                    }
+                ),
+                policy=ActivationPolicy.KEYWORD,
+                keywords=frozenset(
+                    {
+                        r"https?://",
+                        r"url|website|webpage|web\s*page|browse|internet",
+                        r"search.*web|google|look\s*up|online",
+                    }
+                ),
+            )
+        )
+
+        # ── data: data analysis and execution ───────────────────────────
+        self.tool_loader.register_bundle(
+            ToolBundle(
+                name="data",
+                tools=frozenset(
+                    {
+                        "analyze_data_file",
+                        "execute_python_file",
+                    }
+                ),
+                policy=ActivationPolicy.KEYWORD,
+                keywords=frozenset(
+                    {
+                        r"csv|excel|xlsx|data|analy[sz]e|statistics|chart|plot",
+                        r"run.*python|execute.*script|\.py\b",
+                    }
+                ),
+            )
+        )
+
+        # ── desktop: system interaction tools ───────────────────────────
+        self.tool_loader.register_bundle(
+            ToolBundle(
+                name="desktop",
+                tools=frozenset(
+                    {
+                        "take_screenshot",
+                        "list_windows",
+                        "read_clipboard",
+                        "write_clipboard",
+                        "notify_desktop",
+                        "text_to_speech",
+                    }
+                ),
+                policy=ActivationPolicy.KEYWORD,
+                keywords=frozenset(
+                    {
+                        r"screenshot|screen|capture|window|clipboard|copy|paste",
+                        r"notify|notification|alert|speak|say|tts|voice|read.*aloud",
+                    }
+                ),
+            )
+        )
+
+        # ── vlm: vision tools (only if registered) ─────────────────────
+        vlm_tools = {"analyze_image", "answer_question_about_image"} & set(
+            _TOOL_REGISTRY
+        )
+        if vlm_tools:
+            self.tool_loader.register_bundle(
+                ToolBundle(
+                    name="vlm",
+                    tools=frozenset(vlm_tools),
+                    policy=ActivationPolicy.KEYWORD,
+                    keywords=frozenset(
+                        {
+                            r"image|photo|picture|screenshot|jpg|png|gif|visual",
+                            r"what.*see|describe.*image|look.*at",
+                        }
+                    ),
+                )
+            )
+
+        # ── sd: image generation (only if registered) ───────────────────
+        sd_tools = {
+            "generate_image",
+            "list_sd_models",
+            "get_generation_history",
+        } & set(_TOOL_REGISTRY)
+        if sd_tools:
+            self.tool_loader.register_bundle(
+                ToolBundle(
+                    name="sd",
+                    tools=frozenset(sd_tools),
+                    policy=ActivationPolicy.KEYWORD,
+                    keywords=frozenset(
+                        {
+                            r"generate.*image|create.*image|draw|stable.?diffusion|sdxl",
+                            r"art|illustration|render|picture.*of",
+                        }
+                    ),
+                )
+            )
+
+        # ── mcp_*: one bundle per MCP server ────────────────────────────
+        # MCP tools are prefixed as mcp_<server>_<tool>.  Group by server.
+        mcp_tools_by_server: Dict[str, set] = {}
+        for tool_name in _TOOL_REGISTRY:
+            if tool_name.startswith("mcp_"):
+                parts = tool_name.split("_", 2)  # mcp, server, rest
+                if len(parts) >= 3:
+                    server = parts[1]
+                    mcp_tools_by_server.setdefault(server, set()).add(tool_name)
+
+        for server, tools in mcp_tools_by_server.items():
+            self.tool_loader.register_bundle(
+                ToolBundle(
+                    name=f"mcp_{server}",
+                    tools=frozenset(tools),
+                    policy=ActivationPolicy.SESSION,
+                )
+            )
+
+        # Log the bundle configuration
+        total = len(_TOOL_REGISTRY)
+        bundled = sum(len(b.tools) for b in self.tool_loader._bundles.values())
+        logger.info(
+            "ToolLoader configured: %d bundles, %d/%d tools bundled",
+            len(self.tool_loader._bundles),
+            bundled,
+            total,
         )
 
     def _index_documents(self, documents: List[str]) -> None:
