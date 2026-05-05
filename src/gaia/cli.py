@@ -2235,7 +2235,7 @@ Examples:
                         for x in args.allowed_users.split(",")
                         if x.strip()
                     )
-                except Exception:
+                except ValueError:
                     print(
                         "Invalid --allowed-users format; expected comma-separated integers",
                         file=sys.stderr,
@@ -2274,7 +2274,7 @@ Examples:
             except PermissionError:
                 print("Permission denied when attempting to stop process. Try sudo.")
                 sys.exit(1)
-            except Exception as e:
+            except OSError as e:
                 print(f"Failed to stop Telegram adapter: {e}")
                 sys.exit(1)
             return
