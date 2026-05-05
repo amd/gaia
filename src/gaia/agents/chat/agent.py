@@ -42,7 +42,7 @@ class ChatAgentConfig:
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None
-    model_id: Optional[str] = None  # None = use default Qwen3.5-35B-A3B
+    model_id: Optional[str] = None  # None = use default model (Gemma)
 
     # Execution settings
     max_steps: int = 10
@@ -136,7 +136,7 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use default model configured by the Lemonade client when not provided
+        # Use the configured default model (Gemma) when no explicit model is set
         effective_model_id = config.model_id or DEFAULT_MODEL_NAME
         # ToolLoader will be configured later in _setup_tool_bundles(); define
         # attribute here to satisfy linters (avoid attribute-defined-outside-init).
