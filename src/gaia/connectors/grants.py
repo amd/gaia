@@ -137,8 +137,10 @@ def _save_grants_locked(data: Dict[str, Dict[str, List[str]]]) -> None:
         # os.replace is atomic on POSIX and best-effort atomic on Windows
         # (MoveFileEx with MOVEFILE_REPLACE_EXISTING).
         os.replace(tmp_path, path)
-    except Exception:
-        # Clean up the tempfile on any failure path so we don't leak.
+    except (OSError, TypeError):
+        # Clean up the tempfile on expected failure paths (I/O or JSON
+        # serialization errors) so we don't leak temporary files, then
+        # re-raise the original exception for the caller to handle.
         try:
             os.unlink(tmp_path)
         except OSError:

@@ -8,6 +8,7 @@ Lightweight module with no heavy dependencies — safe to import from both
 """
 
 import sys
+import logging
 
 # ── Supported device fingerprints ─────────────────────────────────────────
 # Strix Halo processors contain "Ryzen AI Max" (iGPU/HBM, unified memory).
@@ -47,15 +48,18 @@ def get_processor_name() -> str:
             ) as key:
                 name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
             return name.strip()
-        except Exception:
-            pass
+        except (ImportError, OSError) as e:
+            logging.getLogger(__name__).debug(
+                "Failed to read processor name from registry: %s", e
+            )
 
     # Linux/macOS fallback
     try:
         import platform
 
         return platform.processor()
-    except Exception:
+    except Exception as e:
+        logging.getLogger(__name__).debug("platform.processor() failed: %s", e)
         return ""
 
 
@@ -106,8 +110,8 @@ def get_gpu_info() -> list[tuple[str, float]]:
                             pass
                 except OSError:
                     break
-    except Exception:
-        pass
+    except Exception as e:
+        logging.getLogger(__name__).debug("get_gpu_info failed: %s", e)
 
     return results
 

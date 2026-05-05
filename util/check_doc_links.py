@@ -95,7 +95,8 @@ def extract_links(filepath: Path) -> List[Tuple[int, str]]:
     links = []
     try:
         content = filepath.read_text(encoding="utf-8", errors="replace")
-    except Exception:
+    except (OSError, UnicodeDecodeError):
+        # File IO or decoding error — skip this file
         return links
 
     in_code_block = False
@@ -120,7 +121,7 @@ def extract_links(filepath: Path) -> List[Tuple[int, str]]:
                 links.append((i, url))
 
         # Bare URLs (only if not already captured)
-        existing_urls = {u for _, u in links if _== i}  # noqa: E741
+        existing_urls = {u for ln, u in links if ln == i}
         for match in BARE_URL_RE.finditer(line):
             url = match.group(0).strip().rstrip(".,;:)")
             if url not in existing_urls:
@@ -222,7 +223,7 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
                 if e2.code == 403:
                     return "warning", f"HTTP {e2.code} (may require auth)"
                 return "broken", f"HTTP {e2.code}"
-            except Exception as e2:
+            except (urllib.error.URLError, TimeoutError) as e2:
                 return "broken", str(e2)
         if e.code == 429:
             return "warning", "HTTP 429 (rate limited)"
@@ -252,7 +253,8 @@ def load_docs_json_pages(repo_root: str) -> Set[str]:
     try:
         data = json.loads(docs_json.read_text(encoding="utf-8"))
         _collect_pages(data, pages)
-    except Exception:
+    except (json.JSONDecodeError, OSError):
+        # Malformed docs.json or IO error — return empty set
         pass
     return pages
 

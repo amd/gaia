@@ -189,7 +189,8 @@ class StdioTransport(MCPTransport):
             stderr = self._process.stderr.read()
             if stderr:
                 return stderr.strip()[-2000:]
-        except Exception:
+        except OSError:
+            # Could not read stderr (pipe closed) — return empty string
             pass
         return ""
 

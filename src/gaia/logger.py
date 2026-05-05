@@ -29,9 +29,11 @@ def configure_console_encoding():
             except (subprocess.SubprocessError, OSError, FileNotFoundError):
                 pass  # Ignore if chcp command fails
 
-        except Exception:
-            # If configuration fails, fall back to original streams
-            pass
+        except Exception as e:
+            # If configuration fails, log and fall back to original streams
+            logging.getLogger(__name__).debug(
+                "configure_console_encoding failed: %s", e
+            )
 
 
 class GaiaLogger:
@@ -108,7 +110,8 @@ class GaiaLogger:
                 import tempfile
 
                 fallback_candidates.append(Path(tempfile.gettempdir()) / "gaia.log")
-            except Exception:
+            except ImportError:
+                # tempfile should be available in stdlib; if not, skip
                 pass
 
             print(

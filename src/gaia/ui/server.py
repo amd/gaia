@@ -229,11 +229,13 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
             LemonadeManager.ensure_ready(
                 quiet=True,
-                min_context_size=0,  # Only check reachability — don't trigger model reloads
+                # Only check reachability — don't trigger model reloads
+                min_context_size=0,
             )
 
         def _import_modules():
-            """Pre-import heavy pure-library modules so first-message imports are cached.
+            """Pre-import heavy pure-library modules so first-message imports
+            are cached.
 
             ChatAgent/RAGSDK/MCPClientManager are intentionally excluded: their
             import trees pull in gaia.apps.* modules that instantiate AgentSDK
@@ -277,8 +279,11 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                         all_models2 = resp2.json().get("all_models_loaded", [])
                         if any(m.get("type") in ("llm", "vlm") for m in all_models2):
                             return
-                except Exception:
-                    pass  # proceed with load attempt
+                except httpx.RequestError:
+                    # Transient network error when checking health; proceed
+                    # with the load attempt and let LemonadeClient handle
+                    # failures loudly if the model cannot be loaded.
+                    pass
 
                 from gaia.ui.routers.system import _DEFAULT_MODEL_NAME
 
@@ -359,7 +364,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             "http://localhost:5173",
             "http://127.0.0.1:5173",
         ],
-        allow_origin_regex=r"https://[a-zA-Z0-9-]+\.(ngrok-free\.app|use\.devtunnels\.ms)",
+        allow_origin_regex=(
+            r"https://[a-zA-Z0-9-]+\."
+            r"(ngrok-free\.app|use\.devtunnels\.ms)"
+        ),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -5,6 +5,7 @@ import logging
 import os
 import subprocess
 from importlib.metadata import version as get_package_version_metadata
+from importlib.metadata import PackageNotFoundError
 
 __version__ = "0.17.6"
 
@@ -20,8 +21,11 @@ def get_package_version() -> str:
     """
     try:
         return get_package_version_metadata("amd-gaia")
+    except PackageNotFoundError:
+        # Not installed in editable mode / package not found
+        return ""
     except Exception as e:
-        logging.warning(f"Failed to get package version: {e}")
+        logging.warning("Failed to get package version: %s", e)
         return ""
 
 
@@ -42,8 +46,11 @@ def get_git_hash(hash_length: int = 8) -> str:
             text=True,
         ).strip()
         return git_hash[:hash_length]
-    except Exception:
-        logging.warning("Failed to get Git hash")
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        logging.warning("Failed to get Git hash: %s", e)
+        return ""
+    except Exception as e:
+        logging.warning("Unexpected error getting Git hash: %s", e)
         return ""
 
 
@@ -81,7 +88,7 @@ def write_version_files() -> None:
         print(
             "Version files created successfully: version.txt and installer/version.nsh"
         )
-    except Exception as e:
+    except OSError as e:
         print(f"Failed to write version files: {str(e)}")
         raise
 

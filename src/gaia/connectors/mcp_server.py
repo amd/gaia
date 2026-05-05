@@ -60,7 +60,8 @@ def _write_mcp_servers_json(servers: Dict[str, Any]) -> None:
             json.dump({"mcpServers": servers}, f, indent=2)
             f.write("\n")
         os.replace(tmp, path)
-    except Exception:
+    except (OSError, TypeError):
+        # Cleanup the tempfile on I/O or serialization errors, then re-raise
         try:
             os.unlink(tmp)
         except OSError:

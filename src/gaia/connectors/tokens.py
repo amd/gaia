@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import httpx
+import json
 
 from gaia.connectors.errors import (
     AuthRequiredError,
@@ -161,7 +162,7 @@ async def _refresh_token(
     if response.status_code == 400:
         try:
             payload = response.json()
-        except Exception:
+        except (ValueError, json.JSONDecodeError):
             payload = {}
         if payload.get("error") == "invalid_grant":
             # Clear the stored entry — the refresh token is no longer

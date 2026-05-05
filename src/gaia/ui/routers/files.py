@@ -89,11 +89,11 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"File type '{ext}' is not allowed. "
-                f"Supported types: images (png, jpg, jpeg, gif, webp, bmp, svg) "
-                f"and documents (pdf, txt, md, csv, json, xlsx, html, code files, etc.). "
-                f"Microsoft Word/PowerPoint and legacy .xls are not yet supported — "
-                f"save as PDF or .xlsx."
+                f"File type '{ext}' is not allowed. Supported types: images "
+                f"(png, jpg, jpeg, gif, webp, bmp, svg) and documents "
+                f"(pdf, txt, md, csv, json, xlsx, html, code files, etc.). "
+                f"Microsoft Word/PowerPoint and legacy .xls are not yet "
+                f"supported — save as PDF or .xlsx."
             ),
         )
 
@@ -599,8 +599,8 @@ async def preview_file(path: str, lines: int = 50):
                                 result["columns"] = header
                                 row_count = sum(1 for _ in reader)
                                 result["row_count"] = row_count
-                    except Exception:
-                        pass
+                    except (csv_mod.Error, OSError) as e:
+                        logger.debug("CSV preview skipped for %s: %s", resolved, e)
                 break
             except (UnicodeDecodeError, UnicodeError):
                 continue
@@ -647,9 +647,10 @@ async def serve_local_image(path: str):
 
     ext = resolved.suffix.lower()
     if ext not in IMAGE_EXTENSIONS:
+        supported = ", ".join(sorted(IMAGE_EXTENSIONS))
         raise HTTPException(
             status_code=400,
-            detail=f"Not an image file (supported: {', '.join(sorted(IMAGE_EXTENSIONS))})",
+            detail=f"Not an image file (supported: {supported})",
         )
 
     media_types = {

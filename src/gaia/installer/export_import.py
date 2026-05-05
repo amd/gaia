@@ -187,7 +187,7 @@ def export_custom_agents(output_path: Path) -> ExportResult:
                     arcname = f"{agent_dir.name}/{file_path.relative_to(agent_dir).as_posix()}"
                     zf.write(file_path, arcname=arcname)
         os.replace(tmp_path, output_path)
-    except Exception:
+    except OSError:
         if tmp_path.exists():
             try:
                 tmp_path.unlink()
@@ -395,7 +395,7 @@ def import_agent_bundle(bundle_path: Path) -> ImportResult:
                     os.replace(final_dir, backup_dir)
                 try:
                     os.replace(staged_dir, final_dir)
-                except Exception as exc:
+                except OSError as exc:
                     # Attempt rollback.
                     if existed and (staging_root / f".backup-{agent_id}").exists():
                         try:

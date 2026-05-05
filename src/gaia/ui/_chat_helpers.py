@@ -68,9 +68,9 @@ def get_agent_registry():
 # requests, and the per-session session_lock prevents concurrent turns within
 # the same session.  Together they guarantee the cache dict and each agent are
 # accessed by at most one thread at a time — no per-entry locking needed.
-_agent_cache: dict[str, dict] = (
-    {}
-)  # session_id -> {"agent": Agent, "model_id": str, "agent_type": str, "document_ids": list}
+_agent_cache: dict[str, dict] = {}
+# session_id -> {"agent": Agent, "model_id": str, "agent_type": str,
+#                 "document_ids": list}
 _agent_cache_lock = threading.Lock()
 _MAX_CACHED_AGENTS = 10
 
@@ -106,7 +106,8 @@ def _classify_chat_exception(exc: BaseException):
     streaming/non-streaming paths to decide whether to auto-retry and
     what user-facing message to surface.
     """
-    from gaia.llm.providers.lemonade import (  # local import to avoid cycle at import time
+    # local import to avoid cycle at import time
+    from gaia.llm.providers.lemonade import (
         LemonadeContextOverflowError,
         LemonadeError,
         LemonadeModelNotLoadedError,
@@ -264,7 +265,7 @@ async def _generate_session_title(
             # Strip stock prefixes models sometimes emit anyway.
             for prefix in ("title:", "tab:", "summary:"):
                 if title.lower().startswith(prefix):
-                    title = title[len(prefix) :].strip()
+                    title = title[len(prefix):].strip()
             return title[:64] if title else None
     except Exception as exc:  # pylint: disable=broad-except
         logger.debug("Auto-title LLM call failed: %s", exc)
@@ -403,7 +404,9 @@ def _canonical_agent_type(agent_type: str) -> str:
 
 
 def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
-    """Return the cached agent for *session_id* if model and agent_type match, else None.
+    """Return the cached agent for *session_id* if model and agent_type match.
+
+    Otherwise return None.
 
     Evicts the entry when the model or agent type has changed. Legacy
     agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``) are normalised
@@ -804,7 +807,10 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                 {
                     "type": "status",
                     "status": "warning",
-                    "message": "Could not auto-load LLM. Check that Lemonade is running.",
+                    "message": (
+                        "Could not auto-load LLM. "
+                        "Check that Lemonade is running."
+                    ),
                 }
             )
 
@@ -861,9 +867,9 @@ async def _get_chat_response(
         registry = _agent_registry
         if agent_type != "chat" and registry and not registry.get(agent_type):
             logger.warning(
-                "chat: Session %s requested unknown agent_type '%s', falling back to chat",
-                session_id[:8],
+                "chat: Unknown agent_type '%s' for session %s; falling back",
                 agent_type,
+                session_id[:8],
             )
             agent_type = "chat"
 
@@ -941,12 +947,12 @@ async def _get_chat_response(
                 # Fall back to chat agent rather than permanently breaking the session.
                 if registry is None:
                     logger.warning(
-                        "chat: Agent registry not initialized; falling back to chat for session %s",
+                        "chat: Registry not initialized; falling back (session %s)",
                         session_id[:8],
                     )
                 else:
                     logger.warning(
-                        "chat: Unknown agent_type '%s' for session %s; falling back to chat",
+                        "chat: Unknown agent_type '%s' for %s; falling back",
                         agent_type,
                         session_id[:8],
                     )
@@ -1090,7 +1096,10 @@ async def _get_chat_response(
         )
     except asyncio.TimeoutError:
         logger.error("Chat response timed out after 600 seconds")
-        return "I took too long thinking about that one. Try breaking your question into simpler parts and I'll do my best."
+        return (
+            "I took too long. Try breaking your question into simpler parts "
+            "and I will do my best."
+        )
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
         # Surface the typed Lemonade error's friendly user_message
@@ -1138,10 +1147,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         # Chromium's fetch ReadableStream holds chunks until the buffer fills or
         # the stream closes.  Without this, the browser sees nothing for the
         # entire duration and then gets a batch-dump of all events at the end.
-        yield (
-            'data: {"type":"status","status":"info","message":"Connecting to LLM..."}\n\n'
-            ": " + "x" * 512 + "\n\n"
+        msg = json.dumps(
+            {"type": "status", "status": "info", "message": "Connecting to LLM..."}
         )
+        yield f"data: {msg}\n\n" + ": " + "x" * 512 + "\n\n"
 
         # Build conversation history
         messages = db.get_messages(request.session_id, limit=20)
@@ -1187,9 +1196,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         registry = _agent_registry
         if agent_type != "chat" and registry and not registry.get(agent_type):
             logger.warning(
-                "chat: Session %s requested unknown agent_type '%s', falling back to chat (streaming)",
-                session_id[:8],
+                "chat: Unknown agent_type '%s' for %s; falling back (streaming)",
                 agent_type,
+                session_id[:8],
             )
             agent_type = "chat"
 
@@ -1257,7 +1266,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         )
 
                     logger.info(
-                        "chat: Agent cache hit for session %s (agent_type=%s) setup=%.3fs",
+                        "chat: Agent cache hit for %s (agent=%s) setup=%.3fs",
                         session_id[:8],
                         agent_type,
                         _time.monotonic() - t0,
@@ -1372,12 +1381,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         # state). Fall back to chat to avoid breaking the session.
                         if registry is None:
                             logger.warning(
-                                "chat: Agent registry not initialized; falling back to chat for session %s",
+                                "chat: Registry uninitialized; fallback (%s)",
                                 session_id[:8],
                             )
                         else:
                             logger.warning(
-                                "chat: Unknown agent_type '%s' for session %s; falling back to chat",
+                                "chat: Unknown agent_type '%s' for %s; falling back",
                                 agent_type,
                                 session_id[:8],
                             )
@@ -1439,7 +1448,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         )
                         agent.console = sse_handler
                         logger.info(
-                            "chat: Invoking agent %s for session %s, model=%s took=%.3fs",
+                            "chat: Invoked agent %s for %s model=%s took=%.3fs",
                             agent_type,
                             session_id[:8],
                             _effective_model(agent, model_id),
@@ -1448,8 +1457,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
                         if sse_handler.cancelled.is_set():
                             return
-
-                        # Index session-attached RAG docs (single pass, with SSE progress).
+                        # Index session RAG docs (single-pass)
                         if rag_file_paths and hasattr(agent, "rag") and agent.rag:
                             _index_rag_with_progress(agent, rag_file_paths, sse_handler)
 
@@ -1509,9 +1517,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     return
 
                 # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
-                # omitted, the agent's __init__ set model_id via kwargs.setdefault — a value
-                # invisible pre-construction. Using agent.model_id preserves the existing
-                # 100-900s silent-hang protection for all code paths including setdefault.
+                # omitted, the agent's __init__ set model_id via
+                # ``kwargs.setdefault`` — a value invisible pre-construction.
+                # Using `agent.model_id` preserves the existing 100–900s
+                # silent-hang protection for all code paths including
+                # `setdefault`.
                 _maybe_load_expected_model(
                     _effective_model(agent, model_id), sse_handler
                 )
@@ -1799,7 +1809,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         if not full_response and result_holder["answer"]:
             full_response = result_holder["answer"]
             # Send as answer event since it wasn't streamed
-            yield f"data: {json.dumps({'type': 'answer', 'content': full_response})}\n\n"
+            answer_data = json.dumps({"type": "answer", "content": full_response})
+            yield f"data: {answer_data}\n\n"
 
         # Clean LLM output artifacts before DB storage.
         # Apply all canonical patterns so stored content is always clean
@@ -1811,7 +1822,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         # leaving an empty string.  Extracting the answer first prevents that.
         if full_response:
             full_response = _TOOL_CALL_JSON_SUB_RE.sub("", full_response)
-            # Extract answer from {"thought":..., "answer":...} before thought stripping.
+            # Extract answer from {"thought":..., "answer":...} before
+            # thought stripping.
             full_response = _clean_answer_json(full_response)
             full_response = _THOUGHT_JSON_SUB_RE.sub("", full_response)
             full_response = _RAG_RESULT_JSON_SUB_RE.sub("", full_response)
@@ -1819,9 +1831,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             # embedded after plain text — strips the duplicate JSON wrapper.
             full_response = _ANSWER_JSON_SUB_RE.sub("", full_response)
             full_response = _fix_double_escaped(full_response)
-            # Strip trailing JSON artifact sequences (3+ closing braces = nested tool result leak)
+            # Strip trailing JSON artifact sequences (3+ closing braces = nested
+            # tool result leak)
             full_response = _re.sub(r"\}{3,}\s*$", "", full_response).strip()
-            # Strip trailing code-fence artifacts (e.g. "}\n```" left after JSON extraction)
+            # Strip trailing code-fence artifacts (e.g. "}\n```" left after JSON
+            # extraction)
             full_response = _re.sub(r"[\n\s]*`{3,}\s*$", "", full_response).strip()
             full_response = full_response.strip()
 
@@ -1840,7 +1854,13 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             # Fetch last inference stats from Lemonade (non-blocking)
             inference_stats = None
             try:
-                import httpx
+                try:
+                    import httpx
+                except ImportError:
+                    httpx = None
+
+                if httpx is None:
+                    raise ImportError("httpx not installed")
 
                 base_url = os.environ.get(
                     "LEMONADE_BASE_URL", "http://localhost:13305/api/v1"
@@ -1859,8 +1879,20 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             "input_tokens": stats_data.get("input_tokens", 0),
                             "output_tokens": stats_data.get("output_tokens", 0),
                         }
-            except Exception:
+            except (ImportError, ValueError):
+                # Missing httpx or invalid JSON/response — skip stats quietly
                 pass
+            except Exception as e:
+                # Network-level/transient errors from httpx
+                try:
+                    import httpx as _httpx
+
+                    if isinstance(e, getattr(_httpx, "RequestError", (Exception,))):
+                        pass
+                    else:
+                        logger.debug("Unexpected error fetching inference stats: %s", e)
+                except Exception:
+                    logger.debug("Unexpected error fetching inference stats: %s", e)
 
             msg_id = db.add_message(
                 request.session_id,
@@ -1906,9 +1938,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
         else:
-            # Log details to help diagnose: cold start, empty LLM response, filtered artifacts
+            # Log details to help diagnose: cold start, empty LLM response, filtered
+            # artifacts
             logger.warning(
-                "Empty response for session %s — result_holder answer=%r error=%r captured_steps=%d",
+                "Empty response for session %s — answer=%r error=%r steps=%d",
                 session_id[:8],
                 (
                     result_holder.get("answer", "")[:80]
@@ -1918,7 +1951,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 result_holder.get("error"),
                 len(captured_steps),
             )
-            error_msg = "I wasn't able to generate a response. Please make sure Lemonade Server is running and try again."
+            error_msg = (
+                "I couldn't generate a response. Ensure Lemonade Server is "
+                "running and try again."
+            )
             db.add_message(request.session_id, "assistant", error_msg)
             error_data = json.dumps({"type": "error", "content": error_msg})
             yield f"data: {error_data}\n\n"
@@ -1926,7 +1962,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
         _active_sse_handlers.pop(session_id, None)
-        error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
+        error_msg = (
+            "Sorry, something went wrong. Please try sending your message "
+            "again."
+        )
         try:
             db.add_message(request.session_id, "assistant", error_msg)
         except Exception:

@@ -415,8 +415,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
             try:
                 _parsed = urlparse(base_url)
                 status.lemonade_url = f"{_parsed.scheme}://{_parsed.netloc}"
-            except Exception:
-                pass  # Keep the default "http://localhost:13305"
+            except Exception as e:
+                logger.debug("Failed to parse Lemonade base URL %s: %s", base_url, e)
 
             # Use /health endpoint to get the actually loaded model
             # (not /models which returns the full catalog of available models)

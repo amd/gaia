@@ -187,7 +187,7 @@ class DocumentMonitor:
                 new_hash = await loop.run_in_executor(
                     None, _compute_file_hash, Path(filepath)
                 )
-            except Exception as e:
+            except OSError as e:
                 logger.warning("Failed to hash file %s: %s", filepath, e)
                 continue
 

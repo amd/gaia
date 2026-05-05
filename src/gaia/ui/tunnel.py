@@ -170,11 +170,13 @@ def _check_ngrok_authtoken_configured() -> bool:
                 for line in content.splitlines():
                     s = line.strip()
                     if s.startswith("authtoken:"):
-                        value = s[len("authtoken:") :].strip().strip("'\"")
+                        # slice without extra spaces to satisfy flake8
+                        value = s[len("authtoken:"):].strip().strip("'\"")
                         if value:
                             logger.debug("ngrok authtoken found at %s", p)
                             return True
-        except Exception as e:
+                            return True
+        except OSError as e:
             logger.debug("ngrok config probe failed for %s: %s", p, e)
             continue
     return False
@@ -544,8 +546,8 @@ class TunnelManager:
                 )
             # Brief pause to let the process fully die
             await asyncio.sleep(0.5)
-        except Exception:
-            pass  # Ignore errors - there may be no stale process
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.debug("Error killing stale ngrok processes: %s", e)
 
     async def _fetch_public_ip(self) -> None:
         """Fetch the server's public IP (for ngrok interstitial password)."""
@@ -557,9 +559,24 @@ class TunnelManager:
                 if resp.status_code == 200:
                     self._public_ip = resp.text.strip()
                     logger.info("Public IP: %s", self._public_ip)
-        except Exception as e:
-            logger.debug("Could not fetch public IP: %s", e)
+        except ImportError:
+            logger.debug("httpx not available, skipping public IP fetch")
             self._public_ip = None
+        except Exception as e:
+            # Narrow to httpx.RequestError and OSError where possible.
+            try:
+                import httpx
+
+                exc_types = (httpx.RequestError, OSError)
+            except Exception:
+                exc_types = (OSError,)
+            if isinstance(e, exc_types):
+                logger.debug("Could not fetch public IP: %s", e)
+                self._public_ip = None
+            else:
+                # Unexpected exception - log at debug but continue
+                logger.debug("Unexpected error fetching public IP: %s", e)
+                self._public_ip = None
 
     def _drain_ngrok_output(self) -> str:
         """Best-effort drain of ngrok's stdout+stderr for error reporting.
@@ -640,8 +657,11 @@ class TunnelManager:
                                 if url:
                                     return url
                         # If no HTTPS tunnel found yet, keep polling
+            except ImportError:
+                # httpx not installed -- can't query local API yet
+                pass
             except Exception:
-                # ngrok API not ready yet, keep polling
+                # ngrok API not ready yet or transient request error, keep polling
                 pass
 
         # Timed out. ngrok is still running but didn't open an HTTPS tunnel.
@@ -665,7 +685,7 @@ class TunnelManager:
                     "ngrok timed out (%d chars of output captured)",
                     len(stderr or ""),
                 )
-        except Exception as e:
+        except (OSError, subprocess.SubprocessError) as e:
             logger.debug("Error terminating timed-out ngrok: %s", e)
 
         if stderr:

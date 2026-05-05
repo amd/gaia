@@ -151,7 +151,7 @@ def message_to_response(msg: dict) -> MessageResponse:
             if isinstance(raw_sources, str):
                 raw_sources = json.loads(raw_sources)
             sources = [SourceInfo(**s) for s in raw_sources]
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             sources = None
 
     agent_steps = None
@@ -161,7 +161,7 @@ def message_to_response(msg: dict) -> MessageResponse:
             if isinstance(raw_steps, str):
                 raw_steps = json.loads(raw_steps)
             agent_steps = [AgentStepResponse(**s) for s in raw_steps]
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             agent_steps = None
 
     # Map inference_stats column to stats response field
@@ -174,7 +174,7 @@ def message_to_response(msg: dict) -> MessageResponse:
             if isinstance(raw_stats, str):
                 raw_stats = json.loads(raw_stats)
             stats = InferenceStatsResponse(**raw_stats)
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             stats = None
 
     return MessageResponse(

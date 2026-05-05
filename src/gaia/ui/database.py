@@ -87,8 +87,9 @@ class ChatDatabase:
         """Initialize database connection.
 
         Args:
-            db_path: Path to SQLite database file. Defaults to ~/.gaia/chat/gaia_chat.db.
-                     Use ":memory:" for in-memory database (testing).
+            db_path: Path to SQLite database file. Defaults to
+                ~/.gaia/chat/gaia_chat.db. Use ":memory:" for in-memory
+                database (testing).
         """
         if db_path is None:
             db_path = str(DEFAULT_DB_PATH)
@@ -123,7 +124,8 @@ class ChatDatabase:
         """Apply incremental schema migrations for existing databases."""
         # Ensure settings table exists
         self._ensure_settings_table()
-        # Add agent_steps column if it doesn't exist (added for observability persistence)
+        # Add agent_steps column if it doesn't exist
+        # (added for observability persistence)
         try:
             cols = [
                 row[1]
@@ -133,7 +135,7 @@ class ChatDatabase:
                 self._conn.execute("ALTER TABLE messages ADD COLUMN agent_steps TEXT")
                 self._conn.commit()
                 logger.info("Migrated messages table: added agent_steps column")
-        except Exception as e:
+        except sqlite3.DatabaseError as e:
             logger.debug("Migration check for agent_steps: %s", e)
 
         # Add inference_stats column for persisting LLM performance metrics
@@ -148,7 +150,7 @@ class ChatDatabase:
                 )
                 self._conn.commit()
                 logger.info("Migrated messages table: added inference_stats column")
-        except Exception as e:
+        except sqlite3.DatabaseError as e:
             logger.debug("Migration check for inference_stats: %s", e)
 
         # Add indexing_status column for background indexing progress
@@ -159,11 +161,14 @@ class ChatDatabase:
             ]
             if "indexing_status" not in doc_cols:
                 self._conn.execute(
-                    "ALTER TABLE documents ADD COLUMN indexing_status TEXT DEFAULT 'complete'"
+                    (
+                        "ALTER TABLE documents ADD COLUMN indexing_status TEXT "
+                        "DEFAULT 'complete'"
+                    )
                 )
                 self._conn.commit()
                 logger.info("Migrated documents table: added indexing_status column")
-        except Exception as e:
+        except sqlite3.DatabaseError as e:
             logger.debug("Migration check for indexing_status: %s", e)
 
         # Add file_mtime column for tracking file modification times
@@ -176,7 +181,7 @@ class ChatDatabase:
                 self._conn.execute("ALTER TABLE documents ADD COLUMN file_mtime REAL")
                 self._conn.commit()
                 logger.info("Migrated documents table: added file_mtime column")
-        except Exception as e:
+        except sqlite3.DatabaseError as e:
             logger.debug("Migration check for file_mtime: %s", e)
 
         # Add agent_type column to sessions for agent selection
@@ -195,7 +200,7 @@ class ChatDatabase:
                 )
                 self._conn.commit()
                 logger.info("Migrated sessions table: added agent_type column")
-        except Exception as e:
+        except sqlite3.DatabaseError as e:
             logger.debug("Migration check for agent_type: %s", e)
 
     def close(self):
@@ -240,8 +245,10 @@ class ChatDatabase:
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, agent_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "INSERT INTO sessions (id, title, created_at, updated_at, model, "
+                    "system_prompt, agent_type) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                ),
                 (session_id, title, now, now, model, system_prompt, agent_type),
             )
 
@@ -249,9 +256,10 @@ class ChatDatabase:
             if document_ids:
                 for doc_id in document_ids:
                     self._conn.execute(
-                        """INSERT OR IGNORE INTO session_documents
-                           (session_id, document_id, attached_at)
-                           VALUES (?, ?, ?)""",
+                        (
+                            "INSERT OR IGNORE INTO session_documents "
+                            "(session_id, document_id, attached_at) VALUES (?, ?, ?)"
+                        ),
                         (session_id, doc_id, now),
                     )
 
@@ -261,9 +269,11 @@ class ChatDatabase:
         """Get session by ID with message count and document IDs."""
         with self._lock:
             row = self._conn.execute(
-                """SELECT s.*,
-                          (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as message_count
-                   FROM sessions s WHERE s.id = ?""",
+                (
+                    "SELECT s.*, (SELECT COUNT(*) FROM messages "
+                    "WHERE session_id = s.id) as message_count "
+                    "FROM sessions s WHERE s.id = ?"
+                ),
                 (session_id,),
             ).fetchone()
 
@@ -285,11 +295,12 @@ class ChatDatabase:
         """List sessions ordered by most recently updated."""
         with self._lock:
             rows = self._conn.execute(
-                """SELECT s.*,
-                          (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as message_count
-                   FROM sessions s
-                   ORDER BY s.updated_at DESC
-                   LIMIT ? OFFSET ?""",
+                (
+                    "SELECT s.*, (SELECT COUNT(*) FROM messages "
+                    "WHERE session_id = s.id) as message_count "
+                    "FROM sessions s "
+                    "ORDER BY s.updated_at DESC LIMIT ? OFFSET ?"
+                ),
                 (limit, offset),
             ).fetchall()
 
@@ -552,7 +563,10 @@ class ChatDatabase:
                 # count is higher, e.g. fixing a previous 0-chunk bug)
                 new_chunk_count = max(chunk_count, doc.get("chunk_count", 0))
                 self._conn.execute(
-                    "UPDATE documents SET last_accessed_at = ?, chunk_count = ?, file_mtime = ? WHERE id = ?",
+                    (
+                        "UPDATE documents SET last_accessed_at = ?, chunk_count = ?, "
+                        "file_mtime = ? WHERE id = ?"
+                    ),
                     (now, new_chunk_count, file_mtime, doc["id"]),
                 )
                 self._conn.commit()
@@ -692,7 +706,8 @@ class ChatDatabase:
 
         Args:
             doc_id: Document ID.
-            status: New status ('pending', 'indexing', 'complete', 'failed', 'cancelled').
+            status: New status (one of 'pending', 'indexing', 'complete',
+                'failed', 'cancelled').
             chunk_count: If provided, also update the chunk count.
 
         Returns:

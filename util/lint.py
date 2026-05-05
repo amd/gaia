@@ -12,8 +12,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
-
+ 
 
 @dataclass
 class CheckResult:
@@ -507,7 +506,8 @@ def count_python_files() -> tuple[int, int]:
                 total_files += 1
                 try:
                     total_lines += len(py_file.read_text(encoding="utf-8").splitlines())
-                except Exception:
+                except (OSError, UnicodeDecodeError):
+                    # Skip files that cannot be read due to IO/encoding errors
                     pass
 
     return total_files, total_lines

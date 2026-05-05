@@ -5,6 +5,7 @@
 
 import tempfile
 from contextlib import contextmanager
+import logging
 from pathlib import Path
 from typing import List, Optional, Type, TypeVar
 
@@ -245,18 +246,25 @@ class AgentTestContext:
             if hasattr(self.agent, "close"):
                 try:
                     self.agent.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logging.getLogger(__name__).debug(
+                        "Agent.close() raised during test teardown: %s", e
+                    )
             if hasattr(self.agent, "close_db"):
                 try:
                     self.agent.close_db()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logging.getLogger(__name__).debug(
+                        "Agent.close_db() raised during test teardown: %s", e
+                    )
             if hasattr(self.agent, "stop_all_watchers"):
                 try:
                     self.agent.stop_all_watchers()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logging.getLogger(__name__).debug(
+                        "Agent.stop_all_watchers() raised during test teardown: %s",
+                        e,
+                    )
 
         # Clean up temp directory
         if self._temp_dir_context is not None:

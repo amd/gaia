@@ -7,12 +7,9 @@
 GAIA MCP Bridge - HTTP Native Implementation
 No WebSockets, just clean HTTP + JSON-RPC for maximum compatibility
 """
-
 import io
 import json
-import os
 import shutil
-import sys
 import tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -21,18 +18,21 @@ from urllib.parse import urlparse
 
 from python_multipart.multipart import MultipartParser, parse_options_header
 
-# Add GAIA to path
-sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-)
+try:
+    from gaia.agents.blender.agent import BlenderAgent  # noqa: E402
+    from gaia.llm import create_client  # noqa: E402
+    from gaia.logger import get_logger  # noqa: E402
+except ImportError:
+    import sys
+    import os
 
-from gaia.agents.blender.agent import (  # pylint: disable=wrong-import-position
-    BlenderAgent,
-)
-from gaia.llm import create_client  # pylint: disable=wrong-import-position
-from gaia.logger import get_logger  # pylint: disable=wrong-import-position
+    sys.path.insert(
+        0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    )
 
-# pylint: enable=wrong-import-position
+    from gaia.agents.blender.agent import BlenderAgent  # noqa: E402
+    from gaia.llm import create_client  # noqa: E402
+    from gaia.logger import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -60,7 +60,8 @@ class MultipartCollector:
                     name = p.split("=", 1)[1].strip().strip('"')
                 elif pl.startswith("filename="):
                     filename = p.split("=", 1)[1].strip().strip('"')
-        except Exception:
+        except (IndexError, AttributeError, ValueError):
+            # Malformed content-disposition value — return None values.
             pass
         return name, filename
 
@@ -299,9 +300,8 @@ class GAIAMCPBridge:
             # Initialize Jira config discovery
             try:
                 config = agent_config["instance"].initialize()
-                logger.info(
-                    f"Jira initialized: {len(config.get('projects', []))} projects found"
-                )
+                projects = len(config.get("projects", []))
+                logger.info(f"Jira initialized: {projects} projects found")
             except Exception as e:
                 logger.warning(f"Jira config discovery failed: {e}")
 
@@ -385,7 +385,7 @@ class GAIAMCPBridge:
                 if isinstance(style_bytes, (bytes, bytearray))
                 else str(style_bytes)
             )
-        except Exception:
+        except (AttributeError, UnicodeDecodeError, TypeError):
             style = "brief"
         try:
             stream = str(
@@ -396,7 +396,7 @@ class GAIAMCPBridge:
                 )
                 or ""
             ).lower() in ["1", "true", "yes"]
-        except Exception:
+        except (AttributeError, UnicodeDecodeError, TypeError):
             stream = False
         # Honor Accept: text/event-stream if not explicitly set by field
         if not stream and accept_sse:
@@ -461,8 +461,8 @@ class GAIAMCPBridge:
                     "result": result,
                 }
         finally:
-            # Clean up temp file for non-streaming responses or on error
-            # For streaming responses, cleanup happens in the HTTP handler after streaming completes
+            # Clean up temp file for non-streaming responses or on error.
+            # For streaming responses, cleanup happens later in the HTTP handler.
             if tmpfile_path and not stream and os.path.exists(tmpfile_path):
                 try:
                     os.unlink(tmpfile_path)
@@ -600,7 +600,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             result = self.bridge.execute_tool("gaia.query", data)
             self.send_json(200 if result.get("success") else 500, result)
         elif parsed.path == "/summarize":
-            # Direct Summarize endpoint accept multipart/form-data (file upload) for browser clients
+            # Direct Summarize endpoint: accepts multipart/form-data
+            # (file upload) for browser clients
             accept_header = self.headers.get("Accept", "")
             if isinstance(data, dict):
                 data["accept_sse"] = "text/event-stream" in accept_header
@@ -793,7 +794,8 @@ def start_server(host="localhost", port=8765, base_url=None, verbose=False):
         '  Chat: curl -X POST http://localhost:8765/chat -d \'{"query":"Hello GAIA!"}\''
     )
     print(
-        '  Jira: curl -X POST http://localhost:8765/jira -d \'{"query":"show my issues"}\''
+        '  Jira: curl -X POST http://localhost:8765/jira -d '
+        "'{'\"query\":\"show my issues\"}'"
     )
     print('  n8n: HTTP Request → POST /chat → {"query": "..."}')
     print("  MCP: JSON-RPC to / with method: tools/call")

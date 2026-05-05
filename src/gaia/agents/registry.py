@@ -222,7 +222,10 @@ class AgentRegistry:
             AgentRegistration(
                 id="chat",
                 name="Chat Agent",
-                description="Full-featured document Q&A assistant with RAG, file tools, and MCP support",
+                description=(
+                    "Full-featured document Q&A assistant with RAG, "
+                    "file tools, and MCP support"
+                ),
                 source="builtin",
                 conversation_starters=[
                     "What can you help me with?",
@@ -744,7 +747,13 @@ class AgentRegistry:
             return []
 
         try:
-            import requests
+            try:
+                import requests
+            except ImportError:
+                requests = None
+
+            if requests is None:
+                raise ImportError("requests not installed")
 
             base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
             resp = requests.get(f"{base_url}/models", timeout=2)
@@ -752,8 +761,23 @@ class AgentRegistry:
                 data = resp.json()
                 self._lemonade_models = [m["id"] for m in data.get("data", [])]
                 return self._lemonade_models
-        except Exception:
-            pass
+        except ImportError:
+            # requests not available in this environment; treat as offline
+            logger.debug("requests not available, skipping model fetch")
+        except ValueError:
+            # JSON decode error or unexpected response body
+            logger.debug("Invalid JSON from Lemonade /models endpoint")
+        except Exception as e:
+            # Network / other transient errors
+            try:
+                import requests as _req
+
+                if isinstance(e, getattr(_req, "RequestException", ())):
+                    logger.debug("Network error fetching Lemonade models: %s", e)
+                else:
+                    logger.debug("Unexpected error fetching Lemonade models: %s", e)
+            except Exception:
+                logger.debug("Unexpected error fetching Lemonade models: %s", e)
 
         # Record failure timestamp; do NOT cache models so we retry after the interval.
         self._lemonade_models_last_fail = time.monotonic()
