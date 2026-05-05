@@ -137,6 +137,9 @@ class ChatAgent(
 
         # Use Qwen3.5-35B-A3B by default for better tool-calling
         effective_model_id = config.model_id or "Qwen3.5-35B-A3B-GGUF"
+        # ToolLoader will be configured later in _setup_tool_bundles(); define
+        # attribute here to satisfy linters (avoid attribute-defined-outside-init).
+        self.tool_loader = None
 
         # Debug logging for model selection
         logger.debug(
