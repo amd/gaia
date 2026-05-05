@@ -232,6 +232,23 @@ class ToolLoader:
             state.last_used_ts = 0.0
         self._tool_history.clear()
 
+    def force_activate(self, bundle_name: str) -> None:
+        """Force-activate a bundle by name.
+
+        This is the safe public API to mark a bundle as active for the
+        session. Callers should use this instead of touching ``_state``
+        directly to avoid encapsulation breaches.
+        """
+        now = time.time()
+        if bundle_name in self._state:
+            self._state[bundle_name].activated = True
+            self._state[bundle_name].last_used_ts = now
+            logger.debug("ToolLoader: force-activated bundle '%s'", bundle_name)
+        else:
+            logger.warning(
+                "ToolLoader.force_activate: unknown bundle '%s'", bundle_name
+            )
+
     # ── internals ────────────────────────────────────────────────────────
 
     def _keywords_match(self, keywords: FrozenSet[str], message: str) -> bool:

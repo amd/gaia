@@ -968,6 +968,14 @@ async def _get_chat_response(
                 )
                 agent = ChatAgent(config)
                 _store_agent(session_id, model_id, document_ids, agent, agent_type)
+                # Ensure per-session tool loader state is fresh when a new
+                # agent is created. Use public API to avoid touching internal
+                # attributes (see ToolLoader.reset_session()).
+                try:
+                    if hasattr(agent, "tool_loader") and agent.tool_loader:
+                        agent.tool_loader.reset_session()
+                except Exception as _exc:  # pylint: disable=broad-except
+                    logger.debug("tool_loader.reset_session failed: %s", _exc)
             else:
                 logger.info(
                     "chat: Creating new %s agent for session %s",
@@ -1013,6 +1021,12 @@ async def _get_chat_response(
                     agent,
                     agent_type,
                 )
+                # Reset per-session tool loader state for freshly created agents
+                try:
+                    if hasattr(agent, "tool_loader") and agent.tool_loader:
+                        agent.tool_loader.reset_session()
+                except Exception as _exc:  # pylint: disable=broad-except
+                    logger.debug("tool_loader.reset_session failed: %s", _exc)
 
         # Restore conversation history (limited to prevent context overflow).
         # Always re-inject from DB so the history is consistent with what was

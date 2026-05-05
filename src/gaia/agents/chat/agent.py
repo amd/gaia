@@ -1781,7 +1781,13 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
             and self.rag
             and getattr(self.rag, "indexed_files", None)
         ):
-            self.tool_loader._state["rag"].activated = True
+            # Use ToolLoader.force_activate to avoid direct _state mutation
+            try:
+                self.tool_loader.force_activate("rag")
+            except Exception as exc:
+                logger.warning(
+                    "ToolLoader.force_activate('rag') failed: %s", exc, exc_info=True
+                )
 
         # ── filesystem: file navigation and search ──────────────────────
         self.tool_loader.register_bundle(
@@ -1803,10 +1809,10 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
                 policy=ActivationPolicy.KEYWORD,
                 keywords=frozenset(
                     {
-                        r"file|folder|directory|path|find|search|browse|tree|ls\b|dir\b",
+                        r"\b(?:file|folder|directory|path|find|search|browse|tree|ls|dir)\b",
                         r"\.[a-z]{1,5}\b",  # file extensions like .py, .json
-                        r"[/\\]",  # path separators
-                        r"write|edit|save|create.*file|modify",
+                        r"\b[\w\-.]+/[\w./\\-]+\b",  # path-like patterns (avoid bare slashes)
+                        r"\b(?:write|edit|save|create.*file|modify)\b",
                     }
                 ),
             )
@@ -1828,8 +1834,11 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
                 keywords=frozenset(
                     {
                         r"https?://",
-                        r"url|website|webpage|web\s*page|browse|internet",
-                        r"search.*web|google|look\s*up|online",
+                        r"\b(?:url|website|webpage|web\s*page|browse|internet)\b",
+                        r"\bsearch.*web\b",
+                        r"\bgoogle\b",
+                        r"\blook\s+up\b",
+                        r"\bonline\b",
                     }
                 ),
             )
