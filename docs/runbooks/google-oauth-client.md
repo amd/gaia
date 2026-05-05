@@ -1,37 +1,3 @@
-<<<<<<< docs/telegram-adapter
----
-title: Google OAuth Client Setup
----
-
-# Google OAuth Client
-
-This runbook documents how to configure a Google OAuth client for GAIA's web integrations.
-
-## Create OAuth credentials
-
-1. Open the Google Cloud Console and create a new project or select an existing one.
-2. Navigate to **APIs & Services → Credentials** and click **Create Credentials → OAuth client ID**.
-3. Choose **Web application** and add the authorized redirect URI your deployment uses (e.g., `https://your-domain.example.com/oauth2/callback`).
-
-> Note: Use the standard Markdown link format `[text](url)` for external links in MDX pages.
-
-## Client ID and Secret
-
-Copy the **Client ID** and **Client Secret** into your deployment's secrets store (do not commit secrets into source control).
-
-## Scopes
-
-Only request the scopes you need. Example:
-
-```
-openid email profile
-```
-
-## Troubleshooting
-
-- If you receive an `invalid_request` error, verify the redirect URI exactly matches what you configured.
-- If consent screen is not configured, set the OAuth consent screen in the Google Cloud Console.
-=======
 # Google OAuth Client — Runbook
 
 **Owner:** GAIA team (file an issue → @kovtcharov-amd for changes).
@@ -130,13 +96,13 @@ For day-to-day development:
 
 Trouble: "Connect button does nothing in AgentUI."
 
-1. With `GAIA_DEBUG=1`, hit `GET /api/connections/_debug` — returns
+1. With `GAIA_DEBUG=1`, hit `GET /api/connections/_debug` - returns
    provider registration state, env-var presence, keyring backend,
    grants-path writability, and in-flight flow count.
 2. Check the AgentUI server log for "connections: tripwire sweep complete"
    — confirms lifespan fired.
 3. If the loopback callback timed out: try a different port (the loopback
-   uses an ephemeral port — `127.0.0.1:0` — so this is rare; firewall
+   uses an ephemeral port - `127.0.0.1:0` - so this is rare; firewall
    misconfig is the usual culprit).
 
 ## Security boundaries
@@ -149,4 +115,3 @@ Trouble: "Connect button does nothing in AgentUI."
   itself; it can be logged at INFO without leaking the client id.
 - The OAuth `state` parameter is a per-flow random nonce compared via
   `hmac.compare_digest`; mismatched callbacks return 400.
->>>>>>> main
