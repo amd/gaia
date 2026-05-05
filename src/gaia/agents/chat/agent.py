@@ -21,6 +21,7 @@ from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
 from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
@@ -135,8 +136,8 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use Qwen3.5-35B-A3B by default for better tool-calling
-        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-GGUF"
+        # Use default model configured by the Lemonade client when not provided
+        effective_model_id = config.model_id or DEFAULT_MODEL_NAME
         # ToolLoader will be configured later in _setup_tool_bundles(); define
         # attribute here to satisfy linters (avoid attribute-defined-outside-init).
         self.tool_loader = None
