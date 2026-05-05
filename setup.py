@@ -76,6 +76,7 @@ setup(
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
+        "gaia.web",
         "gaia.code_index",
         "gaia.apps.webui",
         "gaia.connectors",
