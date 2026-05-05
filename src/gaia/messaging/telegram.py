@@ -155,7 +155,7 @@ class TelegramAdapter:
                             log.exception(
                                 "Unexpected error editing telegram message: %s", e
                             )
-                    except Exception:
+                    except ImportError:
                         # If telegram isn't available in this environment, fall back
                         log.debug("Failed to edit telegram message: %s", e)
                 if done:
