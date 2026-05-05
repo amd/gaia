@@ -124,19 +124,24 @@ class WebClient:
         if port and port in BLOCKED_PORTS:
             raise ValueError(f"Blocked port: {port}")
 
-        # Resolve and validate IP
-        self._validate_host_ip(hostname)
+        # Resolve and validate IP. Returns the pinned IP string.
+        return self._validate_host_ip(hostname)
 
-        return url
+    def _validate_host_ip(self, hostname: str) -> str:
+        """Resolve hostname, check IP is not private/internal, and return a
+        pinned IP string.
 
-    def _validate_host_ip(self, hostname: str) -> None:
-        """Resolve hostname and check IP is not private/internal."""
+        This returns the first validated address (as a string) so callers can
+        pin DNS resolution during the subsequent connect. Returning the IP
+        avoids a TOCTOU race where the system DNS record could be re-bound
+        between validate and connect.
+        """
         try:
             results = socket.getaddrinfo(hostname, None)
         except socket.gaierror:
             raise ValueError(f"Cannot resolve hostname: {hostname}")
 
-        for _family, _, _, _, sockaddr in results:
+        for _family, _socktype, _proto, _canonname, sockaddr in results:
             ip_str = sockaddr[0]
             try:
                 ip = ipaddress.ip_address(ip_str)
@@ -154,6 +159,11 @@ class WebClient:
                     f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
                     "Cannot fetch internal network addresses."
                 )
+
+            # First acceptable address -> return it for pinning.
+            return ip_str
+
+        raise ValueError(f"No suitable address found for hostname: {hostname}")
 
     # -- Rate Limiting -------------------------------------------------------
 
@@ -189,7 +199,11 @@ class WebClient:
         100 GB) can't OOM the process by the time a caller touches
         ``response.text``.
         """
-        self.validate_url(url)
+        # Validate and pin initial host IP. For each request we will patch
+        # `socket.getaddrinfo` to force resolution to the pinned IP we just
+        # validated; this prevents a DNS rebind (TOCTOU) between validation
+        # and connect.
+        _ = self.validate_url(url)
 
         domain = urlparse(url).hostname
         self._rate_limit_wait(domain)
@@ -203,7 +217,17 @@ class WebClient:
 
         current_url = url
         for redirect_count in range(self.MAX_REDIRECTS + 1):
-            response = self._session.request(method, current_url, **kwargs)
+            # Resolve and validate the current target host (per-hop pin).
+            target_host = urlparse(current_url).hostname
+            pinned_ip = self._validate_host_ip(target_host)
+            # Use helper to temporarily pin DNS resolution during the
+            # request so we avoid a DNS rebind TOCTOU window.
+            response = self._with_pinned_getaddrinfo(
+                pinned_ip,
+                lambda _method=method, _url=current_url, _kwargs=kwargs: self._session.request(
+                    _method, _url, **_kwargs
+                ),
+            )
 
             # Pre-check declared Content-Length (still useful — rejects cheap
             # DoS before we stream anything).
@@ -306,6 +330,24 @@ class WebClient:
             chunks.append(chunk)
         response._content = b"".join(chunks)
         response._content_consumed = True
+
+    def _with_pinned_getaddrinfo(self, pinned_ip: str, fn, *args, **kwargs):
+        """Run `fn(*args, **kwargs)` while temporarily making
+        `socket.getaddrinfo` return addresses for `pinned_ip` only.
+
+        This is a small, scoped monkey-patch to avoid DNS rebind TOCTOU
+        races when the HTTP stack performs name resolution during connect.
+        """
+        orig_getaddrinfo = socket.getaddrinfo
+
+        def _pinned_getaddrinfo(_host, port, *a, **kw):
+            return orig_getaddrinfo(pinned_ip, port, *a, **kw)
+
+        socket.getaddrinfo = _pinned_getaddrinfo
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            socket.getaddrinfo = orig_getaddrinfo
 
     # -- HTML Parsing & Extraction -------------------------------------------
 
@@ -506,12 +548,17 @@ class WebClient:
         domain = urlparse(url).hostname
         self._rate_limit_wait(domain)
 
-        # Stream the download
-        response = self._session.get(
-            url,
-            stream=True,
-            timeout=self._timeout,
-            allow_redirects=False,
+        # Stream the download. Pin the resolved IP to avoid DNS rebind
+        # between validation and connect.
+        pinned_ip = self._validate_host_ip(urlparse(url).hostname)
+        response = self._with_pinned_getaddrinfo(
+            pinned_ip,
+            lambda _url=url: self._session.get(
+                _url,
+                stream=True,
+                timeout=self._timeout,
+                allow_redirects=False,
+            ),
         )
 
         # Handle redirects manually for downloads too
@@ -526,11 +573,16 @@ class WebClient:
             redirect_url = urljoin(url, redirect_url)
             self.validate_url(redirect_url)
             response.close()
-            response = self._session.get(
-                redirect_url,
-                stream=True,
-                timeout=self._timeout,
-                allow_redirects=False,
+            # Pin IP for the redirect target as well.
+            pinned_ip = self._validate_host_ip(urlparse(redirect_url).hostname)
+            response = self._with_pinned_getaddrinfo(
+                pinned_ip,
+                lambda _url=redirect_url: self._session.get(
+                    _url,
+                    stream=True,
+                    timeout=self._timeout,
+                    allow_redirects=False,
+                ),
             )
             url = redirect_url
 
