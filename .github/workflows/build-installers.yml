@@ -92,10 +92,13 @@ on:
       - 'src/gaia/apps/webui/main.cjs'
       - 'src/gaia/apps/webui/bin/**'
       - 'src/gaia/apps/webui/services/**'
-      # Cover the whole installer-smoke test tree (issue #941) so a PR that
+      # Cover the installer-smoke test tree (issue #941) so a PR that
       # only touches the smoke-test layer still triggers structural smoke.
-      # The narrower `tests/electron/fixtures/**` is subsumed by `**`.
-      - 'tests/electron/**'
+      # Narrower than `tests/electron/**` so Jest-only edits to e.g.
+      # test_electron_chat_app.js don't re-run the multi-platform build.
+      - 'tests/electron/_helpers/**'
+      - 'tests/electron/*-smoke.test.mjs'
+      - 'tests/electron/fixtures/**'
       - 'src/gaia/version.py'
 
 # Least-privilege default. Only the release-upload step needs `contents:
