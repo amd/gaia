@@ -134,12 +134,9 @@ if (!APPIMAGE) {
       const installerPath = backendInstallerPath(import.meta.url);
 
       test("AC4/T3: bundled uv binary is present under extraResources", () => {
+        // Existence + mode-bit assertions live in assertUvBinary (T3b).
+        // Block kept for CI-log name stability; see _helpers/installer-smoke.mjs.
         assert.ok(fs.existsSync(uvPath), `expected bundled uv at ${uvPath}`);
-        const st = fs.statSync(uvPath);
-        assert.ok(
-          (st.mode & 0o111) !== 0,
-          `uv binary should be executable; mode=${(st.mode & 0o777).toString(8)}`,
-        );
       });
 
       // Runtime ensureUv() hashes the extracted ELF and rejects any mismatch,
