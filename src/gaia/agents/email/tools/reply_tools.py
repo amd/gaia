@@ -12,6 +12,7 @@ will actually be sent, not an LLM-generated paraphrase.
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any, Dict, Optional
 
 from gaia.agents.base.tools import tool
@@ -173,14 +174,15 @@ def send_now_impl(
                 db, draft_id=sent_id, to=to, subject=subject, body=body
             )
             action_store.mark_draft_sent(db, draft_id=sent_id)
-        except Exception:
+        except sqlite3.Error as exc:
             # Audit-write failures must NOT mask a successful send. Log
             # but don't raise — the email already left the user's
             # account; the agent must not retry.
             log.warning(
-                "send_now: audit write failed for sent_id=%s — "
+                "send_now: audit write failed for sent_id=%s (%s) — "
                 "send DID succeed but audit row missing",
                 sent_id,
+                exc,
             )
         st["result_summary"] = {"sent_id": sent_id}
         return {"sent_id": sent_id, "to": to, "subject": subject, "sent": True}

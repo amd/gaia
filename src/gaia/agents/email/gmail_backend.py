@@ -596,6 +596,18 @@ def _build_rfc822(
     }
     if extra_headers:
         headers.update(extra_headers)
+    # Defense-in-depth against CRLF header injection. ``to`` and
+    # ``subject`` can be LLM-decided or lifted from inbound mail (e.g.
+    # ``forward_message_impl`` passes the original Subject verbatim).
+    # A CRLF in any header value terminates the current header and starts
+    # a new one, which an attacker could use to inject ``Bcc:``, ``Cc:``,
+    # or body-prefix lines.
+    for k, v in headers.items():
+        if "\r" in v or "\n" in v:
+            raise ValueError(
+                f"refusing to send: header {k!r} contains a newline — "
+                f"possible CRLF injection attempt"
+            )
     header_block = "\r\n".join(f"{k}: {v}" for k, v in headers.items())
     rfc822 = f"{header_block}\r\n\r\n{body}"
     return base64.urlsafe_b64encode(rfc822.encode("utf-8")).decode("ascii").rstrip("=")

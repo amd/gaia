@@ -280,6 +280,35 @@ class TestEmptyInbox:
 
 
 class TestRfc822Builder:
+    def test_crlf_in_to_raises(self):
+        """CRLF in `to` must raise — attacker could inject Bcc: header."""
+        with pytest.raises(ValueError, match="injection"):
+            _build_rfc822(
+                to="victim@example.com\r\nBcc: attacker@evil.com",
+                subject="Hi",
+                body="hello",
+            )
+
+    def test_lf_in_subject_raises(self):
+        """Bare LF in subject (as may appear in Gmail API payload) must also raise."""
+        with pytest.raises(ValueError, match="injection"):
+            _build_rfc822(
+                to="x@example.com",
+                subject="Hello\nX-Injected: yes",
+                body="hi",
+            )
+
+    def test_crlf_in_extra_headers_raises(self):
+        """`extra_headers` values from inbound mail (e.g. forwarded Subject)
+        must be validated the same way."""
+        with pytest.raises(ValueError, match="injection"):
+            _build_rfc822(
+                to="x@example.com",
+                subject="Fwd: thing",
+                body="hi",
+                extra_headers={"In-Reply-To": "<id@example.com>\r\nBcc: spy@evil.com"},
+            )
+
     def test_includes_threading_headers(self):
         import base64
 
