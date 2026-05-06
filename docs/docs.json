@@ -42,6 +42,7 @@
               {
                 "group": "User Guides",
                 "pages": [
+                  "cpp/bash-agent",
                   "cpp/health-agent",
                   "cpp/wifi-agent",
                   "cpp/process-agent",

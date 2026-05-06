@@ -215,6 +215,36 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# gaia-bash agent binary
+# ---------------------------------------------------------------------------
+option(GAIA_BUILD_BASH_AGENT "Build the gaia-bash coding agent" ON)
+if(GAIA_BUILD_BASH_AGENT)
+    add_executable(gaia-bash
+        agents/bash/main.cpp
+        agents/bash/bash_agent.cpp
+        agents/bash/bash_tools.cpp
+        agents/bash/api_server.cpp
+        agents/bash/mcp_server.cpp
+    )
+    target_include_directories(gaia-bash PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/agents/bash
+    )
+    target_link_libraries(gaia-bash PRIVATE gaia::gaia_core)
+
+    # API server needs httplib (already a dependency of gaia_core but PRIVATE)
+    if(httplib_FOUND)
+        target_link_libraries(gaia-bash PRIVATE httplib::httplib)
+    else()
+        target_include_directories(gaia-bash SYSTEM PRIVATE
+            $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+    if(OpenSSL_FOUND)
+        target_compile_definitions(gaia-bash PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(gaia-bash PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Examples
 # ---------------------------------------------------------------------------
 if(GAIA_BUILD_EXAMPLES AND WIN32)

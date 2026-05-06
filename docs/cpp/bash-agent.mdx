@@ -1,0 +1,510 @@
+---
+title: "Bash Coding Agent"
+description: "AI-powered bash scripting assistant — write, review, test, and debug shell scripts locally on AMD hardware"
+icon: "terminal"
+---
+
+<Info>
+  **First time here?** Complete the [C++ Framework Setup](/cpp/setup) guide first to build the `gaia_core` library.
+</Info>
+
+<Note>
+  **Native binary.** `gaia-bash` is a compiled C++ binary built on the GAIA C++ framework (`gaia_core`). No Python runtime required for the agent itself — just Lemonade Server for LLM inference.
+</Note>
+
+## Overview
+
+`gaia-bash` is a domain-specialized coding agent for bash/shell scripting. It provides:
+
+- **Interactive TUI** — Claude Code-style terminal interface with markdown rendering, streaming, and split-pane layout
+- **Bash expertise** — system prompt tuned for POSIX compliance, `shellcheck` integration, BATS test generation
+- **16 built-in tools** — file I/O, git, process execution, linting, testing, and more
+- **REST API server** — OpenAI-compatible endpoint for external tool integration
+- **MCP server** — stdio transport for Claude Code, OpenCode, and other MCP-compatible agents
+- **Session persistence** — save and resume conversations across runs
+- **100% local** — runs entirely on AMD hardware via Lemonade Server, no cloud dependency
+
+---
+
+## Quick Start
+
+<Steps>
+  <Step title="Build the binary">
+    ```bash
+    cd cpp
+    cmake -B build -DGAIA_BUILD_TUI=ON
+    cmake --build build --target gaia-bash
+    ```
+  </Step>
+
+  <Step title="Start Lemonade Server">
+    ```bash
+    lemonade-server serve
+    ```
+
+    Ensure a coding model is loaded (Qwen3-Coder-Next recommended):
+    ```bash
+    gaia download Qwen3-Coder-Next-GGUF
+    ```
+  </Step>
+
+  <Step title="Run the agent">
+    ```bash
+    # Interactive TUI mode
+    ./build/gaia-bash
+
+    # Single query
+    ./build/gaia-bash "write a script that finds duplicate files by checksum"
+
+    # Pipe-friendly (no TUI)
+    ./build/gaia-bash --print "explain what set -euo pipefail does"
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Modes of Operation
+
+### Interactive TUI
+
+The default mode. Launches a fullscreen terminal UI with:
+
+- **Chat history** — scrollable, markdown-rendered responses with syntax highlighting
+- **Status bar** — current model, token count, step counter
+- **Input area** — multi-line input with history (up/down arrows)
+- **Tool approval** — modal dialog for destructive operations
+
+```bash
+./build/gaia-bash
+```
+
+### Single Query
+
+Run one query, print the result, and exit:
+
+```bash
+./build/gaia-bash "write a cron job that rotates logs daily"
+```
+
+### Pipe Mode
+
+No TUI — streams plain text to stdout. Ideal for scripting and CI:
+
+```bash
+echo "review this script for security issues" | ./build/gaia-bash --print
+./build/gaia-bash --print "generate a BATS test for backup.sh" > test_backup.bats
+```
+
+### API Server
+
+Expose the agent as an HTTP REST API:
+
+```bash
+./build/gaia-bash --serve --port 8200
+```
+
+See [API Server](#api-server) below.
+
+### MCP Server
+
+Run as an MCP tool server for external agents:
+
+```bash
+./build/gaia-bash --mcp
+```
+
+See [MCP Server](#mcp-server) below.
+
+### Session Resume
+
+Resume a previous conversation:
+
+```bash
+# List saved sessions
+./build/gaia-bash --list-sessions
+
+# Resume a specific session
+./build/gaia-bash --resume session-20260506-143045
+```
+
+---
+
+## Slash Commands
+
+Built-in commands available in interactive mode:
+
+| Command | Description |
+|---|---|
+| `/help` | Show all available commands |
+| `/clear` | Clear conversation history |
+| `/model [name]` | Show or switch the LLM model |
+| `/history` | Browse saved sessions |
+| `/exit` | Exit the REPL |
+
+Bash-specific commands:
+
+| Command | Description |
+|---|---|
+| `/run <cmd>` | Execute a bash command directly (bypass LLM) |
+| `/lint [file]` | Run ShellCheck on a script |
+| `/test [file]` | Generate and run BATS tests |
+| `/review [file]` | Multi-pass code review |
+| `/edit <file>` | Open file in `$EDITOR` |
+
+---
+
+## Built-in Tools
+
+### Framework Tools (shared with all C++ agents)
+
+| Tool | Policy | Description |
+|---|---|---|
+| `file_read` | ALLOW | Read file contents with optional line range |
+| `file_write` | CONFIRM | Write/create files (creates parent dirs) |
+| `file_edit` | CONFIRM | Surgical string replacement in files |
+| `file_search` | ALLOW | Search files by glob pattern and content |
+| `git_status` | ALLOW | Git status, diff, log, show |
+
+### Bash-Specific Tools
+
+| Tool | Policy | Description |
+|---|---|---|
+| `bash_execute` | CONFIRM | Run bash commands with timeout and output capture |
+| `env_inspect` | ALLOW | Shell version, PATH, installed tools |
+| `script_lint` | ALLOW | ShellCheck integration with structured diagnostics |
+| `script_test` | CONFIRM | BATS test runner in sandboxed temp directory |
+| `man_lookup` | ALLOW | Query man pages or `--help` output |
+| `git_commit` | CONFIRM | Stage + commit with AI-generated message |
+| `bash_background` | CONFIRM | Background process execution with PID tracking |
+| `process_list` | ALLOW | List running processes |
+| `clipboard_copy` | ALLOW | Copy text to system clipboard |
+
+---
+
+## API Server
+
+The API server exposes the bash agent via an OpenAI-compatible HTTP REST API, enabling integration with any tool that speaks the OpenAI protocol.
+
+### Start the server
+
+```bash
+./build/gaia-bash --serve --port 8200
+```
+
+### Endpoints
+
+#### `POST /v1/chat/completions`
+
+Main endpoint — send messages, get agent responses with tool calls.
+
+```bash
+curl http://localhost:8200/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "write a script that monitors disk usage"}
+    ],
+    "stream": false
+  }'
+```
+
+**Streaming mode:**
+
+```bash
+curl http://localhost:8200/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "explain awk column processing"}
+    ],
+    "stream": true
+  }'
+```
+
+#### `GET /v1/tools`
+
+List all registered tools with their parameter schemas:
+
+```bash
+curl http://localhost:8200/v1/tools | jq '.tools[].name'
+```
+
+#### `POST /v1/tools/{name}`
+
+Execute a specific tool directly (bypass the LLM):
+
+```bash
+curl http://localhost:8200/v1/tools/bash_execute \
+  -H "Content-Type: application/json" \
+  -d '{"command": "df -h", "timeoutMs": 5000}'
+
+curl http://localhost:8200/v1/tools/file_read \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/etc/hostname"}'
+```
+
+#### `GET /health`
+
+Health check:
+
+```bash
+curl http://localhost:8200/health
+# {"status":"ok","model":"Qwen3-Coder-Next","tools":16}
+```
+
+#### `GET /sessions`, `POST /sessions`, `DELETE /sessions/{id}`
+
+Session management:
+
+```bash
+# List sessions
+curl http://localhost:8200/sessions
+
+# Delete a session
+curl -X DELETE http://localhost:8200/sessions/session-20260506-143045
+```
+
+---
+
+## MCP Server
+
+The MCP server exposes the bash agent as a tool server over the [Model Context Protocol](https://modelcontextprotocol.io/), enabling any MCP-compatible agent to use bash tools.
+
+### Configure in Claude Code
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "gaia-bash": {
+      "command": "/path/to/gaia-bash",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+Now Claude Code can use bash agent tools:
+
+```
+> Use gaia-bash to run shellcheck on my deploy.sh script
+> Use gaia-bash to write a BATS test for my backup.sh
+```
+
+### Configure in OpenCode
+
+Add to OpenCode's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "gaia-bash": {
+      "command": "gaia-bash",
+      "args": ["--mcp"],
+      "env": {
+        "LEMONADE_BASE_URL": "http://localhost:13305/api/v1"
+      }
+    }
+  }
+}
+```
+
+### MCP Capabilities
+
+| Capability | Description |
+|---|---|
+| `tools/list` | Returns all bash agent tools as MCP tool definitions |
+| `tools/call` | Executes a tool call and returns structured results |
+| `prompts/list` | Exposes prompt templates: `review-script`, `generate-bats-test`, `explain-command`, `posix-check` |
+| `prompts/get` | Returns the prompt template with parameter substitution |
+
+### Test the MCP server
+
+```bash
+# Start MCP server manually and send a tools/list request
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | ./build/gaia-bash --mcp
+```
+
+---
+
+## Demo Walkthrough
+
+A quick demo showing the key features of `gaia-bash`:
+
+### 1. Write a Script
+
+```
+> Write a script that finds all .log files older than 30 days and compresses them
+
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  LOG_DIR="${1:-.}"
+  DAYS="${2:-30}"
+
+  find "$LOG_DIR" -name '*.log' -mtime +"$DAYS" -print0 |
+    while IFS= read -r -d '' file; do
+      gzip --best "$file"
+      echo "Compressed: ${file}.gz"
+    done
+
+  Using tool: file_write → compress_old_logs.sh
+  Using tool: script_lint → 0 warnings
+```
+
+### 2. Review the Script
+
+```
+> /review compress_old_logs.sh
+
+  ## Code Review: compress_old_logs.sh
+
+  Correctness:  Handles filenames with spaces/newlines via -print0
+  Security:     No injection risks, all variables quoted
+  Portability:  gzip --best is GNU-specific (use gzip -9 for broader compat)
+  Performance:  Streaming via pipe, no temp files
+  Style:        ShellCheck clean, well-quoted
+```
+
+### 3. Generate Tests
+
+```
+> /test compress_old_logs.sh
+
+  Running: bats test_compress_old_logs.bats
+
+  4/4 tests passed
+    compresses .log files older than 30 days
+    skips .log files newer than threshold
+    handles filenames with spaces
+    respects custom directory argument
+```
+
+### 4. Use via API
+
+```bash
+# From another terminal
+curl -s http://localhost:8200/v1/tools/script_lint \
+  -d '{"path":"compress_old_logs.sh"}' | jq .
+```
+
+### 5. Use via MCP from Claude Code
+
+```
+Claude Code> Use gaia-bash to check my deploy.sh for POSIX compliance
+
+  gaia-bash: Running POSIX compliance check on deploy.sh...
+  Found 3 bashisms in #!/bin/sh script:
+    Line 12: [[ ]] → use [ ] for POSIX
+    Line 25: ${var,,} → use tr '[:upper:]' '[:lower:]'
+    Line 41: arrays → use positional parameters or files
+```
+
+---
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `LEMONADE_BASE_URL` | `http://localhost:8000/api/v1` | Lemonade Server URL |
+| `LEMONADE_MODEL` | `Qwen3-Coder-Next-GGUF` | Model to load |
+| `GAIA_CPP_CTX_SIZE` | `16384` | Context window size (tokens) |
+| `GAIA_STREAMING` | `0` | Enable streaming (`1` = on) |
+| `GAIA_DEBUG` | unset | Enable debug logging |
+
+### CLI Flags
+
+| Flag | Description |
+|---|---|
+| `--serve [--port N]` | Start REST API server (default port 8200) |
+| `--mcp` | Start as MCP stdio server |
+| `--print` | Pipe-friendly output (no TUI) |
+| `--no-tui` | Force CleanConsole even on interactive terminal |
+| `--resume <id>` | Resume a saved session |
+| `--list-sessions` | List saved sessions and exit |
+| `--model <name>` | Override the LLM model |
+| `--debug` | Enable debug logging |
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+- CMake 3.14+
+- C++17 compiler (MSVC 2019+, GCC 9+, Clang 10+)
+- Lemonade Server running with a coding model loaded
+
+### Build
+
+```bash
+cd cpp
+cmake -B build \
+  -DGAIA_BUILD_TUI=ON \
+  -DGAIA_BUILD_TESTS=ON \
+  -DGAIA_BUILD_EXAMPLES=ON
+
+cmake --build build --target gaia-bash
+cmake --build build --target tests_mock
+```
+
+### Run Tests
+
+```bash
+cd build
+ctest --output-on-failure
+```
+
+### Build Options
+
+| Option | Default | Description |
+|---|---|---|
+| `GAIA_BUILD_TUI` | `ON` | Build FTXUI-based TUI console |
+| `GAIA_BUILD_TESTS` | `ON` | Build unit tests |
+| `GAIA_BUILD_EXAMPLES` | `ON` | Build example agents |
+| `GAIA_BUILD_INTEGRATION_TESTS` | `OFF` | Build LLM integration tests |
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  gaia-bash binary                                        │
+│                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐ │
+│  │ TUI Console   │  │ API Server   │  │ MCP Server    │ │
+│  │ (FTXUI)       │  │ (cpp-httplib)│  │ (stdio)       │ │
+│  │ --default--   │  │ --serve      │  │ --mcp         │ │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬────────┘ │
+│         │                  │                  │          │
+│         └──────────┬───────┴──────────────────┘          │
+│                    │                                     │
+│         ┌──────────┴──────────┐                          │
+│         │  BashAgent : Agent   │                          │
+│         │  16 bash tools       │                          │
+│         │  Session persistence │                          │
+│         └──────────┬──────────┘                          │
+│                    │                                     │
+├────────────────────┼─────────────────────────────────────┤
+│  gaia_core library │                                     │
+│         ┌──────────┴──────────┐                          │
+│         │  Agent loop          │                          │
+│         │  ToolRegistry        │                          │
+│         │  LemonadeClient      │                          │
+│         │  ProcessRunner       │                          │
+│         │  FileIOTools/GitTools│                          │
+│         │  SessionStore        │                          │
+│         │  ReplRunner          │                          │
+│         └──────────┬──────────┘                          │
+│                    │ HTTP (SSE)                           │
+│         ┌──────────┴──────────┐                          │
+│         │  Lemonade Server     │                          │
+│         │  (AMD NPU/GPU/CPU)   │                          │
+│         └─────────────────────┘                          │
+└─────────────────────────────────────────────────────────┘
+```
