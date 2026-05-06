@@ -77,7 +77,18 @@ app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 // invocations bypass the .desktop entry. Appending the switch here makes
 // all Linux launch paths behave identically.
 if (process.platform === "linux") {
+  // Append Chromium switches to improve reliability on constrained CI/container
+  // environments (userns-restricted launches, limited /dev/shm, headless GPUs).
+  // `--no-sandbox` is required on some distro/AppImage combos; include it here
+  // so all Linux launch paths behave identically.
   app.commandLine.appendSwitch("no-sandbox");
+  // Prevent GPU / sandbox issues in headless CI or restricted containers.
+  app.commandLine.appendSwitch("disable-gpu");
+  // Avoid /dev/shm usage which can be small in containers and cause crashes.
+  app.commandLine.appendSwitch("disable-dev-shm-usage");
+  try {
+    process.stderr.write('[main] Applied Linux chromium switches: no-sandbox, disable-gpu, disable-dev-shm-usage\n');
+  } catch { /* best-effort logging */ }
 }
 
 // ── F7: Log tee to ~/.gaia/electron-main.log (issue #782) ───────────────────
