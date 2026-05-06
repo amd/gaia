@@ -661,8 +661,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       expect(pySemver).not.toBeNull();
       const pkgParts = [pkgSemver[1], pkgSemver[2], pkgSemver[3]].map(Number);
       const pyParts = [pySemver[1], pySemver[2], pySemver[3]].map(Number);
-      const pkgAhead = pkgParts.some((n, i) =>
-        n > (pyParts[i] ?? 0) && pkgParts.slice(0, i).every((m, j) => m === (pyParts[j] ?? 0))
+      const pkgAhead = pkgParts.some(
+        (n, i) =>
+          n > pyParts[i] &&
+          pkgParts.slice(0, i).every((m, j) => m === pyParts[j]),
       );
       expect(pkgAhead).toBe(false);
     });
