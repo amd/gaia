@@ -73,6 +73,21 @@ if(NOT httplib_FOUND)
     FetchContent_MakeAvailable(httplib)
 endif()
 
+# FTXUI — reactive TUI framework (optional, gated behind GAIA_BUILD_TUI)
+option(GAIA_BUILD_TUI "Build FTXUI-based TUI console" ON)
+if(GAIA_BUILD_TUI)
+    find_package(ftxui QUIET)
+    if(NOT ftxui_FOUND)
+        message(STATUS "FTXUI not found -- fetching via FetchContent")
+        FetchContent_Declare(
+            ftxui
+            GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI
+            GIT_TAG        v6.1.9
+        )
+        FetchContent_MakeAvailable(ftxui)
+    endif()
+endif()
+
 # Google Test (unit tests and/or integration tests)
 if(GAIA_BUILD_TESTS OR GAIA_BUILD_INTEGRATION_TESTS)
     find_package(GTest QUIET)
@@ -103,7 +118,21 @@ add_library(gaia_core
     src/mcp_client.cpp
     src/security.cpp
     src/sse_parser.cpp
+    src/process.cpp
+    src/file_tools.cpp
+    src/git_tools.cpp
+    src/session.cpp
+    src/repl.cpp
 )
+
+# TUI sources (conditional on FTXUI availability)
+if(GAIA_BUILD_TUI)
+    target_sources(gaia_core PRIVATE
+        src/tui_console.cpp
+        src/tui_markdown.cpp
+    )
+    target_compile_definitions(gaia_core PUBLIC GAIA_HAS_TUI=1)
+endif()
 
 add_library(gaia::gaia_core ALIAS gaia_core)
 
@@ -163,6 +192,16 @@ if(WIN32)
     target_link_libraries(gaia_core PRIVATE ws2_32)
 endif()
 
+# FTXUI (TUI console — optional)
+if(GAIA_BUILD_TUI)
+    target_link_libraries(gaia_core PRIVATE
+        ftxui::component ftxui::dom ftxui::screen
+    )
+    message(STATUS "GAIA TUI: enabled (FTXUI)")
+else()
+    message(STATUS "GAIA TUI: disabled")
+endif()
+
 # HTTPS support — auto-detected. No flags required; OpenSSL is used when available.
 find_package(OpenSSL QUIET)
 if(OpenSSL_FOUND)
@@ -218,6 +257,11 @@ if(GAIA_BUILD_TESTS)
         tests/test_decision.cpp
         tests/test_security.cpp
         tests/test_sse_parser.cpp
+        tests/test_process.cpp
+        tests/test_file_tools.cpp
+        tests/test_git_tools.cpp
+        tests/test_session.cpp
+        tests/test_repl.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
@@ -241,6 +285,11 @@ if(GAIA_BUILD_TESTS)
         GAIA_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
     )
     target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+
+    # TUI tests (conditional -- requires FTXUI)
+    if(GAIA_BUILD_TUI)
+        target_sources(tests_mock PRIVATE tests/test_tui_console.cpp)
+    endif()
 
     include(GoogleTest)
     gtest_discover_tests(tests_mock)

@@ -111,6 +111,31 @@ public:
     /// Clear conversation history (start a fresh topic).
     void clearHistory() { conversationHistory_.clear(); }
 
+    /// Get a snapshot of the current conversation history (for session persistence).
+    /// Returns a copy to avoid races with processQuery() on another thread.
+    std::vector<Message> history() const {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        return conversationHistory_;
+    }
+
+    /// Replace conversation history (for session resume).
+    /// Must NOT be called while processQuery() is running (guarded by inFlight_).
+    void setHistory(std::vector<Message> history) {
+        if (inFlight_.load()) {
+            throw std::runtime_error("Cannot set history while processQuery() is running");
+        }
+        conversationHistory_ = std::move(history);
+    }
+
+    /// Request cancellation of the current processQuery() run.
+    /// The agent loop checks this flag between steps and exits early
+    /// with a partial result. Safe to call from any thread.
+    /// The flag is automatically reset at the start of the next processQuery().
+    void requestCancel() { cancelled_.store(true); }
+
+    /// Check whether a cancel has been requested.
+    bool isCancelled() const { return cancelled_.load(); }
+
     /// Get a mutable reference to the tool registry (for subclass tool registration).
     ToolRegistry& toolRegistry() { return tools_; }
 
@@ -195,6 +220,10 @@ private:
     // Concurrency guard — Agent is NOT re-entrant. A second processQuery
     // call on the same Agent (from any thread) throws std::runtime_error.
     std::atomic<bool> inFlight_{false};
+
+    // Cancel flag — set by requestCancel(), checked between loop steps.
+    // Reset at the start of each processQuery().
+    std::atomic<bool> cancelled_{false};
 
     AgentState executionState_ = AgentState::PLANNING;
     json currentPlan_;

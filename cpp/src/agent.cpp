@@ -643,6 +643,9 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     // Re-entrancy guard (RAII — releases on any exit path incl. exceptions).
     InFlightGuard guard(inFlight_);
 
+    // Reset cancel flag at the start of each query.
+    cancelled_.store(false);
+
     // Snapshot config at start of query for thread-safe consistency throughout.
     AgentConfig cfg;
     {
@@ -695,6 +698,13 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     std::vector<std::pair<std::string, json>> toolCallHistory; // (name, args) for loop detection
 
     while (stepsTaken < stepsLimit && finalAnswer.empty()) {
+        // ---- Cancel check ----
+        if (cancelled_.load()) {
+            console_->printWarning("Cancelled by user");
+            finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
+            break;
+        }
+
         ++stepsTaken;
         console_->printStepHeader(stepsTaken, stepsLimit);
 
