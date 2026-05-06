@@ -77,10 +77,13 @@ const NETWORK_CHECK_TIMEOUT_MS = 5000;
 // archive against upstream's published .sha256, then extracts the `uv` binary
 // which is what `ensureUv()` hashes at runtime.
 //
-// Currently pinned: uv v0.5.14 linux-x64.
+// Currently pinned: uv v0.5.14 linux-x64, mac-arm64.
+// (win-x64 deferred to a follow-up issue — its SHA must ship together with an
+// NSIS structural-smoke verifier, not on its own; see the #849 lesson.)
 const BUNDLED_UV_VERSION = "0.5.14";
 const BUNDLED_UV_SHA256 = {
   "linux-x64": "0e05d828b5708e8a927724124db3746396afddad6273c47283d7c562dc795bd6",
+  "mac-arm64": "415f73cab3771902db58f6a9ce4d9cf3e664a3eed26ee7e48a051453a79bd015",
 };
 
 const MANAGED_UV_DIR = path.join(GAIA_HOME, "bin");
