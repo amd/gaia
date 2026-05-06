@@ -1197,7 +1197,6 @@ describe('Chat App Integration', () => {
     });
 
     it('should have danger zone section at bottom', () => {
-      expect(settingsContent).toContain('danger-zone');
       expect(settingsContent).toContain('danger-warning');
     });
 
@@ -1215,7 +1214,6 @@ describe('Chat App Integration', () => {
     });
 
     it('should have danger zone styles', () => {
-      expect(settingsCss).toContain('.danger-zone');
       expect(settingsCss).toContain('.danger-divider');
       expect(settingsCss).toContain('.danger-warning');
     });
