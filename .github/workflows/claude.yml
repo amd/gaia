@@ -94,11 +94,15 @@ jobs:
         # merged 2025-09-22) and Opus 4.7 (fixed in v1.0.98). The `@beta` floating tag
         # is stuck on a 2025-08-22 SHA that rejects `pull_request_target` — removing
         # `continue-on-error` below means that class of silent failure surfaces on the
-        # next drift.
+        # next drift. The action is now pinned by SHA so version drift is not a concern;
+        # `continue-on-error: true` is restored to avoid blocking PRs on transient API
+        # credit exhaustion ("Credit balance is too low"), which is an infra issue, not
+        # a code problem.
         #
         # v1.0 API migration: `direct_prompt` + `custom_instructions` → single `prompt`.
         # `model` + `max_turns` → `claude_args`. See upstream migration guide:
         # https://github.com/anthropics/claude-code-action/blob/main/docs/migration-guide.md
+        continue-on-error: true
         uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3  # v1.0.99
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
