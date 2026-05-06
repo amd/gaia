@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Mirrors electron-builder.yml `extraResources.to: vendor/uv` — the single
 // source of truth for the in-resources layout. If electron-builder.yml
@@ -43,9 +44,9 @@ export function bundledUvPath(resourcesDir, platformKey) {
 /**
  * Parse `BUNDLED_UV_SHA256[platformKey]` from backend-installer.cjs source.
  *
- * The constant spans multiple lines once it has 2+ entries, so the regex
- * needs the dotall `/s` flag. The `[^}]*?` stop class on `}` is safe
- * because SHA hex strings cannot contain `}`.
+ * The constant spans multiple lines once it has 2+ entries. `[^}]*?` spans
+ * newlines natively (character classes match `\n` without dotall) and the
+ * stop class on `}` is safe because SHA hex strings cannot contain `}`.
  *
  * @param {string} installerCjsPath  absolute path to backend-installer.cjs
  * @param {string} platformKey       e.g. "linux-x64"
@@ -58,7 +59,6 @@ export function parseBundledUvSha(installerCjsPath, platformKey) {
   const escapedKey = platformKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const re = new RegExp(
     `BUNDLED_UV_SHA256\\s*=\\s*\\{[^}]*?"${escapedKey}"\\s*:\\s*"([0-9a-f]{64})"`,
-    "s",
   );
   const m = src.match(re);
   assert.ok(
@@ -113,7 +113,7 @@ export function assertUvBinary(uvPath, platformKey, installerCjsPath) {
  */
 export function backendInstallerPath(testFileUrl) {
   return path.resolve(
-    path.dirname(decodeURIComponent(new URL(testFileUrl).pathname)),
+    path.dirname(fileURLToPath(testFileUrl)),
     "..",
     "..",
     "src",

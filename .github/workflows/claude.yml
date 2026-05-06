@@ -57,6 +57,8 @@ permissions:
 jobs:
   # Auto-review new PRs (including forks)
   pr-review:
+    # Temporarily disabled — Anthropic credit balance exhausted (see commit a013e384).
+    # To re-enable: restore the original `repository / event_name / draft / label` gate.
     if: false
     runs-on: ubuntu-latest
     concurrency:
