@@ -279,6 +279,31 @@ jobs:
           # Replace placeholder in backend-installer.cjs so runtime can verify
           sed -i "s/<WIN_UV_EXTRACTED_SHA256_PLACEHOLDER>/${BIN_SHA}/g" src/gaia/apps/webui/services/backend-installer.cjs
 
+      - name: Fetch uv binary (macOS)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          UV_VERSION="0.5.14"
+          UV_TARBALL="uv-aarch64-apple-darwin.tar.gz"
+          # Upstream tarball SHA256 (archive digest)
+          UV_SHA256="d548dffc256014c4c8c693e148140a3a21bcc2bf066a35e1d5f0d24c91d32112"
+          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
+          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/mac-arm64"
+          mkdir -p "${DEST_DIR}"
+          tmpdir="$(mktemp -d)"
+          echo "Downloading ${UV_URL}"
+          curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_TARBALL}" "${UV_URL}"
+          echo "${UV_SHA256}  ${tmpdir}/${UV_TARBALL}" | shasum -a 256 -c -
+          tar -xzf "${tmpdir}/${UV_TARBALL}" -C "${tmpdir}"
+          cp "${tmpdir}/uv-aarch64-apple-darwin/uv" "${DEST_DIR}/uv"
+          chmod 0755 "${DEST_DIR}/uv"
+          "${DEST_DIR}/uv" --version
+          # Echo the extracted-binary SHA (pre-codesign). To bump the
+          # runtime's POST-codesign digest (BUNDLED_UV_SHA256[mac-arm64]),
+          # run CI and copy the value from the dmg-structural-smoke output.
+          shasum -a 256 "${DEST_DIR}/uv"
+
       # macOS uv fetch removed in this PR to keep changes Windows-only.
       # If needed, re-add a macOS fetch step in a follow-up PR coordinated with the mac team.
 

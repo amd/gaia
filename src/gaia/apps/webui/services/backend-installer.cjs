@@ -96,7 +96,9 @@ const BUNDLED_UV_SHA256 = {
   // build step. The placeholder MUST be replaced in CI before packaging
   // so runtime verification remains strict.
   "win-x64": "055d55eec85a91cfb5e9c8bc7f6463f9883866796c5bcb205fbcdfed9c088c88",
-  "mac-arm64": null,
+  // mac-arm64: POST-codesign digest. CI should populate this value when
+  // packaging the macOS DMG and running the dmg-structural-smoke job.
+  "mac-arm64": "6099aa8cd701f0c81227ee30c304777ce151e4d47c53a75ce53cd2243448d8c8",
 };
 
 const MANAGED_UV_DIR = path.join(GAIA_HOME, "bin");
