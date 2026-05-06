@@ -570,12 +570,15 @@ function PendingAgentRow({
             <div className="grant-scope-list">
                 {allScopes.map((scope) => (
                     <label key={scope} className="grant-scope-item">
-                        <input
-                            type="checkbox"
-                            checked={selected.has(scope)}
-                            onChange={() => toggle(scope)}
-                        />
                         <span className="grant-scope-label">{scopeLabel(scope)}</span>
+                        <span className="toggle-switch">
+                            <input
+                                type="checkbox"
+                                checked={selected.has(scope)}
+                                onChange={() => toggle(scope)}
+                            />
+                            <span className="toggle-track" />
+                        </span>
                     </label>
                 ))}
             </div>
