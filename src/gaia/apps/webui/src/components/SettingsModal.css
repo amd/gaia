@@ -21,7 +21,7 @@
     color: var(--text-secondary);
     margin-bottom: 14px;
     border-left: 2px solid var(--accent);
-    margin-left: -2px;
+    margin-left: -8px;
     padding-left: 6px;
 }
 
@@ -396,9 +396,6 @@
 }
 
 /* Danger zone */
-.danger-zone {
-    border-color: var(--border);
-}
 
 .danger-divider {
     height: 1px;
