@@ -102,7 +102,7 @@ if (!DMG) {
       // registered, but the kernel VFS layer can lag 1–2 ticks before
       // readdir sees the contents. Without this loop, an unguarded
       // path.join(mountpoint, undefined, …) throws an unactionable
-      // TypeError. 5×100ms is empirically enough on macos-latest.
+      // TypeError. 10×200ms (≤2s) is empirically enough on macos-latest.
       let entries = [];
       let appEntry;
       for (let i = 0; i < 10; i++) {
