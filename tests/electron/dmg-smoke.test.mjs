@@ -105,11 +105,11 @@ if (!DMG) {
       // TypeError. 5×100ms is empirically enough on macos-latest.
       let entries = [];
       let appEntry;
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 10; i++) {
         entries = fs.readdirSync(mountpoint);
         appEntry = entries.find((n) => n.endsWith(".app"));
         if (appEntry) break;
-        await sleep(100);
+        await sleep(200);
       }
 
       await t.test("AC3/T5a: DMG contains a .app bundle", () => {

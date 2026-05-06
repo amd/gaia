@@ -650,7 +650,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       // bumped ahead of PyPI during development. They must match at release
       // time but may legitimately differ pre-release. Assert package.json has a
       // valid semver and is not AHEAD of version.py (that would be a bug).
-      expect(pkg.version).toMatch(/^\d+\.\d+\.\d+/);
+      expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(match[1]).toMatch(/^\d+\.\d+\.\d+$/);
       const pkgParts = pkg.version.split('.').map(Number);
       const pyParts = match[1].split('.').map(Number);
       const pkgAhead = pkgParts.some((n, i) =>

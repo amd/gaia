@@ -583,6 +583,8 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: macos-latest  # Apple Silicon (arm64) — matches build matrix
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4

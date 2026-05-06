@@ -81,10 +81,14 @@ const NETWORK_CHECK_TIMEOUT_MS = 5000;
 // (win-x64 deferred to a follow-up issue — its SHA must ship together with an
 // NSIS structural-smoke verifier, not on its own; see the #849 lesson.)
 //
-// Note on mac-arm64: electron-builder code-signs the bundled uv binary during
-// packaging, so the hash here is the post-signing digest (what ensureUv() sees
-// at runtime), NOT the raw extracted-from-tarball digest. The workflow step
-// verifies the archive provenance; this constant verifies the packaged binary.
+// IMPORTANT: per-platform SHA origin differs:
+//   - linux-x64:  raw extracted-from-tarball digest (no post-build modification).
+//   - mac-arm64:  POST-CODESIGN digest. electron-builder code-signs the bundled
+//                 uv during packaging, so this hash matches what ensureUv() sees
+//                 at runtime, NOT the upstream tarball. Bumping this pin means
+//                 running the CI build, then copying the SHA from the
+//                 dmg-structural-smoke failure message — never from `shasum`
+//                 against the freshly downloaded tarball.
 const BUNDLED_UV_VERSION = "0.5.14";
 const BUNDLED_UV_SHA256 = {
   "linux-x64": "0e05d828b5708e8a927724124db3746396afddad6273c47283d7c562dc795bd6",
