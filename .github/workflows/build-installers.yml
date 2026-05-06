@@ -229,6 +229,64 @@ jobs:
           chmod 0755 "${DEST_DIR}/uv"
           "${DEST_DIR}/uv" --version
 
+      - name: Fetch uv binary (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          UV_VERSION="0.5.14"
+          UV_ZIP="uv-x86_64-pc-windows-msvc.zip"
+          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_ZIP}"
+          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/win-x64"
+          mkdir -p "${DEST_DIR}"
+          tmpdir="$(mktemp -d)"
+          echo "Attempting to download ${UV_URL}"
+          if curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_ZIP}" "${UV_URL}"; then
+            unzip -q "${tmpdir}/${UV_ZIP}" -d "${tmpdir}" || true
+            # Try to find uv.exe under extracted dirs
+            find "${tmpdir}" -type f -iname uv.exe -exec cp {} "${DEST_DIR}/uv.exe" \; || true
+            if [ -f "${DEST_DIR}/uv.exe" ]; then
+              echo "Installed uv.exe to ${DEST_DIR}/uv.exe"
+              chmod 0755 "${DEST_DIR}/uv.exe" || true
+              "${DEST_DIR}/uv.exe" --version || true
+            else
+              echo "WARNING: uv.exe not found after download; continuing without bundling (packaged installer will attempt recovery)"
+            fi
+          else
+            echo "WARNING: could not download ${UV_URL}; continuing without bundling";
+          fi
+
+      - name: Fetch uv binary (macOS)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          UV_VERSION="0.5.14"
+          # Try a couple of likely tarball names (arm64 / aarch64 naming varies upstream)
+          CANDIDATES=("uv-aarch64-apple-darwin.tar.gz" "uv-arm64-apple-darwin.tar.gz")
+          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/mac-arm64"
+          mkdir -p "${DEST_DIR}"
+          tmpdir="$(mktemp -d)"
+          ok=0
+          for TARBALL in "${CANDIDATES[@]}"; do
+            URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${TARBALL}"
+            echo "Trying ${URL}"
+            if curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${TARBALL}" "${URL}"; then
+              tar -xzf "${tmpdir}/${TARBALL}" -C "${tmpdir}" || true
+              # find uv binary
+              if find "${tmpdir}" -type f -name uv -exec cp {} "${DEST_DIR}/uv" \;; then
+                chmod 0755 "${DEST_DIR}/uv" || true
+                echo "Installed uv to ${DEST_DIR}/uv"
+                "${DEST_DIR}/uv" --version || true
+                ok=1
+                break
+              fi
+            fi
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "WARNING: could not fetch macOS uv binary; continuing without bundling"
+          fi
+
       - name: Build frontend (Vite)
         working-directory: src/gaia/apps/webui
         shell: bash

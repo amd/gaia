@@ -345,55 +345,89 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
     .filter(Boolean)
     .join("\n");
 
-  const result = await dialog.showMessageBox(parentWindow || null, {
-    type: "error",
-    title: "GAIA install failed",
-    message,
-    detail,
-    buttons: [
-      "Retry",
-      "Manual install instructions",
-      "Copy log path",
-      "Open log file",
-      "Quit",
-    ],
-    defaultId: 0,
-    cancelId: 4,
-    noLink: true,
-  });
+  // Loop so that certain actions (Copy/Open log) return control to the
+  // same dialog rather than exiting the flow. The dialog includes a
+  // one-click "Install uv" action which attempts the packaged rescue
+  // installer and then returns 'retry' on success so the caller can
+  // re-run the full backend install.
+  const buttons = [
+    "Install uv",
+    "Retry",
+    "Manual install instructions",
+    "Copy log path",
+    "Open log file",
+    "Quit",
+  ];
 
-  switch (result.response) {
-    case 0:
-      return "retry";
-    case 1: {
-      try {
-        await shell.openExternal("https://amd-gaia.ai/quickstart#cli-install");
-      } catch {
-        // ignore
+  // Helper to show the dialog and handle the response.
+  const show = async () => {
+    const result = await dialog.showMessageBox(parentWindow || null, {
+      type: "error",
+      title: "GAIA install failed",
+      message,
+      detail,
+      buttons,
+      defaultId: 0,
+      cancelId: buttons.length - 1,
+      noLink: true,
+    });
+
+    switch (result.response) {
+      case 0: {
+        // Install uv (packaged rescue). Present a progress window while
+        // the attempt runs. On success, ask caller to retry the backend
+        // install; on failure, re-show the failure dialog with extra info.
+        const { window, onProgress, close } = createProgressWindow();
+        try {
+          await installer.ensureUv({ onProgress, isPackaged: true });
+          // Close progress UI and tell caller to retry the full install.
+          try { close(); } catch {}
+          return "retry";
+        } catch (err) {
+          try { close(); } catch {}
+          // Augment the error info so the user sees the rescue failure
+          // details when the dialog reappears.
+          const nextInfo = Object.assign({}, errorInfo, {
+            message: err.message || String(err),
+            stage: err.stage || "ensure-uv",
+            suggestion: err.suggestion || errorInfo.suggestion,
+          });
+          return showFailureDialog(parentWindow, nextInfo);
+        }
       }
-      return "manual";
-    }
-    case 2: {
-      try {
-        clipboard.writeText(logPath);
-      } catch {
-        // ignore
+      case 1:
+        return "retry";
+      case 2: {
+        try {
+          await shell.openExternal("https://amd-gaia.ai/quickstart#cli-install");
+        } catch {
+          // ignore
+        }
+        return "manual";
       }
-      // Keep the user in the loop — re-show the dialog so they can pick an action.
-      return showFailureDialog(parentWindow, errorInfo);
-    }
-    case 3: {
-      try {
-        await shell.openPath(logPath);
-      } catch {
-        // ignore
+      case 3: {
+        try {
+          clipboard.writeText(logPath);
+        } catch {
+          // ignore
+        }
+        return showFailureDialog(parentWindow, errorInfo);
       }
-      return showFailureDialog(parentWindow, errorInfo);
+      case 4: {
+        try {
+          await shell.openPath(logPath);
+        } catch {
+          // ignore
+        }
+        return showFailureDialog(parentWindow, errorInfo);
+      }
+      case 5:
+      default:
+        return "quit";
     }
-    case 4:
-    default:
-      return "quit";
-  }
+  };
+
+  return show();
 }
 
 // ── Pre-check failure dialogs ───────────────────────────────────────────────
