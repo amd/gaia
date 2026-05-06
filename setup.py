@@ -34,6 +34,8 @@ setup(
         "gaia.talk",
         "gaia.testing",
         "gaia.utils",
+        "gaia.filesystem",
+        "gaia.scratchpad",
         "gaia.apps",
         "gaia.apps.docker",
         "gaia.apps.jira",
