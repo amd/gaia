@@ -167,6 +167,12 @@ if (!DMG) {
             `stderr:\n${r.stderr}`,
         );
       }
+      try {
+        fs.rmSync(workdir, { recursive: true, force: true });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(`[dmg-smoke] workdir cleanup failed: ${e.message}`);
+      }
     }
   });
 }

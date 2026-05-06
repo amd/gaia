@@ -113,7 +113,7 @@ export function assertUvBinary(uvPath, platformKey, installerCjsPath) {
  */
 export function backendInstallerPath(testFileUrl) {
   return path.resolve(
-    path.dirname(new URL(testFileUrl).pathname),
+    path.dirname(decodeURIComponent(new URL(testFileUrl).pathname)),
     "..",
     "..",
     "src",
