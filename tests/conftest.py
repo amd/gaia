@@ -15,6 +15,9 @@ Current fixtures:
 - api_client: HTTP client (requests.Session) configured for API testing
 - lemonade_available: Session-scoped fixture checking if Lemonade server is running
 - require_lemonade: Fixture that skips tests if Lemonade is not available
+- in_memory_keyring: Session-scoped fixture installing an in-memory keyring backend
+  (used by tests/unit/connectors/ to avoid SecretService prerequisite on Linux CI)
+- ui_api_client: Function-scoped TestClient against gaia.ui.server.create_app()
 
 Current options:
 - --hybrid: Run tests with hybrid configuration (cloud + local models)
@@ -250,3 +253,104 @@ def api_client(api_server):
     )
     yield session
     session.close()
+
+
+# =============================================================================
+# CONNECTIONS / KEYRING FIXTURES (issue #915)
+# =============================================================================
+
+
+def _make_in_memory_keyring():
+    """
+    Build an in-memory keyring backend used by connections tests.
+
+    Imported lazily so that ``import tests.conftest`` does not require keyring
+    to be installed (e.g. for tests that don't need it).
+
+    Avoids the production SecretService / Keychain / DPAPI dependency in CI
+    while preserving the real keyring API contract:
+
+    - get_password() returns None for missing entries
+    - set_password() overwrites in place (atomic at the backend level — see
+      A5 in the plan: this is what the single-blob store relies on)
+    - delete_password() raises PasswordDeleteError for missing entries
+    """
+    import keyring.backend
+    import keyring.errors
+
+    class _InMemoryKeyring(keyring.backend.KeyringBackend):
+        # Highest priority — keyring picks the backend with the largest
+        # ``priority`` value, so this guarantees the test fixture wins over
+        # any production backend that happens to be installed.
+        priority = 99
+
+        def __init__(self):
+            self._store: dict[tuple[str, str], str] = {}
+
+        def get_password(self, service, username):
+            return self._store.get((service, username))
+
+        def set_password(self, service, username, password):
+            self._store[(service, username)] = password
+
+        def delete_password(self, service, username):
+            try:
+                del self._store[(service, username)]
+            except KeyError as e:
+                raise keyring.errors.PasswordDeleteError(
+                    f"No password for {service}:{username}"
+                ) from e
+
+    return _InMemoryKeyring()
+
+
+@pytest.fixture(scope="session")
+def in_memory_keyring():
+    """
+    Install an in-memory keyring backend for the duration of the test session.
+
+    Use as a session-scoped dependency in connections tests. The autouse fixture
+    in tests/unit/connectors/conftest.py wraps this to ensure every connections
+    test has the in-memory backend before any gaia.connectors module is imported.
+
+    Linux CI runners ship without SecretService, and the production-default
+    keyrings.alt fallback is plaintext — we explicitly refuse that backend in
+    gaia.connectors.store. This fixture short-circuits the keyring lookup
+    chain to a deterministic in-memory backend that no production code uses.
+
+    Yields:
+        _InMemoryKeyring: the active backend (already installed via keyring.set_keyring)
+    """
+    import keyring
+
+    backend = _make_in_memory_keyring()
+    previous = keyring.get_keyring()
+    keyring.set_keyring(backend)
+    try:
+        yield backend
+    finally:
+        keyring.set_keyring(previous)
+
+
+@pytest.fixture
+def ui_api_client():
+    """
+    TestClient bound to the in-process gaia.ui.server FastAPI app.
+
+    Use this — NOT the api_client fixture above — for any test that hits a
+    /api/* route on the AgentUI server (port 4200 in production). api_client
+    targets the OpenAI-compatible server at port 8080 and will silently 404
+    on UI-server routes (see plan amendment A12).
+
+    Skips the test if the [ui] extras are not installed.
+    """
+    try:
+        from starlette.testclient import TestClient
+
+        from gaia.ui.server import create_app
+    except ImportError as e:
+        pytest.skip(f"gaia.ui not importable (install with `[ui]` extras): {e}")
+
+    app = create_app()
+    with TestClient(app) as client:
+        yield client

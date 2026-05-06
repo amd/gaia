@@ -231,3 +231,79 @@ test("main.cjs spawn args and index query share the same backendPort", () => {
     "loadApp() must not contain a hardcoded API URL literal"
   );
 });
+
+// ─── isBootstrapping guard (issue #934 layer 3) ──────────────────────
+//
+// The window-all-closed handler must check isBootstrapping so the progress
+// dialog being destroyed during backend install does not fire a premature
+// app.quit() before createWindow() runs. If someone removes the guard or
+// moves `isBootstrapping = false` earlier, the timing race silently returns.
+
+test("window-all-closed handler checks isBootstrapping (issue #934 layer 3)", () => {
+  const src = fs.readFileSync(mainCjsPath, "utf8");
+  const handlerMatch = src.match(
+    /app\.on\("window-all-closed",\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s*\}\)/
+  );
+  assert.ok(handlerMatch, "window-all-closed handler must exist in main.cjs");
+  assert.match(
+    handlerMatch[1],
+    /isBootstrapping/,
+    "window-all-closed must check isBootstrapping (issue #934 layer 3)"
+  );
+});
+
+test("isBootstrapping is set false after createWindow() runs", () => {
+  const src = fs.readFileSync(mainCjsPath, "utf8");
+  // The assignment must appear AFTER the createWindow() call so the guard
+  // is only lifted once the main window exists.
+  const createWindowIdx = src.indexOf("createWindow()");
+  assert.ok(createWindowIdx !== -1, "main.cjs must call createWindow()");
+  const afterCreate = src.slice(createWindowIdx);
+  assert.match(
+    afterCreate,
+    /isBootstrapping\s*=\s*false/,
+    "isBootstrapping must be set false after createWindow() (issue #934 layer 3)"
+  );
+});
+
+// ─── pathToFileURL: forward-slash contract (issue #934 layer 2) ──────
+//
+// Chromium 130+ (Electron 40) rejects backslash file URLs that
+// url.format() / loadFile() produced on Windows. pathToFileURL() must
+// always emit forward-slash URLs regardless of platform.
+
+import { pathToFileURL } from "node:url";
+
+test("pathToFileURL emits forward-slash URL for Windows-style path", () => {
+  // Simulate the path that loadApp() constructs on Windows.
+  const winPath = "C:\\Users\\user\\AppData\\Local\\GAIA\\dist\\index.html";
+  const href = pathToFileURL(winPath).href;
+  assert.ok(href.startsWith("file:///"), `must start with file:/// — got ${href}`);
+  assert.ok(!href.includes("\\"), `must contain no backslashes — got ${href}`);
+});
+
+test("pathToFileURL emits forward-slash URL for POSIX path", () => {
+  const posixPath = "/home/user/.local/share/GAIA/dist/index.html";
+  const href = pathToFileURL(posixPath).href;
+  assert.ok(href.startsWith("file:///"), `must start with file:/// — got ${href}`);
+  assert.ok(!href.includes("\\"), `must contain no backslashes — got ${href}`);
+});
+
+test("main.cjs uses pathToFileURL (not loadFile) to load the frontend", () => {
+  // Regression guard: if someone switches back to loadFile(), the Windows
+  // backslash bug (#934 layer 2) will silently reappear. Pin the call site.
+  const src = fs.readFileSync(mainCjsPath, "utf8");
+  assert.match(
+    src,
+    /pathToFileURL/,
+    "main.cjs must call pathToFileURL() to build the file:// URL"
+  );
+  // loadFile() must not be used for the main app window navigation.
+  const loadAppMatch = src.match(/async function loadApp\(\)\s*{([\s\S]*?)\n}/);
+  assert.ok(loadAppMatch, "main.cjs must declare loadApp()");
+  assert.doesNotMatch(
+    loadAppMatch[1],
+    /\.loadFile\(/,
+    "loadApp() must not use loadFile() — use loadURL(pathToFileURL(...))"
+  );
+});

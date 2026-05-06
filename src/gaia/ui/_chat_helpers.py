@@ -389,6 +389,12 @@ def _canonical_agent_type(agent_type: str) -> str:
     Keeps the per-session agent cache from thrashing when a client mixes the
     old and new IDs within the same session — both resolve to the same
     canonical ID and therefore the same cache entry.
+
+    Raises:
+        AttributeError: If the registry doesn't expose ``canonical_id``.
+            Fail loudly per CLAUDE.md "no silent fallbacks" — a registry
+            that lost this method is a real bug, not something to paper
+            over with a cache miss.
     """
     registry = _agent_registry
     if registry is None:
