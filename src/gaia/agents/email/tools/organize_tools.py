@@ -139,7 +139,14 @@ def move_to_label_impl(
     prior: Optional[Dict[str, Any]] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
-    """Add a label and remove INBOX in one atomic Gmail call."""
+    """Add a label and remove INBOX.
+
+    Non-atomic: two public Protocol calls (``add_label`` then
+    ``archive_message``). If the second call raises, the message will
+    have the new label but still be in INBOX. The ``prior_labels`` field
+    in the action row captures both the original label set so
+    ``restore_message`` can recover either partial state.
+    """
     with log_tool_call(
         "move_to_label",
         {"message_id": message_id, "label_id": label_id},
@@ -148,13 +155,9 @@ def move_to_label_impl(
         if prior is None:
             prior = gmail.get_message(message_id)
         prior_labels = list(prior.get("labelIds", []))
-        # Single Gmail call — uses LiveGmailBackend's private
-        # _modify_labels for atomicity (so we never end up half-moved
-        # if the second of two calls would have raised). This requires
-        # the backend to expose ``_modify_labels``; the FakeGmailBackend
-        # also has the equivalent ``_modify`` method.
-        modify = getattr(gmail, "_modify_labels", None) or getattr(gmail, "_modify")
-        modify(message_id, add=[label_id], remove=["INBOX"])
+        # Gmail call first (ordering invariant: DB write only on success).
+        gmail.add_label(message_id, label_id)
+        gmail.archive_message(message_id)
         action_id = action_store.record_action(
             db,
             action_type="move_to_label",

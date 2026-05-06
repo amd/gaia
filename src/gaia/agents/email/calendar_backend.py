@@ -10,7 +10,6 @@ eval harness can inject a fake; semantic methods (``accept_invite``,
 
 from __future__ import annotations
 
-import logging
 from typing import (
     Any,
     Callable,
@@ -27,8 +26,9 @@ import httpx
 from gaia.agents.email.scopes import AGENT_NAMESPACED_ID, CALENDAR_SCOPES
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import get_credential_sync
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"

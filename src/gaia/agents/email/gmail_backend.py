@@ -33,7 +33,6 @@ request header.
 from __future__ import annotations
 
 import base64
-import logging
 from html.parser import HTMLParser
 from typing import (
     Any,
@@ -52,12 +51,12 @@ import httpx
 from gaia.agents.email.scopes import (
     AGENT_NAMESPACED_ID,
     GMAIL_SCOPES,
-    SCOPE_GMAIL_MODIFY,
 )
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import get_credential_sync
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
@@ -240,12 +239,10 @@ def _decode_charset(
         candidates.append("utf-8")
     candidates.extend(["latin-1", "cp1252"])
 
-    fallback_used = False
     for idx, charset in enumerate(candidates):
         try:
             return payload.decode(charset), idx > 0
         except (UnicodeDecodeError, LookupError):
-            fallback_used = True
             continue
     # Last-resort: latin-1 with replace can never raise — every byte maps.
     return payload.decode("latin-1", errors="replace"), True
@@ -283,15 +280,13 @@ def decode_message_body(payload: dict) -> Tuple[str, List[Dict[str, Any]]]:
             }
     """
     attachments: List[Dict[str, Any]] = []
-    body_text = _walk_parts(payload, attachments, prefer_html=False)
+    body_text = _walk_parts(payload, attachments)
     return body_text.strip(), attachments
 
 
 def _walk_parts(
     part: dict,
     attachments: List[Dict[str, Any]],
-    *,
-    prefer_html: bool,
 ) -> str:
     mime_type = (part.get("mimeType") or "").lower()
     body = part.get("body") or {}
@@ -307,24 +302,24 @@ def _walk_parts(
             for child in parts:
                 child_mime = (child.get("mimeType") or "").lower()
                 if child_mime == "text/plain":
-                    plain_text = _walk_parts(child, attachments, prefer_html=False)
+                    plain_text = _walk_parts(child, attachments)
                 elif child_mime == "text/html":
-                    html_text = _walk_parts(child, attachments, prefer_html=False)
+                    html_text = _walk_parts(child, attachments)
                 elif child_mime.startswith("multipart/"):
                     # Nested multipart inside alternative; pick whichever
                     # comes back first.
-                    nested = _walk_parts(child, attachments, prefer_html=False)
+                    nested = _walk_parts(child, attachments)
                     plain_text = plain_text or nested
             return plain_text or html_text
         else:
             chunks: list[str] = []
             for child in parts:
-                chunks.append(_walk_parts(child, attachments, prefer_html=False))
+                chunks.append(_walk_parts(child, attachments))
             return "\n".join(c for c in chunks if c)
 
     # message/rfc822 — the forwarded body lives in ``parts[0].body``.
     if mime_type == "message/rfc822" and parts:
-        return _walk_parts(parts[0], attachments, prefer_html=False)
+        return _walk_parts(parts[0], attachments)
 
     # Leaf content.
     if mime_type in ("text/plain", "text/html"):

@@ -3211,6 +3211,8 @@ Let me know your answer!
     # Handle Jira command
     if args.action == "jira":
         handle_jira_command(args)
+        return
+
     if args.action == "email":
         handle_email_command(args)
         return

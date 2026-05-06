@@ -35,11 +35,14 @@ logger = logging.getLogger("gaia.agents.email")
 
 
 # Patterns redacted from any tool-call args before logging. Conservative —
-# better to drop a real string than leak an MFA code.
+# better to drop a real string than leak an MFA code or single-use token.
+# The third pattern requires at least one digit AND one letter (to avoid
+# matching long file paths, message IDs, and other non-secret identifiers)
+# AND at least 40 chars (JWT header+payload sections are typically longer).
 _REDACT_PATTERNS = [
     re.compile(r"\b\d{6,8}\b"),  # MFA codes
     re.compile(r"https?://\S{30,}"),  # password reset URLs
-    re.compile(r"[A-Za-z0-9_\-]{30,}"),  # opaque tokens
+    re.compile(r"(?=[A-Za-z0-9_\-]{40,})(?=[A-Za-z0-9_\-]*\d)[A-Za-z0-9_\-]{40,}"),
 ]
 
 

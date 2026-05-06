@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -31,10 +30,7 @@ if str(_REPO_ROOT) not in sys.path:
 pytestmark = pytest.mark.integration
 
 from gaia.agents.email.tools.read_tools import triage_inbox_impl  # noqa: E402
-from tests.fixtures.email.fake_gmail import (  # noqa: E402
-    FakeCalendarBackend,
-    FakeGmailBackend,
-)
+from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 FIXTURES_DIR = _REPO_ROOT / "tests" / "fixtures" / "email"
 STUB_INBOX = FIXTURES_DIR / "_stub_inbox.mbox"

@@ -19,7 +19,6 @@ import httpx
 import pytest
 
 from gaia.agents.email.gmail_backend import (
-    GMAIL_API_BASE,
     GmailBackend,
     LiveGmailBackend,
     _build_rfc822,

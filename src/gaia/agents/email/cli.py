@@ -64,8 +64,8 @@ async def main(args: Any) -> int:
     finally:
         try:
             agent.close_db()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("close_db failed during shutdown: %s", exc)
 
 
 async def _one_shot(agent: EmailTriageAgent, query: str) -> int:

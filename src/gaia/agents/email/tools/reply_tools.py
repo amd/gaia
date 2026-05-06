@@ -17,6 +17,9 @@ from typing import Any, Dict, Optional
 from gaia.agents.base.tools import tool
 from gaia.agents.email import action_store
 from gaia.agents.email.verbose import log_tool_call
+from gaia.logger import get_logger
+
+log = get_logger(__name__)
 
 
 def _envelope_ok(data: Any) -> str:
@@ -173,9 +176,7 @@ def send_now_impl(
             # Audit-write failures must NOT mask a successful send. Log
             # but don't raise — the email already left the user's
             # account; the agent must not retry.
-            import logging
-
-            logging.getLogger("gaia.agents.email").warning(
+            log.warning(
                 "send_now: audit write failed for sent_id=%s — "
                 "send DID succeed but audit row missing",
                 sent_id,
@@ -186,7 +187,7 @@ def send_now_impl(
 
 def forward_message_impl(
     gmail,
-    db,
+    _db,
     *,
     message_id: str,
     to: str,

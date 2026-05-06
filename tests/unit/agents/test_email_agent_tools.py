@@ -291,28 +291,37 @@ class TestSendNowAuditTrail:
         assert row["sent_at"] is not None
 
 
-class TestMoveToLabelAtomicity:
-    """``move_to_label_impl`` issues a single ``_modify_labels`` call so
-    a partial-failure cannot leave a message half-moved.
+class TestMoveToLabelBehavior:
+    """``move_to_label_impl`` calls ``add_label`` then ``archive_message``
+    (two public Protocol calls) so the seam stays provider-agnostic for
+    the Outlook backend (#963). Non-atomicity is documented in the impl.
     """
 
-    def test_move_uses_single_modify_call(self, fake_gmail, db):
+    def test_move_adds_label_and_archives(self, fake_gmail, db):
         from gaia.agents.email.tools.organize_tools import move_to_label_impl
 
         new_label = fake_gmail.create_label(name="archive-target")
         msg_id = list(fake_gmail._messages.keys())[0]
-        # Reset transport call log.
-        fake_gmail.transport.reset()
         move_to_label_impl(fake_gmail, db, message_id=msg_id, label_id=new_label["id"])
-        # Recorded calls: one get_message (for prior_labels) + the
-        # single underlying modify (NOT add_label + archive_message
-        # as two separate calls).
-        method_names = [c[0] for c in fake_gmail.transport.calls]
-        assert "add_label" not in method_names, (
-            "move_to_label should issue a SINGLE atomic modify, "
-            "not separate add_label + archive_message"
+        post = fake_gmail.get_message(msg_id)
+        # Message should have the new label and NOT be in INBOX.
+        assert new_label["id"] in post["labelIds"]
+        assert "INBOX" not in post["labelIds"]
+
+    def test_move_records_action_with_prior_labels(self, fake_gmail, db):
+        from gaia.agents.email.tools.organize_tools import move_to_label_impl
+
+        new_label = fake_gmail.create_label(name="archive-target-2")
+        msg_id = list(fake_gmail._messages.keys())[0]
+        prior = fake_gmail.get_message(msg_id)
+        prior_labels = list(prior.get("labelIds", []))
+        out = move_to_label_impl(
+            fake_gmail, db, message_id=msg_id, label_id=new_label["id"]
         )
-        assert "archive_message" not in method_names
+        action_id = out["action_id"]
+        row = action_store.fetch_undoable(db, action_id=action_id, window_seconds=30)
+        assert row is not None
+        assert row["payload"]["prior_labels"] == prior_labels
 
 
 class TestDeleteTools:

@@ -36,7 +36,7 @@ the LLM's reading of the body and are intentionally not heuristic-gated.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional
+from typing import Iterable, List
 
 # ---------------------------------------------------------------------------
 # Gmail API system label IDs we recognize.

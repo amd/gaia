@@ -40,12 +40,15 @@ def _allowed_hosts() -> set[str]:
     out = set(_LOCAL_HOSTS)
     env = os.environ.get("LEMONADE_BASE_URL", "")
     if env:
-        try:
-            host = urlparse(env).hostname
-            if host:
-                out.add(host)
-        except Exception:
-            pass
+        parsed = urlparse(env)
+        host = parsed.hostname
+        if not host:
+            raise ConfigurationError(
+                f"LEMONADE_BASE_URL={env!r} is not a valid URL: "
+                "could not extract a hostname. Set it to a valid URL "
+                "such as http://localhost:11434."
+            )
+        out.add(host)
     return out
 
 

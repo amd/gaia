@@ -32,7 +32,7 @@ Phase I prompt-injection defense:
 from __future__ import annotations
 
 import os
-from typing import Any, ClassVar, List, Optional
+from typing import ClassVar, List, Optional
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
@@ -237,7 +237,7 @@ class EmailTriageAgent(
         self._organize_op_count = 0
         self._organize_distinct_senders = set()
 
-    def _record_organize_op(self, message_id: str, sender: str) -> None:
+    def _record_organize_op(self, _message_id: str, sender: str) -> None:
         """Bump the per-turn organize counters. Called by organize-tool
         closures BEFORE the Gmail call.
         """
