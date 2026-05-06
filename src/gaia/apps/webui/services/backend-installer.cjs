@@ -77,10 +77,22 @@ const NETWORK_CHECK_TIMEOUT_MS = 5000;
 // archive against upstream's published .sha256, then extracts the `uv` binary
 // which is what `ensureUv()` hashes at runtime.
 //
-// Currently pinned: uv v0.5.14 linux-x64.
+// Currently pinned: uv v0.5.14 linux-x64, mac-arm64.
+// (win-x64 deferred to a follow-up issue — its SHA must ship together with an
+// NSIS structural-smoke verifier, not on its own; see the #849 lesson.)
+//
+// IMPORTANT: per-platform SHA origin differs:
+//   - linux-x64:  raw extracted-from-tarball digest (no post-build modification).
+//   - mac-arm64:  POST-CODESIGN digest. electron-builder code-signs the bundled
+//                 uv during packaging, so this hash matches what ensureUv() sees
+//                 at runtime, NOT the upstream tarball. Bumping this pin means
+//                 running the CI build, then copying the SHA from the
+//                 dmg-structural-smoke failure message — never from `shasum`
+//                 against the freshly downloaded tarball.
 const BUNDLED_UV_VERSION = "0.5.14";
 const BUNDLED_UV_SHA256 = {
   "linux-x64": "0e05d828b5708e8a927724124db3746396afddad6273c47283d7c562dc795bd6",
+  "mac-arm64": "6099aa8cd701f0c81227ee30c304777ce151e4d47c53a75ce53cd2243448d8c8",
 };
 
 const MANAGED_UV_DIR = path.join(GAIA_HOME, "bin");

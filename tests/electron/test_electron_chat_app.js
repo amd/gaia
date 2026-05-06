@@ -1182,7 +1182,7 @@ describe('Chat App Integration', () => {
     });
   });
 
-  // ── Settings Modal Enhancements ───────────────────────────────────
+  // ── Settings Page Enhancements ────────────────────────────────────
 
   describe('SettingsPage enhancements', () => {
     let settingsContent;

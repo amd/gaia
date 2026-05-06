@@ -92,6 +92,12 @@ on:
       - 'src/gaia/apps/webui/main.cjs'
       - 'src/gaia/apps/webui/bin/**'
       - 'src/gaia/apps/webui/services/**'
+      # Cover the installer-smoke test tree (issue #941) so a PR that
+      # only touches the smoke-test layer still triggers structural smoke.
+      # Narrower than `tests/electron/**` so Jest-only edits to e.g.
+      # test_electron_chat_app.js don't re-run the multi-platform build.
+      - 'tests/electron/_helpers/**'
+      - 'tests/electron/*-smoke.test.mjs'
       - 'tests/electron/fixtures/**'
       - 'src/gaia/version.py'
 
@@ -228,6 +234,44 @@ jobs:
           cp "${tmpdir}/uv-x86_64-unknown-linux-gnu/uv" "${DEST_DIR}/uv"
           chmod 0755 "${DEST_DIR}/uv"
           "${DEST_DIR}/uv" --version
+
+      # ─── Fetch uv binary for macOS DMG (issue #941) ─────────────────
+      # Mirror of the Linux step above. Without this, the macOS .app
+      # ships no bundled uv even though backend-installer.cjs claims
+      # support for darwin-arm64, so first-launch on a clean Mac (no
+      # system uv on PATH) hard-fails in ensure-uv. The runtime hashes
+      # the *extracted* binary against BUNDLED_UV_SHA256["mac-arm64"]
+      # in src/gaia/apps/webui/services/backend-installer.cjs — those
+      # two pins MUST be bumped in lockstep with this step.
+      - name: Fetch uv binary (macOS)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          UV_VERSION="0.5.14"
+          UV_TARBALL="uv-aarch64-apple-darwin.tar.gz"
+          UV_SHA256="d548dffc256014c4c8c693e148140a3a21bcc2bf066a35e1d5f0d24c91d32112"
+          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
+          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/mac-arm64"
+          mkdir -p "${DEST_DIR}"
+          tmpdir="$(mktemp -d)"
+          # --retry 3/5s matches the Lemonade MSI step below; survives
+          # transient GitHub Releases CDN flakes on hosted macOS runners.
+          curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_TARBALL}" "${UV_URL}"
+          # macOS shasum -a 256 -c accepts the GNU "hash  file" format.
+          echo "${UV_SHA256}  ${tmpdir}/${UV_TARBALL}" | shasum -a 256 -c -
+          tar -xzf "${tmpdir}/${UV_TARBALL}" -C "${tmpdir}"
+          cp "${tmpdir}/uv-aarch64-apple-darwin/uv" "${DEST_DIR}/uv"
+          chmod 0755 "${DEST_DIR}/uv"
+          "${DEST_DIR}/uv" --version
+          # Echo the extracted-binary SHA. This is the PRE-codesign digest
+          # (i.e., the upstream tarball's uv byte-for-byte), useful for
+          # confirming what feeds into electron-builder's codesign step.
+          # NOTE: this is NOT directly comparable to BUNDLED_UV_SHA256[mac-arm64],
+          # which is the POST-codesign digest — see backend-installer.cjs.
+          # To bump BUNDLED_UV_SHA256[mac-arm64], run the CI build and copy
+          # the SHA from the dmg-structural-smoke failure message.
+          shasum -a 256 "${DEST_DIR}/uv"
 
       - name: Build frontend (Vite)
         working-directory: src/gaia/apps/webui
@@ -531,6 +575,46 @@ jobs:
         env:
           GAIA_APPIMAGE: ${{ steps.locate.outputs.appimage }}
         run: node --test tests/electron/appimage-smoke.test.mjs
+
+  # ─── DMG structural smoke (issue #941) ──────────────────────────────
+  # Mirrors appimage-structural-smoke for the macOS DMG. Catches the
+  # failure mode that bit v0.17.5: a darwin-arm64 install that hard-fails
+  # in ensure-uv on first launch because the bundled uv either was never
+  # shipped or has the wrong SHA256 against BUNDLED_UV_SHA256[mac-arm64]
+  # in backend-installer.cjs.
+  #
+  # MUST be present in build-complete `needs:` below — without that
+  # wiring, a failing DMG smoke does not block release-readiness.
+  dmg-structural-smoke:
+    name: DMG structural smoke
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: macos-latest  # Apple Silicon (arm64) — matches build matrix
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download macOS installer artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: macos-installer  # ${{ matrix.platform }}-installer with platform=macos
+          path: ${{ runner.temp }}/macos-installer
+
+      - name: Locate DMG
+        id: locate
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG=$(ls "${RUNNER_TEMP}/macos-installer"/*.dmg | head -n1)
+          echo "Found DMG: ${DMG}"
+          echo "dmg=${DMG}" >> "$GITHUB_OUTPUT"
+
+      - name: Structural smoke (uv binary, mode, sha256, --version)
+        env:
+          GAIA_DMG: ${{ steps.locate.outputs.dmg }}
+        run: node --test tests/electron/dmg-smoke.test.mjs
 
   appimage-distro-matrix:
     name: AppImage distro matrix
@@ -971,6 +1055,7 @@ jobs:
       - appimage-structural-smoke
       - appimage-distro-matrix
       - appimage-userns-restricted
+      - dmg-structural-smoke
     if: always()
     steps:
       - name: Verify all platform builds and smoke tests succeeded
@@ -980,22 +1065,24 @@ jobs:
           structural_result="${{ needs.appimage-structural-smoke.result }}"
           distro_result="${{ needs.appimage-distro-matrix.result }}"
           userns_result="${{ needs.appimage-userns-restricted.result }}"
+          dmg_result="${{ needs.dmg-structural-smoke.result }}"
           echo "build:                       $build_result"
           echo "appimage-structural-smoke:   $structural_result"
           echo "appimage-distro-matrix:      $distro_result"
           echo "appimage-userns-restricted:  $userns_result"
+          echo "dmg-structural-smoke:        $dmg_result"
           fail=0
           if [ "$build_result" != "success" ]; then
             echo "::error::One or more platform installer builds failed"
             fail=1
           fi
-          for r in "$structural_result" "$distro_result" "$userns_result"; do
+          for r in "$structural_result" "$distro_result" "$userns_result" "$dmg_result"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
-              echo "::error::AppImage smoke job failed (status: $r)"
+              echo "::error::Installer smoke job failed (status: $r)"
               fail=1
             fi
           done
           if [ "$fail" -eq 1 ]; then
             exit 1
           fi
-          echo "All platform installers built and AppImage smoke suite passed."
+          echo "All platform installers built and installer smoke suite passed."
