@@ -10,6 +10,13 @@
 //   GAIA_DMG=$(ls src/gaia/apps/webui/dist-app/*.dmg) \
 //     node --test tests/electron/dmg-smoke.test.mjs
 //
+// NOTE: the AC3/T5b SHA check compares against the POST-codesign digest in
+// BUNDLED_UV_SHA256["mac-arm64"]. A local build without Apple signing certs
+// (CSC_LINK unset) will produce an ad-hoc-signed uv whose SHA will NOT match
+// the pinned CI value — T5b will fail as expected. Local smoke runs are most
+// useful for T5a (.app presence) and T5c (`uv --version` runs); T5b is only
+// meaningful for signed CI builds.
+//
 // Acceptance-criteria mapping (issue #941):
 //   - AC3 / T5: bundled mac-arm64 uv binary is present, executable, has the
 //              SHA256 declared in BUNDLED_UV_SHA256, AND `uv --version` runs.
@@ -158,6 +165,15 @@ if (!DMG) {
             /^uv \d+\.\d+\.\d+/,
             `unexpected uv --version output: ${out}`,
           );
+        });
+      } else {
+        // Emit explicit skips so the CI log shows three subtest results
+        // regardless of T5a outcome — makes it obvious the gap is upstream.
+        await t.test("AC3/T5b: bundled mac-arm64 uv (skipped — no .app)", (st) => {
+          st.skip("T5a failed to locate .app bundle; downstream checks cannot run");
+        });
+        await t.test("AC3/T5c: bundled mac-arm64 uv --version (skipped — no .app)", (st) => {
+          st.skip("T5a failed to locate .app bundle; downstream checks cannot run");
         });
       }
     } finally {

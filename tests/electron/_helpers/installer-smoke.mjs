@@ -99,7 +99,10 @@ export function assertUvBinary(uvPath, platformKey, installerCjsPath) {
   assert.equal(
     actual,
     expected,
-    `bundled uv binary SHA256 does not match BUNDLED_UV_SHA256["${platformKey}"]; ensureUv() will reject this at runtime`,
+    `bundled uv binary SHA256 does not match BUNDLED_UV_SHA256["${platformKey}"]; ` +
+      `ensureUv() will reject this at runtime. ` +
+      `To fix: update BUNDLED_UV_SHA256["${platformKey}"] in ` +
+      `src/gaia/apps/webui/services/backend-installer.cjs to: ${actual}`,
   );
 }
 
