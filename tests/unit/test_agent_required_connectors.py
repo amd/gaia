@@ -218,7 +218,7 @@ class TestAgentInfoSerialization:
             models=[],
             required_connections=[
                 {
-                    "provider": "google",
+                    "connector_id": "google",
                     "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
                     "reason": "test",
                 }

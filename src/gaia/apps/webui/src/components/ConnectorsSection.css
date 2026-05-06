@@ -335,12 +335,7 @@
 .btn-grant-add:hover { color: var(--accent-blue-bright, #6ab4f5); }
 .btn-grant-add:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.spin {
-    animation: spin 0.8s linear infinite;
-}
-@keyframes spin {
-    to { transform: rotate(360deg); }
-}
+/* .spin / @keyframes spin are defined globally in src/styles/index.css */
 
 /* ── Shared ───────────────────────────────────────────────────── */
 

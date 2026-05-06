@@ -580,8 +580,9 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
             })}
             {/* Agents that need a grant but don't have one yet */}
             {pendingAgents.map((agent) => {
-                const agentId = agent.namespaced_agent_id!;
-                const req = agent.required_connections!.find((rc) => rc.connector_id === connectorId)!;
+                const agentId = agent.namespaced_agent_id;
+                const req = agent.required_connections?.find((rc) => rc.connector_id === connectorId);
+                if (!agentId || !req) return null;
                 const busy = granting === agentId;
                 return (
                     <div key={agentId} className="grant-row grant-row--pending">
