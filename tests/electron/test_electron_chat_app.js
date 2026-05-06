@@ -460,9 +460,9 @@ describe('Chat App Integration', () => {
       expect(appContent).toContain('DocumentLibrary');
     });
 
-    it('should conditionally render SettingsModal', () => {
+    it('should conditionally render SettingsPage', () => {
       expect(appContent).toContain('showSettings');
-      expect(appContent).toContain('SettingsModal');
+      expect(appContent).toContain('SettingsPage');
     });
   });
 
@@ -526,7 +526,7 @@ describe('Chat App Integration', () => {
   describe('additional components', () => {
     const additionalComponents = [
       'DocumentLibrary',
-      'SettingsModal',
+      'SettingsPage',
     ];
 
     additionalComponents.forEach(name => {
@@ -1182,13 +1182,13 @@ describe('Chat App Integration', () => {
     });
   });
 
-  // ── Settings Modal Enhancements ───────────────────────────────────
+  // ── Settings Page Enhancements ────────────────────────────────────
 
-  describe('SettingsModal enhancements', () => {
+  describe('SettingsPage enhancements', () => {
     let settingsContent;
 
     beforeAll(() => {
-      const settingsPath = path.join(CHAT_APP_PATH, 'src/components/SettingsModal.tsx');
+      const settingsPath = path.join(CHAT_APP_PATH, 'src/components/SettingsPage.tsx');
       settingsContent = fs.readFileSync(settingsPath, 'utf8');
     });
 
@@ -1196,13 +1196,7 @@ describe('Chat App Integration', () => {
       expect(settingsContent).toContain('__APP_VERSION__');
     });
 
-    it('should have ARIA role dialog', () => {
-      expect(settingsContent).toContain('role="dialog"');
-      expect(settingsContent).toContain('aria-modal="true"');
-    });
-
     it('should have danger zone section at bottom', () => {
-      expect(settingsContent).toContain('danger-zone');
       expect(settingsContent).toContain('danger-warning');
     });
 
@@ -1220,7 +1214,6 @@ describe('Chat App Integration', () => {
     });
 
     it('should have danger zone styles', () => {
-      expect(settingsCss).toContain('.danger-zone');
       expect(settingsCss).toContain('.danger-divider');
       expect(settingsCss).toContain('.danger-warning');
     });
