@@ -48,7 +48,9 @@ _MANIFEST_FINGERPRINT_KEYS = frozenset(
 # Reserved agent IDs that custom agents (under ~/.gaia/agents/) must not
 # claim. Loaded lazily by ``_RESERVED_BUILTIN_IDS`` so the list stays in sync
 # with what ``_register_builtin_agents`` actually registers.
-_RESERVED_BUILTIN_IDS: frozenset[str] = frozenset({"chat", "builder", "gaia-lite"})
+_RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
+    {"chat", "builder", "gaia-lite", "email", "connectors-demo"}
+)
 
 
 def _wrap_factory_with_namespaced_id(
@@ -372,12 +374,15 @@ class AgentRegistry:
                     ),
                     agent_dir=None,
                     models=[],
-                    required_connections=[
-                        # Surfaced in the UI so users see "this agent
-                        # needs Google + GitHub" before granting scopes.
-                        "google",
-                        "mcp-github",
-                    ],
+                    # #962 fix — pre-existing bug: this previously listed
+                    # bare provider strings (``["google", "mcp-github"]``)
+                    # but ``AgentRegistration.required_connections`` is
+                    # typed as ``List[ConnectorRequirement]`` and the UI
+                    # router calls ``.provider``/``.scopes``/``.reason``
+                    # on the items. Bare strings silently broke
+                    # ``_reg_to_info`` in agents.py. Convert to the
+                    # canonical objects so the registry stays consistent.
+                    required_connections=list(ConnectorsDemoAgent.REQUIRED_CONNECTORS),
                     namespaced_agent_id="builtin:connectors-demo",
                 )
             )
@@ -387,6 +392,42 @@ class AgentRegistry:
             )
         except ImportError as e:
             logger.debug("registry: ConnectorsDemoAgent not available, skipping: %s", e)
+
+        # --- EmailTriageAgent (#962) ---
+        # First concrete email provider for the Email Triage Agent
+        # parent issue (#645). Reads/organizes/replies through Gmail
+        # via the connectors framework; processes all email content
+        # locally on Lemonade.
+        try:
+            from gaia.agents.email.agent import EmailTriageAgent
+            from gaia.agents.email.config import EmailAgentConfig
+
+            def email_factory(**kwargs):
+                valid_fields = {f.name for f in dataclasses.fields(EmailAgentConfig)}
+                config = EmailAgentConfig(
+                    **{k: v for k, v in kwargs.items() if k in valid_fields}
+                )
+                return EmailTriageAgent(config=config)
+
+            self._register(
+                AgentRegistration(
+                    id="email",
+                    name=EmailTriageAgent.AGENT_NAME,
+                    description=EmailTriageAgent.AGENT_DESCRIPTION,
+                    source="builtin",
+                    conversation_starters=list(EmailTriageAgent.CONVERSATION_STARTERS),
+                    factory=_wrap_factory_with_namespaced_id(
+                        email_factory, "builtin:email"
+                    ),
+                    agent_dir=None,
+                    models=[],
+                    required_connections=list(EmailTriageAgent.REQUIRED_CONNECTORS),
+                    namespaced_agent_id="builtin:email",
+                )
+            )
+            logger.info("registry: Registered built-in agent: email (EmailTriageAgent)")
+        except ImportError as e:
+            logger.debug("registry: EmailTriageAgent not available, skipping: %s", e)
 
         # --- BuilderAgent ---
         try:

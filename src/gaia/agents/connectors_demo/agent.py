@@ -45,11 +45,8 @@ import httpx
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
-from gaia.connectors.errors import (
-    AuthRequiredError,
-    ConfigurationError,
-    ConnectorsError,
-)
+from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.formatting import format_connector_error as _format_connector_error
 from gaia.connectors.handler import get_credential_sync
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
@@ -150,37 +147,6 @@ def _github_pat() -> str:
             "Personal Access Token."
         )
     return token
-
-
-def _format_connector_error(e: BaseException) -> str:
-    """Translate a connectors exception into a one-line user-facing string.
-
-    The agent's system prompt tells the LLM to surface AGENT_NOT_GRANTED
-    and NOT_CONNECTED specifically — those are the two states the user
-    can fix by clicking something in Settings → Connections.
-    """
-    if isinstance(e, AuthRequiredError):
-        if e.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED:
-            scopes = ", ".join(e.missing_scopes) or "(none reported)"
-            return (
-                f"AGENT_NOT_GRANTED: this agent isn't granted these scopes "
-                f"on {e.provider}: {scopes}. Open Settings → Connections → "
-                f"{e.provider} → Per-agent grants and grant them."
-            )
-        if e.reason in (
-            AuthRequiredError.Reason.NOT_CONNECTED,
-            AuthRequiredError.Reason.REAUTH_REQUIRED,
-        ):
-            return (
-                f"NOT_CONNECTED: {e.provider} is not currently connected. "
-                f"Open Settings → Connections → {e.provider} and click Connect."
-            )
-        return f"AUTH_REQUIRED: {e}"
-    if isinstance(e, ConfigurationError):
-        return f"CONFIG_ERROR: {e}"
-    if isinstance(e, ConnectorsError):
-        return f"CONNECTOR_ERROR: {e}"
-    return f"UNEXPECTED_ERROR: {type(e).__name__}: {e}"
 
 
 def _http_get_json(
