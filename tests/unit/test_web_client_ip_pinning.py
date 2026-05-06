@@ -45,3 +45,52 @@ def test_ip_pinning_prevents_dns_rebind(monkeypatch):
     # should observe the pinned IP when calling getaddrinfo.
     resp = client.get("http://example.com/")
     assert resp.status_code == 200
+
+
+def test_ip_pinning_blocks_rebind_to_private_ip(monkeypatch):
+    client = WebClient()
+
+    call_count = {"n": 0}
+
+    # Simulate DNS rebind: first two lookups return public, subsequent
+    # lookups return loopback. The WebClient pin should keep us on the
+    # validated public IP during the request.
+    def rebinding_getaddrinfo(host, port, *args, **kwargs):
+        call_count["n"] += 1
+        if host == "example.com" and call_count["n"] <= 2:
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
+            ]
+        if host == "example.com":
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))
+            ]
+        # Echo for literal IPs or other hosts
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (host, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", rebinding_getaddrinfo)
+
+    seen = {}
+
+    def fake_request(method, url, **kwargs):
+        # The HTTP stack would perform a lookup during connect; simulate
+        # that by calling getaddrinfo here and capturing what it sees.
+        parsed = urlparse(url)
+        seen["ip"] = socket.getaddrinfo(parsed.hostname, 80)[0][4][0]
+
+        class DummyResp:
+            status_code = 200
+            headers = {}
+            encoding = None
+            apparent_encoding = "utf-8"
+
+            def iter_content(self, chunk_size=8192):
+                yield b""
+
+        return DummyResp()
+
+    monkeypatch.setattr(client._session, "request", fake_request)
+
+    client.get("http://example.com/")
+    # Assert we observed the pinned public IP, not the later loopback.
+    assert seen.get("ip") == "93.184.216.34"
