@@ -241,7 +241,7 @@ jobs:
           # DO NOT merge this PR without replacing the placeholder below
           # with the real value — the build intentionally fails if the
           # checksum is not provided so we never ship an unverified uv.
-          UV_TARBALL_SHA256="7a0c424c7bc55a74751f13592235953ebbe182fa00355f7ae3fb7ab734a51638"
+          UV_TARBALL_SHA256="ee2468e40320a0a2a36435e66bbd0d861228c4c06767f22d97876528138f4ba0"
 
           DEST_DIR="src/gaia/apps/webui/build/vendor/uv/win-x64"
           mkdir -p "${DEST_DIR}"
