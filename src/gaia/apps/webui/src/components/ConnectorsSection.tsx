@@ -18,6 +18,7 @@ import {
     ChevronDown,
     ChevronUp,
     X,
+    Plus,
 } from 'lucide-react';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
@@ -494,7 +495,8 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
     const [grants, setGrants] = useState<Record<string, string[]>>({});
     const [loading, setLoading] = useState(true);
     const [revoking, setRevoking] = useState<string | null>(null);
-    const [revokeErr, setRevokeErr] = useState<string | null>(null);
+    const [granting, setGranting] = useState<string | null>(null);
+    const [actionErr, setActionErr] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         try {
@@ -511,48 +513,94 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
 
     const revoke = async (agentId: string) => {
         setRevoking(agentId);
-        setRevokeErr(null);
+        setActionErr(null);
         try {
             await api.revokeConnectorAgentGrant(connectorId, agentId);
             void load();
         } catch (e) {
-            setRevokeErr(e instanceof Error ? e.message : String(e));
+            setActionErr(e instanceof Error ? e.message : String(e));
         } finally {
             setRevoking(null);
         }
     };
 
+    const grant = async (agentId: string, scopes: string[]) => {
+        setGranting(agentId);
+        setActionErr(null);
+        try {
+            await api.grantConnectorAgent(connectorId, agentId, scopes);
+            void load();
+        } catch (e) {
+            setActionErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setGranting(null);
+        }
+    };
+
+    // Agents that declare a requirement for this connector but have no grant yet.
+    const pendingAgents = agents.filter((a) => {
+        if (!a.namespaced_agent_id) return false;
+        if (a.namespaced_agent_id in grants) return false;
+        return a.required_connections?.some((rc) => rc.connector_id === connectorId) ?? false;
+    });
+
     if (loading) return null;
+
+    const grantedEntries = Object.entries(grants);
+    const hasAnything = grantedEntries.length > 0 || pendingAgents.length > 0;
 
     return (
         <div className="connection-grants">
             <div className="grants-header">Per-agent grants</div>
-            {revokeErr && (
+            {actionErr && (
                 <div className="configure-error" style={{ marginBottom: 6 }}>
-                    <AlertCircle size={12} /> {revokeErr}
+                    <AlertCircle size={12} /> {actionErr}
                 </div>
             )}
-            {Object.entries(grants).length === 0 ? (
+            {!hasAnything && (
                 <div className="grants-empty">No agents have been granted access yet.</div>
-            ) : (
-                Object.entries(grants).map(([agentId, scopes]) => {
-                    const agent = agents.find((a) => a.namespaced_agent_id === agentId);
-                    return (
-                        <div key={agentId} className="grant-row">
-                            <span className="grant-agent">{agent ? agent.name : agentId}</span>
-                            <span className="grant-scopes">{scopes.join(', ')}</span>
-                            <button
-                                className="btn-grant-revoke"
-                                disabled={revoking === agentId}
-                                onClick={() => void revoke(agentId)}
-                                aria-label={`Revoke ${agentId}`}
-                            >
-                                <X size={11} />
-                            </button>
-                        </div>
-                    );
-                })
             )}
+            {/* Agents that already have a grant */}
+            {grantedEntries.map(([agentId, scopes]) => {
+                const agent = agents.find((a) => a.namespaced_agent_id === agentId);
+                return (
+                    <div key={agentId} className="grant-row">
+                        <span className="grant-agent">{agent ? agent.name : agentId}</span>
+                        <span className="grant-scopes">{scopes.join(', ')}</span>
+                        <button
+                            className="btn-grant-revoke"
+                            disabled={revoking === agentId}
+                            onClick={() => void revoke(agentId)}
+                            aria-label={`Revoke ${agentId}`}
+                        >
+                            <X size={11} />
+                        </button>
+                    </div>
+                );
+            })}
+            {/* Agents that need a grant but don't have one yet */}
+            {pendingAgents.map((agent) => {
+                const agentId = agent.namespaced_agent_id!;
+                const req = agent.required_connections!.find((rc) => rc.connector_id === connectorId)!;
+                const busy = granting === agentId;
+                return (
+                    <div key={agentId} className="grant-row grant-row--pending">
+                        <span className="grant-agent">{agent.name}</span>
+                        <span className="grant-scopes grant-scopes--pending">
+                            Needs access
+                        </span>
+                        <button
+                            className="btn-grant-add"
+                            disabled={busy}
+                            onClick={() => void grant(agentId, req.scopes)}
+                            aria-label={`Grant ${agent.name}`}
+                            title={req.reason}
+                        >
+                            {busy ? <Loader2 size={11} className="spin" /> : <Plus size={11} />}
+                        </button>
+                    </div>
+                );
+            })}
         </div>
     );
 }

@@ -311,6 +311,37 @@
 }
 .btn-grant-revoke:hover { color: var(--accent-red, #e55); }
 
+.grant-row--pending {
+    opacity: 0.8;
+}
+
+.grant-scopes--pending {
+    font-style: italic;
+    color: var(--text-muted);
+}
+
+.btn-grant-add {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--accent-blue, #4e9de0);
+    padding: 2px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    transition: color var(--duration) var(--ease);
+    flex-shrink: 0;
+}
+.btn-grant-add:hover { color: var(--accent-blue-bright, #6ab4f5); }
+.btn-grant-add:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.spin {
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
 /* ── Shared ───────────────────────────────────────────────────── */
 
 .error-banner {
