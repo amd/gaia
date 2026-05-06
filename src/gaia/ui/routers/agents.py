@@ -92,7 +92,7 @@ def _reg_to_info(reg) -> AgentInfo:
         # AgentUI consent dialog can render the prompt at agent-selection time.
         required_connections=[
             {
-                "provider": cr.provider,
+                "provider": cr.connector_id,
                 "scopes": list(cr.scopes),
                 "reason": cr.reason,
             }
