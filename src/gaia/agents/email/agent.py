@@ -45,7 +45,6 @@ from gaia.agents.email.calendar_backend import (
 )
 from gaia.agents.email.config import EmailAgentConfig
 from gaia.agents.email.gmail_backend import LiveGmailBackend, _get_gmail_token
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.agents.email.scopes import (
     AGENT_NAMESPACED_ID,
     ALL_SCOPES,
@@ -57,6 +56,7 @@ from gaia.agents.email.tools.read_tools import ReadToolsMixin
 from gaia.agents.email.tools.reply_tools import ReplyToolsMixin
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
