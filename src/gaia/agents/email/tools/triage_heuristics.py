@@ -226,7 +226,7 @@ def classify_category_heuristic(
                 reason=f"subject contains promotional keyword '{kw}'",
             )
 
-    # 7. Automated-sender fallback — newsletters, alert bots, etc.
+    # 6. Automated-sender fallback — newsletters, alert bots, etc.
     for kw in _AUTOMATED_SENDER_KEYWORDS:
         if kw in sender_lower:
             return HeuristicResult(
@@ -236,7 +236,7 @@ def classify_category_heuristic(
                 reason=f"sender contains automated-sender keyword '{kw}'",
             )
 
-    # 8. Built-in IMPORTANT / STARRED labels — Gmail has decided this is
+    # 7. Built-in IMPORTANT / STARRED labels — Gmail has decided this is
     #    significant; we down-rank but do NOT classify (urgent vs.
     #    actionable depends on body, which the LLM reads). Return
     #    confident=False so the caller escalates.
@@ -254,7 +254,7 @@ def classify_category_heuristic(
             matched_label_ids=tuple(matched),
         )
 
-    # 9. No high-confidence heuristic matched — escalate.
+    # 8. No high-confidence heuristic matched — escalate.
     return HeuristicResult(
         category=CATEGORY_INFORMATIONAL,
         is_phishing=is_phishing,

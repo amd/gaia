@@ -107,10 +107,13 @@ def test_heuristic_triage_meets_baseline_minus_tolerance(require_lemonade):
             f"Category accuracy: {accuracy:.2f} "
             f"(baseline {baseline_accuracy:.2f}, floor {floor:.2f})"
         )
-        # Soft gate — issue warning, don't fail until heuristic+LLM combo lands.
+        # Soft gate — xfail (not skip) so regressions are visible in CI.
         if accuracy < floor:
-            pytest.skip(
-                f"category accuracy {accuracy:.2f} below floor {floor:.2f} — "
-                "LLM-fallback path not yet wired into triage_inbox_impl. "
-                "This test will harden once the planning loop integrates."
+            pytest.xfail(
+                strict=False,
+                reason=(
+                    f"category accuracy {accuracy:.2f} below floor {floor:.2f} — "
+                    "LLM-fallback path not yet wired into triage_inbox_impl; "
+                    "will harden once the planning loop integrates"
+                ),
             )

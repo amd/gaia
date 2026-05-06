@@ -32,6 +32,7 @@ Phase I prompt-injection defense:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import ClassVar, List, Optional
 
 from gaia.agents.base.agent import Agent
@@ -44,6 +45,7 @@ from gaia.agents.email.calendar_backend import (
 )
 from gaia.agents.email.config import EmailAgentConfig
 from gaia.agents.email.gmail_backend import LiveGmailBackend, _get_gmail_token
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.agents.email.scopes import (
     AGENT_NAMESPACED_ID,
     ALL_SCOPES,
@@ -182,8 +184,6 @@ class EmailTriageAgent(
 
         # SQLite for the action log. Default ``~/.gaia/email/state.db``.
         # Eval / unit tests inject ``db_path=tmp_path/state.db``.
-        from pathlib import Path
-
         db_path = config.resolved_db_path()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.init_db(db_path)
@@ -191,7 +191,7 @@ class EmailTriageAgent(
 
         # LLM connection. Default to Lemonade — the config's base_url
         # allowlist guarantees the host is local.
-        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-GGUF"
+        effective_model_id = config.model_id or DEFAULT_MODEL_NAME
         effective_base_url = (
             config.base_url
             if config.base_url is not None

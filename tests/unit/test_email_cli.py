@@ -28,8 +28,8 @@ class TestDispatch:
         try:
             try:
                 cli.main()
-            except SystemExit:
-                pass
+            except SystemExit as exc:
+                assert exc.code == 0, f"unexpected non-zero exit: {exc.code}"
         finally:
             sys.argv = old_argv
 
