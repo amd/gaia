@@ -351,7 +351,7 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
   // installer and then returns 'retry' on success so the caller can
   // re-run the full backend install.
   const buttons = [
-    "Install uv",
+    "Install uv (auto)",
     "Retry",
     "Manual install instructions",
     "Copy log path",
@@ -374,22 +374,22 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
 
     switch (result.response) {
       case 0: {
-        // Install uv (packaged rescue). Present a progress window while
-        // the attempt runs. On success, ask caller to retry the backend
-        // install; on failure, re-show the failure dialog with extra info.
+        // Run the full packaged install flow (ensureBackend) so the user
+        // gets a single-click recovery that attempts the entire backend
+        // install rather than only uv provisioning. Show progress UI
+        // while the operation runs. On success, tell the caller to retry
+        // (which will detect READY and proceed); on failure, re-show the
+        // dialog with augmented details.
         const { window, onProgress, close } = createProgressWindow();
         try {
-          await installer.ensureUv({ onProgress, isPackaged: true });
-          // Close progress UI and tell caller to retry the full install.
+          await installer.ensureBackend({ onProgress, isPackaged: true });
           try { close(); } catch {}
           return "retry";
         } catch (err) {
           try { close(); } catch {}
-          // Augment the error info so the user sees the rescue failure
-          // details when the dialog reappears.
           const nextInfo = Object.assign({}, errorInfo, {
             message: err.message || String(err),
-            stage: err.stage || "ensure-uv",
+            stage: err.stage || "ensure-backend",
             suggestion: err.suggestion || errorInfo.suggestion,
           });
           return showFailureDialog(parentWindow, nextInfo);
