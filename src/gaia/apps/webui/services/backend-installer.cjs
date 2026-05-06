@@ -84,7 +84,7 @@ const BUNDLED_UV_SHA256 = {
   // The Windows extracted uv.exe SHA is populated by CI during the
   // build step. The placeholder MUST be replaced in CI before packaging
   // so runtime verification remains strict.
-  "win-x64": "<WIN_UV_EXTRACTED_SHA256_PLACEHOLDER>",
+  "win-x64": "055d55eec85a91cfb5e9c8bc7f6463f9883866796c5bcb205fbcdfed9c088c88",
   "mac-arm64": null,
 };
 
