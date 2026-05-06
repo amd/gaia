@@ -237,24 +237,41 @@ jobs:
           UV_VERSION="0.5.14"
           UV_ZIP="uv-x86_64-pc-windows-msvc.zip"
           UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_ZIP}"
+          # This must be set to the official tarball SHA256 (archive digest).
+          # DO NOT merge this PR without replacing the placeholder below
+          # with the real value — the build intentionally fails if the
+          # checksum is not provided so we never ship an unverified uv.
+          UV_TARBALL_SHA256="7a0c424c7bc55a74751f13592235953ebbe182fa00355f7ae3fb7ab734a51638"
+
           DEST_DIR="src/gaia/apps/webui/build/vendor/uv/win-x64"
           mkdir -p "${DEST_DIR}"
           tmpdir="$(mktemp -d)"
-          echo "Attempting to download ${UV_URL}"
-          if curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_ZIP}" "${UV_URL}"; then
-            unzip -q "${tmpdir}/${UV_ZIP}" -d "${tmpdir}" || true
-            # Try to find uv.exe under extracted dirs
-            find "${tmpdir}" -type f -iname uv.exe -exec cp {} "${DEST_DIR}/uv.exe" \; || true
-            if [ -f "${DEST_DIR}/uv.exe" ]; then
-              echo "Installed uv.exe to ${DEST_DIR}/uv.exe"
-              chmod 0755 "${DEST_DIR}/uv.exe" || true
-              "${DEST_DIR}/uv.exe" --version || true
-            else
-              echo "WARNING: uv.exe not found after download; continuing without bundling (packaged installer will attempt recovery)"
-            fi
-          else
-            echo "WARNING: could not download ${UV_URL}; continuing without bundling";
+          echo "Downloading ${UV_URL}"
+          curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_ZIP}" "${UV_URL}"
+
+          if [ -z "${UV_TARBALL_SHA256}" ] || [ "${UV_TARBALL_SHA256}" = "REPLACE_ME_WIN_UV_TARBALL_SHA256" ]; then
+            echo "ERROR: UV_TARBALL_SHA256 is not set in the workflow. Set it to the upstream tarball SHA256 to proceed." >&2
+            exit 1
           fi
+
+          echo "${UV_TARBALL_SHA256}  ${tmpdir}/${UV_ZIP}" | sha256sum -c -
+
+          unzip -q "${tmpdir}/${UV_ZIP}" -d "${tmpdir}"
+          # Copy uv.exe from extracted tree — fail if not found.
+          FOUND=$(find "${tmpdir}" -type f -iname uv.exe | head -n1 || true)
+          if [ -z "${FOUND}" ]; then
+            echo "ERROR: uv.exe not found in the downloaded archive" >&2
+            exit 1
+          fi
+          cp "${FOUND}" "${DEST_DIR}/uv.exe"
+          chmod 0755 "${DEST_DIR}/uv.exe"
+          "${DEST_DIR}/uv.exe" --version || true
+
+          # Compute SHA256 of the extracted binary and inject into source
+          BIN_SHA=$(sha256sum "${DEST_DIR}/uv.exe" | cut -d' ' -f1)
+          echo "Computed uv.exe SHA256: ${BIN_SHA}"
+          # Replace placeholder in backend-installer.cjs so runtime can verify
+          sed -i "s/<WIN_UV_EXTRACTED_SHA256_PLACEHOLDER>/${BIN_SHA}/g" src/gaia/apps/webui/services/backend-installer.cjs
 
       # macOS uv fetch removed in this PR to keep changes Windows-only.
       # If needed, re-add a macOS fetch step in a follow-up PR coordinated with the mac team.

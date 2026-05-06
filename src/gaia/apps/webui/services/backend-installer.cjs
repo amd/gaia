@@ -81,10 +81,10 @@ const NETWORK_CHECK_TIMEOUT_MS = 5000;
 const BUNDLED_UV_VERSION = "0.5.14";
 const BUNDLED_UV_SHA256 = {
   "linux-x64": "0e05d828b5708e8a927724124db3746396afddad6273c47283d7c562dc795bd6",
-  // Windows/mac keys added so runtime can detect platform support even
-  // when the workflow doesn't yet pin a SHA. CI should populate these
-  // with real extracted-binary SHA256 values when available.
-  "win-x64": null,
+  // The Windows extracted uv.exe SHA is populated by CI during the
+  // build step. The placeholder MUST be replaced in CI before packaging
+  // so runtime verification remains strict.
+  "win-x64": "<WIN_UV_EXTRACTED_SHA256_PLACEHOLDER>",
   "mac-arm64": null,
 };
 
@@ -702,13 +702,13 @@ function findBundledUvResource() {
  */
 async function installBundledUv(sourcePath, platformKey) {
   const expected = BUNDLED_UV_SHA256[platformKey];
-  if (!expected) {
-    // Missing checksum: allow installing the bundled binary but log a
-    // supply-chain warning. CI/release pipeline should populate real
-    // checksums; this fallback avoids a hard failure on platforms where
-    // the build hasn't been updated yet (issue #782 regression surface).
-    log(
-      `Warning: no registered bundled uv checksum for platform ${platformKey}; proceeding without verification`
+  if (!expected || expected.startsWith("<")) {
+    // Enforce strict verification: builds MUST populate the expected SHA
+    // for packaged binaries. Failing fast prevents shipping an unverified
+    // uv binary which would be a supply-chain regression.
+    throw new InstallError(
+      `No bundled uv checksum registered for platform ${platformKey}. Build must populate BUNDLED_UV_SHA256.${platformKey}`,
+      { stage: STAGES.ENSURE_UV }
     );
   }
 
@@ -848,20 +848,20 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
 
     // Verify the source resource matches the manifest before copying —
     // catches AppImage corruption before we touch the user's home.
-    if (expectedSha) {
-      const srcHash = await sha256File(bundled);
-      if (srcHash !== expectedSha) {
-        throw new InstallError(
-          `Bundled uv resource SHA256 mismatch (expected ${expectedSha}, got ${srcHash}).`,
-          {
-            stage: STAGES.ENSURE_UV,
-            suggestion:
-              "The installer appears to be corrupt. Re-download GAIA from https://amd-gaia.ai and try again.",
-          }
-        );
-      }
-    } else {
-      log("No registered SHA256 for bundled uv; proceeding without resource verification");
+    // Enforce that the packaged build provides an expected SHA for the
+    // bundled resource. CI replaces the placeholder with the extracted
+    // binary's SHA during the build; missing/placeholder values are a
+    // build-time error and are rejected at runtime here.
+    const srcHash = await sha256File(bundled);
+    if (srcHash !== expectedSha) {
+      throw new InstallError(
+        `Bundled uv resource SHA256 mismatch (expected ${expectedSha}, got ${srcHash}).`,
+        {
+          stage: STAGES.ENSURE_UV,
+          suggestion:
+            "The installer appears to be corrupt. Re-download GAIA from https://amd-gaia.ai and try again.",
+        }
+      );
     }
     await installBundledUv(bundled, platformKey);
     addManagedBinToPath();
@@ -941,51 +941,51 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
     return;
   }
 
-    // Packaged Windows rescue: try the Astral PowerShell installer even when
-    // running a packaged build. This provides an automated recovery path for
-    // end users on clean machines that don't have uv and where the installer
-    // build unexpectedly omitted a bundled binary. It is a last-resort and
-    // non-fatal attempt; on failure we fall through to the generic error.
-    if (IS_WINDOWS && !isDev) {
-      log("Packaged Windows: attempting automated uv installer (rescue)");
-      try {
-        const rescue = await runCommand(
-          "powershell",
-          [
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            "irm https://astral.sh/uv/install.ps1 | iex",
-          ],
-          { stageLabel: "uv-install-packaged-rescue" }
-        );
-        if (rescue.code === 0) {
-          // Ensure common install locations are present on PATH for this
-          // process in case the installer placed uv in a user-local bin.
-          const candidates = [
-            path.join(os.homedir(), ".local", "bin"),
-            path.join(os.homedir(), ".cargo", "bin"),
-          ];
-          for (const uvDir of candidates) {
-            if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
-              process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
-              log(`Added ${uvDir} to PATH for this process`);
-            }
+  // Packaged Windows rescue: try the Astral PowerShell installer even when
+  // running a packaged build. This provides an automated recovery path for
+  // end users on clean machines that don't have uv and where the installer
+  // build unexpectedly omitted a bundled binary. It is a last-resort and
+  // non-fatal attempt; on failure we fall through to the generic error.
+  if (IS_WINDOWS && !isDev) {
+    log("Packaged Windows: attempting automated uv installer (rescue)");
+    try {
+      const rescue = await runCommand(
+        "powershell",
+        [
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "irm https://astral.sh/uv/install.ps1 | iex",
+        ],
+        { stageLabel: "uv-install-packaged-rescue" }
+      );
+      if (rescue.code === 0) {
+        // Ensure common install locations are present on PATH for this
+        // process in case the installer placed uv in a user-local bin.
+        const candidates = [
+          path.join(os.homedir(), ".local", "bin"),
+          path.join(os.homedir(), ".cargo", "bin"),
+        ];
+        for (const uvDir of candidates) {
+          if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
+            process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
+            log(`Added ${uvDir} to PATH for this process`);
           }
-          if (commandExists("uv")) {
-            log("Packaged Windows: uv installed and found on PATH (rescue succeeded)");
-            addManagedBinToPath();
-            report(STAGES.ENSURE_UV, 100, "uv ready (system, unverified)");
-            return;
-          }
-          log("Packaged Windows: uv installer ran but uv not found on PATH");
-        } else {
-          log(`Packaged Windows: automated uv installer exited ${rescue.code}`);
         }
-      } catch (rescueErr) {
-        log(`Packaged Windows: rescue installer threw: ${rescueErr.message}`);
+        if (commandExists("uv")) {
+          log("Packaged Windows: uv installed and found on PATH (rescue succeeded)");
+          addManagedBinToPath();
+          report(STAGES.ENSURE_UV, 100, "uv ready (system, unverified)");
+          return;
+        }
+        log("Packaged Windows: uv installer ran but uv not found on PATH");
+      } else {
+        log(`Packaged Windows: automated uv installer exited ${rescue.code}`);
       }
+    } catch (rescueErr) {
+      log(`Packaged Windows: rescue installer threw: ${rescueErr.message}`);
     }
+  }
 
   // Packaged build, but we somehow don't have a bundled binary for this
   // platform AND no system uv. Last-ditch: accept an unverified system uv
