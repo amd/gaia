@@ -5,111 +5,111 @@
     "fixture_kind": "stub",
     "schema_version": 1
   },
-  "66c19f08d606c882": {
+  "3ae438da6e2c16c3": {
     "category": "urgent",
     "is_spam": false,
     "is_phishing": false,
     "is_thread_root": true,
-    "thread_id": "66c19f08d606c882",
+    "thread_id": "3ae438da6e2c16c3",
     "has_attachment": false,
     "ambiguous": false,
     "rationale": "Boss requesting headcount projections by 3pm same day. IMPORTANT label set by Gmail. Time-sensitive ask from senior.",
     "sender_persona": "boss"
   },
-  "75cbe98989d56b12": {
+  "1808a201f1357dea": {
     "category": "low priority",
     "is_spam": false,
     "is_phishing": false,
     "is_thread_root": true,
-    "thread_id": "75cbe98989d56b12",
+    "thread_id": "1808a201f1357dea",
     "has_attachment": false,
     "ambiguous": false,
     "rationale": "Promotional flash sale. Gmail flagged CATEGORY_PROMOTIONS. HTML body.",
     "sender_persona": "newsletter"
   },
-  "1c2286c480a21f78": {
+  "43a746b218e9aa11": {
     "category": "actionable",
     "is_spam": false,
     "is_phishing": false,
     "is_thread_root": false,
-    "thread_id": "8a0d1b75bbf27f8a",
+    "thread_id": "2f5ec3387d4a0b17",
     "has_attachment": false,
     "ambiguous": false,
     "rationale": "Direct report blocked, asking for review with one-day deadline. Reply needed.",
     "sender_persona": "direct_report"
   },
-  "c0f70129fd5b7a38": {
+  "e51e94ea0e10de42": {
     "category": "informational",
     "is_spam": false,
     "is_phishing": false,
     "is_thread_root": true,
-    "thread_id": "c0f70129fd5b7a38",
+    "thread_id": "e51e94ea0e10de42",
     "has_attachment": false,
     "ambiguous": false,
     "rationale": "Shipping confirmation. CATEGORY_UPDATES label. No action needed.",
     "sender_persona": "service_alert"
   },
-  "22709c666432bba8": {
+  "f2a937c1bf6edc0b": {
     "category": "low priority",
     "is_spam": false,
     "is_phishing": true,
     "is_thread_root": true,
-    "thread_id": "22709c666432bba8",
+    "thread_id": "f2a937c1bf6edc0b",
     "has_attachment": false,
     "ambiguous": false,
     "rationale": "Phishing payload — verify-account-click pattern, suspicious domain. Should never auto-act on links.",
     "sender_persona": "spam_bot"
   },
-  "a370ac9c44d03c35": {
+  "2e5c7af9c8b07839": {
     "category": "actionable",
     "is_spam": false,
     "is_phishing": false,
     "is_thread_root": true,
-    "thread_id": "a370ac9c44d03c35",
+    "thread_id": "2e5c7af9c8b07839",
     "has_attachment": false,
     "ambiguous": false,
     "rationale": "Calendar invite from organizer needing RSVP. Tomorrow afternoon meeting.",
     "sender_persona": "service_alert"
   },
-  "b2d33587f27e59f0": {
+  "f4f2384d1b24e5f3": {
     "category": "informational",
     "is_spam": false,
     "is_phishing": false,
     "is_thread_root": true,
-    "thread_id": "b2d33587f27e59f0",
+    "thread_id": "f4f2384d1b24e5f3",
     "has_attachment": false,
     "ambiguous": true,
     "rationale": "Benefits enrollment reminder. Date-bounded (May 15) but no immediate action. Borderline informational vs actionable.",
     "sender_persona": "service_alert"
   },
-  "4c3dadf53734d3ae": {
+  "69decbf49ffeb09b": {
     "category": "low priority",
     "is_spam": true,
     "is_phishing": false,
     "is_thread_root": true,
-    "thread_id": "4c3dadf53734d3ae",
+    "thread_id": "69decbf49ffeb09b",
     "has_attachment": false,
     "ambiguous": false,
     "rationale": "Spam-flagged by Gmail. Lottery scam pattern.",
     "sender_persona": "spam_bot"
   },
-  "a4f606381a4cc188": {
+  "5c7634bea444eaf0": {
     "category": "urgent",
     "is_spam": false,
     "is_phishing": false,
     "is_thread_root": true,
-    "thread_id": "a4f606381a4cc188",
+    "thread_id": "5c7634bea444eaf0",
     "has_attachment": false,
     "ambiguous": false,
     "rationale": "Forwarded customer escalation. Production system down 4h. EOD deadline.",
     "sender_persona": "external_vendor"
   },
-  "9b912af3ec7f2cc3": {
+  "44eae4eb62539d37": {
     "category": "informational",
     "is_spam": false,
     "is_phishing": false,
     "is_thread_root": true,
-    "thread_id": "9b912af3ec7f2cc3",
+    "thread_id": "44eae4eb62539d37",
     "has_attachment": false,
     "ambiguous": false,
     "rationale": "GitHub PR-merged notification. No action needed.",

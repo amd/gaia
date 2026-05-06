@@ -183,11 +183,11 @@ def mbox_message_to_gmail_payload(msg: Message) -> Dict[str, Any]:
         gid_seed = (msg.get("Subject") or str(uuid.uuid4())).encode(
             "utf-8", errors="replace"
         )
-    gid = hashlib.sha1(gid_seed).hexdigest()[:16]
+    gid = hashlib.sha256(gid_seed).hexdigest()[:16]
     references = msg.get("References") or msg.get("In-Reply-To") or ""
     if references:
         thread_seed = references.split()[0].encode("utf-8", errors="replace")
-        thread_id = hashlib.sha1(thread_seed).hexdigest()[:16]
+        thread_id = hashlib.sha256(thread_seed).hexdigest()[:16]
     else:
         thread_id = gid
 
