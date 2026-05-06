@@ -261,9 +261,13 @@ jobs:
           cp "${tmpdir}/uv-aarch64-apple-darwin/uv" "${DEST_DIR}/uv"
           chmod 0755 "${DEST_DIR}/uv"
           "${DEST_DIR}/uv" --version
-          # Echo the extracted-binary SHA so a maintainer bumping
-          # BUNDLED_UV_VERSION can cross-check BUNDLED_UV_SHA256[mac-arm64]
-          # without re-running T0 locally.
+          # Echo the extracted-binary SHA. This is the PRE-codesign digest
+          # (i.e., the upstream tarball's uv byte-for-byte), useful for
+          # confirming what feeds into electron-builder's codesign step.
+          # NOTE: this is NOT directly comparable to BUNDLED_UV_SHA256[mac-arm64],
+          # which is the POST-codesign digest — see backend-installer.cjs.
+          # To bump BUNDLED_UV_SHA256[mac-arm64], run the CI build and copy
+          # the SHA from the dmg-structural-smoke failure message.
           shasum -a 256 "${DEST_DIR}/uv"
 
       - name: Build frontend (Vite)

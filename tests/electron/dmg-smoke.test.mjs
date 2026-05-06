@@ -69,26 +69,10 @@ if (!DMG) {
 
     const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "gaia-dmg-"));
     const mountpoint = path.join(workdir, "mnt");
-    fs.mkdirSync(mountpoint, { recursive: true });
-
-    const attachResult = spawnSync(
-      "hdiutil",
-      [
-        "attach",
-        "-nobrowse",
-        "-readonly",
-        "-mountpoint",
-        mountpoint,
-        dmgPath,
-      ],
-      { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
-    );
-    assert.equal(
-      attachResult.status,
-      0,
-      `hdiutil attach exit=${attachResult.status}\n` +
-        `stderr:\n${attachResult.stderr}`,
-    );
+    // attached tracks whether hdiutil attach succeeded so the finally block
+    // only attempts detach (and only detach) when there is actually a mount
+    // to clean up — avoids spurious "no such volume" errors if attach fails.
+    let attached = false;
 
     // Cleanup MUST run regardless of subtest outcome — a left-mounted
     // volume causes "Resource busy" failures on the next CI job that
@@ -97,6 +81,28 @@ if (!DMG) {
     // logged but NEVER thrown — surfacing detach failures must not
     // mask earlier assertion failures from the subtests.
     try {
+      fs.mkdirSync(mountpoint, { recursive: true });
+
+      const attachResult = spawnSync(
+        "hdiutil",
+        [
+          "attach",
+          "-nobrowse",
+          "-readonly",
+          "-mountpoint",
+          mountpoint,
+          dmgPath,
+        ],
+        { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
+      );
+      assert.equal(
+        attachResult.status,
+        0,
+        `hdiutil attach exit=${attachResult.status}\n` +
+          `stderr:\n${attachResult.stderr}`,
+      );
+      attached = true;
+
       // ── Locate the .app bundle inside the mounted DMG ───────────────
       // hdiutil attach returns synchronously when the volume is
       // registered, but the kernel VFS layer can lag 1–2 ticks before
@@ -155,17 +161,19 @@ if (!DMG) {
         });
       }
     } finally {
-      const r = spawnSync(
-        "hdiutil",
-        ["detach", "-force", mountpoint],
-        { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
-      );
-      if (r.status !== 0) {
-        // eslint-disable-next-line no-console
-        console.error(
-          `[dmg-smoke] hdiutil detach exit=${r.status}\n` +
-            `stderr:\n${r.stderr}`,
+      if (attached) {
+        const r = spawnSync(
+          "hdiutil",
+          ["detach", "-force", mountpoint],
+          { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
         );
+        if (r.status !== 0) {
+          // eslint-disable-next-line no-console
+          console.error(
+            `[dmg-smoke] hdiutil detach exit=${r.status}\n` +
+              `stderr:\n${r.stderr}`,
+          );
+        }
       }
       try {
         fs.rmSync(workdir, { recursive: true, force: true });
