@@ -75,15 +75,15 @@ class ChatAgentConfig:
     allowed_paths: Optional[List[str]] = None
 
     # File System settings
-    enable_filesystem: bool = True  # Enable enhanced file system tools
-    enable_scratchpad: bool = True  # Enable data scratchpad for analysis
+    enable_filesystem: bool = False  # Enhanced file system tools (disabled until agent split)
+    enable_scratchpad: bool = False  # Data scratchpad for analysis (disabled until agent split)
     filesystem_index_path: str = "~/.gaia/file_index.db"
     scratchpad_db_path: str = "~/.gaia/scratchpad.db"
     filesystem_scan_depth: int = 3  # Default scan depth (conservative)
     filesystem_exclude_patterns: List[str] = field(default_factory=list)
 
     # Browser settings
-    enable_browser: bool = True  # Enable web browsing tools
+    enable_browser: bool = False  # Web browsing tools (disabled until agent split)
     browser_timeout: int = 30  # HTTP request timeout in seconds
     browser_max_download_size: int = 100 * 1024 * 1024  # 100 MB max download
     browser_rate_limit: float = 1.0  # Seconds between requests per domain
