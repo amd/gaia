@@ -14,6 +14,10 @@ from typing import Any, Dict, Optional
 
 from gaia.agents.base.tools import tool
 from gaia.agents.email.verbose import log_tool_call
+from gaia.connectors.errors import ConnectorsError
+from gaia.logger import get_logger
+
+log = get_logger(__name__)
 
 
 def _envelope_ok(data: Any) -> str:
@@ -123,8 +127,11 @@ class CalendarToolsMixin:
                         cal, time_min=time_min, time_max=time_max, debug=debug_flag
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def accept_invite(event_id: str) -> str:
@@ -140,8 +147,11 @@ class CalendarToolsMixin:
                         debug=debug_flag,
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def decline_invite(event_id: str) -> str:
@@ -157,8 +167,11 @@ class CalendarToolsMixin:
                         debug=debug_flag,
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def create_event_from_email(
@@ -192,5 +205,8 @@ class CalendarToolsMixin:
                         debug=debug_flag,
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")

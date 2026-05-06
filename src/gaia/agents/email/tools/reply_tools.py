@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 from gaia.agents.base.tools import tool
 from gaia.agents.email import action_store
 from gaia.agents.email.verbose import log_tool_call
+from gaia.connectors.errors import ConnectorsError
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -234,8 +235,11 @@ class ReplyToolsMixin:
                         gmail, db, message_id=message_id, body=body, debug=debug_flag
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def draft_forward(message_id: str, to: str, body: str = "") -> str:
@@ -251,8 +255,11 @@ class ReplyToolsMixin:
                         debug=debug_flag,
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def send_draft(draft_id: str) -> str:
@@ -261,8 +268,11 @@ class ReplyToolsMixin:
                 return _envelope_ok(
                     send_draft_impl(gmail, db, draft_id=draft_id, debug=debug_flag)
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def send_now(to: str, subject: str, body: str) -> str:
@@ -278,8 +288,11 @@ class ReplyToolsMixin:
                         debug=debug_flag,
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def forward_message(message_id: str, to: str, note: str = "") -> str:
@@ -295,5 +308,8 @@ class ReplyToolsMixin:
                         debug=debug_flag,
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")

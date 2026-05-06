@@ -13,7 +13,7 @@ schema below before deleting the stub. The leading underscore on
 ## ground_truth.json schema
 
 Each entry in `ground_truth.json` is keyed by the Gmail message id (16-char
-SHA1 prefix derived deterministically from the mbox `Message-ID` header by
+SHA256 prefix derived deterministically from the mbox `Message-ID` header by
 `tests/fixtures/email/fake_gmail.py::mbox_message_to_gmail_payload`).
 
 ```json

@@ -18,6 +18,10 @@ from typing import Any, Dict
 from gaia.agents.base.tools import tool
 from gaia.agents.email import action_store
 from gaia.agents.email.verbose import log_tool_call
+from gaia.connectors.errors import ConnectorsError
+from gaia.logger import get_logger
+
+log = get_logger(__name__)
 
 
 def _envelope_ok(data: Any) -> str:
@@ -114,8 +118,11 @@ class DeleteToolsMixin:
                         gmail, db, message_id=message_id, debug=debug_flag
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def restore_message(action_id: str) -> str:
@@ -130,8 +137,11 @@ class DeleteToolsMixin:
                         debug=debug_flag,
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def permanent_delete(message_id: str) -> str:
@@ -142,5 +152,8 @@ class DeleteToolsMixin:
                         gmail, db, message_id=message_id, debug=debug_flag
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")

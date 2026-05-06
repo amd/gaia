@@ -20,6 +20,10 @@ from typing import Any, Dict, Optional
 from gaia.agents.base.tools import tool
 from gaia.agents.email import action_store
 from gaia.agents.email.verbose import log_tool_call
+from gaia.connectors.errors import ConnectorsError
+from gaia.logger import get_logger
+
+log = get_logger(__name__)
 
 
 def _envelope_ok(data: Any) -> str:
@@ -227,8 +231,11 @@ class OrganizeToolsMixin:
                         gmail, db, message_id=message_id, prior=prior, debug=debug_flag
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def mark_read(message_id: str) -> str:
@@ -244,8 +251,11 @@ class OrganizeToolsMixin:
                 return _envelope_ok(
                     mark_read_impl(gmail, db, message_id=message_id, debug=debug_flag)
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def mark_unread(message_id: str) -> str:
@@ -257,8 +267,11 @@ class OrganizeToolsMixin:
                 return _envelope_ok(
                     mark_unread_impl(gmail, db, message_id=message_id, debug=debug_flag)
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def add_star(message_id: str) -> str:
@@ -270,8 +283,11 @@ class OrganizeToolsMixin:
                 return _envelope_ok(
                     add_star_impl(gmail, db, message_id=message_id, debug=debug_flag)
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def remove_star(message_id: str) -> str:
@@ -283,8 +299,11 @@ class OrganizeToolsMixin:
                 return _envelope_ok(
                     remove_star_impl(gmail, db, message_id=message_id, debug=debug_flag)
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def label_message(message_id: str, label_id: str) -> str:
@@ -302,8 +321,11 @@ class OrganizeToolsMixin:
                         debug=debug_flag,
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def move_to_label(message_id: str, label_id: str) -> str:
@@ -324,5 +346,8 @@ class OrganizeToolsMixin:
                         debug=debug_flag,
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")

@@ -31,6 +31,10 @@ from gaia.agents.email.verbose import (
     log_triage_decision,
     log_triage_dispatch,
 )
+from gaia.connectors.errors import ConnectorsError
+from gaia.logger import get_logger
+
+log = get_logger(__name__)
 
 # Maximum body length sent to the LLM. Larger messages are truncated with
 # a ``...[truncated]`` marker. Prevents context blow-up and limits the
@@ -265,8 +269,11 @@ class ReadToolsMixin:
                 return _envelope_ok(
                     list_inbox_impl(gmail, max_results=max_results, debug=debug_flag)
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def get_message(message_id: str) -> str:
@@ -275,8 +282,11 @@ class ReadToolsMixin:
                 return _envelope_ok(
                     get_message_impl(gmail, message_id=message_id, debug=debug_flag)
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def get_thread(thread_id: str) -> str:
@@ -285,8 +295,11 @@ class ReadToolsMixin:
                 return _envelope_ok(
                     get_thread_impl(gmail, thread_id=thread_id, debug=debug_flag)
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def search_messages(query: str, max_results: int = 25) -> str:
@@ -305,16 +318,22 @@ class ReadToolsMixin:
                         debug=debug_flag,
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def list_labels() -> str:
             """List every label (system + user-defined) in the mailbox."""
             try:
                 return _envelope_ok(list_labels_impl(gmail, debug=debug_flag))
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
         def triage_inbox(max_messages: int = 25) -> str:
@@ -333,5 +352,8 @@ class ReadToolsMixin:
                         gmail, max_messages=max_messages, debug=debug_flag
                     )
                 )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
-                return _envelope_err(repr(exc))
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")

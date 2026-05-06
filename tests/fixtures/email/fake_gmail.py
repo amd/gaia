@@ -148,7 +148,7 @@ def _walk_mime_to_payload(part: Message) -> Dict[str, Any]:
         body["data"] = _b64url(raw)
     else:
         # Treat as attachment — synth a deterministic attachmentId.
-        att_id = "att_" + hashlib.sha1(raw).hexdigest()[:16] if raw else "att_empty"
+        att_id = "att_" + hashlib.sha256(raw).hexdigest()[:16] if raw else "att_empty"
         body["attachmentId"] = att_id
     return {
         "mimeType": mime_type,
@@ -173,7 +173,7 @@ def mbox_message_to_gmail_payload(msg: Message) -> Dict[str, Any]:
             "sizeEstimate": int,
         }
 
-    The id and threadId are SHA1-derived from ``Message-ID`` so the same
+    The id and threadId are SHA256-derived from ``Message-ID`` so the same
     mbox produces the same ids across test runs (deterministic).
     """
     msg_id_header = msg.get("Message-ID") or msg.get("Message-Id") or ""

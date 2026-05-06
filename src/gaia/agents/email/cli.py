@@ -13,7 +13,6 @@ structured-logging contract from Phase A5 fires for every triage decision.
 
 from __future__ import annotations
 
-import argparse
 import logging
 import sys
 from typing import Any
@@ -44,6 +43,7 @@ async def main(args: Any) -> int:
     try:
         agent = EmailTriageAgent(config=config)
     except Exception as exc:
+        log.exception("email-agent failed to start")
         print(f"❌ Email agent could not start: {exc}", file=sys.stderr)
         return 1
 
@@ -68,16 +68,18 @@ async def main(args: Any) -> int:
             log.warning("close_db failed during shutdown: %s", exc)
 
 
+def _extract_answer(result: Any) -> str:
+    """Extract the human-readable answer from an agent result dict."""
+    if isinstance(result, dict):
+        return result.get("answer") or result.get("response") or str(result)
+    return str(result)
+
+
 async def _one_shot(agent: EmailTriageAgent, query: str) -> int:
     """Run a single query and print the result."""
     try:
-        # process_query is async on the base Agent class.
         result = await agent.process_query(query)
-        if isinstance(result, dict):
-            answer = result.get("answer") or result.get("response") or str(result)
-        else:
-            answer = str(result)
-        print(answer)
+        print(_extract_answer(result))
         return 0
     except Exception as exc:
         log.exception("email-agent one-shot failed")
@@ -100,28 +102,7 @@ async def _interactive(agent: EmailTriageAgent) -> int:
             return 0
         try:
             result = await agent.process_query(query)
-            if isinstance(result, dict):
-                answer = result.get("answer") or result.get("response") or str(result)
-            else:
-                answer = str(result)
-            print(answer)
+            print(_extract_answer(result))
         except Exception as exc:
             log.exception("email-agent interactive query failed")
             print(f"❌ Error: {exc}", file=sys.stderr)
-
-
-# Standalone entry point — also wired in setup.py if desired in a follow-up.
-def cli() -> int:  # pragma: no cover — wrapper around argparse
-    parser = argparse.ArgumentParser(prog="gaia email")
-    parser.add_argument("-q", "--query", default=None)
-    parser.add_argument("-i", "--interactive", action="store_true")
-    parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("--debug", action="store_true")
-    args = parser.parse_args()
-    import asyncio
-
-    return asyncio.run(main(args))
-
-
-if __name__ == "__main__":  # pragma: no cover
-    sys.exit(cli())
