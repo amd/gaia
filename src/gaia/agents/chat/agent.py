@@ -6,6 +6,7 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 
 import os
 import platform
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -77,6 +78,7 @@ class ChatAgentConfig:
     enable_filesystem: bool = True  # Enable enhanced file system tools
     enable_scratchpad: bool = True  # Enable data scratchpad for analysis
     filesystem_index_path: str = "~/.gaia/file_index.db"
+    scratchpad_db_path: str = "~/.gaia/scratchpad.db"
     filesystem_scan_depth: int = 3  # Default scan depth (conservative)
     filesystem_exclude_patterns: List[str] = field(default_factory=list)
 
@@ -216,8 +218,12 @@ class ChatAgent(
                     db_path=config.filesystem_index_path
                 )
                 logger.info("File system index service initialized")
-            except Exception as e:
-                logger.debug(f"File system index not available: {e}")
+            except (ImportError, OSError, sqlite3.Error) as e:
+                logger.warning(
+                    "File system index not available: %s. "
+                    "Disable with config.enable_filesystem=False to silence.",
+                    e,
+                )
 
         # Initialize scratchpad service (optional)
         self._scratchpad = None
@@ -225,12 +231,14 @@ class ChatAgent(
             try:
                 from gaia.scratchpad.service import ScratchpadService
 
-                self._scratchpad = ScratchpadService(
-                    db_path=config.filesystem_index_path
-                )
+                self._scratchpad = ScratchpadService(db_path=config.scratchpad_db_path)
                 logger.info("Scratchpad service initialized")
-            except Exception as e:
-                logger.debug(f"Scratchpad service not available: {e}")
+            except (ImportError, OSError, sqlite3.Error) as e:
+                logger.warning(
+                    "Scratchpad service not available: %s. "
+                    "Disable with config.enable_scratchpad=False to silence.",
+                    e,
+                )
 
         # Initialize web client for browser tools (optional)
         self._web_client = None
@@ -244,8 +252,12 @@ class ChatAgent(
                     rate_limit=config.browser_rate_limit,
                 )
                 logger.info("Web client initialized for browser tools")
-            except Exception as e:
-                logger.debug(f"Web client not available: {e}")
+            except (ImportError, OSError) as e:
+                logger.warning(
+                    "Web client not available: %s. "
+                    "Disable with config.enable_browser=False to silence.",
+                    e,
+                )
 
         # Session management
         self.session_manager = SessionManager()

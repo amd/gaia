@@ -486,21 +486,32 @@ class FileSystemToolsMixin:
                         }
                     ):
                         try:
+                            # Cap read to avoid OOM on huge files
+                            read_limit = min(st.st_size, MAX_READ_BYTES)
                             with open(
                                 resolved,
                                 "r",
                                 encoding="utf-8",
                                 errors="ignore",
                             ) as f:
-                                content = f.read()
+                                content = f.read(read_limit)
                             line_count = content.count("\n") + (
                                 1 if content and not content.endswith("\n") else 0
                             )
-                            lines.append(f"  Lines:     {line_count}")
+                            if st.st_size > read_limit:
+                                lines.append(
+                                    f"  Lines:     ~{line_count}+ (sampled first {_format_size(read_limit)})"
+                                )
+                            else:
+                                lines.append(f"  Lines:     {line_count}")
                             # Character count
                             lines.append(f"  Chars:     {len(content)}")
-                        except Exception:
-                            pass
+                        except (OSError, UnicodeDecodeError) as exc:
+                            logger.debug(
+                                "Text metadata read failed for %s: %s",
+                                resolved,
+                                exc,
+                            )
 
                     elif ext == ".pdf":
                         try:
@@ -548,8 +559,12 @@ class FileSystemToolsMixin:
                             lines.append(
                                 "  Dimensions: (install Pillow for image info)"
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(
+                                "Image metadata read failed for %s: %s",
+                                resolved,
+                                exc,
+                            )
 
                 return "\n".join(lines)
 
@@ -1330,8 +1345,8 @@ class FileSystemToolsMixin:
                                                     }
                                                 )
                                                 break  # One match per file
-                                except Exception:
-                                    pass
+                                except (OSError, UnicodeDecodeError):
+                                    pass  # Skip unreadable files during content search
                         except (PermissionError, OSError):
                             continue
                 except (PermissionError, OSError):

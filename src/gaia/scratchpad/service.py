@@ -364,7 +364,8 @@ class ScratchpadService(DatabaseMixin):
 
             # Rough estimate: 200 bytes per row average
             return total_rows * 200
-        except Exception:
+        except Exception as exc:
+            log.warning("get_size_bytes failed: %s", exc)
             return 0
 
     def _sanitize_name(self, name: str) -> str:
