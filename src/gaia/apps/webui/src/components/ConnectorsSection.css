@@ -276,48 +276,10 @@
     font-style: italic;
 }
 
-/* Granted agent rows — use a grid so the name column is fixed-width
-   and the scopes column aligns consistently regardless of name length. */
-.grant-row {
-    display: grid;
-    grid-template-columns: 9rem 1fr auto;
-    align-items: baseline;
-    gap: 8px;
-    padding: 5px 0;
-    font-size: 12px;
-    font-family: var(--font-sans);
-}
+/* ── Unified agent grant card ─────────────────────────────────── */
 
-.grant-agent {
-    font-weight: 500;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.grant-scopes {
-    color: var(--text-secondary);
-    line-height: 1.4;
-}
-
-.btn-grant-revoke {
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--text-muted);
-    padding: 2px;
-    border-radius: 3px;
-    display: flex;
-    align-items: center;
-    transition: color var(--duration) var(--ease);
-    flex-shrink: 0;
-}
-.btn-grant-revoke:hover { color: var(--accent-red, #e55); }
-
-/* ── Pending-agent scope-picker card ─────────────────────────── */
-
-.grant-pending-card {
+/* One card per agent — same layout whether granted or pending. */
+.grant-agent-card {
     border: 1px solid var(--border-light);
     border-radius: var(--radius-sm);
     padding: 10px 14px;
@@ -325,11 +287,11 @@
     background: var(--bg-secondary);
 }
 
-.grant-pending-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+.grant-agent-card-name {
+    font-size: 12px;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
     margin-bottom: 10px;
 }
 
@@ -346,7 +308,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 4px 0;
+    padding: 5px 0;
     cursor: pointer;
     user-select: none;
 }
@@ -421,25 +383,6 @@
     color: var(--text-muted);
 }
 .grant-scope-warning--error { color: var(--accent-red, #e55); }
-
-.btn-grant-confirm {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 10px;
-    font-size: 11px;
-    font-family: var(--font-sans);
-    font-weight: 500;
-    background: var(--accent-blue, #4e9de0);
-    color: #fff;
-    border: none;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: opacity var(--duration) var(--ease);
-}
-.btn-grant-confirm:hover { opacity: 0.85; }
-.btn-grant-confirm:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* .spin / @keyframes spin are defined globally in src/styles/index.css */
 

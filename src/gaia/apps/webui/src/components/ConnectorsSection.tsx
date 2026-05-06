@@ -9,7 +9,7 @@
  * shows an OAuth or MCP-key configure form plus per-agent grants.
  */
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
     CheckCircle2,
     AlertCircle,
@@ -17,7 +17,6 @@ import {
     ExternalLink,
     ChevronDown,
     ChevronUp,
-    X,
 } from 'lucide-react';
 
 // Human-readable labels for well-known OAuth scope URIs.
@@ -511,83 +510,76 @@ function MCPServerConfigureBody({
 
 // ── ConnectorAgentGrants ─────────────────────────────────────────────────────
 
-/** Inline scope-picker for a single pending agent. */
-function PendingAgentRow({
+/**
+ * Unified scope-toggle card for one agent (granted or not).
+ * Toggling a scope auto-saves immediately — no explicit button needed.
+ * Granted scopes start ON; not-yet-granted scopes start OFF.
+ */
+function AgentGrantCard({
     agent,
     connectorId,
-    allScopes,
-    reason,
-    onGranted,
+    grantedScopes,
+    onChanged,
 }: {
-    agent: { namespaced_agent_id?: string; name: string };
+    agent: { namespaced_agent_id?: string; name: string; required_connections?: Array<{ connector_id: string; scopes: string[]; reason: string }> };
     connectorId: string;
-    allScopes: string[];
-    reason: string;
-    onGranted: () => void;
+    grantedScopes: string[];
+    onChanged: () => void;
 }) {
-    const [selected, setSelected] = useState<Set<string>>(() => new Set(allScopes));
-    const [busy, setBusy] = useState(false);
+    const req = agent.required_connections?.find((rc) => rc.connector_id === connectorId);
+    const agentId = agent.namespaced_agent_id;
+    if (!req || !agentId) return null;
+
+    const [localScopes, setLocalScopes] = useState<Set<string>>(() => new Set(grantedScopes));
+    const [busyScope, setBusyScope] = useState<string | null>(null);
     const [err, setErr] = useState<string | null>(null);
 
-    const toggle = (scope: string) =>
-        setSelected((prev) => {
-            const next = new Set(prev);
-            next.has(scope) ? next.delete(scope) : next.add(scope);
-            return next;
-        });
+    // Sync when the parent reloads grants after a successful API call.
+    useEffect(() => {
+        setLocalScopes(new Set(grantedScopes));
+    }, [grantedScopes.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const grant = async () => {
-        const agentId = agent.namespaced_agent_id;
-        if (!agentId || selected.size === 0) return;
-        setBusy(true);
+    const toggleScope = async (scope: string) => {
+        if (busyScope !== null) return; // one request at a time
+        const next = new Set(localScopes);
+        next.has(scope) ? next.delete(scope) : next.add(scope);
+        setLocalScopes(next); // optimistic
+        setBusyScope(scope);
         setErr(null);
         try {
-            await api.grantConnectorAgent(connectorId, agentId, [...selected]);
-            onGranted();
+            if (next.size === 0) {
+                await api.revokeConnectorAgentGrant(connectorId, agentId);
+            } else {
+                await api.grantConnectorAgent(connectorId, agentId, [...next]);
+            }
+            onChanged();
         } catch (e) {
+            setLocalScopes(new Set(grantedScopes)); // revert
             setErr(e instanceof Error ? e.message : String(e));
         } finally {
-            setBusy(false);
+            setBusyScope(null);
         }
     };
 
-    const missingRequired = allScopes.some((s) => !selected.has(s));
-
     return (
-        <div className="grant-pending-card">
-            <div className="grant-pending-header">
-                <span className="grant-agent">{agent.name}</span>
-                <button
-                    className="btn-grant-confirm"
-                    disabled={busy || selected.size === 0}
-                    onClick={() => void grant()}
-                    title={reason}
-                >
-                    {busy ? <Loader2 size={11} className="spin" /> : null}
-                    Grant selected
-                </button>
-            </div>
+        <div className="grant-agent-card">
+            <div className="grant-agent-card-name">{agent.name}</div>
             <div className="grant-scope-list">
-                {allScopes.map((scope) => (
+                {req.scopes.map((scope) => (
                     <label key={scope} className="grant-scope-item">
                         <span className="grant-scope-label">{scopeLabel(scope)}</span>
                         <span className="toggle-switch">
                             <input
                                 type="checkbox"
-                                checked={selected.has(scope)}
-                                onChange={() => toggle(scope)}
+                                checked={localScopes.has(scope)}
+                                onChange={() => void toggleScope(scope)}
+                                disabled={busyScope !== null}
                             />
                             <span className="toggle-track" />
                         </span>
                     </label>
                 ))}
             </div>
-            {missingRequired && (
-                <div className="grant-scope-warning">
-                    <AlertCircle size={11} />
-                    This agent may not work correctly without all scopes.
-                </div>
-            )}
             {err && (
                 <div className="grant-scope-warning grant-scope-warning--error">
                     <AlertCircle size={11} /> {err}
@@ -601,8 +593,6 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
     const { agents } = useChatStore();
     const [grants, setGrants] = useState<Record<string, string[]>>({});
     const [loading, setLoading] = useState(true);
-    const [revoking, setRevoking] = useState<string | null>(null);
-    const [actionErr, setActionErr] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         try {
@@ -617,86 +607,29 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
 
     useEffect(() => { void load(); }, [load]);
 
-    const revoke = async (agentId: string) => {
-        setRevoking(agentId);
-        setActionErr(null);
-        try {
-            await api.revokeConnectorAgentGrant(connectorId, agentId);
-            void load();
-        } catch (e) {
-            setActionErr(e instanceof Error ? e.message : String(e));
-        } finally {
-            setRevoking(null);
-        }
-    };
-
-    // Agents that declare a requirement for this connector but have no grant yet.
-    const pendingAgents = useMemo(() =>
-        agents.filter((a) => {
-            if (!a.namespaced_agent_id) return false;
-            if (a.namespaced_agent_id in grants) return false;
-            return a.required_connections?.some((rc) => rc.connector_id === connectorId) ?? false;
-        }),
-        [agents, grants, connectorId],
-    );
-
     if (loading) return null;
 
-    const grantedEntries = Object.entries(grants);
-    const hasAnything = grantedEntries.length > 0 || pendingAgents.length > 0;
+    // Every agent that declares a requirement for this connector — granted or not.
+    const relevantAgents = agents.filter(
+        (a) => a.namespaced_agent_id && a.required_connections?.some((rc) => rc.connector_id === connectorId),
+    );
 
     return (
         <div className="connection-grants">
             <div className="grants-header">Per-agent grants</div>
-            {actionErr && (
-                <div className="configure-error" style={{ marginBottom: 6 }}>
-                    <AlertCircle size={12} /> {actionErr}
-                </div>
-            )}
-            {!hasAnything && (
-                <div className="grants-empty">No agents have been granted access yet.</div>
-            )}
-
-            {/* Granted agents — compact rows */}
-            {grantedEntries.map(([agentId, scopes]) => {
-                const agent = agents.find((a) => a.namespaced_agent_id === agentId);
-                return (
-                    <div key={agentId} className="grant-row">
-                        <span className="grant-agent">{agent ? agent.name : agentId}</span>
-                        <span className="grant-scopes">
-                            {scopes.map(scopeLabel).join(', ')}
-                        </span>
-                        <button
-                            className="btn-grant-revoke"
-                            disabled={revoking === agentId}
-                            onClick={() => void revoke(agentId)}
-                            aria-label={`Revoke ${agentId}`}
-                        >
-                            {revoking === agentId
-                                ? <Loader2 size={11} className="spin" />
-                                : <X size={11} />}
-                        </button>
-                    </div>
-                );
-            })}
-
-            {/* Pending agents — scope-picker cards */}
-            {pendingAgents.map((agent) => {
-                const req = agent.required_connections?.find(
-                    (rc) => rc.connector_id === connectorId,
-                );
-                if (!req) return null;
-                return (
-                    <PendingAgentRow
+            {relevantAgents.length === 0 ? (
+                <div className="grants-empty">No agents require access to this connector.</div>
+            ) : (
+                relevantAgents.map((agent) => (
+                    <AgentGrantCard
                         key={agent.namespaced_agent_id}
                         agent={agent}
                         connectorId={connectorId}
-                        allScopes={req.scopes}
-                        reason={req.reason}
-                        onGranted={() => void load()}
+                        grantedScopes={grants[agent.namespaced_agent_id!] ?? []}
+                        onChanged={() => void load()}
                     />
-                );
-            })}
+                ))
+            )}
         </div>
     );
 }
