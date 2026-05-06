@@ -651,7 +651,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       // time but may legitimately differ pre-release. Assert package.json has a
       // valid semver and is not AHEAD of version.py (that would be a bug).
       // Allows PEP 440 pre-release suffixes (rcN, .devN, aN, bN) on either side;
-      // the lead-ahead comparison is on the numeric MAJOR.MINOR.PATCH prefix only.
+      // the lead-ahead comparison is on the numeric MAJOR.MINOR.PATCH prefix
+      // only — a released pkg vs a pre-release py with the same triple will
+      // not flag here, which is intentional (release tagging closes that gap).
       const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)([.\-+a-z0-9]*)$/i;
       const pkgSemver = pkg.version.match(SEMVER_RE);
       const pySemver = match[1].match(SEMVER_RE);
