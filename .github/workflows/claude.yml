@@ -58,6 +58,7 @@ jobs:
   # Auto-review new PRs (including forks)
   pr-review:
     # Temporarily disabled — Anthropic credit balance exhausted (see commit a013e384).
+    # Tracked for re-enable in https://github.com/amd/gaia/issues/970
     # To re-enable: restore the original `repository / event_name / draft / label` gate.
     if: false
     runs-on: ubuntu-latest

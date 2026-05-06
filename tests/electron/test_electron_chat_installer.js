@@ -650,10 +650,15 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       // bumped ahead of PyPI during development. They must match at release
       // time but may legitimately differ pre-release. Assert package.json has a
       // valid semver and is not AHEAD of version.py (that would be a bug).
-      expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
-      expect(match[1]).toMatch(/^\d+\.\d+\.\d+$/);
-      const pkgParts = pkg.version.split('.').map(Number);
-      const pyParts = match[1].split('.').map(Number);
+      // Allows PEP 440 pre-release suffixes (rcN, .devN, aN, bN) on either side;
+      // the lead-ahead comparison is on the numeric MAJOR.MINOR.PATCH prefix only.
+      const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)([.\-+a-z0-9]*)$/i;
+      const pkgSemver = pkg.version.match(SEMVER_RE);
+      const pySemver = match[1].match(SEMVER_RE);
+      expect(pkgSemver).not.toBeNull();
+      expect(pySemver).not.toBeNull();
+      const pkgParts = [pkgSemver[1], pkgSemver[2], pkgSemver[3]].map(Number);
+      const pyParts = [pySemver[1], pySemver[2], pySemver[3]].map(Number);
       const pkgAhead = pkgParts.some((n, i) =>
         n > (pyParts[i] ?? 0) && pkgParts.slice(0, i).every((m, j) => m === (pyParts[j] ?? 0))
       );
