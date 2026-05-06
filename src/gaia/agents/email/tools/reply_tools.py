@@ -147,15 +147,41 @@ def send_now_impl(
     body: str,
     debug: bool = False,
 ) -> Dict[str, Any]:
-    """One-shot send (no draft step). Confirmation-gated at the agent level."""
+    """One-shot send (no draft step). Confirmation-gated at the agent level.
+
+    Records an audit row in ``email_drafts`` with both ``created_at`` and
+    ``sent_at`` populated so a one-shot send is visible to any future
+    audit-log inspection alongside the regular draft-then-send flow.
+    Ordering invariant: Gmail call first, DB write only on success.
+    """
     with log_tool_call(
         "send_now",
         {"to": to, "subject": subject, "body": body[:120]},
         debug=debug,
     ) as st:
         result = gmail.send_message(to=to, subject=subject, body=body)
-        st["result_summary"] = {"sent_id": result.get("id")}
-        return {"sent_id": result.get("id"), "to": to, "subject": subject, "sent": True}
+        sent_id = result.get("id") or ""
+        # The send-message API returns a Gmail message id, not a draft
+        # id; we use that as the row key so the audit table stays
+        # uniquely keyed.
+        try:
+            action_store.record_draft(
+                db, draft_id=sent_id, to=to, subject=subject, body=body
+            )
+            action_store.mark_draft_sent(db, draft_id=sent_id)
+        except Exception:
+            # Audit-write failures must NOT mask a successful send. Log
+            # but don't raise — the email already left the user's
+            # account; the agent must not retry.
+            import logging
+
+            logging.getLogger("gaia.agents.email").warning(
+                "send_now: audit write failed for sent_id=%s — "
+                "send DID succeed but audit row missing",
+                sent_id,
+            )
+        st["result_summary"] = {"sent_id": sent_id}
+        return {"sent_id": sent_id, "to": to, "subject": subject, "sent": True}
 
 
 def forward_message_impl(

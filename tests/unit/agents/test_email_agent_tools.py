@@ -21,6 +21,7 @@ Each tool's pure ``*_impl`` function is exercised against a
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -180,6 +181,138 @@ class TestOrganizeTools:
 # ---------------------------------------------------------------------------
 # Delete tools — ordering invariant + undo window
 # ---------------------------------------------------------------------------
+
+
+class TestOrderingInvariantParameterized:
+    """Adversarial B2: every mutate tool must call Gmail BEFORE the DB write.
+
+    A 5xx / KeyError / scope-revoke from Gmail must leave zero rows in
+    ``email_actions`` — no phantom undo entries.
+    """
+
+    @pytest.mark.parametrize(
+        "name,call",
+        [
+            (
+                "archive",
+                lambda gmail, db: archive_message_impl(gmail, db, message_id="nope"),
+            ),
+            (
+                "label",
+                lambda gmail, db: label_message_impl(
+                    gmail, db, message_id="nope", label_id="Label_1"
+                ),
+            ),
+            (
+                "trash",
+                lambda gmail, db: trash_message_impl(gmail, db, message_id="nope"),
+            ),
+        ],
+    )
+    def test_mutate_tool_no_phantom_row_on_gmail_failure(
+        self, fake_gmail, db, name, call
+    ):
+        with pytest.raises(KeyError):
+            call(fake_gmail, db)
+        rows = db.query("SELECT COUNT(*) AS n FROM email_actions", one=True)
+        assert rows["n"] == 0, f"{name} wrote a phantom row on Gmail failure"
+
+
+class TestBatchThresholdEnforcement:
+    """Phase I3 / S2.M2: organize closures MUST refuse to fire past the
+    batch threshold and surface an error envelope (so the agent's
+    planning loop asks the user for confirmation).
+    """
+
+    def test_organize_closure_refuses_past_threshold(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        from unittest.mock import MagicMock, patch
+
+        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia.agents.email.config import EmailAgentConfig
+
+        cfg = EmailAgentConfig(
+            gmail_backend=fake_gmail,
+            calendar_backend=fake_calendar,
+            db_path=str(tmp_path / "state.db"),
+            silent_mode=True,
+        )
+        with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+            mock_sdk.return_value = MagicMock()
+            agent = EmailTriageAgent(config=cfg)
+
+        # Force the threshold trip by hand-bumping the counter past
+        # the boundary (>5 ops, >3 senders).
+        for sender in ("a", "b", "c", "d"):
+            agent._record_organize_op(f"m-{sender}-1", sender)
+        agent._record_organize_op("m-x", "a")
+        agent._record_organize_op("m-y", "b")
+        assert agent._organize_batch_threshold_exceeded() is True
+
+        # archive_message must now refuse and return an error envelope
+        # WITHOUT touching the Gmail backend.
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        archive_fn = _TOOL_REGISTRY["archive_message"]["function"]
+        msg_id = list(fake_gmail._messages.keys())[0]
+        # Capture pre-state — message should still be in INBOX after.
+        prior = fake_gmail.get_message(msg_id)
+        prior_labels = list(prior["labelIds"])
+        result_str = archive_fn(msg_id)
+        result = json.loads(result_str)
+        assert result["ok"] is False
+        assert "batch threshold" in result["error"].lower()
+        # Message labels unchanged — closure refused before any Gmail call.
+        post = fake_gmail.get_message(msg_id)
+        assert post["labelIds"] == prior_labels
+        agent.close_db()
+
+
+class TestSendNowAuditTrail:
+    """``send_now_impl`` must record an audit row (sent_at populated)
+    so a one-shot send is visible alongside drafted-then-sent flows.
+    """
+
+    def test_send_now_writes_to_email_drafts(self, fake_gmail, db):
+        from gaia.agents.email.tools.reply_tools import send_now_impl
+
+        result = send_now_impl(
+            fake_gmail,
+            db,
+            to="bob@example.com",
+            subject="Hi",
+            body="One-shot send from a unit test.",
+        )
+        sent_id = result["sent_id"]
+        # The draft row exists AND is marked sent.
+        row = action_store.fetch_draft(db, draft_id=sent_id)
+        assert row is not None
+        assert row["sent_at"] is not None
+
+
+class TestMoveToLabelAtomicity:
+    """``move_to_label_impl`` issues a single ``_modify_labels`` call so
+    a partial-failure cannot leave a message half-moved.
+    """
+
+    def test_move_uses_single_modify_call(self, fake_gmail, db):
+        from gaia.agents.email.tools.organize_tools import move_to_label_impl
+
+        new_label = fake_gmail.create_label(name="archive-target")
+        msg_id = list(fake_gmail._messages.keys())[0]
+        # Reset transport call log.
+        fake_gmail.transport.reset()
+        move_to_label_impl(fake_gmail, db, message_id=msg_id, label_id=new_label["id"])
+        # Recorded calls: one get_message (for prior_labels) + the
+        # single underlying modify (NOT add_label + archive_message
+        # as two separate calls).
+        method_names = [c[0] for c in fake_gmail.transport.calls]
+        assert "add_label" not in method_names, (
+            "move_to_label should issue a SINGLE atomic modify, "
+            "not separate add_label + archive_message"
+        )
+        assert "archive_message" not in method_names
 
 
 class TestDeleteTools:

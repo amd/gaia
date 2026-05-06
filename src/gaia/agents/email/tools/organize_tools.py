@@ -15,7 +15,7 @@ class.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from gaia.agents.base.tools import tool
 from gaia.agents.email import action_store
@@ -36,13 +36,21 @@ def _envelope_err(message: str) -> str:
 
 
 def archive_message_impl(
-    gmail, db, *, message_id: str, debug: bool = False
+    gmail,
+    db,
+    *,
+    message_id: str,
+    prior: Optional[Dict[str, Any]] = None,
+    debug: bool = False,
 ) -> Dict[str, Any]:
     with log_tool_call(
         "archive_message", {"message_id": message_id}, debug=debug
     ) as st:
-        # Fetch prior labels FIRST so the undo path can restore them.
-        prior = gmail.get_message(message_id)
+        # Fetch prior labels so the undo path can restore them. The
+        # caller may pass ``prior`` to avoid a redundant API round-trip
+        # (the organize closures fetch once for sender + prior_labels).
+        if prior is None:
+            prior = gmail.get_message(message_id)
         prior_labels = list(prior.get("labelIds", []))
         # Gmail call — if this raises, NO db row is written.
         gmail.archive_message(message_id)
@@ -123,18 +131,30 @@ def label_message_impl(
 
 
 def move_to_label_impl(
-    gmail, db, *, message_id: str, label_id: str, debug: bool = False
+    gmail,
+    db,
+    *,
+    message_id: str,
+    label_id: str,
+    prior: Optional[Dict[str, Any]] = None,
+    debug: bool = False,
 ) -> Dict[str, Any]:
-    """Add a label and remove INBOX in one step."""
+    """Add a label and remove INBOX in one atomic Gmail call."""
     with log_tool_call(
         "move_to_label",
         {"message_id": message_id, "label_id": label_id},
         debug=debug,
     ) as st:
-        prior = gmail.get_message(message_id)
+        if prior is None:
+            prior = gmail.get_message(message_id)
         prior_labels = list(prior.get("labelIds", []))
-        gmail.add_label(message_id, label_id)
-        gmail.archive_message(message_id)  # remove INBOX
+        # Single Gmail call — uses LiveGmailBackend's private
+        # _modify_labels for atomicity (so we never end up half-moved
+        # if the second of two calls would have raised). This requires
+        # the backend to expose ``_modify_labels``; the FakeGmailBackend
+        # also has the equivalent ``_modify`` method.
+        modify = getattr(gmail, "_modify_labels", None) or getattr(gmail, "_modify")
+        modify(message_id, add=[label_id], remove=["INBOX"])
         action_id = action_store.record_action(
             db,
             action_type="move_to_label",
@@ -150,30 +170,58 @@ def move_to_label_impl(
 # ---------------------------------------------------------------------------
 
 
+def _extract_sender(msg: Dict[str, Any]) -> str:
+    """Pull the ``From`` header out of a Gmail-API-shape message."""
+    for h in (msg.get("payload") or {}).get("headers", []):
+        if (h.get("name") or "").lower() == "from":
+            return h.get("value", "")
+    return ""
+
+
+# Sentinel error envelope returned by every organize closure when the
+# Phase I3 batch threshold trips. The LLM must surface this to the user
+# and ask for batch confirmation (the agent's planning loop sees this
+# error and re-asks the user).
+_BATCH_THRESHOLD_ERROR = (
+    "Batch threshold exceeded: more than 5 organize operations across "
+    "more than 3 distinct senders in this turn. Refusing to continue "
+    "without user confirmation. Surface this to the user as a single "
+    "batch-confirm prompt — the agent should not auto-bypass."
+)
+
+
 class OrganizeToolsMixin:
     def _register_organize_tools(self) -> None:
         gmail = self._gmail
         db = self
         debug_flag = bool(getattr(self.config, "debug", False))
-        # Reference the agent so the batch-threshold counter
-        # (Phase I3) can be incremented from inside the closures.
-        agent = self
+        agent = self  # for batch-threshold counter access
 
-        def _bump_organize_counter(message_id: str, sender: str) -> None:
-            try:
-                agent._record_organize_op(message_id, sender)
-            except AttributeError:
-                # Agent may not have wired the counter yet; ignore.
-                pass
+        def _check_threshold() -> Optional[str]:
+            """Return error message if Phase I3 threshold is exceeded, else None.
+
+            Called BEFORE each organize op so the offending op never
+            actually fires. The counter has already been bumped for
+            prior ops in the turn.
+            """
+            if agent._organize_batch_threshold_exceeded():
+                return _BATCH_THRESHOLD_ERROR
+            return None
 
         @tool
         def archive_message(message_id: str) -> str:
             """Archive a message (remove from INBOX). Reversible via restore_message."""
             try:
-                _bump_organize_counter(message_id, _peek_sender(gmail, message_id))
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                # Single Gmail fetch — used for both prior_labels (impl)
+                # and sender (counter). Avoids the redundant round-trip
+                # the previous _peek_sender helper introduced.
+                prior = gmail.get_message(message_id)
+                agent._record_organize_op(message_id, _extract_sender(prior))
                 return _envelope_ok(
                     archive_message_impl(
-                        gmail, db, message_id=message_id, debug=debug_flag
+                        gmail, db, message_id=message_id, prior=prior, debug=debug_flag
                     )
                 )
             except Exception as exc:
@@ -183,7 +231,13 @@ class OrganizeToolsMixin:
         def mark_read(message_id: str) -> str:
             """Mark a message as read."""
             try:
-                _bump_organize_counter(message_id, _peek_sender(gmail, message_id))
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                # mark_read does not need prior_labels; only bump
+                # the counter with what we know — the message_id
+                # alone is enough since distinct-sender counting
+                # treats unknown senders as "" (one bucket).
+                agent._record_organize_op(message_id, "")
                 return _envelope_ok(
                     mark_read_impl(gmail, db, message_id=message_id, debug=debug_flag)
                 )
@@ -194,6 +248,9 @@ class OrganizeToolsMixin:
         def mark_unread(message_id: str) -> str:
             """Mark a message as unread."""
             try:
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                agent._record_organize_op(message_id, "")
                 return _envelope_ok(
                     mark_unread_impl(gmail, db, message_id=message_id, debug=debug_flag)
                 )
@@ -204,6 +261,9 @@ class OrganizeToolsMixin:
         def add_star(message_id: str) -> str:
             """Star a message."""
             try:
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                agent._record_organize_op(message_id, "")
                 return _envelope_ok(
                     add_star_impl(gmail, db, message_id=message_id, debug=debug_flag)
                 )
@@ -214,6 +274,9 @@ class OrganizeToolsMixin:
         def remove_star(message_id: str) -> str:
             """Remove the star from a message."""
             try:
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                agent._record_organize_op(message_id, "")
                 return _envelope_ok(
                     remove_star_impl(gmail, db, message_id=message_id, debug=debug_flag)
                 )
@@ -224,7 +287,9 @@ class OrganizeToolsMixin:
         def label_message(message_id: str, label_id: str) -> str:
             """Add a label to a message. Pass the label id (e.g. ``Label_1``)."""
             try:
-                _bump_organize_counter(message_id, _peek_sender(gmail, message_id))
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                agent._record_organize_op(message_id, "")
                 return _envelope_ok(
                     label_message_impl(
                         gmail,
@@ -241,31 +306,20 @@ class OrganizeToolsMixin:
         def move_to_label(message_id: str, label_id: str) -> str:
             """Move a message out of INBOX into a label."""
             try:
-                _bump_organize_counter(message_id, _peek_sender(gmail, message_id))
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                # Single Gmail fetch — for prior_labels + sender.
+                prior = gmail.get_message(message_id)
+                agent._record_organize_op(message_id, _extract_sender(prior))
                 return _envelope_ok(
                     move_to_label_impl(
                         gmail,
                         db,
                         message_id=message_id,
                         label_id=label_id,
+                        prior=prior,
                         debug=debug_flag,
                     )
                 )
             except Exception as exc:
                 return _envelope_err(repr(exc))
-
-
-def _peek_sender(gmail, message_id: str) -> str:
-    """Best-effort sender lookup for the batch-threshold counter.
-
-    Failure is non-fatal — the counter degrades to message-id-only
-    distinct counts.
-    """
-    try:
-        msg = gmail.get_message(message_id)
-        for h in (msg.get("payload") or {}).get("headers", []):
-            if (h.get("name") or "").lower() == "from":
-                return h.get("value", "")
-    except Exception:
-        pass
-    return ""
