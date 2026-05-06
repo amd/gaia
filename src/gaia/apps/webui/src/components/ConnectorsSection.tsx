@@ -9,7 +9,7 @@
  * shows an OAuth or MCP-key configure form plus per-agent grants.
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
     CheckCircle2,
     AlertCircle,
@@ -18,8 +18,29 @@ import {
     ChevronDown,
     ChevronUp,
     X,
-    Plus,
 } from 'lucide-react';
+
+// Human-readable labels for well-known OAuth scope URIs.
+// Unrecognised scopes fall back to the last path segment of the URI.
+const SCOPE_LABELS: Record<string, string> = {
+    'https://www.googleapis.com/auth/gmail.readonly':        'Read emails',
+    'https://www.googleapis.com/auth/gmail.modify':          'Organize emails (archive, label, trash)',
+    'https://www.googleapis.com/auth/gmail.send':            'Send emails on your behalf',
+    'https://www.googleapis.com/auth/gmail.compose':         'Compose emails',
+    'https://www.googleapis.com/auth/calendar.readonly':     'View calendar events',
+    'https://www.googleapis.com/auth/calendar.events':       'Create & respond to calendar events',
+    'https://www.googleapis.com/auth/drive.readonly':        'Read Google Drive files',
+    'https://www.googleapis.com/auth/drive.file':            'Manage Drive files created by this app',
+    'https://www.googleapis.com/auth/spreadsheets.readonly': 'Read Google Sheets',
+    'https://www.googleapis.com/auth/spreadsheets':          'Edit Google Sheets',
+    'openid':   'Identify you',
+    'email':    'See your email address',
+    'profile':  'See your basic profile info',
+};
+
+function scopeLabel(scope: string): string {
+    return SCOPE_LABELS[scope] ?? scope.split(/[/.:]/).pop() ?? scope;
+}
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
@@ -490,12 +511,94 @@ function MCPServerConfigureBody({
 
 // ── ConnectorAgentGrants ─────────────────────────────────────────────────────
 
+/** Inline scope-picker for a single pending agent. */
+function PendingAgentRow({
+    agent,
+    connectorId,
+    allScopes,
+    reason,
+    onGranted,
+}: {
+    agent: { namespaced_agent_id?: string; name: string };
+    connectorId: string;
+    allScopes: string[];
+    reason: string;
+    onGranted: () => void;
+}) {
+    const [selected, setSelected] = useState<Set<string>>(() => new Set(allScopes));
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState<string | null>(null);
+
+    const toggle = (scope: string) =>
+        setSelected((prev) => {
+            const next = new Set(prev);
+            next.has(scope) ? next.delete(scope) : next.add(scope);
+            return next;
+        });
+
+    const grant = async () => {
+        const agentId = agent.namespaced_agent_id;
+        if (!agentId || selected.size === 0) return;
+        setBusy(true);
+        setErr(null);
+        try {
+            await api.grantConnectorAgent(connectorId, agentId, [...selected]);
+            onGranted();
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const missingRequired = allScopes.some((s) => !selected.has(s));
+
+    return (
+        <div className="grant-pending-card">
+            <div className="grant-pending-header">
+                <span className="grant-agent">{agent.name}</span>
+                <button
+                    className="btn-grant-confirm"
+                    disabled={busy || selected.size === 0}
+                    onClick={() => void grant()}
+                    title={reason}
+                >
+                    {busy ? <Loader2 size={11} className="spin" /> : null}
+                    Grant selected
+                </button>
+            </div>
+            <div className="grant-scope-list">
+                {allScopes.map((scope) => (
+                    <label key={scope} className="grant-scope-item">
+                        <input
+                            type="checkbox"
+                            checked={selected.has(scope)}
+                            onChange={() => toggle(scope)}
+                        />
+                        <span className="grant-scope-label">{scopeLabel(scope)}</span>
+                    </label>
+                ))}
+            </div>
+            {missingRequired && (
+                <div className="grant-scope-warning">
+                    <AlertCircle size={11} />
+                    This agent may not work correctly without all scopes.
+                </div>
+            )}
+            {err && (
+                <div className="grant-scope-warning grant-scope-warning--error">
+                    <AlertCircle size={11} /> {err}
+                </div>
+            )}
+        </div>
+    );
+}
+
 function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
     const { agents } = useChatStore();
     const [grants, setGrants] = useState<Record<string, string[]>>({});
     const [loading, setLoading] = useState(true);
     const [revoking, setRevoking] = useState<string | null>(null);
-    const [granting, setGranting] = useState<string | null>(null);
     const [actionErr, setActionErr] = useState<string | null>(null);
 
     const load = useCallback(async () => {
@@ -524,25 +627,15 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
         }
     };
 
-    const grant = async (agentId: string, scopes: string[]) => {
-        setGranting(agentId);
-        setActionErr(null);
-        try {
-            await api.grantConnectorAgent(connectorId, agentId, scopes);
-            void load();
-        } catch (e) {
-            setActionErr(e instanceof Error ? e.message : String(e));
-        } finally {
-            setGranting(null);
-        }
-    };
-
     // Agents that declare a requirement for this connector but have no grant yet.
-    const pendingAgents = agents.filter((a) => {
-        if (!a.namespaced_agent_id) return false;
-        if (a.namespaced_agent_id in grants) return false;
-        return a.required_connections?.some((rc) => rc.connector_id === connectorId) ?? false;
-    });
+    const pendingAgents = useMemo(() =>
+        agents.filter((a) => {
+            if (!a.namespaced_agent_id) return false;
+            if (a.namespaced_agent_id in grants) return false;
+            return a.required_connections?.some((rc) => rc.connector_id === connectorId) ?? false;
+        }),
+        [agents, grants, connectorId],
+    );
 
     if (loading) return null;
 
@@ -560,46 +653,45 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
             {!hasAnything && (
                 <div className="grants-empty">No agents have been granted access yet.</div>
             )}
-            {/* Agents that already have a grant */}
+
+            {/* Granted agents — compact rows */}
             {grantedEntries.map(([agentId, scopes]) => {
                 const agent = agents.find((a) => a.namespaced_agent_id === agentId);
                 return (
                     <div key={agentId} className="grant-row">
                         <span className="grant-agent">{agent ? agent.name : agentId}</span>
-                        <span className="grant-scopes">{scopes.join(', ')}</span>
+                        <span className="grant-scopes">
+                            {scopes.map(scopeLabel).join(', ')}
+                        </span>
                         <button
                             className="btn-grant-revoke"
                             disabled={revoking === agentId}
                             onClick={() => void revoke(agentId)}
                             aria-label={`Revoke ${agentId}`}
                         >
-                            <X size={11} />
+                            {revoking === agentId
+                                ? <Loader2 size={11} className="spin" />
+                                : <X size={11} />}
                         </button>
                     </div>
                 );
             })}
-            {/* Agents that need a grant but don't have one yet */}
+
+            {/* Pending agents — scope-picker cards */}
             {pendingAgents.map((agent) => {
-                const agentId = agent.namespaced_agent_id;
-                const req = agent.required_connections?.find((rc) => rc.connector_id === connectorId);
-                if (!agentId || !req) return null;
-                const busy = granting === agentId;
+                const req = agent.required_connections?.find(
+                    (rc) => rc.connector_id === connectorId,
+                );
+                if (!req) return null;
                 return (
-                    <div key={agentId} className="grant-row grant-row--pending">
-                        <span className="grant-agent">{agent.name}</span>
-                        <span className="grant-scopes grant-scopes--pending">
-                            Needs access
-                        </span>
-                        <button
-                            className="btn-grant-add"
-                            disabled={busy}
-                            onClick={() => void grant(agentId, req.scopes)}
-                            aria-label={`Grant ${agent.name}`}
-                            title={req.reason}
-                        >
-                            {busy ? <Loader2 size={11} className="spin" /> : <Plus size={11} />}
-                        </button>
-                    </div>
+                    <PendingAgentRow
+                        key={agent.namespaced_agent_id}
+                        agent={agent}
+                        connectorId={connectorId}
+                        allScopes={req.scopes}
+                        reason={req.reason}
+                        onGranted={() => void load()}
+                    />
                 );
             })}
         </div>
