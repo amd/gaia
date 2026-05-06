@@ -226,7 +226,9 @@ function OAuthConfigureBody({
         try {
             const r = await api.authorizeConnector(
                 connector.id,
-                connector.default_scopes,
+                connector.available_scopes?.length
+                    ? connector.available_scopes
+                    : connector.default_scopes,
             );
             openAuthUrl(r.authorization_url);
             // onChanged is called via the 'focus' listener when the user returns.
@@ -265,7 +267,13 @@ function OAuthConfigureBody({
         setBusy(true);
         setErr(null);
         try {
-            const result = await api.configureConnector(connector.id, setupValues);
+            const scopes = connector.available_scopes?.length
+                ? connector.available_scopes
+                : connector.default_scopes;
+            const result = await api.configureConnector(connector.id, {
+                ...setupValues,
+                scopes,
+            });
             const url =
                 typeof result.authorization_url === 'string'
                     ? result.authorization_url

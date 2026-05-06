@@ -52,8 +52,8 @@ from gaia.agents.email.scopes import (
     AGENT_NAMESPACED_ID,
     GMAIL_SCOPES,
 )
+from gaia.connectors.api import get_access_token_sync
 from gaia.connectors.errors import ConnectorsError
-from gaia.connectors.handler import get_credential_sync
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -628,12 +628,11 @@ def _get_gmail_token() -> str:
     Requests ``GMAIL_SCOPES`` (a NARROWER set than ``ALL_SCOPES``), so a
     user who declines calendar can still use Gmail tools.
     """
-    cred = get_credential_sync(
-        "google",
+    return get_access_token_sync(
+        provider="google",
         agent_id=AGENT_NAMESPACED_ID,
-        required_scopes=list(GMAIL_SCOPES),
+        scopes=list(GMAIL_SCOPES),
     )
-    return cred["access_token"]
 
 
 __all__ = [
