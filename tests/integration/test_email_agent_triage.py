@@ -110,10 +110,7 @@ def test_heuristic_triage_meets_baseline_minus_tolerance(require_lemonade):
         # Soft gate — xfail (not skip) so regressions are visible in CI.
         if accuracy < floor:
             pytest.xfail(
-                strict=False,
-                reason=(
-                    f"category accuracy {accuracy:.2f} below floor {floor:.2f} — "
-                    "LLM-fallback path not yet wired into triage_inbox_impl; "
-                    "will harden once the planning loop integrates"
-                ),
+                f"category accuracy {accuracy:.2f} below floor {floor:.2f} — "
+                "LLM-fallback path not yet wired into triage_inbox_impl; "
+                "will harden once the planning loop integrates"
             )

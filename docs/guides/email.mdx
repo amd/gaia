@@ -17,19 +17,39 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 
 ## Setup
 
-### 1. Install the Google connector
+### 1. Connect your Google account
 
-```bash
-gaia connectors connect google
-```
+There are two ways to connect Google depending on how you use GAIA.
 
-The CLI walks you through the OAuth flow. You'll be asked to grant Gmail and Calendar scopes:
+<Tabs>
+  <Tab title="Agent UI (recommended)">
+    The Agent UI is the primary way to connect Google. It walks you through the OAuth consent screen and stores your credentials securely in the OS keyring.
 
-- `gmail.modify` — read and modify messages (archive / label / trash)
-- `gmail.send` — send drafts on your behalf
-- `calendar.events` / `calendar.readonly` — read and update calendar events
+    1. Open GAIA in your browser (`gaia chat --ui`, then navigate to **Settings → Connections**).
+    2. Find the **Google** connector and click **Connect**.
+    3. Complete the Google OAuth consent screen — grant all requested scopes:
+       - `gmail.modify` — read and modify messages (archive / label / trash)
+       - `gmail.send` — send drafts on your behalf
+       - `calendar.events` / `calendar.readonly` — read and update calendar events
+    4. After approval, the browser redirects back and the connector shows as **Connected**.
 
-If you connected Google before GAIA v0.23, you'll need to **reconnect** to grant the additional scopes. The agent surfaces an actionable re-grant message the first time it needs them.
+    If you have an existing Google connection that predates GAIA v0.23, click **Reconnect** to grant the additional Gmail and Calendar scopes.
+  </Tab>
+  <Tab title="CLI (developer flow)">
+    The CLI connector flow is intended for developers and headless environments where a browser window cannot open automatically.
+
+    ```bash
+    gaia connectors connect google
+    ```
+
+    The command prints an authorization URL. Open it in a browser, complete the OAuth consent screen, and paste the resulting code back into the terminal. The scopes requested are the same as the Agent UI flow:
+
+    - `gmail.modify`, `gmail.send`
+    - `calendar.events`, `calendar.readonly`
+
+    If you connected Google before GAIA v0.23, run `gaia connectors connect google --force` to trigger a fresh consent screen with the updated scope list.
+  </Tab>
+</Tabs>
 
 ### 2. Confirm Lemonade is running
 
@@ -39,13 +59,26 @@ lemonade-server serve
 
 Email-body inference runs on your local Lemonade instance. The agent **rejects** any non-local LLM endpoint at startup — there is no path through configuration to route email content to a cloud LLM.
 
-### 3. Run the agent
+### 3. Start the agent
 
-```bash
-gaia email -q "Triage my inbox"
-gaia email -q "Summarize my unread emails from this week"
-gaia email -i  # interactive mode
-```
+<Tabs>
+  <Tab title="Agent UI">
+    Select **Email Triage** from the agent picker in the Agent UI and type your request in the chat input, for example:
+
+    - *Triage my inbox*
+    - *Summarize my unread emails from this week*
+    - *Archive all newsletters from the last month*
+
+    Destructive actions (send, delete, calendar mutations) show a confirmation dialog before executing.
+  </Tab>
+  <Tab title="CLI">
+    ```bash
+    gaia email -q "Triage my inbox"
+    gaia email -q "Summarize my unread emails from this week"
+    gaia email -i  # interactive mode
+    ```
+  </Tab>
+</Tabs>
 
 ## CLI reference
 
@@ -92,11 +125,11 @@ The agent's heuristic flags messages that match conservative phishing patterns (
 
 ### "AGENT_NOT_GRANTED — Email agent needs additional Google permissions"
 
-Your Google connection predates the email agent and lacks `gmail.modify`. Open Settings → Connectors → Google → Reconnect to grant the missing scopes.
+Your Google connection predates the email agent and lacks `gmail.modify`. Open Settings → Connections → Google → Reconnect to grant the missing scopes.
 
 ### "Gmail API returned 401"
 
-The access token has expired or scopes were revoked. Reconnect Google in Settings → Connectors.
+The access token has expired or scopes were revoked. Reconnect Google in Settings → Connections.
 
 ### Bulk-archive prompt asking for confirmation
 
