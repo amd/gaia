@@ -269,8 +269,11 @@ async function startBackend() {
               const procCmd = `/proc/${existingPid}/cmdline`;
               if (fs.existsSync(procCmd)) {
                 const raw = fs.readFileSync(procCmd, "utf8");
-                // /proc/<pid>/cmdline is NUL-separated; check for gaia keywords.
-                if (raw.includes("gaia") || raw.includes("gaia-desktop") || raw.includes("python")) {
+                // /proc/<pid>/cmdline is NUL-separated; use a stricter match to
+                // avoid killing unrelated Python processes (Jupyter, LSP, etc.).
+                // Legitimate backend uses: `gaia chat --ui --ui-port <port>`
+                const looksLikeGaiaBackend = raw.includes("gaia") && (raw.includes("chat") || raw.includes("--ui-port"));
+                if (looksLikeGaiaBackend) {
                   isBackend = true;
                 }
               }
@@ -278,7 +281,8 @@ async function startBackend() {
               try {
                 const out = spawnSync("ps", ["-p", String(existingPid), "-o", "command="], { encoding: "utf8" });
                 const cmd = (out && out.stdout) ? out.stdout : "";
-                if (cmd.includes("gaia") || cmd.includes("gaia-desktop") || cmd.includes("python")) {
+                const looksLikeGaiaBackend = cmd.includes("gaia") && (cmd.includes("chat") || cmd.includes("--ui-port"));
+                if (looksLikeGaiaBackend) {
                   isBackend = true;
                 }
               } catch {
