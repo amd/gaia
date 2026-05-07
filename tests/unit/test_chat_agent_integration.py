@@ -41,17 +41,17 @@ def _build_agent(**config_overrides) -> ChatAgent:
 class TestChatAgentConfigDefaults:
     """Verify ChatAgentConfig default values for the new feature flags."""
 
-    def test_enable_filesystem_default_true(self):
+    def test_enable_filesystem_default_false(self):
         config = ChatAgentConfig()
-        assert config.enable_filesystem is True
+        assert config.enable_filesystem is False
 
-    def test_enable_scratchpad_default_true(self):
+    def test_enable_scratchpad_default_false(self):
         config = ChatAgentConfig()
-        assert config.enable_scratchpad is True
+        assert config.enable_scratchpad is False
 
-    def test_enable_browser_default_true(self):
+    def test_enable_browser_default_false(self):
         config = ChatAgentConfig()
-        assert config.enable_browser is True
+        assert config.enable_browser is False
 
     def test_filesystem_scan_depth_default_3(self):
         config = ChatAgentConfig()
