@@ -928,6 +928,7 @@ jobs:
         shell: bash
         env:
           WHEEL_PATH: ${{ steps.locate-wheel.outputs.path }}
+          GAIA_SKIP_GAIA_INIT: "1"
         run: |
           set -euo pipefail
           APPIMAGE=$(ls "${RUNNER_TEMP}/linux-installer"/*.AppImage | head -n1)

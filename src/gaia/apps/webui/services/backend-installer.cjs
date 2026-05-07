@@ -151,6 +151,10 @@ let logStream = null;
  */
 let logRotatedThisSession = false;
 
+function isTruthyEnv(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || ""));
+}
+
 function ensureGaiaHome() {
   try {
     if (!fs.existsSync(GAIA_HOME)) {
@@ -1007,6 +1011,8 @@ async function installBackend(opts = {}) {
   const pipPackage = localWheel
     ? `${localWheel}[ui]`
     : `amd-gaia[ui]==${version}`;
+  const skipGaiaInit =
+    Boolean(opts.skipGaiaInit) || isTruthyEnv(process.env.GAIA_SKIP_GAIA_INIT);
 
   log("================================================");
   log("  Installing GAIA backend");
@@ -1103,7 +1109,7 @@ async function installBackend(opts = {}) {
   report(STAGES.INSTALL_PACKAGE, 100, "GAIA package installed");
 
   // Stage 4: gaia init
-  if (!opts.skipGaiaInit) {
+  if (!skipGaiaInit) {
     setState(STATES.INSTALLING, { stage: STAGES.GAIA_INIT, version });
     report(
       STAGES.GAIA_INIT,
@@ -1126,7 +1132,7 @@ async function installBackend(opts = {}) {
     }
     report(STAGES.GAIA_INIT, 100, "Lemonade Server setup complete");
   } else {
-    log("Skipping gaia init (skipGaiaInit=true)");
+    log("Skipping gaia init (skipGaiaInit=true or GAIA_SKIP_GAIA_INIT set)");
   }
 
   // Stage 5: verify
