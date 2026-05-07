@@ -42,7 +42,7 @@ class OAuthPkceHandler:
 
     ``get_credential`` returns an access-token dict compatible with
     Google's token endpoint; the dict shape is:
-      ``{"access_token": str, "expires_at": int, "scopes": [str]}``
+      ``{"access_token": str, "scopes": [str]}``
 
     This class is stateless — it delegates all persistent state to
     ``tokens.py`` (in-memory cache) and ``store.py`` (keyring; the
@@ -69,12 +69,9 @@ class OAuthPkceHandler:
         """
         provider_id = spec.oauth_provider_ref or spec.id
         account_email = account_id or DEFAULT_ACCOUNT
-        token_str, expires_at = await get_or_refresh(
-            provider_id, account_email=account_email
-        )
+        token_str = await get_or_refresh(provider_id, account_email=account_email)
         return {
             "access_token": token_str,
-            "expires_at": expires_at,
             "scopes": list(required_scopes or spec.default_scopes),
         }
 

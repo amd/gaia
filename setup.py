@@ -85,6 +85,8 @@ setup(
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
         "gaia.agents.connectors_demo",
+        "gaia.agents.email",
+        "gaia.agents.email.tools",
     ],
     package_data={
         "gaia.eval": [

@@ -75,11 +75,11 @@ class TestGetCredential:
         handler = OAuthPkceHandler()
         with patch(
             "gaia.connectors.oauth_pkce.get_or_refresh",
-            new=AsyncMock(return_value=("tok-abc", 9999999999)),
+            new=AsyncMock(return_value="tok-abc"),
         ):
             result = await handler.get_credential(spec, required_scopes=["openid"])
         assert result["access_token"] == "tok-abc"
-        assert result["expires_at"] == 9999999999
+        assert "expires_at" not in result
         assert result["scopes"] == ["openid"]
 
     @pytest.mark.asyncio
@@ -88,7 +88,7 @@ class TestGetCredential:
         handler = OAuthPkceHandler()
         with patch(
             "gaia.connectors.oauth_pkce.get_or_refresh",
-            new=AsyncMock(return_value=("tok", 0)),
+            new=AsyncMock(return_value="tok"),
         ):
             result = await handler.get_credential(spec)
         assert set(result["scopes"]) == {"openid", "email"}
@@ -97,7 +97,7 @@ class TestGetCredential:
     async def test_uses_oauth_provider_ref_as_provider_id(self):
         spec = _make_spec(id="gmail", oauth_provider_ref="google")
         handler = OAuthPkceHandler()
-        mock_refresh = AsyncMock(return_value=("tok", 0))
+        mock_refresh = AsyncMock(return_value="tok")
         with patch("gaia.connectors.oauth_pkce.get_or_refresh", new=mock_refresh):
             await handler.get_credential(spec)
         mock_refresh.assert_called_once_with(
@@ -108,7 +108,7 @@ class TestGetCredential:
     async def test_falls_back_to_spec_id_when_no_provider_ref(self):
         spec = _make_spec(id="myconnector", oauth_provider_ref=None)
         handler = OAuthPkceHandler()
-        mock_refresh = AsyncMock(return_value=("tok", 0))
+        mock_refresh = AsyncMock(return_value="tok")
         with patch("gaia.connectors.oauth_pkce.get_or_refresh", new=mock_refresh):
             await handler.get_credential(spec)
         mock_refresh.assert_called_once_with(

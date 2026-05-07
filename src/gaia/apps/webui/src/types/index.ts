@@ -105,6 +105,7 @@ export interface ConnectorRow {
     last_tested_at: string | null;
     mcp_env_keys: string[];
     default_scopes: string[];
+    available_scopes: string[];
     /**
      * First-time setup fields the user fills in to provide OAuth-app
      * client credentials (e.g. Google Cloud Console client_id +

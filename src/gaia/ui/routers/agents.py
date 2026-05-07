@@ -90,17 +90,12 @@ def _reg_to_info(reg) -> AgentInfo:
         min_memory_gb=reg.min_memory_gb,
         # T-X2 (issue #915): surface declared connection requirements so the
         # AgentUI consent dialog can render the prompt at agent-selection time.
-        # Handle both ConnectorRequirement objects and plain strings (legacy).
         required_connections=[
-            (
-                {
-                    "provider": cr.connector_id,
-                    "scopes": list(cr.scopes),
-                    "reason": cr.reason,
-                }
-                if hasattr(cr, "connector_id")
-                else {"provider": str(cr), "scopes": [], "reason": ""}
-            )
+            {
+                "connector_id": cr.connector_id,
+                "scopes": list(cr.scopes),
+                "reason": cr.reason,
+            }
             for cr in reg.required_connections
         ],
         namespaced_agent_id=reg.namespaced_agent_id,

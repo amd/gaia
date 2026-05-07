@@ -50,6 +50,17 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "write_markdown_file",
     "replace_function",
     "update_gaia_md",
+    # Email Triage Agent (#962) — destructive / external. The
+    # confirmation payload surfaces the literal recipient/subject/body
+    # so the user sees what will actually happen, not an LLM paraphrase
+    # (Phase I2 / S2.M1).
+    "send_draft",
+    "send_now",
+    "forward_message",
+    "permanent_delete",
+    "accept_invite",
+    "decline_invite",
+    "create_event_from_email",
 }
 
 

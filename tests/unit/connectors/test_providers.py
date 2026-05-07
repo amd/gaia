@@ -230,3 +230,33 @@ class TestNoImportSideEffects:
         monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
         importlib.reload(google_mod)
         assert "google" not in providers._registry  # type: ignore[attr-defined]
+
+
+class TestGoogleCatalogScopes:
+    """
+    Per #962: gmail.modify must be in available_scopes so the email triage
+    agent's organize/trash/mark-read tools can request it without the
+    grant ledger refusing the token (``handler.get_credential`` rejects any
+    token request for a scope absent from ``ConnectorSpec.available_scopes``).
+
+    Named explicitly — easy to grep, hard to silently drop in a merge.
+    """
+
+    def test_google_catalog_declares_gmail_modify_scope(self):
+        from gaia.connectors.catalog.google import GOOGLE_SPEC
+
+        assert (
+            "https://www.googleapis.com/auth/gmail.modify"
+            in GOOGLE_SPEC.available_scopes
+        )
+
+    def test_google_catalog_declares_calendar_events_scope(self):
+        # Calendar mutations (create_event, accept/decline invite) need this.
+        # Already present pre-#962, but pin it so a future scope-trim doesn't
+        # regress the email agent.
+        from gaia.connectors.catalog.google import GOOGLE_SPEC
+
+        assert (
+            "https://www.googleapis.com/auth/calendar.events"
+            in GOOGLE_SPEC.available_scopes
+        )
