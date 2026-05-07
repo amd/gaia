@@ -1721,6 +1721,88 @@ class TestStreamingGeneratorEdgeCases:
             "rcpt_disconnect_1234"
         )
 
+    @pytest.mark.asyncio
+    async def test_policy_alert_block_survives_stream_error(self, db, session_id):
+        """A BLOCK receipt remains reloadable when the stream errors afterward."""
+        from gaia.ui._chat_helpers import _stream_chat_response
+        from gaia.ui.models import ChatRequest
+
+        class PolicyBlockedThenErrorAgent:
+            model_id = "TestModel-GGUF"
+
+            def __init__(self):
+                self.indexed_files = set()
+                self.conversation_history = []
+
+            def _register_tools(self):
+                return None
+
+            def process_query(self, _message):
+                self.console.print_policy_alert(
+                    tool_name="drop_table",
+                    decision="BLOCK",
+                    reason="Production DB protection active.",
+                    rule_ids=["governance.block.destructive_db"],
+                    policy_version="v1.2.0",
+                    receipt_id="rcpt_stream_error_1234",
+                )
+                raise RuntimeError("stream exploded")
+
+        class StatsClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, _url):
+                response = MagicMock()
+                response.status_code = 404
+                return response
+
+        async def no_title_update(**_kwargs):
+            return None
+
+        request = ChatRequest(
+            session_id=session_id,
+            message="Drop the production table",
+            stream=True,
+        )
+
+        with (
+            patch(
+                "gaia.ui._chat_helpers._get_cached_agent",
+                return_value=PolicyBlockedThenErrorAgent(),
+            ),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+            patch("gaia.ui._chat_helpers._maybe_update_session_title", no_title_update),
+            patch("httpx.AsyncClient", return_value=StatsClient()),
+        ):
+            chunks = [
+                chunk
+                async for chunk in _stream_chat_response(
+                    db, db.get_session(session_id), request
+                )
+            ]
+
+        assert any('"type": "policy_alert"' in chunk for chunk in chunks)
+        assert any('"type": "error"' in chunk for chunk in chunks)
+
+        assistant_messages = [
+            message
+            for message in db.get_messages(session_id)
+            if message["role"] == "assistant"
+        ]
+        assert len(assistant_messages) == 1
+        assert assistant_messages[0]["content"].startswith(
+            "Blocked: drop_table is restricted by policy."
+        )
+        assert "[Error: stream exploded]" in assistant_messages[0]["content"]
+        assert assistant_messages[0]["agent_steps"][0]["type"] == "policy_alert"
+        assert assistant_messages[0]["agent_steps"][0]["receiptId"] == (
+            "rcpt_stream_error_1234"
+        )
+
     def test_policy_alert_block_with_agent_explanation_does_not_duplicate_message(
         self, client, session_id
     ):

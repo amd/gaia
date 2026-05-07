@@ -3,17 +3,26 @@
 /* Settings Modal -- refined design */
 .settings-modal { width: 560px; }
 
-.settings-section { margin-bottom: 28px; }
+.settings-section {
+    margin-bottom: 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
+    border-radius: 10px;
+    padding: 18px 20px;
+}
 .settings-section:last-child { margin-bottom: 0; }
 
 .settings-section h4 {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
     font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 2px;
-    color: var(--text-muted);
+    letter-spacing: 1.5px;
+    color: var(--text-secondary);
     margin-bottom: 14px;
+    border-left: 2px solid var(--accent);
+    margin-left: -8px;
+    padding-left: 6px;
 }
 
 .status-grid { display: flex; flex-direction: column; gap: 8px; }
@@ -386,12 +395,7 @@
     cursor: not-allowed;
 }
 
-/* Danger zone */
-.danger-zone {
-    border-top: 1px solid var(--border);
-    padding-top: 20px;
-    margin-top: 8px;
-}
+/* Danger actions */
 
 .danger-divider {
     height: 1px;

@@ -1648,10 +1648,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             if not blocked_steps:
                 return None
 
-            for step in captured_steps:
-                step["active"] = False
             persisted_policy_block_content = _policy_block_response(blocked_steps)
             if persisted_policy_block_msg_id is not None:
+                # ChatDatabase is single-writer SQLite today; make this replacement
+                # transactional before moving the chat DB to a multi-writer backend.
                 db.delete_message(request.session_id, persisted_policy_block_msg_id)
             persisted_policy_block_msg_id = db.add_message(
                 request.session_id,
@@ -1871,7 +1871,15 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         if result_holder["error"]:
             error_msg = f"Agent error: {result_holder['error']}"
             if not full_response:
-                full_response = error_msg
+                blocked_alert_steps = _blocked_policy_steps()
+                if blocked_alert_steps:
+                    full_response = (
+                        persisted_policy_block_content
+                        or _policy_block_response(blocked_alert_steps)
+                    )
+                    full_response += f"\n\n[Error: {result_holder['error']}]"
+                else:
+                    full_response = error_msg
             else:
                 # Partial response exists -- append error notice so user knows
                 # the response may be incomplete
@@ -1959,6 +1967,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 msg_id = persisted_policy_block_msg_id
             else:
                 if persisted_policy_block_msg_id is not None:
+                    # ChatDatabase is single-writer SQLite today; make this replacement
+                    # transactional before moving the chat DB to a multi-writer backend.
                     db.delete_message(request.session_id, persisted_policy_block_msg_id)
                 msg_id = db.add_message(
                     request.session_id,
