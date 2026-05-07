@@ -53,6 +53,71 @@ _RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
 )
 
 
+# Session-level kwargs that constrain the agent's effective sandbox. If
+# python_factory drops one of these for a class that doesn't declare it, the
+# session-intended constraint silently relaxes to the agent's default — log
+# at WARNING so the author can see what to declare. Other dropped kwargs stay
+# at debug level (mostly noise).
+_SECURITY_RELEVANT_KWARGS: frozenset[str] = frozenset({"allowed_paths"})
+
+
+def _accepted_init_params(klass: type) -> Optional[set[str]]:
+    """Return the union of keyword-passable __init__ parameters across
+    klass's MRO. Returns None if every inspected level along the chain
+    accepts ``**kwargs`` (callers should then forward all kwargs as-is).
+
+    Used by ``python_factory`` to filter session-level kwargs (injected by
+    the UI host, see ``_session_agent_kwargs`` in ``gaia.ui._chat_helpers``)
+    against what the user-supplied agent class can actually accept.
+
+    NOTE: ``python_factory`` uses ``__init__`` introspection because
+    user-supplied agents have no config dataclass; ``chat_factory`` uses
+    ``dataclasses.fields(ChatAgentConfig)`` because that IS the contract for
+    built-ins. Two different primitives, same goal — drop kwargs the target
+    won't accept by keyword.
+
+    Edge cases handled:
+    - ``POSITIONAL_ONLY`` (PEP 570) and ``VAR_POSITIONAL`` (``*args``) are
+      excluded; they can't be passed by keyword.
+    - C-extension ``__init__`` raises on ``inspect.signature``: be permissive
+      and return ``None`` (don't claim to know what's accepted).
+    - Class whose entire MRO inherits ``object.__init__``: return ``set()`` so
+      the caller filters everything out (``object.__init__`` rejects all kwargs).
+    """
+    accepted: set[str] = set()
+    inspected_levels = 0
+    all_inspected_levels_have_var_keyword = True
+
+    for cls in klass.__mro__:
+        if cls is object:
+            break
+        init = cls.__dict__.get("__init__")
+        if init is None:
+            continue
+        try:
+            sig = inspect.signature(init)
+        except (ValueError, TypeError):
+            return None
+        inspected_levels += 1
+        level_has_var_keyword = False
+        for name, param in sig.parameters.items():
+            if name == "self":
+                continue
+            if param.kind is inspect.Parameter.VAR_KEYWORD:
+                level_has_var_keyword = True
+            elif param.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ):
+                accepted.add(name)
+        if not level_has_var_keyword:
+            all_inspected_levels_have_var_keyword = False
+
+    if inspected_levels == 0:
+        return set()
+    return None if all_inspected_levels_have_var_keyword else accepted
+
+
 def _wrap_factory_with_namespaced_id(
     factory: Callable[..., Any], namespaced_id: str
 ) -> Callable[..., Any]:
@@ -614,9 +679,37 @@ class AgentRegistry:
                 )
 
         klass = agent_class
+        # Compute the accepted-kwargs set once at registration time so any
+        # introspection failure (e.g. C-extension __init__) surfaces during
+        # agent load rather than on the user's first message, and so we
+        # don't repeat the MRO walk on every create_agent call.
+        accepted_init_params = _accepted_init_params(klass)
 
-        def python_factory(klass=klass, **kwargs):
-            return klass(**kwargs)
+        def python_factory(klass=klass, accepted=accepted_init_params, **kwargs):
+            if accepted is None:
+                return klass(**kwargs)
+            filtered = {k: v for k, v in kwargs.items() if k in accepted}
+            dropped = set(kwargs) - set(filtered)
+            if dropped:
+                sec_dropped = dropped & _SECURITY_RELEVANT_KWARGS
+                if sec_dropped:
+                    logger.warning(
+                        "registry: python_factory dropped security-relevant "
+                        "kwargs %s for %s — agent will use default constraints. "
+                        "Declare these in __init__ if the agent needs them.",
+                        sorted(sec_dropped),
+                        klass.__name__,
+                    )
+                non_sec_dropped = dropped - sec_dropped
+                if non_sec_dropped:
+                    logger.debug(
+                        "registry: python_factory dropped %d kwargs not "
+                        "accepted by %s.__init__: %s",
+                        len(non_sec_dropped),
+                        klass.__name__,
+                        sorted(non_sec_dropped),
+                    )
+            return klass(**filtered)
 
         self._register(
             AgentRegistration(
