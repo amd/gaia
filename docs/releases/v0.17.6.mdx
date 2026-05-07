@@ -1,0 +1,85 @@
+---
+title: "v0.17.6"
+description: "Email Triage Agent with Gmail, OAuth PKCE foundation for Google connections, settings UI polish, and installer hardening across all three platforms."
+---
+
+# GAIA v0.17.6 Release Notes
+
+GAIA v0.17.6 is a patch release covering two new agent-side capabilities (the Email Triage Agent with Gmail, and the OAuth PKCE foundation it builds on), a settings UI card layout, and a sweep of installer fixes across Windows, macOS, and Linux that close the remaining first-launch failure modes uncovered after v0.17.5.
+
+**Why upgrade:**
+- **Email Triage Agent with Gmail** — A new `EmailTriageAgent` ships with 25 tools across read, organize, reply, delete, and calendar mixins; every email body stays on local Lemonade hardware, and seven destructive actions are confirmation-gated.
+- **OAuth PKCE foundation for connections** — Self-contained `gaia.connections` module drives OAuth 2.0 PKCE for Google. Refresh tokens land in the OS keychain; per-agent grants live in `~/.gaia/connections/grants.json`; agents can only `get_access_token` for scopes the user explicitly granted.
+- **Installer first-launch reliability** — Windows and macOS installers now ship a bundled `uv` binary so a clean machine no longer hard-fails at `ensure-uv`; the AppImage adds a `~/.local/bin/gaia` shim so `gaia` is on PATH after first launch; the Windows default-model resolution bug that fell back to Qwen instead of Gemma is fixed.
+- **Custom Python agents work in the Agent UI** — `python_factory` now introspects the target class's `__init__` chain and only forwards kwargs the chain accepts, so the bare `super().__init__(**kwargs)` pattern shipped by the agent template no longer crashes on the first message with `unexpected keyword argument 'rag_documents'`.
+
+---
+
+## What's New
+
+### Email Triage Agent with Gmail
+
+A new `EmailTriageAgent` (PR [#965](https://github.com/amd/gaia/pull/965)) lands at `src/gaia/agents/email/` with 25 registered tools across five mixin layers — read (triage / list / search), organize (archive / label / star), reply (draft / send), delete (trash / restore / permanent), and calendar (RSVP / create). The agent inherits `DatabaseMixin` for a local SQLite undo log, so destructive actions can be reversed.
+
+Three layers of prompt-injection defense ship together: I1 system-prompt hardening with untrusted-input delimiters, I3 per-turn batch thresholds (>5 ops or >3 senders), and I4 attack-scenario fixtures. Seven destructive tools are confirmation-gated via `TOOLS_REQUIRING_CONFIRMATION`. Privacy is enforced architecturally — `EmailAgentConfig` has no cloud-LLM field, and `base_url` must be local or a LEMONADE host, so every email body is processed on Lemonade.
+
+For the eval suite, `GmailBackend` and `CalendarBackend` Protocols let the eval harness inject `FakeGmailBackend(mbox_path)` without touching OAuth, returning Gmail API v1 JSON shape (not stdlib `email.Message`). Gmail integration is the first connector to ship on the new OAuth path; Outlook/Exchange via Power Automate is planned for v0.17.7 (see [`docs/plans/`](https://github.com/amd/gaia/blob/main/docs/plans/) for the enterprise-bypass spec landed in PR [#954](https://github.com/amd/gaia/pull/954)).
+
+---
+
+### OAuth PKCE Foundation for Google Connections
+
+A self-contained `gaia.connections` module (PR [#926](https://github.com/amd/gaia/pull/926)) lets any GAIA caller — SDK, CLI, or AgentUI — drive the OAuth 2.0 PKCE flow for Google. Refresh tokens land in the OS keychain (macOS Keychain, Windows DPAPI, Linux SecretService); per-agent grants live in `~/.gaia/connections/grants.json`; an agent can only `get_access_token` for scopes the user explicitly granted it.
+
+The module is provider-agnostic by design: `errors`, `providers` (Google), `pkce`, `store` (keyring with backend allowlist + tripwire), `grants` ledger, async token cache (double-checked locking, 60 s expiry buffer, refresh-token rotation), aiohttp loopback flow, events Protocol, and a public API/CLI. `Agent.REQUIRED_CONNECTIONS` is a new ClassVar; `process_query` wraps tool execution in a private `_agent_context` contextvar so every tool body knows its agent identity. 157 tests cover the surface.
+
+This module is the baseline for the larger Connectors framework (#927, rolling to v0.17.7) that will rename `gaia.connections` → `gaia.connectors`, add a tile UI, and unify the MCP catalog into the same surface.
+
+---
+
+### Settings UI Card Layout
+
+Settings sections in the Agent UI are now distinct outlined cards (PR [#969](https://github.com/amd/gaia/pull/969)) — 1 px border, 10 px radius, inner padding — instead of margin-separated blocks. Section headings move from 11 px to 13 px, switch from `--text-muted` to `--text-secondary`, and gain a 2 px `--accent` left stripe flush with the card body text, so heading and body share the same left edge. Applies to System Status, Active Model, Context Size, Custom Agents, Connectors, About, and Privacy & Data. Light and dark themes both updated.
+
+---
+
+## Bug Fixes
+
+- **Custom Python agents crashed on first message** (PR [#974](https://github.com/amd/gaia/pull/974), closes [#973](https://github.com/amd/gaia/issues/973)) — Custom agents under `~/.gaia/agents/<name>/agent.py` using the bare `super().__init__(**kwargs)` pattern from the template crashed with `Agent.__init__() got an unexpected keyword argument 'rag_documents'` on the first turn in the Agent UI. The UI session layer always injects four session-context kwargs (`rag_documents`, `library_documents`, `allowed_paths`, `ui_session_id`), and `python_factory` was forwarding them blindly to the base `Agent.__init__`. `python_factory` now introspects the target class's `__init__` chain over its MRO and only forwards kwargs the chain accepts. Drops of security-relevant kwargs like `allowed_paths` log at WARNING per the no-silent-fallback rule.
+- **Windows installer failed at `ensure-uv` for users without `uv` on PATH** (PR [#968](https://github.com/amd/gaia/pull/968), closes [#966](https://github.com/amd/gaia/issues/966)) — No `uv` binary was ever bundled for `win-x64`, so the installer hard-failed on a clean machine. Windows builds now ship the pinned `uv` binary in `vendor/uv/win-x64/`, `backend-installer.cjs` resolves and invokes the packaged binary, and a packaged Windows rescue installer is included for recovery from a broken state.
+- **macOS installer failed at `ensure-uv` on clean Apple Silicon** (PR [#967](https://github.com/amd/gaia/pull/967), closes [#941](https://github.com/amd/gaia/issues/941)) — `bundledUvPlatformKey()` claimed `mac-arm64` support but no CI step fetched the binary. The macOS build job now downloads pinned `uv` v0.5.14 (`aarch64-apple-darwin`), verifies the archive SHA, and places it at `build/vendor/uv/mac-arm64/uv`. A new `dmg-structural-smoke` CI job mounts the built DMG, asserts the binary is present + executable + SHA-pinned + actually runs (`uv --version`), and is wired into the `build-complete` gate so future drift fails at smoke time, not on a user's first launch.
+- **AppImage users hit `gaia: command not found` after install** (PR [#942](https://github.com/amd/gaia/pull/942), closes [#782](https://github.com/amd/gaia/issues/782)) — AppImage installs prompted users to run `gaia init` but did not place a binary on PATH. Startup now writes a `gaia` shell shim to `$XDG_BIN_HOME` or `~/.local/bin/gaia` pointing to the verified gaia binary. Skips creation if `gaia` already exists or the shim is already present, so it never clobbers a system package.
+- **Windows fell back to Qwen instead of the new Gemma 4 default** (PR [#949](https://github.com/amd/gaia/pull/949), closes [#948](https://github.com/amd/gaia/issues/948)) — After v0.17.5 made Gemma-4-E4B the default model, the Windows model-selection logic still attempted to load Qwen, leaving the new default effectively unreachable for users who hadn't manually configured a model. Resolution logic fixed so Gemma loads correctly on Windows.
+
+---
+
+## Tooling & Docs
+
+- **`gaia-release` skill** (PR [#939](https://github.com/amd/gaia/pull/939)) — Project-local Claude skill at `.claude/skills/gaia-release/SKILL.md` that walks through a GAIA release end-to-end as a phased checklist with hard gates before every irreversible step (open PR, push tag, rerun CI job, post announcement). The pre-tag verification phase encodes the manual pass that caught two release-blocking bugs in v0.17.4.
+- **Internal-task issue template** (PR [#906](https://github.com/amd/gaia/pull/906)) — Third issue template alongside `bug_report.yaml` and `feature_request.yaml`, specifically for team-internal feature work and tasks intended for coding-agent assignment. Captures Goal / Scope / Acceptance criteria / Attribution / Failure modes plus a domain dropdown matching the new `domain:*` label taxonomy.
+- **Outlook via Power Automate plan** (PR [#954](https://github.com/amd/gaia/pull/954)) — Specification for an enterprise-bypass path that lets the Email Triage Agent reach Outlook/Exchange without Microsoft Graph admin gates. Implementation tracked under #961/#963 for v0.17.7.
+- **PR description guidance sharpened** (PR [#947](https://github.com/amd/gaia/pull/947)) — `CLAUDE.md` now spells out the "tight and value-focused" PR description rule with anti-patterns, so AI-generated PR bodies stop copy-pasting the commit log.
+- **Stale `macOS uv fetch removed` orphan comment removed** (PR [#975](https://github.com/amd/gaia/pull/975)) — Build-installers workflow cleanup.
+
+---
+
+## Full Changelog
+
+**14 commits** since v0.17.5:
+
+- `7ad2efc1` — fix(agents): filter session kwargs in python_factory (#973) (#974)
+- `0147c947` — ci(installer): remove stale 'macOS uv fetch removed' orphan comment (#975)
+- `7df8f945` — fix(installer): bundle uv for win-x64; packaged Windows rescue installer (#968)
+- `fd9fc60d` — fix(installer): create gaia shim in ~/.local/bin for AppImage users (#942)
+- `5935bc2b` — chore(skills): add gaia-release skill for end-to-end release flow (#939)
+- `636de01f` — feat(email): Gmail integration for Email Triage Agent (#965)
+- `7b133521` — fix(installer): bundle uv binary for mac-arm64 (#967)
+- `ba011b40` — feat(ui): card layout with accent stripe for settings sections (#969)
+- `fd82de1d` — docs(plans): Outlook via Power Automate enterprise bypass plan (#954)
+- `019ce010` — docs(claude): sharpen PR description guidance (#947)
+- `7b03ce04` — chore(github): add internal-task issue template for agent-assignable work (#906)
+- `b9166b4b` — feat(connections): OAuth PKCE for Google (#915, baseline for connectors framework) (#926)
+- `63e4995c` — fix(installer): resolve default model falling back to Qwen on Windows (#949)
+- `ad6e3cc2` — release: v0.17.5 notes + bump to 0.17.6 for development
+
+Full Changelog: [v0.17.5...v0.17.6](https://github.com/amd/gaia/compare/v0.17.5...v0.17.6)
