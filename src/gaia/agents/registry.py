@@ -3,20 +3,23 @@
 """Agent registry for discovering, loading, and creating agents."""
 
 import dataclasses
+import hashlib
 import importlib
 import importlib.util
 import inspect
 import os
+import platform
 import re
 import threading
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional
 
 import yaml
 
+from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,6 +45,122 @@ _MANIFEST_FINGERPRINT_KEYS = frozenset(
 )
 
 
+# Reserved agent IDs that custom agents (under ~/.gaia/agents/) must not
+# claim. Loaded lazily by ``_RESERVED_BUILTIN_IDS`` so the list stays in sync
+# with what ``_register_builtin_agents`` actually registers.
+_RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
+    {"chat", "builder", "gaia-lite", "email", "connectors-demo"}
+)
+
+
+# Session-level kwargs that constrain the agent's effective sandbox. If
+# python_factory drops one of these for a class that doesn't declare it, the
+# session-intended constraint silently relaxes to the agent's default — log
+# at WARNING so the author can see what to declare. Other dropped kwargs stay
+# at debug level (mostly noise).
+_SECURITY_RELEVANT_KWARGS: frozenset[str] = frozenset({"allowed_paths"})
+
+
+def _accepted_init_params(klass: type) -> Optional[set[str]]:
+    """Return the union of keyword-passable __init__ parameters across
+    klass's MRO. Returns None if every inspected level along the chain
+    accepts ``**kwargs`` (callers should then forward all kwargs as-is).
+
+    Used by ``python_factory`` to filter session-level kwargs (injected by
+    the UI host, see ``_session_agent_kwargs`` in ``gaia.ui._chat_helpers``)
+    against what the user-supplied agent class can actually accept.
+
+    NOTE: ``python_factory`` uses ``__init__`` introspection because
+    user-supplied agents have no config dataclass; ``chat_factory`` uses
+    ``dataclasses.fields(ChatAgentConfig)`` because that IS the contract for
+    built-ins. Two different primitives, same goal — drop kwargs the target
+    won't accept by keyword.
+
+    Edge cases handled:
+    - ``POSITIONAL_ONLY`` (PEP 570) and ``VAR_POSITIONAL`` (``*args``) are
+      excluded; they can't be passed by keyword.
+    - C-extension ``__init__`` raises on ``inspect.signature``: be permissive
+      and return ``None`` (don't claim to know what's accepted).
+    - Class whose entire MRO inherits ``object.__init__``: return ``set()`` so
+      the caller filters everything out (``object.__init__`` rejects all kwargs).
+    """
+    accepted: set[str] = set()
+    inspected_levels = 0
+    all_inspected_levels_have_var_keyword = True
+
+    for cls in klass.__mro__:
+        if cls is object:
+            break
+        init = cls.__dict__.get("__init__")
+        if init is None:
+            continue
+        try:
+            sig = inspect.signature(init)
+        except (ValueError, TypeError):
+            return None
+        inspected_levels += 1
+        level_has_var_keyword = False
+        for name, param in sig.parameters.items():
+            if name == "self":
+                continue
+            if param.kind is inspect.Parameter.VAR_KEYWORD:
+                level_has_var_keyword = True
+            elif param.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ):
+                accepted.add(name)
+        if not level_has_var_keyword:
+            all_inspected_levels_have_var_keyword = False
+
+    if inspected_levels == 0:
+        return set()
+    return None if all_inspected_levels_have_var_keyword else accepted
+
+
+def _wrap_factory_with_namespaced_id(
+    factory: Callable[..., Any], namespaced_id: str
+) -> Callable[..., Any]:
+    """
+    Wrap a registration factory so the resulting Agent instance carries its
+    namespaced ID for ``Agent.process_query`` to read at runtime.
+
+    The base ``Agent.process_query`` reads ``_gaia_namespaced_agent_id`` (and
+    falls back to ``AGENT_ID``) when wrapping the call in the agent context
+    contextvar. Setting this attribute on the instance is what lets a
+    custom-installed agent get its proper ``custom:<sha256>:<id>`` namespace
+    instead of the bare ``AGENT_ID``.
+    """
+
+    def _factory(**kwargs):
+        instance = factory(**kwargs)
+        # Attribute access — use setattr because subclasses may override
+        # __setattr__ to validate fields. We set on the instance, not the
+        # class, so two different registrations of the same class don't
+        # collide.
+        try:
+            instance._gaia_namespaced_agent_id = namespaced_id
+        except (AttributeError, TypeError):
+            # If the agent uses __slots__ without an entry for this field,
+            # we still proceed — process_query will fall back to AGENT_ID.
+            pass
+        return instance
+
+    return _factory
+
+
+def _compute_custom_origin_hash(py_file: Path) -> str:
+    """
+    Compute the custom-agent origin hash used in ``namespaced_agent_id``.
+
+    Hashes the raw bytes of ``agent.py``. A different file (different code)
+    therefore produces a different namespaced id, so a custom agent that
+    later changes its scope claims will get a fresh grant-ledger key — the
+    user re-grants explicitly rather than inheriting the prior grant.
+    """
+    return hashlib.sha256(py_file.read_bytes()).hexdigest()[:16]
+
+
 @dataclass
 class AgentRegistration:
     """Metadata and factory for a registered agent."""
@@ -55,6 +174,24 @@ class AgentRegistration:
     agent_dir: Optional[Path]
     models: List[str]  # ordered preference list
     hidden: bool = False  # hidden agents are excluded from the UI agent selector
+    # Minimum free system memory (GB) recommended before loading this agent's
+    # preferred model. `None` = no requirement declared. The UI shows a warning
+    # in Settings when memory_available_gb < min_memory_gb so the user isn't
+    # surprised by a load failure or heavy swapping mid-session.
+    min_memory_gb: Optional[float] = None
+    # T-X2 (issue #915):
+    # ``required_connections`` is the agent class's ``REQUIRED_CONNECTORS``
+    # ClassVar surfaced into the registry so the AgentUI consent dialog and
+    # the CLI ``gaia connectors grants`` command can render the prompt
+    # without re-importing the agent module.
+    required_connections: List[ConnectorRequirement] = field(default_factory=list)
+    # T-X2 (issue #915, plan amendment A9):
+    # ``namespaced_agent_id`` is the grant-ledger key for this agent. Built-in
+    # agents use ``builtin:<id>``; custom agents under ``~/.gaia/agents/``
+    # use ``custom:<sha256-of-agent.py>:<id>``. This namespacing prevents a
+    # malicious custom agent from claiming a built-in's AGENT_ID to inherit
+    # a previously-granted scope. Always non-empty.
+    namespaced_agent_id: str = ""
 
 
 class AgentRegistry:
@@ -64,11 +201,35 @@ class AgentRegistry:
     and the ``~/.gaia/agents/`` directory for custom agents.
     """
 
+    # Legacy agent IDs that were renamed. Existing UI sessions store the old
+    # ID in ``sessions.agent_type`` in the ChatDatabase; silently resolving
+    # the alias keeps those sessions working without a DB migration. All
+    # lookups (``get``, ``create_agent``, ``resolve_model``) honour the map.
+    _LEGACY_ID_ALIASES: Dict[str, str] = {
+        "chat-lite": "gaia-lite",
+    }
+
     def __init__(self):
         self._agents: Dict[str, AgentRegistration] = {}
         self._lemonade_models: Optional[List[str]] = None  # cache
         self._lemonade_models_last_fail: Optional[float] = None  # monotonic timestamp
         self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Legacy ID resolution
+    # ------------------------------------------------------------------
+
+    def canonical_id(self, agent_id: str) -> str:
+        """Return the current canonical ID for *agent_id*, resolving aliases.
+
+        Returns the input unchanged when no alias exists so callers can use
+        the result as a stable cache key — two requests for ``chat-lite`` and
+        ``gaia-lite`` both produce ``gaia-lite``, so the per-session agent
+        cache doesn't thrash when a client mixes the old and new names.
+        """
+        if agent_id in self._agents:
+            return agent_id
+        return self._LEGACY_ID_ALIASES.get(agent_id, agent_id)
 
     # ------------------------------------------------------------------
     # Discovery
@@ -135,12 +296,203 @@ class AgentRegistry:
                     "Search my documents for information about...",
                     "Find files related to...",
                 ],
-                factory=chat_factory,
+                factory=_wrap_factory_with_namespaced_id(chat_factory, "builtin:chat"),
                 agent_dir=None,
                 models=[],
+                required_connections=[],
+                namespaced_agent_id="builtin:chat",
             )
         )
         logger.info("registry: Registered built-in agent: chat (ChatAgent)")
+
+        # --- Gaia Lite (smaller ~4B model, Mac/low-memory friendly) ---
+        # Reuses the full ChatAgent feature set but presets model_id to a
+        # compact ~4B checkpoint so it runs on hardware that can't host the
+        # 35B default. It's an agent (tools + RAG + MCP), not a bare chat
+        # bot — the "Lite" refers only to the model size. The preset is
+        # applied via setdefault so callers can still override (e.g. for
+        # tests or explicit user selection).
+        #
+        # Preferred-model list is platform-conditional:
+        #
+        # macOS primary is **Qwen3.5-4B-GGUF** (2.91 GB, "tool-calling"
+        # label in the Lemonade catalog). Empirically Gemma-3-4b-it-GGUF
+        # emits tool calls as Gemini-style ```tool_code``` text blocks
+        # rather than OpenAI-compatible function calls — the GAIA agent
+        # runtime never executes them, so the model can't actually use
+        # RAG, file search, or any other tool. The "personality" eval
+        # category dropped to 1/3 PASS with Gemma 3 4B, with both
+        # failures rooted in this format mismatch (see the eval run
+        # at eval/results/eval-20260426-061705).
+        # Qwen 3.5 is explicitly trained for the OpenAI tool-call format.
+        #
+        # Linux/Windows still leads with Gemma-4-E4B-it-GGUF — those
+        # platforms use a different llama.cpp bundle that ships the
+        # gemma4 architecture handler (added in llama.cpp b8637 /
+        # ggml-org/llama.cpp#21309), and Gemma 4 also carries the
+        # "tool-calling" label. macOS Lemonade v10.2.0 ships an older
+        # bundle (b8460) that can't load Gemma 4, and Lemonade actively
+        # reverts local binary swaps on restart — tracked upstream at
+        # lemonade-sdk/lemonade#1741.
+        #
+        # Each list keeps the alternative platform's primary as a
+        # fallback so ``resolve_model`` can fall through if the primary
+        # is unavailable on a given install.
+        #
+        # Single source of truth — the factory's setdefault below MUST
+        # agree with this list's first entry, or the runtime preset and
+        # the UI's advertised primary will diverge.
+        if platform.system() == "Darwin":
+            _GAIA_LITE_MODELS = ["Qwen3.5-4B-GGUF", "Gemma-4-E4B-it-GGUF"]
+        else:
+            _GAIA_LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Qwen3.5-4B-GGUF"]
+
+        # Memory floor for the gaia-lite agent. Gemma 4 E4B / Qwen3.5-4B Q4_K_M
+        # weights are ~2.5–2.7 GB on disk; add KV-cache for a 32K context window
+        # plus runtime overhead → 5 GB is the comfortable load floor. Below
+        # this the UI surfaces a Memory Warning so the user isn't surprised
+        # by a load failure or heavy swapping mid-session. Update the constant
+        # (not just the registration) if the preferred model list grows a
+        # bigger checkpoint, so the rationale stays adjacent to the number.
+        _GAIA_LITE_MIN_MEMORY_GB = 5.0
+
+        def gaia_lite_factory(**kwargs):
+            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
+            # setdefault pulls from the registration's preferred-models list
+            # so the runtime preset stays in lockstep with the UI's advertised
+            # primary — change the list, the factory follows automatically.
+            filtered.setdefault("model_id", _GAIA_LITE_MODELS[0])
+            config = ChatAgentConfig(**filtered)
+            return ChatAgent(config=config)
+
+        self._register(
+            AgentRegistration(
+                id="gaia-lite",
+                name="Gaia Lite",
+                description=(
+                    "Lightweight GAIA agent — same features as the default Chat "
+                    "Agent (RAG, file tools, MCP) but runs on a ~4B model, "
+                    "suitable for Mac and other hardware that cannot host the "
+                    "35B default."
+                ),
+                source="builtin",
+                conversation_starters=[
+                    "What can you help me with?",
+                    "Summarize this document",
+                    "Search my files for...",
+                ],
+                factory=_wrap_factory_with_namespaced_id(
+                    gaia_lite_factory, "builtin:gaia-lite"
+                ),
+                agent_dir=None,
+                models=_GAIA_LITE_MODELS,
+                min_memory_gb=_GAIA_LITE_MIN_MEMORY_GB,
+                required_connections=[],
+                namespaced_agent_id="builtin:gaia-lite",
+            )
+        )
+        logger.info(
+            "registry: Registered built-in agent: gaia-lite (ChatAgent, primary %s)",
+            _GAIA_LITE_MODELS[0],
+        )
+
+        # --- ConnectorsDemoAgent ---
+        # Demo agent that uses Google + GitHub connectors end-to-end so
+        # the per-agent grant flow has a real consumer to validate it.
+        # Visible in the AgentUI dropdown — users can select it to test
+        # their connector setup.
+        try:
+            from gaia.agents.connectors_demo.agent import (
+                ConnectorsDemoAgent,
+                ConnectorsDemoAgentConfig,
+            )
+
+            def connectors_demo_factory(**kwargs):
+                valid_fields = {
+                    f.name for f in dataclasses.fields(ConnectorsDemoAgentConfig)
+                }
+                config = ConnectorsDemoAgentConfig(
+                    **{k: v for k, v in kwargs.items() if k in valid_fields}
+                )
+                return ConnectorsDemoAgent(config=config)
+
+            self._register(
+                AgentRegistration(
+                    id="connectors-demo",
+                    name="Connectors Demo",
+                    description=(
+                        "Demonstrates the connectors framework — pulls real "
+                        "data from your connected Google account and GitHub PAT."
+                    ),
+                    source="builtin",
+                    conversation_starters=[
+                        "What's in my inbox?",
+                        "What's on my calendar today?",
+                        "List my recent Drive files",
+                        "List my GitHub repositories",
+                    ],
+                    factory=_wrap_factory_with_namespaced_id(
+                        connectors_demo_factory, "builtin:connectors-demo"
+                    ),
+                    agent_dir=None,
+                    models=[],
+                    # #962 fix — pre-existing bug: this previously listed
+                    # bare provider strings (``["google", "mcp-github"]``)
+                    # but ``AgentRegistration.required_connections`` is
+                    # typed as ``List[ConnectorRequirement]`` and the UI
+                    # router calls ``.provider``/``.scopes``/``.reason``
+                    # on the items. Bare strings silently broke
+                    # ``_reg_to_info`` in agents.py. Convert to the
+                    # canonical objects so the registry stays consistent.
+                    required_connections=list(ConnectorsDemoAgent.REQUIRED_CONNECTORS),
+                    namespaced_agent_id="builtin:connectors-demo",
+                )
+            )
+            logger.info(
+                "registry: Registered built-in agent: connectors-demo "
+                "(ConnectorsDemoAgent)"
+            )
+        except ImportError as e:
+            logger.debug("registry: ConnectorsDemoAgent not available, skipping: %s", e)
+
+        # --- EmailTriageAgent (#962) ---
+        # First concrete email provider for the Email Triage Agent
+        # parent issue (#645). Reads/organizes/replies through Gmail
+        # via the connectors framework; processes all email content
+        # locally on Lemonade.
+        try:
+            from gaia.agents.email.agent import EmailTriageAgent
+            from gaia.agents.email.config import EmailAgentConfig
+
+            def email_factory(**kwargs):
+                valid_fields = {f.name for f in dataclasses.fields(EmailAgentConfig)}
+                config = EmailAgentConfig(
+                    **{k: v for k, v in kwargs.items() if k in valid_fields}
+                )
+                return EmailTriageAgent(config=config)
+
+            self._register(
+                AgentRegistration(
+                    id="email",
+                    name=EmailTriageAgent.AGENT_NAME,
+                    description=EmailTriageAgent.AGENT_DESCRIPTION,
+                    source="builtin",
+                    conversation_starters=list(EmailTriageAgent.CONVERSATION_STARTERS),
+                    factory=_wrap_factory_with_namespaced_id(
+                        email_factory, "builtin:email"
+                    ),
+                    agent_dir=None,
+                    models=[],
+                    required_connections=list(EmailTriageAgent.REQUIRED_CONNECTORS),
+                    namespaced_agent_id="builtin:email",
+                )
+            )
+            logger.info("registry: Registered built-in agent: email (EmailTriageAgent)")
+        except ImportError as e:
+            logger.debug("registry: EmailTriageAgent not available, skipping: %s", e)
 
         # --- BuilderAgent ---
         try:
@@ -163,10 +515,14 @@ class AgentRegistry:
                         "Help me create a custom agent",
                         "I want to build a new agent",
                     ],
-                    factory=builder_factory,
+                    factory=_wrap_factory_with_namespaced_id(
+                        builder_factory, "builtin:builder"
+                    ),
                     agent_dir=None,
                     models=[],
                     hidden=True,
+                    required_connections=[],
+                    namespaced_agent_id="builtin:builder",
                 )
             )
             logger.info("registry: Registered built-in agent: builder (BuilderAgent)")
@@ -257,6 +613,23 @@ class AgentRegistry:
         agent_desc = getattr(agent_class, "AGENT_DESCRIPTION", "")
         starters = getattr(agent_class, "CONVERSATION_STARTERS", [])
 
+        # T-X2 (issue #915, plan amendment A9): block custom agents from
+        # claiming a built-in's reserved AGENT_ID. Without this, a custom
+        # agent with `AGENT_ID = "chat"` could inherit a grant the user
+        # previously gave to the built-in chat agent.
+        if agent_id in _RESERVED_BUILTIN_IDS:
+            raise ValueError(
+                f"AGENT_ID {agent_id!r} is reserved for the built-in agent. "
+                f"Choose a different id in {py_file}."
+            )
+
+        # T-X2: collect declarative scope claims and namespaced grant key.
+        required_connections = list(
+            getattr(agent_class, "REQUIRED_CONNECTORS", []) or []
+        )
+        origin_hash = _compute_custom_origin_hash(py_file)
+        namespaced_id = f"custom:{origin_hash}:{agent_id}"
+
         # Read optional companion YAML for `models:` metadata.  Anything outside
         # `models:` is a manifest leftover and should be migrated into agent.py.
         models: List[str] = []
@@ -306,9 +679,37 @@ class AgentRegistry:
                 )
 
         klass = agent_class
+        # Compute the accepted-kwargs set once at registration time so any
+        # introspection failure (e.g. C-extension __init__) surfaces during
+        # agent load rather than on the user's first message, and so we
+        # don't repeat the MRO walk on every create_agent call.
+        accepted_init_params = _accepted_init_params(klass)
 
-        def python_factory(klass=klass, **kwargs):
-            return klass(**kwargs)
+        def python_factory(klass=klass, accepted=accepted_init_params, **kwargs):
+            if accepted is None:
+                return klass(**kwargs)
+            filtered = {k: v for k, v in kwargs.items() if k in accepted}
+            dropped = set(kwargs) - set(filtered)
+            if dropped:
+                sec_dropped = dropped & _SECURITY_RELEVANT_KWARGS
+                if sec_dropped:
+                    logger.warning(
+                        "registry: python_factory dropped security-relevant "
+                        "kwargs %s for %s — agent will use default constraints. "
+                        "Declare these in __init__ if the agent needs them.",
+                        sorted(sec_dropped),
+                        klass.__name__,
+                    )
+                non_sec_dropped = dropped - sec_dropped
+                if non_sec_dropped:
+                    logger.debug(
+                        "registry: python_factory dropped %d kwargs not "
+                        "accepted by %s.__init__: %s",
+                        len(non_sec_dropped),
+                        klass.__name__,
+                        sorted(non_sec_dropped),
+                    )
+            return klass(**filtered)
 
         self._register(
             AgentRegistration(
@@ -317,9 +718,11 @@ class AgentRegistry:
                 description=agent_desc,
                 source="custom_python",
                 conversation_starters=list(starters),
-                factory=python_factory,
+                factory=_wrap_factory_with_namespaced_id(python_factory, namespaced_id),
                 agent_dir=agent_dir,
                 models=models,
+                required_connections=required_connections,
+                namespaced_agent_id=namespaced_id,
             )
         )
         logger.info(
@@ -375,8 +778,13 @@ class AgentRegistry:
             self._agents[registration.id] = registration
 
     def get(self, agent_id: str) -> Optional[AgentRegistration]:
-        """Return the registration for *agent_id*, or ``None``."""
-        return self._agents.get(agent_id)
+        """Return the registration for *agent_id*, or ``None``.
+
+        Legacy aliases (e.g. ``chat-lite`` → ``gaia-lite``) are resolved
+        transparently so existing persisted sessions keep working after a
+        rename.
+        """
+        return self._agents.get(self.canonical_id(agent_id))
 
     def list(self) -> List[AgentRegistration]:
         """Return all registered agents."""
@@ -388,13 +796,17 @@ class AgentRegistry:
         Raises:
             ValueError: If *agent_id* is not registered.
         """
-        reg = self._agents.get(agent_id)
+        # Route through get() so legacy aliases (e.g. chat-lite → gaia-lite)
+        # resolve consistently with lookups.
+        reg = self.get(agent_id)
         if reg is None:
             raise ValueError(
                 f"Unknown agent ID: '{agent_id}'. "
                 f"Available: {list(self._agents.keys())}"
             )
-        logger.info("registry: Creating agent '%s'", agent_id)
+        logger.info(
+            "registry: Creating agent '%s' (resolved id='%s')", agent_id, reg.id
+        )
         return reg.factory(**kwargs)
 
     # ------------------------------------------------------------------
@@ -409,11 +821,18 @@ class AgentRegistry:
         """Return first preferred model that is available, or ``None``.
 
         Args:
-            agent_id: Registered agent identifier.
+            agent_id: Registered agent identifier. Legacy aliases (see
+                :attr:`_LEGACY_ID_ALIASES`) are resolved transparently so
+                stored session IDs that pre-date a rename still pick up
+                the canonical agent's preferred model list.
             available_models: Pre-fetched list of model IDs.  When
                 ``None``, queries the Lemonade server automatically.
         """
-        reg = self._agents.get(agent_id)
+        # Use get() not _agents.get() so alias → canonical mapping applies.
+        # Otherwise a session stored with agent_type="chat-lite" would fall
+        # through to the default 35B model instead of the 4B preset, silently
+        # regressing the whole reason gaia-lite exists.
+        reg = self.get(agent_id)
         if not reg or not reg.models:
             return None
 

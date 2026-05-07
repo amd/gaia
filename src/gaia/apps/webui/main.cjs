@@ -17,7 +17,40 @@ const { app, BrowserWindow, dialog, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
+const { pathToFileURL } = require("url");
+
+// ── Shared log path ───────────────────────────────────────────────────────────
+// Single source of truth used by installSafetyNet AND installMainLogTee so
+// both write to the same file without independent path computations that
+// could drift apart.
+const _GAIA_DIR = path.join(os.homedir(), ".gaia");
+const _MAIN_LOG_PATH = path.join(_GAIA_DIR, "electron-main.log");
+
+// ── Safety net (issue #934) ───────────────────────────────────────────────────
+// Install top-level error handlers BEFORE any service module is required so
+// that synchronous throws at module-load time are caught and shown as a
+// GAIA-branded error box instead of Electron's bare JS-error dialog.
+// Extracted into main-safety-net.cjs so tests can require it without
+// triggering main.cjs side effects (Electron modules, service requires).
+// Wrapped in try/catch: a corrupt ASAR or bad path would otherwise bypass the
+// very handler we are trying to install, falling through to Electron's bare
+// JS-error dialog.
+let installSafetyNet, installLogTee, _fatalHandler;
+try {
+  ({ installSafetyNet, installLogTee } = require("./main-safety-net.cjs"));
+  ({ fatal: _fatalHandler } = installSafetyNet({
+    logPath: _MAIN_LOG_PATH,
+    dialogModule: dialog,
+    appModule: app,
+  }));
+} catch (err) {
+  try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
+  try { dialog.showErrorBox("GAIA failed to start", String((err && err.stack) || err)); } catch { }
+  // Synchronous exit: service module requires below have no uncaughtException
+  // handler installed, so execution cannot safely continue.
+  process.exit(1);
+}
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
@@ -53,9 +86,8 @@ if (process.platform === "linux") {
 // diagnostics bundler has something to attach.
 (function installMainLogTee() {
   try {
-    const gaiaDir = path.join(os.homedir(), ".gaia");
-    try { fs.mkdirSync(gaiaDir, { recursive: true }); } catch { /* ignore */ }
-    const logPath = path.join(gaiaDir, "electron-main.log");
+    try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
+    const logPath = _MAIN_LOG_PATH;
 
     // Rotate if > 5 MB — truncate to last ~5 MB on startup.
     try {
@@ -81,6 +113,10 @@ if (process.platform === "linux") {
     }
 
     const stream = fs.createWriteStream(logPath, { flags: "a" });
+    // Root-cause fix for #934: stream.write() after end emits 'error'
+    // asynchronously — the try/catch in wrap() below doesn't catch it.
+    // This listener absorbs the event before it becomes uncaughtException.
+    installLogTee({ stream, logPath });
     stream.write(
       `\n──── electron-main opened (${new Date().toISOString()}) pid=${process.pid} ────\n`
     );
@@ -156,6 +192,11 @@ let backendStderrTail = [];
 let isIntentionalKill = false;
 let mainWindow = null;
 
+// True until createWindow() runs. Guards window-all-closed from firing app.quit()
+// while the backend-installer progress dialog is open (it's the only window during
+// bootstrap, so destroying it would trigger a premature quit — issue #934).
+let isBootstrapping = true;
+
 /** @type {TrayManager | null} */
 let trayManager = null;
 
@@ -207,6 +248,70 @@ async function startBackend() {
     backendPort = DEFAULT_BACKEND_PORT;
   }
   healthCheckUrl = `http://localhost:${backendPort}/api/health`;
+  // Clean up any stale backend PID left from previous runs. The AppImage
+  // may be double-clicked multiple times or crash, leaving orphaned
+  // backend processes. We store a PID file under ~/.gaia/backend.pid and
+  // attempt to SIGTERM any still-running PID before starting a new backend.
+  try {
+    const pidFile = path.join(_GAIA_DIR, "backend.pid");
+    if (fs.existsSync(pidFile)) {
+      try {
+        const existingPid = parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
+        if (!Number.isNaN(existingPid)) {
+          console.log(`[main] Found existing backend pidfile (${existingPid}) — verifying process identity`);
+
+          // Verify the PID belongs to a GAIA backend before signalling it.
+          // Prefer a conservative match on the process command to avoid
+          // accidentally killing unrelated user processes (TOCTOU mitigation).
+          let isBackend = false;
+          try {
+            if (process.platform === "linux") {
+              const procCmd = `/proc/${existingPid}/cmdline`;
+              if (fs.existsSync(procCmd)) {
+                const raw = fs.readFileSync(procCmd, "utf8");
+                // /proc/<pid>/cmdline is NUL-separated; use a stricter match to
+                // avoid killing unrelated Python processes (Jupyter, LSP, etc.).
+                // Legitimate backend uses: `gaia chat --ui --ui-port <port>`
+                const looksLikeGaiaBackend = raw.includes("gaia") && (raw.includes("chat") || raw.includes("--ui-port"));
+                if (looksLikeGaiaBackend) {
+                  isBackend = true;
+                }
+              }
+            } else if (process.platform === "darwin") {
+              try {
+                const out = spawnSync("ps", ["-p", String(existingPid), "-o", "command="], { encoding: "utf8" });
+                const cmd = (out && out.stdout) ? out.stdout : "";
+                const looksLikeGaiaBackend = cmd.includes("gaia") && (cmd.includes("chat") || cmd.includes("--ui-port"));
+                if (looksLikeGaiaBackend) {
+                  isBackend = true;
+                }
+              } catch {
+                // fallthrough
+              }
+            }
+          } catch (err) {
+            console.warn(`[main] Could not verify pid ${existingPid}: ${err.message}`);
+          }
+
+          if (!isBackend) {
+            console.log(`[main] PID ${existingPid} does not appear to be a GAIA backend; skipping kill`);
+          } else {
+            try {
+              await portManager.killBackend(existingPid);
+              console.log(`[main] Cleaned up previous backend pid ${existingPid}`);
+            } catch (err) {
+              console.warn(`[main] Could not clean previous backend pid ${existingPid}: ${err.message}`);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`[main] Failed reading backend pidfile: ${err.message}`);
+      }
+      try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
+    }
+  } catch (err) {
+    console.warn(`[main] PID cleanup check failed: ${err.message}`);
+  }
 
   console.log(`Starting backend: ${gaiaCmd} chat --ui --ui-port ${backendPort}`);
 
@@ -249,6 +354,18 @@ async function startBackend() {
     console.error("Failed to start backend:", err.message);
   });
 
+  // Write a PID file so subsequent AppImage launches can detect and
+  // cleanup this backend if it becomes orphaned. The pidfile is removed
+  // when the child exits.
+  try {
+    try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
+    const pidFile = path.join(_GAIA_DIR, "backend.pid");
+    fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
+    console.log(`[main] Wrote backend pidfile ${pidFile} (pid=${child.pid})`);
+  } catch (err) {
+    console.warn(`[main] Could not write backend pidfile: ${err.message}`);
+  }
+
   child.on("exit", (code, signal) => {
     if (code !== 0 && code !== null) {
       console.error(`Backend exited with code ${code} (signal=${signal})`);
@@ -259,6 +376,20 @@ async function startBackend() {
     if (crashed && !isQuitting) {
       // Fire-and-forget — don't block the event loop.
       void handleBackendCrash(code, signal);
+    }
+
+    // Remove pidfile on exit to avoid leaving stale PID behind.
+    try {
+      const pidFile = path.join(_GAIA_DIR, "backend.pid");
+      if (fs.existsSync(pidFile)) {
+        const p = fs.readFileSync(pidFile, "utf8").trim();
+        if (p && parseInt(p, 10) === child.pid) {
+          try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
+        }
+      }
+    } catch (err) {
+      // Non-fatal — just log and continue.
+      console.warn(`[main] Failed to remove backend pidfile: ${err.message}`);
     }
   });
 
@@ -428,7 +559,12 @@ async function loadApp() {
     const indexPath = path.join(distPath, "index.html");
     const indexQuery = buildIndexQuery(backendPort);
     console.log("Loading app from:", indexPath, "api:", indexQuery.api);
-    await mainWindow.loadFile(indexPath, { query: indexQuery });
+    // Use pathToFileURL so the file:// URL always has forward slashes on
+    // Windows — Chromium 130+ (Electron 40) rejects backslash file URLs
+    // that Node's url.format() (used by loadFile) produces on Windows.
+    const fileUrl = pathToFileURL(indexPath);
+    fileUrl.search = new URLSearchParams(indexQuery).toString();
+    await mainWindow.loadURL(fileUrl.href);
   } else {
     // Show a simple loading/error page
     mainWindow.loadURL(
@@ -674,6 +810,7 @@ app.whenReady().then(async () => {
 
   // Create the window (hidden until ready-to-show)
   createWindow();
+  isBootstrapping = false; // progress dialog is gone; window-all-closed may now quit
 
   // Initialize services (tray, agent manager, notifications)
   initializeServices();
@@ -737,11 +874,21 @@ app.whenReady().then(async () => {
       mainWindow.show();
     }
   });
+}).catch((err) => {
+  // Route explicit rejection through the safety-net so the user gets a
+  // GAIA-branded dialog and a stack trace in the log (issue #934).
+  _fatalHandler(err);
 });
 
 // ── Window-all-closed (C4 fix) ────────────────────────────────────────────
 // Don't quit when window is hidden — tray keeps app alive
 app.on("window-all-closed", () => {
+  // During bootstrap the progress dialog is the only open window. Destroying
+  // it (progress.close()) fires this event before the main window exists, which
+  // would trigger a premature app.quit() that races with the startup sequence
+  // and causes loadURL() to fail with ERR_FAILED (-2) — issue #934.
+  if (isBootstrapping) return;
+
   // If minimize-to-tray is active, the window is just hidden, not closed.
   // Only quit on macOS if the user explicitly quit (Cmd+Q).
   const trayActive = trayManager && trayManager.minimizeToTray;

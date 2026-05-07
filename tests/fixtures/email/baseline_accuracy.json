@@ -1,0 +1,11 @@
+{
+  "_comment": "Baseline accuracy on the synthetic stub dataset. Updated when the LLM/model changes. The integration test gates on baseline - 5pp.",
+  "fixture": "_stub_inbox.mbox",
+  "model": "Qwen3.5-35B-A3B-GGUF",
+  "category_accuracy": 0.70,
+  "is_spam_accuracy": 1.00,
+  "is_phishing_accuracy": 0.80,
+  "tolerance_pp": 5,
+  "_recorded_on": "2026-05-06",
+  "_recorded_by": "stub baseline (no real measurement yet)"
+}

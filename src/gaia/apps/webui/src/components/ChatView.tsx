@@ -2,56 +2,17 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link, Bot, ChevronDown, Plus } from 'lucide-react';
+import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import { getSessionHash } from '../utils/format';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
 import './ChatView.css';
 
-/** Cache for getComputedStyle results — avoids repeated style recalculations
- *  for the same textarea element since its styles rarely change. */
-const _computedStyleCache = new WeakMap<HTMLTextAreaElement, CSSStyleDeclaration>();
-
-/** Returns the pixel {x, y} of the caret inside a textarea, measured from the
- *  textarea's top-left corner (including its padding). Uses a hidden mirror div
- *  with matching styles so the result works for any font and multiline input.
- *  Accounts for scrollTop so the position stays correct when content overflows. */
-function getCaretXY(el: HTMLTextAreaElement): { x: number; y: number } {
-    const sel = el.selectionStart ?? 0;
-    let computed = _computedStyleCache.get(el);
-    if (!computed) {
-        computed = window.getComputedStyle(el);
-        _computedStyleCache.set(el, computed);
-    }
-    const mirror = document.createElement('div');
-    mirror.style.cssText = [
-        'position:absolute', 'visibility:hidden', 'overflow:hidden',
-        'white-space:pre-wrap', 'word-wrap:break-word',
-        'top:-9999px', 'left:-9999px',
-        `box-sizing:${computed.boxSizing}`,
-        `width:${computed.width}`,
-        `padding:${computed.padding}`,
-        `border:${computed.border}`,
-        `font:${computed.font}`,
-        `line-height:${computed.lineHeight}`,
-        `letter-spacing:${computed.letterSpacing}`,
-        `word-spacing:${computed.wordSpacing}`,
-    ].join(';');
-    mirror.appendChild(document.createTextNode(el.value.substring(0, sel)));
-    const marker = document.createElement('span');
-    marker.textContent = '\u200b';
-    mirror.appendChild(marker);
-    document.body.appendChild(mirror);
-    const coords = { x: marker.offsetLeft, y: marker.offsetTop - el.scrollTop };
-    document.body.removeChild(mirror);
-    return coords;
-}
 
 const EMPTY_SUGGESTIONS = [
     'Summarize a document',
@@ -182,7 +143,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useState('');
-    const [caret, setCaret] = useState({ x: 0, y: 0, focused: false });
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -259,16 +219,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
-    const caretRafRef = useRef<number>(0);
-    const updateCaret = useCallback(() => {
-        cancelAnimationFrame(caretRafRef.current);
-        caretRafRef.current = requestAnimationFrame(() => {
-            if (!inputRef.current) return;
-            const { x, y } = getCaretXY(inputRef.current);
-            setCaret(prev => ({ ...prev, x, y }));
-        });
-    }, []);
-    useEffect(() => () => cancelAnimationFrame(caretRafRef.current), []);
+    // Custom-caret tracking removed (was a 10×18 red glowing block that
+    // blinked once per second — too distracting for an always-visible
+    // text input). Native browser caret is plenty.
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
     const toolOccurredRef = useRef(false);
@@ -501,7 +454,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         const el = e.target;
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, 200) + 'px';
-        updateCaret();
     };
 
     // Handle clipboard paste (screenshots)
@@ -1115,21 +1067,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }
     };
 
-    // Session hash link copy
-    const [hashCopied, setHashCopied] = useState(false);
-    const handleCopyHash = useCallback((e: React.MouseEvent) => {
-        e.preventDefault();
-        const hash = getSessionHash(sessionId);
-        const url = `${window.location.origin}${window.location.pathname}#${hash}`;
-        navigator.clipboard.writeText(url).then(() => {
-            log.ui.info(`Copied session link: ${url}`);
-            setHashCopied(true);
-            setTimeout(() => setHashCopied(false), 1500);
-        }).catch(() => {
-            log.ui.warn('Clipboard write failed');
-        });
-    }, [sessionId]);
-
     // Title editing
     const startEditTitle = () => {
         setTitleDraft(session?.title || '');
@@ -1274,17 +1211,26 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     )}
                 </div>
                 <div className="chat-header-right">
-                    <a
-                        className={`session-hash-badge ${hashCopied ? 'copied' : ''}`}
-                        href={`#${getSessionHash(sessionId)}`}
-                        onClick={handleCopyHash}
-                        title={hashCopied ? 'Copied!' : `Copy session link #${getSessionHash(sessionId)}`}
-                        aria-label={`Copy link for session ${getSessionHash(sessionId)}`}
+                    <span
+                        className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
+                        title={
+                            systemStatus?.model_loaded && systemStatus?.model_context_size
+                                ? `${systemStatus.model_loaded} · context window: ${systemStatus.model_context_size.toLocaleString()} tokens`
+                                : (systemStatus?.model_loaded || 'No model loaded')
+                        }
                     >
-                        <Link size={10} />
-                        <span>#{getSessionHash(sessionId)}</span>
-                    </a>
-                    <span className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}>{systemStatus?.model_loaded || 'No model loaded'}</span>
+                        {systemStatus?.model_loaded || 'No model loaded'}
+                        {systemStatus?.model_loaded && systemStatus?.model_context_size != null && (
+                            <span className="model-ctx-size">
+                                {/* Pretty-print the context window: 32768 → "32K", 8192 → "8K", etc.
+                                    Falls back to a localized integer for odd sizes. */}
+                                {' · '}
+                                {systemStatus.model_context_size % 1024 === 0
+                                    ? `${systemStatus.model_context_size / 1024}K`
+                                    : systemStatus.model_context_size.toLocaleString()}
+                            </span>
+                        )}
+                    </span>
                     <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Attach documents">
                         <Paperclip size={15} />
                     </button>
@@ -1408,9 +1354,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 {messages.map((msg, idx) => {
                     // Show a solid terminal cursor on the last assistant message
                     // (only when not actively streaming — the streaming bubble has its own cursor)
-                    const isLastAssistant = !isStreaming && !streamEnding
-                        && msg.role === 'assistant'
-                        && messages.slice(idx + 1).every((m) => m.role !== 'assistant');
+                    const isLastAssistant = false; // cursor only during streaming, not on completed messages
                     // During stream-ending, skip rendering the just-completed
                     // assistant message entirely — the streaming bubble shows it.
                     // This prevents the flash/jump when transitioning.
@@ -1518,22 +1462,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
                             onPaste={handlePaste}
-                            onSelect={updateCaret}
-                            onFocus={() => { setCaret(prev => ({ ...prev, focused: true })); updateCaret(); }}
-                            onBlur={() => setCaret(prev => ({ ...prev, focused: false }))}
                             placeholder="Type a message or paste an image... (Shift+Enter for new line)"
                             rows={1}
                             disabled={isStreaming || systemStatus?.init_state === 'initializing'}
                             aria-label="Message input"
-                            style={{ caretColor: 'transparent' }}
                         />
-                        {!isStreaming && caret.focused && (
-                            <span
-                                className="input-cursor"
-                                style={{ left: `${caret.x}px`, top: `${caret.y}px` }}
-                                aria-hidden="true"
-                            />
-                        )}
                     </div>
                     <div className="input-btns">
                         <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">

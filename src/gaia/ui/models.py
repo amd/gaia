@@ -15,6 +15,31 @@ except ImportError:
 # ── System ──────────────────────────────────────────────────────────────────
 
 
+class DownloadProgress(BaseModel):
+    """Progress of an in-flight Lemonade model download.
+
+    Populated from Lemonade's ``POST /v1/pull`` SSE event stream
+    (``event: progress``). The frontend polls this on /api/system/status
+    so the download banner can show real progress instead of a bare spinner.
+
+    ``state`` values:
+      - ``starting``    — pull request issued, waiting for first byte
+      - ``downloading`` — at least one progress event received
+      - ``complete``    — all files done (transient — entry expires soon)
+      - ``error``       — Lemonade returned an error event or the stream broke
+    """
+
+    state: str  # starting | downloading | complete | error
+    model_name: str
+    percent: int = 0  # 0–100 across the full multi-file download
+    file: Optional[str] = None  # current file being fetched
+    file_index: int = 0
+    total_files: int = 0
+    downloaded_bytes: int = 0  # cumulative across all files in this pull
+    total_bytes: int = 0  # sum of every file in the pull (bytes)
+    message: Optional[str] = None  # populated only for state=error
+
+
 class SystemStatus(BaseModel):
     """System readiness status."""
 
@@ -22,7 +47,11 @@ class SystemStatus(BaseModel):
     model_loaded: Optional[str] = None
     embedding_model_loaded: bool = False
     disk_space_gb: float = 0.0
-    memory_available_gb: float = 0.0
+    # Optional so the UI can distinguish "psutil reported zero" (unlikely but
+    # possible on a thrashing host) from "we never populated this field".
+    # Memory-warning banners must skip rendering when this is None — otherwise
+    # any agent declaring ``min_memory_gb > 0`` would appear to be over budget.
+    memory_available_gb: Optional[float] = None
     initialized: bool = False
     version: str = _gaia_version
     # Extended Lemonade info (settings modal)
@@ -43,8 +72,16 @@ class SystemStatus(BaseModel):
     context_size_sufficient: bool = True  # False if loaded ctx < required minimum
     model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
     default_model_name: str = "Gemma-4-E4B-it-GGUF"  # Required model for GAIA Chat
+    # Catalog-reported size of ``default_model_name``. Populated alongside
+    # ``model_downloaded`` so the "not downloaded" banner can show an accurate
+    # size hint instead of a hard-coded one (the previous "~25 GB" was a stale
+    # remnant from when the default was Qwen3.5-35B).
+    default_model_size_gb: Optional[float] = None
     lemonade_url: str = "http://localhost:13305"  # Lemonade web UI base URL
     expected_model_loaded: bool = True  # False if a different model is loaded
+    # Live download progress for ``default_model_name`` (or whatever is
+    # currently being pulled). ``None`` when no pull is in flight.
+    download_progress: Optional[DownloadProgress] = None
     # Boot-time initialization tracking (populated from DispatchQueue)
     init_state: str = "ready"  # "initializing" | "ready" | "degraded"
     init_tasks: List["InitTaskInfo"] = Field(default_factory=list)
@@ -118,6 +155,21 @@ class AgentInfo(BaseModel):
     source: Literal["builtin", "custom_python"]
     conversation_starters: List[str] = Field(default_factory=list)
     models: List[str] = Field(default_factory=list)
+    # Minimum free system memory (GB) the agent recommends before loading its
+    # preferred model. `None` means the agent hasn't declared a requirement —
+    # the frontend skips the memory-warning check. Populated from
+    # ``AgentRegistration.min_memory_gb``.
+    min_memory_gb: Optional[float] = None
+    # T-X2 (issue #915): declared external-OAuth scope claims, surfaced from
+    # ``Agent.REQUIRED_CONNECTORS``. The AgentUI consent dialog renders these
+    # in plain language (via SCOPE_DESCRIPTIONS in providers/google.py).
+    # Each entry is a serialized ``ConnectorRequirement``:
+    # {connector_id: str, scopes: list[str], reason: str}.
+    required_connections: List[dict] = Field(default_factory=list)
+    # T-X2: opaque grant-ledger key. Built-ins use ``builtin:<id>``; custom
+    # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
+    # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.
+    namespaced_agent_id: str = ""
 
 
 class AgentListResponse(BaseModel):

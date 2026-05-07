@@ -1,0 +1,46 @@
+CDC SEASONAL INFLUENZA SURVEILLANCE — 2023-2024 SEASON SUMMARY
+(Synthetic paraphrase for evaluation purposes)
+
+The U.S. Centers for Disease Control and Prevention (CDC) tracks
+influenza activity year-round through ILINet, FluView, and laboratory
+surveillance networks. This document summarizes selected end-of-season
+findings for the 2023-2024 influenza season.
+
+SEVERITY CLASSIFICATION
+
+CDC classified the 2023-2024 influenza season as moderately severe across
+all age groups. The classification reflects the combination of outpatient
+illness intensity, hospitalization rates, and mortality observed during
+the season.
+
+OUTPATIENT ILLNESS
+
+Outpatient visits for influenza-like illness (ILI) rose sharply in late
+2023, with the percentage of laboratory specimens testing positive for
+influenza peaking during the week ending December 30, 2023. The peak
+outpatient ILI positivity rate that week reached 18.3%.
+
+PEDIATRIC MORTALITY
+
+A total of 197 laboratory-confirmed influenza-associated pediatric deaths
+were reported during the 2023-2024 season. This represented the
+second-highest pediatric flu death count since CDC began collecting
+pediatric flu mortality data in 2004; only one prior season exceeded this
+total.
+
+VIRUS COMPOSITION
+
+Influenza A(H1N1)pdm09 viruses predominated early and through much of the
+season, with influenza A(H3N2) and influenza B/Victoria-lineage activity
+also detected. Antiviral susceptibility remained high throughout the
+season.
+
+NOTE ON SCOPE
+
+This summary reports surveillance metrics on illness, hospitalization,
+and mortality. Vaccination coverage rates by age group — including
+estimates of the percentage of U.S. adults who received an influenza
+vaccine during the 2023-2024 season — are published separately in CDC's
+FluVaxView products and are not included in this surveillance summary.
+
+END OF SUMMARY
