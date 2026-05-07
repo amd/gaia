@@ -3,7 +3,6 @@
 
 # Pylint: optional native libs (Pillow) can produce false `no-member` warnings
 # for attributes like `PIL.Image.LANCZOS` in some lint environments.
-# pylint: disable=no-member
 
 import json
 import logging

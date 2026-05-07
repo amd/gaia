@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: MIT
 # Pylint: optional native deps (pymupdf/fitz) can cause false `no-member` warnings
 # in linting environments without PyMuPDF installed.
-# pylint: disable=no-member
 
 """
 PDF image extraction utilities for multi-modal RAG.

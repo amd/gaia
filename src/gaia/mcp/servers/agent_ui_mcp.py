@@ -3,7 +3,6 @@
 
 # Pylint: optional native libs (Pillow) can produce false `no-member` warnings
 # for attributes like `PIL.Image.LANCZOS` in some lint environments.
-# pylint: disable=no-member
 
 """MCP server that wraps the GAIA Agent UI REST API.
 

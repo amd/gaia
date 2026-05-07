@@ -175,6 +175,87 @@ class AgentRegistry:
                 "registry: BuilderAgent not available, skipping built-in registration"
             )
 
+        # --- ChatAgentLite ---
+        try:
+            from gaia.agents.chat.lite_agent import ChatAgentLite, ChatAgentLiteConfig
+
+            def chat_lite_factory(**kwargs):
+                valid_fields = {f.name for f in dataclasses.fields(ChatAgentLiteConfig)}
+                config = ChatAgentLiteConfig(
+                    **{k: v for k, v in kwargs.items() if k in valid_fields}
+                )
+                return ChatAgentLite(config=config)
+
+            self._register(
+                AgentRegistration(
+                    id="chat-lite",
+                    name="Chat Agent (Lite)",
+                    description="Lightweight chat-only agent (minimal tools)",
+                    source="builtin",
+                    conversation_starters=["Hi", "Hello"],
+                    factory=chat_lite_factory,
+                    agent_dir=None,
+                    models=[],
+                )
+            )
+            logger.info("registry: Registered built-in agent: chat-lite (ChatAgentLite)")
+        except ImportError:
+            logger.debug("registry: ChatAgentLite not available, skipping")
+
+        # --- DocumentQAAgent ---
+        try:
+            from gaia.agents.docqa.agent import DocumentQAAgent, DocumentQAAgentConfig
+
+            def docqa_factory(**kwargs):
+                valid_fields = {f.name for f in dataclasses.fields(DocumentQAAgentConfig)}
+                config = DocumentQAAgentConfig(
+                    **{k: v for k, v in kwargs.items() if k in valid_fields}
+                )
+                return DocumentQAAgent(config=config)
+
+            self._register(
+                AgentRegistration(
+                    id="docqa",
+                    name="Document QA Agent",
+                    description="RAG-focused document QA agent",
+                    source="builtin",
+                    conversation_starters=["Search my documents", "Index a file"],
+                    factory=docqa_factory,
+                    agent_dir=None,
+                    models=[],
+                )
+            )
+            logger.info("registry: Registered built-in agent: docqa (DocumentQAAgent)")
+        except ImportError:
+            logger.debug("registry: DocumentQAAgent not available, skipping")
+
+        # --- FileIOAgent ---
+        try:
+            from gaia.agents.fileio.agent import FileIOAgent, FileIOAgentConfig
+
+            def fileio_factory(**kwargs):
+                valid_fields = {f.name for f in dataclasses.fields(FileIOAgentConfig)}
+                config = FileIOAgentConfig(
+                    **{k: v for k, v in kwargs.items() if k in valid_fields}
+                )
+                return FileIOAgent(config=config)
+
+            self._register(
+                AgentRegistration(
+                    id="fileio",
+                    name="File I/O Agent",
+                    description="Agent for safe file and shell operations",
+                    source="builtin",
+                    conversation_starters=["List files", "Read a file"],
+                    factory=fileio_factory,
+                    agent_dir=None,
+                    models=[],
+                )
+            )
+            logger.info("registry: Registered built-in agent: fileio (FileIOAgent)")
+        except ImportError:
+            logger.debug("registry: FileIOAgent not available, skipping")
+
     # ------------------------------------------------------------------
     # Directory loading
     # ------------------------------------------------------------------

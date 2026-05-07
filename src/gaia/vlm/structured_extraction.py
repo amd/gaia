@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: MIT
 # Pylint: optional native deps (pymupdf/fitz) produce false `no-member` warnings
 # in some environments; disable that check for this module.
-# pylint: disable=no-member
 
 """
 Structured VLM Extraction - Enhanced VLM capabilities for structured data.

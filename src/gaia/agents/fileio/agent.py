@@ -55,8 +55,10 @@ class FileIOAgent(
             self.register_file_search_tools()
             self.register_shell_tools()
             self.register_screenshot_tools()
-        except Exception:
-            pass
+        except (ImportError, AttributeError) as e:
+            from gaia.logger import get_logger
+
+            get_logger(__name__).debug("FileIOAgent: optional tools skipped: %s", e)
 
     def _get_system_prompt(self) -> str:
         return "You are FileIOAgent. Perform file operations safely and ask for confirmation before destructive actions."

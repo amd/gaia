@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 # Pylint: some optional native deps (pymupdf/fitz) cause false `no-member` warnings
 # when linting in minimal environments. Disable no-member here to avoid noise.
-# pylint: disable=no-member
 
 """
 Parsing utilities for GAIA agents.
