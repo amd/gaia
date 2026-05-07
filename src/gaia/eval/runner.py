@@ -844,6 +844,8 @@ def run_scenario_subprocess(
     cmd = [
         claude_bin,
         "-p",
+        "--bare",  # skip hooks, CLAUDE.md, auto-memory — clean subprocess
+        "--no-session-persistence",  # don't save eval sessions to disk
         "--output-format",
         "json",
         "--json-schema",
