@@ -304,9 +304,6 @@ jobs:
           # run CI and copy the value from the dmg-structural-smoke output.
           shasum -a 256 "${DEST_DIR}/uv"
 
-      # macOS uv fetch removed in this PR to keep changes Windows-only.
-      # If needed, re-add a macOS fetch step in a follow-up PR coordinated with the mac team.
-
       - name: Build frontend (Vite)
         working-directory: src/gaia/apps/webui
         shell: bash
