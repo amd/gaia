@@ -136,7 +136,7 @@ export async function authorizeConnector(
 
 export async function configureConnector(
     connectorId: string,
-    config: Record<string, string>,
+    config: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
     return apiFetch('POST', `/connectors/${connectorId}/configure`, { config }, UI_HEADER);
 }
