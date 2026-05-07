@@ -75,11 +75,10 @@ class TestGetCredential:
         handler = OAuthPkceHandler()
         with patch(
             "gaia.connectors.oauth_pkce.get_or_refresh",
-            new=AsyncMock(return_value=("tok-abc", 9999999999)),
+            new=AsyncMock(return_value="tok-abc"),
         ):
             result = await handler.get_credential(spec, required_scopes=["openid"])
         assert result["access_token"] == "tok-abc"
-        assert result["expires_at"] == 9999999999
         assert result["scopes"] == ["openid"]
 
     @pytest.mark.asyncio
