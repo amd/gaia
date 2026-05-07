@@ -1,10 +1,12 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 from dataclasses import dataclass
 from typing import Optional
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.chat.tools import ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
 from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin
-from gaia.agents.chat.tools import ShellToolsMixin
 from gaia.mcp.mixin import MCPClientMixin
 
 
@@ -49,8 +51,10 @@ class FileIOAgent(
             self.register_file_search_tools()
             self.register_shell_tools()
             self.register_screenshot_tools()
-        except Exception:
-            pass
+        except (ImportError, AttributeError) as e:
+            from gaia.logger import get_logger
+
+            get_logger(__name__).debug("FileIOAgent: optional tools skipped: %s", e)
 
     def _get_system_prompt(self) -> str:
         return "You are FileIOAgent. Perform file operations safely and ask for confirmation before destructive actions."

@@ -1,8 +1,10 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.chat.tools import RAGToolsMixin, FileToolsMixin, ShellToolsMixin
+from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
 from gaia.agents.tools import FileSearchToolsMixin
 from gaia.mcp.mixin import MCPClientMixin
@@ -16,7 +18,7 @@ class DocumentQAAgentConfig:
     base_url: Optional[str] = None
     model_id: Optional[str] = None
     max_steps: int = 10
-    rag_documents: list[str] = None
+    rag_documents: Optional[List[str]] = None
 
 
 class DocumentQAAgent(
@@ -40,7 +42,8 @@ class DocumentQAAgent(
 
             rag_config = RAGConfig(model=config.model_id or "Qwen3.5-35B-A3B-GGUF")
             self.rag = RAGSDK(rag_config)
-        except Exception:
+        except ImportError:
+            # Optional dependency not installed in test environments
             self.rag = None
 
         super().__init__(
@@ -60,9 +63,11 @@ class DocumentQAAgent(
             self.register_file_tools()
             self.register_file_search_tools()
             self.register_file_io_tools()
-        except Exception:
-            # Allow import-time/test-time environments to skip optional deps
-            pass
+        except (ImportError, AttributeError) as e:
+            # Optional mixin dependencies may be missing in test envs; log debug
+            from gaia.logger import get_logger
+
+            get_logger(__name__).debug("DocumentQAAgent: optional tools skipped: %s", e)
 
     def _get_system_prompt(self) -> str:
         return "You are DocumentQAAgent. Use indexed documents to answer user queries accurately and cite sources."
