@@ -42,7 +42,7 @@ class OAuthPkceHandler:
 
     ``get_credential`` returns an access-token dict compatible with
     Google's token endpoint; the dict shape is:
-      ``{"access_token": str, "expires_at": int, "scopes": [str]}``
+      ``{"access_token": str, "scopes": [str]}``
 
     This class is stateless — it delegates all persistent state to
     ``tokens.py`` (in-memory cache) and ``store.py`` (keyring; the
