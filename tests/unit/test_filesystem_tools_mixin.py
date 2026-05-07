@@ -1771,5 +1771,39 @@ class TestMultipleToolCalls:
         assert "Second" in result
 
 
+# ---------------------------------------------------------------------------
+# Bookmark isolation regression (Fix 3 from PR #495 review)
+# ---------------------------------------------------------------------------
+
+
+class TestBookmarkIsolation:
+    """Regression: _bookmarks must be per-instance, not class-shared."""
+
+    def test_class_level_bookmarks_is_none_sentinel(self):
+        """The class attribute should be None, not a shared dict."""
+        assert FileSystemToolsMixin._bookmarks is None
+
+    def test_two_agents_have_independent_bookmarks(self, tmp_path):
+        """Bookmarks added on one agent must not leak to another."""
+        agent1, tools1 = _make_mock_agent_and_tools()
+        agent2, tools2 = _make_mock_agent_and_tools()
+
+        f = tmp_path / "shared.txt"
+        f.write_text("data")
+        tools1["bookmark"](action="add", path=str(f), label="Agent1Only")
+
+        result2 = tools2["bookmark"](action="list")
+        assert "Agent1Only" not in result2
+
+        result1 = tools1["bookmark"](action="list")
+        assert "Agent1Only" in result1
+
+    def test_register_initializes_bookmarks_per_instance(self):
+        """register_filesystem_tools() must set self._bookmarks = {} on each instance."""
+        agent1, _ = _make_mock_agent_and_tools()
+        agent2, _ = _make_mock_agent_and_tools()
+        assert agent1._bookmarks is not agent2._bookmarks
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

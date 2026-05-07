@@ -58,7 +58,7 @@ class FileSystemToolsMixin:
 
     _fs_index = None  # Optional FileSystemIndexService instance
     _path_validator = None  # Optional PathValidator instance
-    _bookmarks: dict = {}  # In-memory bookmarks (persisted in Phase 2 via index)
+    _bookmarks: dict = None  # Per-instance; initialized in register_filesystem_tools()
 
     def _validate_path(self, path: str) -> Path:
         """Validate and resolve a path. Raises ValueError if blocked."""
@@ -113,6 +113,11 @@ class FileSystemToolsMixin:
     def register_filesystem_tools(self) -> None:
         """Register all file system navigation and management tools."""
         from gaia.agents.base.tools import tool
+
+        # Per-instance bookmark storage — guards against the class-level
+        # sentinel being shared across agents in the same process.
+        if self._bookmarks is None:
+            self._bookmarks = {}
 
         mixin = self  # Capture self for nested functions
 

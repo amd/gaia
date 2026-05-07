@@ -1,7 +1,14 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Lightweight HTTP client for web content extraction."""
+"""Lightweight HTTP client for web content extraction.
+
+Includes ``PinnedIPAdapter`` — an ``HTTPAdapter`` that resolves the
+hostname once and rewrites the request URL to the pinned IP. This closes
+the DNS-rebind TOCTOU window between ``validate_url`` (which calls
+``getaddrinfo``) and the actual TCP connection (where ``requests`` /
+``urllib3`` would resolve a second time).
+"""
 
 import ipaddress
 import os
@@ -9,9 +16,11 @@ import re
 import socket
 import time
 from pathlib import Path
-from urllib.parse import parse_qs, urljoin, urlparse
+from typing import Dict, Tuple
+from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from gaia.logger import get_logger
 
@@ -52,6 +61,64 @@ REMOVE_TAGS = [
 ]
 
 
+class PinnedIPAdapter(HTTPAdapter):
+    """HTTPAdapter that pins the resolved IP address for a hostname.
+
+    On ``send()``, the adapter resolves the request hostname once via
+    ``socket.getaddrinfo``, replaces the request URL netloc with the
+    resolved IP:port, and sets the ``Host`` header to the original
+    hostname.  The resolved IP is cached per ``(host, port)`` tuple so
+    subsequent requests to the same origin reuse the same IP — preventing
+    DNS-rebind attacks between ``WebClient.validate_url`` and the actual
+    TCP connect.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pinned_cache: Dict[Tuple[str, int], str] = {}
+
+    def _resolve_first_ip(self, host: str, port: int) -> str:
+        key = (host, port)
+        if key in self._pinned_cache:
+            return self._pinned_cache[key]
+
+        infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+        if not infos:
+            raise OSError(
+                f"getaddrinfo returned no addresses for {host}:{port}"
+            )
+
+        ip = infos[0][4][0]  # sockaddr[0] of the first result
+        self._pinned_cache[key] = ip
+        return ip
+
+    def send(
+        self, request: requests.PreparedRequest, **kwargs
+    ) -> requests.Response:
+        parsed = urlparse(request.url)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        if host:
+            pinned_ip = self._resolve_first_ip(host, port)
+
+            new_netloc = f"{pinned_ip}:{port}" if port else pinned_ip
+            new_url = urlunparse(
+                (
+                    parsed.scheme,
+                    new_netloc,
+                    parsed.path or "",
+                    parsed.params or "",
+                    parsed.query or "",
+                    parsed.fragment or "",
+                )
+            )
+            request.url = new_url
+            request.headers.setdefault("Host", host)
+
+        return super().send(request, **kwargs)
+
+
 class WebClient:
     """Lightweight HTTP client for web content extraction.
 
@@ -86,6 +153,11 @@ class WebClient:
         self._rate_limit = rate_limit or self.MIN_REQUEST_INTERVAL
         self._domain_last_request: dict = {}  # Per-domain rate limiting
         self._session = requests.Session()
+        # Mount PinnedIPAdapter to close the DNS-rebind TOCTOU window
+        # between validate_url() and the actual TCP connect.
+        _adapter = PinnedIPAdapter()
+        self._session.mount("https://", _adapter)
+        self._session.mount("http://", _adapter)
         self._session.headers.update(
             {
                 "User-Agent": self._user_agent,

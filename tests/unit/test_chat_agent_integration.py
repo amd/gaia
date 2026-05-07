@@ -302,5 +302,82 @@ class TestSystemPromptContent:
         assert "DIRECTORY BROWSING WORKFLOW" in self.prompt
 
 
+# ---------------------------------------------------------------------------
+# Prompt section gating regression (Fix 4 from PR #495 review)
+# ---------------------------------------------------------------------------
+
+
+class TestPromptSectionGating:
+    """Verify prompt sections only appear when their profile or flag enables them."""
+
+    # Section headers as they appear in the prompt (with markdown bold).
+    # Use these exact strings to avoid false matches against incidental
+    # mentions of tool names in other prompt sections.
+    _FS_HEADER = "**FILE SYSTEM TOOLS:**"
+    _SP_HEADER = "**DATA ANALYSIS WORKFLOW (Scratchpad):**"
+    _BR_HEADER = "**BROWSER TOOLS:**"
+
+    def test_chat_profile_excludes_all_tool_sections(self):
+        """profile='chat' with default flags must NOT include tool sections."""
+        agent = _build_agent(prompt_profile="chat")
+        prompt = agent._get_system_prompt()
+        assert self._FS_HEADER not in prompt
+        assert self._SP_HEADER not in prompt
+        assert self._BR_HEADER not in prompt
+
+    def test_full_profile_includes_all_tool_sections(self):
+        """profile='full' must include all tool sections even with default flags."""
+        agent = _build_agent(prompt_profile="full")
+        prompt = agent._get_system_prompt()
+        assert self._FS_HEADER in prompt
+        assert self._SP_HEADER in prompt
+        assert self._BR_HEADER in prompt
+
+    def test_file_profile_includes_filesystem_only(self):
+        """profile='file' must include filesystem section, not scratchpad/browser."""
+        agent = _build_agent(prompt_profile="file")
+        prompt = agent._get_system_prompt()
+        assert self._FS_HEADER in prompt
+        assert self._SP_HEADER not in prompt
+        assert self._BR_HEADER not in prompt
+
+    def test_data_profile_includes_scratchpad_only(self):
+        """profile='data' must include scratchpad section, not filesystem/browser."""
+        agent = _build_agent(prompt_profile="data")
+        prompt = agent._get_system_prompt()
+        assert self._SP_HEADER in prompt
+        assert self._FS_HEADER not in prompt
+        assert self._BR_HEADER not in prompt
+
+    def test_web_profile_includes_browser_only(self):
+        """profile='web' must include browser section, not filesystem/scratchpad."""
+        agent = _build_agent(prompt_profile="web")
+        prompt = agent._get_system_prompt()
+        assert self._BR_HEADER in prompt
+        assert self._FS_HEADER not in prompt
+        assert self._SP_HEADER not in prompt
+
+    def test_doc_profile_excludes_tool_sections(self):
+        """profile='doc' must NOT include filesystem/scratchpad/browser sections."""
+        agent = _build_agent(prompt_profile="doc")
+        prompt = agent._get_system_prompt()
+        assert self._FS_HEADER not in prompt
+        assert self._SP_HEADER not in prompt
+        assert self._BR_HEADER not in prompt
+
+    def test_explicit_enable_overrides_profile(self):
+        """profile='chat' + enable_filesystem=True must include filesystem section."""
+        agent = _build_agent(prompt_profile="chat", enable_filesystem=True)
+        prompt = agent._get_system_prompt()
+        assert self._FS_HEADER in prompt
+
+    def test_config_defaults_are_false(self):
+        """All enable_* flags must default to False."""
+        config = ChatAgentConfig()
+        assert config.enable_filesystem is False
+        assert config.enable_scratchpad is False
+        assert config.enable_browser is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
