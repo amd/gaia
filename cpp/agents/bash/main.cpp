@@ -7,8 +7,8 @@
 //   gaia-bash                     Interactive TUI mode (default)
 //   gaia-bash "query"             Single query mode
 //   gaia-bash --print             Pipe mode (no TUI, CleanConsole)
-//   gaia-bash --serve [--port N]  API server mode (not yet implemented)
-//   gaia-bash --mcp               MCP server mode (not yet implemented)
+//   gaia-bash --serve [--port N]  API server mode
+//   gaia-bash --mcp               MCP server mode (stdio JSON-RPC)
 //   gaia-bash --resume <id>       Resume a saved session
 //   gaia-bash --list-sessions     List saved sessions and exit
 //   gaia-bash --model <name>      Override the default model
@@ -20,8 +20,10 @@
 #include <string>
 #include <vector>
 
+#include "api_server.h"
 #include "bash_agent.h"
 #include "bash_tools.h"
+#include "mcp_server.h"
 
 #include <gaia/clean_console.h>
 #include <gaia/repl.h>
@@ -42,8 +44,8 @@ static void printUsage(const char* progName) {
               << "  " << progName << "                     Interactive mode (default)\n"
               << "  " << progName << " \"<query>\"            Single query mode\n"
               << "  " << progName << " --print               Pipe mode (no TUI)\n"
-              << "  " << progName << " --serve [--port N]    API server (not yet implemented)\n"
-              << "  " << progName << " --mcp                 MCP server (not yet implemented)\n"
+              << "  " << progName << " --serve [--port N]    API server (default port 8200)\n"
+              << "  " << progName << " --mcp                 MCP server (stdio JSON-RPC)\n"
               << "  " << progName << " --resume <id>         Resume a saved session\n"
               << "  " << progName << " --list-sessions       List saved sessions\n"
               << "  " << progName << " --model <name>        Override model\n"
@@ -166,24 +168,42 @@ int main(int argc, char* argv[]) {
             return listSessions();
         }
 
-        // Handle --serve (not yet implemented)
+        // Handle --serve (API server mode)
         if (serveMode) {
-            std::cerr << color::YELLOW
-                      << "API server not yet implemented."
-                      << color::RESET << "\n";
-            if (port > 0) {
-                std::cerr << color::GRAY << "(Requested port: " << port << ")"
-                          << color::RESET << "\n";
-            }
-            return 1;
+            int serverPort = (port > 0) ? port : 8200;
+
+            gaia::AgentConfig apiConfig;
+            apiConfig.debug = debug;
+            if (!modelOverride.empty()) apiConfig.modelId = modelOverride;
+
+            gaia::BashAgent apiAgent(apiConfig);
+            gaia::ApiServer server(apiAgent, serverPort);
+            server.setSessionStore(std::make_shared<gaia::SessionStore>());
+
+            std::cerr << color::GREEN << color::BOLD << "gaia-bash"
+                      << color::RESET << " API server starting on port "
+                      << serverPort << "\n";
+            server.run();  // blocking
+            return 0;
         }
 
-        // Handle --mcp (not yet implemented)
+        // Handle --mcp (MCP stdio server mode)
         if (mcpMode) {
-            std::cerr << color::YELLOW
-                      << "MCP server not yet implemented."
-                      << color::RESET << "\n";
-            return 1;
+            gaia::AgentConfig mcpConfig;
+            mcpConfig.debug = debug;
+            mcpConfig.silentMode = true;  // no console output on stdout
+            if (!modelOverride.empty()) mcpConfig.modelId = modelOverride;
+
+            gaia::BashAgent mcpAgent(mcpConfig);
+            // In MCP mode, the external agent handles safety — auto-allow all tools
+            mcpAgent.setToolConfirmCallback(
+                [](const std::string&, const gaia::json&) {
+                    return gaia::ToolConfirmResult::ALLOW_ONCE;
+                });
+            gaia::McpServer mcpServer(mcpAgent);
+
+            mcpServer.run();  // blocking, reads stdin
+            return 0;
         }
 
         // Build agent config
