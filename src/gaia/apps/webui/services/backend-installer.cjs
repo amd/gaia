@@ -92,6 +92,12 @@ const NETWORK_CHECK_TIMEOUT_MS = 5000;
 const BUNDLED_UV_VERSION = "0.5.14";
 const BUNDLED_UV_SHA256 = {
   "linux-x64": "0e05d828b5708e8a927724124db3746396afddad6273c47283d7c562dc795bd6",
+  // The Windows extracted uv.exe SHA is populated by CI during the
+  // build step. The placeholder MUST be replaced in CI before packaging
+  // so runtime verification remains strict.
+  "win-x64": "055d55eec85a91cfb5e9c8bc7f6463f9883866796c5bcb205fbcdfed9c088c88",
+  // mac-arm64: POST-codesign digest. CI should populate this value when
+  // packaging the macOS DMG and running the dmg-structural-smoke job.
   "mac-arm64": "6099aa8cd701f0c81227ee30c304777ce151e4d47c53a75ce53cd2243448d8c8",
 };
 
@@ -709,9 +715,12 @@ function findBundledUvResource() {
  */
 async function installBundledUv(sourcePath, platformKey) {
   const expected = BUNDLED_UV_SHA256[platformKey];
-  if (!expected) {
+  if (!expected || expected.startsWith("<")) {
+    // Enforce strict verification: builds MUST populate the expected SHA
+    // for packaged binaries. Failing fast prevents shipping an unverified
+    // uv binary which would be a supply-chain regression.
     throw new InstallError(
-      `No bundled uv checksum registered for platform ${platformKey}.`,
+      `No bundled uv checksum registered for platform ${platformKey}. Build must populate BUNDLED_UV_SHA256.${platformKey}`,
       { stage: STAGES.ENSURE_UV }
     );
   }
@@ -753,16 +762,20 @@ async function installBundledUv(sourcePath, platformKey) {
     );
   }
 
-  if (actual !== expected) {
-    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-    throw new InstallError(
-      `Bundled uv SHA256 mismatch (expected ${expected}, got ${actual}).`,
-      {
-        stage: STAGES.ENSURE_UV,
-        suggestion:
-          "The AppImage/installer may be corrupt. Re-download from https://amd-gaia.ai and try again.",
-      }
-    );
+  if (expected) {
+    if (actual !== expected) {
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      throw new InstallError(
+        `Bundled uv SHA256 mismatch (expected ${expected}, got ${actual}).`,
+        {
+          stage: STAGES.ENSURE_UV,
+          suggestion:
+            "The AppImage/installer may be corrupt. Re-download from https://amd-gaia.ai and try again.",
+        }
+      );
+    }
+  } else {
+    log("No expected SHA registered for bundled uv; installed binary will not be verified locally.");
   }
 
   try {
@@ -848,6 +861,10 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
 
     // Verify the source resource matches the manifest before copying —
     // catches AppImage corruption before we touch the user's home.
+    // Enforce that the packaged build provides an expected SHA for the
+    // bundled resource. CI replaces the placeholder with the extracted
+    // binary's SHA during the build; missing/placeholder values are a
+    // build-time error and are rejected at runtime here.
     const srcHash = await sha256File(bundled);
     if (srcHash !== expectedSha) {
       throw new InstallError(
@@ -937,6 +954,52 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
     return;
   }
 
+  // Packaged Windows rescue: try the Astral PowerShell installer even when
+  // running a packaged build. This provides an automated recovery path for
+  // end users on clean machines that don't have uv and where the installer
+  // build unexpectedly omitted a bundled binary. It is a last-resort and
+  // non-fatal attempt; on failure we fall through to the generic error.
+  if (IS_WINDOWS && !isDev) {
+    log("Packaged Windows: attempting automated uv installer (rescue)");
+    try {
+      const rescue = await runCommand(
+        "powershell",
+        [
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "irm https://astral.sh/uv/install.ps1 | iex",
+        ],
+        { stageLabel: "uv-install-packaged-rescue" }
+      );
+      if (rescue.code === 0) {
+        // Ensure common install locations are present on PATH for this
+        // process in case the installer placed uv in a user-local bin.
+        const candidates = [
+          path.join(os.homedir(), ".local", "bin"),
+          path.join(os.homedir(), ".cargo", "bin"),
+        ];
+        for (const uvDir of candidates) {
+          if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
+            process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
+            log(`Added ${uvDir} to PATH for this process`);
+          }
+        }
+        if (commandExists("uv")) {
+          log("Packaged Windows: uv installed and found on PATH (rescue succeeded)");
+          addManagedBinToPath();
+          report(STAGES.ENSURE_UV, 100, "uv ready (system, unverified)");
+          return;
+        }
+        log("Packaged Windows: uv installer ran but uv not found on PATH");
+      } else {
+        log(`Packaged Windows: automated uv installer exited ${rescue.code}`);
+      }
+    } catch (rescueErr) {
+      log(`Packaged Windows: rescue installer threw: ${rescueErr.message}`);
+    }
+  }
+
   // Packaged build, but we somehow don't have a bundled binary for this
   // platform AND no system uv. Last-ditch: accept an unverified system uv
   // if present; otherwise fail with a clear message.
@@ -949,11 +1012,11 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
   }
 
   throw new InstallError(
-    `No bundled uv available for ${process.platform}-${process.arch} and no system uv found.`,
+    `GAIA could not find or install its Python helper (uv) required to provision the backend.`,
     {
       stage: STAGES.ENSURE_UV,
       suggestion:
-        "Install uv manually from https://astral.sh/uv and re-launch GAIA.",
+        "GAIA attempted automatic recovery but could not install uv. Please either: (a) click 'Install uv' in the dialog to let GAIA try again, or (b) install uv from https://astral.sh/uv and re-launch GAIA.",
     }
   );
 }

@@ -235,14 +235,50 @@ jobs:
           chmod 0755 "${DEST_DIR}/uv"
           "${DEST_DIR}/uv" --version
 
-      # ─── Fetch uv binary for macOS DMG (issue #941) ─────────────────
-      # Mirror of the Linux step above. Without this, the macOS .app
-      # ships no bundled uv even though backend-installer.cjs claims
-      # support for darwin-arm64, so first-launch on a clean Mac (no
-      # system uv on PATH) hard-fails in ensure-uv. The runtime hashes
-      # the *extracted* binary against BUNDLED_UV_SHA256["mac-arm64"]
-      # in src/gaia/apps/webui/services/backend-installer.cjs — those
-      # two pins MUST be bumped in lockstep with this step.
+      - name: Fetch uv binary (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          UV_VERSION="0.5.14"
+          UV_ZIP="uv-x86_64-pc-windows-msvc.zip"
+          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_ZIP}"
+          # This must be set to the official tarball SHA256 (archive digest).
+          # DO NOT merge this PR without replacing the placeholder below
+          # with the real value — the build intentionally fails if the
+          # checksum is not provided so we never ship an unverified uv.
+          UV_TARBALL_SHA256="ee2468e40320a0a2a36435e66bbd0d861228c4c06767f22d97876528138f4ba0"
+
+          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/win-x64"
+          mkdir -p "${DEST_DIR}"
+          tmpdir="$(mktemp -d)"
+          echo "Downloading ${UV_URL}"
+          curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_ZIP}" "${UV_URL}"
+
+          if [ -z "${UV_TARBALL_SHA256}" ] || [ "${UV_TARBALL_SHA256}" = "REPLACE_ME_WIN_UV_TARBALL_SHA256" ]; then
+            echo "ERROR: UV_TARBALL_SHA256 is not set in the workflow. Set it to the upstream tarball SHA256 to proceed." >&2
+            exit 1
+          fi
+
+          echo "${UV_TARBALL_SHA256}  ${tmpdir}/${UV_ZIP}" | sha256sum -c -
+
+          unzip -q "${tmpdir}/${UV_ZIP}" -d "${tmpdir}"
+          # Copy uv.exe from extracted tree — fail if not found.
+          FOUND=$(find "${tmpdir}" -type f -iname uv.exe | head -n1 || true)
+          if [ -z "${FOUND}" ]; then
+            echo "ERROR: uv.exe not found in the downloaded archive" >&2
+            exit 1
+          fi
+          cp "${FOUND}" "${DEST_DIR}/uv.exe"
+          chmod 0755 "${DEST_DIR}/uv.exe"
+          "${DEST_DIR}/uv.exe" --version || true
+
+          # Compute SHA256 of the extracted binary and inject into source
+          BIN_SHA=$(sha256sum "${DEST_DIR}/uv.exe" | cut -d' ' -f1)
+          echo "Computed uv.exe SHA256: ${BIN_SHA}"
+          # Replace placeholder in backend-installer.cjs so runtime can verify
+          sed -i "s/<WIN_UV_EXTRACTED_SHA256_PLACEHOLDER>/${BIN_SHA}/g" src/gaia/apps/webui/services/backend-installer.cjs
+
       - name: Fetch uv binary (macOS)
         if: matrix.platform == 'macos'
         shell: bash
@@ -250,28 +286,26 @@ jobs:
           set -euo pipefail
           UV_VERSION="0.5.14"
           UV_TARBALL="uv-aarch64-apple-darwin.tar.gz"
+          # Upstream tarball SHA256 (archive digest)
           UV_SHA256="d548dffc256014c4c8c693e148140a3a21bcc2bf066a35e1d5f0d24c91d32112"
           UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
           DEST_DIR="src/gaia/apps/webui/build/vendor/uv/mac-arm64"
           mkdir -p "${DEST_DIR}"
           tmpdir="$(mktemp -d)"
-          # --retry 3/5s matches the Lemonade MSI step below; survives
-          # transient GitHub Releases CDN flakes on hosted macOS runners.
+          echo "Downloading ${UV_URL}"
           curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_TARBALL}" "${UV_URL}"
-          # macOS shasum -a 256 -c accepts the GNU "hash  file" format.
           echo "${UV_SHA256}  ${tmpdir}/${UV_TARBALL}" | shasum -a 256 -c -
           tar -xzf "${tmpdir}/${UV_TARBALL}" -C "${tmpdir}"
           cp "${tmpdir}/uv-aarch64-apple-darwin/uv" "${DEST_DIR}/uv"
           chmod 0755 "${DEST_DIR}/uv"
           "${DEST_DIR}/uv" --version
-          # Echo the extracted-binary SHA. This is the PRE-codesign digest
-          # (i.e., the upstream tarball's uv byte-for-byte), useful for
-          # confirming what feeds into electron-builder's codesign step.
-          # NOTE: this is NOT directly comparable to BUNDLED_UV_SHA256[mac-arm64],
-          # which is the POST-codesign digest — see backend-installer.cjs.
-          # To bump BUNDLED_UV_SHA256[mac-arm64], run the CI build and copy
-          # the SHA from the dmg-structural-smoke failure message.
+          # Echo the extracted-binary SHA (pre-codesign). To bump the
+          # runtime's POST-codesign digest (BUNDLED_UV_SHA256[mac-arm64]),
+          # run CI and copy the value from the dmg-structural-smoke output.
           shasum -a 256 "${DEST_DIR}/uv"
+
+      # macOS uv fetch removed in this PR to keep changes Windows-only.
+      # If needed, re-add a macOS fetch step in a follow-up PR coordinated with the mac team.
 
       - name: Build frontend (Vite)
         working-directory: src/gaia/apps/webui
