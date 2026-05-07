@@ -17,9 +17,9 @@ except ImportError:
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
-from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
 from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
