@@ -665,8 +665,11 @@ IMPORTANT: If no specific question was asked, query the document for "key polici
         # the LLM sees tool instructions for tools that don't exist and either
         # hallucinates them or emits syntactically-valid tool calls that come
         # back as "unknown tool" errors (#495 review feedback from @itomek-amd).
+        profile = getattr(self.config, "prompt_profile", "full")
         filesystem_section = ""
-        if getattr(self.config, "enable_filesystem", True):
+        if profile in ("file", "full") or getattr(
+            self.config, "enable_filesystem", False
+        ):
             filesystem_section = """
 **FILE SYSTEM TOOLS:**
 You have powerful file system tools. Use them when the user asks about files, folders, or their PC:
@@ -717,7 +720,9 @@ When user asks "what's in my Documents?" or "show me the project structure":
 """
 
         scratchpad_section = ""
-        if getattr(self.config, "enable_scratchpad", True):
+        if profile in ("data", "full") or getattr(
+            self.config, "enable_scratchpad", False
+        ):
             scratchpad_section = """
 **DATA ANALYSIS WORKFLOW (Scratchpad):**
 For multi-document analysis (spending, tax, research), use the scratchpad tools:
@@ -736,7 +741,7 @@ Then: {"tool": "query_data", "tool_args": {"sql": "SELECT category, SUM(amount) 
 """
 
         browser_section = ""
-        if getattr(self.config, "enable_browser", True):
+        if profile in ("web", "full") or getattr(self.config, "enable_browser", False):
             browser_section = """
 **BROWSER TOOLS:**
 You can browse the web, search for information, and download files:
@@ -818,13 +823,13 @@ Even if you "know" about supply chain audits, compliance reports, PTO policies, 
 **SECTION/PAGE LOOKUP RULE:**
 When the user asks about a specific section (e.g., "Section 52", "Chapter 3", "Appendix B"):
 1. Try query_specific_file with section name + likely topic: query="Section 52 findings"
-2. If RAG returns low-score or irrelevant results, use find_files_content to grep the file directly:
+2. If RAG returns low-score or irrelevant results, use find_files to grep the file directly:
    - ALWAYS restrict search to the document's directory (avoid searching the whole repo):
-     find_files_content("Section 52", directory="eval/corpus/documents", context_lines=5)
-   - context_lines=5 returns the 5 lines BEFORE and AFTER the match — shows section content
+     find_files("Section 52", search_type="content", scope="eval/corpus/documents")
+   - Content search returns matching lines with line numbers for context
 3. If section header found but content unclear, search for CONTENT keywords (not just the heading):
-   - find_files_content("non-conformities", directory="eval/corpus/documents") → finds finding text
-   - find_files_content("finding", directory="eval/corpus/documents") → finds finding bullets
+   - find_files("non-conformities", search_type="content", scope="eval/corpus/documents") → finds finding text
+   - find_files("finding", search_type="content", scope="eval/corpus/documents") → finds finding bullets
 4. NEVER answer from memory when asked about a specific named section — always retrieve first.
 5. If all queries fail, give the best answer based on what WAS found — never just say "I cannot find it."
 6. CRITICAL — If RAG returned RELEVANT content (even if you're unsure it belongs to "Section 52" specifically):
@@ -1077,8 +1082,9 @@ NOTE: Web browsing and search ARE supported via `fetch_page`, `search_web`, and 
         profile = getattr(self.config, "prompt_profile", "full")
 
         if profile == "chat":
-            # Minimal: personality only, no tools
-            return base_prompt
+            # Minimal: personality only — but respect explicitly enabled tools.
+            extras = filesystem_section + scratchpad_section + browser_section
+            return base_prompt + extras
 
         if profile == "doc":
             # Document Q&A: RAG tools + hallucination prevention
@@ -1378,22 +1384,6 @@ NOTE: Web browsing and search ARE supported via `fetch_page`, `search_web`, and 
 
         if profile == "full":
             self.register_screenshot_tools()
-        # Remove CodeAgent-specific FileIO tools — ChatAgent only needs the 3 generic ones.
-        if profile in ("file", "data", "full"):
-            from gaia.agents.base.tools import _TOOL_REGISTRY
-
-            _chat_only_fileio = {
-                "write_python_file",
-                "edit_python_file",
-                "search_code",
-                "generate_diff",
-                "write_markdown_file",
-                "update_gaia_md",
-                "replace_function",
-            }
-            for _name in _chat_only_fileio:
-                _TOOL_REGISTRY.pop(_name, None)
-
         self._register_external_tools_conditional()
 
         # Inline list_files — only for profiles that need file operations
@@ -1963,6 +1953,23 @@ NOTE: Web browsing and search ARE supported via `fetch_page`, `search_web`, and 
                         )
             except Exception as _mcp_err:
                 logger.warning("MCP server load failed: %s", _mcp_err)
+
+        # Snapshot: freeze this agent's tool set so mutations by other agents
+        # in the same process do not leak in.  Exclusion replaces the old
+        # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
+        self._snapshot_tools()
+        if profile in ("file", "data", "full"):
+            _chat_exclude = {
+                "write_python_file",
+                "edit_python_file",
+                "search_code",
+                "generate_diff",
+                "write_markdown_file",
+                "update_gaia_md",
+                "replace_function",
+            }
+            for _name in _chat_exclude:
+                self._instance_tools.pop(_name, None)
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools

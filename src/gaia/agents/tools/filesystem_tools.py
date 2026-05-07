@@ -14,6 +14,7 @@ import json
 import logging
 import mimetypes
 import os
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -71,8 +72,6 @@ class FileSystemToolsMixin:
 
     def _get_default_excludes(self) -> set:
         """Get platform-specific default directory exclusion patterns."""
-        import sys
-
         excludes = {
             "__pycache__",
             ".git",
@@ -1128,8 +1127,6 @@ class FileSystemToolsMixin:
             elif scope == "home":
                 return [home]
             elif scope == "everywhere":
-                import sys
-
                 if sys.platform == "win32":
                     import string
 

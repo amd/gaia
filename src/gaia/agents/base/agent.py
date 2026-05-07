@@ -86,6 +86,10 @@ class Agent(abc.ABC):
         silent_mode: Suppress all console output for JSON-only usage
     """
 
+    # Per-instance tool snapshot.  ``None`` → fall back to global
+    # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
+    _instance_tools: Optional[Dict[str, Any]] = None
+
     # Define state constants
     STATE_PLANNING = "PLANNING"
     STATE_EXECUTING_PLAN = "EXECUTING_PLAN"
@@ -450,11 +454,32 @@ Do NOT wrap conversational replies in JSON.
         """
         raise NotImplementedError("Subclasses must implement _register_tools")
 
+    @property
+    def _tools_registry(self) -> Dict[str, Any]:
+        """Return this agent's effective tool registry.
+
+        Uses the per-instance snapshot if ``_snapshot_tools()`` was called,
+        otherwise falls back to the global ``_TOOL_REGISTRY`` for backward
+        compatibility with agents that predate the snapshot mechanism.
+        """
+        if self._instance_tools is not None:
+            return self._instance_tools
+        return _TOOL_REGISTRY
+
+    def _snapshot_tools(self) -> None:
+        """Freeze the current ``_TOOL_REGISTRY`` state into this instance.
+
+        After this call, tool lookup, prompt formatting, and execution all
+        use the snapshot.  Mutations on this instance's ``_instance_tools``
+        will not affect other agents or the global dict.
+        """
+        self._instance_tools = dict(_TOOL_REGISTRY)
+
     def _format_tools_for_prompt(self) -> str:
         """Format the registered tools into a string for the prompt."""
         tool_descriptions = []
 
-        for name, tool_info in _TOOL_REGISTRY.items():
+        for name, tool_info in self._tools_registry.items():
             params_str = ", ".join(
                 [
                     f"{param_name}{'' if param_info['required'] else '?'}: {param_info['type']}"
@@ -548,11 +573,11 @@ Do NOT wrap conversational replies in JSON.
 
     def get_tools_info(self) -> Dict[str, Any]:
         """Get information about all registered tools."""
-        return _TOOL_REGISTRY
+        return self._tools_registry
 
     def get_tools(self) -> List[Dict[str, Any]]:
         """Get a list of registered tools for the agent."""
-        return list(_TOOL_REGISTRY.values())
+        return list(self._tools_registry.values())
 
     def _extract_embedded_tool_call(self, response: str) -> Optional[Dict[str, Any]]:
         """
@@ -914,7 +939,7 @@ Do NOT wrap conversational replies in JSON.
         return json_response
 
     def _build_openai_tool_schemas(self) -> list:
-        """Build OpenAI-format function-calling schemas from _TOOL_REGISTRY."""
+        """Build OpenAI-format function-calling schemas from the tool registry."""
 
         def _python_to_json_type(py_type: str) -> str:
             return {
@@ -927,7 +952,7 @@ Do NOT wrap conversational replies in JSON.
             }.get(py_type.lower().strip(), "string")
 
         schemas = []
-        for name, tool_info in _TOOL_REGISTRY.items():
+        for name, tool_info in self._tools_registry.items():
             properties = {}
             required = []
             for param_name, param_info in tool_info["parameters"].items():
@@ -1323,11 +1348,12 @@ Do NOT wrap conversational replies in JSON.
         """
         lower = tool_name.lower()
         suffix = f"_{lower}"
-        matches = [n for n in _TOOL_REGISTRY if n.lower().endswith(suffix)]
+        registry = self._tools_registry
+        matches = [n for n in registry if n.lower().endswith(suffix)]
         if len(matches) == 1:
             return matches[0]
         # Also try exact case-insensitive match
-        matches = [n for n in _TOOL_REGISTRY if n.lower() == lower]
+        matches = [n for n in registry if n.lower() == lower]
         if len(matches) == 1:
             return matches[0]
         return None
@@ -1356,7 +1382,7 @@ Do NOT wrap conversational replies in JSON.
         if not tool_name:
             return {"status": "error", "error": "No tool name provided"}
 
-        if tool_name not in _TOOL_REGISTRY:
+        if tool_name not in self._tools_registry:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
             # when registry has "mcp_time_get_current_time"). Local LLMs often
             # strip the mcp_<server>_ prefix.
@@ -1378,7 +1404,7 @@ Do NOT wrap conversational replies in JSON.
                     "error": f"Tool '{tool_name}' was denied by the user.",
                 }
 
-        tool = _TOOL_REGISTRY[tool_name]["function"]
+        tool = self._tools_registry[tool_name]["function"]
         sig = inspect.signature(tool)
 
         # Get required parameters (those without defaults)
