@@ -319,6 +319,9 @@ if(GAIA_BUILD_TESTS)
     # TUI tests (conditional -- requires FTXUI)
     if(GAIA_BUILD_TUI)
         target_sources(tests_mock PRIVATE tests/test_tui_console.cpp)
+        target_link_libraries(tests_mock PRIVATE
+            ftxui::component ftxui::dom ftxui::screen
+        )
     endif()
 
     include(GoogleTest)

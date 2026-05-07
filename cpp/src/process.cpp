@@ -11,11 +11,15 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
 #   ifndef WIN32_LEAN_AND_MEAN
 #       define WIN32_LEAN_AND_MEAN
+#   endif
+#   ifndef NOMINMAX
+#       define NOMINMAX
 #   endif
 #   include <windows.h>
 #   include <direct.h>
@@ -322,17 +326,17 @@ ProcessResult runWithTimeout(const std::string& command,
     if (stdoutFd >= 0) stdoutFile = _fdopen(stdoutFd, "r");
     if (stderrFd >= 0) stderrFile = _fdopen(stderrFd, "r");
 
-    // Read output (this may block until the process finishes or produces data)
-    // We read in a non-timeout manner here; the timeout is enforced via
-    // WaitForSingleObject below.
-    result.stdout_output = readStream(stdoutFile, maxOutputBytes);
-    result.stderr_output = readStream(stderrFile, maxOutputBytes);
+    // Read pipes in background threads while waiting for process with timeout.
+    // This avoids deadlock: reading before waiting blocks if child keeps stdout
+    // open; waiting before reading loses output if pipe buffer fills.
+    std::string capturedStdout, capturedStderr;
 
-    if (stdoutFile) std::fclose(stdoutFile);  // also closes stdoutReadH via fd
-    else CloseHandle(stdoutReadH);
-
-    if (stderrFile) std::fclose(stderrFile);  // also closes stderrReadH via fd
-    else CloseHandle(stderrReadH);
+    std::thread convergentStdout([&]() {
+        capturedStdout = readStream(stdoutFile, maxOutputBytes);
+    });
+    std::thread convergentStderr([&]() {
+        capturedStderr = readStream(stderrFile, maxOutputBytes);
+    });
 
     // Wait for process with timeout
     DWORD waitResult = WaitForSingleObject(pi.hProcess,
@@ -348,6 +352,19 @@ ProcessResult runWithTimeout(const std::string& command,
         GetExitCodeProcess(pi.hProcess, &exitCodeDw);
         result.exitCode = static_cast<int>(exitCodeDw);
     }
+
+    // Wait for reader threads to finish (process is dead, pipes will EOF)
+    convergentStdout.join();
+    convergentStderr.join();
+
+    result.stdout_output = std::move(capturedStdout);
+    result.stderr_output = std::move(capturedStderr);
+
+    if (stdoutFile) std::fclose(stdoutFile);
+    else CloseHandle(stdoutReadH);
+
+    if (stderrFile) std::fclose(stderrFile);
+    else CloseHandle(stderrReadH);
 
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
