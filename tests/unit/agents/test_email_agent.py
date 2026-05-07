@@ -1,0 +1,247 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""
+Construction + tool-registry tests for ``EmailTriageAgent``.
+
+These tests exercise the agent class WITHOUT making any network calls or
+LLM requests — they construct the agent against an injected
+``FakeGmailBackend`` and assert the expected tool surface, the registry
+declarations, and AC3 enforcement at the unit level.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+# Make tests.fixtures.email importable.
+# parents[0]=agents, [1]=unit, [2]=tests, [3]=repo-root
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from gaia.agents.email.agent import EmailTriageAgent  # noqa: E402
+from gaia.agents.email.config import EmailAgentConfig  # noqa: E402
+from gaia.agents.email.scopes import AGENT_NAMESPACED_ID, ALL_SCOPES  # noqa: E402
+from tests.fixtures.email.fake_gmail import (  # noqa: E402
+    FakeCalendarBackend,
+    FakeGmailBackend,
+)
+
+
+@pytest.fixture
+def fake_gmail():
+    fixture_path = _REPO_ROOT / "tests" / "fixtures" / "email" / "_stub_inbox.mbox"
+    assert fixture_path.exists(), fixture_path
+    return FakeGmailBackend(fixture_path)
+
+
+@pytest.fixture
+def fake_calendar():
+    return FakeCalendarBackend()
+
+
+@pytest.fixture
+def agent(fake_gmail, fake_calendar, tmp_path):
+    """Construct an ``EmailTriageAgent`` against fake backends.
+
+    ``patch`` the LLM-side ``AgentSDK`` so we don't connect to Lemonade.
+    """
+    cfg = EmailAgentConfig(
+        gmail_backend=fake_gmail,
+        calendar_backend=fake_calendar,
+        db_path=str(tmp_path / "state.db"),
+        silent_mode=True,
+        debug=False,
+    )
+    with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+        mock_sdk.return_value = MagicMock()
+        a = EmailTriageAgent(config=cfg)
+        # Expose the mock so tests can introspect.
+        a._mock_chat = mock_sdk.return_value
+    yield a
+    a.close_db()
+
+
+class TestConstruction:
+    def test_can_construct_with_fake_backends(self, agent):
+        assert agent is not None
+        assert agent.AGENT_ID == "email"
+        assert agent.AGENT_NAME == "Email Triage"
+
+    def test_namespaced_id_constant(self):
+        assert AGENT_NAMESPACED_ID == "builtin:email"
+
+    def test_required_connectors_well_formed(self):
+        reqs = EmailTriageAgent.REQUIRED_CONNECTORS
+        assert len(reqs) == 1
+        google = reqs[0]
+        assert google.connector_id == "google"
+        # Tuple form (frozen dataclass normalizes).
+        assert google.scopes == ALL_SCOPES
+        assert google.reason  # non-empty
+
+    def test_response_mode_is_conversational(self, agent):
+        assert agent.response_mode == "conversational"
+
+
+class TestToolRegistry:
+    """The agent must register all 30+ tools from the five mixins."""
+
+    EXPECTED_TOOLS = {
+        # Read
+        "list_inbox",
+        "get_message",
+        "get_thread",
+        "search_messages",
+        "list_labels",
+        "triage_inbox",
+        # Organize
+        "archive_message",
+        "mark_read",
+        "mark_unread",
+        "add_star",
+        "remove_star",
+        "label_message",
+        "move_to_label",
+        # Reply / send / forward
+        "draft_reply",
+        "draft_forward",
+        "send_draft",
+        "send_now",
+        "forward_message",
+        # Delete
+        "trash_message",
+        "restore_message",
+        "permanent_delete",
+        # Calendar
+        "list_calendar_events",
+        "accept_invite",
+        "decline_invite",
+        "create_event_from_email",
+    }
+
+    def test_every_expected_tool_is_registered(self, agent):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        registered = set(_TOOL_REGISTRY.keys())
+        missing = self.EXPECTED_TOOLS - registered
+        assert not missing, f"missing tools: {missing}"
+
+    def test_no_unexpected_tool_set(self, agent):
+        # Sanity — the tool set should be exactly the expected set
+        # (allow for atomic subset variations later by checking subset
+        # rather than equality).
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        registered = set(_TOOL_REGISTRY.keys())
+        # Every registered tool should match an expected one — guard
+        # against accidentally registering a tool that bypasses our
+        # confirmation logic.
+        unexpected = registered - self.EXPECTED_TOOLS
+        assert not unexpected, f"unexpected tools registered: {unexpected}"
+
+
+class TestConfirmationGating:
+    """Destructive tools must be in ``TOOLS_REQUIRING_CONFIRMATION``."""
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "send_draft",
+            "send_now",
+            "forward_message",
+            "permanent_delete",
+            "accept_invite",
+            "decline_invite",
+            "create_event_from_email",
+        ],
+    )
+    def test_destructive_tool_is_confirmation_gated(self, tool_name):
+        from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
+
+        assert tool_name in TOOLS_REQUIRING_CONFIRMATION
+
+
+class TestAC3LocalLLMOnly:
+    """Unit-level proof that we never construct against a cloud LLM."""
+
+    def test_constructed_agent_has_no_cloud_llm_flags(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        """We never pass ``use_claude=True`` / ``use_chatgpt=True`` to the
+        parent ``Agent``. We can prove that by inspecting the kwargs the
+        ``AgentSDK`` constructor was called with.
+        """
+        cfg = EmailAgentConfig(
+            gmail_backend=fake_gmail,
+            calendar_backend=fake_calendar,
+            db_path=str(tmp_path / "state.db"),
+            silent_mode=True,
+        )
+        with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+            mock_sdk.return_value = MagicMock()
+            EmailTriageAgent(config=cfg)
+            call_kwargs = mock_sdk.call_args.kwargs
+            assert "use_claude" not in call_kwargs or call_kwargs["use_claude"] is False
+            assert (
+                "use_chatgpt" not in call_kwargs or call_kwargs["use_chatgpt"] is False
+            )
+
+    def test_remote_base_url_rejected_at_construction(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        from gaia.agents.email.config import ConfigurationError
+
+        cfg = EmailAgentConfig(
+            base_url="https://api.openai.com/v1",
+            gmail_backend=fake_gmail,
+            calendar_backend=fake_calendar,
+            db_path=str(tmp_path / "state.db"),
+        )
+        with pytest.raises(ConfigurationError) as exc:
+            EmailTriageAgent(config=cfg)
+        assert "AC3" in str(exc.value)
+
+
+class TestRegistryIntegration:
+    def test_email_agent_creatable_via_registry(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        from gaia.agents.registry import AgentRegistry
+
+        reg = AgentRegistry()
+        reg._register_builtin_agents()
+        assert "email" in {r.id for r in reg.list()}
+
+        with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+            mock_sdk.return_value = MagicMock()
+            agent = reg.create_agent(
+                "email",
+                gmail_backend=fake_gmail,
+                calendar_backend=fake_calendar,
+                db_path=str(tmp_path / "state.db"),
+                silent_mode=True,
+            )
+            assert isinstance(agent, EmailTriageAgent)
+            agent.close_db()
+
+    def test_connectors_demo_required_connections_are_proper_objects(self):
+        """#962 follow-up: the connectors_demo entry must use
+        ``ConnectorRequirement`` objects, not bare strings.
+        """
+        from gaia.agents.registry import AgentRegistry
+        from gaia.connectors.providers.base import ConnectorRequirement
+
+        reg = AgentRegistry()
+        reg._register_builtin_agents()
+        demo = reg.get("connectors-demo")
+        if demo is None:
+            pytest.skip("connectors-demo not loaded")
+        for r in demo.required_connections:
+            assert isinstance(
+                r, ConnectorRequirement
+            ), f"connectors_demo declared bare-string requirement: {r!r}"

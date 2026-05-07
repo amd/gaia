@@ -1354,9 +1354,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 {messages.map((msg, idx) => {
                     // Show a solid terminal cursor on the last assistant message
                     // (only when not actively streaming — the streaming bubble has its own cursor)
-                    const isLastAssistant = !isStreaming && !streamEnding
-                        && msg.role === 'assistant'
-                        && messages.slice(idx + 1).every((m) => m.role !== 'assistant');
+                    const isLastAssistant = false; // cursor only during streaming, not on completed messages
                     // During stream-ending, skip rendering the just-completed
                     // assistant message entirely — the streaming bubble shows it.
                     // This prevents the flash/jump when transitioning.
