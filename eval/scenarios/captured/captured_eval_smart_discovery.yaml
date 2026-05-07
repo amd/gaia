@@ -1,6 +1,7 @@
 id: captured_eval_smart_discovery
 name: "Captured: Smart Document Discovery"
 category: captured
+agent_type: file
 description: 'Captured from session: Eval: smart_discovery'
 persona: casual_user
 setup:

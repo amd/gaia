@@ -1,6 +1,7 @@
 id: multi_step_plan
 name: "Multi-Step Plan -- Complex Request"
 category: tool_selection
+agent_type: doc
 severity: medium
 description: |
   User makes a compound request requiring the agent to retrieve multiple facts

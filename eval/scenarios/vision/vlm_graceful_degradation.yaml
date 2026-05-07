@@ -1,6 +1,7 @@
 id: vlm_graceful_degradation
 name: "VLM Tool -- Graceful Degradation"
 category: vision
+agent_type: chat
 severity: medium
 description: |
   Tests that the ChatAgent's VLM tools (analyze_image, answer_question_about_image)

@@ -1,6 +1,7 @@
 id: vague_request_clarification
 name: "Vague Request -- Clarification"
 category: error_recovery
+agent_type: doc
 severity: medium
 description: |
   Two documents are indexed. User makes an ambiguous request ("summarize the

@@ -1,6 +1,7 @@
 id: cross_turn_file_recall
 name: "Cross-Turn File Recall"
 category: context_retention
+agent_type: doc
 severity: critical
 description: |
   User indexes a document in Turn 1, then asks about its content in Turn 2

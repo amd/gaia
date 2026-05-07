@@ -1,6 +1,7 @@
 id: apache_license_20
 name: "Apache License 2.0 Legal Clause Lookup"
 category: real_world
+agent_type: doc
 severity: medium
 description: |
   Agent must retrieve precise legal clause details from the Apache License 2.0 text.

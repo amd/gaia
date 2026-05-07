@@ -1,6 +1,7 @@
 id: fed_rate_nov2024
 name: "Federal Reserve Rate Decision November 2024"
 category: real_world
+agent_type: doc
 severity: high
 description: |
   Agent must retrieve precise monetary policy details from the November 2024 FOMC

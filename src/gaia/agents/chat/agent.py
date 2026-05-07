@@ -75,8 +75,12 @@ class ChatAgentConfig:
     allowed_paths: Optional[List[str]] = None
 
     # File System settings
-    enable_filesystem: bool = False  # Enhanced file system tools (disabled until agent split)
-    enable_scratchpad: bool = False  # Data scratchpad for analysis (disabled until agent split)
+    enable_filesystem: bool = (
+        False  # Enhanced file system tools (disabled until agent split)
+    )
+    enable_scratchpad: bool = (
+        False  # Data scratchpad for analysis (disabled until agent split)
+    )
     filesystem_index_path: str = "~/.gaia/file_index.db"
     scratchpad_db_path: str = "~/.gaia/scratchpad.db"
     filesystem_scan_depth: int = 3  # Default scan depth (conservative)
@@ -93,6 +97,16 @@ class ChatAgentConfig:
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Stable Diffusion image generation
+
+    # Prompt profile controls which tools and prompt sections are included.
+    # Profiles keep the system prompt lean for task-specific agents:
+    #   "chat"  — basic conversation only (personality, greetings, no RAG/file tools)
+    #   "doc"   — document Q&A with RAG tools + hallucination prevention
+    #   "file"  — file system operations, search, analysis
+    #   "data"  — data analysis, CSV, tables (scratchpad)
+    #   "web"   — web research, page fetching
+    #   "full"  — all tools and prompt sections (backward-compatible default)
+    prompt_profile: str = "full"
 
 
 class ChatAgent(
@@ -1059,7 +1073,44 @@ NOTE: Web browsing and search ARE supported via `fetch_page`, `search_web`, and 
   AFTER FAILURE: If generate_image returns an error, respond in 1-2 sentences: state it is unavailable and optionally mention enabling --sd. DO NOT apologize, DO NOT explain what you "would have done". Example: "Image generation is not available in this session — start GAIA with the --sd flag to enable it."
 """
 
-        prompt = (
+        # Assemble prompt based on profile
+        profile = getattr(self.config, "prompt_profile", "full")
+
+        if profile == "chat":
+            # Minimal: personality only, no tools
+            return base_prompt
+
+        if profile == "doc":
+            # Document Q&A: RAG tools + hallucination prevention
+            return (
+                base_prompt
+                + indexed_docs_section
+                + tool_rules
+                + discovery_rules
+                + discovery_rules_tail
+                + rag_query_rules
+            )
+
+        if profile == "file":
+            # File operations: file system + search + discovery
+            return (
+                base_prompt
+                + tool_rules
+                + discovery_rules
+                + filesystem_section
+                + discovery_rules_tail
+            )
+
+        if profile == "data":
+            # Data analysis: scratchpad + file tools
+            return base_prompt + tool_rules + scratchpad_section + data_file_rules
+
+        if profile == "web":
+            # Web research: browser tools
+            return base_prompt + browser_section
+
+        # "full" — all sections (backward-compatible default)
+        return (
             base_prompt
             + indexed_docs_section
             + tool_rules
@@ -1071,8 +1122,6 @@ NOTE: Web browsing and search ARE supported via `fetch_page`, `search_web`, and 
             + rag_query_rules
             + data_file_rules
         )
-
-        return prompt
 
     def _create_console(self):
         """Create console for chat agent."""
@@ -1289,125 +1338,165 @@ NOTE: Web browsing and search ARE supported via `fetch_page`, `search_web`, and 
             logger.warning(f"Auto-save failed: {e}")
 
     def _register_tools(self) -> None:
-        """Register chat agent tools from mixins."""
+        """Register chat agent tools from mixins based on prompt_profile."""
         from gaia.agents.base.tools import tool
 
-        # Register tools from mixins
-        self.register_rag_tools()
-        self.register_file_tools()
+        profile = getattr(self.config, "prompt_profile", "full")
+
+        # "chat" profile: no tools — just personality/conversation
+        if profile == "chat":
+            # Minimal: only shell for system queries
+            self.register_shell_tools()
+            self._register_external_tools_conditional()
+            return
+
+        # All other profiles get at least shell tools
         self.register_shell_tools()
-        self.register_filesystem_tools()  # File system navigation & search
-        self.register_scratchpad_tools()  # Structured data analysis
-        self.register_browser_tools()  # Web browsing, search, download
-        self.register_file_search_tools()  # Shared file search tools
-        self.register_file_io_tools()  # File read/write/edit (FileIOToolsMixin)
-        self.register_screenshot_tools()  # Screenshot capture (ScreenshotToolsMixin)
+
+        if profile in ("doc", "full"):
+            self.register_rag_tools()
+            # Doc profile needs file search for smart discovery workflow
+            self.register_file_tools()
+            self.register_file_search_tools()
+
+        if profile in ("file", "full"):
+            self.register_file_tools()
+            self.register_filesystem_tools()
+            self.register_file_search_tools()
+            self.register_file_io_tools()
+
+        if profile in ("data", "full"):
+            self.register_scratchpad_tools()
+            if profile == "data":
+                # Data profile also needs file tools to find/read data files
+                self.register_file_tools()
+                self.register_file_search_tools()
+                self.register_file_io_tools()
+
+        if profile in ("web", "full"):
+            self.register_browser_tools()
+
+        if profile == "full":
+            self.register_screenshot_tools()
         # Remove CodeAgent-specific FileIO tools — ChatAgent only needs the 3 generic ones.
-        # write_python_file, edit_python_file, search_code, generate_diff, write_markdown_file,
-        # update_gaia_md, replace_function are AST/code tools with ~635 tokens of description
-        # that waste context and cause LLM confusion when answering document Q&A questions.
-        from gaia.agents.base.tools import _TOOL_REGISTRY
+        if profile in ("file", "data", "full"):
+            from gaia.agents.base.tools import _TOOL_REGISTRY
 
-        _chat_only_fileio = {
-            "write_python_file",
-            "edit_python_file",
-            "search_code",
-            "generate_diff",
-            "write_markdown_file",
-            "update_gaia_md",
-            "replace_function",
-        }
-        for _name in _chat_only_fileio:
-            _TOOL_REGISTRY.pop(_name, None)
-        self._register_external_tools_conditional()  # Web/doc search (if backends available)
+            _chat_only_fileio = {
+                "write_python_file",
+                "edit_python_file",
+                "search_code",
+                "generate_diff",
+                "write_markdown_file",
+                "update_gaia_md",
+                "replace_function",
+            }
+            for _name in _chat_only_fileio:
+                _TOOL_REGISTRY.pop(_name, None)
 
-        # Inline list_files — only the safe subset of ProjectManagementMixin
-        @tool
-        def list_files(path: str = ".") -> dict:
-            """List files and directories in a path.
+        self._register_external_tools_conditional()
 
-            Args:
-                path: Directory path to list (default: current directory)
+        # Inline list_files — only for profiles that need file operations
+        if profile in ("file", "data", "full"):
 
-            Returns:
-                Dictionary with files, directories, and total count
-            """
-            try:
-                items = os.listdir(path)
-                files = sorted(
-                    i for i in items if os.path.isfile(os.path.join(path, i))
+            @tool
+            def list_files(path: str = ".") -> dict:
+                """List files and directories in a path.
+
+                Args:
+                    path: Directory path to list (default: current directory)
+
+                Returns:
+                    Dictionary with files, directories, and total count
+                """
+                try:
+                    items = os.listdir(path)
+                    files = sorted(
+                        i for i in items if os.path.isfile(os.path.join(path, i))
+                    )
+                    dirs = sorted(
+                        i for i in items if os.path.isdir(os.path.join(path, i))
+                    )
+                    return {
+                        "status": "success",
+                        "path": path,
+                        "files": files,
+                        "directories": dirs,
+                        "total": len(items),
+                    }
+                except FileNotFoundError:
+                    return {
+                        "status": "error",
+                        "error": f"Directory not found: {path}",
+                    }
+                except PermissionError:
+                    return {
+                        "status": "error",
+                        "error": f"Permission denied: {path}",
+                    }
+                except Exception as e:
+                    return {"status": "error", "error": str(e)}
+
+            @tool
+            def execute_python_file(
+                file_path: str, args: str = "", timeout: int = 60
+            ) -> dict:
+                """Execute a Python file as a subprocess and capture its output.
+
+                Args:
+                    file_path: Path to the .py file to run
+                    args: Space-separated CLI arguments to pass to the script
+                    timeout: Max seconds to wait (default 60)
+
+                Returns:
+                    Dictionary with stdout, stderr, return_code, and duration
+                """
+                import shlex
+                import subprocess
+                import sys
+                import time
+
+                if not self.path_validator.is_path_allowed(file_path):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {file_path}",
+                    }
+
+                p = Path(file_path)
+                if not p.exists():
+                    return {
+                        "status": "error",
+                        "error": f"File not found: {file_path}",
+                    }
+                cmd = [sys.executable, str(p.resolve())] + (
+                    shlex.split(args) if args.strip() else []
                 )
-                dirs = sorted(i for i in items if os.path.isdir(os.path.join(path, i)))
-                return {
-                    "status": "success",
-                    "path": path,
-                    "files": files,
-                    "directories": dirs,
-                    "total": len(items),
-                }
-            except FileNotFoundError:
-                return {"status": "error", "error": f"Directory not found: {path}"}
-            except PermissionError:
-                return {"status": "error", "error": f"Permission denied: {path}"}
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
-
-        # Inline execute_python_file — safe subset of TestingMixin with path validation.
-        # Omits run_tests (CodeAgent-specific) and adds allowed_paths guard.
-        @tool
-        def execute_python_file(
-            file_path: str, args: str = "", timeout: int = 60
-        ) -> dict:
-            """Execute a Python file as a subprocess and capture its output.
-
-            Args:
-                file_path: Path to the .py file to run
-                args: Space-separated CLI arguments to pass to the script
-                timeout: Max seconds to wait (default 60)
-
-            Returns:
-                Dictionary with stdout, stderr, return_code, and duration
-            """
-            import shlex
-            import subprocess
-            import sys
-            import time
-
-            if not self.path_validator.is_path_allowed(file_path):
-                return {"status": "error", "error": f"Access denied: {file_path}"}
-
-            p = Path(file_path)
-            if not p.exists():
-                return {"status": "error", "error": f"File not found: {file_path}"}
-            cmd = [sys.executable, str(p.resolve())] + (
-                shlex.split(args) if args.strip() else []
-            )
-            start = time.monotonic()
-            try:
-                r = subprocess.run(
-                    cmd,
-                    cwd=str(p.parent.resolve()),
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    check=False,
-                )
-                return {
-                    "status": "success",
-                    "stdout": r.stdout[:8000],
-                    "stderr": r.stderr[:2000],
-                    "return_code": r.returncode,
-                    "has_errors": r.returncode != 0,
-                    "duration_seconds": round(time.monotonic() - start, 2),
-                }
-            except subprocess.TimeoutExpired:
-                return {
-                    "status": "error",
-                    "error": f"Timed out after {timeout}s",
-                    "has_errors": True,
-                }
-            except Exception as e:
-                return {"status": "error", "error": str(e), "has_errors": True}
+                start = time.monotonic()
+                try:
+                    r = subprocess.run(
+                        cmd,
+                        cwd=str(p.parent.resolve()),
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        check=False,
+                    )
+                    return {
+                        "status": "success",
+                        "stdout": r.stdout[:8000],
+                        "stderr": r.stderr[:2000],
+                        "return_code": r.returncode,
+                        "has_errors": r.returncode != 0,
+                        "duration_seconds": round(time.monotonic() - start, 2),
+                    }
+                except subprocess.TimeoutExpired:
+                    return {
+                        "status": "error",
+                        "error": f"Timed out after {timeout}s",
+                        "has_errors": True,
+                    }
+                except Exception as e:
+                    return {"status": "error", "error": str(e), "has_errors": True}
 
         # VLM tools — analyze_image, answer_question_about_image
         # Registers via init_vlm(); gracefully skipped if VLM model not loaded.
@@ -1434,80 +1523,86 @@ NOTE: Web browsing and search ARE supported via `fetch_page`, `search_web`, and 
                 )
 
         # ── Phase 3: Web & System tools ──────────────────────────────────────────
+        # Only register web tools for profiles that should browse the internet.
+        # Doc/file/data profiles should NOT have fetch_webpage to avoid confusing
+        # the LLM into web-browsing when it should use RAG.
+        _web_profiles = ("web", "full")
 
-        @tool
-        def open_url(url: str) -> dict:
-            """Open a URL in the system's default web browser.
+        if profile in _web_profiles:
 
-            Args:
-                url: The URL to open (must start with http:// or https://)
+            @tool
+            def open_url(url: str) -> dict:
+                """Open a URL in the system's default web browser.
 
-            Returns:
-                Dictionary with status and confirmation message
-            """
-            import webbrowser
+                Args:
+                    url: The URL to open (must start with http:// or https://)
 
-            if not url.startswith(("http://", "https://")):
-                return {
-                    "status": "error",
-                    "error": "URL must start with http:// or https://",
-                }
-            try:
-                webbrowser.open(url)
-                return {
-                    "status": "success",
-                    "message": f"Opened {url} in the default browser",
-                }
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
+                Returns:
+                    Dictionary with status and confirmation message
+                """
+                import webbrowser
 
-        @tool
-        def fetch_webpage(url: str, extract_text: bool = True) -> dict:
-            """Fetch the content of a webpage and optionally extract readable text.
+                if not url.startswith(("http://", "https://")):
+                    return {
+                        "status": "error",
+                        "error": "URL must start with http:// or https://",
+                    }
+                try:
+                    webbrowser.open(url)
+                    return {
+                        "status": "success",
+                        "message": f"Opened {url} in the default browser",
+                    }
+                except Exception as e:
+                    return {"status": "error", "error": str(e)}
 
-            Args:
-                url: The URL to fetch (must start with http:// or https://)
-                extract_text: If True, strip HTML tags and return plain text (default: True)
+            @tool
+            def fetch_webpage(url: str, extract_text: bool = True) -> dict:
+                """Fetch the content of a webpage and optionally extract readable text.
 
-            Returns:
-                Dictionary with status, content (or html), and url
-            """
-            import httpx
+                Args:
+                    url: The URL to fetch (must start with http:// or https://)
+                    extract_text: If True, strip HTML tags and return plain text (default: True)
 
-            if not url.startswith(("http://", "https://")):
-                return {
-                    "status": "error",
-                    "error": "URL must start with http:// or https://",
-                }
-            try:
-                resp = httpx.get(url, timeout=15, follow_redirects=True)
-                resp.raise_for_status()
-                if extract_text:
-                    try:
-                        from bs4 import BeautifulSoup
+                Returns:
+                    Dictionary with status, content (or html), and url
+                """
+                import httpx
 
-                        text = BeautifulSoup(resp.text, "html.parser").get_text(
-                            separator="\n", strip=True
-                        )
-                    except ImportError:
-                        import re
+                if not url.startswith(("http://", "https://")):
+                    return {
+                        "status": "error",
+                        "error": "URL must start with http:// or https://",
+                    }
+                try:
+                    resp = httpx.get(url, timeout=15, follow_redirects=True)
+                    resp.raise_for_status()
+                    if extract_text:
+                        try:
+                            from bs4 import BeautifulSoup
 
-                        text = re.sub(r"<[^>]+>", "", resp.text)
-                        text = re.sub(r"\s{3,}", "\n\n", text).strip()
+                            text = BeautifulSoup(resp.text, "html.parser").get_text(
+                                separator="\n", strip=True
+                            )
+                        except ImportError:
+                            import re
+
+                            text = re.sub(r"<[^>]+>", "", resp.text)
+                            text = re.sub(r"\s{3,}", "\n\n", text).strip()
+                        return {
+                            "status": "success",
+                            "url": url,
+                            "content": text[:8000],
+                            "truncated": len(text) > 8000,
+                        }
                     return {
                         "status": "success",
                         "url": url,
-                        "content": text[:8000],
-                        "truncated": len(text) > 8000,
+                        "html": resp.text[:8000],
+                        "truncated": len(resp.text) > 8000,
                     }
-                return {
-                    "status": "success",
-                    "url": url,
-                    "html": resp.text[:8000],
-                    "truncated": len(resp.text) > 8000,
-                }
-            except Exception as e:
-                return {"status": "error", "url": url, "error": str(e)}
+                except Exception as e:
+                    return {"status": "error", "url": url, "error": str(e)}
 
         @tool
         def get_system_info() -> dict:
