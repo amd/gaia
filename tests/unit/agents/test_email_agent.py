@@ -95,7 +95,7 @@ class TestConstruction:
         now handled by the backend SSE hook (``SSEOutputHandler``
         intercepts ``pre_scan_inbox`` results and injects the
         ``email_pre_scan`` fenced block deterministically — see
-        sse_handler.py and issue #997 for the planned multi-model fix
+        sse_handler.py and issue #1000 for the planned multi-model fix
         that replaces the hook), so the prompt only needs to name the
         tool. Assert that name is present so a future prompt edit
         doesn't silently drop the routing instruction.

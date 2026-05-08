@@ -1720,7 +1720,7 @@ class TestMCPToolVisualization:
 
 
 # ===========================================================================
-# Structured-render injection (HACK — see issue #997)
+# Structured-render injection (HACK — see issue #1000)
 # ===========================================================================
 
 
@@ -1730,7 +1730,7 @@ class TestStructuredRenderInjection:
 
     This is the workaround for chat-tuned models that paraphrase the JSON
     envelope into prose instead of emitting a fenced block (Gemma-4-E4B
-    observed). Removing the hack requires multi-model support — see #997.
+    observed). Removing the hack requires multi-model support — see #1000.
     """
 
     def _make_envelope(self):

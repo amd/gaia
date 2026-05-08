@@ -113,7 +113,7 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_result: bool = False
         self._confirm_id: Optional[str] = None
         self._tool_start_time: Optional[float] = None
-        # HACK — see issue #997 for the proper fix.
+        # HACK — see issue #1000 for the proper fix.
         # Buffer of structured tool-result payloads we want to inject as fenced
         # code blocks into the assistant's final answer, keyed by language tag.
         # Today this is populated only for ``pre_scan_inbox`` → ``email_pre_scan``
@@ -121,7 +121,7 @@ class SSEOutputHandler(OutputHandler):
         # echoing it verbatim, so the frontend's structured-payload renderer never
         # mounts. Removing this buffer cleanly requires multi-model support so a
         # tool-use-tuned model handles the structured emission while a chat model
-        # handles the prose summary — tracked in #997.
+        # handles the prose summary — tracked in #1000.
         self._pending_render_payloads: list[tuple[str, dict]] = []
 
     def _emit(self, event: Dict[str, Any]):
@@ -254,7 +254,7 @@ class SSEOutputHandler(OutputHandler):
             )
             return
 
-        # HACK — see issue #997 for the proper fix.
+        # HACK — see issue #1000 for the proper fix.
         # Capture structured payloads that the frontend wants to render as
         # typed cards. Today only ``pre_scan_inbox`` → ``email_pre_scan`` is
         # supported. The system prompt instructs the LLM to echo this
@@ -263,7 +263,7 @@ class SSEOutputHandler(OutputHandler):
         # the card never mounts. Detect the envelope here, hold it on
         # ``self._pending_render_payloads``, and inject a fenced block into
         # the final answer below — deterministic, model-independent.
-        # Removing this hack requires the multi-model split tracked in #997.
+        # Removing this hack requires the multi-model split tracked in #1000.
         self._capture_render_payload(data)
 
         # For tool results, provide a detailed summary
@@ -404,7 +404,7 @@ class SSEOutputHandler(OutputHandler):
     def stop_progress(self):
         pass  # No-op for SSE - frontend manages its own spinners
 
-    # === Structured-render injection (HACK — see issue #997) ===
+    # === Structured-render injection (HACK — see issue #1000) ===
 
     # Mapping from tool name to the language-tag the frontend's ``pre``
     # override matches (``MessageBubble.tsx`` ``KNOWN_CODE_LANGS`` set).
@@ -420,7 +420,7 @@ class SSEOutputHandler(OutputHandler):
         paraphrase the ``pre_scan_inbox`` envelope into prose instead of
         echoing it as a fenced code block. When the LLM-relay path is
         replaced with a tool-use-tuned model under multi-model parallelism
-        (#997), this method becomes a no-op and the buffer can be removed
+        (#1000), this method becomes a no-op and the buffer can be removed
         with the rest of the hack.
         """
         tool = self._last_tool_name or ""
@@ -489,7 +489,7 @@ class SSEOutputHandler(OutputHandler):
             answer = _TOOL_CALL_JSON_SUB_RE.sub("", answer)
             answer = _THOUGHT_JSON_SUB_RE.sub("", answer)
             answer = answer.strip()
-        # HACK — see issue #997 for the proper fix.
+        # HACK — see issue #1000 for the proper fix.
         # Prepend any pending structured-render payloads as fenced code
         # blocks. Drains the buffer so each pre-scan turn renders exactly
         # one card. The cleaned LLM prose follows underneath so the user
