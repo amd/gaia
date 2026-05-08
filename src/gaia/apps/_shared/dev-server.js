@@ -37,10 +37,20 @@ class DevServer {
   }
 
   initialize() {
-    // Simple in-memory rate limiter (no external dependencies)
+    // Simple in-memory rate limiter (no external dependencies).
+    // A periodic GC sweep evicts stale entries so the Map can't grow
+    // unbounded under IP-rotation traffic.
     const rateLimitStore = new Map();
     const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
     const RATE_LIMIT_MAX = 100; // max requests per window
+    const RATE_LIMIT_GC_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+    setInterval(() => {
+      const now = Date.now();
+      for (const [ip, record] of rateLimitStore) {
+        if (now > record.resetAt) rateLimitStore.delete(ip);
+      }
+    }, RATE_LIMIT_GC_INTERVAL).unref();
 
     this.app.use((req, res, next) => {
       const ip = req.ip || req.connection.remoteAddress;

@@ -268,7 +268,18 @@ class ScratchpadService(DatabaseMixin):
         # Note: column names like ``created_at`` tokenize to {CREATED, AT}, so
         # ``CREATE`` itself is *not* a false-positive — safe to include.
         scan_target = _strip_sql_string_literals(upper)
-        dangerous = {"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "ATTACH"}
+        dangerous = {
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "DROP",
+            "ALTER",
+            "CREATE",
+            "ATTACH",
+            "PRAGMA",
+            "VACUUM",
+            "REINDEX",
+        }
         tokens = set(re.findall(r"\b[A-Z]+\b", scan_target))
         hits = tokens & dangerous
         if hits:
@@ -342,6 +353,15 @@ class ScratchpadService(DatabaseMixin):
         for t in tables:
             self.execute(f"DROP TABLE IF EXISTS {t['name']}")
             count += 1
+
+        # Reclaim disk space — without VACUUM, SQLite keeps the freed
+        # pages on disk and get_size_bytes (row-count estimate) may
+        # report 0 while the file is still large.
+        if count > 0:
+            try:
+                self._db.execute("VACUUM")
+            except Exception as exc:
+                log.debug("VACUUM after clear_all failed (%s); non-critical", exc)
 
         log.info(f"Cleared {count} scratchpad tables")
         return f"Dropped {count} scratchpad table(s)."

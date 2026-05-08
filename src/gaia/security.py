@@ -119,6 +119,10 @@ def _get_blocked_directories() -> Set[str]:
                 "/proc",
                 "/dev",
                 "/var/run",
+                "/var/log",
+                "/var/lib",
+                "/var/spool",
+                "/opt",
                 os.path.join(home, ".ssh"),
                 os.path.join(home, ".gnupg"),
                 "/Library/LaunchDaemons",
@@ -201,10 +205,22 @@ class PathValidator:
         self._load_persisted_paths()
 
     def _setup_audit_logging(self):
-        """Configure audit logging to file for write operations."""
+        """Configure audit logging to file for write operations.
+
+        Uses ``RotatingFileHandler`` (10 MB x 3 backups) so the audit
+        log cannot grow unbounded on a developer's machine over months
+        of use.  Total cap: ~40 MB of audit history.
+        """
+        from logging.handlers import RotatingFileHandler
+
         audit_log_file = self.cache_dir / "file_audit.log"
         if not audit_logger.handlers:
-            handler = logging.FileHandler(str(audit_log_file), encoding="utf-8")
+            handler = RotatingFileHandler(
+                str(audit_log_file),
+                maxBytes=10 * 1024 * 1024,  # 10 MB per file
+                backupCount=3,
+                encoding="utf-8",
+            )
             handler.setFormatter(
                 logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
             )

@@ -12,6 +12,7 @@ search the web, and download files for local analysis.
 
 import json
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -257,8 +258,6 @@ class BrowserToolsMixin:
 
             # Validate save path with PathValidator if available
             if hasattr(mixin, "_path_validator") and mixin._path_validator:
-                from pathlib import Path
-
                 resolved_dir = str(Path(save_to).expanduser().resolve())
                 # Allowlist check — may prompt the user in an interactive TTY;
                 # auto-denies in Agent UI / API server contexts (see #495 S1).
@@ -285,6 +284,25 @@ class BrowserToolsMixin:
             except Exception as e:
                 logger.error(f"Error downloading {url}: {e}")
                 return f"Error downloading file: {e}"
+
+            # Post-download: check the *resolved file path* (not just the
+            # directory) against the sensitive-filename guardrail. The
+            # directory check above catches blocked dirs, but the final
+            # filename (from Content-Disposition or URL) could be something
+            # like `credentials.json` or `.env` that is_write_blocked
+            # would reject for write_file.  Delete the file if blocked.
+            if hasattr(mixin, "_path_validator") and mixin._path_validator:
+                saved_path = result.get("path", "")
+                is_blocked, reason = mixin._path_validator.is_write_blocked(saved_path)
+                if is_blocked:
+                    try:
+                        Path(saved_path).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    return (
+                        f"Error: Downloaded file blocked by security policy: "
+                        f"{reason}"
+                    )
 
             # Format file size
             size_bytes = result["size"]
