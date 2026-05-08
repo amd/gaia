@@ -84,17 +84,13 @@ class PinnedIPAdapter(HTTPAdapter):
 
         infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
         if not infos:
-            raise OSError(
-                f"getaddrinfo returned no addresses for {host}:{port}"
-            )
+            raise OSError(f"getaddrinfo returned no addresses for {host}:{port}")
 
         ip = infos[0][4][0]  # sockaddr[0] of the first result
         self._pinned_cache[key] = ip
         return ip
 
-    def send(
-        self, request: requests.PreparedRequest, **kwargs
-    ) -> requests.Response:
+    def send(self, request: requests.PreparedRequest, **kwargs) -> requests.Response:
         parsed = urlparse(request.url)
         host = parsed.hostname
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -230,13 +226,18 @@ class WebClient:
     # -- Rate Limiting -------------------------------------------------------
 
     def _rate_limit_wait(self, domain: str) -> None:
-        """Wait if needed to respect per-domain rate limit."""
-        now = time.time()
+        """Wait if needed to respect per-domain rate limit.
+
+        Uses ``time.monotonic()`` instead of ``time.time()`` so NTP
+        adjustments and DST transitions cannot produce negative elapsed
+        values or accidentally disable throttling.
+        """
+        now = time.monotonic()
         last = self._domain_last_request.get(domain, 0)
         elapsed = now - last
         if elapsed < self._rate_limit:
             time.sleep(self._rate_limit - elapsed)
-        self._domain_last_request[domain] = time.time()
+        self._domain_last_request[domain] = time.monotonic()
 
     # -- HTTP Methods --------------------------------------------------------
 
@@ -489,10 +490,17 @@ class WebClient:
             if not headers:
                 continue
 
-            # Get data rows
-            data_rows = rows[1:] if not thead else table.find("tbody", recursive=False)
-            if hasattr(data_rows, "find_all"):
-                data_rows = data_rows.find_all("tr")
+            # Get data rows — when <thead> is present, look for <tbody>; if
+            # there is no <tbody> (valid HTML — rows can be direct children of
+            # <table>), fall back to rows[1:] so we don't crash iterating None.
+            if thead:
+                tbody = table.find("tbody", recursive=False)
+                if tbody is not None:
+                    data_rows = tbody.find_all("tr")
+                else:
+                    data_rows = rows[1:]
+            else:
+                data_rows = rows[1:]
 
             table_data = []
             for row in data_rows:

@@ -31,9 +31,7 @@ def test_ip_pinning_blocks_rebind_to_private_ip(monkeypatch):
     mock_response._content = b"ok"
     mock_response.request = req
 
-    with patch.object(
-        PinnedIPAdapter.__bases__[0], "send", return_value=mock_response
-    ):
+    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_response):
         resp = adapter.send(req)
 
     # Adapter should have rewritten the URL to use the first resolved IP
@@ -65,9 +63,7 @@ def test_ip_pinning_prevents_dns_rebind(monkeypatch):
     mock_response.status_code = 200
     mock_response._content = b"ok"
 
-    with patch.object(
-        PinnedIPAdapter.__bases__[0], "send", return_value=mock_response
-    ):
+    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_response):
         # First request pins 198.51.100.7
         r1_req = requests.Request("GET", "http://example.local/first").prepare()
         mock_response.request = r1_req
