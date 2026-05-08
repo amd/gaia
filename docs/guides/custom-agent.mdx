@@ -34,23 +34,23 @@ The fastest way to create an agent is to use the built-in **Gaia Builder Agent**
     In the chat input footer, click the **+** icon (to the left of the agent picker).
     On the welcome screen, click **Build a Custom Agent**.
 
-    <Frame caption="The Build a Custom Agent entry point on the welcome screen.">
-      <img src="/assets/img/custom-agent/builder-entry-point.png" alt="Build a Custom Agent button on the welcome screen" />
-    </Frame>
+    {/* TODO(screenshot): Capture "Build a Custom Agent" button on the welcome screen.
+        Save to docs/assets/img/custom-agent/builder-entry-point.png and add a Frame
+        block here pointing at /assets/img/custom-agent/builder-entry-point.png. */}
   </Step>
   <Step title="Follow the prompts">
     The Builder Agent will greet you, ask for a name, and create your agent automatically.
 
-    <Frame caption="The Builder Agent walks you through creating a new agent.">
-      <img src="/assets/img/custom-agent/builder-conversation.png" alt="Builder Agent conversation creating a new agent" />
-    </Frame>
+    {/* TODO(screenshot): Capture the Builder Agent conversation creating a new agent.
+        Save to docs/assets/img/custom-agent/builder-conversation.png and add a Frame
+        block here pointing at /assets/img/custom-agent/builder-conversation.png. */}
   </Step>
   <Step title="Use your new agent">
     Your agent is immediately available in the agent selector dropdown — no restart needed.
 
-    <Frame caption="A newly built custom agent appears in the agent selector.">
-      <img src="/assets/img/custom-agent/agent-selector-dropdown.png" alt="New agent showing up in the agent selector dropdown" />
-    </Frame>
+    {/* TODO(screenshot): Capture the new agent appearing in the agent selector dropdown.
+        Save to docs/assets/img/custom-agent/agent-selector-dropdown.png and add a Frame
+        block here pointing at /assets/img/custom-agent/agent-selector-dropdown.png. */}
   </Step>
 </Steps>
 
@@ -163,9 +163,9 @@ A connector lets users:
 3. **Trust that secrets stay in the OS keyring**, never in plaintext
    files or env vars baked into your code.
 
-<Frame caption="Settings → Connections lets users connect Google, GitHub, and other providers once and reuse them across agents.">
-  <img src="/assets/img/custom-agent/connections-settings.png" alt="Settings page showing connector authentication options" />
-</Frame>
+{/* TODO(screenshot): Capture the Settings → Connections page showing connector
+    authentication options. Save to docs/assets/img/custom-agent/connections-settings.png
+    and add a Frame block here pointing at /assets/img/custom-agent/connections-settings.png. */}
 
 Declare what your agent needs by setting `REQUIRED_CONNECTORS` on the
 class, and call `get_credential_sync(connector_id, agent_id, required_scopes=[...])`
@@ -174,9 +174,9 @@ from inside a tool to get a usable token. The
 is a working reference for both `oauth_pkce` (Google) and `mcp_server`
 (GitHub) connectors.
 
-<Frame caption="Per-agent grant prompt — users approve the specific scopes an agent requests.">
-  <img src="/assets/img/custom-agent/connector-grant-prompt.png" alt="Per-agent connector grant prompt showing requested scopes" />
-</Frame>
+{/* TODO(screenshot): Capture the per-agent connector grant prompt showing requested
+    scopes. Save to docs/assets/img/custom-agent/connector-grant-prompt.png and add a
+    Frame block here pointing at /assets/img/custom-agent/connector-grant-prompt.png. */}
 
 <Card title="Read the connectors guide" icon="plug" href="/connectors">
   Walks through what connectors are, how the OAuth + MCP flows differ,
@@ -193,16 +193,16 @@ Custom agents can be packaged into a single `.zip` bundle and shared between mac
 
 Open **Settings → Custom Agents**.
 
-<Frame caption="Settings → Custom Agents shows installed agents with Export All and Import buttons.">
-  <img src="/assets/img/custom-agent/custom-agents-settings.png" alt="Custom Agents settings panel with Export All and Import buttons" />
-</Frame>
+{/* TODO(screenshot): Capture the Custom Agents settings panel with Export All and
+    Import buttons. Save to docs/assets/img/custom-agent/custom-agents-settings.png and
+    add a Frame block here pointing at /assets/img/custom-agent/custom-agents-settings.png. */}
 
 - **Export All** — packages every custom agent under `~/.gaia/agents/` into a single `.zip` file and downloads it. Disabled when you have no custom agents.
 - **Import** — opens a file picker for a `.zip` bundle and shows a confirmation dialog listing the agent IDs that will be installed. Imported agents register into the live registry; in most cases no restart is required.
 
-<Frame caption="Import confirmation lists the agent IDs that will be installed before any files are written.">
-  <img src="/assets/img/custom-agent/import-confirmation.png" alt="Import confirmation dialog listing agent IDs to install" />
-</Frame>
+{/* TODO(screenshot): Capture the import confirmation dialog listing agent IDs to
+    install. Save to docs/assets/img/custom-agent/import-confirmation.png and add a
+    Frame block here pointing at /assets/img/custom-agent/import-confirmation.png. */}
 
 ### From the CLI
 
