@@ -422,11 +422,13 @@ def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
 
 def build_scenario_prompt(
     scenario_data, manifest_data, backend_url, keep_sessions=False, agent_type=None
-):
+):  # pylint: disable=unused-argument
     """Build the prompt passed to `claude -p` for one scenario.
 
-    When *keep_sessions* is True, the simulator skips deleting the Agent UI
-    session after the eval so it remains available for manual inspection.
+    Sessions are always preserved (never deleted) so they remain available
+    for manual inspection in the Agent UI.  The *keep_sessions* parameter
+    is retained for backward compatibility with existing callers but has
+    no effect.
 
     When *agent_type* is set, the simulator is instructed to create sessions
     bound to that agent registration ID (e.g. "gaia-lite"). Without it, the
