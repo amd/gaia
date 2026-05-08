@@ -236,12 +236,6 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
             return "warning", f"URL error: {reason} (may block automated requests)"
         if hasattr(reason, "errno") and reason.errno in (104, 111):
             return "warning", f"URL error: {reason} (may block automated requests)"
-        # SSL handshake timeouts are transient CI network issues, not dead links.
-        # They arrive as URLError(SSLError("_ssl.c:...: The handshake operation timed out"))
-        # rather than a Python-level TimeoutError, so they must be caught here.
-        reason_str = str(reason).lower()
-        if "timed out" in reason_str or "handshake" in reason_str:
-            return "warning", f"URL error: {reason} (SSL/network timeout)"
         return "broken", f"URL error: {reason}"
     except TimeoutError:
         return "warning", "timeout"

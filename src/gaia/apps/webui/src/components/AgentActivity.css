@@ -50,7 +50,8 @@
 /* When activity is currently streaming or has errors, force full
    opacity — the user genuinely needs to see those states. */
 .agent-activity.active .agent-summary-bar,
-.agent-activity.has-errors .agent-summary-bar {
+.agent-activity.has-errors .agent-summary-bar,
+.agent-activity.has-policy-alerts .agent-summary-bar {
     opacity: 1;
 }
 /* Once expanded, the bar is the title for the panel below it — keep
@@ -82,6 +83,7 @@
 
 .agent-icon-done { color: var(--text-muted); }
 .agent-icon-error { color: var(--amd-red); }
+.agent-activity.has-policy-alerts .agent-icon-done { color: var(--accent-yellow); }
 
 /* Spinner */
 .agent-spinner-wrap {
@@ -489,6 +491,83 @@
 
 [data-theme="dark"] .flow-error {
     background: rgba(239, 68, 68, 0.06);
+}
+
+/* ── Flow: Policy Alert ─────────────────────────────────────────── */
+.flow-policy-alert {
+    padding: 8px 10px;
+    border-radius: var(--radius-xs);
+    background: rgba(245, 158, 11, 0.06);
+    border: 1px solid rgba(245, 158, 11, 0.22);
+    font-family: var(--font-mono);
+    animation: errorSlideIn 300ms var(--ease);
+}
+
+[data-theme="dark"] .flow-policy-alert {
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(245, 158, 11, 0.28);
+}
+
+.flow-policy-alert-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--accent-yellow);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+}
+
+.flow-policy-alert-title {
+    color: var(--text-primary);
+}
+
+.flow-policy-alert-decision {
+    margin-left: auto;
+    padding: 1px 6px;
+    border-radius: var(--radius-xs);
+    background: rgba(245, 158, 11, 0.14);
+    color: var(--accent-yellow);
+}
+
+.flow-policy-alert-body {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: 7px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.flow-policy-alert-line {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+}
+
+.flow-policy-alert-line span {
+    min-width: 48px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 0.5px;
+}
+
+.flow-policy-alert-line code {
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.flow-policy-alert-line em {
+    color: var(--accent-yellow);
+    font-style: normal;
+}
+
+.flow-policy-alert-reason {
+    color: var(--text-primary);
+    line-height: 1.5;
+    word-break: break-word;
 }
 
 /* ── Shared detail styles (reused from tool detail) ──────────── */

@@ -26,18 +26,6 @@
 #
 # IMPORTANT: Never add steps that execute code from the PR (npm install, pip install, make, etc.)
 #
-# `allowed_non_write_users: "*"` on pr-review and issue-handler bypasses the action's
-# built-in actor-permission gate so fork PRs from external contributors get auto-reviewed
-# without a maintainer having to babysit. The action's own warning calls this "extreme
-# caution" territory: a malicious fork's diff gets fed to Claude, which has Bash in
-# --allowedTools and access to ANTHROPIC_API_KEY + GITHUB_TOKEN. Prompt injection in the
-# diff could try to coerce Claude into running an exfiltration command. The action mitigates
-# with subprocess secret scrubbing (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, auto-set when this
-# input is non-empty) + a pinned bun binary + hardened PATH. We accept the residual risk
-# in exchange for not maintaining a username allowlist. If a real injection lands, tighten
-# this to a literal username list (no `author_association` values supported — checked
-# upstream `src/github/validation/permissions.ts`, only literal usernames or `*`).
-#
 # NOTE: pull_request_target uses the workflow file from the BASE branch (main), not the PR head.
 # Changes to this file only take effect after merging to main.
 #
@@ -69,16 +57,11 @@ permissions:
 jobs:
   # Auto-review new PRs (including forks)
   pr-review:
-    # Temporarily disabled 2026-05 — Anthropic credit balance exhausted
-    # (see commit a013e384). Tracked for re-enable in
-    # https://github.com/amd/gaia/issues/970. To re-enable, replace the
-    # `if: false` line below with this commented gate:
-    # if: |
-    #   github.repository == 'amd/gaia' &&
-    #   github.event_name == 'pull_request_target' &&
-    #   (github.event.pull_request.draft == false ||
-    #    contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
-    if: false
+    if: |
+      github.repository == 'amd/gaia' &&
+      github.event_name == 'pull_request_target' &&
+      (github.event.pull_request.draft == false ||
+       contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
     runs-on: ubuntu-latest
     concurrency:
       group: claude-pr-review-${{ github.event.pull_request.number }}
@@ -120,9 +103,6 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # Allow fork-PR authors (no write perms) to trigger auto-review.
-          # See file header for the security trade-off.
-          allowed_non_write_users: "*"
           prompt: |
             Review this pull request following the custom_instructions exactly.
             First read (in order): pr-diff.txt, pr-files.txt, CLAUDE.md, and the PR title/description via `gh pr view ${{ github.event.pull_request.number }}`.
@@ -538,9 +518,6 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # Allow non-write users (fork-PR authors, external issue reporters) to invoke
-          # @claude. See file header for the security trade-off.
-          allowed_non_write_users: "*"
           prompt: |
             REPO: ${{ github.repository }}
             ISSUE/PR NUMBER: ${{ github.event.issue.number }}

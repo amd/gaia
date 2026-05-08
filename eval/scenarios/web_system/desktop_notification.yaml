@@ -1,7 +1,6 @@
 id: desktop_notification
 name: "Desktop Notification Tool"
 category: web_system
-agent_type: chat
 severity: low
 description: |
   Tests that notify_desktop tool is registered and handles gracefully whether

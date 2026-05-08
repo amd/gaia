@@ -1,7 +1,6 @@
 id: nist_csf2_framework
 name: "NIST Cybersecurity Framework 2.0 Standards Lookup"
 category: real_world
-agent_type: doc
 severity: medium
 description: |
   Agent must retrieve facts about NIST CSF 2.0 from the framework overview document.

@@ -222,6 +222,39 @@ class TestMessageToResponse:
         assert resp.agent_steps is not None
         assert resp.agent_steps[0].type == "tool"
 
+    def test_agent_steps_preserves_policy_alert_fields(self, base_message):
+        base_message["agent_steps"] = json.dumps(
+            [
+                {
+                    "id": 1,
+                    "type": "policy_alert",
+                    "label": "Policy blocked drop_table",
+                    "detail": "Production DB protection active.",
+                    "tool": "drop_table",
+                    "decision": "BLOCK",
+                    "reason": "Production DB protection active.",
+                    "ruleIds": ["governance.block.destructive_db"],
+                    "policyVersion": "v1.2.0",
+                    "receiptId": "rcpt_abcd_1234",
+                    "active": False,
+                    "success": False,
+                    "timestamp": 1000,
+                }
+            ]
+        )
+
+        resp = message_to_response(base_message)
+
+        assert resp.agent_steps is not None
+        step = resp.agent_steps[0]
+        assert step.type == "policy_alert"
+        assert step.tool == "drop_table"
+        assert step.decision == "BLOCK"
+        assert step.reason == "Production DB protection active."
+        assert step.ruleIds == ["governance.block.destructive_db"]
+        assert step.policyVersion == "v1.2.0"
+        assert step.receiptId == "rcpt_abcd_1234"
+
     def test_agent_steps_invalid_json_returns_none(self, base_message):
         base_message["agent_steps"] = "{broken"
         resp = message_to_response(base_message)

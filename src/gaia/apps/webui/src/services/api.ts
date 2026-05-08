@@ -136,7 +136,7 @@ export async function authorizeConnector(
 
 export async function configureConnector(
     connectorId: string,
-    config: Record<string, unknown>,
+    config: Record<string, string>,
 ): Promise<Record<string, unknown>> {
     return apiFetch('POST', `/connectors/${connectorId}/configure`, { config }, UI_HEADER);
 }
@@ -292,7 +292,7 @@ export interface StreamCallbacks {
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
-    'permission_request',
+    'permission_request', 'policy_alert',
 ]);
 
 export function sendMessageStream(

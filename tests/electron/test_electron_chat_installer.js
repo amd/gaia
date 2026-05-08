@@ -645,28 +645,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       const content = fs.readFileSync(versionPyPath, 'utf8');
       const match = content.match(/__version__\s*=\s*"([^"]+)"/);
       expect(match).not.toBeNull();
-
-      // package.json tracks the last *published* PyPI version; version.py is
-      // bumped ahead of PyPI during development. They must match at release
-      // time but may legitimately differ pre-release. Assert package.json has a
-      // valid semver and is not AHEAD of version.py (that would be a bug).
-      // Allows PEP 440 pre-release suffixes (rcN, .devN, aN, bN) on either side;
-      // the lead-ahead comparison is on the numeric MAJOR.MINOR.PATCH prefix
-      // only — a released pkg vs a pre-release py with the same triple will
-      // not flag here, which is intentional (release tagging closes that gap).
-      const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)([.\-+a-z0-9]*)$/i;
-      const pkgSemver = pkg.version.match(SEMVER_RE);
-      const pySemver = match[1].match(SEMVER_RE);
-      expect(pkgSemver).not.toBeNull();
-      expect(pySemver).not.toBeNull();
-      const pkgParts = [pkgSemver[1], pkgSemver[2], pkgSemver[3]].map(Number);
-      const pyParts = [pySemver[1], pySemver[2], pySemver[3]].map(Number);
-      const pkgAhead = pkgParts.some(
-        (n, i) =>
-          n > pyParts[i] &&
-          pkgParts.slice(0, i).every((m, j) => m === pyParts[j]),
-      );
-      expect(pkgAhead).toBe(false);
+      expect(pkg.version).toBe(match[1]);
     });
 
     it('should have .npmignore for clean publishing', () => {

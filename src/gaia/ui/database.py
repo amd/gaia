@@ -424,6 +424,58 @@ class ChatDatabase:
 
         return msg_id
 
+    def replace_message(
+        self,
+        session_id: str,
+        message_id: int,
+        role: str,
+        content: str,
+        rag_sources: List[Dict] = None,
+        agent_steps: List[Dict] = None,
+        tokens_prompt: int = None,
+        tokens_completion: int = None,
+        inference_stats: Dict = None,
+    ) -> bool:
+        """Replace an existing message payload in-place.
+
+        Keeps the original message ID and created_at timestamp so callers can
+        upgrade provisional messages without a delete/reinsert gap.
+        """
+        sources_json = json.dumps(rag_sources) if rag_sources else None
+        steps_json = json.dumps(agent_steps) if agent_steps else None
+        stats_json = json.dumps(inference_stats) if inference_stats else None
+
+        with self._transaction():
+            cursor = self._conn.execute(
+                """UPDATE messages
+                   SET role = ?, content = ?, rag_sources = ?, agent_steps = ?,
+                       tokens_prompt = ?, tokens_completion = ?, inference_stats = ?
+                   WHERE id = ? AND session_id = ?""",
+                (
+                    role,
+                    content,
+                    sources_json,
+                    steps_json,
+                    tokens_prompt,
+                    tokens_completion,
+                    stats_json,
+                    message_id,
+                    session_id,
+                ),
+            )
+            replaced = cursor.rowcount > 0
+
+            if replaced:
+                self._conn.execute(
+                    "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                    (self._now(), session_id),
+                )
+
+        if replaced:
+            logger.info("Replaced message %d in session %s", message_id, session_id)
+
+        return replaced
+
     def get_messages(
         self, session_id: str, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:

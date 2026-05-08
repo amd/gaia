@@ -17,7 +17,7 @@ const { app, BrowserWindow, dialog, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { spawn, spawnSync } = require("child_process");
+const { spawn } = require("child_process");
 const { pathToFileURL } = require("url");
 
 // ── Shared log path ───────────────────────────────────────────────────────────
@@ -248,70 +248,6 @@ async function startBackend() {
     backendPort = DEFAULT_BACKEND_PORT;
   }
   healthCheckUrl = `http://localhost:${backendPort}/api/health`;
-  // Clean up any stale backend PID left from previous runs. The AppImage
-  // may be double-clicked multiple times or crash, leaving orphaned
-  // backend processes. We store a PID file under ~/.gaia/backend.pid and
-  // attempt to SIGTERM any still-running PID before starting a new backend.
-  try {
-    const pidFile = path.join(_GAIA_DIR, "backend.pid");
-    if (fs.existsSync(pidFile)) {
-      try {
-        const existingPid = parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
-        if (!Number.isNaN(existingPid)) {
-          console.log(`[main] Found existing backend pidfile (${existingPid}) — verifying process identity`);
-
-          // Verify the PID belongs to a GAIA backend before signalling it.
-          // Prefer a conservative match on the process command to avoid
-          // accidentally killing unrelated user processes (TOCTOU mitigation).
-          let isBackend = false;
-          try {
-            if (process.platform === "linux") {
-              const procCmd = `/proc/${existingPid}/cmdline`;
-              if (fs.existsSync(procCmd)) {
-                const raw = fs.readFileSync(procCmd, "utf8");
-                // /proc/<pid>/cmdline is NUL-separated; use a stricter match to
-                // avoid killing unrelated Python processes (Jupyter, LSP, etc.).
-                // Legitimate backend uses: `gaia chat --ui --ui-port <port>`
-                const looksLikeGaiaBackend = raw.includes("gaia") && (raw.includes("chat") || raw.includes("--ui-port"));
-                if (looksLikeGaiaBackend) {
-                  isBackend = true;
-                }
-              }
-            } else if (process.platform === "darwin") {
-              try {
-                const out = spawnSync("ps", ["-p", String(existingPid), "-o", "command="], { encoding: "utf8" });
-                const cmd = (out && out.stdout) ? out.stdout : "";
-                const looksLikeGaiaBackend = cmd.includes("gaia") && (cmd.includes("chat") || cmd.includes("--ui-port"));
-                if (looksLikeGaiaBackend) {
-                  isBackend = true;
-                }
-              } catch {
-                // fallthrough
-              }
-            }
-          } catch (err) {
-            console.warn(`[main] Could not verify pid ${existingPid}: ${err.message}`);
-          }
-
-          if (!isBackend) {
-            console.log(`[main] PID ${existingPid} does not appear to be a GAIA backend; skipping kill`);
-          } else {
-            try {
-              await portManager.killBackend(existingPid);
-              console.log(`[main] Cleaned up previous backend pid ${existingPid}`);
-            } catch (err) {
-              console.warn(`[main] Could not clean previous backend pid ${existingPid}: ${err.message}`);
-            }
-          }
-        }
-      } catch (err) {
-        console.warn(`[main] Failed reading backend pidfile: ${err.message}`);
-      }
-      try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
-    }
-  } catch (err) {
-    console.warn(`[main] PID cleanup check failed: ${err.message}`);
-  }
 
   console.log(`Starting backend: ${gaiaCmd} chat --ui --ui-port ${backendPort}`);
 
@@ -354,18 +290,6 @@ async function startBackend() {
     console.error("Failed to start backend:", err.message);
   });
 
-  // Write a PID file so subsequent AppImage launches can detect and
-  // cleanup this backend if it becomes orphaned. The pidfile is removed
-  // when the child exits.
-  try {
-    try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
-    const pidFile = path.join(_GAIA_DIR, "backend.pid");
-    fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
-    console.log(`[main] Wrote backend pidfile ${pidFile} (pid=${child.pid})`);
-  } catch (err) {
-    console.warn(`[main] Could not write backend pidfile: ${err.message}`);
-  }
-
   child.on("exit", (code, signal) => {
     if (code !== 0 && code !== null) {
       console.error(`Backend exited with code ${code} (signal=${signal})`);
@@ -376,20 +300,6 @@ async function startBackend() {
     if (crashed && !isQuitting) {
       // Fire-and-forget — don't block the event loop.
       void handleBackendCrash(code, signal);
-    }
-
-    // Remove pidfile on exit to avoid leaving stale PID behind.
-    try {
-      const pidFile = path.join(_GAIA_DIR, "backend.pid");
-      if (fs.existsSync(pidFile)) {
-        const p = fs.readFileSync(pidFile, "utf8").trim();
-        if (p && parseInt(p, 10) === child.pid) {
-          try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
-        }
-      }
-    } catch (err) {
-      // Non-fatal — just log and continue.
-      console.warn(`[main] Failed to remove backend pidfile: ${err.message}`);
     }
   });
 

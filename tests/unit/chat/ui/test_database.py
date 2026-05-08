@@ -191,6 +191,48 @@ class TestMessages:
         assert db.delete_message(session["id"], msg_id) is True
         assert db.count_messages(session["id"]) == 0
 
+    def test_replace_message(self, db):
+        session = db.create_session()
+        msg_id = db.add_message(session["id"], "assistant", "Blocked: drop_table")
+        replaced = db.replace_message(
+            session["id"],
+            msg_id,
+            "assistant",
+            "I can't drop that table because policy blocks it.",
+            agent_steps=[
+                {
+                    "id": 1,
+                    "type": "policy_alert",
+                    "label": "Policy blocked drop_table",
+                    "receiptId": "rcpt_1234",
+                }
+            ],
+            inference_stats={"tokens_per_second": 12.5},
+        )
+
+        assert replaced is True
+        messages = db.get_messages(session["id"])
+        assert len(messages) == 1
+        assert messages[0]["id"] == msg_id
+        assert (
+            messages[0]["content"]
+            == "I can't drop that table because policy blocks it."
+        )
+        assert messages[0]["agent_steps"][0]["receiptId"] == "rcpt_1234"
+        assert messages[0]["inference_stats"]["tokens_per_second"] == 12.5
+
+    def test_replace_message_not_found(self, db):
+        session = db.create_session()
+        assert (
+            db.replace_message(
+                session["id"],
+                99999,
+                "assistant",
+                "Replacement",
+            )
+            is False
+        )
+
     def test_delete_message_not_found(self, db):
         session = db.create_session()
         assert db.delete_message(session["id"], 99999) is False

@@ -17,29 +17,8 @@ import {
     ExternalLink,
     ChevronDown,
     ChevronUp,
+    X,
 } from 'lucide-react';
-
-// Human-readable labels for well-known OAuth scope URIs.
-// Unrecognised scopes fall back to the last path segment of the URI.
-const SCOPE_LABELS: Record<string, string> = {
-    'https://www.googleapis.com/auth/gmail.readonly':        'Read emails',
-    'https://www.googleapis.com/auth/gmail.modify':          'Organize emails (archive, label, trash)',
-    'https://www.googleapis.com/auth/gmail.send':            'Send emails on your behalf',
-    'https://www.googleapis.com/auth/gmail.compose':         'Compose emails',
-    'https://www.googleapis.com/auth/calendar.readonly':     'View calendar events',
-    'https://www.googleapis.com/auth/calendar.events':       'Create & respond to calendar events',
-    'https://www.googleapis.com/auth/drive.readonly':        'Read Google Drive files',
-    'https://www.googleapis.com/auth/drive.file':            'Manage Drive files created by this app',
-    'https://www.googleapis.com/auth/spreadsheets.readonly': 'Read Google Sheets',
-    'https://www.googleapis.com/auth/spreadsheets':          'Edit Google Sheets',
-    'openid':   'Identify you',
-    'email':    'See your email address',
-    'profile':  'See your basic profile info',
-};
-
-function scopeLabel(scope: string): string {
-    return SCOPE_LABELS[scope] ?? scope.split(/[/.:]/).pop() ?? scope;
-}
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
@@ -226,9 +205,7 @@ function OAuthConfigureBody({
         try {
             const r = await api.authorizeConnector(
                 connector.id,
-                connector.available_scopes?.length
-                    ? connector.available_scopes
-                    : connector.default_scopes,
+                connector.default_scopes,
             );
             openAuthUrl(r.authorization_url);
             // onChanged is called via the 'focus' listener when the user returns.
@@ -267,13 +244,7 @@ function OAuthConfigureBody({
         setBusy(true);
         setErr(null);
         try {
-            const scopes = connector.available_scopes?.length
-                ? connector.available_scopes
-                : connector.default_scopes;
-            const result = await api.configureConnector(connector.id, {
-                ...setupValues,
-                scopes,
-            });
+            const result = await api.configureConnector(connector.id, setupValues);
             const url =
                 typeof result.authorization_url === 'string'
                     ? result.authorization_url
@@ -518,89 +489,12 @@ function MCPServerConfigureBody({
 
 // ── ConnectorAgentGrants ─────────────────────────────────────────────────────
 
-/**
- * Unified scope-toggle card for one agent (granted or not).
- * Toggling a scope auto-saves immediately — no explicit button needed.
- * Granted scopes start ON; not-yet-granted scopes start OFF.
- */
-function AgentGrantCard({
-    agent,
-    connectorId,
-    grantedScopes,
-    onChanged,
-}: {
-    agent: { namespaced_agent_id?: string; name: string; required_connections?: Array<{ connector_id: string; scopes: string[]; reason: string }> };
-    connectorId: string;
-    grantedScopes: string[];
-    onChanged: () => void;
-}) {
-    const req = agent.required_connections?.find((rc) => rc.connector_id === connectorId);
-    const agentId = agent.namespaced_agent_id;
-    if (!req || !agentId) return null;
-
-    const [localScopes, setLocalScopes] = useState<Set<string>>(() => new Set(grantedScopes));
-    const [busyScope, setBusyScope] = useState<string | null>(null);
-    const [err, setErr] = useState<string | null>(null);
-
-    // Sync when the parent reloads grants after a successful API call.
-    useEffect(() => {
-        setLocalScopes(new Set(grantedScopes));
-    }, [grantedScopes.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    const toggleScope = async (scope: string) => {
-        if (busyScope !== null) return; // one request at a time
-        const next = new Set(localScopes);
-        next.has(scope) ? next.delete(scope) : next.add(scope);
-        setLocalScopes(next); // optimistic
-        setBusyScope(scope);
-        setErr(null);
-        try {
-            if (next.size === 0) {
-                await api.revokeConnectorAgentGrant(connectorId, agentId);
-            } else {
-                await api.grantConnectorAgent(connectorId, agentId, [...next]);
-            }
-            onChanged();
-        } catch (e) {
-            setLocalScopes(new Set(grantedScopes)); // revert
-            setErr(e instanceof Error ? e.message : String(e));
-        } finally {
-            setBusyScope(null);
-        }
-    };
-
-    return (
-        <div className="grant-agent-card">
-            <div className="grant-agent-card-name">{agent.name}</div>
-            <div className="grant-scope-list">
-                {req.scopes.map((scope) => (
-                    <label key={scope} className="grant-scope-item">
-                        <span className="grant-scope-label">{scopeLabel(scope)}</span>
-                        <span className="toggle-switch">
-                            <input
-                                type="checkbox"
-                                checked={localScopes.has(scope)}
-                                onChange={() => void toggleScope(scope)}
-                                disabled={busyScope !== null}
-                            />
-                            <span className="toggle-track" />
-                        </span>
-                    </label>
-                ))}
-            </div>
-            {err && (
-                <div className="grant-scope-warning grant-scope-warning--error">
-                    <AlertCircle size={11} /> {err}
-                </div>
-            )}
-        </div>
-    );
-}
-
 function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
     const { agents } = useChatStore();
     const [grants, setGrants] = useState<Record<string, string[]>>({});
     const [loading, setLoading] = useState(true);
+    const [revoking, setRevoking] = useState<string | null>(null);
+    const [revokeErr, setRevokeErr] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         try {
@@ -615,28 +509,49 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
 
     useEffect(() => { void load(); }, [load]);
 
-    if (loading) return null;
+    const revoke = async (agentId: string) => {
+        setRevoking(agentId);
+        setRevokeErr(null);
+        try {
+            await api.revokeConnectorAgentGrant(connectorId, agentId);
+            void load();
+        } catch (e) {
+            setRevokeErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setRevoking(null);
+        }
+    };
 
-    // Every agent that declares a requirement for this connector — granted or not.
-    const relevantAgents = agents.filter(
-        (a) => a.namespaced_agent_id && a.required_connections?.some((rc) => rc.connector_id === connectorId),
-    );
+    if (loading) return null;
 
     return (
         <div className="connection-grants">
             <div className="grants-header">Per-agent grants</div>
-            {relevantAgents.length === 0 ? (
-                <div className="grants-empty">No agents require access to this connector.</div>
+            {revokeErr && (
+                <div className="configure-error" style={{ marginBottom: 6 }}>
+                    <AlertCircle size={12} /> {revokeErr}
+                </div>
+            )}
+            {Object.entries(grants).length === 0 ? (
+                <div className="grants-empty">No agents have been granted access yet.</div>
             ) : (
-                relevantAgents.map((agent) => (
-                    <AgentGrantCard
-                        key={agent.namespaced_agent_id}
-                        agent={agent}
-                        connectorId={connectorId}
-                        grantedScopes={grants[agent.namespaced_agent_id!] ?? []}
-                        onChanged={() => void load()}
-                    />
-                ))
+                Object.entries(grants).map(([agentId, scopes]) => {
+                    const agent = agents.find((a) => a.namespaced_agent_id === agentId);
+                    return (
+                        <div key={agentId} className="grant-row">
+                            <span className="grant-agent">{agent ? agent.name : agentId}</span>
+                            <span className="grant-scopes">{scopes.join(', ')}</span>
+                            <button
+                                className="btn-grant-revoke"
+                                disabled={revoking === agentId}
+                                onClick={() => void revoke(agentId)}
+                                aria-label={`Revoke ${agentId}`}
+                            >
+                                <X size={11} />
+                            </button>
+                        </div>
+                    );
+                })
             )}
         </div>
     );

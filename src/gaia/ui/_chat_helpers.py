@@ -1121,6 +1121,23 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     from gaia.ui.sse_handler import SSEOutputHandler
 
     session_id = request.session_id
+    sse_handler = None
+    producer = None
+    cleanup_done = False
+
+    def _cleanup_stream():
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+        cleanup_done = True
+        if sse_handler is not None:
+            sse_handler.cancelled.set()
+        _active_sse_handlers.pop(session_id, None)
+        if producer is not None and producer.ident is not None:
+            producer.join(timeout=5.0)
+            if producer.is_alive():
+                logger.warning("Producer thread still running after stream ended")
+
     try:
         # Create SSE handler for streaming events
         sse_handler = SSEOutputHandler()
@@ -1592,192 +1609,297 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             finally:
                 sse_handler.signal_done()
 
-        producer = threading.Thread(target=_run_agent, daemon=True)
-        producer.start()
-
         # Yield SSE events from the handler's queue
         # Also capture agent steps for persistence
         full_response = ""
         captured_steps = []  # Collect agent steps for DB persistence
+        persisted_policy_block_msg_id = None
+        persisted_policy_block_content = None
         step_id = 0
         idle_cycles = 0
         _stream_start = _time.time()
         _STREAM_TIMEOUT = 600  # 10 minutes — large system prompts need time
-        while True:
-            # Guard: total timeout for the streaming response
-            if _time.time() - _stream_start > _STREAM_TIMEOUT:
-                logger.error("Streaming response timed out after %ds", _STREAM_TIMEOUT)
-                timeout_event = json.dumps(
-                    {
-                        "type": "agent_error",
-                        "content": f"Response timed out after {_STREAM_TIMEOUT}s. "
-                        "Try a simpler query or break it into smaller questions.",
-                    }
+
+        def _blocked_policy_steps():
+            return [
+                step
+                for step in captured_steps
+                if step.get("type") == "policy_alert"
+                and (step.get("decision") or "BLOCK").upper() == "BLOCK"
+            ]
+
+        def _policy_block_response(blocked_steps):
+            blocked_tool_names = ", ".join(
+                step.get("tool") or "unknown tool" for step in blocked_steps
+            )
+            return (
+                f"Blocked: {blocked_tool_names} "
+                f"{'is' if len(blocked_steps) == 1 else 'are'} "
+                "restricted by policy."
+            )
+
+        def _replace_assistant_message(
+            message_id: int,
+            content: str,
+            *,
+            agent_steps=None,
+            inference_stats=None,
+        ) -> int:
+            replaced = db.replace_message(
+                request.session_id,
+                message_id,
+                "assistant",
+                content,
+                agent_steps=agent_steps,
+                inference_stats=inference_stats,
+            )
+            if not replaced:
+                raise RuntimeError(
+                    "Persisted assistant message disappeared before it could be updated"
                 )
-                yield f"data: {timeout_event}\n\n"
-                break
-            try:
-                event = await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: sse_handler.event_queue.get(timeout=0.2)
+            return message_id
+
+        def _persist_policy_block_if_needed():
+            nonlocal persisted_policy_block_content, persisted_policy_block_msg_id
+
+            blocked_steps = _blocked_policy_steps()
+            if not blocked_steps:
+                return None
+
+            for step in captured_steps:
+                step["active"] = False
+            persisted_policy_block_content = _policy_block_response(blocked_steps)
+            if persisted_policy_block_msg_id is None:
+                persisted_policy_block_msg_id = db.add_message(
+                    request.session_id,
+                    "assistant",
+                    persisted_policy_block_content,
+                    agent_steps=captured_steps if captured_steps else None,
                 )
-                idle_cycles = 0
-                if event is None:
-                    # Sentinel - agent is done
+            else:
+                _replace_assistant_message(
+                    persisted_policy_block_msg_id,
+                    persisted_policy_block_content,
+                    agent_steps=captured_steps if captured_steps else None,
+                )
+            return persisted_policy_block_msg_id
+
+        producer = threading.Thread(target=_run_agent, daemon=True)
+        try:
+            producer.start()
+
+            while True:
+                # Guard: total timeout for the streaming response
+                if _time.time() - _stream_start > _STREAM_TIMEOUT:
+                    logger.error(
+                        "Streaming response timed out after %ds", _STREAM_TIMEOUT
+                    )
+                    timeout_event = json.dumps(
+                        {
+                            "type": "agent_error",
+                            "content": f"Response timed out after {_STREAM_TIMEOUT}s. "
+                            "Try a simpler query or break it into smaller questions.",
+                        }
+                    )
+                    yield f"data: {timeout_event}\n\n"
                     break
-
-                event_type = event.get("type", "")
-
-                # Capture answer content for DB storage
-                if event_type == "answer":
-                    # Always use the answer event to override accumulated chunks.
-                    # print_final_answer emits a clean, artifact-free final answer,
-                    # while chunks include all intermediate streaming text (planning
-                    # sentences, tool call noise, etc.).  Using the answer event
-                    # ensures DB storage matches what the MCP client receives.
-                    answer_content = event.get("content", "")
-                    if answer_content:
-                        full_response = answer_content
-                elif event_type == "chunk":
-                    full_response += event.get("content", "")
-
-                # Capture agent steps for persistence
-                if event_type == "thinking":
-                    step_id += 1
-                    # Deactivate previous steps
-                    for s in captured_steps:
-                        s["active"] = False
-                    captured_steps.append(
-                        {
-                            "id": step_id,
-                            "type": "thinking",
-                            "label": "Thinking",
-                            "detail": event.get("content"),
-                            "active": True,
-                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
-                        }
+                try:
+                    event = await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: sse_handler.event_queue.get(timeout=0.2)
                     )
-                elif event_type == "tool_start":
-                    step_id += 1
-                    for s in captured_steps:
-                        s["active"] = False
-                    captured_steps.append(
-                        {
-                            "id": step_id,
-                            "type": "tool",
-                            "label": f"Using {event.get('tool', 'tool')}",
-                            "tool": event.get("tool"),
-                            "detail": event.get("detail"),
-                            "active": True,
-                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
-                            "mcpServer": event.get("mcp_server"),
-                        }
-                    )
-                elif event_type == "tool_args" and captured_steps:
-                    # Update the last TOOL step (not just last step, since thinking
-                    # events may have been interleaved during tool execution)
-                    tool_step = _find_last_tool_step(captured_steps)
-                    if tool_step is not None:
-                        tool_step["detail"] = event.get("detail", "")
-                elif event_type == "tool_end" and captured_steps:
-                    tool_step = _find_last_tool_step(captured_steps)
-                    if tool_step is not None:
-                        tool_step["active"] = False
-                        tool_step["success"] = event.get("success", True)
-                elif event_type == "tool_result" and captured_steps:
-                    tool_step = _find_last_tool_step(captured_steps)
-                    if tool_step is not None:
-                        tool_step["active"] = False
-                        tool_step["result"] = (
-                            event.get("summary") or event.get("title") or "Done"
-                        )
-                        tool_step["success"] = event.get("success", True)
-                        # Persist MCP tool latency
-                        if event.get("latency_ms") is not None:
-                            tool_step["latencyMs"] = event["latency_ms"]
-                        # Persist structured command output for terminal rendering
-                        if event.get("command_output"):
-                            tool_step["commandOutput"] = event["command_output"]
-                        # Persist file list for rich file list rendering
-                        result_data = event.get("result_data", {})
-                        if result_data.get("type") == "file_list":
-                            tool_step["fileList"] = {
-                                "files": result_data.get("files", []),
-                                "total": result_data.get("total", 0),
+                    idle_cycles = 0
+                    if event is None:
+                        # Sentinel - agent is done
+                        break
+
+                    event_type = event.get("type", "")
+
+                    # Capture answer content for DB storage
+                    if event_type == "answer":
+                        # Always use the answer event to override accumulated chunks.
+                        # print_final_answer emits a clean, artifact-free final answer,
+                        # while chunks include all intermediate streaming text (planning
+                        # sentences, tool call noise, etc.).  Using the answer event
+                        # ensures DB storage matches what the MCP client receives.
+                        answer_content = event.get("content", "")
+                        if answer_content:
+                            full_response = answer_content
+                    elif event_type == "chunk":
+                        full_response += event.get("content", "")
+
+                    # Capture agent steps for persistence
+                    if event_type == "thinking":
+                        step_id += 1
+                        # Deactivate previous steps
+                        for s in captured_steps:
+                            s["active"] = False
+                        captured_steps.append(
+                            {
+                                "id": step_id,
+                                "type": "thinking",
+                                "label": "Thinking",
+                                "detail": event.get("content"),
+                                "active": True,
+                                "timestamp": int(
+                                    asyncio.get_running_loop().time() * 1000
+                                ),
                             }
-                elif event_type == "plan":
-                    step_id += 1
-                    for s in captured_steps:
-                        s["active"] = False
-                    captured_steps.append(
-                        {
-                            "id": step_id,
-                            "type": "plan",
-                            "label": "Created plan",
-                            "planSteps": event.get("steps"),
-                            "active": False,
-                            "success": True,
-                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
-                        }
-                    )
-                elif event_type == "agent_error":
-                    step_id += 1
-                    for s in captured_steps:
-                        s["active"] = False
-                    captured_steps.append(
-                        {
-                            "id": step_id,
-                            "type": "error",
-                            "label": "Error",
-                            "detail": event.get("content"),
-                            "active": False,
-                            "success": False,
-                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
-                        }
-                    )
-
-                # Pad each event so Chromium's receive buffer flushes immediately.
-                # Events < 512 bytes are held by Chromium until the buffer fills.
-                event_data = f"data: {json.dumps(event)}\n\n"
-                if len(event_data) < 512:
-                    event_data += ": " + "x" * (512 - len(event_data) - 4) + "\n\n"
-                yield event_data
-
-            except queue.Empty:
-                if not producer.is_alive():
-                    break
-                idle_cycles += 1
-                # Send a padded keepalive every ~5s (25 cycles × 0.2s).
-                # The padding flushes Chromium's receive buffer so any events
-                # already sent but not yet dispatched arrive immediately.
-                if idle_cycles % 25 == 0:
-                    yield ": keepalive " + "x" * 490 + "\n\n"
-                # Every 15s (75 cycles) emit a visible status so the user knows
-                # the model is still processing (prompt prefill is silent).
-                # Use status='working' so active=true; consecutive events merge
-                # into a single updating step on the frontend.
-                if idle_cycles % 75 == 0:
-                    elapsed = int(_time.time() - _stream_start)
-                    status_evt = json.dumps(
-                        {
-                            "type": "status",
-                            "status": "working",
-                            "message": f"Model is processing... ({elapsed}s)",
-                        }
-                    )
-                    status_data = f"data: {status_evt}\n\n"
-                    if len(status_data) < 512:
-                        status_data += (
-                            ": " + "x" * (512 - len(status_data) - 4) + "\n\n"
                         )
-                    yield status_data
-                continue
+                    elif event_type == "tool_start":
+                        step_id += 1
+                        for s in captured_steps:
+                            s["active"] = False
+                        captured_steps.append(
+                            {
+                                "id": step_id,
+                                "type": "tool",
+                                "label": f"Using {event.get('tool', 'tool')}",
+                                "tool": event.get("tool"),
+                                "detail": event.get("detail"),
+                                "active": True,
+                                "timestamp": int(
+                                    asyncio.get_running_loop().time() * 1000
+                                ),
+                                "mcpServer": event.get("mcp_server"),
+                            }
+                        )
+                    elif event_type == "tool_args" and captured_steps:
+                        # Update the last TOOL step (not just last step, since thinking
+                        # events may have been interleaved during tool execution)
+                        tool_step = _find_last_tool_step(captured_steps)
+                        if tool_step is not None:
+                            tool_step["detail"] = event.get("detail", "")
+                    elif event_type == "tool_end" and captured_steps:
+                        tool_step = _find_last_tool_step(captured_steps)
+                        if tool_step is not None:
+                            tool_step["active"] = False
+                            tool_step["success"] = event.get("success", True)
+                    elif event_type == "tool_result" and captured_steps:
+                        tool_step = _find_last_tool_step(captured_steps)
+                        if tool_step is not None:
+                            tool_step["active"] = False
+                            tool_step["result"] = (
+                                event.get("summary") or event.get("title") or "Done"
+                            )
+                            tool_step["success"] = event.get("success", True)
+                            # Persist MCP tool latency
+                            if event.get("latency_ms") is not None:
+                                tool_step["latencyMs"] = event["latency_ms"]
+                            # Persist structured command output for terminal rendering
+                            if event.get("command_output"):
+                                tool_step["commandOutput"] = event["command_output"]
+                            # Persist file list for rich file list rendering
+                            result_data = event.get("result_data", {})
+                            if result_data.get("type") == "file_list":
+                                tool_step["fileList"] = {
+                                    "files": result_data.get("files", []),
+                                    "total": result_data.get("total", 0),
+                                }
+                    elif event_type == "plan":
+                        step_id += 1
+                        for s in captured_steps:
+                            s["active"] = False
+                        captured_steps.append(
+                            {
+                                "id": step_id,
+                                "type": "plan",
+                                "label": "Created plan",
+                                "planSteps": event.get("steps"),
+                                "active": False,
+                                "success": True,
+                                "timestamp": int(
+                                    asyncio.get_running_loop().time() * 1000
+                                ),
+                            }
+                        )
+                    elif event_type == "agent_error":
+                        step_id += 1
+                        for s in captured_steps:
+                            s["active"] = False
+                        captured_steps.append(
+                            {
+                                "id": step_id,
+                                "type": "error",
+                                "label": "Error",
+                                "detail": event.get("content"),
+                                "active": False,
+                                "success": False,
+                                "timestamp": int(
+                                    asyncio.get_running_loop().time() * 1000
+                                ),
+                            }
+                        )
+                    elif event_type == "policy_alert":
+                        step_id += 1
+                        for s in captured_steps:
+                            s["active"] = False
+                        tool_name = event.get("tool") or "unknown tool"
+                        reason = (
+                            event.get("reason")
+                            or event.get("message")
+                            or event.get("content")
+                            or "Tool execution was blocked by governance policy."
+                        )
+                        captured_steps.append(
+                            {
+                                "id": step_id,
+                                "type": "policy_alert",
+                                "label": f"Policy blocked {tool_name}",
+                                "detail": reason,
+                                "tool": tool_name,
+                                "decision": event.get("decision") or "BLOCK",
+                                "reason": reason,
+                                "ruleIds": event.get("rule_ids") or [],
+                                "policyVersion": event.get("policy_version"),
+                                "receiptId": event.get("receipt_id"),
+                                "active": False,
+                                "success": False,
+                                "timestamp": int(
+                                    asyncio.get_running_loop().time() * 1000
+                                ),
+                            }
+                        )
+                        if (event.get("decision") or "BLOCK").upper() == "BLOCK":
+                            _persist_policy_block_if_needed()
 
-        # Signal cancellation (handles client disconnect) then wait for producer
-        sse_handler.cancelled.set()
-        _active_sse_handlers.pop(session_id, None)
-        producer.join(timeout=5.0)
-        if producer.is_alive():
-            logger.warning("Producer thread still running after stream ended")
+                    # Pad each event so Chromium's receive buffer flushes immediately.
+                    # Events < 512 bytes are held by Chromium until the buffer fills.
+                    event_data = f"data: {json.dumps(event)}\n\n"
+                    if len(event_data) < 512:
+                        event_data += ": " + "x" * (512 - len(event_data) - 4) + "\n\n"
+                    yield event_data
+
+                except queue.Empty:
+                    if not producer.is_alive():
+                        break
+                    idle_cycles += 1
+                    # Send a padded keepalive every ~5s (25 cycles × 0.2s).
+                    # The padding flushes Chromium's receive buffer so any events
+                    # already sent but not yet dispatched arrive immediately.
+                    if idle_cycles % 25 == 0:
+                        yield ": keepalive " + "x" * 490 + "\n\n"
+                    # Every 15s (75 cycles) emit a visible status so the user knows
+                    # the model is still processing (prompt prefill is silent).
+                    # Use status='working' so active=true; consecutive events merge
+                    # into a single updating step on the frontend.
+                    if idle_cycles % 75 == 0:
+                        elapsed = int(_time.time() - _stream_start)
+                        status_evt = json.dumps(
+                            {
+                                "type": "status",
+                                "status": "working",
+                                "message": f"Model is processing... ({elapsed}s)",
+                            }
+                        )
+                        status_data = f"data: {status_evt}\n\n"
+                        if len(status_data) < 512:
+                            status_data += (
+                                ": " + "x" * (512 - len(status_data) - 4) + "\n\n"
+                            )
+                        yield status_data
+                    continue
+        finally:
+            _cleanup_stream()
 
         # Finalize all captured steps (mark as inactive)
         for s in captured_steps:
@@ -1787,7 +1909,15 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         if result_holder["error"]:
             error_msg = f"Agent error: {result_holder['error']}"
             if not full_response:
-                full_response = error_msg
+                blocked_alert_steps = _blocked_policy_steps()
+                if blocked_alert_steps:
+                    full_response = (
+                        persisted_policy_block_content
+                        or _policy_block_response(blocked_alert_steps)
+                    )
+                    full_response += f"\n\n[Error: {result_holder['error']}]"
+                else:
+                    full_response = error_msg
             else:
                 # Partial response exists -- append error notice so user knows
                 # the response may be incomplete
@@ -1835,6 +1965,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             )
             full_response = result_holder.get("answer", "") or ""
 
+        blocked_alert_steps = _blocked_policy_steps()
+        if not full_response and blocked_alert_steps:
+            full_response = persisted_policy_block_content or _policy_block_response(
+                blocked_alert_steps
+            )
+
         # Save complete response to DB (including captured agent steps)
         if full_response:
             # Fetch last inference stats from Lemonade (non-blocking)
@@ -1862,13 +1998,21 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             except Exception:
                 pass
 
-            msg_id = db.add_message(
-                request.session_id,
-                "assistant",
-                full_response,
-                agent_steps=captured_steps if captured_steps else None,
-                inference_stats=inference_stats,
-            )
+            if persisted_policy_block_msg_id is not None:
+                msg_id = _replace_assistant_message(
+                    persisted_policy_block_msg_id,
+                    full_response,
+                    agent_steps=captured_steps if captured_steps else None,
+                    inference_stats=inference_stats,
+                )
+            else:
+                msg_id = db.add_message(
+                    request.session_id,
+                    "assistant",
+                    full_response,
+                    agent_steps=captured_steps if captured_steps else None,
+                    inference_stats=inference_stats,
+                )
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
             # to 30 s/session, runs on the same Lemonade slot the chat
@@ -1925,7 +2069,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
-        _active_sse_handlers.pop(session_id, None)
+        # Setup errors can happen before the producer cleanup block is reached.
+        # _cleanup_stream() is idempotent, so reuse it here to avoid leaking
+        # the registered SSE handler from _active_sse_handlers.
+        _cleanup_stream()
         error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
             db.add_message(request.session_id, "assistant", error_msg)

@@ -1,7 +1,6 @@
 id: empty_file
 name: "Empty File Handling"
 category: adversarial
-agent_type: doc
 severity: medium
 description: |
   User asks the agent to index and read a completely empty file. Agent must

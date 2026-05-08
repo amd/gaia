@@ -146,7 +146,6 @@ def initialize_lemonade_for_agent(
         "docker": 32768,
         "talk": 32768,
         "rag": 32768,
-        "email": 32768,  # email agent (#962) — needs room for body + thread context
         "sd": 8192,  # SD agent needs 8K for image + story workflow
         "mcp": 4096,
         "minimal": 4096,
@@ -590,12 +589,6 @@ async def async_main(action, **kwargs):
             # Create initial session if not loading one
             if not agent.current_session:
                 agent.current_session = agent.session_manager.create_session()
-                # Reset tool loader session state on new session
-                try:
-                    if hasattr(agent, "tool_loader"):
-                        agent.tool_loader.reset_session()
-                except Exception:
-                    pass
                 log.debug(f"Created new session: {agent.current_session.session_id}")
 
             # List tools if requested
@@ -791,12 +784,6 @@ def _launch_interactive_cli(log=None):
 
         if not agent.current_session:
             agent.current_session = agent.session_manager.create_session()
-            # Reset tool loader session state on new session
-            try:
-                if hasattr(agent, "tool_loader"):
-                    agent.tool_loader.reset_session()
-            except Exception:
-                pass
 
         interactive_mode(agent)
     except KeyboardInterrupt:
@@ -1348,48 +1335,6 @@ def main():
         help="Enable debug logging",
     )
 
-    # Add Email Triage Agent command (#962)
-    email_parser = subparsers.add_parser(
-        "email",
-        help=(
-            "Email Triage Agent — read, organize, and reply to Gmail with "
-            "all body inference running locally on Lemonade. Requires the "
-            "Google connector to be configured (Settings → Connections)."
-        ),
-        parents=[parent_parser],
-    )
-    email_parser.add_argument(
-        "-q",
-        "--query",
-        type=str,
-        default=None,
-        help="One-shot query to send to the agent (non-interactive).",
-    )
-    email_parser.add_argument(
-        "-i",
-        "--interactive",
-        action="store_true",
-        help="Run in interactive mode (loop reading queries from stdin).",
-    )
-    email_parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help=(
-            "Verbose mode — emit structured logs for every triage decision "
-            "and tool call (recommended when benchmarking against other "
-            "email agents)."
-        ),
-    )
-    email_parser.add_argument(
-        "--debug",
-        action="store_true",
-        help=(
-            "Debug mode — adds full prompt + LLM response logging to "
-            "verbose output. Sensitive payloads in logs."
-        ),
-    )
-
     # Add Docker app command
     docker_parser = subparsers.add_parser(
         "docker",
@@ -1462,59 +1407,6 @@ def main():
         help="Enable step-through debugging mode (pause at each agent step)",
     )
     api_parser.set_defaults(action="api")
-
-    # Telegram adapter command (v0.18.2) - supports start|stop|status
-    telegram_parser = subparsers.add_parser(
-        "telegram",
-        help="Manage Telegram messaging adapter (start|stop|status)",
-        parents=[parent_parser],
-    )
-    telegram_subparsers = telegram_parser.add_subparsers(
-        dest="telegram_action", help="telegram action to perform"
-    )
-
-    # Start subcommand
-    t_start = telegram_subparsers.add_parser(
-        "start", help="Start the Telegram adapter (polling)"
-    )
-    t_start.add_argument("--token", required=True, help="Telegram bot token")
-    t_start.add_argument(
-        "--allowed-users",
-        help="Comma-separated Telegram user IDs allowed to interact (default: allow all)",
-    )
-    t_start.add_argument(
-        "--background",
-        action="store_true",
-        help="Run adapter in background/daemon mode (writes PID and health endpoint)",
-    )
-
-    # Stop subcommand
-    t_stop = telegram_subparsers.add_parser(
-        "stop", help="Stop background Telegram adapter"
-    )
-    t_stop.add_argument(
-        "--force",
-        action="store_true",
-        help="Force stop even if graceful shutdown fails",
-    )
-
-    # Status subcommand
-    t_status = telegram_subparsers.add_parser(
-        "status", help="Show status of Telegram adapter"
-    )
-    t_status.add_argument(
-        "--health-host",
-        default="127.0.0.1",
-        help="Health server host (default: 127.0.0.1)",
-    )
-    t_status.add_argument(
-        "--health-port",
-        type=int,
-        default=8765,
-        help="Health server port (default: 8765)",
-    )
-
-    telegram_parser.set_defaults(action="telegram")
 
     # Add model download command
     download_parser = subparsers.add_parser(
@@ -2268,101 +2160,6 @@ Examples:
             log=log,
             debug=getattr(args, "debug", False),
             webui_dist=getattr(args, "ui_dist", None),
-        )
-        return
-
-    # Handle telegram scaffold command
-    if args.action == "telegram":
-        # Telegram management: start | stop | status
-        action = getattr(args, "telegram_action", None)
-        if action == "start":
-            try:
-                from gaia.messaging.telegram import run_telegram
-            except Exception as e:  # pragma: no cover - runtime import error
-                print(f"❌ Telegram support is not available: {e}", file=sys.stderr)
-                sys.exit(1)
-
-            allowed = None
-            if getattr(args, "allowed_users", None):
-                try:
-                    allowed = set(
-                        int(x.strip())
-                        for x in args.allowed_users.split(",")
-                        if x.strip()
-                    )
-                except ValueError:
-                    print(
-                        "Invalid --allowed-users format; expected comma-separated integers",
-                        file=sys.stderr,
-                    )
-                    sys.exit(2)
-
-            run_telegram(
-                token=args.token,
-                allowed_users=allowed,
-                background=getattr(args, "background", False),
-            )
-            return
-
-        if action == "stop":
-            import signal
-
-            pid_path = os.path.expanduser("~/.gaia/telegram.pid")
-            if not os.path.exists(pid_path):
-                print("Telegram adapter is not running (no PID file).")
-                return
-            try:
-                with open(pid_path, "r", encoding="utf-8") as f:
-                    pid = int(f.read().strip())
-                os.kill(pid, signal.SIGTERM)
-                print(f"Sent SIGTERM to Telegram adapter (pid {pid}).")
-                try:
-                    os.remove(pid_path)
-                except OSError:
-                    pass
-            except ProcessLookupError:
-                print("Process not found; removing stale PID file.")
-                try:
-                    os.remove(pid_path)
-                except OSError:
-                    pass
-            except PermissionError:
-                print("Permission denied when attempting to stop process. Try sudo.")
-                sys.exit(1)
-            except OSError as e:
-                print(f"Failed to stop Telegram adapter: {e}")
-                sys.exit(1)
-            return
-
-        if action == "status":
-            # Prefer health endpoint; fallback to pid file existence
-            import urllib.error
-            import urllib.request
-
-            host = getattr(args, "health_host", "127.0.0.1")
-            port = getattr(args, "health_port", 8765)
-            url = f"http://{host}:{port}/healthz"
-            try:
-                with urllib.request.urlopen(url, timeout=1) as resp:
-                    body = resp.read().decode("utf-8").strip()
-                    if resp.status == 200 and body == "ok":
-                        print(f"Telegram adapter: healthy ({url})")
-                        return
-            except urllib.error.URLError:
-                pass
-
-            pid_path = os.path.expanduser("~/.gaia/telegram.pid")
-            if os.path.exists(pid_path):
-                print(
-                    "Telegram adapter: PID file exists, but health check failed (may be starting or unhealthy)."
-                )
-            else:
-                print("Telegram adapter: not running")
-            return
-
-        print(
-            "No telegram action specified. Use: gaia telegram start|stop|status",
-            file=sys.stderr,
         )
         return
 
@@ -3373,10 +3170,6 @@ Let me know your answer!
         handle_jira_command(args)
         return
 
-    if args.action == "email":
-        handle_email_command(args)
-        return
-
     # Handle Docker command
     if args.action == "docker":
         handle_docker_command(args)
@@ -3746,62 +3539,6 @@ def handle_jira_command(args):
         sys.exit(1)
     except Exception as e:
         log.error(f"Error running Jira app: {e}")
-        print(f"❌ Error: {e}")
-        sys.exit(1)
-
-
-def handle_email_command(args):
-    """
-    Handle the ``gaia email`` command.
-
-    Wires the Email Triage Agent (#962) to a CLI session. AC3-critical:
-    this handler does NOT pass ``--use-claude`` / ``--use-chatgpt`` to
-    the agent (the agent's config has no such field). The local-LLM-only
-    path is the only path.
-
-    Args:
-        args: Parsed command line arguments for the email command
-    """
-    log = get_logger(__name__)
-
-    # Initialize Lemonade — local LLM only. The email agent's config will
-    # also reject any non-local base_url at construction time, but the
-    # CLI manager check gives a friendlier "start Lemonade first" message.
-    if not getattr(args, "no_lemonade_check", False):
-        success, _ = initialize_lemonade_for_agent(
-            agent="email",
-            skip_if_external=True,
-            # Deliberately omitted: use_claude / use_chatgpt — see AC3.
-            base_url=getattr(args, "base_url", None),
-        )
-        if not success:
-            sys.exit(1)
-
-    try:
-        from gaia.agents.email.cli import main as email_main
-
-        # Normalize args the agent CLI expects.
-        if not hasattr(args, "verbose"):
-            args.verbose = False
-        if not hasattr(args, "debug"):
-            args.debug = False
-        if not hasattr(args, "model"):
-            args.model = None
-        if not hasattr(args, "query"):
-            args.query = None
-        if not hasattr(args, "interactive"):
-            args.interactive = False
-
-        result = asyncio.run(email_main(args))
-        sys.exit(result)
-
-    except ImportError as e:
-        log.error(f"Failed to import Email agent: {e}")
-        print("❌ Error: Email agent components are not available")
-        print("Make sure GAIA is installed properly: uv pip install -e .")
-        sys.exit(1)
-    except Exception as e:
-        log.error(f"Error running Email agent: {e}")
         print(f"❌ Error: {e}")
         sys.exit(1)
 

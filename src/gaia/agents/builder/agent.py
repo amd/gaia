@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.tools import tool
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -154,8 +154,8 @@ class BuilderAgent(Agent):
         return BUILDER_SYSTEM_PROMPT
 
     def _register_tools(self) -> None:
+        _TOOL_REGISTRY.clear()
         self.register_builder_tools()
-        self._snapshot_tools()
 
     def register_builder_tools(self) -> None:
         """Register the create_agent tool."""

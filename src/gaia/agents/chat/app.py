@@ -317,12 +317,6 @@ def interactive_mode(agent: ChatAgent):
                         agent.save_current_session()
                     # Create new session
                     agent.current_session = agent.session_manager.create_session()
-                    # Reset per-session tool activation (bundle state)
-                    try:
-                        if hasattr(agent, "tool_loader"):
-                            agent.tool_loader.reset_session()
-                    except Exception:
-                        pass
                     # Clear chat history (if agent tracks it)
                     if hasattr(agent, "chat_history"):
                         agent.chat_history = []
@@ -1003,12 +997,6 @@ def main():
         # Create initial session if not loading one
         if not agent.current_session:
             agent.current_session = agent.session_manager.create_session()
-            # Reset tool loader session state on new session
-            try:
-                if hasattr(agent, "tool_loader"):
-                    agent.tool_loader.reset_session()
-            except Exception:
-                pass
             logger.debug(f"Created new session: {agent.current_session.session_id}")
 
         # Index document if --index flag provided

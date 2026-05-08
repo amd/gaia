@@ -271,35 +271,8 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// General per-IP rate limiter for all auth endpoints (not just /login).
-// Defined here so it can be applied to every auth route below, closing the
-// "missing rate-limiting" CodeQL alert on /auth/logout and
-// /auth/login-error which would otherwise accept unlimited requests.
-const rateLimitStore = new Map();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX = 100; // max requests per window per IP
-
-function rateLimiter(req, res, next) {
-  const ip = req.ip || req.connection.remoteAddress;
-  const now = Date.now();
-  const record = rateLimitStore.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
-
-  if (now > record.resetAt) {
-    record.count = 0;
-    record.resetAt = now + RATE_LIMIT_WINDOW;
-  }
-
-  record.count++;
-  rateLimitStore.set(ip, record);
-
-  if (record.count > RATE_LIMIT_MAX) {
-    return res.status(429).send('Too Many Requests');
-  }
-  next();
-}
-
 // Login handler
-app.post('/auth/login', loginLimiter, rateLimiter, (req, res) => {
+app.post('/auth/login', loginLimiter, (req, res) => {
   const { code, nonce } = req.body;
 
   if (code === ACCESS_CODE) {
@@ -312,29 +285,15 @@ app.post('/auth/login', loginLimiter, rateLimiter, (req, res) => {
       maxAge: COOKIE_MAX_AGE,
       sameSite: 'lax'
     });
-    // Server-side redirect target. Instead of validating the user-supplied
-    // pathname and forwarding it (which CodeQL's
-    // js/server-side-unvalidated-url-redirection analyzer can't prove safe),
-    // we maintain an explicit allowlist of post-login destinations and
-    // round-trip the incoming pathname through it. Anything that doesn't
-    // exactly match a known-safe path falls back to '/'.
-    const ALLOWED_POST_LOGIN_PATHS = new Set([
-      '/',
-      '/index.html',
-    ]);
+    // Retrieve redirect URL from server-side storage and validate with url.parse()
     const target = consumeRedirect(nonce);
     const parsed = url.parse(target || '');
-    const pathname = parsed.pathname || '/';
-    // Block open-redirects and traversal before the allowlist check.
-    const structurallySafe =
-      !parsed.host &&
-      !parsed.protocol &&
-      pathname.startsWith('/') &&
-      !pathname.startsWith('//') &&
-      !pathname.split('/').includes('..');
-    const resolvedPath =
-      structurallySafe && ALLOWED_POST_LOGIN_PATHS.has(pathname) ? pathname : '/';
-    res.redirect(303, resolvedPath);
+    // Only redirect to relative paths (no host/protocol) to prevent open redirects
+    if (!parsed.host && !parsed.protocol && parsed.pathname) {
+      res.redirect(303, parsed.pathname);
+    } else {
+      res.redirect(303, '/');
+    }
   } else {
     // Retrieve the original redirect URL and re-store with a new nonce for retry
     const originalRedirect = consumeRedirect(nonce);
@@ -344,7 +303,7 @@ app.post('/auth/login', loginLimiter, rateLimiter, (req, res) => {
 });
 
 // Login error handler (uses nonce to retrieve redirect URL)
-app.get('/auth/login-error', rateLimiter, (req, res) => {
+app.get('/auth/login-error', (req, res) => {
   // Retrieve redirect URL from server-side storage and re-store for the form
   const originalRedirect = consumeRedirect(req.query.nonce);
   const newNonce = storeRedirect(originalRedirect);
@@ -353,13 +312,10 @@ app.get('/auth/login-error', rateLimiter, (req, res) => {
 });
 
 // Logout handler
-app.get('/auth/logout', rateLimiter, (req, res) => {
+app.get('/auth/logout', (req, res) => {
   res.clearCookie(COOKIE_NAME);
   res.redirect('/');
 });
-
-// Apply rate limiter before auth middleware for every other route
-app.use(rateLimiter);
 
 // Apply auth middleware
 app.use(authMiddleware);

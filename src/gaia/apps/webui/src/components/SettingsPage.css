@@ -39,7 +39,7 @@
 .settings-page-body {
     flex: 1;
     overflow-y: auto;
-    padding: 16px 20px;
+    padding: 24px;
     max-width: 600px;
     width: 100%;
     margin: 0 auto;

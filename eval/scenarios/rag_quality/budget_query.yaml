@@ -1,7 +1,6 @@
 id: budget_query
 name: "Budget Document Query"
 category: rag_quality
-agent_type: doc
 severity: medium
 description: |
   Agent must retrieve budget facts from a structured markdown table document.

@@ -1,7 +1,6 @@
 id: pronoun_resolution
 name: "Pronoun Resolution"
 category: context_retention
-agent_type: doc
 severity: critical
 description: |
   User asks follow-up questions using pronouns ("it", "that policy").

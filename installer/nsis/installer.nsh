@@ -41,7 +41,7 @@
 ;   customInstall    — runs at the end of the main install section
 ;   customUnInstall  — runs at the start of the uninstall section
 ;
-; Reference: https://github.com/electron-userland/electron-builder
+; Reference: https://www.electron.build/configuration/nsis.html#custom-nsis-script
 
 ; ─── File-scope includes ───────────────────────────────────────────────
 ;

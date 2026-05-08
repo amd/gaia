@@ -105,7 +105,6 @@ export interface ConnectorRow {
     last_tested_at: string | null;
     mcp_env_keys: string[];
     default_scopes: string[];
-    available_scopes: string[];
     /**
      * First-time setup fields the user fills in to provide OAuth-app
      * client credentials (e.g. Google Cloud Console client_id +
@@ -360,13 +359,23 @@ export interface RetrievalChunk {
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
-    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error';
+    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
     /** Short label shown in collapsed view. */
     label: string;
     /** Detailed content shown when expanded. */
     detail?: string;
     /** Tool name (for type='tool'). */
     tool?: string;
+    /** Governance decision (for type='policy_alert'). */
+    decision?: string;
+    /** Governance policy reason (for type='policy_alert'). */
+    reason?: string;
+    /** Governance rule IDs (for type='policy_alert'). */
+    ruleIds?: string[];
+    /** Governance policy version (for type='policy_alert'). */
+    policyVersion?: string;
+    /** Governance receipt ID (for type='policy_alert'). */
+    receiptId?: string;
     /** Tool result summary (for type='tool'). */
     result?: string;
     /** Whether this step completed successfully. */

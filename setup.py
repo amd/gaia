@@ -76,17 +76,12 @@ setup(
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
-        "gaia.filesystem",
-        "gaia.scratchpad",
-        "gaia.web",
         "gaia.code_index",
         "gaia.apps.webui",
         "gaia.connectors",
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
         "gaia.agents.connectors_demo",
-        "gaia.agents.email",
-        "gaia.agents.email.tools",
     ],
     package_data={
         "gaia.eval": [
@@ -122,7 +117,6 @@ setup(
         "aiohttp",
         "rich",
         "requests",
-        "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
     ],
@@ -173,9 +167,6 @@ setup(
             "mcp>=1.1.0",
             "starlette",
             "uvicorn",
-        ],
-        "telegram": [
-            "python-telegram-bot>=20.3",
         ],
         "dev": [
             "pytest",

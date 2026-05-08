@@ -502,7 +502,7 @@ export function SettingsPage() {
                 </section>
 
                 {/* Privacy & Data */}
-                <section className="settings-section">
+                <section className="settings-section danger-zone">
                     <h4>Privacy & Data</h4>
                     <div className="setting-row">
                         <span>Data location</span>
