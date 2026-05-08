@@ -302,18 +302,6 @@ export interface MCPServerInfo {
     enabled: boolean;
 }
 
-export interface MCPCatalogEntry {
-    name: string;
-    display_name: string;
-    description: string;
-    category: string;
-    tier: number;
-    command: string;
-    args: string[];
-    env: Record<string, string>;
-    requires_config: string[];
-}
-
 export interface MCPServerStatus {
     name: string;
     connected: boolean;
