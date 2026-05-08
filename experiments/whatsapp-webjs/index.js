@@ -5,6 +5,12 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 
+// Privacy note:
+// - Messages sent/received by this prototype transit Meta's WhatsApp service (WhatsApp Web).
+// - Session credentials created by LocalAuth are stored locally on disk.
+// - `run.log` may contain message bodies. By default this script redacts message bodies
+//   from the log unless `LOG_MESSAGE_BODIES=1` is set in the environment. Treat logs as
+//   sensitive and do not run this against production/personal accounts.
 const LOG_PATH = path.resolve(__dirname, 'run.log');
 function writeLog(...parts) {
   const line = `[${new Date().toISOString()}] ${parts.join(' ')}\n`;
@@ -41,7 +47,10 @@ client.on('disconnected', (reason) => {
 });
 
 client.on('message', async (msg) => {
-  writeLog('IN', msg.from, msg.body);
+  // redact body unless explicitly allowed via env var
+  const showBodies = process.env.LOG_MESSAGE_BODIES === '1';
+  const bodyForLog = showBodies ? msg.body : '[REDACTED_BODY]';
+  writeLog('IN', msg.from, bodyForLog);
   try {
     await msg.reply('Echo: ' + msg.body);
     writeLog('OUT reply', msg.from);
