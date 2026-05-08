@@ -499,10 +499,9 @@
 }
 
 .connector-tile-menu-popup {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 100;
+    /* position/top/right set via inline style (position:fixed) so the popup
+       escapes overflow:hidden on .connector-tile */
+    z-index: 1000;
     min-width: 160px;
     background: var(--bg-primary);
     border: 1px solid var(--border-color, var(--border-light));

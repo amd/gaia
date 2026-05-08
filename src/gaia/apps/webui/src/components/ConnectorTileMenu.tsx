@@ -12,10 +12,13 @@
  *   - For not-configured MCP connectors:        nothing (button hidden)
  *   - For oauth_pkce connectors:                nothing (button hidden)
  *
- * The component is self-positioning (no portal): a relative-positioned
- * wrapper holds the trigger button and the absolutely-positioned popup.
- * Click-outside closes the menu via a document-level listener; Escape
- * also closes.
+ * Positioning: the popup uses `position: fixed` with viewport coordinates
+ * computed from the trigger button's `getBoundingClientRect()`. This lets
+ * it escape the `overflow: hidden` on `.connector-tile` without a portal.
+ * A scroll + resize listener repositions the popup while it is open so it
+ * stays anchored to the trigger as the settings panel scrolls.
+ *
+ * Click-outside (mousedown on document) and Escape close the menu.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -42,15 +45,20 @@ export function ConnectorTileMenu({ connector, onChanged }: Props) {
     const [open, setOpen] = useState(false);
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<string | null>(null);
-    const wrapperRef = useRef<HTMLDivElement>(null);
+    const [popupPos, setPopupPos] = useState<{ top: number; right: number } | null>(null);
+    const triggerRef = useRef<HTMLButtonElement>(null);
+    const popupRef = useRef<HTMLDivElement>(null);
 
     // Close on click outside.
     useEffect(() => {
         if (!open) return;
         const handler = (e: MouseEvent) => {
+            const target = e.target as Node;
             if (
-                wrapperRef.current &&
-                !wrapperRef.current.contains(e.target as Node)
+                triggerRef.current &&
+                !triggerRef.current.contains(target) &&
+                popupRef.current &&
+                !popupRef.current.contains(target)
             ) {
                 setOpen(false);
             }
@@ -69,12 +77,46 @@ export function ConnectorTileMenu({ connector, onChanged }: Props) {
         return () => document.removeEventListener('keydown', handler);
     }, [open]);
 
+    // Reposition popup on scroll/resize so it stays anchored to the trigger
+    // even as the settings panel scrolls. Using capture:true catches scroll
+    // on any ancestor (the settings-page-body scroller included).
+    useEffect(() => {
+        if (!open) return;
+        const reposition = () => {
+            if (!triggerRef.current) return;
+            const rect = triggerRef.current.getBoundingClientRect();
+            setPopupPos({
+                top: rect.bottom + 4,
+                right: window.innerWidth - rect.right,
+            });
+        };
+        window.addEventListener('resize', reposition);
+        window.addEventListener('scroll', reposition, true);
+        return () => {
+            window.removeEventListener('resize', reposition);
+            window.removeEventListener('scroll', reposition, true);
+        };
+    }, [open]);
+
     if (!shouldRenderMenu(connector)) return null;
 
     const stop = (e: React.MouseEvent) => {
         // Prevent the tile from toggling open when the menu trigger is clicked.
         e.stopPropagation();
         e.preventDefault();
+    };
+
+    const handleTriggerClick = (e: React.MouseEvent) => {
+        stop(e);
+        if (!open && triggerRef.current) {
+            const rect = triggerRef.current.getBoundingClientRect();
+            // Anchor popup below-right of trigger; right-align to viewport right edge.
+            setPopupPos({
+                top: rect.bottom + 4,
+                right: window.innerWidth - rect.right,
+            });
+        }
+        setOpen((v) => !v);
     };
 
     const runAction = async (action: () => Promise<unknown>) => {
@@ -93,28 +135,30 @@ export function ConnectorTileMenu({ connector, onChanged }: Props) {
 
     return (
         <div
-            ref={wrapperRef}
             className="connector-tile-menu"
             onClick={stop}
             onKeyDown={stop as unknown as React.KeyboardEventHandler<HTMLDivElement>}
         >
             <button
+                ref={triggerRef}
                 type="button"
                 className="connector-tile-menu-trigger"
                 aria-haspopup="menu"
                 aria-expanded={open}
                 aria-label="Connector actions"
-                onClick={(e) => {
-                    stop(e);
-                    setOpen((v) => !v);
-                }}
+                onClick={handleTriggerClick}
                 disabled={busy}
             >
                 <MoreHorizontal size={14} />
             </button>
 
-            {open && (
-                <div role="menu" className="connector-tile-menu-popup">
+            {open && popupPos && (
+                <div
+                    ref={popupRef}
+                    role="menu"
+                    className="connector-tile-menu-popup"
+                    style={{ position: 'fixed', top: popupPos.top, right: popupPos.right }}
+                >
                     {connector.enabled ? (
                         <button
                             role="menuitem"
