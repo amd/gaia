@@ -15,7 +15,6 @@ These tests cover ``McpServerHandler.set_enabled`` and
 
 from __future__ import annotations
 
-import json
 import os
 import stat
 from typing import Dict

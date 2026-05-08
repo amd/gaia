@@ -17,14 +17,12 @@ Coverage:
 from __future__ import annotations
 
 import json
-import types
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 from unittest.mock import MagicMock
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Minimal AgentRegistration stub so the test does not import the real module
@@ -187,7 +185,7 @@ class TestAgentMcpsRoute:
                 "mcpServers": {
                     "zebra": {"command": "z", "args": [], "disabled": False},
                     "alpha": {"command": "a", "args": [], "disabled": True},
-                    "beta":  {"command": "b", "args": [], "disabled": False},
+                    "beta": {"command": "b", "args": [], "disabled": False},
                     "omega": {"command": "o", "args": [], "disabled": True},
                 }
             },
@@ -202,9 +200,7 @@ class TestAgentMcpsRoute:
         # Enabled (beta, zebra) alphabetical first, then disabled (alpha, omega) alphabetical.
         assert names == ["beta", "zebra", "alpha", "omega"]
 
-    def test_malformed_json_skipped_other_agents_returned(
-        self, app_client, tmp_path
-    ):
+    def test_malformed_json_skipped_other_agents_returned(self, app_client, tmp_path):
         """Bad JSON for one agent does not prevent other agents from appearing."""
         client, app = app_client
 
