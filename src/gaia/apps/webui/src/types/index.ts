@@ -142,6 +142,20 @@ export interface ConnectorConfigField {
     help_md: string;
 }
 
+/**
+ * One MCP server entry declared by a custom Python agent (#1020).
+ * Read-only — controlled by the agent's local mcp_servers.json.
+ */
+export interface AgentMcpServer {
+    agent_id: string;
+    agent_name: string;
+    config_path: string;
+    server_name: string;
+    command: string;
+    args: string[];
+    disabled: boolean;
+}
+
 export interface InferenceStats {
     tokens_per_second: number;
     time_to_first_token: number;

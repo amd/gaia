@@ -544,6 +544,135 @@
     margin: 4px 0;
 }
 
+/* ── Custom-agent MCP section (#1020) ─────────────────────────────── */
+
+/*
+ * Read-only section below the managed connectors list. Each tile shows one
+ * MCP server from a custom agent's local mcp_servers.json. No toggle, no
+ * overflow menu — the user edits the JSON directly to change these.
+ */
+.agent-mcps-section {
+    margin-top: 20px;
+}
+
+.agent-mcps-section-header {
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.agent-mcp-tile {
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    overflow: hidden;
+    transition: border-color var(--duration) var(--ease);
+}
+.agent-mcp-tile:hover,
+.agent-mcp-tile--open {
+    border-color: var(--border);
+}
+
+.agent-mcp-tile-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 14px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+}
+.agent-mcp-tile-header:hover {
+    background: var(--bg-hover, rgba(0,0,0,0.03));
+}
+[data-theme="dark"] .agent-mcp-tile-header:hover {
+    background: rgba(255,255,255,0.04);
+}
+
+.agent-mcp-server-name {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.agent-mcp-agent-label {
+    font-size: 11px;
+    font-family: var(--font-sans);
+    color: var(--text-muted);
+    flex: 1;
+}
+
+.agent-mcp-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-family: var(--font-sans);
+}
+.agent-mcp-status.enabled  { color: var(--accent-green); }
+.agent-mcp-status.disabled {
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 1px 8px;
+}
+
+.agent-mcp-readonly-badge {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+}
+
+.agent-mcp-chevron {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.agent-mcp-detail {
+    border-top: 1px solid var(--border-light);
+    padding: 12px 16px;
+}
+
+.agent-mcp-command-row {
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    word-break: break-all;
+}
+
+.agent-mcp-config-path {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    word-break: break-all;
+}
+
+.agent-mcp-config-hint {
+    font-size: 11px;
+    font-family: var(--font-sans);
+    color: var(--text-muted);
+    font-style: italic;
+}
+
 .connector-tile-menu-error {
     padding: 6px 10px;
     color: var(--text-danger, #d04a3a);

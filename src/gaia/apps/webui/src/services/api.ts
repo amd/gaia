@@ -114,7 +114,7 @@ export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number
 
 // -- Connections (issue #915) ---------------------------------------------------
 
-import type { ConnectorInfo, ConnectorRow } from '../types';
+import type { AgentMcpServer, ConnectorInfo, ConnectorRow } from '../types';
 
 // New framework endpoints (T-8b) — /api/connectors
 const UI_HEADER = { 'x-gaia-ui': '1' };
@@ -176,6 +176,17 @@ export async function enableConnector(connectorId: string): Promise<ConnectorRow
  */
 export async function disableConnector(connectorId: string): Promise<ConnectorRow> {
     return apiFetch('POST', `/connectors/${connectorId}/disable`, {}, UI_HEADER);
+}
+
+/**
+ * List MCP servers declared by custom Python agents (#1020).
+ *
+ * Returns a flat sorted list (enabled first, alphabetical) of server entries
+ * from each custom agent's local mcp_servers.json. These are read-only — the
+ * UI renders them without a toggle or disconnect action.
+ */
+export async function listAgentMcps(): Promise<{ agent_mcps: AgentMcpServer[] }> {
+    return apiFetch('GET', '/connectors/agent-mcps');
 }
 
 export async function listConnectorGrants(connectorId: string): Promise<{

@@ -428,6 +428,78 @@ async def debug_state() -> Dict[str, Any]:
     }
 
 
+@router.get("/agent-mcps")
+async def list_agent_mcps(request: Request) -> Dict[str, Any]:
+    """Return MCP servers declared by custom-Python agents (#1020).
+
+    Scans each registered custom agent's ``mcp_servers.json`` (if present) and
+    returns a flat sorted list of server entries.  Servers are sorted: enabled
+    first (alphabetical), then disabled (alphabetical).
+
+    These entries are read-only — they are controlled by each agent's local
+    config file, not the global connectors framework.  The UI renders them in a
+    separate "Custom agent servers" section with no toggle or disconnect action.
+    """
+    registry = getattr(request.app.state, "agent_registry", None)
+    if registry is None:
+        # Registry not yet initialised (e.g. test client without lifespan).
+        return {"agent_mcps": []}
+
+    servers: List[Dict[str, Any]] = []
+
+    for reg in registry.list():
+        if reg.source != "custom_python" or reg.agent_dir is None:
+            continue
+        config_path = reg.agent_dir / "mcp_servers.json"
+        if not config_path.exists():
+            continue
+        try:
+            with open(config_path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            if not isinstance(raw, dict):
+                raise ValueError(
+                    f"top-level JSON must be an object, got {type(raw).__name__}"
+                )
+            mcp_servers_data = raw.get("mcpServers", raw.get("servers", {}))
+            if not isinstance(mcp_servers_data, dict):
+                raise ValueError("'mcpServers' must be an object")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "agent-mcps: failed to read %s for agent %r: %s",
+                config_path,
+                reg.id,
+                exc,
+            )
+            continue
+
+        for server_name, server_cfg in mcp_servers_data.items():
+            if not isinstance(server_cfg, dict):
+                logger.warning(
+                    "agent-mcps: skipping non-object server %r in %s",
+                    server_name,
+                    config_path,
+                )
+                continue
+            raw_args = server_cfg.get("args", [])
+            args = [str(a) for a in raw_args] if isinstance(raw_args, list) else []
+            servers.append(
+                {
+                    "agent_id": reg.id,
+                    "agent_name": reg.name,
+                    "config_path": str(config_path),
+                    "server_name": server_name,
+                    "command": str(server_cfg.get("command", "")),
+                    "args": args,
+                    "disabled": bool(server_cfg.get("disabled", False)),
+                }
+            )
+
+    # Enabled (disabled=False) first, then disabled; alphabetical within each group.
+    servers.sort(key=lambda s: (s["disabled"], s["server_name"].lower()))
+
+    return {"agent_mcps": servers}
+
+
 @router.get("/{connector_id}/grants")
 async def get_grants(connector_id: str) -> Dict[str, Any]:
     return {"grants": list_agent_grants(connector_id)}
