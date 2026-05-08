@@ -1,6 +1,7 @@
 id: conversation_summary
 name: "5-Turn Conversation Summary"
 category: context_retention
+agent_type: doc
 severity: medium
 description: |
   A 5-turn conversation that tests the agent's ability to accumulate facts across

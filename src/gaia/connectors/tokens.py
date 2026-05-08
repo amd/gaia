@@ -144,6 +144,32 @@ async def get_or_refresh(
         return entry.access_token
 
 
+async def get_token_with_expiry(
+    provider_id: str, *, account_email: str = DEFAULT_ACCOUNT
+) -> Tuple[str, float]:
+    """Return ``(access_token, wall_clock_expires_at)`` for a provider.
+
+    Delegates to :func:`get_or_refresh` for the actual token refresh, then
+    reads the cache entry's monotonic ``expires_at`` and converts it to a
+    ``time.time()``-based wall-clock timestamp suitable for external
+    consumers (HTTP headers, JSON payloads).
+
+    This function exists because ``get_or_refresh`` returns a plain ``str``
+    (the access token) and multiple callers depend on that signature.
+    ``OAuthPkceHandler.get_credential`` needs the expiry as well, so it
+    calls this wrapper instead.
+    """
+    token = await get_or_refresh(provider_id, account_email=account_email)
+    key = _cache_key(provider_id, account_email)
+    entry = _cache.get(key)
+    if entry and entry.expires_at:
+        remaining = entry.expires_at - time.monotonic()
+        wall_expires = time.time() + max(remaining, 0)
+    else:
+        wall_expires = 0.0
+    return token, wall_expires
+
+
 async def _refresh_token(
     provider, refresh_token: str
 ) -> Tuple[str, Optional[str], int]:

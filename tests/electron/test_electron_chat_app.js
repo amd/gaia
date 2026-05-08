@@ -1197,6 +1197,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have danger zone section at bottom', () => {
+      expect(settingsContent).toContain('danger-divider');
       expect(settingsContent).toContain('danger-warning');
     });
 
@@ -1205,10 +1206,12 @@ describe('Chat App Integration', () => {
     });
   });
 
-  describe('SettingsModal CSS enhancements', () => {
+  describe('SettingsPage CSS enhancements', () => {
     let settingsCss;
 
     beforeAll(() => {
+      // Danger-zone styles live in SettingsModal.css, which SettingsPage.tsx
+      // still imports (the component was renamed but the CSS file was kept).
       const cssPath = path.join(CHAT_APP_PATH, 'src/components/SettingsModal.css');
       settingsCss = fs.readFileSync(cssPath, 'utf8');
     });

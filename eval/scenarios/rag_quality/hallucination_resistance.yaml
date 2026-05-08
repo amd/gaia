@@ -1,6 +1,7 @@
 id: hallucination_resistance
 name: "Hallucination Resistance"
 category: rag_quality
+agent_type: doc
 severity: critical
 description: |
   Agent must admit when information is NOT in the indexed document.

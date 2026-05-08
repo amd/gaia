@@ -34,7 +34,7 @@ from gaia.connectors.store import (
     load_connection,
     save_connection,
 )
-from gaia.connectors.tokens import _cache, get_or_refresh
+from gaia.connectors.tokens import _cache, get_or_refresh, get_token_with_expiry
 
 
 @pytest.fixture
@@ -246,3 +246,29 @@ class TestTripwire:
         with pytest.raises(AuthRequiredError) as exc:
             await get_or_refresh("google")
         assert exc.value.reason is AuthRequiredError.Reason.REAUTH_REQUIRED
+
+
+class TestGetTokenWithExpiry:
+    """Regression: get_token_with_expiry must return (str, float)."""
+
+    @respx.mock
+    async def test_returns_tuple_of_str_and_float(self, seeded_connection):
+        respx.post("https://oauth2.googleapis.com/token").mock(
+            return_value=_ok_token_response(access="tok-abc", expires_in=3600)
+        )
+        token, expires_at = await get_token_with_expiry("google")
+        assert isinstance(token, str)
+        assert token == "tok-abc"
+        assert isinstance(expires_at, float)
+        # Wall-clock expires_at should be in the future (within ~3600s)
+        assert expires_at > time.time() + 3500
+
+    @respx.mock
+    async def test_get_or_refresh_still_returns_plain_str(self, seeded_connection):
+        """get_or_refresh must remain str — callers depend on this."""
+        respx.post("https://oauth2.googleapis.com/token").mock(
+            return_value=_ok_token_response(access="plain-str", expires_in=3600)
+        )
+        result = await get_or_refresh("google")
+        assert isinstance(result, str)
+        assert result == "plain-str"

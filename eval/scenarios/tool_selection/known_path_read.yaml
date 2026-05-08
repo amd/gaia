@@ -1,6 +1,7 @@
 id: known_path_read
 name: "Known Path -- Use read_file Directly"
 category: tool_selection
+agent_type: doc
 severity: high
 description: |
   User provides an exact file path. Agent should read the file directly using

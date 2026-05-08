@@ -1,6 +1,7 @@
 id: large_document
 name: "Buried Fact in Large Document"
 category: adversarial
+agent_type: doc
 severity: high
 description: |
   A specific fact is buried deep within a large document. Tests whether the

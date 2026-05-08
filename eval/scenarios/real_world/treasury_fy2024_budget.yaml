@@ -1,6 +1,7 @@
 id: treasury_fy2024_budget
 name: "US Treasury FY2024 Budget Results"
 category: real_world
+agent_type: doc
 severity: medium
 description: |
   Agent must retrieve fiscal policy data from the US Treasury FY2024 budget results report.

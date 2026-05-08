@@ -34,6 +34,9 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     "file_io": ("gaia.agents.code.tools.file_io", "FileIOToolsMixin"),
     "shell": ("gaia.agents.chat.tools.shell_tools", "ShellToolsMixin"),
     "screenshot": ("gaia.agents.tools.screenshot_tools", "ScreenshotToolsMixin"),
+    "filesystem": ("gaia.agents.tools.filesystem_tools", "FileSystemToolsMixin"),
+    "scratchpad": ("gaia.agents.tools.scratchpad_tools", "ScratchpadToolsMixin"),
+    "browser": ("gaia.agents.tools.browser_tools", "BrowserToolsMixin"),
     "sd": ("gaia.sd.mixin", "SDToolsMixin"),
     "vlm": ("gaia.vlm.mixin", "VLMToolsMixin"),
 }
@@ -49,7 +52,22 @@ _MANIFEST_FINGERPRINT_KEYS = frozenset(
 # claim. Loaded lazily by ``_RESERVED_BUILTIN_IDS`` so the list stays in sync
 # with what ``_register_builtin_agents`` actually registers.
 _RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
-    {"chat", "builder", "gaia-lite", "email", "connectors-demo"}
+    {
+        "chat",
+        "doc",
+        "file",
+        "data",
+        "web",
+        "chat-lite",
+        "doc-lite",
+        "file-lite",
+        "data-lite",
+        "web-lite",
+        "gaia-lite",
+        "builder",
+        "email",
+        "connectors-demo",
+    }
 )
 
 
@@ -205,9 +223,7 @@ class AgentRegistry:
     # ID in ``sessions.agent_type`` in the ChatDatabase; silently resolving
     # the alias keeps those sessions working without a DB migration. All
     # lookups (``get``, ``create_agent``, ``resolve_model``) honour the map.
-    _LEGACY_ID_ALIASES: Dict[str, str] = {
-        "chat-lite": "gaia-lite",
-    }
+    _LEGACY_ID_ALIASES: Dict[str, str] = {}
 
     def __init__(self):
         self._agents: Dict[str, AgentRegistration] = {}
@@ -275,26 +291,26 @@ class AgentRegistry:
     def _register_builtin_agents(self) -> None:
         """Register built-in agents (ChatAgent, BuilderAgent, etc.)."""
 
-        # --- ChatAgent ---
+        # --- Chat Agent (conversation-only, lean prompt) ---
         def chat_factory(**kwargs):
             from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
             valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
-            config = ChatAgentConfig(
-                **{k: v for k, v in kwargs.items() if k in valid_fields}
-            )
+            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
+            filtered.setdefault("prompt_profile", "chat")
+            config = ChatAgentConfig(**filtered)
             return ChatAgent(config=config)
 
         self._register(
             AgentRegistration(
                 id="chat",
-                name="Chat Agent",
-                description="Full-featured document Q&A assistant with RAG, file tools, and MCP support",
+                name="Chat",
+                description="General conversation — fast, personality-first, no document tools",
                 source="builtin",
                 conversation_starters=[
                     "What can you help me with?",
-                    "Search my documents for information about...",
-                    "Find files related to...",
+                    "Tell me about yourself",
+                    "What's new today?",
                 ],
                 factory=_wrap_factory_with_namespaced_id(chat_factory, "builtin:chat"),
                 agent_dir=None,
@@ -303,100 +319,277 @@ class AgentRegistry:
                 namespaced_agent_id="builtin:chat",
             )
         )
-        logger.info("registry: Registered built-in agent: chat (ChatAgent)")
+        logger.info(
+            "registry: Registered built-in agent: chat (ChatAgent, profile=chat)"
+        )
 
-        # --- Gaia Lite (smaller ~4B model, Mac/low-memory friendly) ---
-        # Reuses the full ChatAgent feature set but presets model_id to a
-        # compact ~4B checkpoint so it runs on hardware that can't host the
-        # 35B default. It's an agent (tools + RAG + MCP), not a bare chat
-        # bot — the "Lite" refers only to the model size. The preset is
-        # applied via setdefault so callers can still override (e.g. for
-        # tests or explicit user selection).
-        #
-        # Preferred-model list is platform-conditional:
-        #
-        # macOS primary is **Qwen3.5-4B-GGUF** (2.91 GB, "tool-calling"
-        # label in the Lemonade catalog). Empirically Gemma-3-4b-it-GGUF
-        # emits tool calls as Gemini-style ```tool_code``` text blocks
-        # rather than OpenAI-compatible function calls — the GAIA agent
-        # runtime never executes them, so the model can't actually use
-        # RAG, file search, or any other tool. The "personality" eval
-        # category dropped to 1/3 PASS with Gemma 3 4B, with both
-        # failures rooted in this format mismatch (see the eval run
-        # at eval/results/eval-20260426-061705).
-        # Qwen 3.5 is explicitly trained for the OpenAI tool-call format.
-        #
-        # Linux/Windows still leads with Gemma-4-E4B-it-GGUF — those
-        # platforms use a different llama.cpp bundle that ships the
-        # gemma4 architecture handler (added in llama.cpp b8637 /
-        # ggml-org/llama.cpp#21309), and Gemma 4 also carries the
-        # "tool-calling" label. macOS Lemonade v10.2.0 ships an older
-        # bundle (b8460) that can't load Gemma 4, and Lemonade actively
-        # reverts local binary swaps on restart — tracked upstream at
-        # lemonade-sdk/lemonade#1741.
-        #
-        # Each list keeps the alternative platform's primary as a
-        # fallback so ``resolve_model`` can fall through if the primary
-        # is unavailable on a given install.
-        #
-        # Single source of truth — the factory's setdefault below MUST
-        # agree with this list's first entry, or the runtime preset and
-        # the UI's advertised primary will diverge.
-        if platform.system() == "Darwin":
-            _GAIA_LITE_MODELS = ["Qwen3.5-4B-GGUF", "Gemma-4-E4B-it-GGUF"]
-        else:
-            _GAIA_LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Qwen3.5-4B-GGUF"]
-
-        # Memory floor for the gaia-lite agent. Gemma 4 E4B / Qwen3.5-4B Q4_K_M
-        # weights are ~2.5–2.7 GB on disk; add KV-cache for a 32K context window
-        # plus runtime overhead → 5 GB is the comfortable load floor. Below
-        # this the UI surfaces a Memory Warning so the user isn't surprised
-        # by a load failure or heavy swapping mid-session. Update the constant
-        # (not just the registration) if the preferred model list grows a
-        # bigger checkpoint, so the rationale stays adjacent to the number.
-        _GAIA_LITE_MIN_MEMORY_GB = 5.0
-
-        def gaia_lite_factory(**kwargs):
+        # --- Doc Agent (document Q&A with RAG) ---
+        def doc_factory(**kwargs):
             from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
             valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
             filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-            # setdefault pulls from the registration's preferred-models list
-            # so the runtime preset stays in lockstep with the UI's advertised
-            # primary — change the list, the factory follows automatically.
-            filtered.setdefault("model_id", _GAIA_LITE_MODELS[0])
+            filtered.setdefault("prompt_profile", "doc")
             config = ChatAgentConfig(**filtered)
             return ChatAgent(config=config)
 
+        self._register(
+            AgentRegistration(
+                id="doc",
+                name="Doc Agent",
+                description="Document Q&A with RAG — ask questions about PDFs, reports, and manuals",
+                source="builtin",
+                conversation_starters=[
+                    "Search my documents for...",
+                    "Summarize this document",
+                    "What does the report say about...",
+                ],
+                factory=_wrap_factory_with_namespaced_id(doc_factory, "builtin:doc"),
+                agent_dir=None,
+                models=[],
+                required_connections=[],
+                namespaced_agent_id="builtin:doc",
+            )
+        )
+        logger.info("registry: Registered built-in agent: doc (ChatAgent, profile=doc)")
+
+        # --- File Agent (file system operations) ---
+        def file_factory(**kwargs):
+            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
+            filtered.setdefault("prompt_profile", "file")
+            filtered.setdefault("enable_filesystem", True)
+            config = ChatAgentConfig(**filtered)
+            return ChatAgent(config=config)
+
+        self._register(
+            AgentRegistration(
+                id="file",
+                name="File Agent",
+                description="File system navigation, search, and analysis",
+                source="builtin",
+                conversation_starters=[
+                    "Find files related to...",
+                    "What's in my Documents folder?",
+                    "Show me the project structure",
+                ],
+                factory=_wrap_factory_with_namespaced_id(file_factory, "builtin:file"),
+                agent_dir=None,
+                models=[],
+                required_connections=[],
+                namespaced_agent_id="builtin:file",
+            )
+        )
+        logger.info(
+            "registry: Registered built-in agent: file (ChatAgent, profile=file)"
+        )
+
+        # --- Data Agent (data analysis with scratchpad) ---
+        def data_factory(**kwargs):
+            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
+            filtered.setdefault("prompt_profile", "data")
+            filtered.setdefault("enable_scratchpad", True)
+            config = ChatAgentConfig(**filtered)
+            return ChatAgent(config=config)
+
+        self._register(
+            AgentRegistration(
+                id="data",
+                name="Data Agent",
+                description="Data analysis — CSV, Excel, structured queries and tables",
+                source="builtin",
+                conversation_starters=[
+                    "Analyze my spending data",
+                    "What are the trends in this CSV?",
+                    "Who is the top performer?",
+                ],
+                factory=_wrap_factory_with_namespaced_id(data_factory, "builtin:data"),
+                agent_dir=None,
+                models=[],
+                required_connections=[],
+                namespaced_agent_id="builtin:data",
+            )
+        )
+        logger.info(
+            "registry: Registered built-in agent: data (ChatAgent, profile=data)"
+        )
+
+        # --- Web Agent (web research) ---
+        def web_factory(**kwargs):
+            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
+            filtered.setdefault("prompt_profile", "web")
+            filtered.setdefault("enable_browser", True)
+            config = ChatAgentConfig(**filtered)
+            return ChatAgent(config=config)
+
+        self._register(
+            AgentRegistration(
+                id="web",
+                name="Web Agent",
+                description="Web research — search, fetch pages, and download files",
+                source="builtin",
+                conversation_starters=[
+                    "Search the web for...",
+                    "What's the latest on...",
+                    "Fetch this URL for me",
+                ],
+                factory=_wrap_factory_with_namespaced_id(web_factory, "builtin:web"),
+                agent_dir=None,
+                models=[],
+                required_connections=[],
+                namespaced_agent_id="builtin:web",
+            )
+        )
+        logger.info("registry: Registered built-in agent: web (ChatAgent, profile=web)")
+
+        # --- Lite variants of all 5 agents ---
+        # Each agent (chat, doc, file, data, web) has a "-lite" variant that
+        # uses a smaller ~4B model for faster responses on lower-end hardware.
+        # Platform-conditional model list:
+        #   macOS: Qwen3.5-4B-GGUF (tool-calling label, OpenAI format)
+        #   Linux/Windows: Gemma-4-E4B-it-GGUF (tool-calling label)
+        if platform.system() == "Darwin":
+            _LITE_MODELS = ["Qwen3.5-4B-GGUF", "Gemma-4-E4B-it-GGUF"]
+        else:
+            _LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Qwen3.5-4B-GGUF"]
+        _LITE_MIN_MEMORY_GB = 5.0
+
+        _LITE_AGENTS = [
+            {
+                "id": "chat-lite",
+                "name": "Chat Lite",
+                "description": "Fast general conversation on a lightweight ~4B model",
+                "profile": "chat",
+                "starters": [
+                    "What can you help me with?",
+                    "Tell me about yourself",
+                ],
+                "extra_config": {},
+            },
+            {
+                "id": "doc-lite",
+                "name": "Doc Agent Lite",
+                "description": "Document Q&A with RAG on a lightweight ~4B model",
+                "profile": "doc",
+                "starters": [
+                    "Search my documents for...",
+                    "Summarize this document",
+                ],
+                "extra_config": {},
+            },
+            {
+                "id": "file-lite",
+                "name": "File Agent Lite",
+                "description": "File system navigation and search on a lightweight ~4B model",
+                "profile": "file",
+                "starters": [
+                    "Find files related to...",
+                    "What's in my Documents folder?",
+                ],
+                "extra_config": {"enable_filesystem": True},
+            },
+            {
+                "id": "data-lite",
+                "name": "Data Agent Lite",
+                "description": "Data analysis and CSV processing on a lightweight ~4B model",
+                "profile": "data",
+                "starters": [
+                    "Analyze my spending data",
+                    "What are the trends in this CSV?",
+                ],
+                "extra_config": {"enable_scratchpad": True},
+            },
+            {
+                "id": "web-lite",
+                "name": "Web Agent Lite",
+                "description": "Web research and page fetching on a lightweight ~4B model",
+                "profile": "web",
+                "starters": [
+                    "Search the web for...",
+                    "Fetch this URL for me",
+                ],
+                "extra_config": {"enable_browser": True},
+            },
+        ]
+
+        for agent_def in _LITE_AGENTS:
+            aid = agent_def["id"]
+            profile = agent_def["profile"]
+            extra = agent_def["extra_config"]
+
+            def _make_lite_factory(_profile, _extra):
+                def factory(**kwargs):
+                    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+                    valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+                    filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
+                    filtered.setdefault("model_id", _LITE_MODELS[0])
+                    filtered.setdefault("prompt_profile", _profile)
+                    for k, v in _extra.items():
+                        filtered.setdefault(k, v)
+                    config = ChatAgentConfig(**filtered)
+                    return ChatAgent(config=config)
+
+                return factory
+
+            self._register(
+                AgentRegistration(
+                    id=aid,
+                    name=agent_def["name"],
+                    description=agent_def["description"],
+                    source="builtin",
+                    conversation_starters=agent_def["starters"],
+                    factory=_wrap_factory_with_namespaced_id(
+                        _make_lite_factory(profile, extra), f"builtin:{aid}"
+                    ),
+                    agent_dir=None,
+                    models=_LITE_MODELS,
+                    min_memory_gb=_LITE_MIN_MEMORY_GB,
+                    required_connections=[],
+                    namespaced_agent_id=f"builtin:{aid}",
+                )
+            )
+            logger.info(
+                "registry: Registered built-in agent: %s (ChatAgent, profile=%s, lite)",
+                aid,
+                profile,
+            )
+
+        # Keep gaia-lite as a legacy alias for backward compatibility
         self._register(
             AgentRegistration(
                 id="gaia-lite",
                 name="Gaia Lite",
                 description=(
                     "Lightweight GAIA agent — same features as the default Chat "
-                    "Agent (RAG, file tools, MCP) but runs on a ~4B model, "
-                    "suitable for Mac and other hardware that cannot host the "
-                    "35B default."
+                    "Agent but runs on a ~4B model. Equivalent to doc-lite."
                 ),
                 source="builtin",
                 conversation_starters=[
                     "What can you help me with?",
                     "Summarize this document",
-                    "Search my files for...",
                 ],
                 factory=_wrap_factory_with_namespaced_id(
-                    gaia_lite_factory, "builtin:gaia-lite"
+                    _make_lite_factory("doc", {}), "builtin:gaia-lite"
                 ),
                 agent_dir=None,
-                models=_GAIA_LITE_MODELS,
-                min_memory_gb=_GAIA_LITE_MIN_MEMORY_GB,
+                models=_LITE_MODELS,
+                min_memory_gb=_LITE_MIN_MEMORY_GB,
                 required_connections=[],
                 namespaced_agent_id="builtin:gaia-lite",
             )
         )
         logger.info(
-            "registry: Registered built-in agent: gaia-lite (ChatAgent, primary %s)",
-            _GAIA_LITE_MODELS[0],
+            "registry: Registered built-in agent: gaia-lite (legacy, primary %s)",
+            _LITE_MODELS[0],
         )
 
         # --- ConnectorsDemoAgent ---

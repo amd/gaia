@@ -1,6 +1,7 @@
 id: text_to_speech
 name: "TTS Tool -- Graceful Degradation"
 category: web_system
+agent_type: chat
 severity: low
 description: |
   Tests that text_to_speech tool is registered. If Kokoro TTS dependencies not installed,

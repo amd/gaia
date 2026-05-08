@@ -287,7 +287,9 @@
               "spec/prisma-tools-mixin",
               "spec/typescript-tools-mixin",
               "spec/external-tools-mixin",
-              "spec/web-tools-mixin"
+              "spec/web-tools-mixin",
+              "spec/browser-tools",
+              "spec/file-system-agent"
             ]
           },
           {
