@@ -277,10 +277,15 @@ class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
     id: int
-    type: str  # 'thinking' | 'tool' | 'plan' | 'status' | 'error'
+    type: str  # 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
     label: str
     detail: Optional[str] = None
     tool: Optional[str] = None
+    decision: Optional[str] = None
+    reason: Optional[str] = None
+    ruleIds: Optional[List[str]] = None
+    policyVersion: Optional[str] = None
+    receiptId: Optional[str] = None
     result: Optional[str] = None
     success: Optional[bool] = None
     active: bool = False

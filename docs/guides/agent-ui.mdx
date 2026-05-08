@@ -183,6 +183,17 @@ Once the agent finds files — or you drag them into a session — it can index 
 
 Create, rename, search, export (Markdown/JSON), and delete sessions. Sessions persist across the CLI (`gaia chat`) and the Agent UI.
 
+### Policy Alerts and Receipts
+
+When a governance-enabled agent blocks a tool call, the Agent UI shows a
+non-actionable policy alert instead of an approval prompt. Policy blocks appear
+as inline **Policy Shield** activity cards, critical notifications, and a toast
+with a **View receipt** link when a receipt ID is available.
+
+Policy alerts are durable session history. If you reload the UI or reconnect
+after a blocked request with no assistant text, the block reason, rule IDs,
+policy version, and receipt ID remain attached to the assistant message.
+
 ---
 
 ## Keyboard Shortcuts

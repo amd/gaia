@@ -292,7 +292,7 @@ export interface StreamCallbacks {
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
-    'permission_request',
+    'permission_request', 'policy_alert',
 ]);
 
 export function sendMessageStream(

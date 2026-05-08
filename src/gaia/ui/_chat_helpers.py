@@ -1121,6 +1121,23 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     from gaia.ui.sse_handler import SSEOutputHandler
 
     session_id = request.session_id
+    sse_handler = None
+    producer = None
+    cleanup_done = False
+
+    def _cleanup_stream():
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+        cleanup_done = True
+        if sse_handler is not None:
+            sse_handler.cancelled.set()
+        _active_sse_handlers.pop(session_id, None)
+        if producer is not None:
+            producer.join(timeout=5.0)
+            if producer.is_alive():
+                logger.warning("Producer thread still running after stream ended")
+
     try:
         # Create SSE handler for streaming events
         sse_handler = SSEOutputHandler()
@@ -1599,10 +1616,51 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         # Also capture agent steps for persistence
         full_response = ""
         captured_steps = []  # Collect agent steps for DB persistence
+        persisted_policy_block_msg_id = None
+        persisted_policy_block_content = None
         step_id = 0
         idle_cycles = 0
         _stream_start = _time.time()
         _STREAM_TIMEOUT = 600  # 10 minutes — large system prompts need time
+
+        def _blocked_policy_steps():
+            return [
+                step
+                for step in captured_steps
+                if step.get("type") == "policy_alert"
+                and (step.get("decision") or "BLOCK").upper() == "BLOCK"
+            ]
+
+        def _policy_block_response(blocked_steps):
+            blocked_tool_names = ", ".join(
+                step.get("tool") or "unknown tool" for step in blocked_steps
+            )
+            return (
+                f"Blocked: {blocked_tool_names} "
+                f"{'is' if len(blocked_steps) == 1 else 'are'} "
+                "restricted by policy."
+            )
+
+        def _persist_policy_block_if_needed():
+            nonlocal persisted_policy_block_content, persisted_policy_block_msg_id
+
+            blocked_steps = _blocked_policy_steps()
+            if not blocked_steps:
+                return None
+
+            persisted_policy_block_content = _policy_block_response(blocked_steps)
+            if persisted_policy_block_msg_id is not None:
+                # ChatDatabase is single-writer SQLite today; make this replacement
+                # transactional before moving the chat DB to a multi-writer backend.
+                db.delete_message(request.session_id, persisted_policy_block_msg_id)
+            persisted_policy_block_msg_id = db.add_message(
+                request.session_id,
+                "assistant",
+                persisted_policy_block_content,
+                agent_steps=captured_steps if captured_steps else None,
+            )
+            return persisted_policy_block_msg_id
+
         while True:
             # Guard: total timeout for the streaming response
             if _time.time() - _stream_start > _STREAM_TIMEOUT:
@@ -1734,6 +1792,36 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
                     )
+                elif event_type == "policy_alert":
+                    step_id += 1
+                    for s in captured_steps:
+                        s["active"] = False
+                    tool_name = event.get("tool") or "unknown tool"
+                    reason = (
+                        event.get("reason")
+                        or event.get("message")
+                        or event.get("content")
+                        or "Tool execution was blocked by governance policy."
+                    )
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "policy_alert",
+                            "label": f"Policy blocked {tool_name}",
+                            "detail": reason,
+                            "tool": tool_name,
+                            "decision": event.get("decision") or "BLOCK",
+                            "reason": reason,
+                            "ruleIds": event.get("rule_ids") or [],
+                            "policyVersion": event.get("policy_version"),
+                            "receiptId": event.get("receipt_id"),
+                            "active": False,
+                            "success": False,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
+                    if (event.get("decision") or "BLOCK").upper() == "BLOCK":
+                        _persist_policy_block_if_needed()
 
                 # Pad each event so Chromium's receive buffer flushes immediately.
                 # Events < 512 bytes are held by Chromium until the buffer fills.
@@ -1772,12 +1860,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     yield status_data
                 continue
 
-        # Signal cancellation (handles client disconnect) then wait for producer
-        sse_handler.cancelled.set()
-        _active_sse_handlers.pop(session_id, None)
-        producer.join(timeout=5.0)
-        if producer.is_alive():
-            logger.warning("Producer thread still running after stream ended")
+        # Signal cancellation (handles client disconnect) then wait for producer.
+        _cleanup_stream()
 
         # Finalize all captured steps (mark as inactive)
         for s in captured_steps:
@@ -1787,7 +1871,15 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         if result_holder["error"]:
             error_msg = f"Agent error: {result_holder['error']}"
             if not full_response:
-                full_response = error_msg
+                blocked_alert_steps = _blocked_policy_steps()
+                if blocked_alert_steps:
+                    full_response = (
+                        persisted_policy_block_content
+                        or _policy_block_response(blocked_alert_steps)
+                    )
+                    full_response += f"\n\n[Error: {result_holder['error']}]"
+                else:
+                    full_response = error_msg
             else:
                 # Partial response exists -- append error notice so user knows
                 # the response may be incomplete
@@ -1835,6 +1927,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             )
             full_response = result_holder.get("answer", "") or ""
 
+        blocked_alert_steps = _blocked_policy_steps()
+        if not full_response and blocked_alert_steps:
+            full_response = persisted_policy_block_content or _policy_block_response(
+                blocked_alert_steps
+            )
+
         # Save complete response to DB (including captured agent steps)
         if full_response:
             # Fetch last inference stats from Lemonade (non-blocking)
@@ -1862,13 +1960,23 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             except Exception:
                 pass
 
-            msg_id = db.add_message(
-                request.session_id,
-                "assistant",
-                full_response,
-                agent_steps=captured_steps if captured_steps else None,
-                inference_stats=inference_stats,
-            )
+            if (
+                persisted_policy_block_msg_id is not None
+                and full_response == persisted_policy_block_content
+            ):
+                msg_id = persisted_policy_block_msg_id
+            else:
+                if persisted_policy_block_msg_id is not None:
+                    # ChatDatabase is single-writer SQLite today; make this replacement
+                    # transactional before moving the chat DB to a multi-writer backend.
+                    db.delete_message(request.session_id, persisted_policy_block_msg_id)
+                msg_id = db.add_message(
+                    request.session_id,
+                    "assistant",
+                    full_response,
+                    agent_steps=captured_steps if captured_steps else None,
+                    inference_stats=inference_stats,
+                )
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
             # to 30 s/session, runs on the same Lemonade slot the chat
@@ -1925,7 +2033,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
-        _active_sse_handlers.pop(session_id, None)
+        _cleanup_stream()
         error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
             db.add_message(request.session_id, "assistant", error_msg)
@@ -1933,6 +2041,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             pass
         error_data = json.dumps({"type": "error", "content": error_msg})
         yield f"data: {error_data}\n\n"
+    finally:
+        _cleanup_stream()
 
 
 # ── Document Indexing ────────────────────────────────────────────────────────
