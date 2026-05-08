@@ -236,20 +236,35 @@ export function commitInference(insights: InferenceInsight[]) {
 export interface MemorySettings {
     memory_enabled: boolean;
     mcp_memory_enabled: boolean;
+    system_discovery_consent: boolean;
 }
 
 export function getMemorySettings() {
     return memFetch<MemorySettings>('GET', '/memory/settings');
 }
 
+/** Response from PUT /api/memory/settings — includes base settings plus
+ *  optional fields when system discovery consent is toggled ON. */
+export interface MemorySettingsUpdateResponse extends MemorySettings {
+    system_context_refresh?: { stored: number; skipped?: boolean };
+    system_context_error?: string;
+}
+
 export function updateMemorySettings(settings: Partial<MemorySettings>) {
-    return memFetch<MemorySettings>('PUT', '/memory/settings', settings);
+    return memFetch<MemorySettingsUpdateResponse>('PUT', '/memory/settings', settings);
 }
 
 export function clearAllMemory() {
     return memFetch<{ knowledge: number; tool_history: number; conversations: number }>(
         'DELETE', '/memory/all'
     );
+}
+
+export function reinitializeMemory() {
+    return memFetch<{
+        cleared: { knowledge: number; tool_history: number; conversations: number };
+        system_context: { stored: number };
+    }>('POST', '/memory/reinitialize');
 }
 
 // ── Goals & Tasks ────────────────────────────────────────────────────────────

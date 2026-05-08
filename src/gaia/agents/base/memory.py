@@ -81,8 +81,13 @@ def _save_memory_settings(settings: Dict) -> None:
 
 
 def _system_context_is_enabled() -> bool:
-    """Return True unless the user has explicitly disabled system context collection."""
-    return bool(_load_memory_settings().get("system_context_enabled", True))
+    """Return True only when the user has explicitly opted in to system discovery.
+
+    Default is ``False`` (opt-in) — system discovery should never run
+    without user consent.  The toggle lives in the Memory Dashboard
+    settings panel and is persisted to ``~/.gaia/memory_settings.json``.
+    """
+    return bool(_load_memory_settings().get("system_context_enabled", False))
 
 
 #: Auto-refresh system context after this many days (hardware/software changes over time).

@@ -43,7 +43,7 @@ Admin tools (eval-only, gated by `GAIA_MEMORY_ADMIN=1`):
 - `memory_clear(scope)` — `scope` ∈ `"all"` / `"knowledge"` / `"conversations"`
 - `memory_seed(items)` — items: list of `{content, category?, context?, domain?, entity?, sensitive?, confidence?}`
 
-**Per-scenario isolation (mandatory for `category: memory`):** immediately after `create_session()` and BEFORE turn 1, call `memory_clear(scope="all")`. Skipping this lets prior scenarios pollute the run. If the scenario YAML has `setup.memory_seed`, call `memory_seed(items=<that list>)` after the clear.
+**Per-scenario memory reset:** immediately after `create_session()` and BEFORE turn 1, do NOT call `memory_clear`. Let memory accumulate across scenarios so the system is tested with growing state. If the scenario YAML has `setup.memory_seed`, call `memory_seed(items=<that list>)` directly.
 
 **During turns these tools are READ-ONLY for the simulator.** Never write or modify memory on the agent's behalf — the agent under test must do its own writing. Use the read tools only to verify state for `VERIFY VIA MCP:` clauses in `success_criteria`.
 

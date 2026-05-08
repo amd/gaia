@@ -208,6 +208,12 @@ def mixin_host(tmp_db_path):
             "consolidate_old_sessions",
             return_value={"consolidated": 0, "extracted_items": 0},
         ),
+        # System discovery defaults to opt-in (False). Override so system
+        # context tests get facts stored as they did before the consent gate.
+        patch(
+            "gaia.agents.base.memory._system_context_is_enabled",
+            return_value=True,
+        ),
     ):
         host.init_memory(db_path=tmp_db_path, context="global")
     # Set the mock embedder for post-init operations
@@ -345,6 +351,14 @@ class TestInitMemory:
 
 class TestSystemContext:
     """Tests for init_system_context() and day-0 system fact collection."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_system_context(self):
+        """System context tests assume discovery consent is granted."""
+        with patch(
+            "gaia.agents.base.memory._system_context_is_enabled", return_value=True
+        ):
+            yield
 
     def test_system_category_in_valid_categories(self):
         """'system' is a valid MemoryStore category."""

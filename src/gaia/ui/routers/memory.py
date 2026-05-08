@@ -956,9 +956,80 @@ def clear_all_memory() -> Dict:
         raise HTTPException(500, f"Clear failed: {type(exc).__name__}")
 
 
+@router.post("/api/memory/reinitialize")
+def reinitialize_memory() -> Dict:
+    """Wipe all memory and re-run initialization from scratch.
+
+    Sequence:
+    1. Delete all knowledge, conversations, and tool history.
+    2. If system discovery consent is granted, re-collect system context.
+
+    Returns ``{cleared: {...}, system_context: {stored: int}}``.
+    This is irreversible.
+    """
+    try:
+        store = _get_store()
+        cleared = store.clear_all()
+
+        system_context = {"stored": 0}
+        try:
+            system_context = _do_system_context_refresh()
+        except Exception as exc:
+            logger.warning(
+                "[memory router] reinitialize: system context failed: %s", exc
+            )
+
+        logger.info(
+            "[memory router] reinitialize complete: cleared=%s, system=%s",
+            cleared,
+            system_context,
+        )
+        return {"cleared": cleared, "system_context": system_context}
+
+    except Exception as exc:
+        logger.error("[memory router] reinitialize failed: %s", exc)
+        raise HTTPException(500, f"Reinitialize failed: {type(exc).__name__}: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # System Context Refresh
 # ---------------------------------------------------------------------------
+
+
+def _do_system_context_refresh() -> Dict:
+    """Shared helper: delete stale system facts and re-collect.
+
+    Returns ``{stored: int, skipped: bool}``.  Raises on failure so
+    callers can decide how to handle (HTTP 500, log-and-continue, etc.).
+    """
+    from gaia.agents.base.memory import _system_context_is_enabled
+
+    if not _system_context_is_enabled():
+        return {"stored": 0, "skipped": True, "reason": "system_context_disabled"}
+
+    from gaia.agents.base.system_context import collect_system_info
+
+    store = _get_store()
+    store.delete_by_source("system")
+
+    facts = collect_system_info()
+    stored = 0
+    for fact in facts:
+        try:
+            store.store(
+                category="system",
+                content=fact["content"],
+                domain=fact.get("domain"),
+                context="global",
+                confidence=1.0,
+                source="system",
+            )
+            stored += 1
+        except Exception:
+            pass
+
+    logger.info("[memory router] system context refresh: stored %d facts", stored)
+    return {"stored": stored, "skipped": False}
 
 
 @router.post("/api/memory/refresh-system-context")
@@ -971,36 +1042,7 @@ def refresh_system_context() -> Dict:
     Returns ``{stored: int, skipped: bool}``.
     """
     try:
-        from gaia.agents.base.memory import _system_context_is_enabled
-        from gaia.agents.base.system_context import collect_system_info
-
-        if not _system_context_is_enabled():
-            return {"stored": 0, "skipped": True, "reason": "system_context_disabled"}
-
-        store = _get_store()
-
-        # Replace stale facts atomically
-        store.delete_by_source("system")
-
-        facts = collect_system_info()
-        stored = 0
-        for fact in facts:
-            try:
-                store.store(
-                    category="system",
-                    content=fact["content"],
-                    domain=fact.get("domain"),
-                    context="global",
-                    confidence=1.0,
-                    source="system",
-                )
-                stored += 1
-            except Exception:
-                pass
-
-        logger.info("[memory router] refresh-system-context: stored %d facts", stored)
-        return {"stored": stored, "skipped": False}
-
+        return _do_system_context_refresh()
     except Exception as exc:
         logger.error("[memory router] refresh-system-context failed: %s", exc)
         raise HTTPException(
@@ -1453,14 +1495,29 @@ def commit_inference(body: InferenceCommit) -> Dict:
 
 _MCP_MEMORY_ENABLED_KEY = "mcp_memory_enabled"
 _MEMORY_ENABLED_KEY = "memory_enabled"
+_SYSTEM_DISCOVERY_KEY = "system_discovery_consent"
 
 
 def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
-    """Read all memory settings from the DB and return as a dict."""
+    """Read all memory settings from the DB and return as a dict.
+
+    For ``system_discovery_consent``, the authoritative source is
+    ``~/.gaia/memory_settings.json`` (key ``system_context_enabled``),
+    because the agent reads that file at startup.  If the DB value
+    disagrees (e.g., the JSON was manually edited), we sync the DB
+    to match.
+    """
+    from gaia.agents.base.memory import _system_context_is_enabled
+
+    json_consent = _system_context_is_enabled()
+    db_consent = db.get_setting(_SYSTEM_DISCOVERY_KEY, "false") == "true"
+    if json_consent != db_consent:
+        db.set_setting(_SYSTEM_DISCOVERY_KEY, "true" if json_consent else "false")
     return {
         "memory_enabled": db.get_setting(_MEMORY_ENABLED_KEY, "true") == "true",
         "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false")
         == "true",
+        "system_discovery_consent": json_consent,
     }
 
 
@@ -1471,6 +1528,8 @@ def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
     Keys:
     - ``memory_enabled`` (bool): global memory on/off. Default true.
     - ``mcp_memory_enabled`` (bool): expose read tools to MCP clients. Default false.
+    - ``system_discovery_consent`` (bool): allow system scanning (hardware, software,
+      environment). Default false — requires explicit opt-in.
     """
     return _get_memory_settings_dict(db)
 
@@ -1488,6 +1547,9 @@ def update_memory_settings(
       chat session (equivalent to every session being private). Default true.
     - ``mcp_memory_enabled`` (bool): expose memory read tools to MCP clients
       for debug/troubleshooting. Default false.
+    - ``system_discovery_consent`` (bool): allow system scanning. Default false.
+      When toggled ON, also persists the consent to ``~/.gaia/memory_settings.json``
+      and triggers an immediate system context refresh.
     """
     if "memory_enabled" in body:
         db.set_setting(
@@ -1497,4 +1559,25 @@ def update_memory_settings(
         db.set_setting(
             _MCP_MEMORY_ENABLED_KEY, "true" if body["mcp_memory_enabled"] else "false"
         )
+    if "system_discovery_consent" in body:
+        consented = bool(body["system_discovery_consent"])
+        db.set_setting(_SYSTEM_DISCOVERY_KEY, "true" if consented else "false")
+        # Sync to ~/.gaia/memory_settings.json so init_system_context() sees it
+        from gaia.agents.base.memory import _save_memory_settings
+
+        _save_memory_settings({"system_context_enabled": consented})
+        # When toggled ON, run system discovery immediately
+        if consented:
+            try:
+                refresh_result = _do_system_context_refresh()
+                result = _get_memory_settings_dict(db)
+                result["system_context_refresh"] = refresh_result
+                return result
+            except Exception as exc:
+                logger.warning(
+                    "[memory router] system discovery after consent failed: %s", exc
+                )
+                result = _get_memory_settings_dict(db)
+                result["system_context_error"] = str(exc)
+                return result
     return _get_memory_settings_dict(db)

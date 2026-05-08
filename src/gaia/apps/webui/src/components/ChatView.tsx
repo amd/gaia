@@ -1401,7 +1401,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 {messages.map((msg, idx) => {
                     // Show a solid terminal cursor on the last assistant message
                     // (only when not actively streaming — the streaming bubble has its own cursor)
-                    const isLastAssistant = false; // cursor only during streaming, not on completed messages
+                    const isLastAssistant = !isStreaming && !streamEnding
+                        && msg.role === 'assistant'
+                        && messages.slice(idx + 1).every((m) => m.role !== 'assistant');
                     // During stream-ending, skip rendering the just-completed
                     // assistant message entirely — the streaming bubble shows it.
                     // This prevents the flash/jump when transitioning.
@@ -1511,7 +1513,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             onPaste={handlePaste}
                             placeholder="Type a message or paste an image... (Shift+Enter for new line)"
                             rows={1}
-                            disabled={systemStatus?.init_state === 'initializing'}
+                            disabled={isStreaming || systemStatus?.init_state === 'initializing'}
                             aria-label="Message input"
                         />
                     </div>

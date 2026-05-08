@@ -336,8 +336,10 @@ export function MemoryDashboard() {
     // Settings
     const [memoryEnabled, setMemoryEnabled] = useState(true);
     const [mcpMemoryEnabled, setMcpMemoryEnabled] = useState(false);
+    const [systemDiscoveryConsent, setSystemDiscoveryConsent] = useState(false);
     const [settingsLoading, setSettingsLoading] = useState(false);
     const [deleteConfirm, setDeleteConfirm] = useState(false);
+    const [reinitConfirm, setReinitConfirm] = useState(false);
 
     // Tab state
     const [activeTab, setActiveTab] = useState<DashboardTab>('dashboard');
@@ -515,6 +517,7 @@ export function MemoryDashboard() {
             const s = await memoryApi.getMemorySettings();
             setMcpMemoryEnabled(s.mcp_memory_enabled);
             setMemoryEnabled(s.memory_enabled);
+            setSystemDiscoveryConsent(s.system_discovery_consent);
         } catch (err) {
             log.system.warn('Failed to load memory settings', err);
         }
@@ -1968,6 +1971,96 @@ export function MemoryDashboard() {
                                     >
                                         {mcpMemoryEnabled ? 'On' : 'Off'}
                                     </button>
+                                </div>
+                                <div className="mem-setting-row">
+                                    <div className="mem-setting-info">
+                                        <span className="mem-setting-label">System discovery</span>
+                                        <span className="mem-setting-desc">
+                                            Allow GAIA to scan your system for hardware, software, and environment information to personalize responses.
+                                        </span>
+                                    </div>
+                                    <button
+                                        className={`mem-toggle${systemDiscoveryConsent ? ' mem-toggle-on' : ''}`}
+                                        disabled={settingsLoading}
+                                        onClick={async () => {
+                                            setSettingsLoading(true);
+                                            try {
+                                                const updated = await memoryApi.updateMemorySettings({
+                                                    system_discovery_consent: !systemDiscoveryConsent,
+                                                });
+                                                setSystemDiscoveryConsent(updated.system_discovery_consent);
+                                                if (updated.system_discovery_consent) {
+                                                    if (updated.system_context_error) {
+                                                        showToast(`System discovery enabled but scan failed: ${updated.system_context_error}`, 'error');
+                                                    } else {
+                                                        const stored = updated.system_context_refresh?.stored ?? 0;
+                                                        showToast(`System discovery enabled — ${stored} system facts collected`, 'info');
+                                                    }
+                                                    loadAll();
+                                                }
+                                            } catch (err) {
+                                                log.system.warn('Failed to update system discovery setting', err);
+                                                showToast('Failed to update system discovery setting', 'error');
+                                            } finally {
+                                                setSettingsLoading(false);
+                                            }
+                                        }}
+                                        aria-label="Toggle system discovery"
+                                        aria-pressed={systemDiscoveryConsent}
+                                    >
+                                        {systemDiscoveryConsent ? 'On' : 'Off'}
+                                    </button>
+                                </div>
+                                <div className="mem-setting-row mem-setting-row-danger">
+                                    <div className="mem-setting-info">
+                                        <span className="mem-setting-label">Re-initialize memory</span>
+                                        <span className="mem-setting-desc">
+                                            Wipe all memories, conversations, and tool logs, then re-collect system information. This cannot be undone.
+                                        </span>
+                                    </div>
+                                    {reinitConfirm ? (
+                                        <div className="mem-delete-confirm">
+                                            <span className="mem-delete-confirm-label">Are you sure?</span>
+                                            <button
+                                                className="mem-btn-danger"
+                                                disabled={settingsLoading}
+                                                onClick={async () => {
+                                                    setSettingsLoading(true);
+                                                    try {
+                                                        const result = await memoryApi.reinitializeMemory();
+                                                        showToast(
+                                                            `Re-initialized: cleared ${result.cleared.knowledge} entries, restored ${result.system_context.stored} system facts`,
+                                                            'info'
+                                                        );
+                                                        loadAll();
+                                                    } catch (err) {
+                                                        log.system.warn('Failed to reinitialize memory', err);
+                                                        showToast('Failed to re-initialize memory', 'error');
+                                                    } finally {
+                                                        setSettingsLoading(false);
+                                                        setReinitConfirm(false);
+                                                    }
+                                                }}
+                                            >
+                                                Yes, re-initialize
+                                            </button>
+                                            <button
+                                                className="btn-secondary"
+                                                onClick={() => setReinitConfirm(false)}
+                                                style={{ padding: '6px 14px', fontSize: 12 }}
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <button
+                                            className="mem-btn-danger"
+                                            disabled={settingsLoading}
+                                            onClick={() => setReinitConfirm(true)}
+                                        >
+                                            Re-initialize
+                                        </button>
+                                    )}
                                 </div>
                                 <div className="mem-setting-row mem-setting-row-danger">
                                     <div className="mem-setting-info">

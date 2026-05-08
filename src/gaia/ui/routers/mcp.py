@@ -9,7 +9,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from gaia.mcp.client.config import MCPConfig
 

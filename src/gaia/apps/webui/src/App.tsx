@@ -8,7 +8,6 @@ import { ChatView } from './components/ChatView';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { FileBrowser } from './components/FileBrowser';
-import { SettingsModal } from './components/SettingsModal';
 import { MemoryDashboard } from './components/MemoryDashboard';
 import { SettingsPage } from './components/SettingsPage';
 import { MobileAccessModal } from './components/MobileAccessModal';
@@ -519,6 +518,8 @@ function App() {
             <div className="main-content">
                 {showSettings ? (
                     <SettingsPage />
+                ) : showMemoryDashboard ? (
+                    <MemoryDashboard />
                 ) : (
                     <>
                         {/* Connection / LLM status banner */}
@@ -545,12 +546,9 @@ function App() {
             <AnimatedPresence show={showFileBrowser}>
                 <FileBrowser />
             </AnimatedPresence>
-            <AnimatedPresence show={showSettings}>
-                <SettingsModal />
-            </AnimatedPresence>
-            <AnimatedPresence show={showMemoryDashboard}>
-                <MemoryDashboard />
-            </AnimatedPresence>
+            {/* Settings is now a full page (SettingsPage), rendered inline above.
+               The legacy SettingsModal overlay is no longer needed. */}
+            {/* Memory Dashboard is now a full page, rendered inline above. */}
 
             {/* Mobile Access Modal */}
             {!isMobile && (
