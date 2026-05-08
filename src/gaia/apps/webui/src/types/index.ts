@@ -100,6 +100,17 @@ export interface ConnectorRow {
      * Populated only when ``configurable === false``; null otherwise.
      */
     config_error: string | null;
+    /**
+     * Whether the connector is currently enabled (#1004).
+     *
+     * Meaningful only for ``type === 'mcp_server'`` — when ``false``, the
+     * connector retains its credentials and per-agent grants but is
+     * suppressed from agent tool lists. The backend defaults this to
+     * ``true`` for OAuth tiles and for not-yet-configured MCP tiles, so
+     * the UI never renders a "Disabled" pill where the concept doesn't
+     * apply.
+     */
+    enabled: boolean;
     account_id: string | null;
     scopes: string[];
     last_tested_at: string | null;

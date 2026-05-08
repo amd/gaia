@@ -44,6 +44,7 @@ import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
 import type { ConnectorRow } from '../types';
+import { ConnectorTileMenu } from './ConnectorTileMenu';
 import './ConnectorsSection.css';
 
 // ── ConnectorsSection ────────────────────────────────────────────────────────
@@ -148,6 +149,25 @@ function ConnectorTile({
     onToggle: () => void;
     onChanged: () => void;
 }) {
+    // Three exclusive status states for the tile header pill (#1004):
+    //   - configured + enabled   → "Configured" / account_id (green ok)
+    //   - configured + disabled  → "Disabled"               (warm muted)
+    //   - not configured         → "Not configured"         (cool muted)
+    const renderStatus = () => {
+        if (!connector.configured) {
+            return <span className="connector-status idle">Not configured</span>;
+        }
+        if (connector.type === 'mcp_server' && connector.enabled === false) {
+            return <span className="connector-status disabled">Disabled</span>;
+        }
+        return (
+            <span className="connector-status ok">
+                <CheckCircle2 size={12} />
+                {connector.account_id ?? 'Configured'}
+            </span>
+        );
+    };
+
     return (
         <div className={`connector-tile${expanded ? ' connector-tile--open' : ''}`}>
             <button
@@ -157,14 +177,8 @@ function ConnectorTile({
             >
                 <span className="connector-tile-name">{connector.display_name}</span>
                 <span className="connector-tile-type">{connector.type === 'oauth_pkce' ? 'OAuth' : 'MCP'}</span>
-                {connector.configured ? (
-                    <span className="connector-status ok">
-                        <CheckCircle2 size={12} />
-                        {connector.account_id ?? 'Configured'}
-                    </span>
-                ) : (
-                    <span className="connector-status idle">Not configured</span>
-                )}
+                {renderStatus()}
+                <ConnectorTileMenu connector={connector} onChanged={onChanged} />
                 <span className="connector-tile-chevron">
                     {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </span>
@@ -452,6 +466,29 @@ function MCPServerConfigureBody({
         }
     };
 
+    // Per-MCP enable/disable toggle (#1004). The toggle row appears only
+    // for already-configured MCP connectors — toggling on a never-
+    // configured connector has no meaning. Detail-view toggle and the
+    // tile-header overflow menu both call the same enableConnector /
+    // disableConnector helpers, so the SSE refresh keeps both surfaces
+    // in sync.
+    const handleToggleEnabled = async () => {
+        setBusy(true);
+        setErr(null);
+        try {
+            if (connector.enabled) {
+                await api.disableConnector(connector.id);
+            } else {
+                await api.enableConnector(connector.id);
+            }
+            onChanged();
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
     return (
         <div className="configure-body">
             {connector.description && (
@@ -461,6 +498,31 @@ function MCPServerConfigureBody({
                 <div className="configure-error">
                     <AlertCircle size={12} /> {err}
                 </div>
+            )}
+            {connector.configured && (
+                <div className="connector-toggle-row">
+                    <span className="connector-toggle-label">Active</span>
+                    <span className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            checked={connector.enabled !== false}
+                            onChange={() => void handleToggleEnabled()}
+                            disabled={busy}
+                            aria-label={
+                                connector.enabled
+                                    ? 'Disable this MCP server'
+                                    : 'Enable this MCP server'
+                            }
+                        />
+                        <span className="toggle-track" />
+                    </span>
+                </div>
+            )}
+            {connector.configured && connector.enabled === false && (
+                <p className="connector-toggle-help">
+                    Credentials and per-agent grants are preserved.
+                    Re-enable to make this server's tools available again.
+                </p>
             )}
             {connector.mcp_env_keys.map((key) => (
                 <div key={key} className="mcp-key-row">

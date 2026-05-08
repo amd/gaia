@@ -332,6 +332,37 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 e,
             )
 
+        # ── Connectors live-reload (issue #1004) ────────────────────────
+        # Wire the McpServerHandler.reload_callback so a Settings →
+        # Connectors enable/disable/configure/disconnect from the UI
+        # broadcasts a reload to every cached chat-session agent's
+        # per-instance MCPClientManager. Without this, toggling an MCP
+        # only takes effect after GAIA restart.
+        try:
+            from gaia.connectors.handler import _HANDLER_REGISTRY
+            from gaia.ui._chat_helpers import reload_all_session_agents_mcp
+
+            mcp_handler = _HANDLER_REGISTRY.get("mcp_server")
+            if mcp_handler is not None:
+                mcp_handler.set_reload_callback(reload_all_session_agents_mcp)
+                logger.info(
+                    "connectors: McpServerHandler reload_callback wired to "
+                    "reload_all_session_agents_mcp"
+                )
+            else:
+                logger.warning(
+                    "connectors: McpServerHandler not registered; live "
+                    "reload of toggled connectors will be deferred until "
+                    "GAIA restart"
+                )
+        except Exception as e:  # noqa: BLE001 — defense in depth
+            logger.warning(
+                "connectors: failed to wire McpServerHandler reload_callback "
+                "(%s); live reload of toggled connectors will be deferred "
+                "until GAIA restart",
+                e,
+            )
+
         yield
 
         # Shutdown

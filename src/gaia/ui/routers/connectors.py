@@ -63,8 +63,16 @@ from gaia.connectors.grants import (
     list_agent_grants,
     revoke_agent_grant,
 )
-from gaia.connectors.handler import configure, disconnect, health_check
-from gaia.connectors.mcp_server import is_mcp_server_configured
+from gaia.connectors.handler import (
+    _HANDLER_REGISTRY,
+    configure,
+    disconnect,
+    health_check,
+)
+from gaia.connectors.mcp_server import (
+    _read_mcp_servers_json,
+    is_mcp_server_configured,
+)
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.store import peek_connection
 
@@ -274,8 +282,28 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
             account_id = blob.get("account_email")
             scopes = list(blob.get("scopes", []))
 
-    elif spec.type == "mcp_server":
+    # ``enabled`` is meaningful only for ``mcp_server`` connectors. We
+    # default to ``True`` for both not-configured connectors AND OAuth so
+    # the UI doesn't render a "Disabled" pill where the concept doesn't
+    # apply.
+    enabled = True
+
+    if spec.type == "mcp_server":
         configured = is_mcp_server_configured(spec.id)
+        if configured:
+            try:
+                entry = _read_mcp_servers_json().get(spec.id, {})
+                enabled = not entry.get("disabled", False)
+            except ConnectorsError as e:
+                # Corrupt mcp_servers.json — log loudly so the user has
+                # a path to a fix, but don't crash the whole catalog
+                # list (one bad entry would make every tile unavailable).
+                logger.warning(
+                    "connectors-summary: cannot read mcp_servers.json for "
+                    "%s (%s); rendering tile with default enabled=true",
+                    spec.id,
+                    e,
+                )
 
     return {
         "id": spec.id,
@@ -292,6 +320,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "config_error": config_error,
         "account_id": account_id,
         "scopes": scopes,
+        "enabled": enabled,
         "mcp_env_keys": list(spec.mcp_env_keys),
         "default_scopes": list(spec.default_scopes),
         "available_scopes": list(spec.available_scopes),
@@ -341,6 +370,8 @@ async def connector_events() -> StreamingResponse:
       - ``connector.configured``        ({connector_id, account_id})
       - ``connector.disconnected``      ({connector_id})
       - ``connector.tested``            ({connector_id, ok, detail})
+      - ``connector.enabled``           ({connector_id})
+      - ``connector.disabled``          ({connector_id})
       - ``connector.oauth.completed``   ({connector_id, account_email})
       - ``connector.oauth.error``       ({connector_id, error})
       - ``connector.grant.changed``     ({connector_id, agent_id, scopes})
@@ -486,6 +517,67 @@ async def disconnect_connector(connector_id: str) -> Response:
 
     await _emitter.emit("connector.disconnected", {"connector_id": connector_id})
     return Response(status_code=204)
+
+
+async def _set_connector_enabled(connector_id: str, enabled: bool) -> Dict[str, Any]:
+    """Shared implementation for ``POST /{id}/enable`` and ``POST /{id}/disable``.
+
+    The toggle is meaningful only for ``mcp_server`` connectors that have
+    already been configured. Unknown ids → 404; non-MCP types → 400; not-yet-
+    configured ids → bubble up the handler's ``ConnectorsError`` as 500.
+
+    On success, emits ``connector.enabled`` or ``connector.disabled`` on the
+    SSE stream and returns the updated connector summary.
+    """
+    try:
+        spec = REGISTRY.get(connector_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
+
+    if spec.type != "mcp_server":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Connector type {spec.type!r} does not support enable/disable. "
+                "Only mcp_server connectors can be toggled."
+            ),
+        )
+
+    if not is_mcp_server_configured(connector_id):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Connector {connector_id!r} is not configured. "
+                "Configure it before toggling its enabled state."
+            ),
+        )
+
+    handler = _HANDLER_REGISTRY.get("mcp_server")
+    if handler is None:  # pragma: no cover — handler registers at import time
+        raise HTTPException(status_code=500, detail="MCP handler not registered")
+
+    try:
+        await handler.set_enabled(connector_id, enabled)
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
+
+    event_name = "connector.enabled" if enabled else "connector.disabled"
+    await _emitter.emit(event_name, {"connector_id": connector_id})
+    return _connector_summary(connector_id)
+
+
+@router.post("/{connector_id}/enable", dependencies=[Depends(_require_ui_header)])
+async def enable_connector(connector_id: str) -> Dict[str, Any]:
+    """Enable a previously-disabled MCP connector. Tools materialize live."""
+    return await _set_connector_enabled(connector_id, True)
+
+
+@router.post("/{connector_id}/disable", dependencies=[Depends(_require_ui_header)])
+async def disable_connector(connector_id: str) -> Dict[str, Any]:
+    """Disable a configured MCP connector without clearing its credentials."""
+    return await _set_connector_enabled(connector_id, False)
 
 
 @router.post("/{connector_id}/authorize", dependencies=[Depends(_require_ui_header)])

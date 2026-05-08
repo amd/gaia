@@ -151,6 +151,33 @@ export async function disconnectConnector(connectorId: string): Promise<void> {
     await apiFetch<unknown>('DELETE', `/connectors/${connectorId}`, undefined, UI_HEADER);
 }
 
+/**
+ * Enable a previously-disabled MCP connector (#1004).
+ *
+ * Returns the updated ConnectorRow with `enabled: true`. The backend
+ * triggers a live reload of every cached chat session's MCPClientManager
+ * so the connector's tools materialize without restarting GAIA.
+ *
+ * Throws when called against a non-MCP connector (server returns 400).
+ */
+export async function enableConnector(connectorId: string): Promise<ConnectorRow> {
+    return apiFetch('POST', `/connectors/${connectorId}/enable`, {}, UI_HEADER);
+}
+
+/**
+ * Disable a configured MCP connector without clearing credentials (#1004).
+ *
+ * Credentials, the env-block ``$keyring`` references, and per-agent grants
+ * are preserved. The backend triggers a live reload so the connector's
+ * tools disappear from active agents' tool lists. Re-enable with
+ * ``enableConnector`` to make tools available again.
+ *
+ * Throws when called against a non-MCP connector (server returns 400).
+ */
+export async function disableConnector(connectorId: string): Promise<ConnectorRow> {
+    return apiFetch('POST', `/connectors/${connectorId}/disable`, {}, UI_HEADER);
+}
+
 export async function listConnectorGrants(connectorId: string): Promise<{
     grants: Record<string, string[]>;
 }> {
