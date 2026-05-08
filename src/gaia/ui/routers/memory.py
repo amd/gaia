@@ -1065,6 +1065,11 @@ _DISCOVERY_SOURCES = [
     "home_structure",
     "project_manifests",
     "shell_config",
+    "file_system",
+    "git_repos",
+    "browser_bookmarks",
+    "browser_history",
+    "ssh_config",
 ]
 
 _DISCOVERY_SOURCE_LABELS = {
@@ -1077,6 +1082,11 @@ _DISCOVERY_SOURCE_LABELS = {
     "home_structure": "Home folder structure",
     "project_manifests": "Project manifests",
     "shell_config": "Shell configuration",
+    "file_system": "File system projects",
+    "git_repos": "Git repositories",
+    "browser_bookmarks": "Browser bookmarks",
+    "browser_history": "Browser history (30 days)",
+    "ssh_config": "SSH configuration",
 }
 
 # LLM inference prompt (mirrors _INFER_PROMPT in cli.py)
@@ -1142,6 +1152,11 @@ def stream_discovery():
                 "home_structure": discovery.scan_home_structure,
                 "project_manifests": discovery.scan_project_manifests,
                 "shell_config": discovery.scan_shell_config,
+                "file_system": discovery.scan_file_system,
+                "git_repos": discovery.scan_git_repos,
+                "browser_bookmarks": discovery.scan_browser_bookmarks,
+                "browser_history": lambda: discovery.scan_browser_history(days=30),
+                "ssh_config": discovery.scan_ssh_config,
             }
 
             total = 0
