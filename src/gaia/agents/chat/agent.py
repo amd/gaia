@@ -18,6 +18,7 @@ except ImportError:
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
@@ -279,6 +280,10 @@ class ChatAgent(
         self.conversation_history: List[Dict[str, str]] = (
             []
         )  # Track conversation for persistence
+        # Tool loader controls which tool bundles are active per-session.
+        # Instantiate here so the agent can reset bundle activation when a
+        # new conversation/session is created.
+        self.tool_loader = ToolLoader()
 
         # Store base URL for use in _register_tools() (VLM, etc.)
         self._base_url = effective_base_url
@@ -352,6 +357,14 @@ class ChatAgent(
                 self.current_session = self.session_manager.create_session(
                     config.ui_session_id
                 )
+                # New conversation started for this UI session; clear any
+                # session-scoped tool activations so bundles don't persist
+                # across distinct conversations.
+                try:
+                    self.tool_loader.reset_session()
+                except Exception:
+                    # Never fail agent init due to tool loader reset.
+                    pass
 
         # Start watching directories
         if self.watch_directories:

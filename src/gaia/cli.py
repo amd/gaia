@@ -590,6 +590,12 @@ async def async_main(action, **kwargs):
             # Create initial session if not loading one
             if not agent.current_session:
                 agent.current_session = agent.session_manager.create_session()
+                # Reset tool loader session state on new session
+                try:
+                    if hasattr(agent, "tool_loader"):
+                        agent.tool_loader.reset_session()
+                except Exception:
+                    pass
                 log.debug(f"Created new session: {agent.current_session.session_id}")
 
             # List tools if requested
@@ -785,6 +791,12 @@ def _launch_interactive_cli(log=None):
 
         if not agent.current_session:
             agent.current_session = agent.session_manager.create_session()
+            # Reset tool loader session state on new session
+            try:
+                if hasattr(agent, "tool_loader"):
+                    agent.tool_loader.reset_session()
+            except Exception:
+                pass
 
         interactive_mode(agent)
     except KeyboardInterrupt:
