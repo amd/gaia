@@ -44,10 +44,24 @@ Integration paths (concrete pros/cons)
   - Pros: low-level control, performant, community-maintained, avoids Puppeteer overhead.
   - Cons: same TOS risk as whatsapp-web.js; higher maintenance; frequent breakage after protocol changes.
 
-Privacy posture (which servers see message data / metadata)
-- Business Cloud API: Message payloads and metadata flow through Meta Cloud API endpoints (Meta-managed infra). If using a partner, message copies / delivery metadata also flow through the partner's servers.
-- Partner (Twilio/360dialog): Partner sees metadata and possibly message bodies (depending on partner model). They store logs/delivery receipts per contract.
-- whatsapp-web.js / Baileys: Messages flow end-to-end between participants but are proxied through Meta (WhatsApp Web). Our local client holds session keys; Meta still sees metadata (device/IP) and may analyze content per their privacy policy. Because these are unofficial clients, WhatsApp monitors for automation patterns and may ban accounts.
+Privacy posture (which servers see message data / metadata) — explicit
+- Message payloads (bodies and media):
+  - Business Cloud API (Meta-hosted): message bodies and media are transmitted to Meta-managed Cloud API endpoints and therefore are visible to Meta. When a partner is used, the partner may also receive or store message payloads when acting as a relay or handling media uploads.
+  - Partner integrations (Twilio / 360dialog / MessageBird): partners commonly see message bodies, attachments, and delivery payloads. Their dashboards and APIs may expose message content and delivery logs according to contract.
+  - Community drivers (`whatsapp-web.js`, Baileys): these run a local client that proxies traffic to Meta's WhatsApp service (WhatsApp Web). Message traffic still goes to Meta; the local client stores session credentials and may cache media locally.
+- Metadata (timestamps, delivery receipts, phone numbers, connection IP/device):
+  - Business Cloud API & partners: both Meta and the partner will typically have access to delivery and metadata; partners use this for billing, retries, and debugging.
+  - Community drivers: Meta observes metadata via the standard WhatsApp infrastructure; the local host also retains connection-level metadata.
+- Local-only data (remains on host unless explicitly forwarded):
+  - Agent runtime state, ephemeral conversation context and short-lived caches are local by default. Do not persist message bodies or attachments off-host without explicit legal/PM approval.
+  - Session credentials created by `LocalAuth` are stored on the host; they should be treated as secrets.
+- Logging and telemetry:
+  - Local logs and run artifacts may contain message bodies; treat them as sensitive and minimise body-level logging by default. Use an explicit opt-in (and legal review) before capturing or shipping message transcripts to third parties.
+
+Summary guidance:
+- For production, prefer partner-backed Business Cloud API to obtain contractual clarity about who stores or can access message content and retention policies.
+- Community drivers are experimental: while session data is local, message traffic still goes through Meta and they are not a privacy-preserving alternative to official APIs.
+- Document what exact data (bodies, media, metadata, logs) is persisted where, and require legal sign-off before retaining or sharing anything beyond ephemeral, host-local state.
 
 Cost model (production)
 - Business Cloud API (Meta): Meta pricing varies and often has free tier for limited messages; template messages may have per-message charges in some regions. Expect low per-message cost but operational overhead (verification) and possible per-message charges for large campaigns.

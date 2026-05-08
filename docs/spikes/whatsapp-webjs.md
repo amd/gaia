@@ -37,6 +37,11 @@ Notes and warnings
 - This uses an unofficial client that automates WhatsApp Web; using it for automation is against WhatsApp's TOS and accounts do get banned. Use a sacrificial test account and do not use production / personal numbers.
 - Keep runs short and document any account suspensions. Do not publish account credentials.
 
+Privacy posture (explicit)
+- Traffic flow: `whatsapp-web.js` runs a local WhatsApp Web client; message payloads and media are transmitted to Meta's WhatsApp infrastructure (WhatsApp Web). The library stores session credentials locally (e.g., in `LocalAuth`) so the host retains session keys, but message content is not kept purely local — it still transits Meta servers as normal WhatsApp traffic.
+- Local storage: session tokens and any cached media are stored on the local host by the client. Local `run.log` files may contain message text unless logging is disabled or scrubbed.
+- Recommendation: for spike runs, avoid logging full message bodies and treat logs as sensitive. Do not use customer or private phone numbers during testing.
+
 Deliverables
 - `experiments/whatsapp-webjs` prototype scaffolding (index.js, package.json).
 - `docs/spikes/whatsapp-webjs.md` — this doc (updated with findings).

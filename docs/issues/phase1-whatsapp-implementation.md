@@ -36,9 +36,14 @@ Acceptance criteria
 - Documentation updated: `docs/spec/whatsapp-evaluation.md` and adapter README with setup steps.
 - Spike reports for A/B filed under `docs/spikes/whatsapp-webjs.md` and `docs/spikes/whatsapp-cloudapi.md` (manual deliverables).
 
+Privacy posture (explicit)
+- Message payloads (text, images, audio, video): if using the WhatsApp Business Cloud API, message bodies and media transit Meta-managed Cloud API endpoints and therefore are visible to Meta. If we integrate via a partner (Twilio/360dialog), the partner will also receive message payloads when it acts as the relay or handles media uploads. For community drivers (`whatsapp-web.js`, Baileys) the local client sends normal WhatsApp Web traffic to Meta; session keys are stored locally but Meta still processes message traffic per its policies.
+- Metadata (phone numbers, timestamps, delivery receipts, IP/device info): partners and Meta will see and store metadata; local clients will have connection-level metadata on the host.
+- Local-only data: agent internal state, ephemeral conversation context, and short-lived caches remain local by default — do not persist message bodies or attachments off-host without legal/PM approval.
+- Logging: logs may contain message bodies. Treat `run.log` and any debug artifacts as sensitive; require explicit approval and contractual review before storing or shipping logs to partner systems or remote telemetry.
+
 Risks
 - Long external wait times (Meta verification) - mitigate by starting verification early and running local integration tests with partner sandbox numbers.
-- Privacy contractual review required before storing message logs - involve legal.
 
 Estimates
 - Implementation (adapter + tests + docs): 2–3 engineer-weeks.

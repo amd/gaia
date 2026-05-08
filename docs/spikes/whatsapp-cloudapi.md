@@ -21,6 +21,11 @@ Notes
 - Meta verification can take days; partners often streamline onboarding and provide sandbox/test numbers.
 - Templates must be submitted and approved for proactive outbound messages; this step can also take time.
 
+Privacy posture (explicit)
+- Business Cloud API: message payloads and media are sent to Meta-managed Cloud API endpoints and therefore are visible to Meta. When using a partner, the partner may also receive and store message bodies and media depending on their relay model and contract.
+- Metadata (delivery receipts, timestamps, phone numbers) will be visible to Meta and/or the partner and should be treated as sensitive.
+- Local logging of message bodies should be minimised during the trial; treat any `run.log` or webhook captures as sensitive artifacts.
+
 Deliverables
 - `docs/spikes/whatsapp-cloudapi.md` (this doc, updated with findings)
 - Short onboarding log with screenshots and time estimates.
