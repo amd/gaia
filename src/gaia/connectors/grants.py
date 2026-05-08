@@ -137,6 +137,14 @@ def _save_grants_locked(data: Dict[str, Dict[str, List[str]]]) -> None:
         # os.replace is atomic on POSIX and best-effort atomic on Windows
         # (MoveFileEx with MOVEFILE_REPLACE_EXISTING).
         os.replace(tmp_path, path)
+        # os.replace inherits the destination's prior mode (or umask for new
+        # files); enforce 0600 on the destination explicitly so prior runs
+        # with a permissive umask don't leave the grants file world-readable.
+        if sys.platform != "win32":
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
     except Exception:
         # Clean up the tempfile on any failure path so we don't leak.
         try:
@@ -181,6 +189,34 @@ def revoke_agent_grant(connector_id: str, agent_id: str) -> None:
             logger.debug(
                 "grants: revoked connector_id=%s agent_id=%s", connector_id, agent_id
             )
+
+
+def revoke_all_grants_for(connector_id: str) -> List[str]:
+    """
+    Remove every agent grant for ``connector_id``.
+
+    Called on connector ``disconnect()`` to prevent silent grant inheritance
+    when a connector with the same id is later re-added (which would otherwise
+    re-attach the previous user's consent to the new connector with no
+    confirmation prompt — a real security bypass).
+
+    Returns the list of agent_ids whose grants were revoked, useful for
+    callers that want to log or audit the revocation.
+    """
+    with _write_lock:
+        data = load_grants()
+        if connector_id not in data:
+            return []
+        revoked = sorted(data[connector_id].keys())
+        del data[connector_id]
+        _save_grants_locked(data)
+        logger.info(
+            "grants: revoked all agent grants for connector_id=%s (%d agents: %s)",
+            connector_id,
+            len(revoked),
+            revoked,
+        )
+        return revoked
 
 
 def list_agent_grants(connector_id: str) -> Dict[str, List[str]]:

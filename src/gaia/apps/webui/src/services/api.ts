@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, AgentInfo } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentInfo } from '../types';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -618,28 +618,14 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
 
 // -- MCP Server Management -------------------------------------------------------
 
+// MCP server configuration moved to the connectors framework (#927):
+//   - Catalog tiles  → POST /api/connectors/{id}/configure (see connectorsStore)
+//   - Custom servers → CLI `gaia connectors mcp add` today; UI in #977
+//   - Catalog list   → GET /api/connectors/catalog (filter by type='mcp_server')
+// Only read-only runtime endpoints remain:
+
 export async function listMCPServers(): Promise<{ servers: MCPServerInfo[] }> {
     return apiFetch('GET', '/mcp/servers');
-}
-
-export async function addMCPServer(data: { name: string; command: string; args?: string[]; env?: Record<string, string> }): Promise<{ status: string; name: string }> {
-    return apiFetch('POST', '/mcp/servers', data);
-}
-
-export async function removeMCPServer(name: string): Promise<{ status: string; name: string }> {
-    return apiFetch('DELETE', `/mcp/servers/${name}`);
-}
-
-export async function enableMCPServer(name: string): Promise<{ status: string; name: string }> {
-    return apiFetch('POST', `/mcp/servers/${name}/enable`);
-}
-
-export async function disableMCPServer(name: string): Promise<{ status: string; name: string }> {
-    return apiFetch('POST', `/mcp/servers/${name}/disable`);
-}
-
-export async function getMCPCatalog(): Promise<{ catalog: MCPCatalogEntry[] }> {
-    return apiFetch('GET', '/mcp/catalog');
 }
 
 export async function getMCPRuntimeStatus(): Promise<{ servers: MCPServerStatus[] }> {

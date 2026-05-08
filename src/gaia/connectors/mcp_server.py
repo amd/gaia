@@ -51,15 +51,34 @@ def _keyring_ref(connector_id: str, env_key: str) -> str:
 
 
 def _write_mcp_servers_json(servers: Dict[str, Any]) -> None:
-    """Atomically overwrite ``mcp_servers.json`` with *servers* dict."""
+    """Atomically overwrite ``mcp_servers.json`` with *servers* dict.
+
+    File is written mode 0600 (parent 0700). ``os.replace`` would otherwise
+    inherit the destination's prior mode (or umask for new files), which on a
+    multi-user machine leaves any plaintext env value (custom MCP entries
+    that escape the keyring path, ChatAgent dynamic registrations, etc.)
+    world-readable.
+    """
     path = _mcp_servers_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:  # Windows or read-only mount
+        pass
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".mcp_servers_", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"mcpServers": servers}, f, indent=2)
             f.write("\n")
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:  # Windows
+            pass
         os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
     except Exception:
         try:
             os.unlink(tmp)
@@ -218,7 +237,7 @@ class McpServerHandler:
         *,
         account_id: Optional[str] = None,
     ) -> None:
-        """Remove the MCP server entry and delete keyring slots."""
+        """Remove the MCP server entry, keyring slots, and per-agent grants."""
         # Remove from mcp_servers.json.
         servers = _read_mcp_servers_json()
         if spec.id in servers:
@@ -232,6 +251,13 @@ class McpServerHandler:
                 keyring.delete_password(SERVICE_NAME, username)
             except keyring.errors.PasswordDeleteError:
                 pass  # already absent — idempotent
+
+        # Wipe per-agent grants. If the same connector_id is re-added later
+        # (custom MCP, repeat OAuth, etc.) the new connector must NOT inherit
+        # the previous user's consent without an explicit re-grant.
+        from gaia.connectors.grants import revoke_all_grants_for
+
+        revoke_all_grants_for(spec.id)
 
         logger.info("mcp_server: disconnected connector_id=%s", spec.id)
 
