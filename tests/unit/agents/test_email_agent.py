@@ -87,9 +87,28 @@ class TestConstruction:
     def test_response_mode_is_conversational(self, agent):
         assert agent.response_mode == "conversational"
 
+    def test_system_prompt_pre_scan_fence_canary(self, agent):
+        """Canary against silent prompt drift.
+
+        The frontend's structured triage card mounts only when the LLM
+        emits its ``pre_scan_inbox`` output as a fenced block tagged
+        ``email_pre_scan``. That contract lives in the system prompt;
+        an unrelated prompt edit could quietly remove it and the card
+        would never render. Assert the literal language tag is still
+        present so a regression shows up here, not in the demo.
+        """
+        prompt = agent._get_system_prompt()
+        assert "email_pre_scan" in prompt, (
+            "system prompt must instruct the LLM to emit a fenced "
+            "``email_pre_scan`` block — the frontend's pre-scan card "
+            "mount path depends on this exact language tag"
+        )
+        # And the keyword that names the tool the LLM should call.
+        assert "pre_scan_inbox" in prompt
+
 
 class TestToolRegistry:
-    """The agent must register all 30+ tools from the five mixins."""
+    """The agent must register all tools from the six mixins."""
 
     EXPECTED_TOOLS = {
         # Read
@@ -99,6 +118,7 @@ class TestToolRegistry:
         "search_messages",
         "list_labels",
         "triage_inbox",
+        "pre_scan_inbox",
         # Organize
         "archive_message",
         "mark_read",
@@ -122,6 +142,11 @@ class TestToolRegistry:
         "accept_invite",
         "decline_invite",
         "create_event_from_email",
+        # Session preferences (in-memory; wiped on agent restart)
+        "set_priority_sender",
+        "set_low_priority_sender",
+        "set_category_default",
+        "clear_session_preferences",
     }
 
     def test_every_expected_tool_is_registered(self, agent):

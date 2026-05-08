@@ -7,6 +7,8 @@ import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentActivity } from './AgentActivity';
+import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
+import { EmailPreScanCard, isPreScanPayload } from './email/EmailPreScanCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import gaiaRobot from '../assets/gaia-robot.png';
@@ -205,6 +207,8 @@ const KNOWN_CODE_LANGS = new Set([
     'matlab', 'octave', 'fortran', 'cobol', 'pascal', 'delphi', 'ada',
     'assembly', 'asm', 'nasm', 'wasm', 'solidity', 'sol', 'verilog', 'vhdl',
     'text', 'txt', 'plaintext', 'diff', 'patch', 'log',
+    // GAIA structured-payload tags — see the ``pre`` override below.
+    'email_pre_scan', 'email-pre-scan',
 ]);
 
 /**
@@ -452,6 +456,11 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                         </div>
                     )}
                     <RenderedContent content={cleanedContent} showCursor={(isStreaming || showTerminalCursor) && !!cleanedContent && !agentStepsActive} />
+                    {message.role === 'assistant'
+                        && !isStreaming
+                        && isAuthRequiredMessage(cleanedContent) && (
+                        <EmailConnectCta />
+                    )}
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
                         <div className="msg-stats" aria-label="Message performance stats">
                             {message.created_at && (
@@ -652,18 +661,36 @@ function RenderedContent({ content, showCursor }: { content: string; showCursor?
                         );
                     },
                     // Fenced code blocks: react-markdown wraps them in <pre><code>.
-                    // Extract the language and code text, render as CodeBlock.
+                    // Extract the language and code text, render as CodeBlock —
+                    // unless the language tag is one of our structured-payload
+                    // contracts (currently: ``email_pre_scan``), in which case
+                    // we mount a typed component instead.
                     pre({ children }) {
                         // children is <code className="language-xxx">...</code>
                         const codeChild = React.Children.toArray(children)[0];
                         if (React.isValidElement(codeChild) && (codeChild.type === 'code' || (codeChild.props as any)?.className !== undefined || typeof (codeChild.props as any)?.children === 'string')) {
                             const codeProps = codeChild.props as any;
                             const className = codeProps?.className || '';
-                            const match = /language-(\w+)/.exec(className);
+                            const match = /language-([\w-]+)/.exec(className);
                             const codeString = String(codeProps?.children || '').replace(/\n$/, '');
+                            const lang = match?.[1] || '';
+                            if (lang === 'email_pre_scan' || lang === 'email-pre-scan') {
+                                try {
+                                    const parsed = JSON.parse(codeString);
+                                    if (isPreScanPayload(parsed)) {
+                                        return <EmailPreScanCard payload={parsed} />;
+                                    }
+                                } catch {
+                                    // Fall through to CodeBlock — the LLM emitted
+                                    // an ill-formed envelope. The user sees the
+                                    // raw JSON instead of a broken card; the
+                                    // system prompt makes the format explicit
+                                    // so this should be rare in practice.
+                                }
+                            }
                             return (
                                 <CodeBlock
-                                    lang={match?.[1] || ''}
+                                    lang={lang}
                                     code={codeString}
                                 />
                             );
