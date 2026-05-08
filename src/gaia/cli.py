@@ -590,6 +590,12 @@ async def async_main(action, **kwargs):
             # Create initial session if not loading one
             if not agent.current_session:
                 agent.current_session = agent.session_manager.create_session()
+                # Reset tool loader session state on new session
+                try:
+                    if hasattr(agent, "tool_loader"):
+                        agent.tool_loader.reset_session()
+                except Exception:
+                    pass
                 log.debug(f"Created new session: {agent.current_session.session_id}")
 
             # List tools if requested
@@ -785,6 +791,12 @@ def _launch_interactive_cli(log=None):
 
         if not agent.current_session:
             agent.current_session = agent.session_manager.create_session()
+            # Reset tool loader session state on new session
+            try:
+                if hasattr(agent, "tool_loader"):
+                    agent.tool_loader.reset_session()
+            except Exception:
+                pass
 
         interactive_mode(agent)
     except KeyboardInterrupt:
@@ -1450,6 +1462,59 @@ def main():
         help="Enable step-through debugging mode (pause at each agent step)",
     )
     api_parser.set_defaults(action="api")
+
+    # Telegram adapter command (v0.18.2) - supports start|stop|status
+    telegram_parser = subparsers.add_parser(
+        "telegram",
+        help="Manage Telegram messaging adapter (start|stop|status)",
+        parents=[parent_parser],
+    )
+    telegram_subparsers = telegram_parser.add_subparsers(
+        dest="telegram_action", help="telegram action to perform"
+    )
+
+    # Start subcommand
+    t_start = telegram_subparsers.add_parser(
+        "start", help="Start the Telegram adapter (polling)"
+    )
+    t_start.add_argument("--token", required=True, help="Telegram bot token")
+    t_start.add_argument(
+        "--allowed-users",
+        help="Comma-separated Telegram user IDs allowed to interact (default: allow all)",
+    )
+    t_start.add_argument(
+        "--background",
+        action="store_true",
+        help="Run adapter in background/daemon mode (writes PID and health endpoint)",
+    )
+
+    # Stop subcommand
+    t_stop = telegram_subparsers.add_parser(
+        "stop", help="Stop background Telegram adapter"
+    )
+    t_stop.add_argument(
+        "--force",
+        action="store_true",
+        help="Force stop even if graceful shutdown fails",
+    )
+
+    # Status subcommand
+    t_status = telegram_subparsers.add_parser(
+        "status", help="Show status of Telegram adapter"
+    )
+    t_status.add_argument(
+        "--health-host",
+        default="127.0.0.1",
+        help="Health server host (default: 127.0.0.1)",
+    )
+    t_status.add_argument(
+        "--health-port",
+        type=int,
+        default=8765,
+        help="Health server port (default: 8765)",
+    )
+
+    telegram_parser.set_defaults(action="telegram")
 
     # Add model download command
     download_parser = subparsers.add_parser(
@@ -2203,6 +2268,101 @@ Examples:
             log=log,
             debug=getattr(args, "debug", False),
             webui_dist=getattr(args, "ui_dist", None),
+        )
+        return
+
+    # Handle telegram scaffold command
+    if args.action == "telegram":
+        # Telegram management: start | stop | status
+        action = getattr(args, "telegram_action", None)
+        if action == "start":
+            try:
+                from gaia.messaging.telegram import run_telegram
+            except Exception as e:  # pragma: no cover - runtime import error
+                print(f"❌ Telegram support is not available: {e}", file=sys.stderr)
+                sys.exit(1)
+
+            allowed = None
+            if getattr(args, "allowed_users", None):
+                try:
+                    allowed = set(
+                        int(x.strip())
+                        for x in args.allowed_users.split(",")
+                        if x.strip()
+                    )
+                except ValueError:
+                    print(
+                        "Invalid --allowed-users format; expected comma-separated integers",
+                        file=sys.stderr,
+                    )
+                    sys.exit(2)
+
+            run_telegram(
+                token=args.token,
+                allowed_users=allowed,
+                background=getattr(args, "background", False),
+            )
+            return
+
+        if action == "stop":
+            import signal
+
+            pid_path = os.path.expanduser("~/.gaia/telegram.pid")
+            if not os.path.exists(pid_path):
+                print("Telegram adapter is not running (no PID file).")
+                return
+            try:
+                with open(pid_path, "r", encoding="utf-8") as f:
+                    pid = int(f.read().strip())
+                os.kill(pid, signal.SIGTERM)
+                print(f"Sent SIGTERM to Telegram adapter (pid {pid}).")
+                try:
+                    os.remove(pid_path)
+                except OSError:
+                    pass
+            except ProcessLookupError:
+                print("Process not found; removing stale PID file.")
+                try:
+                    os.remove(pid_path)
+                except OSError:
+                    pass
+            except PermissionError:
+                print("Permission denied when attempting to stop process. Try sudo.")
+                sys.exit(1)
+            except OSError as e:
+                print(f"Failed to stop Telegram adapter: {e}")
+                sys.exit(1)
+            return
+
+        if action == "status":
+            # Prefer health endpoint; fallback to pid file existence
+            import urllib.error
+            import urllib.request
+
+            host = getattr(args, "health_host", "127.0.0.1")
+            port = getattr(args, "health_port", 8765)
+            url = f"http://{host}:{port}/healthz"
+            try:
+                with urllib.request.urlopen(url, timeout=1) as resp:
+                    body = resp.read().decode("utf-8").strip()
+                    if resp.status == 200 and body == "ok":
+                        print(f"Telegram adapter: healthy ({url})")
+                        return
+            except urllib.error.URLError:
+                pass
+
+            pid_path = os.path.expanduser("~/.gaia/telegram.pid")
+            if os.path.exists(pid_path):
+                print(
+                    "Telegram adapter: PID file exists, but health check failed (may be starting or unhealthy)."
+                )
+            else:
+                print("Telegram adapter: not running")
+            return
+
+        print(
+            "No telegram action specified. Use: gaia telegram start|stop|status",
+            file=sys.stderr,
         )
         return
 

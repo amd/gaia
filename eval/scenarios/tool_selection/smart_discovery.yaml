@@ -1,6 +1,7 @@
 id: smart_discovery
 name: "Smart Discovery"
 category: tool_selection
+agent_type: doc
 severity: critical
 description: |
   No documents are pre-indexed. User asks about PTO policy.

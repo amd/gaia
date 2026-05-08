@@ -1,6 +1,7 @@
 id: file_not_found
 name: "File Not Found -- Helpful Error"
 category: error_recovery
+agent_type: doc
 severity: medium
 description: |
   User asks to read a nonexistent file. Agent must report the error gracefully

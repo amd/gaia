@@ -44,7 +44,7 @@ import httpx
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error as _format_connector_error
 from gaia.connectors.handler import get_credential_sync
@@ -359,10 +359,6 @@ class ConnectorsDemoAgent(Agent):
         return _SYSTEM_PROMPT
 
     def _register_tools(self) -> None:
-        # Match BuilderAgent's pattern: clear the module-level registry
-        # before registering our own so we don't inherit unrelated tools
-        # from a prior instance in the same process.
-        _TOOL_REGISTRY.clear()
 
         @tool
         def gmail_recent_subjects(limit: int = 5) -> str:
@@ -417,6 +413,6 @@ class ConnectorsDemoAgent(Agent):
             limit = max(1, min(int(limit or 10), 50))
             return json.dumps(_github_my_repos_impl(limit))
 
-        # Tools are registered on the module-level registry by the
-        # decorator; nothing else to do here. The base Agent's default
-        # chat loop drives tool selection — no custom orchestration.
+        # Snapshot: isolate this agent's tools from other agents in the
+        # same process. Replaces the old _TOOL_REGISTRY.clear() pattern.
+        self._snapshot_tools()

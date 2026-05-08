@@ -58,11 +58,11 @@ jobs:
           # pyfakefs is required by tests/unit/installer/test_uninstall_command.py
           # which uses the `fs` fixture to build a fake filesystem for testing
           # tiered uninstall logic cross-platform without touching the real FS.
-          #
+          # pytest-mock is required by the browser/filesystem tool tests.
           # keyring + httpx + respx are required by tests/unit/connections/
           # (issue #915). The in-memory keyring backend in tests/conftest.py
           # avoids the SecretService daemon prerequisite on Linux runners.
-          uv pip install --system pytest pytest-cov pytest-asyncio pyfakefs \
+          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pyfakefs \
                                   keyring httpx respx
           uv pip install --system -e ".[api]"
 
@@ -140,6 +140,17 @@ jobs:
           echo "  - ASR: Automatic speech recognition utilities"
           echo "  - TTS: Text-to-speech utilities"
           echo "  - InitCommand: gaia init profiles and installer logic"
+          echo "  - FileSystemIndex: Persistent file index with FTS5 search"
+          echo "  - FileSystemToolsMixin: browse_directory, tree, file_info, find_files, read_file, bookmark tools"
+          echo "  - ScratchpadService: SQLite working memory for data analysis"
+          echo "  - ScratchpadToolsMixin: create_table, insert_data, query_data, list_tables, drop_table tools"
+          echo "  - BrowserTools: WebClient SSRF prevention, HTML extraction, downloads"
+          echo "  - WebClient Edge Cases: parse_html fallback, extract_text, tables, links, download redirects"
+          echo "  - Categorizer: auto_categorize, category map completeness, extension uniqueness"
+          echo "  - ChatAgent Integration: filesystem, scratchpad, browser init/config/cleanup"
+          echo "  - File Write Guardrails: blocked dirs, sensitive files, size limits, backup, audit"
+          echo "  - Security Edge Cases: symlinks, audit logging, TOCTOU, prompt_overwrite"
+          echo "  - Service Edge Cases: DB corruption rebuild, shared DB, row limits, transaction atomicity"
           echo ""
           echo "Integration Tests:"
           echo "  - DatabaseMixin + Agent: Full agent lifecycle with database"

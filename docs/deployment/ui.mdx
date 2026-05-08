@@ -102,11 +102,72 @@ chmod +x gaia-agent-ui-*.AppImage
    to work around the distro's AppArmor userns restriction. See
    [Troubleshooting → AppImage on Linux](/reference/troubleshooting#appimage-on-linux)
    for the security implications and recovery steps.
-4. To collect logs for a bug report:
+4. If you downloaded the AppImage (portable) variant, the desktop app
+  creates a small user shim so you can run the `gaia` CLI from a
+  terminal. The shim is written to `~/.local/bin/gaia` when the bundled
+  Python backend is installed and no other `gaia` binary exists on your
+  PATH. If `gaia` is still not found after installation, add `~/.local/bin`
+  to your `PATH` (shell restart may be required):
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+# To persist, add the above line to ~/.profile or ~/.bashrc
+```
+
+  You can verify the shim exists with:
+
+```bash
+ls -l ~/.local/bin/gaia
+```
+5. To collect logs for a bug report:
 ```bash
 gaia diagnostics
 ```
 Attach the resulting `~/.gaia/diagnostics-*.tgz` to your GitHub issue.
+
+
+## Troubleshooting — zombie backend processes
+
+If the Electron front-end crashes or is force-quit, the Python backend
+process may remain running (listening on a random port). The AppImage
+now attempts to clean up stale backends on startup, but you can inspect
+and terminate any leftover processes manually:
+
+```bash
+# List running GAIA backend processes
+ps aux | grep -E 'python.*gaia' | grep -v grep
+
+# Terminate a PID (SIGTERM then SIGKILL if needed)
+kill <pid> || sudo kill -9 <pid>
+```
+
+If you repeatedly see leftover backends, please attach the diagnostics
+bundle produced by `gaia diagnostics` to your issue and include the
+output of `ps aux | grep -E 'python.*gaia'`.
+
+## Arch Linux and AppImage notes
+
+Arch and some rolling-release distros may ship significantly newer
+glibc or system libraries than the Ubuntu runner used to produce the
+AppImage. If the AppImage binary is not compatible on Arch you have
+these options:
+
+- Use the browser-based UI by running the backend manually:
+
+```bash
+lemonade-server serve
+python -m gaia.ui.server
+# Open http://localhost:4200
+```
+
+- Install from source or via the project `npm` package and run the
+  UI in development mode (see Developer Quick Start).
+- Report the incompatible AppImage on GitHub so we can extend the CI
+  build matrix to produce an Arch-compatible artifact.
+
+When filing an Arch/AppImage issue, include your `ldd --version`,
+`cat /etc/os-release`, and the AppImage `stdout/stderr` from a terminal
+run so we can diagnose glibc mismatches.
 
 ---
 
