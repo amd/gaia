@@ -1921,6 +1921,8 @@ NOTE: Web browsing and search ARE supported via `fetch_page`, `search_web`, and 
         # MCP tools — load from ~/.gaia/mcp_servers.json if configured.
         # Must run last so MCP tools don't bloat context before we know the base count.
         # Hard limit: skip if MCP would add >10 tools (context bloat guard).
+        from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: F811
+
         _MCP_TOOL_LIMIT = 10
         _mcp_config_path = Path.home() / ".gaia" / "mcp_servers.json"
         if _mcp_config_path.exists() and self._mcp_manager is not None:
