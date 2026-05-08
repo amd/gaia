@@ -22,37 +22,6 @@ Custom agents can have their own:
 
 ---
 
-## Using GAIA connectors
-
-If your agent needs to act on your behalf — read your inbox, list your
-calendar events, query GitHub, post to Slack, etc. — wire it up to a
-**GAIA connector** rather than asking users to paste API tokens into
-your code.
-
-A connector lets users:
-
-1. **Authenticate once** in Settings → Connections (OAuth flow for
-   Google-style providers, paste-an-API-key for MCP servers).
-2. **Grant scopes per agent** so each agent only sees the data it
-   actually needs. The Agent UI surfaces this when a user first picks
-   your agent.
-3. **Trust that secrets stay in the OS keyring**, never in plaintext
-   files or env vars baked into your code.
-
-Declare what your agent needs by setting `REQUIRED_CONNECTORS` on the
-class, and call `get_credential_sync(connector_id, agent_id, required_scopes=[...])`
-from inside a tool to get a usable token. The
-[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/src/gaia/agents/connectors_demo/agent.py)
-is a working reference for both `oauth_pkce` (Google) and `mcp_server`
-(GitHub) connectors.
-
-<Card title="Read the connectors guide" icon="plug" href="/connectors">
-  Walks through what connectors are, how the OAuth + MCP flows differ,
-  per-agent grants, and a step-by-step setup for Google and GitHub.
-</Card>
-
----
-
 ## Quick Start: Gaia Builder Agent
 
 The fastest way to create an agent is to use the built-in **Gaia Builder Agent**.
@@ -64,17 +33,33 @@ The fastest way to create an agent is to use the built-in **Gaia Builder Agent**
   <Step title="Click the + button">
     In the chat input footer, click the **+** icon (to the left of the agent picker).
     On the welcome screen, click **Build a Custom Agent**.
+
+    <Frame caption="The Build a Custom Agent entry point on the welcome screen.">
+      <img src="/assets/img/custom-agent/builder-entry-point.png" alt="Build a Custom Agent button on the welcome screen" />
+    </Frame>
   </Step>
   <Step title="Follow the prompts">
     The Builder Agent will greet you, ask for a name, and create your agent automatically.
+
+    <Frame caption="The Builder Agent walks you through creating a new agent.">
+      <img src="/assets/img/custom-agent/builder-conversation.png" alt="Builder Agent conversation creating a new agent" />
+    </Frame>
   </Step>
   <Step title="Use your new agent">
     Your agent is immediately available in the agent selector dropdown — no restart needed.
+
+    <Frame caption="A newly built custom agent appears in the agent selector.">
+      <img src="/assets/img/custom-agent/agent-selector-dropdown.png" alt="New agent showing up in the agent selector dropdown" />
+    </Frame>
   </Step>
 </Steps>
 
 The builder creates a fully working agent scaffold in `~/.gaia/agents/<your-agent-name>/agent.py`.
 Open that file to customize the instructions and add tools.
+
+<Tip>
+  Need your agent to read real data — Gmail, GitHub, your calendar? Skip ahead to [Using GAIA connectors](#using-gaia-connectors).
+</Tip>
 
 ---
 
@@ -143,6 +128,10 @@ GAIA ships with ready-to-use tool mixins. To enable them, inherit the mixin and 
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | `self.register_sd_tools()` |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | `self.register_vlm_tools()` |
 
+<Tip>
+  To call out to external services (Gmail, GitHub, Slack, etc.) without baking API keys into your code, use [GAIA connectors](#using-gaia-connectors) instead of writing your own auth.
+</Tip>
+
 ### Overriding the default model (optional)
 
 If your agent needs a specific model, set `model_id` in `__init__()`:
@@ -153,82 +142,113 @@ def __init__(self, **kwargs):
     super().__init__(**kwargs)
 ```
 
-Alternatively, create a companion `agent.yaml` next to `agent.py` with a `models:` list — the registry reads that list as an ordered preference. The sidecar is intentionally limited to `models:`; any other top-level key (`tools`, `instructions`, `mcp_servers`, `id`, `manifest_version`) is a leftover from the legacy YAML manifest format and is ignored with a deprecation warning.
+Alternatively, create a companion `agent.yaml` next to `agent.py` with a `models:` list — the registry reads that list as an ordered preference. The sidecar only honours the `models:` key; any other top-level key is ignored.
 
 ---
 
-## Migrating from a YAML Manifest
+## Using GAIA connectors
+
+If your agent needs to act on your behalf — read your inbox, list your
+calendar events, query GitHub, post to Slack, etc. — wire it up to a
+**GAIA connector** rather than asking users to paste API tokens into
+your code.
+
+A connector lets users:
+
+1. **Authenticate once** in Settings → Connections (OAuth flow for
+   Google-style providers, paste-an-API-key for MCP servers).
+2. **Grant scopes per agent** so each agent only sees the data it
+   actually needs. The Agent UI surfaces this when a user first picks
+   your agent.
+3. **Trust that secrets stay in the OS keyring**, never in plaintext
+   files or env vars baked into your code.
+
+<Frame caption="Settings → Connections lets users connect Google, GitHub, and other providers once and reuse them across agents.">
+  <img src="/assets/img/custom-agent/connections-settings.png" alt="Settings page showing connector authentication options" />
+</Frame>
+
+Declare what your agent needs by setting `REQUIRED_CONNECTORS` on the
+class, and call `get_credential_sync(connector_id, agent_id, required_scopes=[...])`
+from inside a tool to get a usable token. The
+[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/src/gaia/agents/connectors_demo/agent.py)
+is a working reference for both `oauth_pkce` (Google) and `mcp_server`
+(GitHub) connectors.
+
+<Frame caption="Per-agent grant prompt — users approve the specific scopes an agent requests.">
+  <img src="/assets/img/custom-agent/connector-grant-prompt.png" alt="Per-agent connector grant prompt showing requested scopes" />
+</Frame>
+
+<Card title="Read the connectors guide" icon="plug" href="/connectors">
+  Walks through what connectors are, how the OAuth + MCP flows differ,
+  per-agent grants, and a step-by-step setup for Google and GitHub.
+</Card>
+
+---
+
+## Export and import agents
+
+Custom agents can be packaged into a single `.zip` bundle and shared between machines, teammates, or environments. GAIA supports export and import from both the Agent UI and the CLI.
+
+### From the Agent UI
+
+Open **Settings → Custom Agents**.
+
+<Frame caption="Settings → Custom Agents shows installed agents with Export All and Import buttons.">
+  <img src="/assets/img/custom-agent/custom-agents-settings.png" alt="Custom Agents settings panel with Export All and Import buttons" />
+</Frame>
+
+- **Export All** — packages every custom agent under `~/.gaia/agents/` into a single `.zip` file and downloads it. Disabled when you have no custom agents.
+- **Import** — opens a file picker for a `.zip` bundle and shows a confirmation dialog listing the agent IDs that will be installed. Imported agents register into the live registry; in most cases no restart is required.
+
+<Frame caption="Import confirmation lists the agent IDs that will be installed before any files are written.">
+  <img src="/assets/img/custom-agent/import-confirmation.png" alt="Import confirmation dialog listing agent IDs to install" />
+</Frame>
+
+### From the CLI
+
+```bash
+# Export every custom agent to ~/.gaia/export.zip
+gaia agent export
+
+# Export to a specific path
+gaia agent export --output ./my-agents.zip
+
+# Import a bundle (shows IDs and prompts for confirmation)
+gaia agent import ./my-agents.zip
+
+# Import non-interactively (CI / scripts)
+gaia agent import ./my-agents.zip --yes
+```
+
+See the [CLI reference](/reference/cli#agent-command) for full option details.
+
+### What's in the bundle
+
+Each `.zip` contains a `bundle.json` manifest at the root and one directory per agent:
+
+```
+my-agents.zip
+├── bundle.json                  # { format_version, exported_at, gaia_version, agent_ids[] }
+├── my-research-bot/
+│   ├── agent.py
+│   └── agent.yaml               # if present
+└── my-greeter/
+    └── agent.py
+```
+
+Bundles are validated on import. The receiving end enforces conservative limits (max 1000 entries, 500 MB uncompressed, 50 MB per file, 100 MB upload via the UI) and rejects symlinks or path-traversal entries.
+
+### Security
 
 <Warning>
-  **Removed in v0.17.5:** YAML manifest agents (a directory containing only `agent.yaml`, no `agent.py`) are no longer loaded. The registry emits a `DeprecationWarning` per such directory and skips it. Convert each manifest to `agent.py` using the table below or scaffold a fresh agent with the [Gaia Builder Agent](#quick-start-gaia-builder-agent).
+  **Bundles ship your agent source as-is.** Any API keys, hardcoded tokens, or secrets embedded in `agent.py` will be included in the export. Review the bundle — or better, move secrets to [GAIA connectors](#using-gaia-connectors) — before sharing.
 </Warning>
 
-Manifest fields map to Python class attributes and base classes:
+<Note>
+  **Importing runs third-party code.** A bundle's `agent.py` files execute inside your GAIA process. Both the CLI (`gaia agent import` without `--yes`) and the UI surface the agent IDs and require explicit confirmation before installing. Only import bundles from sources you trust.
+</Note>
 
-| YAML manifest field | Python equivalent in `agent.py` |
-|---|---|
-| `id: my-bot` | `AGENT_ID = "my-bot"` |
-| `name: My Bot` | `AGENT_NAME = "My Bot"` |
-| `description: ...` | `AGENT_DESCRIPTION = "..."` |
-| `instructions: ...` | Return the string from `_get_system_prompt()` |
-| `tools: [rag, file_search]` | Inherit `RAGToolsMixin`, `FileSearchToolsMixin`; call `self.register_rag_tools()` etc. from `_register_tools()` |
-| `conversation_starters: [...]` | `CONVERSATION_STARTERS = [...]` |
-| `mcp_servers: { ... }` | Inherit `MCPClientMixin` and load servers from a `mcp_servers.json` written next to `agent.py` (see the BuilderAgent MCP template) |
-| `models: [...]` | Either `kwargs.setdefault("model_id", "...")` in `__init__()` **or** keep a sidecar `agent.yaml` with `models:` only |
-
-### Example conversion
-
-```yaml
-# agent.yaml — old manifest (no longer loaded in v0.17.5)
-manifest_version: 1
-id: research-bot
-name: Research Bot
-description: Searches documents and files
-instructions: |
-  You are a thorough research assistant. Cite sources.
-tools:
-  - rag
-  - file_search
-conversation_starters:
-  - Summarize my project notes
-models:
-  - Qwen3.5-35B-A3B-GGUF
-```
-
-becomes
-
-```python
-# agent.py — equivalent Python agent
-from gaia.agents.base.agent import Agent
-from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
-from gaia.agents.tools.file_tools import FileSearchToolsMixin
-
-
-class ResearchBot(Agent, RAGToolsMixin, FileSearchToolsMixin):
-    AGENT_ID = "research-bot"
-    AGENT_NAME = "Research Bot"
-    AGENT_DESCRIPTION = "Searches documents and files"
-    CONVERSATION_STARTERS = ["Summarize my project notes"]
-
-    def __init__(self, **kwargs):
-        kwargs.setdefault("model_id", "Qwen3.5-35B-A3B-GGUF")
-        super().__init__(**kwargs)
-
-    def _get_system_prompt(self) -> str:
-        return "You are a thorough research assistant. Cite sources."
-
-    def _create_console(self) -> AgentConsole:
-        return AgentConsole()
-
-    def _register_tools(self) -> None:
-        _TOOL_REGISTRY.clear()
-        self.register_rag_tools()
-        self.register_file_search_tools()
-```
-
-If you used a manifest with `mcp_servers:`, the BuilderAgent's MCP template emits the equivalent Python wiring — run `gaia chat --ui`, click **+** in the chat footer, and choose **Build a Custom Agent** with MCP enabled to scaffold a working starting point.
+The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are localhost-only, CSRF-guarded with the `X-Gaia-UI` header, and disabled while a [tunnel](/guides/agent-ui) is active.
 
 ---
 
@@ -348,6 +368,13 @@ If you used a manifest with `mcp_servers:`, the BuilderAgent's MCP template emit
 
   <Accordion title="Agent fails to load">
     Check the server logs for load errors. Ensure `AGENT_ID`, `AGENT_NAME`, and `AGENT_DESCRIPTION` are set as class attributes, and that the three required methods (`_get_system_prompt`, `_create_console`, `_register_tools`) are implemented.
+  </Accordion>
+
+  <Accordion title="Imported agent doesn't appear or shows errors">
+    - The import response (UI status banner or CLI output) lists per-agent errors under `errors[]` — check those first.
+    - Confirm each agent directory in the bundle contains an `agent.py` at its root. Bundles missing `agent.py` are rejected.
+    - If `requires_restart: true` is reported, restart the GAIA server to pick up the new agent.
+    - Bundles produced on a different GAIA version may reference imports that don't exist locally — check the server logs for `ImportError`.
   </Accordion>
 
   <Accordion title="MCP server not connecting">
