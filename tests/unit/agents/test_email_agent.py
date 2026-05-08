@@ -87,24 +87,25 @@ class TestConstruction:
     def test_response_mode_is_conversational(self, agent):
         assert agent.response_mode == "conversational"
 
-    def test_system_prompt_pre_scan_fence_canary(self, agent):
+    def test_system_prompt_pre_scan_canary(self, agent):
         """Canary against silent prompt drift.
 
-        The frontend's structured triage card mounts only when the LLM
-        emits its ``pre_scan_inbox`` output as a fenced block tagged
-        ``email_pre_scan``. That contract lives in the system prompt;
-        an unrelated prompt edit could quietly remove it and the card
-        would never render. Assert the literal language tag is still
-        present so a regression shows up here, not in the demo.
+        ``pre_scan_inbox`` is the tool the LLM must call when the user
+        asks for a triage view. The structured render-card contract is
+        now handled by the backend SSE hook (``SSEOutputHandler``
+        intercepts ``pre_scan_inbox`` results and injects the
+        ``email_pre_scan`` fenced block deterministically — see
+        sse_handler.py and issue #997 for the planned multi-model fix
+        that replaces the hook), so the prompt only needs to name the
+        tool. Assert that name is present so a future prompt edit
+        doesn't silently drop the routing instruction.
         """
         prompt = agent._get_system_prompt()
-        assert "email_pre_scan" in prompt, (
-            "system prompt must instruct the LLM to emit a fenced "
-            "``email_pre_scan`` block — the frontend's pre-scan card "
-            "mount path depends on this exact language tag"
+        assert "pre_scan_inbox" in prompt, (
+            "system prompt must mention ``pre_scan_inbox`` so the LLM "
+            "calls it on triage requests; the frontend card mount path "
+            "depends on this tool firing"
         )
-        # And the keyword that names the tool the LLM should call.
-        assert "pre_scan_inbox" in prompt
 
 
 class TestToolRegistry:
