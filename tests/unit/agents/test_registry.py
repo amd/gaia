@@ -178,21 +178,13 @@ class TestBuiltinRegistration:
         # comfortable load floor (weights + KV cache + runtime overhead).
         assert reg.min_memory_gb == 5.0
 
-    def test_legacy_chat_lite_id_resolves_to_gaia_lite(self):
-        """Persisted sessions with the old ``chat-lite`` agent_type must still work.
-
-        The registry should resolve the legacy ID to the renamed ``gaia-lite``
-        registration so we don't need a database migration for existing UI
-        sessions.
-        """
+    def test_chat_lite_is_registered(self):
+        """chat-lite is now a first-class agent (not an alias)."""
         registry = AgentRegistry()
         registry.discover()
-        aliased = registry.get("chat-lite")
-        canonical = registry.get("gaia-lite")
-        assert aliased is not None, "chat-lite alias should resolve"
-        assert (
-            aliased is canonical
-        ), "chat-lite should alias to the same registration as gaia-lite"
+        reg = registry.get("chat-lite")
+        assert reg is not None, "chat-lite should be registered"
+        assert reg.id == "chat-lite"
 
     def test_legacy_chat_lite_create_agent_routes_to_gaia_lite(self):
         """``create_agent('chat-lite')`` should build the renamed agent."""
@@ -225,13 +217,13 @@ class TestBuiltinRegistration:
         assert resolved == _EXPECTED_PRIMARY
 
     def test_canonical_id_maps_aliases_and_passes_through_known_ids(self):
-        """``canonical_id`` is the single source of alias truth."""
+        """``canonical_id`` passes known IDs through unchanged."""
         registry = AgentRegistry()
         registry.discover()
-        assert registry.canonical_id("chat-lite") == "gaia-lite"
         # Known IDs pass through unchanged.
         assert registry.canonical_id("gaia-lite") == "gaia-lite"
         assert registry.canonical_id("chat") == "chat"
+        assert registry.canonical_id("chat-lite") == "chat-lite"
         # Unknown IDs pass through so callers can surface the miss themselves
         # (``get`` returns ``None``, ``create_agent`` raises ValueError).
         assert registry.canonical_id("unknown-agent") == "unknown-agent"

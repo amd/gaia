@@ -638,6 +638,7 @@ class AttachDocumentRequest(BaseModel):
     | `tool_args` | `tool` (string), `args` (object), `detail` (string) | Tool arguments. `args` is the raw arguments dict passed to the tool. `detail` is a formatted human-readable summary of the arguments. |
     | `tool_end` | `success` (boolean) | Tool invocation completed. |
     | `tool_result` | `title` (string or null), `summary` (string), `success` (boolean), `result_data` (object or null), `command_output` (object or null) | Tool result with structured data. `summary` is a human-readable result. `result_data` contains typed results (see below). `command_output` contains shell command output (see below). |
+    | `policy_alert` | `tool` (string), `decision` (`"BLOCK"`), `reason` (string), `rule_ids` (string[]), `policy_version` (string), `receipt_id` (string, optional) | Governance policy blocked a tool before execution. No user action is required; use this to show a visible policy refusal instead of treating the denial as a generic tool failure. |
 
     `result_data` variants in `tool_result`:
     - **File list:** `{"type": "file_list", "files": [...], "total": int}` -- up to 20 file entries

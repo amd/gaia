@@ -14,6 +14,8 @@
     "coverageDirectory": "coverage",
     "collectCoverageFrom": [
       "../../src/gaia/electron/**/*.js",
+      "../../src/gaia/apps/webui/*.cjs",
+      "../../src/gaia/apps/webui/services/*.cjs",
       "../../src/gaia/apps/**/webui/src/**/*.js",
       "!../../src/gaia/apps/**/webui/src/renderer/**/*.js",
       "!**/node_modules/**",

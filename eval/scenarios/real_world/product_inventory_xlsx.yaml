@@ -1,6 +1,7 @@
 id: product_inventory_xlsx
 name: "Product Inventory Multi-Sheet Cross-Reference"
 category: real_world
+agent_type: data
 severity: high
 description: |
   Agent must query a three-sheet Excel inventory file (Inventory, Price List, Lookup)

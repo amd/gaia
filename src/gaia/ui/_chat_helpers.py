@@ -412,11 +412,10 @@ def _canonical_agent_type(agent_type: str) -> str:
     canonical ID and therefore the same cache entry.
 
     Raises:
-        AttributeError: if the registered registry lacks ``canonical_id``.
-            We deliberately surface this loudly rather than fall back to the
-            raw ``agent_type`` — silent fallbacks here cause cache thrash that
-            is hard to debug. See the regression test in
-            tests/unit/chat/ui/test_chat_helpers.py.
+        AttributeError: If the registry doesn't expose ``canonical_id``.
+            Fail loudly per CLAUDE.md "no silent fallbacks" — a registry
+            that lost this method is a real bug, not something to paper
+            over with a cache miss.
     """
     registry = _agent_registry
     if registry is None:

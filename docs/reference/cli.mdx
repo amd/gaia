@@ -703,6 +703,35 @@ gaia blender --example 2
 
 ---
 
+### Email Command
+
+<Card title="Email Triage" icon="envelope" href="/guides/email">
+  Read, organize, and reply to Gmail with all email content processed locally on your machine.
+</Card>
+
+```bash
+gaia email -q "<query>"           # one-shot
+gaia email -i                     # interactive REPL
+gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `-q, --query` | string | – | Single query to send to the agent (non-interactive). |
+| `-i, --interactive` | flag | false | REPL loop until `/quit`. |
+| `-v, --verbose` | flag | false | Emit structured logs for every triage decision and tool call. |
+| `--debug` | flag | false | Adds full prompt + LLM-response logging (sensitive payloads in logs). |
+
+**Setup:** requires the Google connector. Run `gaia connectors connect google` first; you'll be asked to grant Gmail and Calendar scopes.
+
+**Privacy:** all email body inference runs locally on Lemonade — the agent **rejects** any non-local LLM endpoint at startup.
+
+[→ Full Email Triage Agent Documentation](/guides/email)
+
+---
+
 ### SD Command
 
 <Card title="Image Generation" icon="image" href="/guides/sd">

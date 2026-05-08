@@ -21,6 +21,7 @@ import functools
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -225,7 +226,9 @@ DEFAULT_BACKEND = "http://localhost:4200"
 DEFAULT_BUDGET = "2.00"
 DEFAULT_TIMEOUT = 900  # seconds per scenario (base)
 # Extra seconds reserved for claude subprocess + MCP server cold-start.
-_STARTUP_OVERHEAD_S = 120
+_STARTUP_OVERHEAD_S = (
+    240  # 4 min startup (MCP init + prompt ingestion, higher on Windows)
+)
 # Hard upper bound — a misconfigured scenario cannot tie up CI for more than 2 hours.
 _MAX_EFFECTIVE_TIMEOUT_S = 7200
 
@@ -525,8 +528,8 @@ After all turns, call get_messages(session_id) for the persisted full trace.
 ### Phase 4: Scenario judgment
 Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
 
-### Phase 5: Cleanup
-{"Skip this step — leave the session in the Agent UI for manual inspection." if keep_sessions else "Call delete_session(session_id)"}
+### Phase 5: Preserve session
+Do NOT call delete_session. Leave the session intact so it can be reviewed in the Agent UI after the eval completes.
 
 ### Phase 6: Return result
 Return a single JSON object to stdout with this structure:
@@ -726,11 +729,23 @@ def preflight_check(backend_url, scenarios=None):
         errors.append(f"MCP config not found: {MCP_CONFIG}")
 
     # Check claude CLI
-    result = subprocess.run(
-        ["claude", "--version"], capture_output=True, text=True, check=False
-    )
-    if result.returncode != 0:
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
         errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
+    else:
+        try:
+            result = subprocess.run(
+                [claude_bin, "--version"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                errors.append(
+                    "'claude' CLI not found on PATH — install Claude Code CLI"
+                )
+        except FileNotFoundError:
+            errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
 
     # Memory-category preflight — required only when memory scenarios are queued.
     # Memory scenarios call memory_clear(scope=all) to reset state between turns;
@@ -917,9 +932,12 @@ def run_scenario_subprocess(
         }
     )
 
+    claude_bin = shutil.which("claude") or "claude"
     cmd = [
-        "claude",
+        claude_bin,
         "-p",
+        "--bare",  # skip hooks, CLAUDE.md, auto-memory — clean subprocess
+        "--no-session-persistence",  # don't save eval sessions to disk
         "--output-format",
         "json",
         "--json-schema",
@@ -1199,6 +1217,20 @@ def run_scenario_subprocess(
     # non-Lemonade providers and does not affect pass/fail.
     _aggregate_performance(result, scenario_id)
 
+    # Latency validation — flag excessive TTFT as a UX concern
+    _MAX_TTFT_S = 30.0  # fail threshold for time-to-first-token
+    perf_summary = result.get("performance_summary") or {}
+    avg_ttft = perf_summary.get("avg_time_to_first_token")
+    if isinstance(avg_ttft, (int, float)) and avg_ttft > _MAX_TTFT_S:
+        result.setdefault("latency_warning", []).append(
+            f"avg TTFT {avg_ttft:.1f}s exceeds {_MAX_TTFT_S}s threshold"
+        )
+        print(
+            f"[WARN] {scenario_id} — slow TTFT: {avg_ttft:.1f}s "
+            f"(threshold: {_MAX_TTFT_S}s)",
+            file=sys.stderr,
+        )
+
     # Write trace file
     traces_dir = run_dir / "traces"
     traces_dir.mkdir(exist_ok=True)
@@ -1282,8 +1314,6 @@ Fix failures in this order:
 
 def run_fix_iteration(scorecard, run_dir, iteration):
     """Invoke Claude Code to fix failing scenarios. Returns fix log entry."""
-    import shutil
-
     # Load fixer prompt from file if available, fall back to inline FIXER_PROMPT
     fixer_prompt_path = EVAL_DIR / "prompts" / "fixer.md"
     fixer_template = (
@@ -1778,6 +1808,8 @@ class AgentEvalRunner:
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
+            # Per-scenario agent_type from YAML overrides CLI --agent-type
+            scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
             result = run_scenario_subprocess(
                 scenario_path,
                 scenario_data,
@@ -1790,7 +1822,7 @@ class AgentEvalRunner:
                 extra_corpus_dirs=(
                     self.extra_corpus_dirs if self.extra_corpus_dirs else None
                 ),
-                agent_type=self.agent_type,
+                agent_type=scenario_agent_type,
             )
             results.append(result)
 
@@ -1873,6 +1905,7 @@ class AgentEvalRunner:
                 effective_timeout = _compute_effective_timeout(
                     self.timeout, scenario_data
                 )
+                scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
                 result = run_scenario_subprocess(
                     scenario_path,
                     scenario_data,
@@ -1885,7 +1918,7 @@ class AgentEvalRunner:
                     extra_corpus_dirs=(
                         self.extra_corpus_dirs if self.extra_corpus_dirs else None
                     ),
-                    agent_type=self.agent_type,
+                    agent_type=scenario_agent_type,
                 )
                 rerun_results.append(result)
 

@@ -910,13 +910,13 @@ class TestComputeEffectiveTimeout:
     def test_computed_exceeds_base(self):
         from gaia.eval.runner import _compute_effective_timeout
 
-        # 2 docs + 3 turns → 120 + 2*90 + 3*200 = 120+180+600 = 900
+        # 2 docs + 3 turns → 240 + 2*90 + 3*200 = 240+180+600 = 1020
         data = {
             "turns": [{}, {}, {}],
             "setup": {"index_documents": [{}, {}]},
         }
         result = _compute_effective_timeout(100, data)
-        assert result == 900
+        assert result == 1020
 
     def test_cap_enforced(self):
         from gaia.eval.runner import (
@@ -924,7 +924,7 @@ class TestComputeEffectiveTimeout:
             _compute_effective_timeout,
         )
 
-        # 100 docs + 100 turns → 120 + 100*90 + 100*200 = 120+9000+20000 = 29120 > cap
+        # 100 docs + 100 turns → 240 + 100*90 + 100*200 = 240+9000+20000 = 29240 > cap
         data = {
             "turns": [{}] * 100,
             "setup": {"index_documents": [{}] * 100},

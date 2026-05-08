@@ -1,0 +1,152 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: Internal task / feature work
+description: For team-internal feature work, agent-assignable tasks, and roadmap items. End users — please use Bug Report or Feature Request instead.
+title: 'feat: '
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        # Internal task template
+
+        Use this template for internal feature work, refactors, or tasks intended for assignment to coding agents (Claude Code, Cursor, etc.).
+
+        **End users:** please use the Bug Report or Feature Request template instead — this one expects more structured technical detail.
+
+        See `AGENTS.md` for the multi-agent coordination rules and `CLAUDE.md` for project conventions.
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One-paragraph statement of what this issue ships and why it matters.
+      placeholder: |
+        Example: "Add a Telegram messaging adapter so consumers can reach the agent from their phone via Telegram. Closes the async-mobile gap before v0.20.0 ships."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope (what ships in this PR)
+      description: Concrete list of changes. Files, components, endpoints, tests. Distinguish what's IN scope vs. OUT of scope.
+      placeholder: |
+        ### A. Implementation
+        - [ ] Create `src/gaia/messaging/telegram.py` wrapping `python-telegram-bot`
+        - [ ] CLI: `gaia telegram start --token $TOKEN`
+        - [ ] Tests in `tests/unit/test_telegram.py`
+
+        ### B. Out of scope
+        - Voice notes (separate issue)
+        - WhatsApp (#891 evaluation)
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Verifiable conditions. Each should map to a test or a manual verification step.
+      placeholder: |
+        - `gaia telegram start --token $TOKEN` boots and responds to `/start` within 5 seconds
+        - Free-form messages produce streaming agent responses
+        - Allowed-users gate rejects unlisted users
+        - Unit tests in `tests/unit/test_telegram.py` pass
+    validations:
+      required: true
+
+  - type: textarea
+    id: attribution
+    attributes:
+      label: Attribution / prior art
+      description: Cite the libraries, papers, open standards, or comparator products this work builds on. (See `CLAUDE.md` for why this matters.)
+      placeholder: |
+        - Hermes Agent (Nous Research) — messaging-native paradigm
+        - python-telegram-bot — upstream library, MIT
+        - Issue #635 — full multi-platform messaging adapter (this carves Telegram out as Phase 0)
+
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Capability domain
+      description: Pick the primary domain. Adds a `domain:*` label for cross-cutting filtering.
+      options:
+        - 'platform — Lemonade, providers, runtime, install, packaging'
+        - 'quality — Tests, CI/CD, security, performance, evals'
+        - 'agent-core — Framework, tools, memory, skills, orchestration'
+        - 'multimodal — Voice, Vision, Image gen, CUA'
+        - 'surfaces — Agent UI, Telegram, WhatsApp, Slack/Discord, mobile'
+        - 'automation — Scheduler, autonomy, RAG, web search, watchers'
+        - 'integrations — MCP catalogue, connectors, OAuth, third-party'
+        - 'distribution — Agent Hub, Skills marketplace, OEM bundling, OS Agents'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: track
+    attributes:
+      label: Product track
+      description: Which product line does this serve? Adds a `track:*` label.
+      options:
+        - 'consumer-app — Hermes-competitor consumer product (mobile-first, voice + messaging + memory + skills)'
+        - 'oem-pc — OEM pre-installed AMD PC product (C++ runtime + OS Agents)'
+        - 'platform — Foundation that both consumer-app and oem-pc consume'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: |
+        - **p0** = must ship in next 4 weeks; release blocker
+        - **p1** = high priority; ship in next 2 milestones
+        - **p2** = medium priority; ship in next quarter
+        - **p3** = low priority; future
+      options:
+        - 'p0 — release blocker, next 4 weeks'
+        - 'p1 — high, next 2 milestones'
+        - 'p2 — medium, next quarter'
+        - 'p3 — low, future'
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: consumer-critical
+    attributes:
+      label: Consumer-critical?
+      description: Check if this blocks the v0.20.0 consumer launch
+      options:
+        - label: This issue is on the consumer-critical path (adds `consumer-critical` label)
+          required: false
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Other issues / PRs this depends on or unblocks.
+      placeholder: |
+        - **Blocked by:** PR #606 (memory architecture)
+        - **Adjacent:** #635 (full multi-platform), #889 (Telegram Phase 0)
+        - **Unblocks:** #645 (Email Triage), #663 (Daily Briefs)
+
+  - type: textarea
+    id: failure-modes
+    attributes:
+      label: Failure modes (per CLAUDE.md "no silent fallback" rule)
+      description: For each thing that can go wrong, what's the actionable behavior?
+      placeholder: |
+        - Telegram unreachable → fail loudly with reconnect retry; do NOT silently swallow messages
+        - Bot token invalid → exit immediately with clear error citing where to get a token
+        - Allowed-users gate fails → reply with polite "not authorized" message; log
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Before submitting
+
+        **For agent assignment:** if this issue carries `consumer-critical`, it must also have the `spec-ready` label before being assigned to a coding agent. See AGENTS.md for the spec depth required (use #887/#888/#890 as templates).
+
+        **Add the appropriate labels** that this template suggested in the dropdowns. The labels aren't auto-applied from the dropdown values — please add them manually after submitting.

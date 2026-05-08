@@ -146,6 +146,7 @@ def initialize_lemonade_for_agent(
         "docker": 32768,
         "talk": 32768,
         "rag": 32768,
+        "email": 32768,  # email agent (#962) — needs room for body + thread context
         "sd": 8192,  # SD agent needs 8K for image + story workflow
         "mcp": 4096,
         "minimal": 4096,
@@ -1359,6 +1360,48 @@ def main():
         help="Enable debug logging",
     )
 
+    # Add Email Triage Agent command (#962)
+    email_parser = subparsers.add_parser(
+        "email",
+        help=(
+            "Email Triage Agent — read, organize, and reply to Gmail with "
+            "all body inference running locally on Lemonade. Requires the "
+            "Google connector to be configured (Settings → Connections)."
+        ),
+        parents=[parent_parser],
+    )
+    email_parser.add_argument(
+        "-q",
+        "--query",
+        type=str,
+        default=None,
+        help="One-shot query to send to the agent (non-interactive).",
+    )
+    email_parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help="Run in interactive mode (loop reading queries from stdin).",
+    )
+    email_parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help=(
+            "Verbose mode — emit structured logs for every triage decision "
+            "and tool call (recommended when benchmarking against other "
+            "email agents)."
+        ),
+    )
+    email_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help=(
+            "Debug mode — adds full prompt + LLM response logging to "
+            "verbose output. Sensitive payloads in logs."
+        ),
+    )
+
     # Add Docker app command
     docker_parser = subparsers.add_parser(
         "docker",
@@ -2134,6 +2177,13 @@ Examples:
         action="store_true",
         help="Skip interactive confirmation prompt (non-interactive/CI use)",
     )
+
+    # Connectors framework (issue #927, parent of #915) — manage OAuth +
+    # MCP-server connectors + per-agent grants. The subparser tree lives in
+    # gaia.connectors.cli to keep this file lean.
+    from gaia.connectors import cli as connectors_cli
+
+    connectors_cli.add_subparser(subparsers)
 
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
@@ -3254,6 +3304,13 @@ Let me know your answer!
         handle_memory_command(args)
         return
 
+    # Handle Connectors command (issue #927, parent of #915)
+    if args.action == "connectors":
+        from gaia.connectors import cli as connectors_cli  # pylint: disable=reimported
+
+        rc = connectors_cli.handle(args)
+        sys.exit(rc)
+
     # Handle Diagnostics command
     if args.action == "diagnostics":
         handle_diagnostics_command(args)
@@ -3277,6 +3334,10 @@ Let me know your answer!
     # Handle Jira command
     if args.action == "jira":
         handle_jira_command(args)
+        return
+
+    if args.action == "email":
+        handle_email_command(args)
         return
 
     # Handle Docker command
@@ -3648,6 +3709,62 @@ def handle_jira_command(args):
         sys.exit(1)
     except Exception as e:
         log.error(f"Error running Jira app: {e}")
+        print(f"❌ Error: {e}")
+        sys.exit(1)
+
+
+def handle_email_command(args):
+    """
+    Handle the ``gaia email`` command.
+
+    Wires the Email Triage Agent (#962) to a CLI session. AC3-critical:
+    this handler does NOT pass ``--use-claude`` / ``--use-chatgpt`` to
+    the agent (the agent's config has no such field). The local-LLM-only
+    path is the only path.
+
+    Args:
+        args: Parsed command line arguments for the email command
+    """
+    log = get_logger(__name__)
+
+    # Initialize Lemonade — local LLM only. The email agent's config will
+    # also reject any non-local base_url at construction time, but the
+    # CLI manager check gives a friendlier "start Lemonade first" message.
+    if not getattr(args, "no_lemonade_check", False):
+        success, _ = initialize_lemonade_for_agent(
+            agent="email",
+            skip_if_external=True,
+            # Deliberately omitted: use_claude / use_chatgpt — see AC3.
+            base_url=getattr(args, "base_url", None),
+        )
+        if not success:
+            sys.exit(1)
+
+    try:
+        from gaia.agents.email.cli import main as email_main
+
+        # Normalize args the agent CLI expects.
+        if not hasattr(args, "verbose"):
+            args.verbose = False
+        if not hasattr(args, "debug"):
+            args.debug = False
+        if not hasattr(args, "model"):
+            args.model = None
+        if not hasattr(args, "query"):
+            args.query = None
+        if not hasattr(args, "interactive"):
+            args.interactive = False
+
+        result = asyncio.run(email_main(args))
+        sys.exit(result)
+
+    except ImportError as e:
+        log.error(f"Failed to import Email agent: {e}")
+        print("❌ Error: Email agent components are not available")
+        print("Make sure GAIA is installed properly: uv pip install -e .")
+        sys.exit(1)
+    except Exception as e:
+        log.error(f"Error running Email agent: {e}")
         print(f"❌ Error: {e}")
         sys.exit(1)
 

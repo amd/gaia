@@ -159,7 +159,7 @@ axis run --policy ~/.axis/policies/gaia-mvp.yaml -- \
 
 **Step 3 — Run the demo sequence**
 
-From the GAIA UI, send two chat messages to `ChatAgent`:
+From the Gaia Agent UI, send two chat messages to `ChatAgent`:
 
 1. *"Summarize the README from this directory."* — uses the local RAG/file tool. Expected: works normally. Confirm in the audit log that only `localhost:13305` network activity is recorded.
 
