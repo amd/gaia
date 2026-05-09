@@ -2,48 +2,26 @@
 /* SPDX-License-Identifier: MIT */
 /* Memory Dashboard — agent memory observability */
 
-/* ── Full-screen overlay (same pattern as DocumentLibrary) ─── */
-.memory-dashboard-overlay {
-    position: fixed; inset: 0; z-index: 100;
-    background: var(--bg-modal-overlay);
-    backdrop-filter: blur(16px) saturate(1.2);
-    -webkit-backdrop-filter: blur(16px) saturate(1.2);
-    display: flex; align-items: stretch; justify-content: center;
-    animation: modalOverlayIn 200ms var(--ease);
-}
-
-.memory-dashboard-panel {
-    position: relative;
-    width: 1400px; max-width: 96%;
-    max-height: 94vh;
-    margin: auto;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-    box-shadow: var(--shadow-lg);
-    display: flex; flex-direction: column;
+/* ── Full-page layout (same pattern as SettingsPage) ─── */
+.memory-dashboard-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--bg-primary);
     overflow: hidden;
-    animation: modalPanelIn 300ms var(--ease);
-}
-
-@keyframes modalPanelIn {
-    from { opacity: 0; transform: translateY(12px) scale(0.98); }
-    to { opacity: 1; transform: none; }
-}
-@keyframes modalOverlayIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
 }
 
 .memory-dashboard-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 18px 24px; border-bottom: 1px solid var(--border);
+    padding: 16px 24px; border-bottom: 1px solid var(--border-light);
     flex-shrink: 0;
 }
+.memory-dashboard-header-left {
+    display: flex; align-items: center; gap: 12px;
+}
 .memory-dashboard-header h3 {
-    font-size: 14px; font-weight: 600; font-family: var(--font-mono);
-    text-transform: uppercase; letter-spacing: 1.5px;
-    color: var(--text-secondary);
+    font-size: 15px; font-weight: 600; font-family: var(--font-sans);
+    color: var(--text-primary);
 }
 .memory-dashboard-header-actions {
     display: flex; align-items: center; gap: 6px;
@@ -1611,10 +1589,8 @@
     .mem-stat-cards {
         grid-template-columns: 1fr;
     }
-    .memory-dashboard-panel {
-        max-width: 100%;
-        max-height: 100vh;
-        border-radius: 0;
+    .memory-dashboard-page {
+        height: 100%;
     }
     .mem-knowledge-table {
         font-size: 12px;

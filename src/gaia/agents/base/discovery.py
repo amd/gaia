@@ -492,6 +492,52 @@ def _extract_domain(url: str) -> str:
     return domain.lower()
 
 
+def _classify_project(path: Path, languages: List[str]) -> str:
+    """Return a brief classification of a project based on markers and languages.
+
+    Checks for framework-specific files to provide richer insight.
+    Returns an empty string if no specific classification is found.
+    """
+    markers = {
+        "Dockerfile": "containerized app",
+        "docker-compose.yml": "containerized app",
+        "Makefile": "build-system project",
+        "setup.py": "Python package",
+        "pyproject.toml": "Python package",
+        "package.json": "Node.js project",
+        "Cargo.toml": "Rust project",
+        "go.mod": "Go module",
+        "pom.xml": "Java/Maven project",
+        "build.gradle": "Java/Gradle project",
+        "Gemfile": "Ruby project",
+        "composer.json": "PHP project",
+        ".sln": "C#/.NET solution",
+    }
+    found: List[str] = []
+    try:
+        entries = {e.name for e in os.scandir(str(path)) if e.is_file()}
+    except (PermissionError, OSError):
+        entries = set()
+
+    for marker, label in markers.items():
+        if marker in entries:
+            found.append(label)
+
+    # Framework-specific markers in subdirectories
+    if (path / "src").is_dir():
+        found.append("structured src/ layout")
+
+    if found:
+        return found[0]  # Return most specific marker
+
+    # Fall back to language-based classification
+    if languages:
+        primary = languages[0]
+        return f"{primary} codebase"
+
+    return ""
+
+
 def _detect_languages(path: Path, max_depth: int = 2) -> List[str]:
     """Detect programming languages in a directory by file extensions."""
     lang_counts: Dict[str, int] = {}
@@ -595,6 +641,10 @@ class SystemDiscovery:
         Only reads folder names and file extensions — never file contents.
         Skips hidden directories, node_modules, .git, etc.
 
+        Produces enriched insights: each project fact includes a ``file_type``
+        classification (``"project"``), the detected languages, and a brief
+        classification of what the project suggests about the user.
+
         Args:
             paths: Override directories to scan. Defaults to common project dirs.
 
@@ -640,6 +690,10 @@ class SystemDiscovery:
                     except (PermissionError, OSError):
                         subfolder_count = 0
 
+                    # Classify project type from markers
+                    file_type = "project"
+                    classification = _classify_project(project_path, languages)
+
                     context = _classify_path(project_path)
                     content = (
                         f"Project '{project_name}' in {base_path.name}/ "
@@ -647,16 +701,41 @@ class SystemDiscovery:
                     )
                     if subfolder_count > 0:
                         content += f" ({subfolder_count} subfolders)"
+                    if classification:
+                        content += f" [{classification}]"
 
-                    results.append(
-                        _make_fact(
-                            content=content,
-                            context=context,
-                            entity=f"project:{project_name.lower().replace(' ', '_')}",
-                        )
+                    fact = _make_fact(
+                        content=content,
+                        context=context,
+                        entity=f"project:{project_name.lower().replace(' ', '_')}",
                     )
+                    fact["file_type"] = file_type
+                    fact["languages"] = languages
+                    fact["path"] = str(project_path)
+                    results.append(fact)
             except (PermissionError, OSError) as e:
                 logger.debug("scan_file_system error for %s: %s", base_path, e)
+
+        # If we found multiple projects, add a summary insight
+        if len(results) >= 3:
+            # Aggregate languages across all projects
+            all_langs: Dict[str, int] = {}
+            for r in results:
+                for lang in r.get("languages", []):
+                    all_langs[lang] = all_langs.get(lang, 0) + 1
+            if all_langs:
+                top_langs = sorted(all_langs.items(), key=lambda x: x[1], reverse=True)
+                lang_summary = "/".join(lang for lang, _ in top_langs[:4])
+                paths_shown = [r.get("path", "") for r in results[:4]]
+                summary = _make_profile_fact(
+                    f"Active {lang_summary} developer — "
+                    f"{len(results)} projects found",
+                    context="work",
+                    confidence=0.75,
+                    domain="work",
+                )
+                summary["paths"] = paths_shown
+                results.append(summary)
 
         return results
 
@@ -1823,6 +1902,357 @@ class SystemDiscovery:
         return facts
 
     # ------------------------------------------------------------------
+    # Personal Files Scan
+    # ------------------------------------------------------------------
+
+    def scan_personal_files(self) -> List[Dict]:
+        """Scan for important personal files: configs, documents, creative work, data.
+
+        Examines metadata only (name, path, size, modified date, extension)
+        — never reads file contents.  Sensitive paths (SSH keys, credentials)
+        are flagged with ``sensitive: True``.
+
+        Returns:
+            List of discovered fact/profile dicts with file insights.
+        """
+        results: List[Dict] = []
+
+        home = self._home
+
+        # --- 1. Resume / CV files in Documents ---
+        try:
+            self._scan_resume_files(home, results)
+        except (PermissionError, OSError) as e:
+            logger.debug("scan_personal_files resume scan error: %s", e)
+
+        # --- 2. Important config / dotfiles ---
+        try:
+            self._scan_config_files(home, results)
+        except (PermissionError, OSError) as e:
+            logger.debug("scan_personal_files config scan error: %s", e)
+
+        # --- 3. Creative projects (Blender, Photoshop, music DAWs) ---
+        try:
+            self._scan_creative_files(home, results)
+        except (PermissionError, OSError) as e:
+            logger.debug("scan_personal_files creative scan error: %s", e)
+
+        # --- 4. Writing / notes directories ---
+        try:
+            self._scan_writing_directories(home, results)
+        except (PermissionError, OSError) as e:
+            logger.debug("scan_personal_files writing scan error: %s", e)
+
+        # --- 5. Data files (CSV, SQLite, Jupyter) ---
+        try:
+            self._scan_data_files(home, results)
+        except (PermissionError, OSError) as e:
+            logger.debug("scan_personal_files data scan error: %s", e)
+
+        return results
+
+    # -- Personal files sub-scanners --
+
+    def _scan_resume_files(self, home: Path, results: List[Dict]) -> None:
+        """Find resume/CV files in Documents by filename patterns."""
+        resume_pattern = re.compile(
+            r"(resume|cv|curriculum[_\s-]?vitae|cover[_\s-]?letter)",
+            re.IGNORECASE,
+        )
+        docs_dir = home / "Documents"
+        if not docs_dir.exists() or not docs_dir.is_dir():
+            return
+
+        found: List[str] = []
+        try:
+            for entry in os.scandir(str(docs_dir)):
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                ext = os.path.splitext(entry.name)[1].lower()
+                if ext not in (".pdf", ".docx", ".doc", ".odt", ".rtf"):
+                    continue
+                if resume_pattern.search(os.path.splitext(entry.name)[0]):
+                    found.append(entry.name)
+        except (PermissionError, OSError):
+            return
+
+        if found:
+            names = ", ".join(found[:5])
+            results.append(
+                _make_profile_fact(
+                    f"Has resume/CV files in Documents: {names}",
+                    context="personal",
+                    confidence=0.8,
+                    sensitive=True,
+                )
+            )
+
+    def _scan_config_files(self, home: Path, results: List[Dict]) -> None:
+        """Check for important dotfiles and config files."""
+        # Map of config paths relative to home -> (description, sensitive)
+        config_checks = [
+            (".gitconfig", "Git configuration", False),
+            (".ssh/config", "SSH configuration", True),
+            (".ssh/id_rsa", "SSH RSA key", True),
+            (".ssh/id_ed25519", "SSH Ed25519 key", True),
+            (".bashrc", "Bash shell config", False),
+            (".zshrc", "Zsh shell config", False),
+            (".npmrc", "npm configuration", True),
+            (".pypirc", "PyPI credentials", True),
+            (".docker/config.json", "Docker configuration", True),
+            (".aws/credentials", "AWS credentials", True),
+            (".kube/config", "Kubernetes config", True),
+        ]
+
+        found_configs: List[str] = []
+        found_sensitive: List[str] = []
+
+        for rel_path, description, is_sensitive in config_checks:
+            full_path = home / rel_path
+            if full_path.exists():
+                if is_sensitive:
+                    found_sensitive.append(description)
+                else:
+                    found_configs.append(description)
+
+        if found_configs:
+            results.append(
+                _make_fact(
+                    content=f"Config files present: {', '.join(found_configs)}",
+                    context="unclassified",
+                    entity="config:dotfiles",
+                    confidence=0.5,
+                )
+            )
+
+        if found_sensitive:
+            results.append(
+                _make_fact(
+                    content=f"Sensitive config files present: {', '.join(found_sensitive)}",
+                    context="unclassified",
+                    entity="config:credentials",
+                    sensitive=True,
+                    confidence=0.5,
+                )
+            )
+
+    def _scan_creative_files(self, home: Path, results: List[Dict]) -> None:
+        """Find creative project files (Blender, Photoshop, music, etc.)."""
+        creative_exts = {
+            ".blend": ("3D", "Blender project"),
+            ".psd": ("design", "Photoshop file"),
+            ".psb": ("design", "Photoshop large document"),
+            ".ai": ("design", "Illustrator file"),
+            ".indd": ("design", "InDesign file"),
+            ".sketch": ("design", "Sketch file"),
+            ".xd": ("design", "Adobe XD file"),
+            # Music production
+            ".als": ("music_production", "Ableton Live project"),
+            ".flp": ("music_production", "FL Studio project"),
+            ".logic": ("music_production", "Logic Pro project"),
+            ".ptx": ("music_production", "Pro Tools project"),
+            ".rpp": ("music_production", "REAPER project"),
+            # 3D / game
+            ".fbx": ("3D", "3D model file"),
+            ".unitypackage": ("game_dev", "Unity package"),
+            ".uproject": ("game_dev", "Unreal Engine project"),
+            ".godot": ("game_dev", "Godot project"),
+        }
+
+        scan_dirs = [
+            home / "Documents",
+            home / "Desktop",
+            home / "Downloads",
+            home / "Projects",
+            home / "Creative",
+            home / "Art",
+        ]
+
+        category_counts: Dict[str, int] = {}  # category -> count
+
+        for scan_dir in scan_dirs:
+            if not scan_dir.exists() or not scan_dir.is_dir():
+                continue
+            try:
+                for depth, (_dirpath, dirnames, filenames) in enumerate(
+                    os.walk(str(scan_dir))
+                ):
+                    if depth >= 3:
+                        dirnames.clear()
+                        continue
+                    dirnames[:] = [
+                        d
+                        for d in dirnames
+                        if d not in _SKIP_DIRS and not d.startswith(".")
+                    ]
+                    for fname in filenames:
+                        ext = os.path.splitext(fname)[1].lower()
+                        if ext in creative_exts:
+                            category, _desc = creative_exts[ext]
+                            category_counts[category] = (
+                                category_counts.get(category, 0) + 1
+                            )
+            except (PermissionError, OSError):
+                continue
+
+        _CREATIVE_LABELS = {
+            "3D": "3D modeling (Blender/FBX)",
+            "design": "graphic design (Photoshop/Illustrator)",
+            "music_production": "music production (DAW projects)",
+            "game_dev": "game development (Unity/Unreal/Godot)",
+        }
+
+        for category, count in sorted(
+            category_counts.items(), key=lambda x: x[1], reverse=True
+        ):
+            if count >= 1:
+                label = _CREATIVE_LABELS.get(category, category)
+                results.append(
+                    _make_profile_fact(
+                        f"Has {count} {label} file(s) across personal directories",
+                        context="personal",
+                        confidence=0.75,
+                        domain="personal",
+                    )
+                )
+
+    def _scan_writing_directories(self, home: Path, results: List[Dict]) -> None:
+        """Detect note-taking / writing directories (Obsidian, Notion, markdown)."""
+        # Check for known note-taking app vaults/exports
+        writing_indicators = [
+            (home / "Documents" / "Obsidian", "Obsidian vault"),
+            (home / "Obsidian", "Obsidian vault"),
+            (home / "Documents" / "Notion", "Notion export"),
+            (home / "Notion", "Notion export"),
+            (home / "Documents" / "Notes", "notes directory"),
+            (home / "Notes", "notes directory"),
+            (home / "Documents" / "Journal", "journal directory"),
+            (home / "Journal", "journal directory"),
+            (home / "Documents" / "Writing", "writing directory"),
+            (home / "Writing", "writing directory"),
+            (home / "Documents" / "Blog", "blog directory"),
+            (home / "Blog", "blog directory"),
+        ]
+
+        found_writing: List[str] = []
+        for check_path, description in writing_indicators:
+            if check_path.exists() and check_path.is_dir():
+                # Count markdown files at top 2 levels as a quality signal
+                md_count = 0
+                try:
+                    for depth, (_dirpath, dirnames, filenames) in enumerate(
+                        os.walk(str(check_path))
+                    ):
+                        if depth >= 2:
+                            dirnames.clear()
+                            continue
+                        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+                        md_count += sum(
+                            1
+                            for f in filenames
+                            if f.lower().endswith((".md", ".mdx", ".txt"))
+                        )
+                except (PermissionError, OSError):
+                    pass
+
+                if md_count > 0:
+                    found_writing.append(f"{description} (~{md_count} files)")
+                else:
+                    found_writing.append(description)
+
+        # Also scan for .obsidian directories (indicates vault root)
+        for candidate in [home / "Documents", home]:
+            if not candidate.exists():
+                continue
+            try:
+                for entry in os.scandir(str(candidate)):
+                    if not entry.is_dir():
+                        continue
+                    obsidian_marker = Path(entry.path) / ".obsidian"
+                    if obsidian_marker.is_dir():
+                        desc = f"Obsidian vault '{entry.name}'"
+                        if desc not in found_writing and f"Obsidian vault" not in str(
+                            found_writing
+                        ):
+                            found_writing.append(desc)
+            except (PermissionError, OSError):
+                pass
+
+        if found_writing:
+            results.append(
+                _make_profile_fact(
+                    f"Writing/notes: {', '.join(found_writing[:4])}",
+                    context="personal",
+                    confidence=0.7,
+                    domain="personal",
+                )
+            )
+
+    def _scan_data_files(self, home: Path, results: List[Dict]) -> None:
+        """Find data analysis files (CSVs, SQLite databases, Jupyter notebooks)."""
+        data_exts = {
+            ".csv": "CSV",
+            ".tsv": "TSV",
+            ".sqlite": "SQLite",
+            ".db": "SQLite",
+            ".ipynb": "Jupyter",
+            ".parquet": "Parquet",
+            ".feather": "Feather",
+            ".h5": "HDF5",
+            ".hdf5": "HDF5",
+        }
+
+        scan_dirs = [
+            home / "Documents",
+            home / "Desktop",
+            home / "Downloads",
+            home / "Projects",
+            home / "Work",
+            home / "Data",
+        ]
+
+        type_counts: Dict[str, int] = {}
+
+        for scan_dir in scan_dirs:
+            if not scan_dir.exists() or not scan_dir.is_dir():
+                continue
+            try:
+                for depth, (_dirpath, dirnames, filenames) in enumerate(
+                    os.walk(str(scan_dir))
+                ):
+                    if depth >= 3:
+                        dirnames.clear()
+                        continue
+                    dirnames[:] = [
+                        d
+                        for d in dirnames
+                        if d not in _SKIP_DIRS and not d.startswith(".")
+                    ]
+                    for fname in filenames:
+                        ext = os.path.splitext(fname)[1].lower()
+                        if ext in data_exts:
+                            label = data_exts[ext]
+                            type_counts[label] = type_counts.get(label, 0) + 1
+            except (PermissionError, OSError):
+                continue
+
+        if type_counts:
+            total = sum(type_counts.values())
+            parts = [
+                f"{count} {label}"
+                for label, count in sorted(
+                    type_counts.items(), key=lambda x: x[1], reverse=True
+                )
+            ]
+            results.append(
+                _make_profile_fact(
+                    f"Data files found: {', '.join(parts[:5])} ({total} total)",
+                    confidence=0.65,
+                    domain="technical",
+                )
+            )
+
+    # ------------------------------------------------------------------
     # Windows UserAssist (actually-launched app frequency)
     # ------------------------------------------------------------------
 
@@ -2469,9 +2899,9 @@ class SystemDiscovery:
                 Valid names: "file_system", "git_repos", "installed_apps",
                 "browser_bookmarks", "browser_history", "email_accounts",
                 "git_identity", "shell_config", "project_manifests",
-                "ssh_config", "home_structure", "windows_userassist",
-                "recent_file_types", "gaming_and_media",
-                "macos_app_usage"
+                "ssh_config", "home_structure", "personal_files",
+                "windows_userassist", "recent_file_types",
+                "gaming_and_media", "macos_app_usage"
             paths: Override scan paths for file_system and git_repos.
             history_days: Days of browser history to scan.
 
@@ -2487,6 +2917,7 @@ class SystemDiscovery:
             "project_manifests",
             "ssh_config",
             "home_structure",
+            "personal_files",
             "installed_apps",
             "browser_bookmarks",
             "browser_history",
@@ -2511,6 +2942,7 @@ class SystemDiscovery:
             "project_manifests": self.scan_project_manifests,
             "ssh_config": self.scan_ssh_config,
             "home_structure": self.scan_home_structure,
+            "personal_files": self.scan_personal_files,
             "installed_apps": self.scan_installed_apps,
             "browser_bookmarks": self.scan_browser_bookmarks,
             "browser_history": lambda: self.scan_browser_history(days=history_days),

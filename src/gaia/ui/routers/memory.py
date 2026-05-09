@@ -1067,6 +1067,7 @@ _DISCOVERY_SOURCES = [
     "shell_config",
     "file_system",
     "git_repos",
+    "personal_files",
     "browser_bookmarks",
     "browser_history",
     "ssh_config",
@@ -1086,6 +1087,7 @@ _DISCOVERY_SOURCE_LABELS = {
     "git_repos": "Git repositories",
     "browser_bookmarks": "Browser bookmarks",
     "browser_history": "Browser history (30 days)",
+    "personal_files": "Personal files (docs, configs, creative, data)",
     "ssh_config": "SSH configuration",
 }
 
@@ -1098,6 +1100,7 @@ Based on the data below, generate 5-10 concise profile facts about this user. Fo
 - Key technologies, languages, and tools they regularly use
 - Technical interests and areas of focus
 - Non-technical interests or hobbies (if clearly evident)
+- Personal file landscape (config files, writing, creative projects, data analysis)
 
 Raw data:
 {sections}
@@ -1154,6 +1157,7 @@ def stream_discovery():
                 "shell_config": discovery.scan_shell_config,
                 "file_system": discovery.scan_file_system,
                 "git_repos": discovery.scan_git_repos,
+                "personal_files": discovery.scan_personal_files,
                 "browser_bookmarks": discovery.scan_browser_bookmarks,
                 "browser_history": lambda: discovery.scan_browser_history(days=30),
                 "ssh_config": discovery.scan_ssh_config,
@@ -1302,6 +1306,21 @@ def stream_inference(include_browser: bool = Query(False)):
                 if gm_results:
                     lines = [f"  {r['content']}" for r in gm_results]
                     sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
+            except Exception:
+                pass
+
+            yield _sse({"type": "log", "message": "Scanning personal files..."})
+            try:
+                pf_results = discovery.scan_personal_files()
+                if pf_results:
+                    lines = [f"  {r['content']}" for r in pf_results]
+                    sections.append("PERSONAL FILES:\n" + "\n".join(lines))
+                    yield _sse(
+                        {
+                            "type": "log",
+                            "message": f"  Found {len(pf_results)} personal file insights",
+                        }
+                    )
             except Exception:
                 pass
 

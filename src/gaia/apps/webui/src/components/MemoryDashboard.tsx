@@ -3,7 +3,7 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
-    X, Search, RefreshCw, Plus, Trash2, Pencil, Copy, Clock,
+    X, Search, RefreshCw, Plus, Trash2, Pencil, Copy, Clock, ArrowLeft,
     Brain, MessageSquare, Wrench, TrendingUp, ChevronLeft, ChevronRight,
     AlertTriangle, CheckCircle, Shield, ShieldOff, ChevronDown, Database,
     Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks,
@@ -992,12 +992,19 @@ export function MemoryDashboard() {
     // ── Main render ─────────────────────────────────────────────────────
 
     return (
-        <div className="memory-dashboard-overlay" onClick={() => setShowMemoryDashboard(false)}
-             role="dialog" aria-modal="true" aria-label="Memory Dashboard">
-            <div className="memory-dashboard-panel" onClick={e => e.stopPropagation()}>
+        <div className="memory-dashboard-page">
                 {/* Header */}
                 <div className="memory-dashboard-header">
-                    <h3>Memory Dashboard</h3>
+                    <div className="memory-dashboard-header-left">
+                        <button
+                            className="btn-icon settings-back-btn"
+                            onClick={() => setShowMemoryDashboard(false)}
+                            aria-label="Back"
+                        >
+                            <ArrowLeft size={18} />
+                        </button>
+                        <h3>Memory Dashboard</h3>
+                    </div>
                     <div className="memory-dashboard-header-actions">
                         {/* Embedding coverage indicator */}
                         {embeddingCoverage && embeddingCoverage.total_items > 0 && (
@@ -1085,9 +1092,6 @@ export function MemoryDashboard() {
 
                         <button className="btn-icon" onClick={loadAll} title="Refresh" aria-label="Refresh dashboard">
                             <RefreshCw size={16} />
-                        </button>
-                        <button className="btn-icon" onClick={() => setShowMemoryDashboard(false)} aria-label="Close memory dashboard">
-                            <X size={18} />
                         </button>
                     </div>
                 </div>
@@ -2496,7 +2500,6 @@ export function MemoryDashboard() {
                         </div>
                     )}
                 </div>
-            </div>
 
             {/* Toast container */}
             {toasts.length > 0 && (
