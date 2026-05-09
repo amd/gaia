@@ -174,6 +174,7 @@ int main(int argc, char* argv[]) {
 
             gaia::AgentConfig apiConfig;
             apiConfig.debug = debug;
+            apiConfig.contextSize = 32768;  // bash agent needs 32K for system prompt + tools
             if (!modelOverride.empty()) apiConfig.modelId = modelOverride;
 
             gaia::BashAgent apiAgent(apiConfig);
@@ -192,6 +193,7 @@ int main(int argc, char* argv[]) {
             gaia::AgentConfig mcpConfig;
             mcpConfig.debug = debug;
             mcpConfig.silentMode = true;  // no console output on stdout
+            mcpConfig.contextSize = 32768;
             if (!modelOverride.empty()) mcpConfig.modelId = modelOverride;
 
             gaia::BashAgent mcpAgent(mcpConfig);
@@ -209,6 +211,7 @@ int main(int argc, char* argv[]) {
         // Build agent config
         gaia::AgentConfig config;
         config.debug = debug;
+        config.contextSize = 32768;  // bash agent needs 32K for system prompt + tools
         config.modelId = "Qwen3-4B-GGUF";
 
         if (!modelOverride.empty()) {
