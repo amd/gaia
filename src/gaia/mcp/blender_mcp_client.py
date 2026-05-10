@@ -43,7 +43,7 @@ class MCPClient:
         # Return original message if no enhancement is available
         return error_message
 
-    def send_command(self, cmd_type, params=None, timeout: float = 30.0):
+    def send_command(self, cmd_type, params=None, timeout: float = 120.0):
         """Send a command to the Blender MCP server and return the parsed response.
 
         The Blender addon (src/gaia/mcp/blender_mcp_server.py) keeps the TCP
@@ -53,6 +53,12 @@ class MCPClient:
         FIN. Instead we read incrementally and break as soon as a complete
         JSON document can be parsed, mirroring the server's own framing in
         ``blender_mcp_server.py:128-166``.
+
+        ``timeout`` is the per-recv socket timeout (not cumulative) — long
+        Blender operations like ``bpy.ops.render.render(...)`` can take many
+        seconds without the server emitting any data, so the default is
+        deliberately generous. Pass a higher value for very long renders or
+        simulations.
 
         Regression-tested by ``tests/unit/mcp/test_blender_mcp_client.py``.
         Fixes issue #1022.
@@ -76,12 +82,26 @@ class MCPClient:
                 # response parses out of the buffer. The server keeps the
                 # connection open afterwards (see docstring above), so a
                 # chunk-until-EOF loop would deadlock here.
+                #
+                # Catch UnicodeDecodeError as well as JSONDecodeError: a
+                # multi-byte UTF-8 character (e.g. an emoji or non-ASCII
+                # object name in an error message) can be split across
+                # ``recv()`` boundaries, raising UnicodeDecodeError on the
+                # partial buffer. Treat both as "keep reading".
                 buffer = b""
                 parsed_response = None
                 while True:
-                    chunk = sock.recv(65536)
+                    try:
+                        chunk = sock.recv(65536)
+                    except ConnectionResetError as e:
+                        # RST instead of FIN — server crashed or closed
+                        # forcefully mid-response. Same user-facing
+                        # outcome: we don't have a complete response.
+                        raise MCPError(
+                            "Connection closed before a complete response was received"
+                        ) from e
                     if not chunk:
-                        # Server closed without sending a full JSON response.
+                        # FIN before a complete JSON response.
                         raise MCPError(
                             "Connection closed before a complete response was received"
                         )
@@ -89,7 +109,7 @@ class MCPClient:
                     try:
                         parsed_response = json.loads(buffer.decode("utf-8"))
                         break
-                    except json.JSONDecodeError:
+                    except (json.JSONDecodeError, UnicodeDecodeError):
                         continue
 
                 if parsed_response["status"] == "error":
