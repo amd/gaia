@@ -657,8 +657,8 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 Thanks for reporting this! The error you're seeing in `gaia chat` appears to be related to RAG initialization.
 
 Looking at src/gaia/rag/sdk.py:145, the initialization expects a model path. Could you confirm:
-1. Did you run `gaia chat init` first?
-2. What's the output of `gaia chat status`?
+1. Did you run `gaia init --profile chat` first?
+2. Could you share the output of `gaia diagnostics`?
 
 See docs/guides/chat.mdx for the full setup process. This might also be related to #123.
 ```
