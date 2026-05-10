@@ -183,3 +183,175 @@ class TestProcessQueryRecoversOnContextOverflow:
             # No raw exception leaked
             assert "exceeds the available context size" not in text
             assert "Traceback" not in text
+
+
+class TestRepairInvalidJsonEscapes:
+    """Helper that doubles invalid JSON backslash escapes (e.g. Windows paths).
+
+    Issue #1023: smaller LLMs (Gemma-4-E4B-class) sometimes emit Windows paths
+    in tool-call arguments with single backslashes. Strict ``json.loads``
+    rejects ``\\U`` (and any other backslash followed by a non-escape char).
+    """
+
+    def test_doubles_backslash_before_invalid_escape_char(self):
+        """`C:\\Users\\K` (single-escaped) becomes parseable JSON after repair."""
+        from gaia.agents.base.agent import _repair_invalid_json_escapes
+
+        bad = r'{"path":"C:\Users\K"}'
+        # Sanity: input is genuinely invalid JSON without repair.
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(bad)
+        repaired = _repair_invalid_json_escapes(bad)
+        assert json.loads(repaired) == {"path": r"C:\Users\K"}
+
+    def test_preserves_valid_json_escape_sequences(self):
+        """Valid escapes (\\n \\t \\\\ \\" \\u00ff) must pass through unchanged."""
+        from gaia.agents.base.agent import _repair_invalid_json_escapes
+
+        valid = (
+            r'{"text":"line1\nline2\ttab","quote":"\"",'
+            r'"unicode":"ÿ","slash":"a\\b"}'
+        )
+        before = json.loads(valid)
+        repaired = _repair_invalid_json_escapes(valid)
+        assert json.loads(repaired) == before
+
+    def test_idempotent_on_already_repaired_string(self):
+        """Running repair twice gives the same result as running it once."""
+        from gaia.agents.base.agent import _repair_invalid_json_escapes
+
+        bad = r'{"a":"\X","b":"\W"}'
+        once = _repair_invalid_json_escapes(bad)
+        twice = _repair_invalid_json_escapes(once)
+        assert once == twice
+        # And the result actually parses.
+        assert json.loads(once) == {"a": r"\X", "b": r"\W"}
+
+
+class TestParseLLMResponseRecoversFromInvalidEscapes:
+    """Issue #1023: tool-call arguments with under-escaped Windows paths."""
+
+    def test_windows_path_with_single_escapes_parses_via_repair(self, agent):
+        """Reproduces #1023 step 2: ``C:\\Users\\Klaus\\img.png`` parses cleanly."""
+        # The arguments string the LLM emitted (under-escaped backslashes).
+        # ``r"..."`` keeps backslashes literal -- this is what the outer JSON
+        # decoder hands to the inner ``json.loads(arguments_raw)`` call.
+        malformed_inner = (
+            r'{"image_path":"C:\Users\Klaus\.gaia\cache\sd\images\img.png",'
+            r'"story_style":"dramatic"}'
+        )
+        # Sanity: confirm the input is genuinely invalid JSON without repair.
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(malformed_inner)
+
+        # Build the full LLM response envelope. ``json.dumps`` encodes the
+        # outer level correctly while keeping the inner string verbatim.
+        response = json.dumps(
+            {
+                "__tool_calls__": [
+                    {
+                        "function": {
+                            "name": "create_story_from_image",
+                            "arguments": malformed_inner,
+                        }
+                    }
+                ]
+            }
+        )
+
+        parsed = agent._parse_llm_response(response)
+        assert parsed["tool"] == "create_story_from_image"
+        assert parsed["tool_args"]["image_path"] == (
+            r"C:\Users\Klaus\.gaia\cache\sd\images\img.png"
+        )
+        assert parsed["tool_args"]["story_style"] == "dramatic"
+
+    def test_truly_malformed_args_still_raise_after_repair_attempt(self, agent):
+        """When repair cannot fix the JSON, ValueError still propagates."""
+        # Truncated/corrupt -- repair won't help, error must still surface.
+        broken = (
+            '{"__tool_calls__": [{"function": {"name": "x",'
+            ' "arguments": "{not-json:"}}]}'
+        )
+        with pytest.raises(ValueError, match="Malformed"):
+            agent._parse_llm_response(broken)
+
+
+class TestPostFailureOverrideSkippedAfterCapabilitySuccess:
+    """Issue #1023 step 3: the verbose-failure override at process_query
+    must NOT fire when the capability tool (``generate_image``) succeeded.
+
+    The original guard fired solely on ``has_tried_capability_tool`` --
+    "was generate_image called this turn?" -- with no check on whether the
+    call actually returned an error.  As a result, when generate_image
+    succeeded and a SUBSEQUENT tool's parse error provoked a verbose
+    apology, the override clobbered the model's reply with a misleading
+    "Image generation is not available" message.
+    """
+
+    def _stub_chat(self, agent, *responses):
+        responses = list(responses)
+        chat = MagicMock()
+
+        def _send(*_, **__):
+            r = responses.pop(0)
+            resp = MagicMock()
+            resp.text = r
+            resp.stats = {}
+            return resp
+
+        chat.send_messages = MagicMock(side_effect=_send)
+        agent.chat = chat
+        return chat
+
+    def test_override_skipped_when_generate_image_succeeded(self, agent):
+        """generate_image returned success -> verbose model reply is preserved."""
+        # Inject a fake generate_image into the agent's instance registry.
+        # _instance_tools is per-instance, so this does not pollute the global
+        # _TOOL_REGISTRY or other tests.
+        agent._instance_tools = {
+            "generate_image": {
+                "name": "generate_image",
+                "description": "stub",
+                "parameters": {
+                    "prompt": {"type": "string", "required": True},
+                },
+                "function": lambda prompt="": {
+                    "status": "success",
+                    "image_path": r"C:\Users\K\img.png",
+                    "model": "SDXL-Turbo",
+                },
+                "atomic": True,
+            }
+        }
+
+        # Step 1: model calls generate_image (succeeds).
+        step1 = json.dumps(
+            {"tool": "generate_image", "tool_args": {"prompt": "a forest"}}
+        )
+        # Step 2: malformed tool call -> parse fails -> recovery prompt added.
+        step2 = (
+            '{"__tool_calls__": [{"function":'
+            ' {"name": "make_story", "arguments": "{not-json:"}}]}'
+        )
+        # Step 3: model responds with phrasing that matches the verbose-failure
+        # regex (``r"i apologize for the confusion"``).  After the fix, this
+        # text passes through unchanged because generate_image SUCCEEDED.
+        step3 = json.dumps(
+            {
+                "answer": (
+                    "I apologize for the confusion. "
+                    "The image was generated successfully."
+                )
+            }
+        )
+        self._stub_chat(agent, step1, step2, step3)
+
+        result = agent.process_query("make me an image", max_steps=10)
+        # ``process_query`` returns ``{"status": ..., "result": <final_answer>, ...}``
+        text = result["result"]
+
+        # The hardcoded override message must NOT replace the model's reply.
+        assert "Image generation is not available" not in text
+        # And the model's actual answer must be visible.
+        assert "image was generated successfully" in text.lower()
