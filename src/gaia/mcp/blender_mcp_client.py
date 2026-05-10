@@ -43,7 +43,20 @@ class MCPClient:
         # Return original message if no enhancement is available
         return error_message
 
-    def send_command(self, cmd_type, params=None):
+    def send_command(self, cmd_type, params=None, timeout: float = 30.0):
+        """Send a command to the Blender MCP server and return the parsed response.
+
+        The Blender addon (src/gaia/mcp/blender_mcp_server.py) keeps the TCP
+        connection open after responding so it can accept further commands on
+        the same socket. We therefore cannot rely on ``recv()`` returning empty
+        (FIN) to know the response is complete — the server will never send
+        FIN. Instead we read incrementally and break as soon as a complete
+        JSON document can be parsed, mirroring the server's own framing in
+        ``blender_mcp_server.py:128-166``.
+
+        Regression-tested by ``tests/unit/mcp/test_blender_mcp_client.py``.
+        Fixes issue #1022.
+        """
         if params is None:
             params = {}
 
@@ -55,20 +68,29 @@ class MCPClient:
         # Send command to server
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(timeout)
                 sock.connect((self.host, self.port))
                 sock.sendall(json.dumps(command).encode("utf-8"))
 
-                # Receive full response (may arrive in multiple recv chunks)
-                chunks = []
+                # Read incrementally; stop as soon as a complete JSON
+                # response parses out of the buffer. The server keeps the
+                # connection open afterwards (see docstring above), so a
+                # chunk-until-EOF loop would deadlock here.
+                buffer = b""
+                parsed_response = None
                 while True:
                     chunk = sock.recv(65536)
                     if not chunk:
+                        # Server closed without sending a full JSON response.
+                        raise MCPError(
+                            "Connection closed before a complete response was received"
+                        )
+                    buffer += chunk
+                    try:
+                        parsed_response = json.loads(buffer.decode("utf-8"))
                         break
-                    chunks.append(chunk)
-                response = b"".join(chunks).decode("utf-8")
-
-                # Parse the JSON response
-                parsed_response = json.loads(response)
+                    except json.JSONDecodeError:
+                        continue
 
                 if parsed_response["status"] == "error":
                     error_message = parsed_response.get("message", "Unknown error")
@@ -82,6 +104,14 @@ class MCPClient:
         except ConnectionRefusedError:
             error_msg = "Connection refused. Is the Blender MCP server running?"
             self.log.error(f"Connection error: {error_msg}")
+            raise MCPError(error_msg)
+        except socket.timeout:
+            error_msg = (
+                f"Timed out after {timeout}s waiting for response from Blender MCP "
+                f"server at {self.host}:{self.port}. The server may be unresponsive — "
+                "check Blender's console for errors."
+            )
+            self.log.error(error_msg)
             raise MCPError(error_msg)
         except MCPError:
             # Re-raise MCPError without wrapping it
