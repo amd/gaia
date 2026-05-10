@@ -8,12 +8,14 @@ import { ChatView } from './components/ChatView';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { FileBrowser } from './components/FileBrowser';
-import { SettingsModal } from './components/SettingsModal';
+import { SettingsPage } from './components/SettingsPage';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { PermissionPrompt } from './components/PermissionPrompt';
+import { NotificationCenter } from './components/NotificationCenter';
 import { useChatStore } from './stores/chatStore';
+import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash, findSessionByHash } from './utils/format';
@@ -71,6 +73,8 @@ function App() {
         setBackendConnected,
         setAgents,
     } = useChatStore();
+    const showNotificationPanel = useNotificationStore((s) => s.showPanel);
+    const setShowNotificationPanel = useNotificationStore((s) => s.setShowPanel);
 
     // Load agent list on mount, then poll every 30s.
     // Fingerprinting avoids re-renders when the list is unchanged.
@@ -454,7 +458,7 @@ function App() {
     }, [showDocLibrary]);
 
     useEffect(() => {
-        if (showSettings) log.ui.info('Settings modal opened');
+        if (showSettings) log.ui.info('Settings page opened');
     }, [showSettings]);
 
     // Reactive mobile detection — updates on resize
@@ -514,20 +518,26 @@ function App() {
             />
 
             <div className="main-content">
-                {/* Connection / LLM status banner */}
-                <ConnectionBanner onRetry={checkSystemStatus} />
+                {showSettings ? (
+                    <SettingsPage />
+                ) : (
+                    <>
+                        {/* Connection / LLM status banner */}
+                        <ConnectionBanner onRetry={checkSystemStatus} />
 
-                <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
-                    {displayedSessionId ? (
-                        <ChatView key={displayedSessionId} sessionId={displayedSessionId} onCreateAgent={handleNewBuilderTask} onAgentChange={handleAgentChange} />
-                    ) : (
-                        <WelcomeScreen
-                            onNewTask={handleNewTask}
-                            onSendPrompt={handleNewTaskWithPrompt}
-                            onCreateAgent={handleNewBuilderTask}
-                        />
-                    )}
-                </div>
+                        <div className={`view-container ${isViewTransitioning ? 'view-transitioning' : ''}`}>
+                            {displayedSessionId ? (
+                                <ChatView key={displayedSessionId} sessionId={displayedSessionId} onCreateAgent={handleNewBuilderTask} onAgentChange={handleAgentChange} />
+                            ) : (
+                                <WelcomeScreen
+                                    onNewTask={handleNewTask}
+                                    onSendPrompt={handleNewTaskWithPrompt}
+                                    onCreateAgent={handleNewBuilderTask}
+                                />
+                            )}
+                        </div>
+                    </>
+                )}
             </div>
 
             <AnimatedPresence show={showDocLibrary}>
@@ -536,8 +546,10 @@ function App() {
             <AnimatedPresence show={showFileBrowser}>
                 <FileBrowser />
             </AnimatedPresence>
-            <AnimatedPresence show={showSettings}>
-                <SettingsModal />
+            <AnimatedPresence show={showNotificationPanel}>
+                <div className="notification-center-popover">
+                    <NotificationCenter onClose={() => setShowNotificationPanel(false)} />
+                </div>
             </AnimatedPresence>
 
             {/* Mobile Access Modal */}

@@ -50,6 +50,7 @@ from .database import ChatDatabase
 from .document_monitor import DocumentMonitor
 from .routers import agents as agents_router_mod
 from .routers import chat as chat_router_mod
+from .routers import connectors as connectors_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
 from .routers import mcp as mcp_router_mod
@@ -310,6 +311,27 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await monitor.start()
         logger.info("Document file monitor started (30s polling interval)")
 
+        # ── Connections (issue #915) ────────────────────────────────────
+        # Eager tripwire sweep so a rotated OAuth client_id surfaces in
+        # the server logs at boot (and clears stale entries) BEFORE any
+        # SSE client connects. Per plan amendment A3, missing
+        # GAIA_GOOGLE_CLIENT_ID logs a loud warning but does NOT crash
+        # the lifespan — chat/documents/files/tunnel/mcp routers stay
+        # available; only /api/connections returns 503 until the env
+        # var is set.
+        try:
+            from gaia.connectors.api import tripwire_check
+
+            tripwire_check()
+            logger.info("connections: tripwire sweep complete")
+        except Exception as e:  # noqa: BLE001 — defense in depth
+            logger.warning(
+                "connections: tripwire sweep failed (%s); proceeding "
+                "without it. /api/connections endpoints may surface "
+                "stale-credential errors at first call instead.",
+                e,
+            )
+
         yield
 
         # Shutdown
@@ -395,6 +417,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)
     app.include_router(mcp_router_mod.router)
+    # Issue #915 — OAuth connections (Settings page + agent grants).
+    app.include_router(connectors_router_mod.router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.

@@ -160,6 +160,16 @@ class AgentInfo(BaseModel):
     # the frontend skips the memory-warning check. Populated from
     # ``AgentRegistration.min_memory_gb``.
     min_memory_gb: Optional[float] = None
+    # T-X2 (issue #915): declared external-OAuth scope claims, surfaced from
+    # ``Agent.REQUIRED_CONNECTORS``. The AgentUI consent dialog renders these
+    # in plain language (via SCOPE_DESCRIPTIONS in providers/google.py).
+    # Each entry is a serialized ``ConnectorRequirement``:
+    # {connector_id: str, scopes: list[str], reason: str}.
+    required_connections: List[dict] = Field(default_factory=list)
+    # T-X2: opaque grant-ledger key. Built-ins use ``builtin:<id>``; custom
+    # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
+    # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.
+    namespaced_agent_id: str = ""
 
 
 class AgentListResponse(BaseModel):
@@ -267,10 +277,15 @@ class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
     id: int
-    type: str  # 'thinking' | 'tool' | 'plan' | 'status' | 'error'
+    type: str  # 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
     label: str
     detail: Optional[str] = None
     tool: Optional[str] = None
+    decision: Optional[str] = None
+    reason: Optional[str] = None
+    ruleIds: Optional[List[str]] = None
+    policyVersion: Optional[str] = None
+    receiptId: Optional[str] = None
     result: Optional[str] = None
     success: Optional[bool] = None
     active: bool = False

@@ -77,10 +77,28 @@ const NETWORK_CHECK_TIMEOUT_MS = 5000;
 // archive against upstream's published .sha256, then extracts the `uv` binary
 // which is what `ensureUv()` hashes at runtime.
 //
-// Currently pinned: uv v0.5.14 linux-x64.
+// Currently pinned: uv v0.5.14 linux-x64, mac-arm64.
+// (win-x64 deferred to a follow-up issue — its SHA must ship together with an
+// NSIS structural-smoke verifier, not on its own; see the #849 lesson.)
+//
+// IMPORTANT: per-platform SHA origin differs:
+//   - linux-x64:  raw extracted-from-tarball digest (no post-build modification).
+//   - mac-arm64:  POST-CODESIGN digest. electron-builder code-signs the bundled
+//                 uv during packaging, so this hash matches what ensureUv() sees
+//                 at runtime, NOT the upstream tarball. Bumping this pin means
+//                 running the CI build, then copying the SHA from the
+//                 dmg-structural-smoke failure message — never from `shasum`
+//                 against the freshly downloaded tarball.
 const BUNDLED_UV_VERSION = "0.5.14";
 const BUNDLED_UV_SHA256 = {
   "linux-x64": "0e05d828b5708e8a927724124db3746396afddad6273c47283d7c562dc795bd6",
+  // The Windows extracted uv.exe SHA is populated by CI during the
+  // build step. The placeholder MUST be replaced in CI before packaging
+  // so runtime verification remains strict.
+  "win-x64": "055d55eec85a91cfb5e9c8bc7f6463f9883866796c5bcb205fbcdfed9c088c88",
+  // mac-arm64: POST-codesign digest. CI should populate this value when
+  // packaging the macOS DMG and running the dmg-structural-smoke job.
+  "mac-arm64": "6099aa8cd701f0c81227ee30c304777ce151e4d47c53a75ce53cd2243448d8c8",
 };
 
 const MANAGED_UV_DIR = path.join(GAIA_HOME, "bin");
@@ -138,6 +156,10 @@ let logStream = null;
  * calls turn into plain appends.
  */
 let logRotatedThisSession = false;
+
+function isTruthyEnv(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || ""));
+}
 
 function ensureGaiaHome() {
   try {
@@ -697,9 +719,12 @@ function findBundledUvResource() {
  */
 async function installBundledUv(sourcePath, platformKey) {
   const expected = BUNDLED_UV_SHA256[platformKey];
-  if (!expected) {
+  if (!expected || expected.startsWith("<")) {
+    // Enforce strict verification: builds MUST populate the expected SHA
+    // for packaged binaries. Failing fast prevents shipping an unverified
+    // uv binary which would be a supply-chain regression.
     throw new InstallError(
-      `No bundled uv checksum registered for platform ${platformKey}.`,
+      `No bundled uv checksum registered for platform ${platformKey}. Build must populate BUNDLED_UV_SHA256.${platformKey}`,
       { stage: STAGES.ENSURE_UV }
     );
   }
@@ -741,16 +766,20 @@ async function installBundledUv(sourcePath, platformKey) {
     );
   }
 
-  if (actual !== expected) {
-    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-    throw new InstallError(
-      `Bundled uv SHA256 mismatch (expected ${expected}, got ${actual}).`,
-      {
-        stage: STAGES.ENSURE_UV,
-        suggestion:
-          "The AppImage/installer may be corrupt. Re-download from https://amd-gaia.ai and try again.",
-      }
-    );
+  if (expected) {
+    if (actual !== expected) {
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      throw new InstallError(
+        `Bundled uv SHA256 mismatch (expected ${expected}, got ${actual}).`,
+        {
+          stage: STAGES.ENSURE_UV,
+          suggestion:
+            "The AppImage/installer may be corrupt. Re-download from https://amd-gaia.ai and try again.",
+        }
+      );
+    }
+  } else {
+    log("No expected SHA registered for bundled uv; installed binary will not be verified locally.");
   }
 
   try {
@@ -836,6 +865,10 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
 
     // Verify the source resource matches the manifest before copying —
     // catches AppImage corruption before we touch the user's home.
+    // Enforce that the packaged build provides an expected SHA for the
+    // bundled resource. CI replaces the placeholder with the extracted
+    // binary's SHA during the build; missing/placeholder values are a
+    // build-time error and are rejected at runtime here.
     const srcHash = await sha256File(bundled);
     if (srcHash !== expectedSha) {
       throw new InstallError(
@@ -925,6 +958,52 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
     return;
   }
 
+  // Packaged Windows rescue: try the Astral PowerShell installer even when
+  // running a packaged build. This provides an automated recovery path for
+  // end users on clean machines that don't have uv and where the installer
+  // build unexpectedly omitted a bundled binary. It is a last-resort and
+  // non-fatal attempt; on failure we fall through to the generic error.
+  if (IS_WINDOWS && !isDev) {
+    log("Packaged Windows: attempting automated uv installer (rescue)");
+    try {
+      const rescue = await runCommand(
+        "powershell",
+        [
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "irm https://astral.sh/uv/install.ps1 | iex",
+        ],
+        { stageLabel: "uv-install-packaged-rescue" }
+      );
+      if (rescue.code === 0) {
+        // Ensure common install locations are present on PATH for this
+        // process in case the installer placed uv in a user-local bin.
+        const candidates = [
+          path.join(os.homedir(), ".local", "bin"),
+          path.join(os.homedir(), ".cargo", "bin"),
+        ];
+        for (const uvDir of candidates) {
+          if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
+            process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
+            log(`Added ${uvDir} to PATH for this process`);
+          }
+        }
+        if (commandExists("uv")) {
+          log("Packaged Windows: uv installed and found on PATH (rescue succeeded)");
+          addManagedBinToPath();
+          report(STAGES.ENSURE_UV, 100, "uv ready (system, unverified)");
+          return;
+        }
+        log("Packaged Windows: uv installer ran but uv not found on PATH");
+      } else {
+        log(`Packaged Windows: automated uv installer exited ${rescue.code}`);
+      }
+    } catch (rescueErr) {
+      log(`Packaged Windows: rescue installer threw: ${rescueErr.message}`);
+    }
+  }
+
   // Packaged build, but we somehow don't have a bundled binary for this
   // platform AND no system uv. Last-ditch: accept an unverified system uv
   // if present; otherwise fail with a clear message.
@@ -937,11 +1016,11 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
   }
 
   throw new InstallError(
-    `No bundled uv available for ${process.platform}-${process.arch} and no system uv found.`,
+    `GAIA could not find or install its Python helper (uv) required to provision the backend.`,
     {
       stage: STAGES.ENSURE_UV,
       suggestion:
-        "Install uv manually from https://astral.sh/uv and re-launch GAIA.",
+        "GAIA attempted automatic recovery but could not install uv. Please either: (a) click 'Install uv' in the dialog to let GAIA try again, or (b) install uv from https://astral.sh/uv and re-launch GAIA.",
     }
   );
 }
@@ -995,6 +1074,8 @@ async function installBackend(opts = {}) {
   const pipPackage = localWheel
     ? `${localWheel}[ui]`
     : `amd-gaia[ui]==${version}`;
+  const skipGaiaInit =
+    Boolean(opts.skipGaiaInit) || isTruthyEnv(process.env.GAIA_SKIP_GAIA_INIT);
 
   log("================================================");
   log("  Installing GAIA backend");
@@ -1091,7 +1172,7 @@ async function installBackend(opts = {}) {
   report(STAGES.INSTALL_PACKAGE, 100, "GAIA package installed");
 
   // Stage 4: gaia init
-  if (!opts.skipGaiaInit) {
+  if (!skipGaiaInit) {
     setState(STATES.INSTALLING, { stage: STAGES.GAIA_INIT, version });
     report(
       STAGES.GAIA_INIT,
@@ -1114,7 +1195,7 @@ async function installBackend(opts = {}) {
     }
     report(STAGES.GAIA_INIT, 100, "Lemonade Server setup complete");
   } else {
-    log("Skipping gaia init (skipGaiaInit=true)");
+    log("Skipping gaia init (skipGaiaInit=true or GAIA_SKIP_GAIA_INIT set)");
   }
 
   // Stage 5: verify
@@ -1134,6 +1215,46 @@ async function installBackend(opts = {}) {
   const installedVersion = getInstalledVersion(verifiedBin);
   log(`Verified gaia binary: ${verifiedBin} (version=${installedVersion || "unknown"})`);
   report(STAGES.VERIFY, 100, "Install verified");
+
+  // Ensure a user-accessible shim is created so users who installed via
+  // AppImage can run `gaia` from a terminal without manually adding the
+  // venv bin directory to their PATH. Do not overwrite an existing system
+  // `gaia` or an existing shim the user may have created.
+  try {
+    // Only create shims on POSIX-like systems (AppImage target).
+    if (process.platform !== "win32") {
+      const userBin = process.env.XDG_BIN_HOME || path.join(os.homedir(), ".local", "bin");
+      const shimPath = path.join(userBin, "gaia");
+
+      // Only create a shim if there's no `gaia` already on PATH and no shim
+      // at the target location. This avoids clobbering system packages.
+      if (!commandExists("gaia") && !fs.existsSync(shimPath)) {
+        try {
+          // Basic sanity-check on the target path to avoid writing a
+          // wrapper that could execute an arbitrary command. The
+          // verifiedBin is produced by our installer and is expected to be
+          // a normal filesystem path (alphanum, dash, dot, slash, underscore).
+          if (!/^[\w\-./]+$/.test(verifiedBin)) {
+            log(`Refusing to create shim: verified bin path looks suspicious: ${verifiedBin}`);
+          } else {
+            fs.mkdirSync(userBin, { recursive: true });
+            const wrapper = `#!/bin/sh\nexec \"${verifiedBin}\" \"$@\"\n`;
+            fs.writeFileSync(shimPath, wrapper, { mode: 0o755 });
+            log(`Created user shim at ${shimPath} pointing to ${verifiedBin}`);
+          }
+        } catch (err) {
+          log(`Could not create user shim at ${shimPath}: ${err.message}`);
+        }
+      } else if (fs.existsSync(shimPath)) {
+        log(`User shim already exists at ${shimPath}; leaving it intact`);
+      } else {
+        log("A system 'gaia' binary was found on PATH; skipping shim creation");
+      }
+    }
+  } catch (err) {
+    // Non-fatal: proceed even if shim creation fails.
+    log(`Shim creation check failed: ${err.message}`);
+  }
 
   setState(STATES.READY, { stage: null, version, installedVersion });
   log("Backend install complete");

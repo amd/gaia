@@ -4,6 +4,8 @@
 Generic Agent class for building domain-specific agents.
 """
 
+from __future__ import annotations
+
 # Standard library imports
 import abc
 import ast
@@ -15,7 +17,7 @@ import os
 import re
 import subprocess
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
@@ -23,6 +25,9 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
+
+if TYPE_CHECKING:
+    from gaia.connectors.providers.base import ConnectorRequirement
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -45,6 +50,17 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "write_markdown_file",
     "replace_function",
     "update_gaia_md",
+    # Email Triage Agent (#962) — destructive / external. The
+    # confirmation payload surfaces the literal recipient/subject/body
+    # so the user sees what will actually happen, not an LLM paraphrase
+    # (Phase I2 / S2.M1).
+    "send_draft",
+    "send_now",
+    "forward_message",
+    "permanent_delete",
+    "accept_invite",
+    "decline_invite",
+    "create_event_from_email",
 }
 
 
@@ -70,12 +86,24 @@ class Agent(abc.ABC):
         silent_mode: Suppress all console output for JSON-only usage
     """
 
+    # Per-instance tool snapshot.  ``None`` → fall back to global
+    # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
+    _instance_tools: Optional[Dict[str, Any]] = None
+
     # Define state constants
     STATE_PLANNING = "PLANNING"
     STATE_EXECUTING_PLAN = "EXECUTING_PLAN"
     STATE_DIRECT_EXECUTION = "DIRECT_EXECUTION"
     STATE_ERROR_RECOVERY = "ERROR_RECOVERY"
     STATE_COMPLETION = "COMPLETION"
+
+    # T-X2 (issue #915): declarative external-OAuth scope requirement.
+    # Subclasses override this to declare which provider+scopes their tool
+    # bodies need. The registry surfaces these to AgentUI's consent dialog and
+    # the CLI ``gaia connectors grants`` command, and the runtime gates each
+    # ``get_access_token`` call on a per-agent grant for these scopes.
+    # Empty list = no external connections required (the default for built-ins).
+    REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = []
 
     # Response format templates — agents select via response_mode attribute.
     # "planning" (default): JSON-only responses with thought/goal/plan/tool structure.
@@ -248,8 +276,8 @@ Do NOT wrap conversational replies in JSON.
         # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
         # Note: Context size is configured when starting Lemonade server, not here
-        # Use Qwen3.5-35B by default for better reasoning and JSON formatting
-        # The 0.5B model is too small for complex agent tasks
+        # Use the configured default model (Gemma) when no explicit model_id
+        # is provided. The 0.5B model is too small for complex agent tasks.
         chat_config = AgentConfig(
             model=model_id or "Qwen3.5-35B-A3B-GGUF",
             use_claude=use_claude,
@@ -426,11 +454,32 @@ Do NOT wrap conversational replies in JSON.
         """
         raise NotImplementedError("Subclasses must implement _register_tools")
 
+    @property
+    def _tools_registry(self) -> Dict[str, Any]:
+        """Return this agent's effective tool registry.
+
+        Uses the per-instance snapshot if ``_snapshot_tools()`` was called,
+        otherwise falls back to the global ``_TOOL_REGISTRY`` for backward
+        compatibility with agents that predate the snapshot mechanism.
+        """
+        if self._instance_tools is not None:
+            return self._instance_tools
+        return _TOOL_REGISTRY
+
+    def _snapshot_tools(self) -> None:
+        """Freeze the current ``_TOOL_REGISTRY`` state into this instance.
+
+        After this call, tool lookup, prompt formatting, and execution all
+        use the snapshot.  Mutations on this instance's ``_instance_tools``
+        will not affect other agents or the global dict.
+        """
+        self._instance_tools = dict(_TOOL_REGISTRY)
+
     def _format_tools_for_prompt(self) -> str:
         """Format the registered tools into a string for the prompt."""
         tool_descriptions = []
 
-        for name, tool_info in _TOOL_REGISTRY.items():
+        for name, tool_info in self._tools_registry.items():
             params_str = ", ".join(
                 [
                     f"{param_name}{'' if param_info['required'] else '?'}: {param_info['type']}"
@@ -524,11 +573,11 @@ Do NOT wrap conversational replies in JSON.
 
     def get_tools_info(self) -> Dict[str, Any]:
         """Get information about all registered tools."""
-        return _TOOL_REGISTRY
+        return self._tools_registry
 
     def get_tools(self) -> List[Dict[str, Any]]:
         """Get a list of registered tools for the agent."""
-        return list(_TOOL_REGISTRY.values())
+        return list(self._tools_registry.values())
 
     def _extract_embedded_tool_call(self, response: str) -> Optional[Dict[str, Any]]:
         """
@@ -890,7 +939,7 @@ Do NOT wrap conversational replies in JSON.
         return json_response
 
     def _build_openai_tool_schemas(self) -> list:
-        """Build OpenAI-format function-calling schemas from _TOOL_REGISTRY."""
+        """Build OpenAI-format function-calling schemas from the tool registry."""
 
         def _python_to_json_type(py_type: str) -> str:
             return {
@@ -903,7 +952,7 @@ Do NOT wrap conversational replies in JSON.
             }.get(py_type.lower().strip(), "string")
 
         schemas = []
-        for name, tool_info in _TOOL_REGISTRY.items():
+        for name, tool_info in self._tools_registry.items():
             properties = {}
             required = []
             for param_name, param_info in tool_info["parameters"].items():
@@ -1343,11 +1392,12 @@ Do NOT wrap conversational replies in JSON.
         """
         lower = tool_name.lower()
         suffix = f"_{lower}"
-        matches = [n for n in _TOOL_REGISTRY if n.lower().endswith(suffix)]
+        registry = self._tools_registry
+        matches = [n for n in registry if n.lower().endswith(suffix)]
         if len(matches) == 1:
             return matches[0]
         # Also try exact case-insensitive match
-        matches = [n for n in _TOOL_REGISTRY if n.lower() == lower]
+        matches = [n for n in registry if n.lower() == lower]
         if len(matches) == 1:
             return matches[0]
         return None
@@ -1376,7 +1426,7 @@ Do NOT wrap conversational replies in JSON.
         if not tool_name:
             return {"status": "error", "error": "No tool name provided"}
 
-        if tool_name not in _TOOL_REGISTRY:
+        if tool_name not in self._tools_registry:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
             # when registry has "mcp_time_get_current_time"). Local LLMs often
             # strip the mcp_<server>_ prefix.
@@ -1398,7 +1448,7 @@ Do NOT wrap conversational replies in JSON.
                     "error": f"Tool '{tool_name}' was denied by the user.",
                 }
 
-        tool = _TOOL_REGISTRY[tool_name]["function"]
+        tool = self._tools_registry[tool_name]["function"]
         sig = inspect.signature(tool)
 
         # Get required parameters (those without defaults)
@@ -1902,6 +1952,32 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Dict containing the final result and operation details
         """
+        # T-X2 (issue #915): bind agent identity for the duration of the
+        # query so any tool body's `get_access_token_sync(...)` calls can
+        # resolve the per-agent grant via contextvars.
+        #
+        # `_agent_context` is intentionally PRIVATE — imported via the
+        # private path so a malicious tool body cannot import it from the
+        # public `gaia.connectors` API to forge an agent identity.
+        # See plan amendment A9.
+        from gaia.connectors.context import _agent_context
+
+        ns_id = getattr(self, "_gaia_namespaced_agent_id", None) or getattr(
+            self, "AGENT_ID", None
+        )
+        if ns_id is None:
+            return self._process_query_impl(user_input, max_steps, trace, filename)
+        with _agent_context(ns_id):
+            return self._process_query_impl(user_input, max_steps, trace, filename)
+
+    def _process_query_impl(
+        self,
+        user_input: str,
+        max_steps: int = None,
+        trace: bool = False,
+        filename: str = None,
+    ) -> Dict[str, Any]:
+        """Inner implementation of ``process_query`` — see public method docstring."""
         import time
 
         start_time = time.time()  # Track query processing start time

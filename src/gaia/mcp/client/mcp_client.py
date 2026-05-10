@@ -14,6 +14,86 @@ from .transports.stdio import StdioTransport
 logger = get_logger(__name__)
 
 
+def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """
+    Resolve ``{"$keyring": "<service>:<connector_id>:<env_key>"}`` references in *env*.
+
+    The keyring lookup uses ``service`` and the two-part username
+    ``<connector_id>:<env_key>`` (first ``:`` splits service from username, so
+    ``ref.partition(":")`` gives the correct ``service`` / ``username`` pair
+    that ``McpServerHandler.configure`` writes).
+
+    Security invariants:
+
+    * ``service`` MUST equal ``gaia.connections``. Any other value would let a
+      corrupted ``mcp_servers.json`` (e.g. a malicious entry pointing at
+      ``"Chrome Safe Storage:Chrome:..."``) exfiltrate other applications'
+      keyring entries into the spawned MCP subprocess env. We refuse to
+      spawn instead.
+    * Missing keyring entries fail closed (raise ``ConnectorsError``) — the
+      MCP server is never spawned with empty env in place of a secret.
+
+    Plain string values pass through unchanged.
+    """
+    if not env:
+        return {}
+    import keyring  # pylint: disable=import-outside-toplevel
+
+    from gaia.connectors.errors import ConnectorsError
+    from gaia.connectors.store import SERVICE_NAME
+
+    resolved: Dict[str, str] = {}
+    missing: list[str] = []
+    for key, value in env.items():
+        if isinstance(value, dict) and "$keyring" in value:
+            ref = value["$keyring"]
+            service, _, username = ref.partition(":")
+            if service != SERVICE_NAME:
+                raise ConnectorsError(
+                    f"MCPClient: refusing to spawn — $keyring reference "
+                    f"{ref!r} points outside the gaia namespace "
+                    f"(service={service!r}). Only {SERVICE_NAME!r} is allowed."
+                )
+            password = keyring.get_password(service, username)
+            if password is None:
+                missing.append(ref)
+            else:
+                resolved[key] = password
+        else:
+            resolved[key] = str(value)
+    if missing:
+        # Diagnostic parse — split each ref into (service, connector_id,
+        # env_key) for an actionable error pointing at `gaia connectors
+        # configure <id>`. Keep the raw refs in the message too for grep.
+        details = []
+        for ref in missing:
+            parts = ref.split(":", 2)
+            if len(parts) == 3:
+                _, connector_id, env_key = parts
+                details.append(
+                    f"connector_id={connector_id!r} env_key={env_key!r} ref={ref!r}"
+                )
+            else:
+                details.append(f"ref={ref!r}")
+        joined = "; ".join(details)
+        # Pull a connector_id from the first parseable ref for the recovery
+        # hint; if none parses, fall back to a generic message.
+        recovery_hint = ""
+        for ref in missing:
+            parts = ref.split(":", 2)
+            if len(parts) == 3:
+                recovery_hint = (
+                    f" Run `gaia connectors configure {parts[1]}` to "
+                    "re-supply the secret."
+                )
+                break
+        raise ConnectorsError(
+            f"MCPClient: refusing to spawn — missing keyring entries: "
+            f"{joined}.{recovery_hint}"
+        )
+    return resolved
+
+
 @dataclass
 class MCPTool:
     """Represents an MCP tool with its schema.
@@ -119,10 +199,14 @@ class MCPClient:
         if "command" not in config:
             raise ValueError("Config must include 'command' field")
 
+        # Resolve any $keyring references before spawning; raises RuntimeError
+        # if a reference is dangling (fail-closed per plan amendment A5b).
+        resolved_env = _resolve_keyring_refs(config.get("env"))
+
         transport = StdioTransport(
             command=config["command"],
             args=config.get("args"),
-            env=config.get("env"),
+            env=resolved_env or None,
             timeout=timeout,
             debug=debug,
         )

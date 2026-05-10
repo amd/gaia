@@ -1,6 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Configuration management for MCP clients."""
+"""Configuration management for MCP clients (read-only as of #976).
+
+Mutations to ``~/.gaia/mcp_servers.json`` go through the connectors framework
+(``gaia.connectors.mcp_server.McpServerHandler.configure`` / ``disconnect``).
+This class is the read path used by ``MCPClient``, ``ChatAgent`` and the
+agent-builder template.
+"""
 
 import json
 import sys
@@ -109,59 +115,45 @@ class MCPConfig:
         return None
 
     def _read_servers(self, path: Path) -> Dict[str, Any]:
-        """Read and return the server dict from *path* without side effects."""
+        """Read and return the server dict from *path* without side effects.
+
+        Fails loudly on malformed JSON: returning an empty dict on any error
+        masks the underlying problem and lets corrupted state propagate
+        silently into ``MCPClient`` (which then sees zero servers with no
+        actionable error). A missing file returns an empty dict — the caller
+        in ``__init__`` already gates on ``path.exists()``.
+        """
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data.get("mcpServers", data.get("servers", {}))
-        except Exception as e:
-            logger.error(f"Error reading config from {path}: {e}")
-            return {}
+        except json.JSONDecodeError as e:
+            from gaia.connectors.errors import ConnectorsError
+
+            raise ConnectorsError(
+                f"mcp_servers.json at {path} is corrupt: {e}. "
+                f"Inspect the file or remove it to start fresh; the connectors "
+                f"framework will recreate it on next configure()."
+            ) from e
+        except OSError as e:
+            from gaia.connectors.errors import ConnectorsError
+
+            raise ConnectorsError(
+                f"failed to read mcp_servers.json at {path}: {e}"
+            ) from e
+        return data.get("mcpServers", data.get("servers", {}))
 
     def _load(self) -> None:
-        """Load configuration from ``self.config_file`` (replaces current servers)."""
+        """Load configuration from ``self.config_file`` (replaces current servers).
+
+        Fails loudly via :meth:`_read_servers`; an actionable
+        ``ConnectorsError`` propagates rather than silently masking corruption.
+        """
         if not self.config_file.exists():
             logger.debug(f"Config file not found: {self.config_file}")
             return
 
-        try:
-            with open(self.config_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                # Support both new 'mcpServers' and legacy 'servers' key
-                self._servers = data.get("mcpServers", data.get("servers", {}))
-            logger.debug(f"Loaded {len(self._servers)} servers from config")
-        except Exception as e:
-            logger.error(f"Error loading config: {e}")
-            self._servers = {}
-
-    def _save(self) -> None:
-        """Save configuration to file (always uses 'mcpServers' key)."""
-        try:
-            with open(self.config_file, "w", encoding="utf-8") as f:
-                json.dump({"mcpServers": self._servers}, f, indent=2)
-            logger.debug(f"Saved config to {self.config_file}")
-        except Exception as e:
-            logger.error(f"Error saving config: {e}")
-
-    def add_server(self, name: str, config: Dict[str, Any]) -> None:
-        """Add or update a server configuration.
-
-        Args:
-            name: Server name
-            config: Server configuration dictionary
-        """
-        self._servers[name] = config
-        self._save()
-
-    def remove_server(self, name: str) -> None:
-        """Remove a server configuration.
-
-        Args:
-            name: Server name
-        """
-        if name in self._servers:
-            del self._servers[name]
-            self._save()
+        self._servers = self._read_servers(self.config_file)
+        logger.debug(f"Loaded {len(self._servers)} servers from config")
 
     def get_server(self, name: str) -> Dict[str, Any]:
         """Get a server configuration.

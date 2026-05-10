@@ -6,6 +6,7 @@ Chat Agent - Interactive chat with RAG and file search capabilities.
 
 import os
 import platform
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,10 +18,15 @@ except ImportError:
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
+from gaia.agents.tools import BrowserToolsMixin  # Web browsing and search
+from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
+from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
@@ -41,7 +47,7 @@ class ChatAgentConfig:
     use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None
-    model_id: Optional[str] = None  # None = use default Qwen3.5-35B-A3B
+    model_id: Optional[str] = None  # None = use default model (Gemma)
 
     # Execution settings
     max_steps: int = 10
@@ -69,11 +75,39 @@ class ChatAgentConfig:
     # Security
     allowed_paths: Optional[List[str]] = None
 
+    # File System settings
+    enable_filesystem: bool = (
+        False  # Enhanced file system tools (disabled until agent split)
+    )
+    enable_scratchpad: bool = (
+        False  # Data scratchpad for analysis (disabled until agent split)
+    )
+    filesystem_index_path: str = "~/.gaia/file_index.db"
+    scratchpad_db_path: str = "~/.gaia/scratchpad.db"
+    filesystem_scan_depth: int = 3  # Default scan depth (conservative)
+    filesystem_exclude_patterns: List[str] = field(default_factory=list)
+
+    # Browser settings
+    enable_browser: bool = False  # Web browsing tools (disabled until agent split)
+    browser_timeout: int = 30  # HTTP request timeout in seconds
+    browser_max_download_size: int = 100 * 1024 * 1024  # 100 MB max download
+    browser_rate_limit: float = 1.0  # Seconds between requests per domain
+
     # Session persistence (UI session ID for cross-turn document retention)
     ui_session_id: Optional[str] = None
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Stable Diffusion image generation
+
+    # Prompt profile controls which tools and prompt sections are included.
+    # Profiles keep the system prompt lean for task-specific agents:
+    #   "chat"  — basic conversation only (personality, greetings, no RAG/file tools)
+    #   "doc"   — document Q&A with RAG tools + hallucination prevention
+    #   "file"  — file system operations, search, analysis
+    #   "data"  — data analysis, CSV, tables (scratchpad)
+    #   "web"   — web research, page fetching
+    #   "full"  — all tools and prompt sections (backward-compatible default)
+    prompt_profile: str = "full"
 
 
 class ChatAgent(
@@ -81,6 +115,9 @@ class ChatAgent(
     RAGToolsMixin,
     FileToolsMixin,
     ShellToolsMixin,
+    FileSystemToolsMixin,
+    ScratchpadToolsMixin,
+    BrowserToolsMixin,
     FileSearchToolsMixin,
     FileIOToolsMixin,
     VLMToolsMixin,
@@ -89,11 +126,14 @@ class ChatAgent(
     MCPClientMixin,
 ):
     """
-    Chat Agent with RAG, file operations, and shell command capabilities.
+    Chat Agent with RAG, file system navigation, data analysis, web browsing,
+    and shell capabilities.
 
     This agent provides:
     - Document Q&A using RAG
-    - File search and operations
+    - File system browsing, search, and navigation
+    - Structured data analysis via SQLite scratchpad
+    - Web browsing, search, and file download
     - Shell command execution
     - Auto-indexing when files change
     - Interactive chat interface
@@ -135,8 +175,8 @@ class ChatAgent(
         else:
             self.allowed_paths = [Path(p).resolve() for p in config.allowed_paths]
 
-        # Use Qwen3.5-35B-A3B by default for better tool-calling
-        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-GGUF"
+        # Use the configured default model (Gemma) when no explicit model is set
+        effective_model_id = config.model_id or DEFAULT_MODEL_NAME
 
         # Debug logging for model selection
         logger.debug(
@@ -182,12 +222,68 @@ class ChatAgent(
         self.file_handlers = []  # Track FileChangeHandler instances for telemetry
         self.indexed_files = set()
 
+        # Initialize file system index service (optional)
+        self._fs_index = None
+        self._path_validator = self.path_validator
+        if config.enable_filesystem:
+            try:
+                from gaia.filesystem.index import FileSystemIndexService
+
+                self._fs_index = FileSystemIndexService(
+                    db_path=config.filesystem_index_path
+                )
+                logger.info("File system index service initialized")
+            except (ImportError, OSError, sqlite3.Error) as e:
+                logger.warning(
+                    "File system index not available: %s. "
+                    "Disable with config.enable_filesystem=False to silence.",
+                    e,
+                )
+
+        # Initialize scratchpad service (optional)
+        self._scratchpad = None
+        if config.enable_scratchpad:
+            try:
+                from gaia.scratchpad.service import ScratchpadService
+
+                self._scratchpad = ScratchpadService(db_path=config.scratchpad_db_path)
+                logger.info("Scratchpad service initialized")
+            except (ImportError, OSError, sqlite3.Error) as e:
+                logger.warning(
+                    "Scratchpad service not available: %s. "
+                    "Disable with config.enable_scratchpad=False to silence.",
+                    e,
+                )
+
+        # Initialize web client for browser tools (optional)
+        self._web_client = None
+        if config.enable_browser:
+            try:
+                from gaia.web.client import WebClient
+
+                self._web_client = WebClient(
+                    timeout=config.browser_timeout,
+                    max_download_size=config.browser_max_download_size,
+                    rate_limit=config.browser_rate_limit,
+                )
+                logger.info("Web client initialized for browser tools")
+            except (ImportError, OSError) as e:
+                logger.warning(
+                    "Web client not available: %s. "
+                    "Disable with config.enable_browser=False to silence.",
+                    e,
+                )
+
         # Session management
         self.session_manager = SessionManager()
         self.current_session = None
         self.conversation_history: List[Dict[str, str]] = (
             []
         )  # Track conversation for persistence
+        # Tool loader controls which tool bundles are active per-session.
+        # Instantiate here so the agent can reset bundle activation when a
+        # new conversation/session is created.
+        self.tool_loader = ToolLoader()
 
         # Store base URL for use in _register_tools() (VLM, etc.)
         self._base_url = effective_base_url
@@ -261,6 +357,14 @@ class ChatAgent(
                 self.current_session = self.session_manager.create_session(
                     config.ui_session_id
                 )
+                # New conversation started for this UI session; clear any
+                # session-scoped tool activations so bundles don't persist
+                # across distinct conversations.
+                try:
+                    self.tool_loader.reset_session()
+                except Exception:
+                    # Never fail agent init due to tool loader reset.
+                    pass
 
         # Start watching directories
         if self.watch_directories:
@@ -487,8 +591,12 @@ Use tools when:
 - "what files are indexed?" → {"tool": "list_indexed_documents", "tool_args": {}}
 - "search for X" → {"tool": "query_documents", "tool_args": {"query": "X"}}
 - "what does doc say?" → {"tool": "query_specific_file", "tool_args": {...}}
-- "find the project manual" → {"tool": "search_file", "tool_args": {"file_pattern": "project manual"}}
+- "find the oil and gas manual" → {"tool": "find_files", "tool_args": {"query": "oil and gas manual", "file_types": "pdf,docx"}}
+- "what's in my Documents folder?" → {"tool": "browse_directory", "tool_args": {"path": "~/Documents"}}
+- "show me the project structure" → {"tool": "tree", "tool_args": {"path": "."}}
+- "find the project manual" → {"tool": "find_files", "tool_args": {"query": "project manual", "file_types": "pdf,docx"}}
 - "index files in /path/to/dir" → {"tool": "index_directory", "tool_args": {"directory_path": "/path/to/dir"}}
+- "analyze my spending" → Use find_files + read_file + create_table + insert_data + query_data workflow
 
 **DATA ANALYSIS:** Use analyze_data_file for CSV/Excel with analysis_type: "summary", "spending", "trends", or "full".
 
@@ -526,8 +634,8 @@ When user asks a domain-specific question (e.g., "what is the PTO policy?"):
       - Finance/budget/revenue → search "budget", "financial", "report", "revenue"
       - Project/plan/roadmap → search "project", "plan", "roadmap"
       - If unsure → search "handbook OR report OR guide OR manual"
-   b. Search for files using search_file with those document-type keywords (1-2 words MAX)
-   c. If nothing found after 2 tries → call browse_files to see all available files
+   b. Search for files using find_files with those document-type keywords (1-2 words MAX)
+   c. If nothing found after 2 tries → call browse_directory to see all available files
    d. If files found, index them automatically
    e. Provide status update: "Found and indexed X file(s)"
    f. IMMEDIATELY query the indexed file before answering
@@ -537,7 +645,7 @@ Example Smart Discovery:
 User: "How many PTO days do first-year employees get?"
 You: {"tool": "list_indexed_documents", "tool_args": {}}
 Result: {"documents": [], "count": 0}
-You: {"tool": "search_file", "tool_args": {"file_pattern": "handbook"}}
+You: {"tool": "find_files", "tool_args": {"query": "handbook", "file_types": "md,pdf,docx"}}
 Result: {"files": ["/docs/employee_handbook.md"], "count": 1}
 You: {"tool": "index_document", "tool_args": {"file_path": "/docs/employee_handbook.md"}}
 Result: {"status": "success", "chunks": 45}
@@ -546,7 +654,7 @@ Result: {"chunks": ["First-year employees receive 15 days of PTO..."], "scores":
 You: {"answer": "According to the employee handbook, first-year employees receive 15 days of PTO."}
 
 **SEARCH LOOP PREVENTION:**
-If you call search_file or browse_files twice with similar terms and get the same results, STOP. After 2 failed attempts, acknowledge the limitation.
+If you call find_files or browse_directory twice with similar terms and get the same results, STOP. After 2 failed attempts, acknowledge the limitation.
 
 **PROACTIVE FOLLOW-THROUGH:**
 When the user follows up after a failed action (e.g., nonexistent file) with a new document reference, IMMEDIATELY proceed with the FULL workflow — find + index + query + answer — in ONE response. Never stop mid-workflow to ask permission.
@@ -554,7 +662,7 @@ When the user follows up after a failed action (e.g., nonexistent file) with a n
 BANNED RESPONSE PATTERN (AUTOMATIC FAIL): "Would you like me to index this document?" / "Shall I index X?" / "Do you want me to proceed?" / "Once indexed, I'll be able to..." ← THESE ARE ALL WRONG. If you can see a document, INDEX IT IMMEDIATELY without asking.
 
 MANDATORY WORKFLOW for "what about X?" / "try X" / "what about the Y document?":
-1. search_file("X") to locate the file
+1. find_files("X") to locate the file
 2. index_document(path) — NO CONFIRMATION NEEDED, just do it
 3. query_specific_file(filename, question) — use any question from context or ask about key topics
 4. Return the answer
@@ -563,42 +671,125 @@ MANDATORY WORKFLOW for "what about X?" / "try X" / "what about the Y document?":
 "What about the employee handbook? How many PTO days?" = INDEX + QUERY "PTO days" + ANSWER "15 days"
 
 IMPORTANT: If no specific question was asked, query the document for "key policies" or "main content" and summarize — NEVER just say "it's indexed, what do you want to know?"
+"""
+
+        # ── Tier 1b: Optional tool sections — each block is only injected when
+        # the corresponding mixin was actually registered. Without this gating
+        # the LLM sees tool instructions for tools that don't exist and either
+        # hallucinates them or emits syntactically-valid tool calls that come
+        # back as "unknown tool" errors (#495 review feedback from @itomek-amd).
+        profile = getattr(self.config, "prompt_profile", "full")
+        filesystem_section = ""
+        if profile in ("file", "full") or getattr(
+            self.config, "enable_filesystem", False
+        ):
+            filesystem_section = """
+**FILE SYSTEM TOOLS:**
+You have powerful file system tools. Use them when the user asks about files, folders, or their PC:
+- **browse_directory**: List folder contents with sizes and dates
+- **tree**: Show visual tree of a directory structure
+- **file_info**: Get detailed info about a file (size, type, pages, lines)
+- **find_files**: Search for files by name, content, or metadata (size, date, type)
+- **read_file**: Read file contents with smart formatting (text, CSV, JSON, PDF)
+- **bookmark**: Save/list/remove bookmarks for quick access to important locations
 
 **FILE SEARCH AND AUTO-INDEX WORKFLOW:**
 When user asks "find the X manual" or "find X document on my drive":
-1. Use SHORT keyword file_pattern (1-2 words MAX), NOT full phrases:
-   - WRONG: search_file("Acme Corp API reference") — too many words, won't match filenames
-   - RIGHT: search_file("api_reference") or search_file("api") — short, will match api_reference.py
-   - Extract the most distinctive 1-2 words from the request as the file_pattern.
-2. ALWAYS start with a QUICK search (do NOT set deep_search):
-   {"tool": "search_file", "tool_args": {"file_pattern": "api"}}
+1. Use SHORT keyword queries (1-2 words MAX), NOT full phrases:
+   - WRONG: find_files("Acme Corp API reference") -- too many words, won't match filenames
+   - RIGHT: find_files("api_reference") or find_files("api") -- short, will match api_reference.py
+   - Extract the most distinctive 1-2 words from the request as the query.
+2. ALWAYS start with a QUICK search (no deep_search flag):
+   {"tool": "find_files", "tool_args": {"query": "api"}}
    This searches CWD (recursively), Documents, Downloads, Desktop - FAST
 3. Handle quick search results:
    - **If exactly 1 file found AND the user asked a content question**: **INDEX IT IMMEDIATELY and answer**
-   - **CLEAR INTENT RULE**: If the user's message contains a question word (what, how, who, when, where) OR asks about content/information → that is a CONTENT QUESTION. Index immediately, no confirmation needed.
+   - **CLEAR INTENT RULE**: If the user's message contains a question word (what, how, who, when, where) OR asks about content/information -> that is a CONTENT QUESTION. Index immediately, no confirmation needed.
    - **If exactly 1 file found AND user literally only said "find X" with no follow-up intent**: Show result and ask to confirm.
    - NEVER ask "Would you like me to index this?" when the user clearly wants information from the file.
    - **If multiple files found**: Display numbered list, ask user to select.
-   - **If none found**: Try a DIFFERENT short keyword (synonym or partial name), then if still nothing, use browse_files to explore the directory structure.
-4. browse_files FALLBACK — use when search returns 0 results after 2 attempts
+   - **If none found**: Try a DIFFERENT short keyword (synonym or partial name), then if still nothing, use browse_directory to explore the directory structure.
+4. browse_directory FALLBACK -- use when search returns 0 results after 2 attempts
 5. After indexing, answer the user's question immediately.
 
 **CRITICAL: NEVER use deep_search=true on the first search call!**
 Always do quick search first, show results, and wait for user response.
 
 **IMPORTANT: Always show tool results with display_message!**
-Tools like search_file return a 'display_message' field - ALWAYS show this to the user:
+Tools like find_files return a 'display_message' field - ALWAYS show this to the user:
 
 Example:
-Tool result: {"display_message": "Found 2 file(s) in current directory", "file_list": [...]}
-You must say: {"answer": "Found 2 file(s):\n1. README.md\n2. setup.py"}
+User: "Can you find the oil and gas manual on my drive?"
+You: {"tool": "find_files", "tool_args": {"query": "oil gas manual", "file_types": "pdf,docx"}}
+Result: "Found 1 result(s):\\n  1. C:/Users/user/Documents/Oil-Gas-Manual.pdf (2.1 MB)"
+You: {"tool": "index_document", "tool_args": {"file_path": "C:/Users/user/Documents/Oil-Gas-Manual.pdf"}}
+You: {"answer": "Found and indexed Oil-Gas-Manual.pdf (150 chunks). You can now ask me questions about it!"}
 
+**DIRECTORY BROWSING WORKFLOW:**
+When user asks "what's in my Documents?" or "show me the project structure":
+1. Use browse_directory to list contents, or tree for visual hierarchy
+2. Use file_info for details about specific files
+3. Use bookmark to save frequently accessed locations
+"""
+
+        scratchpad_section = ""
+        if profile in ("data", "full") or getattr(
+            self.config, "enable_scratchpad", False
+        ):
+            scratchpad_section = """
+**DATA ANALYSIS WORKFLOW (Scratchpad):**
+For multi-document analysis (spending, tax, research), use the scratchpad tools:
+1. **find_files** to locate documents (e.g., credit card statements)
+2. **create_table** to set up a structured workspace
+3. **read_file** + **insert_data** for each document (extract data, store in table)
+4. **query_data** to analyze with SQL (SUM, AVG, GROUP BY, etc.)
+5. **drop_table** to clean up when done
+
+Example:
+User: "Analyze my credit card spending"
+You: {"tool": "find_files", "tool_args": {"query": "statement", "file_types": "pdf", "scope": "home"}}
+You: {"tool": "create_table", "tool_args": {"table_name": "transactions", "columns": "date TEXT, description TEXT, amount REAL, category TEXT, source TEXT"}}
+Then for each PDF: read_file → extract transactions → insert_data
+Then: {"tool": "query_data", "tool_args": {"sql": "SELECT category, SUM(amount) as total FROM scratch_transactions GROUP BY category ORDER BY total DESC"}}
+"""
+
+        browser_section = ""
+        if profile in ("web", "full") or getattr(self.config, "enable_browser", False):
+            browser_section = """
+**BROWSER TOOLS:**
+You can browse the web, search for information, and download files:
+- **fetch_page**: Fetch a web page and extract readable text, links, or tables
+- **search_web**: Search the web using DuckDuckGo (no API key needed)
+- **download_file**: Download files from the web to local disk
+
+**WEB RESEARCH WORKFLOW:**
+When user needs online information (prices, statistics, documentation, etc.):
+1. **search_web** to find relevant pages
+2. **fetch_page** to read the full content of a result
+3. Combine with local data analysis if needed
+
+Example:
+User: "Compare my grocery spending to the national average"
+You: query_data to get user's spending → search_web for national averages → fetch_page to read the data → provide comparison
+
+**DOWNLOAD + ANALYZE WORKFLOW:**
+When user wants to get and analyze a web resource:
+1. **search_web** or use direct URL
+2. **download_file** to save locally
+3. **index_document** or **read_file** to process the downloaded file
+4. Use scratchpad tools for structured analysis
+"""
+
+        # Tail of Tier 1: always-on examples + indexing note. Kept separate so
+        # we can prepend the gated sections between the discovery workflow and
+        # these examples without having to maintain a single monolithic f-string.
+        discovery_rules_tail = """
 NOTE: Progress indicators (spinners) are shown automatically by the tool while searching.
 You don't need to say "searching..." - the tool displays it live!
 
 Example (Single file found):
 User: "Can you find the project report on my drive?"
-You: {"tool": "search_file", "tool_args": {"file_pattern": "project report"}}
+You: {"tool": "find_files", "tool_args": {"query": "project report"}}
 Result: {"files": [...], "count": 1, "display_message": "Found 1 matching file(s)", "file_list": [{"number": 1, "name": "Project-Report.pdf", "directory": "C:/Users/user/Documents"}]}
 You: {"answer": "Found 1 file:\n- Project-Report.pdf (Documents folder)\n\nIs this the one you're looking for?"}
 User: "yes"
@@ -607,15 +798,15 @@ You: {"answer": "Indexed Project-Report.pdf (150 chunks). You can now ask me que
 
 Example (Nothing found — offer deep search):
 User: "Find my tax return"
-You: {"tool": "search_file", "tool_args": {"file_pattern": "tax return"}}
+You: {"tool": "find_files", "tool_args": {"query": "tax return"}}
 Result: {"count": 0, "deep_search_available": true, "suggestion": "I can do a deep search across all drives..."}
 You: {"answer": "I didn't find any files matching 'tax return' in your common folders (Documents, Downloads, Desktop).\n\nWould you like me to do a deep search across all your drives? This may take a minute."}
 User: "yes please"
-You: {"tool": "search_file", "tool_args": {"file_pattern": "tax return", "deep_search": true}}
+You: {"tool": "find_files", "tool_args": {"query": "tax return", "deep_search": true}}
 
 Example (Multiple files):
 User: "Find the manual on my drive"
-You: {"tool": "search_file", "tool_args": {"file_pattern": "manual"}}
+You: {"tool": "find_files", "tool_args": {"query": "manual"}}
 Result: {"count": 3, "file_list": [{"number": 1, "name": "User-Guide.pdf", "directory": "C:/Docs"}, {"number": 2, "name": "Safety-Manual.pdf", "directory": "C:/Downloads"}]}
 You: {"answer": "Found 3 matching files:\n\n1. User-Guide.pdf (C:/Docs/)\n2. Safety-Manual.pdf (C:/Downloads/)\n3. Training-Manual.pdf (C:/Work/)\n\nWhich one would you like me to index? (enter the number)"}
 User: "1"
@@ -629,7 +820,7 @@ You: {"answer": "Indexed User-Guide.pdf. You can now ask questions about it!"}
         rag_query_rules = ""
         if has_indexed:
             rag_query_rules = """
-**CONTEXT-CHECK RULE:** Before running search_file or browse_files on a follow-up turn, check your indexed documents list. If any indexed file matches the user's request, query it FIRST. Only search for new files if nothing indexed matches.
+**CONTEXT-CHECK RULE:** Before running find_files or browse_directory on a follow-up turn, check your indexed documents list. If any indexed file matches the user's request, query it FIRST. Only search for new files if nothing indexed matches.
 Examples:
 - "api_reference.py" is indexed + user asks about "the Python file" → query api_reference.py, do NOT search
 - "employee_handbook.md" is indexed + user asks "what does the handbook say?" → query directly, do NOT search
@@ -645,13 +836,13 @@ Even if you "know" about supply chain audits, compliance reports, PTO policies, 
 **SECTION/PAGE LOOKUP RULE:**
 When the user asks about a specific section (e.g., "Section 52", "Chapter 3", "Appendix B"):
 1. Try query_specific_file with section name + likely topic: query="Section 52 findings"
-2. If RAG returns low-score or irrelevant results, use search_file_content to grep the file directly:
+2. If RAG returns low-score or irrelevant results, use find_files to grep the file directly:
    - ALWAYS restrict search to the document's directory (avoid searching the whole repo):
-     search_file_content("Section 52", directory="eval/corpus/documents", context_lines=5)
-   - context_lines=5 returns the 5 lines BEFORE and AFTER the match — shows section content
+     find_files("Section 52", search_type="content", scope="eval/corpus/documents")
+   - Content search returns matching lines with line numbers for context
 3. If section header found but content unclear, search for CONTENT keywords (not just the heading):
-   - search_file_content("non-conformities", directory="eval/corpus/documents") → finds finding text
-   - search_file_content("finding", directory="eval/corpus/documents") → finds finding bullets
+   - find_files("non-conformities", search_type="content", scope="eval/corpus/documents") → finds finding text
+   - find_files("finding", search_type="content", scope="eval/corpus/documents") → finds finding bullets
 4. NEVER answer from memory when asked about a specific named section — always retrieve first.
 5. If all queries fail, give the best answer based on what WAS found — never just say "I cannot find it."
 6. CRITICAL — If RAG returned RELEVANT content (even if you're unsure it belongs to "Section 52" specifically):
@@ -834,7 +1025,7 @@ When user uses a reference to a file already found/indexed in a PRIOR turn ("the
 - CHECK CONVERSATION HISTORY first — if you indexed/found a file in a prior turn, that IS the file.
 - DO NOT re-search from scratch. Query the already-indexed document directly.
 - "What about the Python source file?" after indexing api_reference.py → query api_reference.py
-- WRONG: search_file("Python source authentication") when you already indexed api_reference.py
+- WRONG: find_files("Python source authentication") when you already indexed api_reference.py
 - RIGHT: query_specific_file("api_reference.py", "authentication method")
 """
 
@@ -842,7 +1033,7 @@ When user uses a reference to a file already found/indexed in a PRIOR turn ("the
         data_file_rules = """
 **FILE ANALYSIS AND DATA PROCESSING:**
 When user asks to analyze data files (bank statements, spreadsheets, expense reports, CSV sales data):
-1. First find the files using search_file or list_recent_files
+1. First find the files using find_files or list_recent_files
 2. Use get_file_info to understand the file structure (column names, row count)
 3. Use analyze_data_file with appropriate parameters:
    - analysis_type: "summary" for general overview, "spending" for expenses, "trends" for time-based, "full" for comprehensive
@@ -892,24 +1083,64 @@ You: {"answer": "The top salesperson in Q1 2025 was Sarah Chen with $70,000 in r
 **FILE BROWSING:** browse_directory for navigation, list_recent_files for recent files, get_file_info for metadata.
 
 **UNSUPPORTED FEATURES:**
-If user asks for something not supported (web browsing, email, scheduling, cloud storage, file conversion, live collaboration, video/audio analysis), explain it's not available and suggest alternatives. Link: https://github.com/amd/gaia/issues/new?template=feature_request.md
-NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fetch_webpage). For generate_image, ALWAYS attempt the call first before saying unavailable.
+If user asks for something not supported (email, scheduling, cloud storage, file conversion, live collaboration, video/audio analysis), explain it's not available and suggest alternatives. Link: https://github.com/amd/gaia/issues/new?template=feature_request.md
+NOTE: Web browsing and search ARE supported via `fetch_page`, `search_web`, and `download_file` (see BROWSER TOOLS section above). Image analysis IS supported (analyze_image). For generate_image, ALWAYS attempt the call first before saying unavailable.
   IMAGE GENERATION MANDATORY WORKFLOW — AUTOMATIC FAIL if violated:
   BANNED RESPONSE (NEVER SAY): "I can generate images when the --sd flag is active" / "image generation requires --sd" / "I can create images for you" — ANY claim about availability before attempting.
   MANDATORY: When user asks "can you generate an image?" or asks you to create any image, you MUST call generate_image FIRST. If it returns an error, THEN report it is unavailable. NEVER claim you can or cannot generate images without first attempting the call. Your first response to any image request must be the tool call, not a text explanation.
   AFTER FAILURE: If generate_image returns an error, respond in 1-2 sentences: state it is unavailable and optionally mention enabling --sd. DO NOT apologize, DO NOT explain what you "would have done". Example: "Image generation is not available in this session — start GAIA with the --sd flag to enable it."
 """
 
-        prompt = (
+        # Assemble prompt based on profile
+        profile = getattr(self.config, "prompt_profile", "full")
+
+        if profile == "chat":
+            # Minimal: personality only — but respect explicitly enabled tools.
+            extras = filesystem_section + scratchpad_section + browser_section
+            return base_prompt + extras
+
+        if profile == "doc":
+            # Document Q&A: RAG tools + hallucination prevention
+            return (
+                base_prompt
+                + indexed_docs_section
+                + tool_rules
+                + discovery_rules
+                + discovery_rules_tail
+                + rag_query_rules
+            )
+
+        if profile == "file":
+            # File operations: file system + search + discovery
+            return (
+                base_prompt
+                + tool_rules
+                + discovery_rules
+                + filesystem_section
+                + discovery_rules_tail
+            )
+
+        if profile == "data":
+            # Data analysis: scratchpad + file tools
+            return base_prompt + tool_rules + scratchpad_section + data_file_rules
+
+        if profile == "web":
+            # Web research: browser tools
+            return base_prompt + browser_section
+
+        # "full" — all sections (backward-compatible default)
+        return (
             base_prompt
             + indexed_docs_section
             + tool_rules
             + discovery_rules
+            + filesystem_section
+            + scratchpad_section
+            + browser_section
+            + discovery_rules_tail
             + rag_query_rules
             + data_file_rules
         )
-
-        return prompt
 
     def _create_console(self):
         """Create console for chat agent."""
@@ -1126,122 +1357,149 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
             logger.warning(f"Auto-save failed: {e}")
 
     def _register_tools(self) -> None:
-        """Register chat agent tools from mixins."""
+        """Register chat agent tools from mixins based on prompt_profile."""
         from gaia.agents.base.tools import tool
 
-        # Register tools from mixins
-        self.register_rag_tools()
-        self.register_file_tools()
+        profile = getattr(self.config, "prompt_profile", "full")
+
+        # "chat" profile: no tools — just personality/conversation
+        if profile == "chat":
+            # Minimal: only shell for system queries
+            self.register_shell_tools()
+            self._register_external_tools_conditional()
+            return
+
+        # All other profiles get at least shell tools
         self.register_shell_tools()
-        self.register_file_search_tools()  # Shared file search tools
-        self.register_file_io_tools()  # File read/write/edit (FileIOToolsMixin)
-        self.register_screenshot_tools()  # Screenshot capture (ScreenshotToolsMixin)
-        # Remove CodeAgent-specific FileIO tools — ChatAgent only needs the 3 generic ones.
-        # write_python_file, edit_python_file, search_code, generate_diff, write_markdown_file,
-        # update_gaia_md, replace_function are AST/code tools with ~635 tokens of description
-        # that waste context and cause LLM confusion when answering document Q&A questions.
-        from gaia.agents.base.tools import _TOOL_REGISTRY
 
-        _chat_only_fileio = {
-            "write_python_file",
-            "edit_python_file",
-            "search_code",
-            "generate_diff",
-            "write_markdown_file",
-            "update_gaia_md",
-            "replace_function",
-        }
-        for _name in _chat_only_fileio:
-            _TOOL_REGISTRY.pop(_name, None)
-        self._register_external_tools_conditional()  # Web/doc search (if backends available)
+        if profile in ("doc", "full"):
+            self.register_rag_tools()
+            # Doc profile needs file search for smart discovery workflow
+            self.register_file_tools()
+            self.register_file_search_tools()
 
-        # Inline list_files — only the safe subset of ProjectManagementMixin
-        @tool
-        def list_files(path: str = ".") -> dict:
-            """List files and directories in a path.
+        if profile in ("file", "full"):
+            self.register_file_tools()
+            self.register_filesystem_tools()
+            self.register_file_search_tools()
+            self.register_file_io_tools()
 
-            Args:
-                path: Directory path to list (default: current directory)
+        if profile in ("data", "full"):
+            self.register_scratchpad_tools()
+            if profile == "data":
+                # Data profile also needs file tools to find/read data files
+                self.register_file_tools()
+                self.register_file_search_tools()
+                self.register_file_io_tools()
 
-            Returns:
-                Dictionary with files, directories, and total count
-            """
-            try:
-                items = os.listdir(path)
-                files = sorted(
-                    i for i in items if os.path.isfile(os.path.join(path, i))
+        if profile in ("web", "full"):
+            self.register_browser_tools()
+
+        if profile == "full":
+            self.register_screenshot_tools()
+        self._register_external_tools_conditional()
+
+        # Inline list_files — only for profiles that need file operations
+        if profile in ("file", "data", "full"):
+
+            @tool
+            def list_files(path: str = ".") -> dict:
+                """List files and directories in a path.
+
+                Args:
+                    path: Directory path to list (default: current directory)
+
+                Returns:
+                    Dictionary with files, directories, and total count
+                """
+                try:
+                    items = os.listdir(path)
+                    files = sorted(
+                        i for i in items if os.path.isfile(os.path.join(path, i))
+                    )
+                    dirs = sorted(
+                        i for i in items if os.path.isdir(os.path.join(path, i))
+                    )
+                    return {
+                        "status": "success",
+                        "path": path,
+                        "files": files,
+                        "directories": dirs,
+                        "total": len(items),
+                    }
+                except FileNotFoundError:
+                    return {
+                        "status": "error",
+                        "error": f"Directory not found: {path}",
+                    }
+                except PermissionError:
+                    return {
+                        "status": "error",
+                        "error": f"Permission denied: {path}",
+                    }
+                except Exception as e:
+                    return {"status": "error", "error": str(e)}
+
+            @tool
+            def execute_python_file(
+                file_path: str, args: str = "", timeout: int = 60
+            ) -> dict:
+                """Execute a Python file as a subprocess and capture its output.
+
+                Args:
+                    file_path: Path to the .py file to run
+                    args: Space-separated CLI arguments to pass to the script
+                    timeout: Max seconds to wait (default 60)
+
+                Returns:
+                    Dictionary with stdout, stderr, return_code, and duration
+                """
+                import shlex
+                import subprocess
+                import sys
+                import time
+
+                if not self.path_validator.is_path_allowed(file_path):
+                    return {
+                        "status": "error",
+                        "error": f"Access denied: {file_path}",
+                    }
+
+                p = Path(file_path)
+                if not p.exists():
+                    return {
+                        "status": "error",
+                        "error": f"File not found: {file_path}",
+                    }
+                cmd = [sys.executable, str(p.resolve())] + (
+                    shlex.split(args) if args.strip() else []
                 )
-                dirs = sorted(i for i in items if os.path.isdir(os.path.join(path, i)))
-                return {
-                    "status": "success",
-                    "path": path,
-                    "files": files,
-                    "directories": dirs,
-                    "total": len(items),
-                }
-            except FileNotFoundError:
-                return {"status": "error", "error": f"Directory not found: {path}"}
-            except PermissionError:
-                return {"status": "error", "error": f"Permission denied: {path}"}
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
-
-        # Inline execute_python_file — safe subset of TestingMixin with path validation.
-        # Omits run_tests (CodeAgent-specific) and adds allowed_paths guard.
-        @tool
-        def execute_python_file(
-            file_path: str, args: str = "", timeout: int = 60
-        ) -> dict:
-            """Execute a Python file as a subprocess and capture its output.
-
-            Args:
-                file_path: Path to the .py file to run
-                args: Space-separated CLI arguments to pass to the script
-                timeout: Max seconds to wait (default 60)
-
-            Returns:
-                Dictionary with stdout, stderr, return_code, and duration
-            """
-            import shlex
-            import subprocess
-            import sys
-            import time
-
-            if not self.path_validator.is_path_allowed(file_path):
-                return {"status": "error", "error": f"Access denied: {file_path}"}
-
-            p = Path(file_path)
-            if not p.exists():
-                return {"status": "error", "error": f"File not found: {file_path}"}
-            cmd = [sys.executable, str(p.resolve())] + (
-                shlex.split(args) if args.strip() else []
-            )
-            start = time.monotonic()
-            try:
-                r = subprocess.run(
-                    cmd,
-                    cwd=str(p.parent.resolve()),
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    check=False,
-                )
-                return {
-                    "status": "success",
-                    "stdout": r.stdout[:8000],
-                    "stderr": r.stderr[:2000],
-                    "return_code": r.returncode,
-                    "has_errors": r.returncode != 0,
-                    "duration_seconds": round(time.monotonic() - start, 2),
-                }
-            except subprocess.TimeoutExpired:
-                return {
-                    "status": "error",
-                    "error": f"Timed out after {timeout}s",
-                    "has_errors": True,
-                }
-            except Exception as e:
-                return {"status": "error", "error": str(e), "has_errors": True}
+                start = time.monotonic()
+                try:
+                    r = subprocess.run(
+                        cmd,
+                        cwd=str(p.parent.resolve()),
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        check=False,
+                    )
+                    return {
+                        "status": "success",
+                        "stdout": r.stdout[:8000],
+                        "stderr": r.stderr[:2000],
+                        "return_code": r.returncode,
+                        "has_errors": r.returncode != 0,
+                        "duration_seconds": round(time.monotonic() - start, 2),
+                    }
+                except subprocess.TimeoutExpired:
+                    return {
+                        "status": "error",
+                        "error": f"Timed out after {timeout}s",
+                        "has_errors": True,
+                    }
+                except Exception as e:
+                    return {"status": "error", "error": str(e), "has_errors": True}
 
         # VLM tools — analyze_image, answer_question_about_image
         # Registers via init_vlm(); gracefully skipped if VLM model not loaded.
@@ -1268,80 +1526,86 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
                 )
 
         # ── Phase 3: Web & System tools ──────────────────────────────────────────
+        # Only register web tools for profiles that should browse the internet.
+        # Doc/file/data profiles should NOT have fetch_webpage to avoid confusing
+        # the LLM into web-browsing when it should use RAG.
+        _web_profiles = ("web", "full")
 
-        @tool
-        def open_url(url: str) -> dict:
-            """Open a URL in the system's default web browser.
+        if profile in _web_profiles:
 
-            Args:
-                url: The URL to open (must start with http:// or https://)
+            @tool
+            def open_url(url: str) -> dict:
+                """Open a URL in the system's default web browser.
 
-            Returns:
-                Dictionary with status and confirmation message
-            """
-            import webbrowser
+                Args:
+                    url: The URL to open (must start with http:// or https://)
 
-            if not url.startswith(("http://", "https://")):
-                return {
-                    "status": "error",
-                    "error": "URL must start with http:// or https://",
-                }
-            try:
-                webbrowser.open(url)
-                return {
-                    "status": "success",
-                    "message": f"Opened {url} in the default browser",
-                }
-            except Exception as e:
-                return {"status": "error", "error": str(e)}
+                Returns:
+                    Dictionary with status and confirmation message
+                """
+                import webbrowser
 
-        @tool
-        def fetch_webpage(url: str, extract_text: bool = True) -> dict:
-            """Fetch the content of a webpage and optionally extract readable text.
+                if not url.startswith(("http://", "https://")):
+                    return {
+                        "status": "error",
+                        "error": "URL must start with http:// or https://",
+                    }
+                try:
+                    webbrowser.open(url)
+                    return {
+                        "status": "success",
+                        "message": f"Opened {url} in the default browser",
+                    }
+                except Exception as e:
+                    return {"status": "error", "error": str(e)}
 
-            Args:
-                url: The URL to fetch (must start with http:// or https://)
-                extract_text: If True, strip HTML tags and return plain text (default: True)
+            @tool
+            def fetch_webpage(url: str, extract_text: bool = True) -> dict:
+                """Fetch the content of a webpage and optionally extract readable text.
 
-            Returns:
-                Dictionary with status, content (or html), and url
-            """
-            import httpx
+                Args:
+                    url: The URL to fetch (must start with http:// or https://)
+                    extract_text: If True, strip HTML tags and return plain text (default: True)
 
-            if not url.startswith(("http://", "https://")):
-                return {
-                    "status": "error",
-                    "error": "URL must start with http:// or https://",
-                }
-            try:
-                resp = httpx.get(url, timeout=15, follow_redirects=True)
-                resp.raise_for_status()
-                if extract_text:
-                    try:
-                        from bs4 import BeautifulSoup
+                Returns:
+                    Dictionary with status, content (or html), and url
+                """
+                import httpx
 
-                        text = BeautifulSoup(resp.text, "html.parser").get_text(
-                            separator="\n", strip=True
-                        )
-                    except ImportError:
-                        import re
+                if not url.startswith(("http://", "https://")):
+                    return {
+                        "status": "error",
+                        "error": "URL must start with http:// or https://",
+                    }
+                try:
+                    resp = httpx.get(url, timeout=15, follow_redirects=True)
+                    resp.raise_for_status()
+                    if extract_text:
+                        try:
+                            from bs4 import BeautifulSoup
 
-                        text = re.sub(r"<[^>]+>", "", resp.text)
-                        text = re.sub(r"\s{3,}", "\n\n", text).strip()
+                            text = BeautifulSoup(resp.text, "html.parser").get_text(
+                                separator="\n", strip=True
+                            )
+                        except ImportError:
+                            import re
+
+                            text = re.sub(r"<[^>]+>", "", resp.text)
+                            text = re.sub(r"\s{3,}", "\n\n", text).strip()
+                        return {
+                            "status": "success",
+                            "url": url,
+                            "content": text[:8000],
+                            "truncated": len(text) > 8000,
+                        }
                     return {
                         "status": "success",
                         "url": url,
-                        "content": text[:8000],
-                        "truncated": len(text) > 8000,
+                        "html": resp.text[:8000],
+                        "truncated": len(resp.text) > 8000,
                     }
-                return {
-                    "status": "success",
-                    "url": url,
-                    "html": resp.text[:8000],
-                    "truncated": len(resp.text) > 8000,
-                }
-            except Exception as e:
-                return {"status": "error", "url": url, "error": str(e)}
+                except Exception as e:
+                    return {"status": "error", "url": url, "error": str(e)}
 
         @tool
         def get_system_info() -> dict:
@@ -1670,6 +1934,8 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
         # MCP tools — load from ~/.gaia/mcp_servers.json if configured.
         # Must run last so MCP tools don't bloat context before we know the base count.
         # Hard limit: skip if MCP would add >10 tools (context bloat guard).
+        from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: F811
+
         _MCP_TOOL_LIMIT = 10
         _mcp_config_path = Path.home() / ".gaia" / "mcp_servers.json"
         if _mcp_config_path.exists() and self._mcp_manager is not None:
@@ -1703,10 +1969,30 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
             except Exception as _mcp_err:
                 logger.warning("MCP server load failed: %s", _mcp_err)
 
+        # Snapshot: freeze this agent's tool set so mutations by other agents
+        # in the same process do not leak in.  Exclusion replaces the old
+        # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
+        self._snapshot_tools()
+        if profile in ("file", "data", "full"):
+            _chat_exclude = {
+                "write_python_file",
+                "edit_python_file",
+                "search_code",
+                "generate_diff",
+                "write_markdown_file",
+                "update_gaia_md",
+                "replace_function",
+            }
+            for _name in _chat_exclude:
+                self._instance_tools.pop(_name, None)
+
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools
     # - FileToolsMixin (file_tools.py): Directory monitoring
     # - ShellToolsMixin (shell_tools.py): Shell command execution
+    # - FileSystemToolsMixin (shared): File system browsing, search, tree, bookmarks
+    # - ScratchpadToolsMixin (shared): SQLite working memory for data analysis
+    # - BrowserToolsMixin (shared): Web browsing, content extraction, download
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (code/tools/file_io.py): read_file, write_file, edit_file (3 generic tools only)
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from ~/.gaia/mcp_servers.json)
@@ -1971,8 +2257,31 @@ NOTE: Image analysis IS supported (analyze_image). URL fetching IS supported (fe
             return False
 
     def __del__(self):
-        """Cleanup when agent is destroyed."""
+        """Cleanup when agent is destroyed.
+
+        Releases watchdog observers, HTTP session, and the two SQLite
+        connections owned by this agent. ``__del__`` is best-effort — Python
+        doesn't guarantee it fires on interpreter shutdown — but explicit
+        close() makes tests deterministic (WAL journals released, file handles
+        closed) and avoids leaking Session/connection objects in long-running
+        services like the Agent UI backend.
+        """
         try:
             self.stop_watching()
         except Exception as e:
             logger.error(f"Error stopping file watchers during cleanup: {e}")
+        try:
+            if self._web_client:
+                self._web_client.close()
+        except Exception as e:
+            logger.error(f"Error closing web client during cleanup: {e}")
+        try:
+            if self._fs_index:
+                self._fs_index.close_db()
+        except Exception as e:
+            logger.error(f"Error closing file system index during cleanup: {e}")
+        try:
+            if self._scratchpad:
+                self._scratchpad.close_db()
+        except Exception as e:
+            logger.error(f"Error closing scratchpad during cleanup: {e}")

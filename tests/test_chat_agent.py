@@ -329,9 +329,9 @@ class TestChatAgent:
 
         # Tier 1 (always present — LLM needs these for registered RAG tools)
         assert "SMART DISCOVERY WORKFLOW" in prompt
-        assert "FILE SEARCH AND AUTO-INDEX" in prompt
         # POST-INDEX QUERY RULE is always present (moved to tool_rules for Smart Discovery)
         assert "POST-INDEX QUERY RULE" in prompt
+        # FILE SEARCH AND AUTO-INDEX is only present when enable_filesystem=True
 
         # Tier 2 (absent until docs are indexed)
         assert "FACTUAL ACCURACY RULE" not in prompt

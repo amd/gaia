@@ -4,7 +4,7 @@
 import React, { useCallback, useRef, useState, useEffect, useMemo } from 'react';
 import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import rehypeRaw from 'rehype-raw';
+import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentActivity } from './AgentActivity';
 import * as api from '../services/api';
@@ -598,7 +598,8 @@ function RenderedContent({ content, showCursor }: { content: string; showCursor?
         <div className="md-content">
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeRaw]}
+                disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
+                urlTransform={safeUrlTransform}
                 components={{
                     // Code block vs inline code detection.
                     // react-markdown calls `code` for both inline `code` and

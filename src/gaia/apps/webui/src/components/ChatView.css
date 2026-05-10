@@ -968,6 +968,34 @@
     color: white;
 }
 
+/* ── Policy alert toast ─────────────────────────────────────────── */
+.policy-alert-toast {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border-color: rgba(245, 158, 11, 0.35);
+    pointer-events: all;
+    animation: toastIn 200ms var(--ease), toastOut 200ms var(--ease) 5s forwards;
+}
+
+.policy-alert-toast-link {
+    background: none;
+    border: 0;
+    color: var(--accent-yellow);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    padding: 0;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+}
+
+.policy-alert-toast-missing {
+    color: var(--accent-yellow);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
 /* ── Responsive ──────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
