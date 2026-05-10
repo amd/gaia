@@ -2089,8 +2089,13 @@ Do NOT wrap conversational replies in JSON.
 
                     # Issue #1023: record success/failure of capability tools
                     # so the verbose-failure override downstream can fire
-                    # only when the tool actually errored.
-                    if any(tool_name.startswith(_s) for _s in _SD_CAPABILITY_TOOLS):
+                    # only when the tool actually errored.  ``.lower()``
+                    # mirrors the defensive check at
+                    # ``has_tried_capability_tool`` so a model that emits
+                    # ``Generate_Image`` doesn't slip past the tracker.
+                    if any(
+                        tool_name.lower().startswith(_s) for _s in _SD_CAPABILITY_TOOLS
+                    ):
                         capability_tool_last_succeeded = not (
                             isinstance(tool_result, dict)
                             and tool_result.get("status") in ("error", "denied")
@@ -2987,8 +2992,10 @@ Do NOT wrap conversational replies in JSON.
 
                 # Issue #1023: record success/failure of capability tools so
                 # the verbose-failure override downstream fires only when the
-                # tool actually errored.
-                if any(tool_name.startswith(_s) for _s in _SD_CAPABILITY_TOOLS):
+                # tool actually errored.  ``.lower()`` mirrors the defensive
+                # check at ``has_tried_capability_tool`` so a model that emits
+                # ``Generate_Image`` doesn't slip past the tracker.
+                if any(tool_name.lower().startswith(_s) for _s in _SD_CAPABILITY_TOOLS):
                     capability_tool_last_succeeded = not (
                         isinstance(tool_result, dict)
                         and tool_result.get("status") in ("error", "denied")

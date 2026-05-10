@@ -304,11 +304,21 @@ class TestPostFailureOverrideSkippedAfterCapabilitySuccess:
         agent.chat = chat
         return chat
 
-    def test_override_skipped_when_generate_image_succeeded(self, agent):
-        """generate_image returned success -> verbose model reply is preserved."""
-        # Inject a fake generate_image into the agent's instance registry.
-        # _instance_tools is per-instance, so this does not pollute the global
-        # _TOOL_REGISTRY or other tests.
+    def _register_generate_image(self, agent, *, status: str = "success") -> None:
+        """Inject a fake generate_image into the agent's instance registry.
+
+        ``_instance_tools`` is per-instance, so this does not pollute the
+        global ``_TOOL_REGISTRY`` or other tests.
+        """
+        result = (
+            {
+                "status": "success",
+                "image_path": r"C:\Users\K\img.png",
+                "model": "SDXL-Turbo",
+            }
+            if status == "success"
+            else {"status": "error", "error": "SD backend not available"}
+        )
         agent._instance_tools = {
             "generate_image": {
                 "name": "generate_image",
@@ -316,14 +326,14 @@ class TestPostFailureOverrideSkippedAfterCapabilitySuccess:
                 "parameters": {
                     "prompt": {"type": "string", "required": True},
                 },
-                "function": lambda prompt="": {
-                    "status": "success",
-                    "image_path": r"C:\Users\K\img.png",
-                    "model": "SDXL-Turbo",
-                },
+                "function": lambda prompt="", _r=result: _r,
                 "atomic": True,
             }
         }
+
+    def test_override_skipped_when_generate_image_succeeded(self, agent):
+        """generate_image returned success -> verbose model reply is preserved."""
+        self._register_generate_image(agent, status="success")
 
         # Step 1: model calls generate_image (succeeds).
         step1 = json.dumps(
@@ -355,3 +365,87 @@ class TestPostFailureOverrideSkippedAfterCapabilitySuccess:
         assert "Image generation is not available" not in text
         # And the model's actual answer must be visible.
         assert "image was generated successfully" in text.lower()
+
+    def test_override_still_fires_when_generate_image_failed(self, agent):
+        """Regression guard: legitimate failure path keeps the canonical message.
+
+        Pairs with the post-success test above.  Without this, the gate
+        could be (intentionally or accidentally) widened to skip the
+        override unconditionally and only the post-success test would
+        catch it -- leaving the legitimate "SD not enabled" UX broken.
+        """
+        self._register_generate_image(agent, status="error")
+
+        # Step 1: model calls generate_image (returns error).
+        step1 = json.dumps(
+            {"tool": "generate_image", "tool_args": {"prompt": "a forest"}}
+        )
+        # Step 2: model emits a verbose-apology answer matching the
+        # ``i apologize for the confusion`` pattern.  Because the
+        # capability tool actually FAILED, the override must replace
+        # this with the canonical "Image generation is not available"
+        # message -- preserving the pre-existing UX for the legitimate
+        # "SD not enabled" case.
+        step2 = json.dumps(
+            {
+                "answer": (
+                    "I apologize for the confusion. Let me explain what "
+                    "I would have done with prompt enhancement..."
+                )
+            }
+        )
+        self._stub_chat(agent, step1, step2)
+
+        result = agent.process_query("make me an image", max_steps=10)
+        text = result["result"]
+
+        # The override fired and replaced the verbose apology with the
+        # canonical "not available" message.
+        assert "Image generation is not available" in text
+
+    def test_override_fires_after_mixed_case_capability_failure(self, agent):
+        """The tracker must be case-insensitive (mirrors ``has_tried_capability_tool``).
+
+        Models occasionally emit tool names with non-canonical casing
+        (``Generate_Image``).  The dispatcher resolves these via
+        ``_resolve_tool_name`` for execution, but ``tool_call_log`` records
+        the un-normalized name -- so both the pre-existing
+        ``has_tried_capability_tool`` check and the new
+        ``capability_tool_last_succeeded`` tracker must apply ``.lower()``
+        for the gate to evaluate consistently.
+
+        The interesting failure mode is **mixed-case + tool error**:
+        without ``.lower()``, the tracker silently stays at ``None``, and
+        ``None is False`` is False, so the override DOESN'T fire even
+        though the capability tool legitimately errored.  The user would
+        then see a verbose model apology instead of the canonical "not
+        available" message.  This test pins that down.
+        """
+        # generate_image returns an error this time.
+        self._register_generate_image(agent, status="error")
+
+        # Step 1: model emits the tool name with mixed case.  The
+        # dispatcher resolves "Generate_Image" -> "generate_image" but
+        # ``tool_call_log`` records the original LLM-emitted casing.
+        step1 = json.dumps(
+            {"tool": "Generate_Image", "tool_args": {"prompt": "a forest"}}
+        )
+        # Step 2: verbose-apology answer that matches the failure-override
+        # regex.  With ``.lower()`` the tracker correctly registered Step
+        # 1's failure, so the gate fires and replaces this with the
+        # canonical "not available" message.
+        step2 = json.dumps(
+            {
+                "answer": (
+                    "I apologize for the confusion. Let me explain what "
+                    "I would have done with prompt enhancement..."
+                )
+            }
+        )
+        self._stub_chat(agent, step1, step2)
+
+        result = agent.process_query("make me an image", max_steps=10)
+        text = result["result"]
+
+        # Override fired despite the mixed-case tool name.
+        assert "Image generation is not available" in text
