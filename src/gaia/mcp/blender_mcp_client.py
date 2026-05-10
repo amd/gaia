@@ -4,11 +4,17 @@
 # This Blender MCP client is a simplified and modified version of the BlenderMCP project from https://github.com/BlenderMCP/blender-mcp
 
 import json
-import logging
 import re
 import socket
 
 from gaia.logger import get_logger
+
+# Defensive bound on response buffer size. A misbehaving server that
+# trickles bytes in just under the per-recv timeout would otherwise grow
+# the buffer without bound. Real Blender responses are KB-range; 16 MB
+# leaves enormous headroom (e.g. for execute_code returning large stdout
+# from a Blender Python script) while preventing pathological growth.
+_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 
 class MCPError(Exception):
@@ -22,8 +28,9 @@ class MCPClient:
     def __init__(self, host="localhost", port=9876):
         self.host = host
         self.port = port
-        self.log = self.__class__.log  # Use the class-level logger for instances
-        self.log.setLevel(logging.INFO)
+        # Use the class-level logger; do not mutate global log level here —
+        # the user's logging config decides verbosity.
+        self.log = self.__class__.log
 
     def _enhance_error_message(self, error_message):
         """Enhance error messages with more helpful information."""
@@ -90,13 +97,19 @@ class MCPClient:
                 # partial buffer. Treat both as "keep reading".
                 buffer = b""
                 parsed_response = None
+                decoder = json.JSONDecoder()
                 while True:
                     try:
                         chunk = sock.recv(65536)
-                    except ConnectionResetError as e:
-                        # RST instead of FIN — server crashed or closed
-                        # forcefully mid-response. Same user-facing
-                        # outcome: we don't have a complete response.
+                    except (
+                        ConnectionResetError,
+                        ConnectionAbortedError,
+                        BrokenPipeError,
+                    ) as e:
+                        # RST / abort / broken pipe instead of FIN —
+                        # server crashed or closed forcefully mid-response.
+                        # Same user-facing outcome: we don't have a complete
+                        # response.
                         raise MCPError(
                             "Connection closed before a complete response was received"
                         ) from e
@@ -106,10 +119,28 @@ class MCPClient:
                             "Connection closed before a complete response was received"
                         )
                     buffer += chunk
+                    if len(buffer) > _MAX_RESPONSE_BYTES:
+                        raise MCPError(
+                            f"Response exceeded {_MAX_RESPONSE_BYTES} bytes "
+                            "without a parseable JSON document — refusing to "
+                            "buffer further (possible server misbehaviour)."
+                        )
+                    # Two-step parse: a multi-byte UTF-8 character split
+                    # across recv() boundaries raises UnicodeDecodeError,
+                    # not JSONDecodeError, so decode and parse separately.
                     try:
-                        parsed_response = json.loads(buffer.decode("utf-8"))
+                        text = buffer.decode("utf-8")
+                    except UnicodeDecodeError:
+                        continue
+                    # raw_decode parses the first complete JSON value and
+                    # tolerates trailing data, so a hypothetically pipelined
+                    # ``{"a":1}{"b":2}`` would yield the first object instead
+                    # of looping until timeout. The current server sends one
+                    # response per command, but this is cheap future-proofing.
+                    try:
+                        parsed_response, _ = decoder.raw_decode(text)
                         break
-                    except (json.JSONDecodeError, UnicodeDecodeError):
+                    except json.JSONDecodeError:
                         continue
 
                 if parsed_response["status"] == "error":
@@ -141,9 +172,18 @@ class MCPClient:
             self.log.error(error_msg)
             raise MCPError(error_msg)
 
-    def execute_code(self, code):
+    def execute_code(self, code, timeout: float = 600.0):
+        """Execute arbitrary Python code inside Blender.
+
+        Defaults to a 10-minute per-recv timeout (vs. 120s for other
+        commands) because ``execute_code`` is the path used for
+        rendering, simulations, and complex geometry generation —
+        operations that can legitimately sit silent for many seconds
+        between any output. Pass a higher ``timeout`` for very long
+        renders.
+        """
         self.log.debug("Executing code in Blender")
-        return self.send_command("execute_code", {"code": code})
+        return self.send_command("execute_code", {"code": code}, timeout=timeout)
 
     def get_scene_info(self):
         self.log.debug("Getting scene info")

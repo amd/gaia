@@ -218,7 +218,11 @@ class _ChunkedServer:
                     break
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
-            payload = json.dumps(self.response).encode("utf-8")
+            # ensure_ascii=False so non-ASCII content lands on the wire as
+            # raw multi-byte UTF-8, letting tests deliberately split the
+            # payload mid-codepoint to exercise the client's
+            # UnicodeDecodeError tolerance.
+            payload = json.dumps(self.response, ensure_ascii=False).encode("utf-8")
             try:
                 client.sendall(payload[: self.split_after])
                 time.sleep(self.gap_seconds)
@@ -247,12 +251,26 @@ class _ChunkedServer:
 def test_send_command_assembles_chunked_response():
     """The incremental-parse loop must reconstruct a JSON response that
     arrives across multiple recv() chunks (TCP segmentation)."""
+    response_dict = {
+        "status": "success",
+        "result": {"object_count": 0, "message": "Scene cleared 🧼"},
+    }
+    # Split halfway through the 4-byte UTF-8 encoding of the emoji to
+    # exercise the UnicodeDecodeError tolerance specifically. If we just
+    # picked an arbitrary offset it would land in pure ASCII (the bulk of
+    # the JSON) and never reach the multi-byte boundary, leaving that code
+    # path uncovered.
+    # Match the wire format _ChunkedServer will emit (ensure_ascii=False
+    # keeps the emoji as raw 4-byte UTF-8 instead of escaping to \uXXXX).
+    payload = json.dumps(response_dict, ensure_ascii=False).encode("utf-8")
+    emoji_bytes = "🧼".encode("utf-8")
+    assert len(emoji_bytes) == 4
+    emoji_start = payload.index(emoji_bytes)
+    mid_emoji = emoji_start + 2  # split inside the emoji, mid-codepoint
+
     server = _ChunkedServer(
-        response={
-            "status": "success",
-            "result": {"object_count": 0, "message": "Scene cleared 🧼"},
-        },
-        split_after=20,
+        response=response_dict,
+        split_after=mid_emoji,
         gap_seconds=0.05,
     )
     server.start()
@@ -277,10 +295,48 @@ def test_send_command_assembles_chunked_response():
 
         response = outcome["response"]
         assert response["status"] == "success"
-        # Non-ASCII payload exercises the UnicodeDecodeError tolerance:
-        # if split_after lands mid-emoji, the partial buffer would raise
-        # UnicodeDecodeError; the loop must keep reading instead of dying.
-        assert "🧼" in response["result"]["message"]
+        # The emoji must have been reconstructed across the mid-codepoint
+        # split — proves the UnicodeDecodeError tolerance is exercised.
+        assert response["result"]["message"] == "Scene cleared 🧼"
+    finally:
+        server.stop()
+
+
+def test_send_command_surfaces_enhanced_error_message():
+    """When the server returns ``{"status": "error", "message": ...}``,
+    the client must run the message through ``_enhance_error_message``
+    before raising — so a bare NameError ("name 'foo' is not defined")
+    becomes a more actionable message for the LLM/user."""
+    server = _PersistentServer(
+        response={
+            "status": "error",
+            "message": "name 'undefined_var' is not defined",
+        }
+    )
+    server.start()
+    try:
+        client = MCPClient(host=server.host, port=server.port)
+        outcome: dict = {}
+
+        def _call():
+            try:
+                client.send_command("execute_code", {"code": "undefined_var + 1"})
+            except BaseException as exc:  # noqa: BLE001
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=_call, daemon=True)
+        worker.start()
+        worker.join(timeout=5.0)
+
+        if worker.is_alive():
+            pytest.fail("send_command hung against an error-response server")
+        assert "error" in outcome, "expected MCPError, got nothing"
+        err = outcome["error"]
+        assert isinstance(err, MCPError)
+        # _enhance_error_message rewrites NameError-shaped messages
+        # into a friendlier, actionable form.
+        assert "undefined_var" in str(err)
+        assert "Make sure to declare it before use" in str(err)
     finally:
         server.stop()
 
