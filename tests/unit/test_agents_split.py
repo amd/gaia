@@ -2,6 +2,7 @@ from importlib import import_module
 
 
 def test_instantiate_new_agents_and_register_tools():
+def test_instantiate_new_agents():
     # Import without triggering heavy optional deps by relying on skip_lemonade
     chat_mod = import_module("gaia.agents.chat.lite_agent")
     docqa_mod = import_module("gaia.agents.docqa.agent")
@@ -30,3 +31,11 @@ def test_instantiate_new_agents_and_register_tools():
 
     # FileIOAgent should register file I/O tools such as read_file
     assert "read_file" in _TOOL_REGISTRY
+    chat = chat_mod.ChatAgentLite()
+    assert chat is not None
+
+    doc = docqa_mod.DocumentQAAgent()
+    assert doc is not None
+
+    f = fileio_mod.FileIOAgent()
+    assert f is not None

@@ -53,6 +53,9 @@ class ChatAgentLite(
             from gaia.logger import get_logger
 
             get_logger(__name__).debug("ChatAgentLite: optional screenshot tools skipped: %s", e)
+        except Exception:
+            # optional in test environments
+            pass
 
     def _get_system_prompt(self) -> str:
         return "You are AMD GAIA Chat Assistant. Be concise, helpful, and safe."

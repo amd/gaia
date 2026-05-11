@@ -175,6 +175,41 @@
     animation: spin 1s linear infinite;
 }
 
+/* Live download progress (Lemonade /v1/pull SSE → /api/system/status). */
+.connection-banner__progress {
+    /* Override the parent's 0.7 opacity — when there's an active percent
+       readout to display, dimming it makes the number hard to read. */
+    opacity: 1;
+    gap: 8px;
+}
+
+.connection-banner__progress-bar {
+    /* Keep the bar narrow so it doesn't crowd out the text on the same row;
+       the percent label next to it carries the precise value. */
+    display: inline-block;
+    width: 100px;
+    height: 6px;
+    border-radius: 3px;
+    background-color: rgba(255, 255, 255, 0.15);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.connection-banner__progress-fill {
+    display: block;
+    height: 100%;
+    background-color: currentColor;
+    transition: width 200ms ease-out;
+    /* Cap at 100% even if upstream computation drifts (defensive — Lemonade
+       has been observed reporting >100% briefly when files repair). */
+    max-width: 100%;
+}
+
+.connection-banner__progress-label {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
 @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }

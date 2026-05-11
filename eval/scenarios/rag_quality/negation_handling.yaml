@@ -1,6 +1,7 @@
 id: negation_handling
 name: "Negation Handling"
 category: rag_quality
+agent_type: doc
 severity: high
 description: |
   Tests whether the agent correctly interprets negation in source documents.

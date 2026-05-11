@@ -6,6 +6,8 @@ DocumentQAAgent — RAG-focused agent scaffold.
 
 from dataclasses import dataclass
 from typing import Optional, List
+from dataclasses import dataclass
+from typing import List, Optional
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin

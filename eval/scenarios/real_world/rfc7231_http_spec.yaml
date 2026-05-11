@@ -1,6 +1,7 @@
 id: rfc7231_http_spec
 name: "RFC 7231 HTTP Semantics Spec Lookup"
 category: real_world
+agent_type: doc
 severity: medium
 description: |
   Agent must retrieve precise facts from RFC 7231 (HTTP/1.1 Semantics and Content).

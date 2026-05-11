@@ -4,7 +4,7 @@
 import React, { useCallback, useRef, useState, useEffect, useMemo } from 'react';
 import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import rehypeRaw from 'rehype-raw';
+import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentActivity } from './AgentActivity';
 import * as api from '../services/api';
@@ -349,8 +349,19 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
         onResend?.(message);
     }, [message, onResend]);
 
+    // Tooltip shown on hover anywhere over the bubble — full absolute
+    // timestamp (e.g. "Apr 25, 2026, 11:02:04 PM"). Both user and assistant
+    // bubbles get one; previously only the assistant had a visible
+    // timestamp readout via msg-stats-ts.
+    const hoverTimestamp = message.created_at
+        ? `${message.role === 'user' ? 'Sent' : 'Replied'} ${formatFullTimestamp(message.created_at)}`
+        : undefined;
+
     return (
-        <div className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}>
+        <div
+            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}
+            title={hoverTimestamp}
+        >
             <div className="msg-inner">
                 <div className="msg-header">
                     <div className="msg-header-left">
@@ -360,7 +371,16 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                                     <img src={gaiaRobot} alt="" />
                                 </div>
                                 <span className="msg-role-brand">GAIA</span>
-                                {agentName && <span className="msg-role-agent">{agentName}</span>}
+                                {(() => {
+                                    // Strip a leading "Gaia" / "GAIA" from the agent name so
+                                    // "Gaia Lite" renders as "GAIA Lite" (not "GAIA Gaia Lite").
+                                    // Word-boundary match: "Gaiadocs" (hypothetical) stays intact.
+                                    const trimmed = agentName?.trim() ?? '';
+                                    const stripped = trimmed.replace(/^gaia\b\s*/i, '');
+                                    return stripped ? (
+                                        <span className="msg-role-agent">{stripped}</span>
+                                    ) : null;
+                                })()}
                                 {(isStreaming || message.created_at) && (
                                     <span className="msg-header-sep">|</span>
                                 )}
@@ -578,7 +598,8 @@ function RenderedContent({ content, showCursor }: { content: string; showCursor?
         <div className="md-content">
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeRaw]}
+                disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
+                urlTransform={safeUrlTransform}
                 components={{
                     // Code block vs inline code detection.
                     // react-markdown calls `code` for both inline `code` and

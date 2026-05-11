@@ -1,6 +1,7 @@
 id: captured_eval_cross_turn_file_recall
 name: "Captured: Cross-Turn File Recall"
 category: captured
+agent_type: doc
 description: 'Captured from session: Eval: cross_turn_file_recall'
 note: "Subset of cross_turn_file_recall (2 of 3 turns captured from a real session)"
 persona: casual_user

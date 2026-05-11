@@ -22,7 +22,7 @@ import os
 import sys
 import tempfile
 import webbrowser
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -210,9 +210,22 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
         return _api(backend_url, "get", "/sessions")
 
     @mcp.tool()
-    def create_session(title: str = "New Chat") -> Dict[str, Any]:
-        """Create a new chat session. Returns the session object with its ID."""
-        return _api(backend_url, "post", "/sessions", json={"title": title})
+    def create_session(
+        title: str = "New Chat", agent_type: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Create a new chat session. Returns the session object with its ID.
+
+        Args:
+            title: Display title for the session.
+            agent_type: Optional agent registration ID (e.g. "chat", "gaia-lite").
+                When omitted, the backend's default agent is used. Pass the
+                desired agent ID here to route this session through a specific
+                registered agent (matches the IDs returned by GET /api/agents).
+        """
+        payload: Dict[str, Any] = {"title": title}
+        if agent_type:
+            payload["agent_type"] = agent_type
+        return _api(backend_url, "post", "/sessions", json=payload)
 
     @mcp.tool()
     def get_session(session_id: str) -> Dict[str, Any]:

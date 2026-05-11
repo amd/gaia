@@ -39,17 +39,22 @@ If *any* of those is uncertain, **do not commit** — surface the uncertainty to
 
 **Keep PR descriptions short. Lead with *why* and *impact*, not *what*.** Reviewers skim; long walls of text get ignored. A PR description is a sales pitch for the change, not a changelog.
 
-**Target shape:**
+**Target shape (default — most PRs need only this):**
 
-1. **One-paragraph Summary** — what this PR does, in plain English, and the problem it solves. If a reader stops after this paragraph, they should understand the change's purpose.
-2. **Bullet list of threads** (if the PR has more than one logical thread) — one line each, with a *why this matters* clause for every bullet. Not every file changed — only changes a reviewer needs to evaluate.
-3. **Test plan** — checkbox list of how to verify. Specific commands beat vague prose.
+1. **One-paragraph "Why this matters"** — the user-observable impact in plain English. Lead with the *before-state* (what was broken / missing) and the *after-state* (what now works). If a reviewer stops after this paragraph, they should know whether to merge.
+2. **Test plan** — checkbox list of how to verify. Specific commands beat vague prose.
+
+That's it. No "What changed" / "Files modified" / "Implementation notes" sections by default — the diff shows what changed; the commit messages explain how. The PR description's job is to sell the merge.
+
+**Add a short threads list ONLY if** the PR genuinely bundles multiple logical changes a reviewer needs to evaluate independently. Each bullet: one line, with a *why this matters* clause. Not every commit — only changes a reviewer can't infer from the title.
+
+**The "user-observable impact" test:** can a non-author understand the value in <30 seconds without reading the diff? If your description is "supports X protocol" or "refactors Y handler", you've described the *change* but not the *value*. Rewrite to "before: feature Z silently failed for users running model M; after: it works." Concrete observable behaviour beats abstract capability claims.
 
 **Hard rules:**
 
 - **No section longer than ~5 lines of prose** before breaking into bullets or cutting.
 - **Every non-trivial claim earns its place with a why.** "Added a linter" is noise; "Added a linter so new agents stop shipping with missing docs/tests" is signal.
-- **Cut exhaustive file-by-file enumeration.** The diff is the source of truth for what files changed. The description is the source of truth for *why they changed*.
+- **Cut exhaustive file-by-file enumeration and implementation walkthroughs.** The diff is the source of truth for what files changed and how. The description is the source of truth for *why a reviewer should care*.
 - **No "Generated with Claude Code" tagline** (see attribution rule below).
 - **If the PR really does bundle many threads**, group them — don't list 16 commits. Reviewers scan 4 themes faster than 16 bullets.
 
@@ -59,6 +64,9 @@ If *any* of those is uncertain, **do not commit** — surface the uncertainty to
 - ❌ "This PR adds X, Y, Z, A, B, C, D, E, F, G" with no stated value
 - ❌ Mirroring every bullet in the summary inside the test plan (pick one)
 - ❌ Explaining implementation details a reviewer will read from the diff anyway
+- ❌ A "What changed" bullet list when the title + commit message body already cover it
+- ❌ Naming files in the description ("modified `agent.py`") — the diff already shows that
+- ❌ Burying the user impact under a section labelled "Summary"; lead with the impact
 
 **Title convention:** conventional commits style (`feat(scope):`, `fix(scope):`, `docs(scope):`, `ci(scope):`), under ~70 chars, descriptive of the *change*, not the *why* (the body carries the why).
 
@@ -216,6 +224,21 @@ gaia mcp status
 python -m gaia.mcp.mcp_bridge
 ```
 
+### IMPORTANT: Run agent evals SERIALLY, never in parallel
+
+**Never run two `gaia eval agent` invocations concurrently against the same Lemonade Server.** Each eval scenario forces Lemonade to load a specific model at a specific `ctx_size`; two concurrent runs will race-evict each other's models and you'll see chaotic failures like:
+- `request (NNNN tokens) exceeds the available context size (4096 tokens)` — one run reloaded the model at a smaller ctx
+- Spurious `BLOCKED_BY_ARCHITECTURE` / `INFRA_ERROR` results — process management collisions
+- `model_load_error: llama-server failed to start` — port conflicts on llama-server children
+
+**Rule of thumb:** at most ONE `gaia eval agent ...` process running at any time, period. If a fix-loop or batch-experiment script needs to chain runs, it must do so sequentially (`run-1 && run-2 && run-3`), never via background `&`. Before kicking off a new eval, verify nothing else is running:
+
+```bash
+ps aux | grep "gaia eval" | grep -v grep | wc -l    # must print "0"
+```
+
+This applies to **all** eval flavours: `gaia eval agent`, `gaia eval --use-claude`, `gaia eval fix-code`, batch experiments. The judge LLM (Claude) can run concurrently across scenarios — the bottleneck is the local Lemonade backend, which is single-tenant per model slot.
+
 ## Development Workflow
 
 **See [`docs/reference/dev.mdx`](docs/reference/dev.mdx)** for complete setup (using uv for fast installs), testing, and linting instructions.
@@ -355,7 +378,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 - **Agent SDK** (`src/gaia/chat/`): AgentSDK class (formerly ChatSDK) for programmatic chat - see [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx)
 - **Agent UI Backend** (`src/gaia/ui/`): FastAPI server with modular routers (chat, documents, files, sessions, system, tunnel), SSE streaming, database - see [`docs/guides/agent-ui.mdx`](docs/guides/agent-ui.mdx)
 - **Agent UI Frontend** (`src/gaia/apps/webui/`): React/TypeScript/Vite desktop app with Electron shell - see [`docs/sdk/sdks/agent-ui.mdx`](docs/sdk/sdks/agent-ui.mdx)
-- **Evaluation** (`src/gaia/eval/`): Batch experiments and ground truth - see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)
+- **Evaluation** (`src/gaia/eval/`): Agent eval benchmark with scenario-based testing - see [`docs/guides/eval.mdx`](docs/guides/eval.mdx)
 
 ### Agent Implementations
 
@@ -543,7 +566,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
    - LLM backend: `src/gaia/llm/` (+ `providers/` for Claude/OpenAI)
    - Audio processing: `src/gaia/audio/` (whisper_asr.py, kokoro_tts.py)
    - RAG system: `src/gaia/rag/` (sdk.py, pdf_utils.py)
-   - Evaluation: `src/gaia/eval/` (eval.py, batch_experiment.py)
+   - Evaluation: `src/gaia/eval/` (runner.py, scorecard.py, audit.py)
    - Applications: `src/gaia/apps/` (webui/, jira/, llm/, summarize/, docker/, example/, _shared/)
    - Agent SDK: `src/gaia/chat/` (AgentSDK class, formerly ChatSDK)
    - Agent UI backend: `src/gaia/ui/` (FastAPI server, routers, SSE handler)

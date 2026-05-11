@@ -360,28 +360,14 @@ agent = ChatAgent(
 
 ## Integration with Evaluation Framework
 
-### Test Configuration
+Use the agent eval framework to test ChatAgent behavior:
 
-See `src/gaia/eval/configs/chat_agent_eval.json` for evaluation setup.
-
-### Running Evaluations
-
-```python
-from gaia.agents.chat.agent import ChatAgent
-
-# Setup test
-agent = ChatAgent(rag_documents=["test_doc.pdf"])
-
-# Test autonomous decisions
-queries = [
-    "Hello",  # Should NOT retrieve
-    "What does the document say?",  # Should retrieve
-]
-
-for query in queries:
-    result = agent.process_query(query)
-    # Check if retrieval was appropriate
+```bash
+# Run agent eval scenarios for RAG quality
+gaia eval agent --category rag_quality
 ```
+
+See `eval/scenarios/` for scenario YAML files and `src/gaia/eval/runner.py` for the eval runner.
 
 ## Troubleshooting
 

@@ -1,0 +1,161 @@
+{
+  "run_id": "eval-20260426-065020",
+  "timestamp": "2026-04-26T06:54:39.624805+00:00",
+  "config": {
+    "backend_url": "http://localhost:4200",
+    "model": "claude-sonnet-4-6",
+    "budget_per_scenario_usd": 2.0,
+    "agent_type": "gaia-lite"
+  },
+  "summary": {
+    "total_scenarios": 1,
+    "passed": 1,
+    "failed": 0,
+    "blocked": 0,
+    "timeout": 0,
+    "budget_exceeded": 0,
+    "infra_error": 0,
+    "skipped": 0,
+    "errored": 0,
+    "pass_rate": 1.0,
+    "judged_pass_rate": 1.0,
+    "avg_score": 9.87,
+    "by_category": {
+      "rag_quality": {
+        "passed": 1,
+        "failed": 0,
+        "blocked": 0,
+        "timeout": 0,
+        "budget_exceeded": 0,
+        "infra_error": 0,
+        "skipped": 0,
+        "errored": 0,
+        "avg_score": 9.87
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "scenario_id": "simple_factual_rag",
+      "status": "PASS",
+      "overall_score": 9.87,
+      "turns": [
+        {
+          "turn": 1,
+          "user_message": "What was Acme Corp's total revenue for Q3 2025? Pull it from the Q3 report.",
+          "agent_response": "Acme Corp's total revenue for Q3 2025 was **$14.2 million**, representing a **23% increase** from Q3 2024's $11.5 million. The results exceeded internal forecast by approximately $600,000, driven primarily by a large enterprise deal that closed in early September.",
+          "agent_tools": [
+            "index_documents",
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly returned $14.2M using the optimal tool sequence (index_documents → query_specific_file). Response is direct and factually accurate with no sycophancy.",
+          "performance": {
+            "tokens_per_second": 32.6,
+            "time_to_first_token": 3.536,
+            "input_tokens": 1266,
+            "output_tokens": 121,
+            "flags": []
+          }
+        },
+        {
+          "turn": 2,
+          "user_message": "And what was the year-over-year revenue growth compared to Q3 2024?",
+          "agent_response": "Q3 2025 had **$14.2M in revenue**, which represents a **23% year-over-year increase** compared to Q3 2024's $11.5M — exactly as noted in my earlier summary of the report.",
+          "agent_tools": [],
+          "scores": {
+            "correctness": 10,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.95,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly recalled 23% YoY growth from Q3 2024's $11.5M baseline from context — no tool call needed since facts were already retrieved in turn 1. Perfect context retention.",
+          "performance": {
+            "tokens_per_second": 32.9,
+            "time_to_first_token": 0.477,
+            "input_tokens": 109,
+            "output_tokens": 195,
+            "flags": []
+          }
+        },
+        {
+          "turn": 3,
+          "user_message": "What's the CEO's outlook for Q4? Does the report give any projections?",
+          "agent_response": "**CEO Outlook for Q4:**\n\nJane Smith projects **15–18% revenue growth** for Q4 2025, driven primarily by:\n\n- Enterprise segment expansion (~40% of Q3 revenue came from existing account expansions)\n- Three new product launches scheduled for November:\n  - Widget Pro X v2.1 with enhanced API rate limiting — Nov 12, 2025\n  - Gadget Plus Salesforce integration — Q4 2025\n  - Mobile app (Android) — December 2025",
+          "agent_tools": [
+            "query_specific_file"
+          ],
+          "scores": {
+            "correctness": 9,
+            "tool_selection": 10,
+            "context_retention": 10,
+            "completeness": 10,
+            "efficiency": 10,
+            "personality": 9,
+            "error_recovery": 10
+          },
+          "overall_score": 9.7,
+          "pass": true,
+          "failure_category": null,
+          "reasoning": "Agent correctly reported 15-18% projected growth driven by enterprise expansion. Minor correctness deduction because the CEO name 'Jane Smith' and granular product launch details could not be verified against ground truth, but core projection figure is exact.",
+          "performance": {
+            "tokens_per_second": 31.4,
+            "time_to_first_token": 6.604,
+            "input_tokens": 2243,
+            "output_tokens": 262,
+            "flags": [
+              "high_latency"
+            ]
+          }
+        }
+      ],
+      "root_cause": null,
+      "recommended_fix": null,
+      "cost_estimate": {
+        "turns": 3,
+        "estimated_usd": 0.21
+      },
+      "elapsed_s": 259.3784410953522,
+      "category": "rag_quality",
+      "performance_summary": {
+        "avg_tokens_per_second": 32.3,
+        "avg_time_to_first_token": 3.539,
+        "total_input_tokens": 3618,
+        "total_output_tokens": 578,
+        "flags": [
+          "high_latency"
+        ]
+      }
+    }
+  ],
+  "cost": {
+    "estimated_total_usd": 0.21
+  },
+  "performance": {
+    "avg_tokens_per_second": 32.3,
+    "avg_time_to_first_token": 3.539,
+    "total_input_tokens": 3618,
+    "total_output_tokens": 578,
+    "scenarios_with_data": 1,
+    "flags": [
+      "high_latency"
+    ]
+  }
+}

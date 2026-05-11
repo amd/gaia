@@ -22,6 +22,113 @@ export interface AgentInfo {
     source: string;
     conversation_starters: string[];
     models: string[];
+    /** Minimum recommended free RAM in GB for this agent. Null = no declared requirement. */
+    min_memory_gb?: number | null;
+    /**
+     * Connection requirements declared by the agent's REQUIRED_CONNECTORS
+     * (issue #915). The Settings → Connections page renders these so the
+     * user can grant scopes per agent.
+     */
+    required_connections?: ConnectorRequirement[];
+    /**
+     * Opaque grant-ledger key. Built-ins are `builtin:<id>`, custom agents
+     * are `custom:<sha256-prefix>:<id>`. Pass this to the grants endpoint.
+     */
+    namespaced_agent_id?: string;
+}
+
+/**
+ * Issue #915 — declarative scope claim on an agent.
+ */
+export interface ConnectorRequirement {
+    connector_id: string;
+    scopes: string[];
+    reason: string;
+}
+
+/**
+ * Issue #915 — one stored OAuth connection.
+ */
+export interface ConnectorInfo {
+    provider: string;
+    account_email: string;
+    scopes: string[];
+    connected_at: number | null;
+    error?: string;
+}
+
+/**
+ * Issue #915 — a per-agent grant entry (provider → agent_id → scopes).
+ */
+export interface ConnectorGrant {
+    agent_id: string;
+    scopes: string[];
+}
+
+/**
+ * Connector row returned by GET /api/connectors (new framework, T-8b).
+ * Merges ConnectorSpec fields with live state.
+ */
+export interface ConnectorRow {
+    id: string;
+    display_name: string;
+    icon: string | null;
+    category: string;
+    tier: string;
+    type: 'oauth_pkce' | 'mcp_server' | string;
+    description: string;
+    product_url: string | null;
+    /**
+     * GAIA documentation URL — what the AgentUI's "Learn more" link
+     * points at. Tells users where to obtain client credentials, API
+     * tokens, and any other setup specifics. ``null`` means the
+     * connector hasn't shipped a docs page yet; the UI falls back to
+     * ``product_url`` in that case.
+     */
+    docs_url: string | null;
+    configured: boolean;
+    /**
+     * ``false`` when the connector cannot be instantiated as configured —
+     * for example, an ``oauth_pkce`` provider whose required environment
+     * variables (``GAIA_GOOGLE_CLIENT_ID`` etc.) aren't set. The UI uses
+     * this to disable the Connect button up-front instead of letting the
+     * user click and see a raw 503 error inline.
+     */
+    configurable: boolean;
+    /**
+     * Human-readable explanation of why ``configurable`` is ``false``.
+     * Populated only when ``configurable === false``; null otherwise.
+     */
+    config_error: string | null;
+    account_id: string | null;
+    scopes: string[];
+    last_tested_at: string | null;
+    mcp_env_keys: string[];
+    default_scopes: string[];
+    available_scopes: string[];
+    /**
+     * First-time setup fields the user fills in to provide OAuth-app
+     * client credentials (e.g. Google Cloud Console client_id +
+     * client_secret). When ``configurable`` is ``false`` and this list
+     * is non-empty, the UI renders the form inline; submitting it
+     * stores the credentials in the OS keyring and triggers the OAuth
+     * browser flow. Empty for connectors that don't require user-side
+     * provider credentials.
+     */
+    oauth_setup_fields: ConnectorConfigField[];
+}
+
+/**
+ * One field in a connector's first-time setup form. Mirrors
+ * ``gaia.connectors.spec.ConfigField`` on the backend.
+ */
+export interface ConnectorConfigField {
+    key: string;
+    label: string;
+    kind: 'text' | 'secret' | 'url' | 'email' | 'select' | 'bool' | 'textarea';
+    required: boolean;
+    placeholder: string;
+    help_md: string;
 }
 
 export interface InferenceStats {
@@ -88,12 +195,34 @@ export interface Settings {
     model_status: ModelStatus | null;
 }
 
+/**
+ * Live download progress for the default model. Mirrors the backend's
+ * ``DownloadProgress`` schema; populated from Lemonade's ``POST /v1/pull``
+ * SSE stream and surfaced via ``GET /api/system/status``.
+ */
+export interface DownloadProgress {
+    state: 'starting' | 'downloading' | 'complete' | 'error';
+    model_name: string;
+    /** Overall percent across the full multi-file download (0–100). */
+    percent: number;
+    /** Current file being fetched (null between files / on terminal events). */
+    file: string | null;
+    file_index: number;
+    total_files: number;
+    /** Cumulative bytes pulled across every file in this download. */
+    downloaded_bytes: number;
+    /** Sum of every file's ``bytes_total`` in this download. */
+    total_bytes: number;
+    /** Populated only when state === 'error'. */
+    message: string | null;
+}
+
 export interface SystemStatus {
     lemonade_running: boolean;
     model_loaded: string | null;
     embedding_model_loaded: boolean;
     disk_space_gb: number;
-    memory_available_gb: number;
+    memory_available_gb: number | null;
     initialized: boolean;
     version: string;
     // Extended Lemonade info
@@ -113,8 +242,16 @@ export interface SystemStatus {
     context_size_sufficient: boolean;
     model_downloaded: boolean | null;
     default_model_name: string | null;
+    /**
+     * Catalog-reported size of ``default_model_name`` (GB). Used by the
+     * "model not downloaded" banner so the size hint stays in sync with
+     * the actual default — replaces the previously hard-coded "~25 GB".
+     */
+    default_model_size_gb: number | null;
     lemonade_url: string | null;
     expected_model_loaded: boolean;
+    /** Live progress while a model pull is in flight. ``null`` otherwise. */
+    download_progress: DownloadProgress | null;
     // Boot-time initialization tracking
     init_state?: 'initializing' | 'ready' | 'degraded';
     init_tasks?: Array<{ name: string; status: string }>;
@@ -165,18 +302,6 @@ export interface MCPServerInfo {
     enabled: boolean;
 }
 
-export interface MCPCatalogEntry {
-    name: string;
-    display_name: string;
-    description: string;
-    category: string;
-    tier: number;
-    command: string;
-    args: string[];
-    env: Record<string, string>;
-    requires_config: string[];
-}
-
 export interface MCPServerStatus {
     name: string;
     connected: boolean;
@@ -223,13 +348,23 @@ export interface RetrievalChunk {
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
-    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error';
+    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
     /** Short label shown in collapsed view. */
     label: string;
     /** Detailed content shown when expanded. */
     detail?: string;
     /** Tool name (for type='tool'). */
     tool?: string;
+    /** Governance decision (for type='policy_alert'). */
+    decision?: string;
+    /** Governance policy reason (for type='policy_alert'). */
+    reason?: string;
+    /** Governance rule IDs (for type='policy_alert'). */
+    ruleIds?: string[];
+    /** Governance policy version (for type='policy_alert'). */
+    policyVersion?: string;
+    /** Governance receipt ID (for type='policy_alert'). */
+    receiptId?: string;
     /** Tool result summary (for type='tool'). */
     result?: string;
     /** Whether this step completed successfully. */
@@ -272,6 +407,7 @@ export type StreamEventType =
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
+    | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
     | 'agent_created'; // New agent created — triggers agent list refresh
 
@@ -319,6 +455,16 @@ export interface StreamEvent {
     mcp_server?: string;
     /** Tool call latency in milliseconds (for tool_result). */
     latency_ms?: number;
+    /** Governance decision (for policy_alert). */
+    decision?: string;
+    /** Governance policy reason (for policy_alert). */
+    reason?: string;
+    /** Governance rule IDs (for policy_alert). */
+    rule_ids?: string[];
+    /** Governance policy version (for policy_alert). */
+    policy_version?: string;
+    /** Governance receipt ID (for policy_alert). */
+    receipt_id?: string;
     /** Structured result data (for tool_result with search results, file lists, etc.). */
     result_data?: {
         type: string;

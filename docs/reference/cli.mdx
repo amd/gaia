@@ -703,6 +703,35 @@ gaia blender --example 2
 
 ---
 
+### Email Command
+
+<Card title="Email Triage" icon="envelope" href="/guides/email">
+  Read, organize, and reply to Gmail with all email content processed locally on your machine.
+</Card>
+
+```bash
+gaia email -q "<query>"           # one-shot
+gaia email -i                     # interactive REPL
+gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `-q, --query` | string | – | Single query to send to the agent (non-interactive). |
+| `-i, --interactive` | flag | false | REPL loop until `/quit`. |
+| `-v, --verbose` | flag | false | Emit structured logs for every triage decision and tool call. |
+| `--debug` | flag | false | Adds full prompt + LLM-response logging (sensitive payloads in logs). |
+
+**Setup:** requires the Google connector. Run `gaia connectors connect google` first; you'll be asked to grant Gmail and Calendar scopes.
+
+**Privacy:** all email body inference runs locally on Lemonade — the agent **rejects** any non-local LLM endpoint at startup.
+
+[→ Full Email Triage Agent Documentation](/guides/email)
+
+---
+
 ### SD Command
 
 <Card title="Image Generation" icon="image" href="/guides/sd">
@@ -1219,6 +1248,105 @@ gaia visualize
 ```
 
 [→ Full Evaluation Guide](/reference/eval)
+
+---
+
+### Agent Eval
+
+<Card title="Agent Eval Benchmark" icon="microscope" href="/guides/eval">
+  Scenario-based end-to-end testing of the GAIA Agent UI
+</Card>
+
+Run automated multi-turn conversation tests against the live Agent UI. The eval agent (Claude Code) simulates user personas, drives conversations via MCP, and judges every response across 7 scoring dimensions.
+
+```bash
+gaia eval agent [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--scenario` | string | all | Run a specific scenario by ID |
+| `--category` | string | all | Run all scenarios in a category |
+| `--backend` | string | `http://localhost:4200` | Agent UI backend URL |
+| `--model` | string | `claude-sonnet-4-6` | Judge/simulator model |
+| `--budget` | string | `2.00` | Maximum USD spend per scenario |
+| `--timeout` | integer | `900` | Per-scenario timeout in seconds (auto-scaled for complex scenarios) |
+| `--audit-only` | flag | false | Run architecture audit without LLM calls (free) |
+| `--generate-corpus` | flag | false | Regenerate corpus documents and validate `manifest.json` |
+| `--fix` | flag | false | Auto-invoke Claude Code to diagnose and repair failures, then re-evaluate |
+| `--max-fix-iterations` | integer | `3` | Maximum repair cycles in `--fix` mode |
+| `--target-pass-rate` | float | `0.90` | Stop fix iterations when judged pass rate reaches this threshold |
+| `--compare` | string(s) | -- | Compare two scorecard files, or one scorecard against saved baseline |
+| `--save-baseline` | flag | false | Save this run's scorecard as `eval/results/baseline.json` |
+| `--capture-session` | string | -- | Convert an Agent UI session (by UUID) into a YAML scenario file |
+| `--scenario-dir` | string | -- | Additional scenario directory to scan (repeatable) |
+| `--corpus-dir` | string | -- | Additional corpus directory to scan (repeatable) |
+| `--tag` | string | -- | Run only scenarios with this tag (repeatable, OR logic) |
+| `--output-format` | choice | -- | Output format: `json`, `markdown`, or `junit` |
+
+**Examples:**
+
+<CodeGroup>
+```bash Single Scenario
+gaia eval agent --scenario simple_factual_rag
+```
+
+```bash Run Category
+gaia eval agent --category rag_quality
+```
+
+```bash Full Benchmark
+gaia eval agent
+```
+
+```bash Architecture Audit (Free)
+gaia eval agent --audit-only
+```
+
+```bash Auto-Fix Mode
+gaia eval agent --fix --max-fix-iterations 5 --target-pass-rate 0.95
+```
+
+```bash Save Baseline
+gaia eval agent --save-baseline
+```
+
+```bash Compare Against Baseline
+gaia eval agent --compare eval/results/latest/scorecard.json
+```
+
+```bash Explicit Two-File Comparison
+gaia eval agent --compare eval/results/run_A/scorecard.json eval/results/run_B/scorecard.json
+```
+
+```bash Capture Session to Scenario
+gaia eval agent --capture-session 29c211c7-31b5-4084-bb3f-1825c0210942
+```
+
+```bash Budget and Timeout Control
+gaia eval agent --category rag_quality --budget 1.00 --timeout 300
+```
+
+```bash Filter by Tags
+gaia eval agent --tag healthcare --tag critical
+```
+
+```bash JUnit Output for CI
+gaia eval agent --output-format junit
+```
+
+```bash Custom Scenario Directory
+gaia eval agent --scenario-dir ~/my-project/eval-scenarios
+```
+</CodeGroup>
+
+<Note>
+  The eval agent requires Claude Code CLI (`claude` command), an Anthropic API key, and the Agent UI backend running. See the [Agent Eval Guide](/guides/eval) for full setup instructions.
+</Note>
+
+[→ Full Agent Eval Guide](/guides/eval) · [→ Scenario Authoring](/guides/eval-scenarios) · [→ CI/CD Integration](/guides/eval-ci)
 
 ---
 

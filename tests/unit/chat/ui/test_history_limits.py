@@ -39,7 +39,7 @@ def _make_mock_db(messages: list, session_id: str = "sess-1") -> MagicMock:
 
 def _run_sync(coro):
     """Run a coroutine synchronously in a fresh event loop."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ── non-streaming path: _get_chat_response ────────────────────────────────────

@@ -65,17 +65,36 @@
                   "guides/chat",
                   "guides/talk",
                   "guides/code",
+                  "guides/telegram-adapter",
                   "guides/code-index",
                   "guides/sd",
                   "guides/emr",
                   "guides/blender",
                   "guides/jira",
+                  "guides/email",
                   "guides/docker",
                   "guides/routing",
                   "guides/custom-agent",
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
+                ]
+              },
+              {
+                "group": "Connectors",
+                "pages": [
+                  "connectors/index",
+                  "connectors/google",
+                  "connectors/github",
+                  "security/connections"
+                ]
+              },
+              {
+                "group": "Agent Eval",
+                "pages": [
+                  "guides/eval",
+                  "guides/eval-scenarios",
+                  "guides/eval-ci"
                 ]
               },
               {
@@ -149,14 +168,16 @@
                       "sdk/sdks/mcp",
                       "sdk/sdks/llm",
                       "sdk/sdks/vlm",
-                      "sdk/sdks/audio"
+                      "sdk/sdks/audio",
+                      "sdk/sdks/governance"
                     ]
                   },
                   {
                     "group": "Infrastructure",
                     "pages": [
                       "sdk/infrastructure/api-server",
-                      "sdk/infrastructure/mcp"
+                      "sdk/infrastructure/mcp",
+                      "sdk/infrastructure/connectors"
                     ]
                   },
                   {
@@ -267,7 +288,9 @@
               "spec/prisma-tools-mixin",
               "spec/typescript-tools-mixin",
               "spec/external-tools-mixin",
-              "spec/web-tools-mixin"
+              "spec/web-tools-mixin",
+              "spec/browser-tools",
+              "spec/file-system-agent"
             ]
           },
           {
@@ -311,7 +334,6 @@
                 "group": "Evaluation Framework",
                 "pages": [
                   "reference/eval",
-                  "reference/eval/fix-code-testbench",
                   "eval"
                 ]
               },
@@ -366,6 +388,7 @@
               "plans/agent-ui",
               "plans/setup-wizard",
               "plans/security-model",
+              "plans/connectors",
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
               "plans/messaging-integrations-plan",
@@ -405,6 +428,8 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.17.6",
+              "releases/v0.17.5",
               "releases/v0.17.4",
               "releases/v0.17.3",
               "releases/v0.17.2",
@@ -453,7 +478,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.17.4 \u00b7 Lemonade 10.0.0",
+        "label": "v0.17.6 \u00b7 Lemonade 10.2.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

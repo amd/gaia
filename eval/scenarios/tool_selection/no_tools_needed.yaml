@@ -1,6 +1,7 @@
 id: no_tools_needed
 name: "No Tools -- General Knowledge"
 category: tool_selection
+agent_type: doc
 severity: high
 description: |
   No documents are indexed. User asks simple general-knowledge and arithmetic

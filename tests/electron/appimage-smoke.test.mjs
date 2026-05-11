@@ -26,12 +26,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  assertUvBinary,
+  backendInstallerPath,
+  bundledUvPath,
+} from "./_helpers/installer-smoke.mjs";
+
 const APPIMAGE = process.env.GAIA_APPIMAGE;
+const PLATFORM_KEY = "linux-x64";
 
 // node:test has no built-in skipAll; emit a clear SKIP message and
 // register a single trivially-passing test so runners don't think the
@@ -120,69 +126,23 @@ if (!APPIMAGE) {
       });
 
       // ── AC4 / T3: bundled uv binary present and executable ──────────
+      // Implementation lives in tests/electron/_helpers/installer-smoke.mjs
+      // and is shared with dmg-smoke.test.mjs (issue #941). Two named test
+      // blocks preserved for output stability with prior CI logs.
+      const resourcesDir = path.join(squashRoot, "resources");
+      const uvPath = bundledUvPath(resourcesDir, PLATFORM_KEY);
+      const installerPath = backendInstallerPath(import.meta.url);
+
       test("AC4/T3: bundled uv binary is present under extraResources", () => {
-        const uvPath = path.join(
-          squashRoot,
-          "resources",
-          "vendor",
-          "uv",
-          "linux-x64",
-          "uv"
-        );
-        assert.ok(
-          fs.existsSync(uvPath),
-          `expected bundled uv at ${uvPath}`
-        );
-        const st = fs.statSync(uvPath);
-        // Any execute bit set on any class is enough; AppImage squashfs
-        // typically preserves 0o755.
-        assert.ok(
-          (st.mode & 0o111) !== 0,
-          `uv binary should be executable; mode=${(st.mode & 0o777).toString(8)}`
-        );
+        // Existence + mode-bit assertions live in assertUvBinary (T3b).
+        // Block kept for CI-log name stability; see _helpers/installer-smoke.mjs.
+        assert.ok(fs.existsSync(uvPath), `expected bundled uv at ${uvPath}`);
       });
 
-      // ── AC4 / T3b: bundled uv binary SHA256 matches BUNDLED_UV_SHA256 ──
       // Runtime ensureUv() hashes the extracted ELF and rejects any mismatch,
       // so catch packaging/hash drift at smoke time instead of on user launch.
       test("AC4/T3b: bundled uv SHA256 matches BUNDLED_UV_SHA256[linux-x64]", () => {
-        const uvPath = path.join(
-          squashRoot,
-          "resources",
-          "vendor",
-          "uv",
-          "linux-x64",
-          "uv"
-        );
-        const installerPath = path.resolve(
-          path.dirname(new URL(import.meta.url).pathname),
-          "..",
-          "..",
-          "src",
-          "gaia",
-          "apps",
-          "webui",
-          "services",
-          "backend-installer.cjs"
-        );
-        const installerSrc = fs.readFileSync(installerPath, "utf8");
-        const m = installerSrc.match(
-          /BUNDLED_UV_SHA256\s*=\s*\{[^}]*?"linux-x64"\s*:\s*"([0-9a-f]{64})"/s
-        );
-        assert.ok(
-          m,
-          `could not parse BUNDLED_UV_SHA256["linux-x64"] from ${installerPath}`
-        );
-        const expected = m[1];
-        const actual = crypto
-          .createHash("sha256")
-          .update(fs.readFileSync(uvPath))
-          .digest("hex");
-        assert.equal(
-          actual,
-          expected,
-          `bundled uv binary SHA256 does not match BUNDLED_UV_SHA256["linux-x64"]; ensureUv() will reject this at runtime`
-        );
+        assertUvBinary(uvPath, PLATFORM_KEY, installerPath);
       });
 
       // ── AC3: pre-built React dist/ ships with the AppImage ──────────
