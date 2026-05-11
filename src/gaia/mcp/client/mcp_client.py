@@ -37,15 +37,29 @@ def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
     """
     if not env:
         return {}
-    import keyring  # pylint: disable=import-outside-toplevel
 
-    from gaia.connectors.errors import ConnectorsError
-    from gaia.connectors.store import SERVICE_NAME
+    # Imports (keyring + connectors) are deferred to the branch that
+    # actually needs them. ``keyring`` is an optional dependency — if
+    # the env contains no ``$keyring`` references, plain values must
+    # pass through without forcing a keyring install.
+    keyring = None  # populated on first $keyring reference
+    SERVICE_NAME = None
+    ConnectorsError: type = Exception  # type: ignore[assignment]
 
     resolved: Dict[str, str] = {}
     missing: list[str] = []
     for key, value in env.items():
         if isinstance(value, dict) and "$keyring" in value:
+            if keyring is None:
+                # pylint: disable=import-outside-toplevel
+                import keyring as _keyring  # noqa: I001
+
+                from gaia.connectors.errors import ConnectorsError as _ConnectorsError
+                from gaia.connectors.store import SERVICE_NAME as _SERVICE_NAME
+
+                keyring = _keyring
+                ConnectorsError = _ConnectorsError
+                SERVICE_NAME = _SERVICE_NAME
             ref = value["$keyring"]
             service, _, username = ref.partition(":")
             if service != SERVICE_NAME:

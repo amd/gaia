@@ -1075,6 +1075,23 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
 
+    // Listen for programmatic message dispatches from rich-content
+    // components (currently the EmailPreScanCard's Approve / Reply
+    // buttons). Wired as a window-level CustomEvent rather than prop
+    // drilling so any embedded component can reach the active session
+    // without ChatView having to know about it ahead of time.
+    useEffect(() => {
+        const handler = (evt: Event) => {
+            const ce = evt as CustomEvent<{ text?: string }>;
+            const text = ce.detail?.text;
+            if (typeof text === 'string' && text.trim()) {
+                sendMessageRef.current(text);
+            }
+        };
+        window.addEventListener('gaia:send-message', handler);
+        return () => window.removeEventListener('gaia:send-message', handler);
+    }, []);
+
     // Refocus input when streaming ends (textarea is disabled during streaming,
     // which causes the browser to drop focus — restore it so the user can
     // immediately type the next message without clicking).

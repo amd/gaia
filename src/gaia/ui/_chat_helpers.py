@@ -111,6 +111,7 @@ def _classify_chat_exception(exc: BaseException):
         LemonadeError,
         LemonadeModelNotLoadedError,
         LemonadeNetworkError,
+        LemonadeUpstreamTimeoutError,
     )
 
     # 1. Direct typed match anywhere in the cause chain.
@@ -118,8 +119,14 @@ def _classify_chat_exception(exc: BaseException):
     # (implicit ``raise ...`` inside an ``except`` block) so we don't lose the
     # typed-class metadata (e.g. ``LemonadeContextOverflowError.retryable``)
     # for handlers that re-raise without ``from``.
+    #
+    # Cycle protection: tracking visited ids defends against pathological
+    # exception graphs where ``a.__cause__ = b`` and ``b.__cause__ = a``.
+    # Without it the walker would loop forever and freeze the chat handler.
     cur: Optional[BaseException] = exc
-    while cur is not None:
+    _seen: set = set()
+    while cur is not None and id(cur) not in _seen:
+        _seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
         cur = cur.__cause__ or cur.__context__
@@ -141,12 +148,50 @@ def _classify_chat_exception(exc: BaseException):
         if m:
             try:
                 n_ctx = int(m.group(1))
-                if 0 < n_ctx < 32768:
+                # Threshold tracks the chat / rag profile default
+                # (65536) — see lemonade.py:_classify_lemonade_response.
+                if 0 < n_ctx < 65536:
                     err.retryable = True
             except ValueError:
                 pass
         return err
-    if "network_error" in text or "curl error" in text or "timeout was reached" in text:
+    # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
+    # hung) from real connectivity failures (#1030). The user-facing remediation
+    # is very different.
+    is_timeout = (
+        "timeout was reached" in text
+        or "timed out" in text
+        or "operation_timeout" in text
+    )
+    is_unreachable = (
+        "connection refused" in text
+        or "could not resolve host" in text
+        or "no route to host" in text
+        or "couldn't connect" in text
+    )
+    # Lemonade HTTP 5xx — typical when llama-server is mid-swap between
+    # models or hit an internal recovery state. ``LemonadeClient._send_request``
+    # raises ``LemonadeClientError("Request failed with status 503: ...")`` /
+    # 500/502/504 for these. Pre-iter2 these fell through to the generic
+    # "trouble connecting" UI fallback and the chat layer never retried —
+    # so a transient model-swap stall surfaced as a hard FAIL. Treat them
+    # as the network-flavour transient: retryable=True kicks the chat
+    # layer's auto-reload + one-retry path, which usually recovers.
+    is_backend_5xx = bool(
+        _re.search(r"failed with status 5\d\d", text)
+        or "internal server error" in text
+        or "service unavailable" in text
+        or "bad gateway" in text
+        or "gateway timeout" in text
+    )
+    if is_timeout and not is_unreachable:
+        return LemonadeUpstreamTimeoutError()
+    if (
+        "network_error" in text
+        or "curl error" in text
+        or is_unreachable
+        or is_backend_5xx
+    ):
         return LemonadeNetworkError()
     return None
 
@@ -460,6 +505,51 @@ def _store_agent(
             canonical,
             len(_agent_cache),
         )
+
+
+def reload_all_session_agents_mcp() -> int:
+    """
+    Call ``reload()`` on every cached agent's ``MCPClientManager`` (#1004).
+
+    Each `ChatAgent` instance owns its own per-instance `MCPClientManager`
+    (see `MCPClientMixin.__init__`); there is no process-wide singleton.
+    When a user toggles a connector via Settings → Connectors, the active
+    chat sessions need to pick up the new ``mcp_servers.json`` state on
+    their next turn — otherwise tools materialize/disappear only after
+    GAIA restart.
+
+    Wired as the ``McpServerHandler.reload_callback`` from the FastAPI
+    lifespan. Returns the count of managers reloaded for diagnostics.
+    """
+    count = 0
+    failed = 0
+    with _agent_cache_lock:
+        entries = list(_agent_cache.items())
+
+    for session_id, entry in entries:
+        agent = entry.get("agent")
+        manager = getattr(agent, "_mcp_manager", None)
+        if manager is None:
+            continue
+        try:
+            manager.reload()
+            count += 1
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 — defensive: one bad session must not break others
+            failed += 1
+            logger.warning(
+                "reload_all_session_agents_mcp: reload() failed for session %s (%s)",
+                session_id[:8],
+                e,
+            )
+
+    logger.info(
+        "reload_all_session_agents_mcp: reloaded %d session manager(s), %d failed",
+        count,
+        failed,
+    )
+    return count
 
 
 def _index_rag_with_progress(

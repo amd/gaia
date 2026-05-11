@@ -1,0 +1,81 @@
+/* EmailConnectCta — inline Connect Google button rendered next to an
+ * assistant error message when the email agent surfaces a connectors
+ * auth-required state. Visually distinct from the normal error banner
+ * so the user sees there's something they can act on, not just a wall
+ * of text. */
+
+.email-connect-cta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-light, #e2e2e2);
+    border-radius: 8px;
+    background: var(--bg-section, #fafafa);
+    font-size: 13px;
+    color: var(--text-primary, #1a1a1a);
+}
+
+.email-connect-cta__text {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+}
+
+.email-connect-cta__icon {
+    color: var(--color-accent, #d96b22);
+    flex-shrink: 0;
+}
+
+.email-connect-cta__button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--color-accent, #d96b22);
+    color: #ffffff;
+    border: 1px solid var(--color-accent, #d96b22);
+    border-radius: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 120ms ease;
+}
+.email-connect-cta__button:hover:not(:disabled) {
+    background: var(--color-accent-hover, #c25a14);
+    border-color: var(--color-accent-hover, #c25a14);
+}
+.email-connect-cta__button:focus-visible {
+    outline: 2px solid var(--color-accent, #d96b22);
+    outline-offset: 2px;
+}
+.email-connect-cta__button:disabled {
+    opacity: 0.7;
+    cursor: progress;
+}
+
+.email-connect-cta__spinner {
+    animation: email-connect-spin 1s linear infinite;
+}
+
+@keyframes email-connect-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.email-connect-cta__error {
+    width: 100%;
+    color: var(--color-danger, #c0392b);
+    font-size: 12px;
+}
+
+/* Dark theme. */
+[data-theme='dark'] .email-connect-cta {
+    background: var(--bg-section, #141618);
+    border-color: var(--border-light, #2c2f33);
+    color: var(--text-primary, #e8e8e8);
+}
