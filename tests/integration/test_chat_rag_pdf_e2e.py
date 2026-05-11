@@ -1,8 +1,8 @@
 import os
 import subprocess
 import time
-from urllib.request import urlopen
 from urllib.error import URLError
+from urllib.request import urlopen
 
 import pytest
 
@@ -46,7 +46,9 @@ def test_chat_rag_pdf_e2e_short_timeout():
     elapsed = time.time() - start
 
     # First ensure the command succeeded; if it failed, surface stdout/stderr.
-    assert proc.returncode == 0, f"Eval command failed: stdout={proc.stdout[:200]} stderr={proc.stderr[:200]}"
+    assert (
+        proc.returncode == 0
+    ), f"Eval command failed: stdout={proc.stdout[:200]} stderr={proc.stderr[:200]}"
 
     # Then assert the run finished within a generous cap (10 minutes) to avoid flakes.
     cap = 600

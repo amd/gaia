@@ -3436,7 +3436,9 @@ Let me know your answer!
                         if isinstance(result, dict)
                         else []
                     )
-                    total_issues = len(regressed) + len(score_regressed) + len(time_regressed)
+                    total_issues = (
+                        len(regressed) + len(score_regressed) + len(time_regressed)
+                    )
                     if total_issues > 0:
                         print(
                             f"[ERROR] Detected {total_issues} issue(s) (status regressions, score regressions, or time regressions); failing."
