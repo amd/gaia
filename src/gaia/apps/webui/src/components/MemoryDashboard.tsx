@@ -1003,7 +1003,7 @@ export function MemoryDashboard() {
                         >
                             <ArrowLeft size={18} />
                         </button>
-                        <h3>Memory Dashboard</h3>
+                        <h3>Memory Dashboard <span style={{ fontSize: 11, fontWeight: 600, color: '#f59e0b', background: 'rgba(245,158,11,0.15)', padding: '2px 8px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span></h3>
                     </div>
                     <div className="memory-dashboard-header-actions">
                         {/* Embedding coverage indicator */}
@@ -1915,7 +1915,7 @@ export function MemoryDashboard() {
                             {/* ── Settings ─────────────────────── */}
                             <div className="mem-section">
                                 <div className="mem-section-title">
-                                    <Shield size={14} /> Settings
+                                    <Shield size={14} /> Settings <span style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', background: 'rgba(245,158,11,0.15)', padding: '1px 6px', borderRadius: 4, marginLeft: 6, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span>
                                 </div>
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
