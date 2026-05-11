@@ -102,9 +102,7 @@
         {"id": "engineering_budget", "question": "What is the annual Engineering department budget?", "answer": "$1.3M", "difficulty": "medium"},
         {"id": "cfo_approval_threshold", "question": "What spending threshold requires CFO approval?", "answer": "Expenses over $50K require CFO approval", "difficulty": "medium"}
       ]
-    }
-  ],
-  "real_world_documents": [
+    },
     {
       "id": "safety_handbook_cc0",
       "filename": "safety_handbook_cc0.txt",
