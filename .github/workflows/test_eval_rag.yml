@@ -34,7 +34,8 @@ jobs:
           pip install -e .[dev]
 
       - name: Run eval rag_quality compare
-        # This runner must have Lemonade + 'claude' CLI installed and Gemma model loaded.
+        # This runner must have a running Lemonade Server with the Gemma model loaded
+        # and ANTHROPIC_API_KEY set in the job environment so the Anthropic judge can be used.
         run: |
           set -e
           gaia eval agent --category rag_quality --compare tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json
