@@ -7,7 +7,7 @@ description: 'Verifies Lemonade Server matches the GAIA-expected version, upgrad
 # This action checks the lemonade-server already installed on the runner
 # against the version GAIA expects (``src/gaia/version.LEMONADE_VERSION``).
 # When the runner is at an older version, it downloads the matching MSI
-# from the lemonade-sdk GitHub releases and installs it silently — same
+# from the lemonade-sdk GitHub releases and installs it silently -- same
 # release URL the gaia init flow uses (``src/gaia/installer/lemonade_installer.py:GITHUB_RELEASE_BASE``).
 # This keeps the runner's model catalog (e.g. Gemma-4-E4B-it-GGUF, the
 # LemonadeManager default) aligned with what GAIA expects so preload/pull
@@ -137,15 +137,15 @@ runs:
         # rather than downgrading.
         $needsInstall = $false
         if (-not $installedVersion) {
-            Write-Host "No existing install detected — will install v$expectedVersion."
+            Write-Host "No existing install detected -- will install v$expectedVersion."
             $needsInstall = $true
         } else {
             $cmp = Compare-SemVer -A $installedVersion -B $expectedVersion
-            if ($cmp -eq $null) {
+            if ($null -eq $cmp) {
                 Write-Host "Could not parse versions for comparison; reinstalling v$expectedVersion to be safe."
                 $needsInstall = $true
             } elseif ($cmp -lt 0) {
-                Write-Host "Runner is behind expected version — upgrading to v$expectedVersion."
+                Write-Host "Runner is behind expected version -- upgrading to v$expectedVersion."
                 $needsInstall = $true
             } elseif ($cmp -gt 0) {
                 Write-Host "Runner is AHEAD of expected version. Leaving as-is."
