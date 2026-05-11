@@ -41,8 +41,8 @@ If *any* of those is uncertain, **do not commit** — surface the uncertainty to
 
 **Target shape (default — most PRs need only this):**
 
-1. **One-paragraph "Why this matters"** — the user-observable impact in plain English. Lead with the *before-state* (what was broken / missing) and the *after-state* (what now works). If a reviewer stops after this paragraph, they should know whether to merge.
-2. **Test plan** — checkbox list of how to verify. Specific commands beat vague prose.
+1. **One-paragraph "Why this matters"** — the user-observable impact, in concise direct prose (~3 sentences max). Lead with the *before-state* (what was broken / missing) and the *after-state* (what now works). No labelled prefix (`In plain English:`, `Layman-first:`); just lead with the substance. If a reviewer stops after this paragraph, they should know whether to merge.
+2. **Test plan** — checkbox list of how to verify. Specific commands beat vague prose. Only list items a reviewer can actually verify before merge.
 
 That's it. No "What changed" / "Files modified" / "Implementation notes" sections by default — the diff shows what changed; the commit messages explain how. The PR description's job is to sell the merge.
 
@@ -50,15 +50,7 @@ That's it. No "What changed" / "Files modified" / "Implementation notes" section
 
 **The "user-observable impact" test:** can a non-author understand the value in <30 seconds without reading the diff? If your description is "supports X protocol" or "refactors Y handler", you've described the *change* but not the *value*. Rewrite to "before: feature Z silently failed for users running model M; after: it works." Concrete observable behaviour beats abstract capability claims.
 
-**Lead with the summary (PRs and commit messages):**
-
-The first paragraph of every PR description AND the first line of every non-trivial commit-message body must summarize the change directly — what's different, why a reviewer should care, in ~3 sentences. No labelled prefix ("In plain English:", "Layman-first:") — just lead with the substance. If 3 sentences isn't enough, the change is doing more than one thing; ask whether to split.
-
-The summary leads; technical detail follows in the same body. Supplements technical detail, does not replace it.
-
-For commit messages: the conventional-commits title (`fix(agents): trim ChatAgent prompt …`) is the technical handle; the first line of the body is the summary. PR #1034's commit body opens with `"ChatAgent system prompt had grown to ~52K chars …"` — direct, no preamble, technical-but-readable.
-
-The same rule applies to bot reviews and issue comments — see [Issue Response Guidelines](#issue-response-guidelines) below.
+**Same rule for commit messages:** the conventional-commits title is the technical handle; the first line of the body is the summary (concise direct prose, no labelled prefix). PR #1034's body opens with `"ChatAgent system prompt had grown to ~52K chars …"` — direct, no preamble. The same rule applies to bot reviews and issue comments — see [Issue Response Guidelines](#issue-response-guidelines).
 
 **Hard rules:**
 
@@ -160,6 +152,37 @@ This self-review step is mandatory - never skip verification of your output.
 1. Check if similar functionality exists in `src/gaia/agents/base/`
 2. Check existing mixins in agent subdirectories (e.g., `chat/tools/`, `code/tools/`)
 3. Extract shared logic into base classes or mixins when patterns repeat
+
+### Code Comments — Short or Skip
+
+**Default to no comments.** Write one only when the *why* is non-obvious — a hidden constraint, a subtle invariant, a workaround for a specific bug. Never explain *what* the code does (identifiers should already do that).
+
+**Keep WHY comments to one short line.** Multi-paragraph "history of how we got here" blocks are noise — the diff, commit message, and linked issue carry the history. Inline comments are read at the speed of code, not the speed of a postmortem.
+
+**Don't reference the current task, fix, or callers inline.** Patterns like `"Pre-#1030 follow-up the non-streaming path skipped the check…"` or `"Added for the Y flow"` belong in the PR description and commit body. Inline they rot as soon as the code moves.
+
+**Bad** (verbose, history-tagged, will rot):
+
+```python
+# Pre-flight: ensure the model is loaded at the GAIA-expected ctx.
+# The streaming path already does this via
+# ``_stream_chat_completions_with_openai`` -> ``_ensure_model_loaded``.
+# Pre-#1030 follow-up the non-streaming path skipped the check, so
+# when something (e.g. the RAG SDK's embedder warm-up) unloaded the
+# LLM, the next non-streaming chat_completion let Lemonade auto-load
+# Gemma at its own default ctx (32K) — bypassing
+# MODELS[…].min_ctx_size and silently capping doc-Q&A at 32K.
+self._ensure_model_loaded()
+```
+
+**Good** (one line, names the invariant the call enforces):
+
+```python
+# Re-check ctx — embedder warm-up can quietly unload the chat model.
+self._ensure_model_loaded()
+```
+
+The PR / commit message is where multi-paragraph context lives. The code carries the one line a future reader needs to not break it.
 
 ### No Silent Fallbacks — Fail Loudly
 
@@ -647,7 +670,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 ### Response Quality Guidelines
 
 #### Tone & Style
-- **Lead with the finding:** open every response with one sentence stating the diagnosis, the answer, or what you need from the author. No labelled prefix ("In plain English:", "TL;DR:") — just the finding.
+- **Lead with the finding:** open every response with one sentence stating the diagnosis, the answer, or what you need from the author. No labelled "In plain English:" preamble — just the finding. (`TL;DR:` is fine if a long review genuinely warrants one; `In plain English:` reads as performative plain-talk and is forbidden.)
 - **Professional but friendly:** Welcome contributors warmly while maintaining technical accuracy
 - **Concise:** 1–3 paragraphs for simple questions; expand only when the issue actually warrants it
 - **Specific:** Reference actual files with line numbers (e.g., `src/gaia/agents/base/agent.py:123`) — but AFTER the finding, not before it
