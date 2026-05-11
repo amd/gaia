@@ -410,7 +410,13 @@ export function MemoryDashboard() {
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
-                if (convDetail) {
+                if (betaConfirm) {
+                    setBetaConfirm(null);
+                } else if (deleteConfirm) {
+                    setDeleteConfirm(false);
+                } else if (reinitConfirm) {
+                    setReinitConfirm(false);
+                } else if (convDetail) {
                     setConvDetail(null);
                 } else if (showMaintenanceMenu) {
                     setShowMaintenanceMenu(false);
@@ -426,7 +432,7 @@ export function MemoryDashboard() {
         };
         document.addEventListener('keydown', handler);
         return () => document.removeEventListener('keydown', handler);
-    }, [convDetail, showMaintenanceMenu, showAddForm, editingId, expandedRowId, setShowMemoryDashboard]);
+    }, [convDetail, showMaintenanceMenu, showAddForm, editingId, expandedRowId, setShowMemoryDashboard, betaConfirm, deleteConfirm, reinitConfirm]);
 
     // ── Data loading ────────────────────────────────────────────────────
 
@@ -2050,6 +2056,7 @@ export function MemoryDashboard() {
                                                             await cfg.onConfirm();
                                                         } catch (err) {
                                                             log.system.warn('Failed to update setting', err);
+                                                            showToast('Failed to update setting. Please try again.', 'error');
                                                         } finally {
                                                             setSettingsLoading(false);
                                                             setBetaConfirm(null);

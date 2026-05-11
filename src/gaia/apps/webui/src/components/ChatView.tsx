@@ -11,7 +11,7 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
-import { getSessionHash } from '../utils/format';
+
 import './ChatView.css';
 import DashboardProgress from './DashboardProgress';
 
@@ -1162,20 +1162,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }
     };
 
-    // Session hash link copy
-    const [hashCopied, setHashCopied] = useState(false);
-    const handleCopyHash = useCallback((e: React.MouseEvent) => {
-        e.preventDefault();
-        const hash = getSessionHash(sessionId);
-        const url = `${window.location.origin}${window.location.pathname}#${hash}`;
-        navigator.clipboard.writeText(url).then(() => {
-            log.ui.info(`Copied session link: ${url}`);
-            setHashCopied(true);
-            setTimeout(() => setHashCopied(false), 1500);
-        }).catch(() => {
-            log.ui.warn('Clipboard write failed');
-        });
-    }, [sessionId]);
+
 
     // Title editing
     const startEditTitle = () => {

@@ -1025,8 +1025,12 @@ def _do_system_context_refresh() -> Dict:
                 source="system",
             )
             stored += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "[memory router] failed to store system fact %r: %s",
+                fact.get("content", "")[:60],
+                exc,
+            )
 
     logger.info("[memory router] system context refresh: stored %d facts", stored)
     return {"stored": stored, "skipped": False}
