@@ -729,8 +729,8 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 Looks like RAG initialization didn't complete — the symptom you're hitting is what happens
 when GAIA can't find a loaded embedding model. Two quick checks:
 
-1. Did you run `gaia init` after install?
-2. What does `gaia chat status` print?
+1. Did you run `gaia init --profile chat` first?
+2. Could you share the output of `gaia diagnostics`?
 
 If both look right, paste the output of `gaia chat --debug` and I can dig in further. Setup
 walkthrough lives at docs/guides/chat.mdx.
