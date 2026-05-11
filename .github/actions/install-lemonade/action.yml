@@ -116,31 +116,50 @@ runs:
 
         function Get-LemonadeVersion {
             param([string]$LemonadeExe)
-            # Combine streams so a v10.x deprecation warning on stderr
-            # doesn't trip ``2>&1`` PowerShell error-record handling and
-            # still contributes its content for regex extraction. Also
-            # silence ``$ErrorActionPreference`` so a non-zero exit from
-            # the deprecation shim doesn't blow us out of the try block
-            # before we can pull the version string.
+            # v10.x renamed the canonical binary to ``LemonadeServer.exe``
+            # which appears to be a GUI/launcher shell that emits no
+            # console output on ``--version``, while the legacy
+            # ``lemonade-server.exe`` is a deprecation shim that prints a
+            # warning instead of a version. Reading the PE file's embedded
+            # VersionInfo (ProductVersion/FileVersion) avoids both
+            # pitfalls -- it's the version the installer baked into the
+            # binary, no CLI invocation required.
+
+            # 1) PE file VersionInfo (most reliable; works for .exe).
+            if ($LemonadeExe -match "\.exe$") {
+                try {
+                    $info = (Get-Item -LiteralPath $LemonadeExe -ErrorAction Stop).VersionInfo
+                    foreach ($candidate in @($info.ProductVersion, $info.FileVersion)) {
+                        if ($candidate -and ($candidate -match "(\d+\.\d+\.\d+)")) {
+                            Write-Host "VersionInfo on $LemonadeExe : $candidate"
+                            return $matches[1]
+                        }
+                    }
+                } catch {
+                    Write-Host "VersionInfo read failed on $LemonadeExe : $_"
+                }
+            }
+
+            # 2) Fall back to running ``--version``. Combine streams so a
+            # v10.x deprecation warning on stderr doesn't trip PowerShell's
+            # error-record handling on ``2>&1``. Silence
+            # ``$ErrorActionPreference`` so a non-zero exit from a shim
+            # doesn't blow us out of the try block.
             $prev = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                # Capture stdout + stderr to a single string. ``cmd /c`` is
-                # used because the deprecation shim mixes output streams in
-                # ways that PowerShell's native operators don't always join
-                # cleanly.
                 $versionOutput = & cmd /c "`"$LemonadeExe`" --version 2>&1"
                 $combined = ($versionOutput | Out-String)
-                Write-Host $combined
-                # Take the LAST x.y.z match -- the deprecation warning text
-                # itself doesn't include a version string, but we want to
-                # be resilient to any future preamble.
+                if ($combined.Trim()) {
+                    Write-Host "--version output from $LemonadeExe :"
+                    Write-Host $combined
+                }
                 $allMatches = [regex]::Matches($combined, "(\d+\.\d+\.\d+)")
                 if ($allMatches.Count -gt 0) {
                     return $allMatches[$allMatches.Count - 1].Value
                 }
             } catch {
-                Write-Host "Exception while querying version from $LemonadeExe : $_"
+                Write-Host "Exception while querying --version from $LemonadeExe : $_"
             } finally {
                 $ErrorActionPreference = $prev
             }
