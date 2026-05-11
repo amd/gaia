@@ -1,6 +1,7 @@
 id: multi_doc_context
 name: "Multi-Document Context"
 category: context_retention
+agent_type: doc
 severity: high
 description: |
   Two documents are indexed simultaneously. Agent must answer questions from each

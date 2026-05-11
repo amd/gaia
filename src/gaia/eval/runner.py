@@ -15,15 +15,31 @@ Usage:
   runner.run()
 """
 
+import contextlib
+import errno
 import functools
 import json
+import logging
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger(__name__)
+
+# fcntl is POSIX-only — on Windows the eval lock degrades to a no-op (the
+# Lemonade race the lock guards against doesn't happen on a contributor's
+# Windows box, where Lemonade Server isn't typically running concurrent evals).
+if sys.platform == "win32":
+    fcntl = None  # type: ignore[assignment]
+else:
+    import fcntl  # type: ignore[no-redef]
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 EVAL_DIR = REPO_ROOT / "eval"
@@ -33,9 +49,163 @@ RESULTS_DIR = EVAL_DIR / "results"
 MCP_CONFIG = EVAL_DIR / "mcp-config.json"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
+
+# ── Single-runner lock ────────────────────────────────────────────────────
+#
+# Why this exists: ``gaia eval agent`` drives Lemonade Server, which has a
+# **single-tenant LLM slot** (one model loaded at a time, one ``ctx_size``
+# in effect). When two eval runs fire concurrently against the same
+# Lemonade — e.g. an agent in ``--fix`` mode shelling out parallel
+# category invocations, or a user kicking off a manual run on top of a
+# script — they race-evict each other's models out of that slot, and
+# the user sees nondeterministic ``n_ctx=4096`` overflow errors,
+# ``model_load_error: llama-server failed to start`` failures, and
+# spurious ``BLOCKED_BY_ARCHITECTURE`` results that have nothing to do
+# with the agent under test.
+#
+# We enforce one-at-a-time execution by holding an advisory lock on
+# ``/tmp/gaia-eval-agent.lock`` for the lifetime of ``AgentEvalRunner.run()``.
+# fcntl.flock + LOCK_EX | LOCK_NB gives us "fail fast if held by another
+# process" semantics. We write our PID into the lock file so the error
+# message is actionable, and we tolerate stale locks by checking whether
+# the holder PID is alive.
+#
+# Escape hatch: ``GAIA_EVAL_NO_LOCK=1`` skips the lock — useful for the
+# unit-test suite or for callers that genuinely manage Lemonade out of
+# band.
+_LOCK_FILE = Path(tempfile.gettempdir()) / "gaia-eval-agent.lock"
+_LOCK_ENV_BYPASS = "GAIA_EVAL_NO_LOCK"
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Return True iff *pid* corresponds to a running process."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # We don't own the process, but it exists.
+        return True
+
+
+@contextlib.contextmanager
+def _acquire_eval_lock():
+    """Hold a process-wide advisory lock for the duration of an eval run.
+
+    Raises ``SystemExit(2)`` with an actionable error message when the
+    lock is already held by another live process.  Stale locks (holder
+    PID has exited) are reclaimed automatically.
+    """
+    if os.environ.get(_LOCK_ENV_BYPASS) == "1":
+        yield
+        return
+
+    # Windows: fcntl is unavailable — degrade to a no-op (same shape as the
+    # OSError-on-/tmp short-circuit below).
+    if fcntl is None:
+        yield
+        return
+
+    # Open / create the lock file. Mode 0o644 so it survives across users
+    # without weird permission games.
+    try:
+        fd = os.open(str(_LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as exc:
+        # If we can't even create the lockfile (read-only /tmp etc.),
+        # skip locking and let the run proceed — better degraded than dead.
+        print(
+            f"[WARN] Could not create eval lock at {_LOCK_FILE}: {exc}. "
+            "Skipping concurrency guard.",
+            file=sys.stderr,
+        )
+        yield
+        return
+
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
+                raise
+            # Lock is held — read holder PID + age and decide.
+            try:
+                with open(_LOCK_FILE, "r", encoding="utf-8") as fh:
+                    holder_pid_str = fh.read().strip()
+                holder_pid = int(holder_pid_str) if holder_pid_str else -1
+            except (ValueError, OSError):
+                holder_pid = -1
+
+            held_age_s = (
+                time.time() - _LOCK_FILE.stat().st_mtime if _LOCK_FILE.exists() else 0
+            )
+
+            if holder_pid > 0 and not _is_pid_alive(holder_pid):
+                # Stale lock — holder is dead. Try once more to grab it.
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    print(
+                        "[ERROR] Eval lock is held but holder PID "
+                        f"{holder_pid} is gone, and re-acquire still failed. "
+                        f"Manually delete {_LOCK_FILE} and retry.",
+                        file=sys.stderr,
+                    )
+                    os.close(fd)
+                    sys.exit(2)
+            else:
+                # A live eval run is in progress somewhere — refuse loudly.
+                print(
+                    "[ERROR] Another `gaia eval agent` run is already in "
+                    f"progress (PID {holder_pid}, started ~{int(held_age_s)}s ago).\n"
+                    "        Lemonade Server's single LLM slot can't safely "
+                    "host two evals at once — they race-evict each other's "
+                    "models and you'll see bogus n_ctx=4096 errors.\n"
+                    f"        Wait for PID {holder_pid} to finish, or "
+                    f"`kill {holder_pid}` if it's stuck.\n"
+                    "        Override (NOT recommended): "
+                    f"set {_LOCK_ENV_BYPASS}=1 in the environment.",
+                    file=sys.stderr,
+                )
+                os.close(fd)
+                sys.exit(2)
+
+        # We hold the lock — record our PID so future failers can see it.
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
+            os.fsync(fd)
+        except OSError:
+            # PID-write failure is non-fatal; the lock itself is already held.
+            pass
+
+        try:
+            yield
+        finally:
+            # Best-effort cleanup. Releasing the flock happens implicitly
+            # when fd is closed; we also wipe our PID so a reader doesn't
+            # blame our (dead) process for a future stale-lock encounter.
+            try:
+                os.ftruncate(fd, 0)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 REAL_WORLD_MANIFEST = REAL_WORLD_CORPUS_DIR / "manifest.json"
 
+# User-local directories for custom scenarios and corpus.
+# Auto-discovered if they exist; also addable via --scenario-dir / --corpus-dir.
+USER_SCENARIOS_DIR = Path.home() / ".gaia" / "eval" / "scenarios"
+USER_CORPUS_DIR = Path.home() / ".gaia" / "eval" / "corpus"
+
 # Personas defined in eval/prompts/simulator.md.  validate_scenario enforces this list.
+# Custom personas are allowed — these are documented defaults.
 _KNOWN_PERSONAS = frozenset(
     {"casual_user", "power_user", "confused_user", "adversarial_user", "data_analyst"}
 )
@@ -45,7 +215,9 @@ DEFAULT_BACKEND = "http://localhost:4200"
 DEFAULT_BUDGET = "2.00"
 DEFAULT_TIMEOUT = 900  # seconds per scenario (base)
 # Extra seconds reserved for claude subprocess + MCP server cold-start.
-_STARTUP_OVERHEAD_S = 120
+_STARTUP_OVERHEAD_S = (
+    240  # 4 min startup (MCP init + prompt ingestion, higher on Windows)
+)
 # Hard upper bound — a misconfigured scenario cannot tie up CI for more than 2 hours.
 _MAX_EFFECTIVE_TIMEOUT_S = 7200
 
@@ -79,15 +251,21 @@ def validate_scenario(path: Path, data: dict) -> None:
                 "(required so the runner can verify the file exists before running)"
             )
 
-    # Validate persona against the known list defined in simulator.md.
+    # Validate persona: must be a non-empty string.
+    # The 5 built-in personas (casual_user, power_user, etc.) are documented defaults,
+    # but any non-empty string is accepted to support custom persona descriptions.
     persona = data.get("persona")
     if persona is not None:
         if not isinstance(persona, str):
             errors.append(f"persona must be a string, got {type(persona).__name__}")
+        elif not persona.strip():
+            errors.append("persona must be a non-empty string")
         elif persona not in _KNOWN_PERSONAS:
-            errors.append(
-                f"persona '{persona}' is not a known persona; "
-                f"use one of: {', '.join(sorted(_KNOWN_PERSONAS))}"
+            logger.info(
+                "Scenario '%s' uses custom persona '%s' (not in built-in set: %s)",
+                sid,
+                persona,
+                ", ".join(sorted(_KNOWN_PERSONAS)),
             )
 
     turns = data.get("turns", [])
@@ -159,32 +337,85 @@ def _documents_exist(scenario_data: dict) -> bool:
     return True
 
 
-def find_scenarios(scenario_id=None, category=None):
+def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
     """Find scenario YAML files matching filters.
+
+    Args:
+        scenario_id: Only return the scenario with this ID.
+        category: Only return scenarios in this category.
+        extra_dirs: List of additional directories to scan for scenario YAML files.
+            Scenarios from extra_dirs override built-in scenarios with the same ID.
+        tags: List of tags to filter by. If specified, only scenarios whose ``tags``
+            field contains at least one of these tags are returned (OR logic).
 
     Returns list of (path, data) tuples. Raises RuntimeError if any YAML is
     unparseable or fails schema validation.
     """
+    # Collect all directories to scan: built-in first, then user-local, then extra.
+    dirs_to_scan = [SCENARIOS_DIR]
+
+    # Auto-discover user-local scenarios directory
+    if USER_SCENARIOS_DIR.is_dir():
+        dirs_to_scan.append(USER_SCENARIOS_DIR)
+        logger.info("Auto-discovered user scenarios dir: %s", USER_SCENARIOS_DIR)
+
+    # Append any extra directories from --scenario-dir
+    if extra_dirs:
+        for d in extra_dirs:
+            p = Path(d)
+            if p.is_dir():
+                dirs_to_scan.append(p)
+                logger.info("Adding extra scenario dir: %s", p)
+            else:
+                logger.warning("Scenario directory does not exist, skipping: %s", p)
+
+    # Scan all directories; later entries override earlier ones (by scenario ID).
+    scenarios_by_id = {}  # id -> (path, data)
+    for scan_dir in dirs_to_scan:
+        for path in sorted(scan_dir.rglob("*.yaml")):
+            try:
+                data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            except Exception as e:
+                raise RuntimeError(f"Failed to parse scenario YAML {path}: {e}") from e
+            try:
+                validate_scenario(path, data)
+            except ValueError as e:
+                raise RuntimeError(str(e)) from e
+
+            sid = data.get("id")
+            if sid in scenarios_by_id:
+                prev_path = scenarios_by_id[sid][0]
+                logger.info(
+                    "Scenario '%s' from %s overrides built-in at %s",
+                    sid,
+                    path,
+                    prev_path,
+                )
+            scenarios_by_id[sid] = (path, data)
+
+    # Apply filters
     scenarios = []
-    for path in sorted(SCENARIOS_DIR.rglob("*.yaml")):
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except Exception as e:
-            raise RuntimeError(f"Failed to parse scenario YAML {path}: {e}") from e
-        try:
-            validate_scenario(path, data)
-        except ValueError as e:
-            raise RuntimeError(str(e)) from e
+    for sid, (path, data) in sorted(scenarios_by_id.items(), key=lambda x: x[0]):
         if scenario_id and data.get("id") != scenario_id:
             continue
         if category and data.get("category") != category:
             continue
+        # Tag filtering: scenario must have at least one matching tag (OR logic)
+        if tags:
+            scenario_tags = set(data.get("tags", []))
+            if not scenario_tags.intersection(tags):
+                continue
         scenarios.append((path, data))
     return scenarios
 
 
-def build_scenario_prompt(scenario_data, manifest_data, backend_url):
-    """Build the prompt passed to `claude -p` for one scenario."""
+def build_scenario_prompt(scenario_data, manifest_data, backend_url, agent_type=None):
+    """Build the prompt passed to `claude -p` for one scenario.
+
+    When *agent_type* is set, the simulator is instructed to create sessions
+    bound to that agent registration ID (e.g. "gaia-lite"). Without it, the
+    backend uses its default agent.
+    """
     scenario_yaml = yaml.dump(scenario_data, default_flow_style=False)
     manifest_json = json.dumps(manifest_data, indent=2)
 
@@ -198,6 +429,27 @@ def build_scenario_prompt(scenario_data, manifest_data, backend_url):
     simulator_content = _load_simulator_content()
     judge_turn_content = _load_judge_turn_content()
     judge_scenario_content = _load_judge_scenario_content()
+
+    # When the runner targets a specific agent (e.g. gaia-lite), inject an
+    # explicit instruction so the eval simulator creates sessions bound to
+    # that agent_type. The MCP create_session tool accepts an optional
+    # agent_type kwarg that maps to the REST POST /api/sessions body.
+    if agent_type:
+        agent_type_instructions = (
+            f"\n## TARGET AGENT\n"
+            f'This eval run targets agent_type="{agent_type}". '
+            f"When creating sessions in Phase 1, you MUST pass "
+            f'agent_type="{agent_type}" to create_session so each scenario '
+            f"runs against the intended agent. Example call: "
+            f'create_session(title="Eval: <scenario_id>", agent_type="{agent_type}").\n'
+        )
+        create_session_call = (
+            f'create_session(title="Eval: {{scenario_id}}", '
+            f'agent_type="{agent_type}")'
+        )
+    else:
+        agent_type_instructions = ""
+        create_session_call = 'create_session("Eval: {{scenario_id}}")'
 
     return f"""You are the GAIA Eval Agent. Test the GAIA Agent UI by simulating a realistic user and judging responses.
 
@@ -229,12 +481,12 @@ def build_scenario_prompt(scenario_data, manifest_data, backend_url):
 
 ## AGENT UI
 Backend: {backend_url}
-
+{agent_type_instructions}
 ## YOUR TASK
 
 ### Phase 1: Setup
 1. Call system_status() — if error, return status="INFRA_ERROR"
-2. Call create_session("Eval: {{scenario_id}}")
+2. Call {create_session_call}
 3. For each document in scenario setup.index_documents:
    Call index_document(filepath=<absolute path>, session_id=<session_id from step 2>)
    CRITICAL: Always pass the session_id so documents are linked to the session and visible to the agent.
@@ -260,8 +512,8 @@ After all turns, call get_messages(session_id) for the persisted full trace.
 ### Phase 4: Scenario judgment
 Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
 
-### Phase 5: Cleanup
-Call delete_session(session_id)
+### Phase 5: Preserve session
+Do NOT call delete_session. Leave the session intact so it can be reviewed in the Agent UI after the eval completes.
 
 ### Phase 6: Return result
 Return a single JSON object to stdout with this structure:
@@ -451,23 +703,40 @@ def preflight_check(backend_url):
         errors.append(f"MCP config not found: {MCP_CONFIG}")
 
     # Check claude CLI
-    result = subprocess.run(
-        ["claude", "--version"], capture_output=True, text=True, check=False
-    )
-    if result.returncode != 0:
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
         errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
+    else:
+        try:
+            result = subprocess.run(
+                [claude_bin, "--version"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                errors.append(
+                    "'claude' CLI not found on PATH — install Claude Code CLI"
+                )
+        except FileNotFoundError:
+            errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
 
     return errors
 
 
-def run_scenario_subprocess(
-    _scenario_path, scenario_data, run_dir, backend_url, model, budget, timeout
-):
-    """Invoke claude -p for one scenario. Returns parsed result dict."""
-    scenario_id = scenario_data["id"]
+def _load_merged_manifest(extra_corpus_dirs=None):
+    """Load and merge corpus manifest from built-in + user-local + extra dirs.
+
+    Args:
+        extra_corpus_dirs: Optional list of additional corpus directories, each
+            expected to contain a ``manifest.json``.
+
+    Returns:
+        Merged manifest dict with combined document lists.
+    """
     manifest_data = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    # Merge real-world manifest facts if present, so the eval agent has ground
-    # truth for all document types (standard + real-world) in a single context block.
+
+    # Merge real-world manifest facts if present
     if REAL_WORLD_MANIFEST.exists():
         try:
             rw_manifest = json.loads(REAL_WORLD_MANIFEST.read_text(encoding="utf-8"))
@@ -486,7 +755,74 @@ def run_scenario_subprocess(
             "total_documents": len(merged_docs),
         }
 
-    prompt = build_scenario_prompt(scenario_data, manifest_data, backend_url)
+    # Auto-discover user-local corpus manifest
+    user_manifest = USER_CORPUS_DIR / "manifest.json"
+    if user_manifest.is_file():
+        try:
+            user_data = json.loads(user_manifest.read_text(encoding="utf-8"))
+            extra_docs = user_data.get("documents", [])
+            manifest_data["documents"] = manifest_data.get("documents", []) + extra_docs
+            manifest_data["total_documents"] = len(manifest_data["documents"])
+            logger.info(
+                "Merged %d document(s) from user corpus: %s",
+                len(extra_docs),
+                USER_CORPUS_DIR,
+            )
+        except (json.JSONDecodeError, OSError) as exc:
+            print(
+                f"[WARN] Could not load user corpus manifest {user_manifest}: {exc}",
+                file=sys.stderr,
+            )
+
+    # Merge extra corpus directories from --corpus-dir
+    if extra_corpus_dirs:
+        for corpus_dir_str in extra_corpus_dirs:
+            corpus_dir_path = Path(corpus_dir_str)
+            extra_manifest = corpus_dir_path / "manifest.json"
+            if extra_manifest.is_file():
+                try:
+                    extra_data = json.loads(extra_manifest.read_text(encoding="utf-8"))
+                    extra_docs = extra_data.get("documents", [])
+                    manifest_data["documents"] = (
+                        manifest_data.get("documents", []) + extra_docs
+                    )
+                    manifest_data["total_documents"] = len(manifest_data["documents"])
+                    logger.info(
+                        "Merged %d document(s) from extra corpus: %s",
+                        len(extra_docs),
+                        corpus_dir_path,
+                    )
+                except (json.JSONDecodeError, OSError) as exc:
+                    print(
+                        f"[WARN] Could not load corpus manifest {extra_manifest}: {exc}",
+                        file=sys.stderr,
+                    )
+            else:
+                logger.warning(
+                    "No manifest.json found in corpus dir: %s", corpus_dir_path
+                )
+
+    return manifest_data
+
+
+def run_scenario_subprocess(
+    _scenario_path,
+    scenario_data,
+    run_dir,
+    backend_url,
+    model,
+    budget,
+    timeout,
+    extra_corpus_dirs=None,
+    agent_type=None,
+):
+    """Invoke claude -p for one scenario. Returns parsed result dict."""
+    scenario_id = scenario_data["id"]
+    manifest_data = _load_merged_manifest(extra_corpus_dirs=extra_corpus_dirs)
+
+    prompt = build_scenario_prompt(
+        scenario_data, manifest_data, backend_url, agent_type=agent_type
+    )
 
     result_schema = json.dumps(
         {
@@ -504,9 +840,12 @@ def run_scenario_subprocess(
         }
     )
 
+    claude_bin = shutil.which("claude") or "claude"
     cmd = [
-        "claude",
+        claude_bin,
         "-p",
+        "--bare",  # skip hooks, CLAUDE.md, auto-memory — clean subprocess
+        "--no-session-persistence",  # don't save eval sessions to disk
         "--output-format",
         "json",
         "--json-schema",
@@ -791,6 +1130,20 @@ def run_scenario_subprocess(
     # non-Lemonade providers and does not affect pass/fail.
     _aggregate_performance(result, scenario_id)
 
+    # Latency validation — flag excessive TTFT as a UX concern
+    _MAX_TTFT_S = 30.0  # fail threshold for time-to-first-token
+    perf_summary = result.get("performance_summary") or {}
+    avg_ttft = perf_summary.get("avg_time_to_first_token")
+    if isinstance(avg_ttft, (int, float)) and avg_ttft > _MAX_TTFT_S:
+        result.setdefault("latency_warning", []).append(
+            f"avg TTFT {avg_ttft:.1f}s exceeds {_MAX_TTFT_S}s threshold"
+        )
+        print(
+            f"[WARN] {scenario_id} — slow TTFT: {avg_ttft:.1f}s "
+            f"(threshold: {_MAX_TTFT_S}s)",
+            file=sys.stderr,
+        )
+
     # Write trace file
     traces_dir = run_dir / "traces"
     traces_dir.mkdir(exist_ok=True)
@@ -862,8 +1215,6 @@ Fix failures in this order:
 
 def run_fix_iteration(scorecard, run_dir, iteration):
     """Invoke Claude Code to fix failing scenarios. Returns fix log entry."""
-    import shutil
-
     # Load fixer prompt from file if available, fall back to inline FIXER_PROMPT
     fixer_prompt_path = EVAL_DIR / "prompts" / "fixer.md"
     fixer_template = (
@@ -1180,12 +1531,22 @@ class AgentEvalRunner:
         budget_per_scenario=DEFAULT_BUDGET,
         timeout_per_scenario=DEFAULT_TIMEOUT,
         results_dir=None,
+        extra_scenario_dirs=None,
+        extra_corpus_dirs=None,
+        tags=None,
+        output_format=None,
+        agent_type=None,
     ):
         self.backend_url = backend_url
         self.model = model
         self.budget = budget_per_scenario
         self.timeout = timeout_per_scenario
         self.results_dir = Path(results_dir) if results_dir else RESULTS_DIR
+        self.extra_scenario_dirs = extra_scenario_dirs or []
+        self.extra_corpus_dirs = extra_corpus_dirs or []
+        self.tags = tags or []
+        self.output_format = output_format
+        self.agent_type = agent_type
 
     def _print_summary(self, scorecard, run_id, run_dir):
         """Print a one-block eval summary to stdout."""
@@ -1218,6 +1579,10 @@ class AgentEvalRunner:
           C) re-run only previously-failed scenarios
           D) compare before/after and report improvements/regressions
         repeating B-D up to max_fix_iterations or until target_pass_rate is met.
+
+        Holds a process-wide advisory lock for the lifetime of the run
+        (audit-only mode skips this — no Lemonade contention there).
+        See ``_acquire_eval_lock`` for the rationale.
         """
 
         if audit_only:
@@ -1227,16 +1592,45 @@ class AgentEvalRunner:
             print(json.dumps(result, indent=2))
             return result
 
+        with _acquire_eval_lock():
+            return self._run_locked(
+                scenario_id=scenario_id,
+                category=category,
+                fix_mode=fix_mode,
+                max_fix_iterations=max_fix_iterations,
+                target_pass_rate=target_pass_rate,
+            )
+
+    def _run_locked(
+        self,
+        scenario_id=None,
+        category=None,
+        fix_mode=False,
+        max_fix_iterations=3,
+        target_pass_rate=0.90,
+    ):
+        """Internal entry — holds the eval lock; only called by ``run()``."""
+
         # Find scenarios
-        scenarios = find_scenarios(scenario_id=scenario_id, category=category)
+        scenarios = find_scenarios(
+            scenario_id=scenario_id,
+            category=category,
+            extra_dirs=self.extra_scenario_dirs,
+            tags=self.tags if self.tags else None,
+        )
         if not scenarios:
+            filter_desc = f"id={scenario_id}, category={category}"
+            if self.tags:
+                filter_desc += f", tags={self.tags}"
             print(
-                f"[ERROR] No scenarios found (id={scenario_id}, category={category})",
+                f"[ERROR] No scenarios found ({filter_desc})",
                 file=sys.stderr,
             )
             sys.exit(1)
 
         print(f"[INFO] Found {len(scenarios)} scenario(s)")
+        if self.agent_type:
+            print(f"[INFO] Targeting agent_type='{self.agent_type}'")
 
         # Pre-flight
         errors = preflight_check(self.backend_url)
@@ -1312,6 +1706,8 @@ class AgentEvalRunner:
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
+            # Per-scenario agent_type from YAML overrides CLI --agent-type
+            scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
             result = run_scenario_subprocess(
                 scenario_path,
                 scenario_data,
@@ -1320,6 +1716,10 @@ class AgentEvalRunner:
                 self.model,
                 self.budget,
                 effective_timeout,
+                extra_corpus_dirs=(
+                    self.extra_corpus_dirs if self.extra_corpus_dirs else None
+                ),
+                agent_type=scenario_agent_type,
             )
             results.append(result)
 
@@ -1335,8 +1735,17 @@ class AgentEvalRunner:
             "backend_url": self.backend_url,
             "model": self.model,
             "budget_per_scenario_usd": float(self.budget),
+            "agent_type": self.agent_type,
         }
         scorecard = aggregate_scorecard(results, run_id, run_dir, config)
+
+        # Write JUnit XML if requested
+        if self.output_format == "junit":
+            from gaia.eval.scorecard import write_junit_xml
+
+            junit_path = run_dir / "results.xml"
+            junit_path.write_text(write_junit_xml(scorecard), encoding="utf-8")
+            print(f"[INFO] JUnit XML written to: {junit_path}")
 
         # Print summary
         self._print_summary(scorecard, run_id, run_dir)
@@ -1393,6 +1802,7 @@ class AgentEvalRunner:
                 effective_timeout = _compute_effective_timeout(
                     self.timeout, scenario_data
                 )
+                scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
                 result = run_scenario_subprocess(
                     scenario_path,
                     scenario_data,
@@ -1401,6 +1811,10 @@ class AgentEvalRunner:
                     self.model,
                     self.budget,
                     effective_timeout,
+                    extra_corpus_dirs=(
+                        self.extra_corpus_dirs if self.extra_corpus_dirs else None
+                    ),
+                    agent_type=scenario_agent_type,
                 )
                 rerun_results.append(result)
 

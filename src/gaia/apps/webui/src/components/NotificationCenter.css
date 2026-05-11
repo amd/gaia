@@ -190,6 +190,9 @@
 .notification-item.notif-type-security {
   border-left-color: var(--accent-yellow);
 }
+.notification-item.notif-type-policy {
+  border-left-color: var(--accent-yellow);
+}
 .notification-item.notif-type-status {
   border-left-color: var(--accent-green);
 }
@@ -205,6 +208,9 @@
   color: var(--amd-red);
 }
 .notif-type-security .notification-icon {
+  color: var(--accent-yellow);
+}
+.notif-type-policy .notification-icon {
   color: var(--accent-yellow);
 }
 .notif-type-status .notification-icon {
@@ -284,6 +290,25 @@
   border-radius: var(--radius-xs);
   background: var(--bg-tertiary);
   color: var(--text-primary);
+}
+.notification-tool em {
+  color: var(--accent-yellow);
+  font-style: normal;
+}
+
+.notification-policy-reason {
+  display: block;
+  padding-left: 8px;
+  border-left: 2px solid rgba(245, 158, 11, 0.45);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.notification-policy-details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
 }
 
 /* ── Permission Actions ──────────────────────────────────────────────── */

@@ -3,17 +3,26 @@
 /* Settings Modal -- refined design */
 .settings-modal { width: 560px; }
 
-.settings-section { margin-bottom: 28px; }
+.settings-section {
+    margin-bottom: 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
+    border-radius: 10px;
+    padding: 18px 20px;
+}
 .settings-section:last-child { margin-bottom: 0; }
 
 .settings-section h4 {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
     font-family: var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 2px;
-    color: var(--text-muted);
+    letter-spacing: 1.5px;
+    color: var(--text-secondary);
     margin-bottom: 14px;
+    border-left: 2px solid var(--accent);
+    margin-left: -8px;
+    padding-left: 6px;
 }
 
 .status-grid { display: flex; flex-direction: column; gap: 8px; }
@@ -336,13 +345,57 @@
     line-height: 1.5;
     font-family: var(--font-sans);
 }
-
-/* Danger zone */
-.danger-zone {
-    border-top: 1px solid var(--border);
-    padding-top: 20px;
-    margin-top: 8px;
+.model-status-hint code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    color: var(--text-secondary);
+    white-space: nowrap;
 }
+
+/* Inline icon + text for memory warning rows. */
+.memory-warning-value {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+/* Context-size preset chips: quick buttons for common ctx values. */
+.ctx-preset-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 8px 0 10px;
+}
+.btn-ctx-preset {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: border-color 120ms, color 120ms, background 120ms;
+}
+.btn-ctx-preset:hover:not(:disabled) {
+    border-color: var(--border);
+    color: var(--text-primary);
+}
+.btn-ctx-preset.active {
+    background: var(--bg-accent, var(--bg-secondary));
+    border-color: var(--text-accent, var(--text-primary));
+    color: var(--text-primary);
+}
+.btn-ctx-preset:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Danger actions */
 
 .danger-divider {
     height: 1px;

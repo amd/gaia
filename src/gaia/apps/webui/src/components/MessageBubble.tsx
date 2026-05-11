@@ -4,13 +4,14 @@
 import React, { useCallback, useRef, useState, useEffect, useMemo } from 'react';
 import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import rehypeRaw from 'rehype-raw';
+import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentActivity } from './AgentActivity';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import gaiaRobot from '../assets/gaia-robot.png';
 import type { Message, AgentStep } from '../types';
+import { EmailPreScanCard, isPreScanPayload } from './email/EmailPreScanCard';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -187,6 +188,9 @@ function cleanLLMJsonBlocks(text: string): string {
     return result;
 }
 
+/** Structured payload fence tags — preserved verbatim, bypassed in RenderedContent. */
+const STRUCTURED_PAYLOAD_LANGS = new Set(['email_pre_scan', 'email-pre-scan']);
+
 /** Known programming language identifiers that should keep code block rendering. */
 const KNOWN_CODE_LANGS = new Set([
     'python', 'py', 'javascript', 'js', 'typescript', 'ts', 'java', 'c', 'cpp',
@@ -219,9 +223,13 @@ function stripBogusCodeFences(text: string): string {
         /```(\w*)[ \t]*\n([\s\S]*?)```/g,
         (_match, lang: string, inner: string) => {
             const langLower = lang.toLowerCase();
+            // Keep structured payload fences intact — RenderedContent handles them
+            if (langLower && STRUCTURED_PAYLOAD_LANGS.has(langLower)) {
+                return _match;
+            }
             // Keep fences with known code languages
             if (langLower && KNOWN_CODE_LANGS.has(langLower)) {
-                return _match; // Preserve the original fenced block
+                return _match;
             }
             // Strip the fence — return inner content as plain markdown
             return inner.trim();
@@ -349,8 +357,19 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
         onResend?.(message);
     }, [message, onResend]);
 
+    // Tooltip shown on hover anywhere over the bubble — full absolute
+    // timestamp (e.g. "Apr 25, 2026, 11:02:04 PM"). Both user and assistant
+    // bubbles get one; previously only the assistant had a visible
+    // timestamp readout via msg-stats-ts.
+    const hoverTimestamp = message.created_at
+        ? `${message.role === 'user' ? 'Sent' : 'Replied'} ${formatFullTimestamp(message.created_at)}`
+        : undefined;
+
     return (
-        <div className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}>
+        <div
+            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}
+            title={hoverTimestamp}
+        >
             <div className="msg-inner">
                 <div className="msg-header">
                     <div className="msg-header-left">
@@ -360,7 +379,16 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                                     <img src={gaiaRobot} alt="" />
                                 </div>
                                 <span className="msg-role-brand">GAIA</span>
-                                {agentName && <span className="msg-role-agent">{agentName}</span>}
+                                {(() => {
+                                    // Strip a leading "Gaia" / "GAIA" from the agent name so
+                                    // "Gaia Lite" renders as "GAIA Lite" (not "GAIA Gaia Lite").
+                                    // Word-boundary match: "Gaiadocs" (hypothetical) stays intact.
+                                    const trimmed = agentName?.trim() ?? '';
+                                    const stripped = trimmed.replace(/^gaia\b\s*/i, '');
+                                    return stripped ? (
+                                        <span className="msg-role-agent">{stripped}</span>
+                                    ) : null;
+                                })()}
                                 {(isStreaming || message.created_at) && (
                                     <span className="msg-header-sep">|</span>
                                 )}
@@ -570,15 +598,43 @@ function linkifyChildren(children: React.ReactNode): React.ReactNode {
     );
 }
 
+const STRUCTURED_FENCE_RE = /```(email[_-]pre[_-]scan)[ \t]*\r?\n([\s\S]*?)\r?\n```/;
+
 function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
+
+    // Bypass ReactMarkdown for structured payload blocks.
+    // remark-gfm autolinks (<email@domain>) inside the JSON corrupt the
+    // fence detection, so we extract and render these blocks directly.
+    const fenceMatch = STRUCTURED_FENCE_RE.exec(content);
+    if (fenceMatch) {
+        const before = content.slice(0, fenceMatch.index).trim();
+        const jsonPart = fenceMatch[2];
+        const after = content.slice(fenceMatch.index + fenceMatch[0].length).trim();
+        try {
+            const parsed = JSON.parse(jsonPart);
+            if (isPreScanPayload(parsed)) {
+                return (
+                    <div className="md-content">
+                        {before && <RenderedContent content={before} />}
+                        <EmailPreScanCard payload={parsed} />
+                        {after && <RenderedContent content={after} />}
+                        {showCursor && <span className="cursor" />}
+                    </div>
+                );
+            }
+        } catch {
+            // JSON.parse failed — fall through to normal ReactMarkdown render
+        }
+    }
 
     return (
         <div className="md-content">
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeRaw]}
+                disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
+                urlTransform={safeUrlTransform}
                 components={{
                     // Code block vs inline code detection.
                     // react-markdown calls `code` for both inline `code` and

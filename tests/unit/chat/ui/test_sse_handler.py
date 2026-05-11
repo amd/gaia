@@ -94,6 +94,44 @@ class TestEmit:
         assert handler.event_queue.get_nowait() is None
 
 
+class TestPolicyAlert:
+    """Tests for SSEOutputHandler.print_policy_alert."""
+
+    def test_policy_alert_event_shape(self, handler):
+        handler.print_policy_alert(
+            tool_name="drop_table",
+            decision="BLOCK",
+            reason="Production DB protection active.",
+            rule_ids=["governance.block.destructive_db"],
+            policy_version="v1.2.0",
+            receipt_id="rcpt_abcd_1234",
+        )
+
+        assert handler.event_queue.get_nowait() == {
+            "type": "policy_alert",
+            "tool": "drop_table",
+            "decision": "BLOCK",
+            "reason": "Production DB protection active.",
+            "rule_ids": ["governance.block.destructive_db"],
+            "policy_version": "v1.2.0",
+            "receipt_id": "rcpt_abcd_1234",
+        }
+
+    def test_policy_alert_omits_missing_receipt_id(self, handler):
+        handler.print_policy_alert(
+            tool_name="drop_table",
+            decision="BLOCK",
+            reason="blocked",
+            rule_ids=[],
+            policy_version="v1",
+            receipt_id=None,
+        )
+
+        event = handler.event_queue.get_nowait()
+        assert event["type"] == "policy_alert"
+        assert "receipt_id" not in event
+
+
 # ===========================================================================
 # SSEOutputHandler._elapsed
 # ===========================================================================

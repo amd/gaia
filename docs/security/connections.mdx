@@ -1,0 +1,60 @@
+---
+title: "Connections Security Model"
+description: "How GAIA stores credentials, enforces per-agent grants, and protects against unauthorized access."
+icon: "shield"
+---
+
+## Credential storage
+
+GAIA never writes tokens or API keys to plaintext files. All secrets live exclusively in your OS credential store:
+
+| Platform | Store |
+|---|---|
+| macOS | Keychain |
+| Linux | gnome-keyring or kwallet |
+| Windows | Credential Locker |
+
+Each connector occupies a dedicated keyring slot keyed by `gaia.connections:<connector-id>:<secret-name>`. MCP server tokens use `$keyring:<slot>` references in `~/.gaia/mcp_servers.json` — the JSON file itself contains no actual secrets.
+
+OAuth refresh tokens and MCP server API keys are AES-256 encrypted by the OS keyring at rest and decrypted in memory only when a tool call needs them.
+
+## Per-agent grant model
+
+Connecting a service (e.g. Google) does **not** give every agent access to it. Access is gated at two levels:
+
+1. **Connection** — you store a credential once in the keyring (OAuth refresh token or PAT).
+2. **Grant** — you explicitly allow a specific agent to use that credential for a specific scope.
+
+```
+User → connects Google once
+User → grants chat-agent gmail.readonly
+User → grants my-research-agent gmail.readonly + drive.readonly
+```
+
+An agent that calls `get_credential_sync("google", agent_id=..., required_scopes=["gmail.readonly"])` without a matching grant receives `AuthRequiredError(reason=AGENT_NOT_GRANTED)` and cannot proceed. No token is ever returned to an ungrantedn agent.
+
+Grants are stored in `~/.gaia/connectors/grants.json` — a flat file that is **not** a secret store. It contains agent IDs and scope names, not credentials.
+
+## Revocation
+
+You can revoke access at any level:
+
+| Action | Effect |
+|---|---|
+| Settings → Connections → \<connector\> → **Disconnect** | Removes token from keyring; all agent calls fail with `NOT_CONNECTED` |
+| `gaia connectors grants revoke <connector> <agent>` | Removes the per-agent grant; that agent's calls fail with `AGENT_NOT_GRANTED` |
+| Revoke the PAT/OAuth client at the provider | Invalidates the token at the source; GAIA's next API call surfaces the provider's error |
+
+## Threat model
+
+| Threat | Mitigation |
+|---|---|
+| Malicious process reads `mcp_servers.json` | File contains only `$keyring:...` references, never raw tokens |
+| Malicious agent requests a credential it wasn't granted | `get_credential_sync` checks the grants ledger before returning; unapproved calls raise `AuthRequiredError` |
+| Token leak via logging | Connector code never logs token values; credentials are redacted before any log statement |
+| Token exfiltration via a rogue custom agent | Custom agents run in the same process as GAIA — they are trusted code you install yourself, analogous to a browser extension |
+
+## See also
+
+- [Connectors overview](/connectors)
+- [Connectors SDK](/sdk/infrastructure/connectors)

@@ -1,0 +1,14 @@
+{
+  "name": "gaia-whatsapp-webjs-prototype",
+  "version": "0.1.0",
+  "description": "Prototype for whatsapp-web.js spike (GAIA experiments)",
+  "private": true,
+  "scripts": {
+    "start": "node index.js",
+    "test": "node index.js"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.19.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

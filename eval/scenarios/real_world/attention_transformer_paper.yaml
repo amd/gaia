@@ -1,6 +1,7 @@
 id: attention_transformer_paper
 name: "Attention Is All You Need Research Paper Lookup"
 category: real_world
+agent_type: doc
 severity: medium
 description: |
   Agent must retrieve facts from the "Attention Is All You Need" Transformer paper.

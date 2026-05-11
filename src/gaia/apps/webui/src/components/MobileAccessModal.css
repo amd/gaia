@@ -73,6 +73,14 @@
     font-size: 13px;
     line-height: 1.5;
     word-break: break-word;
+    /* Preserve \n newlines from backend hint messages (e.g. the
+       multi-line authtoken-setup instructions). */
+    white-space: pre-line;
+}
+
+.tunnel-error a {
+    color: var(--accent-danger);
+    text-decoration: underline;
 }
 
 /* QR Code area */

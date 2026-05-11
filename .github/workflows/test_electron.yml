@@ -63,6 +63,16 @@ jobs:
           cd tests/electron
           npm test
 
+      # node:test files (`.mjs`) for modules that don't fit Jest's CJS
+      # mocking model — port-manager and the index-query helper. Keep
+      # them here so the `services/*.cjs` extraction pattern stays
+      # CI-gated; without this step they would silently never run.
+      - name: Run node:test suites (services helpers)
+        run: |
+          node --test \
+            tests/electron/test_port_manager.mjs \
+            tests/electron/test_loadapp_query.mjs
+
       - name: Upload test coverage
         if: always()
         uses: actions/upload-artifact@v6

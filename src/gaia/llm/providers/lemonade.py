@@ -4,7 +4,7 @@
 
 import json
 import logging
-from typing import Iterator, List, Optional, Union
+from typing import Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
 from ..lemonade_client import DEFAULT_MODEL_NAME, LemonadeClient, is_tool_calling_model
@@ -14,6 +14,141 @@ logger = logging.getLogger(__name__)
 # Sentinel key used to encode native tool_calls inside a JSON string so that
 # the response type stays `str` everywhere (no callers need updating).
 _NATIVE_TC_KEY = "__tool_calls__"
+
+
+# ── Typed errors ────────────────────────────────────────────────────────
+#
+# Lemonade returns structured errors as ``{"error": {"type": ..., "message": ...}}``.
+# We translate the well-known transient failure modes into typed exceptions
+# so the chat layer can decide whether to retry (after a model reload, etc.)
+# vs. surface a friendly message immediately. Anything we don't recognise
+# falls through to ``LemonadeError`` with the raw payload preserved.
+
+
+class LemonadeError(ValueError):
+    """Base class for Lemonade-side failures.
+
+    Carries the raw response payload (when available) on ``.payload`` so
+    higher layers can log it for diagnostics; ``.user_message`` is the
+    short, plain-English text we'd show the end user.
+    """
+
+    retryable: bool = False
+    user_message: str = "Something went wrong talking to the local LLM."
+
+    def __init__(
+        self,
+        user_message: Optional[str] = None,
+        payload: Optional[dict] = None,
+    ):
+        if user_message is not None:
+            self.user_message = user_message
+        self.payload = payload
+        super().__init__(self.user_message)
+
+
+class LemonadeModelNotLoadedError(LemonadeError):
+    retryable = True
+    user_message = "Reloading the model — give it a few seconds and try again."
+
+
+class LemonadeContextOverflowError(LemonadeError):
+    """Raised when the prompt + history exceeds the loaded model's ctx.
+
+    ``retryable`` is dynamic — set in ``_classify_lemonade_response`` based
+    on the reported ``n_ctx``. When n_ctx is smaller than GAIA's expected
+    32K, the model was loaded with the wrong ctx_size; reloading via the
+    pre-flight helper will fix it, so we mark retryable so the chat layer
+    auto-recovers. When n_ctx is already at full size, this is a genuine
+    "conversation too big" situation and retry won't help.
+    """
+
+    retryable = False  # default; set True dynamically when n_ctx < 32K
+    user_message = (
+        "This conversation got too long for the model's context window. "
+        "Start a fresh task to keep going."
+    )
+
+
+class LemonadeNetworkError(LemonadeError):
+    retryable = True
+    user_message = (
+        "Couldn't reach the local LLM. It may be loading or briefly busy "
+        "— try sending the message again."
+    )
+
+
+def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError], bool]:
+    """Inspect a Lemonade response dict for a known error shape.
+
+    Returns ``(error_instance_or_None, is_error)``. ``is_error=True`` with
+    ``None`` means we saw an error envelope but couldn't classify it —
+    caller should fall back to the generic ``LemonadeError``.
+    """
+    if not isinstance(response, dict):
+        return None, False
+    err = response.get("error")
+    if not isinstance(err, dict):
+        return None, False
+
+    # Lemonade may nest the upstream llama-server error inside
+    # ``details.response.error`` for ``backend_error`` envelopes.
+    nested = (
+        (err.get("details") or {}).get("response", {}).get("error")
+        if isinstance(err.get("details"), dict)
+        else None
+    )
+    candidate_types = []
+    candidate_messages = []
+    if isinstance(nested, dict):
+        candidate_types.append((nested.get("type") or "").lower())
+        candidate_messages.append(nested.get("message") or "")
+    candidate_types.append((err.get("type") or "").lower())
+    candidate_messages.append(err.get("message") or "")
+
+    type_blob = " ".join(t for t in candidate_types if t)
+    msg_blob = " ".join(m for m in candidate_messages if m).lower()
+
+    if "model_not_loaded" in type_blob or "no model loaded" in msg_blob:
+        return LemonadeModelNotLoadedError(payload=response), True
+    if (
+        "exceed_context_size" in type_blob
+        or "exceeds the available context size" in msg_blob
+    ):
+        # Mark retryable when the model was loaded with an unexpectedly
+        # small ctx (almost always 4096 from a pre-restart leftover).
+        # The chat layer's auto-reload at 32K will fix it, so let it try.
+        # GAIA expects 32K everywhere; threshold is a deliberate constant
+        # rather than imported to avoid a circular dep with lemonade_client.
+        n_ctx_reported = 0
+        if isinstance(nested, dict):
+            n_ctx_reported = nested.get("n_ctx") or 0
+        if not n_ctx_reported and isinstance(err, dict):
+            n_ctx_reported = err.get("n_ctx") or 0
+        err_instance = LemonadeContextOverflowError(payload=response)
+        if 0 < n_ctx_reported < 32768:
+            err_instance.retryable = True
+        return err_instance, True
+    if (
+        "network_error" in type_blob
+        or "curl error" in msg_blob
+        or "timeout was reached" in msg_blob
+        or "connection refused" in msg_blob
+    ):
+        return LemonadeNetworkError(payload=response), True
+
+    # Recognised the error envelope but couldn't bucket it specifically.
+    user_text = candidate_messages[0] if candidate_messages else ""
+    return (
+        LemonadeError(
+            user_message=(
+                "The local LLM hit an unexpected error. "
+                f"{user_text[:200] if user_text else 'Try again in a moment.'}"
+            ),
+            payload=response,
+        ),
+        True,
+    )
 
 
 class LemonadeProvider(LLMClient):
@@ -122,10 +257,31 @@ class LemonadeProvider(LLMClient):
         if effective_stream:
             return self._handle_stream(response)
 
-        # Handle error responses gracefully
+        # Handle error responses — classify into typed exceptions so the
+        # chat layer can decide whether to auto-retry vs. surface a
+        # friendly message. Raw payload is preserved on the exception
+        # for diagnostic logging.
         if not isinstance(response, dict) or "choices" not in response:
-            error_msg = f"Unexpected response format from Lemonade Server: {response}"
-            raise ValueError(error_msg)
+            classified, _is_err = _classify_lemonade_response(
+                response if isinstance(response, dict) else {}
+            )
+            if classified is not None:
+                logger.warning(
+                    "Lemonade error: type=%s payload=%r",
+                    type(classified).__name__,
+                    response,
+                )
+                raise classified
+            # Truly unrecognised shape (no error envelope, no choices) —
+            # last-resort generic.
+            logger.warning("Unexpected Lemonade response: %r", response)
+            raise LemonadeError(
+                user_message=(
+                    "The local LLM returned an unexpected response. "
+                    "Try the message again."
+                ),
+                payload=response if isinstance(response, dict) else {"raw": response},
+            )
 
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")
@@ -137,16 +293,32 @@ class LemonadeProvider(LLMClient):
 
         if tool_calls:
             logger.debug(
-                "tool_call_path=native model_id=%s tool_calling_flag=%s finish_reason=%s",
+                "tool_call_path=native model_id=%s tool_calling_flag=%s "
+                "finish_reason=%s n_tool_calls=%d",
                 effective_model,
                 tool_capable,
                 finish_reason,
+                len(tool_calls),
             )
+            # Some tool-calling models (e.g. Gemma-4-E4B) emit assistant text
+            # alongside tool_calls in the same response. Surface that text in
+            # the envelope so the agent loop can attach it to the assistant
+            # message and not silently drop it. Per OpenAI spec, ``content``
+            # may be null when only tool_calls are emitted — pass it through
+            # unchanged so callers can distinguish "no content" from "empty
+            # string content".
+            tc_content = message.get("content")
+            if tc_content is None:
+                # Some llama.cpp builds put text in ``reasoning_content``
+                # instead of ``content`` when the model emits a thought
+                # before a tool call. Treat that as content too.
+                tc_content = message.get("reasoning_content")
             # Encode as JSON string so callers can keep treating responses as str.
             return json.dumps(
                 {
                     _NATIVE_TC_KEY: tool_calls,
                     "finish_reason": finish_reason,
+                    "content": tc_content,
                 }
             )
 

@@ -9,33 +9,65 @@
     padding: 0 24px;
 }
 
-/* ── Summary bar -- sharp, terminal panel ────────────────────── */
+/* ── Summary bar — subtle by default, expands on hover ─────────────
+   Most chat turns don't require the user to inspect the agent's
+   internal steps; the previous loud panel-with-border was eating
+   visual attention every turn for content the user rarely opens.
+   Now it sits quietly inline (no border, dim text, smaller) and only
+   asserts itself on hover/focus, matching the access pattern. The
+   "active/done" state and error variant still escalate visibility
+   so an in-flight or failed run is obvious. */
 .agent-summary-bar {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    padding: 7px 12px;
+    justify-content: flex-start;
+    width: auto;
+    max-width: 100%;
+    gap: 6px;
+    padding: 2px 8px 2px 4px;
     border-radius: var(--radius-xs);
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
-    font-size: 11px;
+    background: transparent;
+    border: 1px solid transparent;
+    font-size: 10px;
     font-family: var(--font-mono);
-    color: var(--text-secondary);
-    transition: all var(--duration) var(--ease);
+    color: var(--text-muted);
+    opacity: 0.55;
+    transition: opacity var(--duration-fast) var(--ease),
+                background var(--duration-fast) var(--ease),
+                border-color var(--duration-fast) var(--ease),
+                color var(--duration-fast) var(--ease);
     cursor: pointer;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.4px;
 }
-.agent-summary-bar:hover {
-    background: var(--bg-hover);
-    border-color: var(--text-muted);
+.agent-summary-bar:hover,
+.agent-summary-bar:focus-visible {
+    opacity: 1;
+    background: var(--bg-tertiary);
+    border-color: var(--border);
+    color: var(--text-secondary);
+}
+/* When activity is currently streaming or has errors, force full
+   opacity — the user genuinely needs to see those states. */
+.agent-activity.active .agent-summary-bar,
+.agent-activity.has-errors .agent-summary-bar,
+.agent-activity.has-policy-alerts .agent-summary-bar {
+    opacity: 1;
+}
+/* Once expanded, the bar is the title for the panel below it — keep
+   it visible at full opacity even on mouse-out so the user has
+   continuous orientation. */
+.agent-activity:has(.flow-expanded) .agent-summary-bar {
+    opacity: 1;
+    background: var(--bg-tertiary);
+    border-color: var(--border);
+    color: var(--text-secondary);
 }
 
 .agent-summary-left {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
 }
 
 .agent-summary-right {
@@ -46,11 +78,12 @@
 }
 
 .agent-summary-text {
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .agent-icon-done { color: var(--text-muted); }
 .agent-icon-error { color: var(--amd-red); }
+.agent-activity.has-policy-alerts .agent-icon-done { color: var(--accent-yellow); }
 
 /* Spinner */
 .agent-spinner-wrap {
@@ -458,6 +491,83 @@
 
 [data-theme="dark"] .flow-error {
     background: rgba(239, 68, 68, 0.06);
+}
+
+/* ── Flow: Policy Alert ─────────────────────────────────────────── */
+.flow-policy-alert {
+    padding: 8px 10px;
+    border-radius: var(--radius-xs);
+    background: rgba(245, 158, 11, 0.06);
+    border: 1px solid rgba(245, 158, 11, 0.22);
+    font-family: var(--font-mono);
+    animation: errorSlideIn 300ms var(--ease);
+}
+
+[data-theme="dark"] .flow-policy-alert {
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(245, 158, 11, 0.28);
+}
+
+.flow-policy-alert-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--accent-yellow);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+}
+
+.flow-policy-alert-title {
+    color: var(--text-primary);
+}
+
+.flow-policy-alert-decision {
+    margin-left: auto;
+    padding: 1px 6px;
+    border-radius: var(--radius-xs);
+    background: rgba(245, 158, 11, 0.14);
+    color: var(--accent-yellow);
+}
+
+.flow-policy-alert-body {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: 7px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.flow-policy-alert-line {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+}
+
+.flow-policy-alert-line span {
+    min-width: 48px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: 0.5px;
+}
+
+.flow-policy-alert-line code {
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.flow-policy-alert-line em {
+    color: var(--accent-yellow);
+    font-style: normal;
+}
+
+.flow-policy-alert-reason {
+    color: var(--text-primary);
+    line-height: 1.5;
+    word-break: break-word;
 }
 
 /* ── Shared detail styles (reused from tool detail) ──────────── */

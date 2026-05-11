@@ -1,0 +1,286 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""
+Tests for ``gaia.agents.email.tools.triage_heuristics``.
+
+The heuristic was lifted (and re-mapped) from PR #916's classifier. The
+critical behaviour that this test pins down:
+
+1. The heuristic operates on Gmail API system label IDs
+   (``CATEGORY_PROMOTIONS``, ``SPAM``, ...), NOT on the human label
+   names that PR #916 originally used (``"Promotions"``, ``"Spam"``,
+   ...).
+2. The heuristic emits #848's four-bucket taxonomy
+   (``urgent / actionable / informational / low priority``), NOT
+   PR #916's five-bucket scheme (``URGENT/NEEDS_RESPONSE/FYI/...``).
+3. Spam/phishing are SEPARATE booleans, not categories.
+4. ``confident=False`` results MUST escalate to the LLM — the heuristic
+   must never silently absorb an ambiguous case.
+
+Without these tests, the lifted heuristic is dead code in production:
+matching against MBOX label names against live Gmail data never fires,
+and every email goes to the LLM regardless of how obvious it is.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from gaia.agents.email.tools.triage_heuristics import (
+    ALL_CATEGORIES,
+    CATEGORY_ACTIONABLE,
+    CATEGORY_INFORMATIONAL,
+    CATEGORY_LOW_PRIORITY,
+    CATEGORY_URGENT,
+    LABEL_CATEGORY_PROMOTIONS,
+    LABEL_CATEGORY_SOCIAL,
+    LABEL_CATEGORY_UPDATES,
+    LABEL_IMPORTANT,
+    LABEL_INBOX,
+    LABEL_SPAM,
+    LABEL_STARRED,
+    classify_category_heuristic,
+    group_by_category,
+)
+
+# ---------------------------------------------------------------------------
+# System-label-ID matching
+# ---------------------------------------------------------------------------
+
+
+class TestSystemLabelIDs:
+    """The heuristic MUST match Gmail API system label IDs, not human names."""
+
+    def test_spam_label_marks_low_priority_and_is_spam(self):
+        result = classify_category_heuristic(
+            subject="Win a free iPhone",
+            sender="winner@scam.example",
+            label_ids=[LABEL_SPAM],
+        )
+        assert result.category == CATEGORY_LOW_PRIORITY
+        assert result.is_spam is True
+        assert result.confident is True
+        assert "SPAM" in result.reason
+
+    def test_promotions_label_marks_low_priority(self):
+        result = classify_category_heuristic(
+            subject="50% off — but heuristic should match the LABEL not the keyword",
+            sender="store@example.com",
+            label_ids=[LABEL_INBOX, LABEL_CATEGORY_PROMOTIONS],
+        )
+        assert result.category == CATEGORY_LOW_PRIORITY
+        assert result.is_spam is False
+        assert result.confident is True
+        assert "CATEGORY_PROMOTIONS" in result.reason
+
+    def test_social_label_marks_low_priority(self):
+        result = classify_category_heuristic(
+            subject="Alice mentioned you in a post",
+            sender="notify@social-network.example",
+            label_ids=[LABEL_INBOX, LABEL_CATEGORY_SOCIAL],
+        )
+        assert result.category == CATEGORY_LOW_PRIORITY
+        assert result.confident is True
+
+    def test_updates_label_marks_informational(self):
+        result = classify_category_heuristic(
+            subject="Your shipment has been delivered",
+            sender="orders@store.example",
+            label_ids=[LABEL_INBOX, LABEL_CATEGORY_UPDATES],
+        )
+        assert result.category == CATEGORY_INFORMATIONAL
+        assert result.confident is True
+        assert "CATEGORY_UPDATES" in result.reason
+
+    def test_human_label_name_does_NOT_match(self):
+        """
+        Pin the regression that broke PR #916's heuristic on live Gmail:
+        ``"Promotions"`` (human name) MUST NOT trigger the
+        ``CATEGORY_PROMOTIONS`` branch. Live Gmail returns the system ID;
+        the human name only appears in MBOX exports.
+        """
+        result = classify_category_heuristic(
+            subject="Your weekly newsletter",
+            sender="news@example.com",
+            label_ids=["Promotions", "INBOX"],  # human name — should NOT fire
+        )
+        # "Your weekly newsletter" matches the "newsletter" keyword in the
+        # promo-keyword fallback, so the result IS low_priority — but the
+        # ``reason`` should reflect the keyword path, not the label path.
+        assert "CATEGORY_PROMOTIONS" not in result.reason
+
+    def test_user_defined_label_does_not_match_heuristic(self):
+        """
+        User-defined labels are opaque ``Label_*`` IDs and cannot be
+        keyword-matched. The heuristic must fall through to the
+        no-match path (confident=False).
+        """
+        result = classify_category_heuristic(
+            subject="Re: project update",
+            sender="colleague@company.example",
+            label_ids=[LABEL_INBOX, "Label_12345"],
+        )
+        assert (
+            result.confident is False
+        ), f"User-defined label triggered confident heuristic: {result!r}"
+
+
+# ---------------------------------------------------------------------------
+# Category taxonomy alignment with #848
+# ---------------------------------------------------------------------------
+
+
+class TestTaxonomy:
+    """Categories MUST be #848's four-bucket scheme."""
+
+    def test_categories_are_exactly_the_four_we_expect(self):
+        assert set(ALL_CATEGORIES) == {
+            "urgent",
+            "actionable",
+            "informational",
+            "low priority",
+        }
+
+    @pytest.mark.parametrize(
+        "label_ids,expected",
+        [
+            ([LABEL_SPAM], CATEGORY_LOW_PRIORITY),
+            ([LABEL_CATEGORY_PROMOTIONS], CATEGORY_LOW_PRIORITY),
+            ([LABEL_CATEGORY_SOCIAL], CATEGORY_LOW_PRIORITY),
+            ([LABEL_CATEGORY_UPDATES], CATEGORY_INFORMATIONAL),
+        ],
+    )
+    def test_emitted_category_is_one_of_the_four(self, label_ids, expected):
+        result = classify_category_heuristic(
+            subject="x", sender="x@example.com", label_ids=label_ids
+        )
+        assert result.category == expected
+        assert result.category in ALL_CATEGORIES
+
+    def test_pr916_category_strings_are_NOT_emitted(self):
+        """``URGENT/NEEDS_RESPONSE/FYI/PROMOTIONAL/PERSONAL`` must never appear."""
+        legacy = {"URGENT", "NEEDS_RESPONSE", "FYI", "PROMOTIONAL", "PERSONAL"}
+        for label in [
+            [LABEL_SPAM],
+            [LABEL_CATEGORY_PROMOTIONS],
+            [LABEL_CATEGORY_UPDATES],
+            [],  # no labels — fallback
+        ]:
+            result = classify_category_heuristic(
+                subject="x", sender="x@example.com", label_ids=label
+            )
+            assert result.category not in legacy
+
+
+# ---------------------------------------------------------------------------
+# Spam / phishing as separate booleans
+# ---------------------------------------------------------------------------
+
+
+class TestSpamPhishingFlags:
+    def test_spam_label_sets_is_spam_flag(self):
+        result = classify_category_heuristic(
+            subject="x", sender="x@example.com", label_ids=[LABEL_SPAM]
+        )
+        assert result.is_spam is True
+
+    def test_phishing_keyword_pair_flags_phishing(self):
+        result = classify_category_heuristic(
+            subject="Verify your account immediately - click here",
+            sender="security@bank.example",
+            label_ids=[LABEL_INBOX],
+        )
+        # No high-confidence category match; phishing flag is informational.
+        assert result.is_phishing is True
+
+    def test_single_word_does_not_flag_phishing(self):
+        # "verify" alone is too common (legit password reset, etc.) to fire.
+        result = classify_category_heuristic(
+            subject="Please verify your new email subscription",
+            sender="newsletter@example.com",
+            label_ids=[LABEL_INBOX],
+        )
+        assert result.is_phishing is False
+
+    def test_spam_and_phishing_can_both_fire(self):
+        result = classify_category_heuristic(
+            subject="Verify your account - click here urgently",
+            sender="x@scam.example",
+            label_ids=[LABEL_SPAM],
+        )
+        assert result.is_spam is True
+        assert result.is_phishing is True
+
+
+# ---------------------------------------------------------------------------
+# Escalation behavior
+# ---------------------------------------------------------------------------
+
+
+class TestEscalation:
+    def test_no_match_returns_not_confident(self):
+        result = classify_category_heuristic(
+            subject="Re: meeting at 3pm",
+            sender="alice@company.example",
+            label_ids=[LABEL_INBOX],
+        )
+        assert result.confident is False
+        assert "no heuristic match" in result.reason
+
+    def test_important_or_starred_escalate_with_actionable_hint(self):
+        result = classify_category_heuristic(
+            subject="Re: budget review",
+            sender="ceo@company.example",
+            label_ids=[LABEL_INBOX, LABEL_IMPORTANT],
+        )
+        assert result.confident is False  # LLM still has the final say
+        assert result.category == CATEGORY_ACTIONABLE
+        assert LABEL_IMPORTANT in result.matched_label_ids
+
+    def test_starred_only_also_escalates(self):
+        result = classify_category_heuristic(
+            subject="Recipe", sender="x@example.com", label_ids=[LABEL_STARRED]
+        )
+        assert result.confident is False
+        assert LABEL_STARRED in result.matched_label_ids
+
+
+# ---------------------------------------------------------------------------
+# group_by_category — bucketed view used by the triage tool's summary
+# ---------------------------------------------------------------------------
+
+
+class TestGroupByCategory:
+    def test_basic_bucketing(self):
+        items = [
+            {"id": "m1", "category": CATEGORY_URGENT},
+            {"id": "m2", "category": CATEGORY_ACTIONABLE},
+            {"id": "m3", "category": CATEGORY_INFORMATIONAL},
+            {"id": "m4", "category": CATEGORY_LOW_PRIORITY},
+            {"id": "m5", "category": CATEGORY_LOW_PRIORITY},
+        ]
+        out = group_by_category(items)
+        assert out["groups"][CATEGORY_URGENT] == ["m1"]
+        assert out["groups"][CATEGORY_ACTIONABLE] == ["m2"]
+        assert out["groups"][CATEGORY_INFORMATIONAL] == ["m3"]
+        assert out["groups"][CATEGORY_LOW_PRIORITY] == ["m4", "m5"]
+        assert out["total"] == 5
+
+    def test_spam_and_phishing_are_separate_lists(self):
+        items = [
+            {"id": "m1", "category": CATEGORY_LOW_PRIORITY, "is_spam": True},
+            {"id": "m2", "category": CATEGORY_INFORMATIONAL, "is_phishing": True},
+            {"id": "m3", "category": CATEGORY_LOW_PRIORITY},
+        ]
+        out = group_by_category(items)
+        assert "m1" in out["spam"]
+        assert "m2" in out["phishing"]
+        # Spam/phishing items still appear in their categories — the
+        # buckets are AND-views, not exclusive.
+        assert "m1" in out["groups"][CATEGORY_LOW_PRIORITY]
+        assert "m2" in out["groups"][CATEGORY_INFORMATIONAL]
+
+    def test_missing_id_skipped(self):
+        items = [{"category": CATEGORY_URGENT}]  # no id
+        out = group_by_category(items)
+        assert out["total"] == 0

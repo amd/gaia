@@ -41,7 +41,6 @@ setup(
         "gaia.apps.summarize",
         "gaia.apps.summarize.templates",
         "gaia.eval",
-        "gaia.eval.fix_code_testbench",
         "gaia.installer",
         "gaia.rag",
         "gaia.mcp",
@@ -73,10 +72,21 @@ setup(
         "gaia.agents.routing",
         "gaia.agents.sd",
         "gaia.agents.summarize",
+        "gaia.governance",
         "gaia.sd",
         "gaia.vlm",
         "gaia.api",
+        "gaia.filesystem",
+        "gaia.scratchpad",
+        "gaia.web",
         "gaia.code_index",
+        "gaia.apps.webui",
+        "gaia.connectors",
+        "gaia.connectors.catalog",
+        "gaia.connectors.providers",
+        "gaia.agents.connectors_demo",
+        "gaia.agents.email",
+        "gaia.agents.email.tools",
     ],
     package_data={
         "gaia.eval": [
@@ -86,6 +96,21 @@ setup(
             "webapp/public/*.html",
             "webapp/public/*.css",
             "webapp/public/*.js",
+        ],
+        # Browser-mode Agent UI bundle. Recursive globs in package_data are
+        # unreliable across setuptools versions, so we list shallow patterns
+        # here and back them up with `recursive-include` in MANIFEST.in. The
+        # CI verifier (util/verify_wheel_dist.py) enforces that the wheel
+        # actually contains these entries before publish.
+        "gaia.apps.webui": [
+            "dist/index.html",
+            "dist/*.svg",
+            "dist/*.png",
+            "dist/*.ico",
+            "dist/*.webmanifest",
+            "dist/*.json",
+            "dist/*.txt",
+            "dist/assets/*",
         ],
     },
     install_requires=[
@@ -97,6 +122,7 @@ setup(
         "aiohttp",
         "rich",
         "requests",
+        "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
     ],
@@ -115,6 +141,25 @@ setup(
             "python-multipart>=0.0.9",
             "httpx>=0.27.0",
             "psutil>=5.9.0",
+            # OAuth connections (issue #915): keyring stores refresh tokens in
+            # the OS credential store (macOS Keychain, Windows DPAPI, Linux
+            # SecretService). Pinned upper bound per supply-chain advisory.
+            "keyring>=24.0.0,<26.0.0",
+            # RAG runtime deps — gaia.ui.server boots faiss + sentence_transformers
+            # eagerly, and gaia.rag.sdk uses pypdf/pymupdf/numpy. See #845.
+            # Version specifiers match the standalone "rag" extra; "ui"
+            # additionally declares safetensors and a torch lower bound.
+            "faiss-cpu>=1.7.0",
+            "numpy>=1.24.0",
+            "pymupdf>=1.24.0",
+            "pypdf",
+            "sentence-transformers",
+            "safetensors",
+            # torch is pinned lower-bound only. The "audio" extra caps
+            # torch<2.4 because torchvision<0.19 / torchaudio require it,
+            # but "ui" ships neither — capping here would force resolver
+            # downgrades for users with torch 2.5+ already installed.
+            "torch>=2.0.0",
         ],
         "audio": [
             "torch>=2.0.0,<2.4",
@@ -128,6 +173,9 @@ setup(
             "mcp>=1.1.0",
             "starlette",
             "uvicorn",
+        ],
+        "telegram": [
+            "python-telegram-bot>=20.3",
         ],
         "dev": [
             "pytest",
@@ -148,6 +196,12 @@ setup(
             "bandit",
             "responses",
             "requests",
+            # gaia.connectors runtime deps surfaced in [dev] so that
+            # `pip install -e ".[dev]"` is sufficient to run the unit suite
+            # without pulling in the much heavier [ui] extra (faiss, torch).
+            "httpx>=0.27.0,<0.29.0",
+            "respx>=0.21.0,<0.23.0",
+            "keyring>=24.0.0,<26.0.0",
         ],
         "eval": [
             "anthropic",

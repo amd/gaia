@@ -1,6 +1,7 @@
 id: bls_employment_dec2025
 name: "BLS Employment Situation December 2025"
 category: real_world
+agent_type: doc
 severity: medium
 description: |
   Agent must retrieve labor market statistics from the BLS December 2025 employment

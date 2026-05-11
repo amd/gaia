@@ -1,0 +1,67 @@
+REGULATION (EU) 2016/679 — GDPR
+ARTICLE 17 — RIGHT TO ERASURE ('RIGHT TO BE FORGOTTEN')
+(Synthetic paraphrase for evaluation purposes)
+
+This document paraphrases Article 17 of the EU General Data Protection
+Regulation, commonly cited as the "Right to Erasure" or "Right to be
+Forgotten." It preserves clause structure for accurate lookup.
+
+ARTICLE 17(1) — GROUNDS FOR ERASURE
+
+The data subject shall have the right to obtain from the controller the
+erasure of personal data concerning him or her without undue delay, and
+the controller shall have the obligation to erase personal data without
+undue delay where one of the following grounds applies:
+
+  (a) The personal data are no longer necessary in relation to the
+      purposes for which they were collected or otherwise processed.
+
+  (b) The data subject withdraws consent on which the processing is based,
+      and there is no other legal ground for the processing.
+
+  (c) The data subject objects to the processing pursuant to Article
+      21(1) and there are no overriding legitimate grounds, or the data
+      subject objects to direct-marketing processing under Article 21(2).
+
+  (d) The personal data have been unlawfully processed.
+
+  (e) The personal data have to be erased for compliance with a legal
+      obligation in Union or Member-State law to which the controller is
+      subject.
+
+  (f) The personal data have been collected in relation to the offer of
+      information-society services referred to in Article 8(1) (services
+      offered to a child).
+
+In total, six grounds for erasure (a through f) are enumerated in
+Article 17(1).
+
+ARTICLE 17(2) — DATA THAT WAS MADE PUBLIC
+
+Where the controller has made the personal data public and is obliged
+under paragraph 1 to erase the personal data, the controller, taking
+account of available technology and the cost of implementation, shall
+take reasonable steps, including technical measures, to inform other
+controllers that are processing the data that the data subject has
+requested the erasure by such controllers of any links to, or copy or
+replication of, those personal data.
+
+ARTICLE 17(3) — EXCEPTIONS
+
+Paragraphs 1 and 2 shall not apply to the extent that processing is
+necessary for, among other reasons: exercising the right of freedom of
+expression and information; compliance with a legal obligation requiring
+processing or carrying out a task in the public interest; reasons of
+public interest in the area of public health; archiving in the public
+interest, scientific or historical research, or statistical purposes; or
+the establishment, exercise, or defense of legal claims.
+
+NOTE ON SCOPE
+
+This document covers Article 17 only. Administrative fines and other
+penalties for infringements of GDPR provisions are addressed separately
+in Article 83 (general conditions for imposing administrative fines) and
+related provisions; financial penalty figures are not specified in
+Article 17 itself.
+
+END OF ARTICLE 17

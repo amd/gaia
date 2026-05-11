@@ -1,6 +1,6 @@
 ---
 title: "Agent Registry"
-description: "How GAIA discovers and instantiates agents from built-in modules and ~/.gaia/agents/ manifests"
+description: "How GAIA discovers and instantiates agents from built-in modules and ~/.gaia/agents/"
 icon: "list"
 ---
 
@@ -11,7 +11,7 @@ icon: "list"
 <Note>
 **Component:** AgentRegistry
 **Module:** `gaia.agents.registry`
-**Import:** `from gaia.agents.registry import AgentRegistry, AgentManifest, AgentRegistration, KNOWN_TOOLS`
+**Import:** `from gaia.agents.registry import AgentRegistry, AgentRegistration, KNOWN_TOOLS`
 </Note>
 
 ---
@@ -23,9 +23,10 @@ is populated at server startup by `AgentRegistry.discover()`, which:
 
 1. Registers **built-in agents** declared in code (today: `chat`, `builder`,
    optionally others).
-2. Scans `~/.gaia/agents/` for **custom agents** — either a YAML
-   `manifest.yaml` file or a Python module exporting a factory — and registers
-   each subdirectory it finds.
+2. Scans `~/.gaia/agents/` for **custom agents**. Each subdirectory must
+   contain an `agent.py` defining a subclass of `Agent`. The registry imports
+   the module via `importlib`, finds the `Agent` subclass with `AGENT_ID` and
+   `AGENT_NAME` class attributes, and registers it.
 
 The result is a keyed dict of `AgentRegistration` objects that the UI router
 (`src/gaia/ui/routers/agents.py`) lists and that `_chat_helpers.py` uses to
@@ -38,40 +39,28 @@ not go through `AgentRegistry`. See [API Server](/sdk/infrastructure/api-server)
 how to wire new agents into the OpenAI surface.
 </Note>
 
+<Warning>
+**Removed in v0.17.5 (#912):** YAML manifest agents (a directory containing
+only `agent.yaml`, no `agent.py`) are no longer loaded. The registry emits a
+`DeprecationWarning` per such directory and skips it. See the
+[Custom Agents guide](/guides/custom-agent#migrating-from-a-yaml-manifest) for
+the migration recipe.
+</Warning>
+
 ---
 
 ## Core types
 
-### `AgentManifest`
-
-Pydantic v2 model used to validate a YAML `manifest.yaml` file under
-`~/.gaia/agents/<agent-id>/`.
-
-```python
-class AgentManifest(BaseModel):
-    manifest_version: int = 1
-    id: str                                       # lowercase/digits/hyphen, ≤ 52 chars
-    name: str
-    description: str = ""
-    instructions: str = ""                        # system prompt for YAML-only agents
-    tools: List[str] = ["rag", "file_search"]     # must be a subset of KNOWN_TOOLS
-    mcp_servers: Dict[str, Dict[str, Any]] = {}
-    models: List[str] = []                        # ordered preference list
-    conversation_starters: List[str] = []
-```
-
-Validators enforce an ID regex (lowercase letters, digits, and hyphens, up to
-52 chars; see `validate_id` in the source for the exact pattern) and check
-every tool in `tools` appears in `KNOWN_TOOLS`.
-
 ### `KNOWN_TOOLS`
 
-Whitelist of tool-mixin keys a manifest may reference. Each maps to a lazily-
-imported `(module, class)` pair:
+Map of tool-mixin keys to a lazily-imported `(module, class)` pair. Consumed
+by [`builder/template.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/builder/template.py)
+when scaffolding a new `agent.py` so users can opt into a mixin by name.
 
 ```python
 KNOWN_TOOLS = {
     "rag":         ("gaia.agents.chat.tools.rag_tools",  "RAGToolsMixin"),
+    "code_index":  ("gaia.agents.code_index.tools.mixin","CodeIndexToolsMixin"),
     "file_search": ("gaia.agents.tools.file_tools",      "FileSearchToolsMixin"),
     "file_io":     ("gaia.agents.code.tools.file_io",    "FileIOToolsMixin"),
     "shell":       ("gaia.agents.chat.tools.shell_tools","ShellToolsMixin"),
@@ -91,7 +80,7 @@ class AgentRegistration:
     id: str
     name: str
     description: str
-    source: str                           # "builtin" | "custom_python" | "custom_manifest"
+    source: Literal["builtin", "custom_python"]
     conversation_starters: List[str]
     factory: Callable[..., Any]           # returns an Agent instance
     agent_dir: Optional[Path]
@@ -122,9 +111,9 @@ Useful methods (see source for the full surface):
 | Method | Purpose |
 |---|---|
 | `discover()` | Scan built-ins and `~/.gaia/agents/`. Idempotent; logs results. |
-| `get(id)` | Return the registration for `id` or raise `KeyError`. |
+| `get(id)` | Return the registration for `id` or `None`. |
 | `list()` | Enumerate registered agents as a list of `AgentRegistration`. |
-| `refresh()` | Re-scan `~/.gaia/agents/` to pick up new YAML manifests at runtime. |
+| `register_from_dir(path)` | Hot-load a single `~/.gaia/agents/<id>/` directory. Used by BuilderAgent so newly-scaffolded agents are immediately available. |
 
 The factory signature is deliberately free-form (`**kwargs`) — the caller
 filters to valid `AgentConfig` fields per agent (see `chat_factory` in the
@@ -137,32 +126,17 @@ source for the common pattern using `dataclasses.fields(...)`).
 ```
 ~/.gaia/agents/
   my-agent/
-    manifest.yaml          # required for YAML-only agents
-    agent.py               # optional — Python factory alternative
+    agent.py               # required — defines the Agent subclass
+    agent.yaml             # optional sidecar — only `models:` is read
+    mcp_servers.json       # optional — MCP server config for MCPClientMixin
     README.md              # optional
 ```
 
-Minimal `manifest.yaml`:
-
-```yaml
-manifest_version: 1
-id: my-agent
-name: My Custom Agent
-description: Example agent for showing how custom registration works.
-instructions: |
-  You are a helpful assistant. Use the available tools when the user asks.
-tools:
-  - rag
-  - file_search
-models:
-  - Qwen3.5-35B-A3B-GGUF
-conversation_starters:
-  - "What can you help me with?"
-```
-
-For Python-based custom agents, `agent.py` must export a `factory(**kwargs)`
-function that returns an `Agent` subclass instance. The registry imports the
-module lazily at discovery time.
+The recommended way to scaffold a new agent is the **Gaia Builder Agent**
+(`gaia chat --ui` → **+** → **Build a Custom Agent**), which writes a
+ready-to-edit `agent.py`. See the [Custom Agents guide](/guides/custom-agent)
+for the full minimal example, the tool-mixin table, and the YAML-manifest
+migration recipe.
 
 ---
 
@@ -172,3 +146,5 @@ module lazily at discovery time.
   registry to resolve chat sessions.
 - [API Server](/sdk/infrastructure/api-server) — the separate OpenAI-style
   model registry used by `gaia api start`.
+- [Custom Agents guide](/guides/custom-agent) — Python agent recipes and
+  the manifest → `agent.py` migration.

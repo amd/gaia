@@ -92,6 +92,19 @@ def _get_lemonade_config() -> tuple:
 # in minimal setups. The UI default lives in ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
+# Minimum context window (in tokens) that GAIA agents assume is loaded. The
+# bundled ChatAgent system prompt alone runs >7000 tokens before any user
+# message; running below this silently truncates prompts and yields empty
+# responses from llama.cpp. Consumed by:
+#   - ``_ensure_model_loaded`` (this module), as the fallback ctx_size when
+#     loading a model that isn't in the ``MODELS`` registry.
+#   - ``gaia.llm.lemonade_manager`` — re-exported as ``DEFAULT_CONTEXT_SIZE``.
+#   - ``gaia.ui.routers.system`` — drives the "context window too small"
+#     banner and the pre-flight load ctx requirement.
+# This is the *single* source of truth; the other module-level names are
+# thin re-exports so there's nothing to keep in sync.
+DEFAULT_CONTEXT_SIZE = 32768
+
 # =========================================================================
 # Request Configuration Defaults
 # =========================================================================
@@ -2427,8 +2440,15 @@ class LemonadeClient:
                     break
 
             if ctx_size is None:
-                self.log.debug(
-                    f"Model '{model}' not in MODELS registry; using server default ctx_size"
+                # Model not in the built-in registry (e.g. a custom or
+                # community model surfaced via an agent's ``models`` list).
+                # Loading with Lemonade's 4096-token default would silently
+                # truncate GAIA's large system prompts and yield empty
+                # responses. Fall back to the GAIA-wide default.
+                ctx_size = DEFAULT_CONTEXT_SIZE
+                self.log.info(
+                    f"Model '{model}' not in MODELS registry; "
+                    f"defaulting to ctx_size={ctx_size} to fit agent prompts"
                 )
 
             self.load_model(model, auto_download=True, prompt=False, ctx_size=ctx_size)

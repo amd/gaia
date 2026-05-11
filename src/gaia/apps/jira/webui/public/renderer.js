@@ -369,24 +369,42 @@ class JaxWebUIRenderer {
 
     // Add user message to chat
     const chatMessages = document.getElementById('chat-messages');
-    chatMessages.innerHTML += `
-      <div class="chat-message user-message">
-        <div class="message-avatar">👤</div>
-        <div class="message-content">${message}</div>
-      </div>
-    `;
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'chat-message user-message';
+    const avatarDiv = document.createElement('div');
+    avatarDiv.className = 'message-avatar';
+    avatarDiv.textContent = '\uD83D\uDC64';
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+    contentDiv.textContent = message;
+    msgDiv.appendChild(avatarDiv);
+    msgDiv.appendChild(contentDiv);
+    chatMessages.appendChild(msgDiv);
 
     chatInput.value = '';
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
+    // Helper to build an AI message bubble via DOM APIs so we never
+    // interpolate untrusted data into innerHTML. Closes the CodeQL
+    // xss-through-dom / xss-through-exception alerts on this file.
+    const appendAiMessage = (bodyText, { idAttr = null, extraClass = '' } = {}) => {
+      const wrap = document.createElement('div');
+      wrap.className = `chat-message ai-message${extraClass ? ' ' + extraClass : ''}`;
+      if (idAttr) wrap.id = idAttr;
+      const avatar = document.createElement('div');
+      avatar.className = 'message-avatar';
+      avatar.textContent = '\uD83E\uDD16';
+      const body = document.createElement('div');
+      body.className = 'message-content';
+      body.textContent = bodyText;
+      wrap.appendChild(avatar);
+      wrap.appendChild(body);
+      chatMessages.appendChild(wrap);
+      return wrap;
+    };
+
     // Show typing indicator
-    const typingIndicator = `
-      <div class="chat-message ai-message typing" id="typing-indicator">
-        <div class="message-avatar">🤖</div>
-        <div class="message-content">Thinking...</div>
-      </div>
-    `;
-    chatMessages.innerHTML += typingIndicator;
+    appendAiMessage('Thinking...', { idAttr: 'typing-indicator', extraClass: 'typing' });
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     try {
@@ -401,25 +419,14 @@ class JaxWebUIRenderer {
 
       // Add AI response
       const aiResponse = response.result?.response || 'I encountered an error processing your request.';
-      chatMessages.innerHTML += `
-        <div class="chat-message ai-message">
-          <div class="message-avatar">🤖</div>
-          <div class="message-content">${aiResponse}</div>
-        </div>
-      `;
-
+      appendAiMessage(aiResponse);
       chatMessages.scrollTop = chatMessages.scrollHeight;
     } catch (error) {
       // Remove typing indicator
       const indicator = document.getElementById('typing-indicator');
       if (indicator) indicator.remove();
 
-      chatMessages.innerHTML += `
-        <div class="chat-message ai-message">
-          <div class="message-avatar">🤖</div>
-          <div class="message-content">Error: ${error.message}</div>
-        </div>
-      `;
+      appendAiMessage(`Error: ${error && error.message ? error.message : String(error)}`);
       chatMessages.scrollTop = chatMessages.scrollHeight;
     }
   }

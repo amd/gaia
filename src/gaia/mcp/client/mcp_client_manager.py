@@ -78,11 +78,11 @@ class MCPClientManager:
             detail = f": {client.last_error}" if client.last_error else ""
             raise RuntimeError(f"Failed to connect to MCP server '{name}'{detail}")
 
-        # Store client
+        # Store client (in-memory only).
+        # Persistence to ~/.gaia/mcp_servers.json goes through the connectors
+        # framework (see gaia.connectors.mcp_server.McpServerHandler.configure)
+        # — this manager is a runtime registry, not a writer (#976).
         self._clients[name] = client
-
-        # Save to config
-        self.config.add_server(name, config)
 
         logger.debug(f"Successfully added MCP server: {name}")
         return client
@@ -104,7 +104,9 @@ class MCPClientManager:
         del self._clients[name]
         self._failed.pop(name, None)
 
-        self.config.remove_server(name)
+        # Removal is in-memory only — persistence (clearing the
+        # mcp_servers.json entry + keyring + grants) goes through
+        # gaia.connectors.mcp_server.McpServerHandler.disconnect (#976).
 
         logger.debug(f"Successfully removed MCP server: {name}")
 
@@ -162,6 +164,19 @@ class MCPClientManager:
 
         self._clients.clear()
         self._failed.clear()
+
+    def reload(self) -> None:
+        """Hot-reload server config without restarting GAIA.
+
+        Disconnects all currently running servers, re-reads
+        ``mcp_servers.json``, and reconnects all enabled servers.
+        Called by ``McpServerHandler`` after ``configure`` / ``disconnect``
+        (plan amendment A5).
+        """
+        logger.debug("MCPClientManager: reloading server config")
+        self.disconnect_all()
+        self.config._load()
+        self.load_from_config()
 
     def load_from_config(self) -> None:
         """Load and connect to all servers from configuration.

@@ -159,7 +159,7 @@ axis run --policy ~/.axis/policies/gaia-mvp.yaml -- \
 
 **Step 3 — Run the demo sequence**
 
-From the GAIA UI, send two chat messages to `ChatAgent`:
+From the Gaia Agent UI, send two chat messages to `ChatAgent`:
 
 1. *"Summarize the README from this directory."* — uses the local RAG/file tool. Expected: works normally. Confirm in the audit log that only `localhost:13305` network activity is recorded.
 
@@ -439,14 +439,14 @@ Phase 2 is load-bearing. It:
 | MCP transport | stdio only (HTTP/SSE stubs raise `ValueError`) |
 | Agent execution | In-process; `Agent.process_query()` runs in FastAPI thread pool |
 | Concurrency | `asyncio.Semaphore(1)` — one chat request at a time (global `_TOOL_REGISTRY` constraint) |
-| Plugin discovery | `~/.gaia/agents/*/agent.py` or `agent.yaml` (Pydantic `AgentManifest`) |
+| Plugin discovery | `~/.gaia/agents/*/agent.py` (Python `Agent` subclasses) |
 
 **Key packages:**
 
 | Package | Role |
 |---|---|
 | `gaia.agents.base` | `Agent` ABC, `@tool` decorator, global `_TOOL_REGISTRY`, `MCPAgent` |
-| `gaia.agents.registry` | `AgentRegistry`, `AgentManifest` (Pydantic v2), dynamic class creation via `type()` |
+| `gaia.agents.registry` | `AgentRegistry`, Python custom agent loader (`importlib`-based) |
 | `gaia.ui.server` | FastAPI app factory, CORS + tunnel auth middleware, SSE streaming |
 | `gaia.ui.sse_handler` | `SSEOutputHandler` — agent console events → typed SSE JSON |
 | `gaia.ui._chat_helpers` | Agent creation, session caching, streaming pipeline |

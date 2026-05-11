@@ -2,56 +2,17 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Link, Bot, ChevronDown, Plus } from 'lucide-react';
+import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
+import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY, selectUnreadCount } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import { getSessionHash } from '../utils/format';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
 import './ChatView.css';
 
-/** Cache for getComputedStyle results — avoids repeated style recalculations
- *  for the same textarea element since its styles rarely change. */
-const _computedStyleCache = new WeakMap<HTMLTextAreaElement, CSSStyleDeclaration>();
-
-/** Returns the pixel {x, y} of the caret inside a textarea, measured from the
- *  textarea's top-left corner (including its padding). Uses a hidden mirror div
- *  with matching styles so the result works for any font and multiline input.
- *  Accounts for scrollTop so the position stays correct when content overflows. */
-function getCaretXY(el: HTMLTextAreaElement): { x: number; y: number } {
-    const sel = el.selectionStart ?? 0;
-    let computed = _computedStyleCache.get(el);
-    if (!computed) {
-        computed = window.getComputedStyle(el);
-        _computedStyleCache.set(el, computed);
-    }
-    const mirror = document.createElement('div');
-    mirror.style.cssText = [
-        'position:absolute', 'visibility:hidden', 'overflow:hidden',
-        'white-space:pre-wrap', 'word-wrap:break-word',
-        'top:-9999px', 'left:-9999px',
-        `box-sizing:${computed.boxSizing}`,
-        `width:${computed.width}`,
-        `padding:${computed.padding}`,
-        `border:${computed.border}`,
-        `font:${computed.font}`,
-        `line-height:${computed.lineHeight}`,
-        `letter-spacing:${computed.letterSpacing}`,
-        `word-spacing:${computed.wordSpacing}`,
-    ].join(';');
-    mirror.appendChild(document.createTextNode(el.value.substring(0, sel)));
-    const marker = document.createElement('span');
-    marker.textContent = '\u200b';
-    mirror.appendChild(marker);
-    document.body.appendChild(mirror);
-    const coords = { x: marker.offsetLeft, y: marker.offsetTop - el.scrollTop };
-    document.body.removeChild(mirror);
-    return coords;
-}
 
 const EMPTY_SUGGESTIONS = [
     'Summarize a document',
@@ -154,9 +115,36 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 detail: event.content, success: false,
                 active: false, timestamp: ts,
             };
+        case 'policy_alert': {
+            const toolName = event.tool || 'unknown tool';
+            const reason =
+                event.reason ||
+                event.message ||
+                event.content ||
+                'Tool execution was blocked by governance policy.';
+            return {
+                id,
+                type: 'policy_alert',
+                label: `Policy blocked ${toolName}`,
+                detail: reason,
+                tool: toolName,
+                decision: event.decision || 'BLOCK',
+                reason,
+                ruleIds: event.rule_ids ?? [],
+                policyVersion: event.policy_version,
+                receiptId: event.receipt_id,
+                success: false,
+                active: false,
+                timestamp: ts,
+            };
+        }
         default:
             return null;
     }
+}
+
+function policyReceiptAnchor(receiptId: string): string {
+    return `policy-receipt-${encodeURIComponent(receiptId)}`;
 }
 
 interface ChatViewProps {
@@ -175,14 +163,17 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         agents, activeAgentId, setActiveAgentId,
     } = useChatStore();
 
-    const { addNotification } = useNotificationStore();
+    const addNotification = useNotificationStore((s) => s.addNotification);
+    const showNotificationPanel = useNotificationStore((s) => s.showPanel);
+    const setNotificationPanelVisible = useNotificationStore((s) => s.setShowPanel);
+    const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
+    const notificationUnreadCount = useNotificationStore(selectUnreadCount);
     const pendingPrompt = useChatStore((s) => s.pendingPrompt);
 
     const session = sessions.find((s) => s.id === sessionId);
     const sessionDocIds = new Set(session?.document_ids ?? []);
     const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useState('');
-    const [caret, setCaret] = useState({ x: 0, y: 0, focused: false });
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -192,6 +183,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
+    const [policyToast, setPolicyToast] = useState<{ tool: string; receiptId?: string } | null>(null);
     // Agent picker dropdown state
     const [agentPickerOpen, setAgentPickerOpen] = useState(false);
     const agentPickerRef = useRef<HTMLDivElement>(null);
@@ -259,16 +251,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
-    const caretRafRef = useRef<number>(0);
-    const updateCaret = useCallback(() => {
-        cancelAnimationFrame(caretRafRef.current);
-        caretRafRef.current = requestAnimationFrame(() => {
-            if (!inputRef.current) return;
-            const { x, y } = getCaretXY(inputRef.current);
-            setCaret(prev => ({ ...prev, x, y }));
-        });
-    }, []);
-    useEffect(() => () => cancelAnimationFrame(caretRafRef.current), []);
+    // Custom-caret tracking removed (was a 10×18 red glowing block that
+    // blinked once per second — too distracting for an always-visible
+    // text input). Native browser caret is plenty.
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
     const toolOccurredRef = useRef(false);
@@ -281,6 +266,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // and eliminating extension-triggered "runtime.lastError" floods.
     const streamBufferRef = useRef('');
     const streamRafRef = useRef<number | null>(null);
+    const policyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     /** Timestamp of the last auto-scroll (used for throttling). */
     const lastScrollRef = useRef(0);
@@ -419,6 +405,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 clearTimeout(scrollTimerRef.current);
                 scrollTimerRef.current = null;
             }
+            if (policyToastTimerRef.current) {
+                clearTimeout(policyToastTimerRef.current);
+                policyToastTimerRef.current = null;
+            }
+            setPolicyToast(null);
             streamBufferRef.current = '';
             // Revoke any attachment blob URLs to prevent memory leaks
             setAttachments(prev => {
@@ -501,7 +492,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         const el = e.target;
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, 200) + 'px';
-        updateCaret();
     };
 
     // Handle clipboard paste (screenshots)
@@ -791,6 +781,40 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     return;
                 }
 
+                if (event.type === 'policy_alert') {
+                    const toolName = event.tool || 'unknown tool';
+                    const reason =
+                        event.reason ||
+                        event.message ||
+                        event.content ||
+                        'Tool execution was blocked by governance policy.';
+                    const notification: GaiaNotification = {
+                        id: event.receipt_id ?? `policy-${Date.now()}-${stepIdRef.current + 1}`,
+                        type: 'policy_alert',
+                        agentId: sessionId,
+                        agentName: 'GAIA',
+                        title: `Blocked: ${toolName} is restricted by policy.`,
+                        message: reason,
+                        timestamp: Date.now(),
+                        read: false,
+                        dismissed: false,
+                        priority: 'critical',
+                        tool: toolName,
+                        decision: event.decision || 'BLOCK',
+                        reason,
+                        ruleIds: event.rule_ids ?? [],
+                        policyVersion: event.policy_version,
+                        receiptId: event.receipt_id,
+                    };
+                    addNotification(notification);
+                    const step = agentEventToStep(event, stepIdRef);
+                    if (step) addAgentStep(step);
+                    setPolicyToast({ tool: toolName, receiptId: event.receipt_id });
+                    if (policyToastTimerRef.current) clearTimeout(policyToastTimerRef.current);
+                    policyToastTimerRef.current = setTimeout(() => setPolicyToast(null), 5200);
+                    return;
+                }
+
                 // Tool completion updates the last TOOL step (not just the last step,
                 // since thinking/status events may have been interleaved during execution)
                 if (event.type === 'tool_end') {
@@ -933,7 +957,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     ...s, active: false,
                 }));
 
-                if (content) {
+                const hasPolicyAlert = stepsSnapshot.some((s) => s.type === 'policy_alert');
+                if (content || hasPolicyAlert) {
                     // Update msg count ref so poll doesn't re-fetch what we just added
                     lastMsgCountRef.current = useChatStore.getState().messages.length + 1;
                     const assistantMsg: Message = {
@@ -965,11 +990,13 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     api.getMessages(sessionId)
                         .then((data) => {
                             if (useChatStore.getState().currentSessionId !== sessionId) return;
-                            const msgs = (data.messages || []).map((m: any) => ({
-                                ...m,
-                                agentSteps: m.agentSteps || m.agent_steps || undefined,
-                                stats: m.stats || m.inference_stats || undefined,
-                            }));
+                            const msgs: Message[] = (data.messages || []).map((m: any) => {
+                                return {
+                                    ...m,
+                                    agentSteps: m.agentSteps || m.agent_steps || undefined,
+                                    stats: m.stats || m.inference_stats || undefined,
+                                };
+                            });
                             setMessages(msgs);
                             lastMsgCountRef.current = msgs.length;
                         })
@@ -1043,10 +1070,22 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }, undefined, undefined, activeAgentId);
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId, addNotification]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
+
+    // Allow card components (e.g. EmailPreScanCard) to dispatch a chat message
+    // by emitting a gaia:send-message CustomEvent on window. The ref is used so
+    // this effect never needs to re-run when sendMessage changes identity.
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const text = (e as CustomEvent<{ text: string }>).detail?.text;
+            if (text) sendMessageRef.current(text);
+        };
+        window.addEventListener('gaia:send-message', handler);
+        return () => window.removeEventListener('gaia:send-message', handler);
+    }, []);
 
     // Refocus input when streaming ends (textarea is disabled during streaming,
     // which causes the browser to drop focus — restore it so the user can
@@ -1114,21 +1153,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             sendMessage();
         }
     };
-
-    // Session hash link copy
-    const [hashCopied, setHashCopied] = useState(false);
-    const handleCopyHash = useCallback((e: React.MouseEvent) => {
-        e.preventDefault();
-        const hash = getSessionHash(sessionId);
-        const url = `${window.location.origin}${window.location.pathname}#${hash}`;
-        navigator.clipboard.writeText(url).then(() => {
-            log.ui.info(`Copied session link: ${url}`);
-            setHashCopied(true);
-            setTimeout(() => setHashCopied(false), 1500);
-        }).catch(() => {
-            log.ui.warn('Clipboard write failed');
-        });
-    }, [sessionId]);
 
     // Title editing
     const startEditTitle = () => {
@@ -1274,17 +1298,26 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     )}
                 </div>
                 <div className="chat-header-right">
-                    <a
-                        className={`session-hash-badge ${hashCopied ? 'copied' : ''}`}
-                        href={`#${getSessionHash(sessionId)}`}
-                        onClick={handleCopyHash}
-                        title={hashCopied ? 'Copied!' : `Copy session link #${getSessionHash(sessionId)}`}
-                        aria-label={`Copy link for session ${getSessionHash(sessionId)}`}
+                    <span
+                        className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
+                        title={
+                            systemStatus?.model_loaded && systemStatus?.model_context_size
+                                ? `${systemStatus.model_loaded} · context window: ${systemStatus.model_context_size.toLocaleString()} tokens`
+                                : (systemStatus?.model_loaded || 'No model loaded')
+                        }
                     >
-                        <Link size={10} />
-                        <span>#{getSessionHash(sessionId)}</span>
-                    </a>
-                    <span className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}>{systemStatus?.model_loaded || 'No model loaded'}</span>
+                        {systemStatus?.model_loaded || 'No model loaded'}
+                        {systemStatus?.model_loaded && systemStatus?.model_context_size != null && (
+                            <span className="model-ctx-size">
+                                {/* Pretty-print the context window: 32768 → "32K", 8192 → "8K", etc.
+                                    Falls back to a localized integer for odd sizes. */}
+                                {' · '}
+                                {systemStatus.model_context_size % 1024 === 0
+                                    ? `${systemStatus.model_context_size / 1024}K`
+                                    : systemStatus.model_context_size.toLocaleString()}
+                            </span>
+                        )}
+                    </span>
                     <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Documents" aria-label="Attach documents">
                         <Paperclip size={15} />
                     </button>
@@ -1293,6 +1326,20 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     </button>
                     <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export chat">
                         <Download size={15} />
+                    </button>
+                    <button
+                        className={`notification-center-trigger ${notificationUnreadCount > 0 ? 'has-unread' : ''}`}
+                        onClick={() => setNotificationPanelVisible(!showNotificationPanel)}
+                        aria-label="Open notification center"
+                        aria-expanded={showNotificationPanel}
+                        title="Notifications"
+                    >
+                        <Bell size={15} />
+                        {notificationUnreadCount > 0 && (
+                            <span className="notification-center-trigger-badge">
+                                {notificationUnreadCount > 99 ? '99+' : notificationUnreadCount}
+                            </span>
+                        )}
                     </button>
                 </div>
             </header>
@@ -1408,9 +1455,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 {messages.map((msg, idx) => {
                     // Show a solid terminal cursor on the last assistant message
                     // (only when not actively streaming — the streaming bubble has its own cursor)
-                    const isLastAssistant = !isStreaming && !streamEnding
-                        && msg.role === 'assistant'
-                        && messages.slice(idx + 1).every((m) => m.role !== 'assistant');
+                    const isLastAssistant = false; // cursor only during streaming, not on completed messages
                     // During stream-ending, skip rendering the just-completed
                     // assistant message entirely — the streaming bubble shows it.
                     // This prevents the flash/jump when transitioning.
@@ -1474,6 +1519,33 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 </div>
             )}
 
+            {policyToast && (
+                <div className="toast policy-alert-toast" role="alert">
+                    <span>Blocked: {policyToast.tool} is restricted by policy.</span>
+                    {policyToast.receiptId ? (
+                        <button
+                            type="button"
+                            className="policy-alert-toast-link"
+                            onClick={() => {
+                                const receiptId = policyToast.receiptId;
+                                if (!receiptId) return;
+                                setNotificationTypeFilter('policy_alert');
+                                setNotificationPanelVisible(true);
+                                window.setTimeout(() => {
+                                    document
+                                        .getElementById(policyReceiptAnchor(receiptId))
+                                        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }, 80);
+                            }}
+                        >
+                            View receipt
+                        </button>
+                    ) : (
+                        <span className="policy-alert-toast-missing">Receipt unavailable</span>
+                    )}
+                </div>
+            )}
+
             {/* Input */}
             <div className="input-area">
                 <div
@@ -1518,22 +1590,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
                             onPaste={handlePaste}
-                            onSelect={updateCaret}
-                            onFocus={() => { setCaret(prev => ({ ...prev, focused: true })); updateCaret(); }}
-                            onBlur={() => setCaret(prev => ({ ...prev, focused: false }))}
                             placeholder="Type a message or paste an image... (Shift+Enter for new line)"
                             rows={1}
                             disabled={isStreaming || systemStatus?.init_state === 'initializing'}
                             aria-label="Message input"
-                            style={{ caretColor: 'transparent' }}
                         />
-                        {!isStreaming && caret.focused && (
-                            <span
-                                className="input-cursor"
-                                style={{ left: `${caret.x}px`, top: `${caret.y}px` }}
-                                aria-hidden="true"
-                            />
-                        )}
                     </div>
                     <div className="input-btns">
                         <button className="btn-icon-sm" onClick={() => setShowDocLibrary(true)} title="Upload document" aria-label="Upload document">

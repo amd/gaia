@@ -24,6 +24,7 @@ import {
     Copy,
     Check,
     File,
+    ShieldAlert,
     type LucideIcon,
 } from 'lucide-react';
 import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
@@ -155,6 +156,8 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     }, [steps]);
 
     const toolSteps = displaySteps.filter((s) => s.type === 'tool');
+    const policySteps = displaySteps.filter((s) => s.type === 'policy_alert');
+    const hasPolicyAlerts = policySteps.length > 0;
 
     // ── Filter state (for MCP tool visualization) ───────────────────
     const [toolNameFilter, setToolNameFilter] = useState('');
@@ -175,6 +178,10 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
 
     const errorSteps = displaySteps.filter((s) => s.type === 'error');
     const hasErrors = errorSteps.length > 0;
+
+    useEffect(() => {
+        if (hasPolicyAlerts) setExpanded(true);
+    }, [hasPolicyAlerts]);
 
     // Auto-expand native tools for visibility. MCP tools start collapsed
     // by default (users expand on demand) to reduce noise in busy sessions.
@@ -213,11 +220,13 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     // Build summary — always use stable step count so the bar doesn't
     // visually change when transitioning from thinking to answer streaming.
     const stepCount = displaySteps.length;
-    const summaryText = `${stepCount} step${stepCount !== 1 ? 's' : ''}`
-        + (toolSteps.length > 0 ? ` \u00b7 ${toolSteps.length} tool${toolSteps.length !== 1 ? 's' : ''}` : '');
+    const summaryText = hasPolicyAlerts
+        ? `Blocked by policy \u00b7 ${policySteps.length} alert${policySteps.length !== 1 ? 's' : ''}`
+        : `${stepCount} step${stepCount !== 1 ? 's' : ''}`
+            + (toolSteps.length > 0 ? ` \u00b7 ${toolSteps.length} tool${toolSteps.length !== 1 ? 's' : ''}` : '');
 
     return (
-        <div className={`agent-activity ${variant} ${isActive ? 'active' : 'done'} ${hasErrors ? 'has-errors' : ''}`}>
+        <div className={`agent-activity ${variant} ${isActive ? 'active' : 'done'} ${hasErrors ? 'has-errors' : ''} ${hasPolicyAlerts ? 'has-policy-alerts' : ''}`}>
             {/* Summary bar */}
             <button
                 className="agent-summary-bar"
@@ -289,6 +298,9 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                             }
                             if (step.type === 'error') {
                                 return <FlowError key={step.id} step={step} />;
+                            }
+                            if (step.type === 'policy_alert') {
+                                return <FlowPolicyAlert key={step.id} step={step} />;
                             }
                             return null;
                         })}
@@ -549,6 +561,41 @@ function FlowError({ step }: { step: AgentStep }) {
         <div className="flow-error">
             <AlertCircle size={13} />
             <span>{step.detail || step.label || 'An error occurred'}</span>
+        </div>
+    );
+}
+
+function FlowPolicyAlert({ step }: { step: AgentStep }) {
+    return (
+        <div className="flow-policy-alert">
+            <div className="flow-policy-alert-header">
+                <ShieldAlert size={14} />
+                <span className="flow-policy-alert-title">Policy Shield</span>
+                <span className="flow-policy-alert-decision">{step.decision || 'BLOCK'}</span>
+            </div>
+            <div className="flow-policy-alert-body">
+                <div className="flow-policy-alert-line">
+                    <span>Tool</span>
+                    <code>{step.tool || 'unknown tool'}</code>
+                </div>
+                <div className="flow-policy-alert-reason">{step.reason || step.detail}</div>
+                {step.ruleIds && step.ruleIds.length > 0 && (
+                    <div className="flow-policy-alert-line">
+                        <span>Rules</span>
+                        <code>{step.ruleIds.join(', ')}</code>
+                    </div>
+                )}
+                {step.policyVersion && (
+                    <div className="flow-policy-alert-line">
+                        <span>Policy</span>
+                        <code>{step.policyVersion}</code>
+                    </div>
+                )}
+                <div className="flow-policy-alert-line">
+                    <span>Receipt</span>
+                    {step.receiptId ? <code>{step.receiptId}</code> : <em>Receipt unavailable</em>}
+                </div>
+            </div>
         </div>
     );
 }

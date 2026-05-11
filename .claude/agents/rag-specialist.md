@@ -82,7 +82,7 @@ class MyAgent(RAGToolsMixin, Agent):   # Agent last in MRO
         # ... additional tools
 ```
 
-YAML-manifest agents just list `tools: [rag, file_search]` — the registry wires it up via `KNOWN_TOOLS`.
+Agents compose `RAGToolsMixin` directly in the class declaration; resolve it dynamically via `KNOWN_TOOLS["rag"]` (see [`src/gaia/agents/registry.py`](../../src/gaia/agents/registry.py)) when scaffolding.
 
 ## Chunking choices (trade-offs)
 

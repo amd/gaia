@@ -4,6 +4,8 @@
 Generic Agent class for building domain-specific agents.
 """
 
+from __future__ import annotations
+
 # Standard library imports
 import abc
 import ast
@@ -15,7 +17,7 @@ import os
 import re
 import subprocess
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
@@ -23,6 +25,9 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
+
+if TYPE_CHECKING:
+    from gaia.connectors.providers.base import ConnectorRequirement
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -45,6 +50,17 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "write_markdown_file",
     "replace_function",
     "update_gaia_md",
+    # Email Triage Agent (#962) — destructive / external. The
+    # confirmation payload surfaces the literal recipient/subject/body
+    # so the user sees what will actually happen, not an LLM paraphrase
+    # (Phase I2 / S2.M1).
+    "send_draft",
+    "send_now",
+    "forward_message",
+    "permanent_delete",
+    "accept_invite",
+    "decline_invite",
+    "create_event_from_email",
 }
 
 
@@ -70,12 +86,24 @@ class Agent(abc.ABC):
         silent_mode: Suppress all console output for JSON-only usage
     """
 
+    # Per-instance tool snapshot.  ``None`` → fall back to global
+    # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
+    _instance_tools: Optional[Dict[str, Any]] = None
+
     # Define state constants
     STATE_PLANNING = "PLANNING"
     STATE_EXECUTING_PLAN = "EXECUTING_PLAN"
     STATE_DIRECT_EXECUTION = "DIRECT_EXECUTION"
     STATE_ERROR_RECOVERY = "ERROR_RECOVERY"
     STATE_COMPLETION = "COMPLETION"
+
+    # T-X2 (issue #915): declarative external-OAuth scope requirement.
+    # Subclasses override this to declare which provider+scopes their tool
+    # bodies need. The registry surfaces these to AgentUI's consent dialog and
+    # the CLI ``gaia connectors grants`` command, and the runtime gates each
+    # ``get_access_token`` call on a per-agent grant for these scopes.
+    # Empty list = no external connections required (the default for built-ins).
+    REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = []
 
     # Response format templates — agents select via response_mode attribute.
     # "planning" (default): JSON-only responses with thought/goal/plan/tool structure.
@@ -248,8 +276,8 @@ Do NOT wrap conversational replies in JSON.
         # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
         # Note: Context size is configured when starting Lemonade server, not here
-        # Use Qwen3.5-35B by default for better reasoning and JSON formatting
-        # The 0.5B model is too small for complex agent tasks
+        # Use the configured default model (Gemma) when no explicit model_id
+        # is provided. The 0.5B model is too small for complex agent tasks.
         chat_config = AgentConfig(
             model=model_id or "Qwen3.5-35B-A3B-GGUF",
             use_claude=use_claude,
@@ -258,7 +286,12 @@ Do NOT wrap conversational replies in JSON.
             base_url=base_url,
             show_stats=True,  # Always collect stats for token tracking
             max_history_length=20,  # Keep more history for agent conversations
-            max_tokens=4096,  # Increased for complex code generation
+            # Output token cap. With our 32K ctx_size and a ~7.7K-token system
+            # prompt + history, leaving 8K for output gives plenty of headroom
+            # for both prose answers and long tool-call arg blobs (the eval
+            # surfaced 4K cutting off mid-tool-call on Qwen 4B). Going much
+            # higher would steal from the input-history budget.
+            max_tokens=8192,
         )
         self.chat = AgentSDK(chat_config)
         self.model_id = model_id
@@ -421,11 +454,32 @@ Do NOT wrap conversational replies in JSON.
         """
         raise NotImplementedError("Subclasses must implement _register_tools")
 
+    @property
+    def _tools_registry(self) -> Dict[str, Any]:
+        """Return this agent's effective tool registry.
+
+        Uses the per-instance snapshot if ``_snapshot_tools()`` was called,
+        otherwise falls back to the global ``_TOOL_REGISTRY`` for backward
+        compatibility with agents that predate the snapshot mechanism.
+        """
+        if self._instance_tools is not None:
+            return self._instance_tools
+        return _TOOL_REGISTRY
+
+    def _snapshot_tools(self) -> None:
+        """Freeze the current ``_TOOL_REGISTRY`` state into this instance.
+
+        After this call, tool lookup, prompt formatting, and execution all
+        use the snapshot.  Mutations on this instance's ``_instance_tools``
+        will not affect other agents or the global dict.
+        """
+        self._instance_tools = dict(_TOOL_REGISTRY)
+
     def _format_tools_for_prompt(self) -> str:
         """Format the registered tools into a string for the prompt."""
         tool_descriptions = []
 
-        for name, tool_info in _TOOL_REGISTRY.items():
+        for name, tool_info in self._tools_registry.items():
             params_str = ", ".join(
                 [
                     f"{param_name}{'' if param_info['required'] else '?'}: {param_info['type']}"
@@ -519,11 +573,11 @@ Do NOT wrap conversational replies in JSON.
 
     def get_tools_info(self) -> Dict[str, Any]:
         """Get information about all registered tools."""
-        return _TOOL_REGISTRY
+        return self._tools_registry
 
     def get_tools(self) -> List[Dict[str, Any]]:
         """Get a list of registered tools for the agent."""
-        return list(_TOOL_REGISTRY.values())
+        return list(self._tools_registry.values())
 
     def _extract_embedded_tool_call(self, response: str) -> Optional[Dict[str, Any]]:
         """
@@ -885,7 +939,7 @@ Do NOT wrap conversational replies in JSON.
         return json_response
 
     def _build_openai_tool_schemas(self) -> list:
-        """Build OpenAI-format function-calling schemas from _TOOL_REGISTRY."""
+        """Build OpenAI-format function-calling schemas from the tool registry."""
 
         def _python_to_json_type(py_type: str) -> str:
             return {
@@ -898,7 +952,7 @@ Do NOT wrap conversational replies in JSON.
             }.get(py_type.lower().strip(), "string")
 
         schemas = []
-        for name, tool_info in _TOOL_REGISTRY.items():
+        for name, tool_info in self._tools_registry.items():
             properties = {}
             required = []
             for param_name, param_info in tool_info["parameters"].items():
@@ -936,6 +990,22 @@ Do NOT wrap conversational replies in JSON.
         - Plain JSON string `{"thought": ..., "tool": ..., "tool_args": ...}` — embedded format
         - Plain text — conversational answer
 
+        Native tool_calls return shape (issue #944):
+            {
+                "thought": "", "goal": "",
+                "tool_calls": [
+                    {"id": str, "name": str, "tool_args": dict},
+                    ...  # 1 or more — N>1 is the "parallel tool calls" case
+                ],
+                "content": str | None,  # assistant text emitted alongside calls
+                # Backwards-compat: when N==1 the legacy single-call fields
+                # ("tool", "tool_args") are also populated so older consumers
+                # keep working unchanged. Newer code paths SHOULD prefer
+                # ``tool_calls`` since it's the only field set when N>1.
+                "tool": <name when N==1>,
+                "tool_args": <args when N==1>,
+            }
+
         Args:
             response: Raw string from LLM (or sentinel-encoded tool_calls)
 
@@ -953,35 +1023,87 @@ Do NOT wrap conversational replies in JSON.
                 raise ValueError(
                     f"Malformed native tool_calls envelope: {exc}"
                 ) from exc
-            tool_calls = envelope["__tool_calls__"]
+            raw_tool_calls = envelope["__tool_calls__"]
             finish_reason = envelope.get("finish_reason", "")
             if finish_reason == "length":
+                # ``finish_reason="length"`` from the OpenAI completions API
+                # signals the model hit the **max_tokens output cap**, NOT the
+                # context window — those are separate limits and conflating
+                # them led to misleading error messages telling users to
+                # raise ``--ctx-size`` when their ctx was already 32K. The
+                # actual fix is bumping the output budget in
+                # ``AgentConfig.max_tokens`` (or, for one-off long tool calls,
+                # asking the model to pick a single value rather than
+                # concatenating).
                 raise ValueError(
                     f"Tool call truncated mid-arguments (finish_reason=length). "
-                    f"Increase --ctx-size for model {self.model_id}."
+                    f"Model {self.model_id} ran out of output tokens before "
+                    f"finishing the call — increase AgentConfig.max_tokens."
                 )
-            if len(tool_calls) > 1:
-                raise NotImplementedError(
-                    "Parallel tool calls (multiple tool_calls in one response) are not yet supported. "
-                    f"Received {len(tool_calls)} tool calls."
+            if not raw_tool_calls:
+                raise ValueError(
+                    "Native tool_calls envelope contained an empty tool_calls list."
                 )
-            tc = tool_calls[0]
-            name = tc["function"]["name"]
-            arguments_str = tc["function"].get("arguments") or ""
-            if arguments_str:
-                try:
-                    tool_args = json.loads(arguments_str)
-                except json.JSONDecodeError as exc:
+            # Normalise every entry. Tool-calling-trained models routinely
+            # emit multiple tool_calls per response when a user utterance
+            # contains multiple distinct intents (issue #944). Each call gets
+            # parsed independently so a single bad-arguments entry only
+            # poisons that one call's parse, not the others.
+            normalised: list[Dict[str, Any]] = []
+            for idx, tc in enumerate(raw_tool_calls):
+                name = tc["function"]["name"]
+                arguments_raw = tc["function"].get("arguments")
+                # ``arguments`` is canonically a JSON string per OpenAI spec,
+                # but llama.cpp 4B-class models occasionally emit it
+                # pre-parsed as a dict. Accept both shapes — only call
+                # ``json.loads`` when it's actually a string.
+                if arguments_raw is None or arguments_raw == "":
+                    tool_args: Dict[str, Any] = {}
+                elif isinstance(arguments_raw, dict):
+                    tool_args = arguments_raw
+                elif isinstance(arguments_raw, (str, bytes, bytearray)):
+                    try:
+                        tool_args = json.loads(arguments_raw)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            f"Malformed tool_call arguments for '{name}': {exc}. "
+                            f"Raw arguments: {str(arguments_raw)[:200]}"
+                        ) from exc
+                else:
+                    # Unexpected shape (list / int / None-ish) — treat as
+                    # malformed so the recovery layer in process_query nudges
+                    # the model to retry with valid arguments.
                     raise ValueError(
-                        f"Malformed tool_call arguments for '{name}': {exc}. "
-                        f"Raw arguments: {arguments_str[:200]}"
-                    ) from exc
-            else:
-                tool_args = {}
+                        f"Malformed tool_call arguments for '{name}': expected "
+                        f"str or dict, got {type(arguments_raw).__name__}"
+                    )
+                # Use the model-supplied id when present so tool result
+                # messages can be correlated back to their originating call;
+                # synthesise one when absent (some llama.cpp builds omit it).
+                tc_id = tc.get("id") or f"call_{idx}_{uuid.uuid4().hex[:8]}"
+                normalised.append({"id": tc_id, "name": name, "tool_args": tool_args})
+            content = envelope.get("content")
             logger.debug(
-                "[PARSE] tool_call_path=native model_id=%s tool=%s", self.model_id, name
+                "[PARSE] tool_call_path=native model_id=%s n_calls=%d tools=%s",
+                self.model_id,
+                len(normalised),
+                [tc["name"] for tc in normalised],
             )
-            return {"thought": "", "goal": "", "tool": name, "tool_args": tool_args}
+            parsed: Dict[str, Any] = {
+                "thought": "",
+                "goal": "",
+                "tool_calls": normalised,
+                "content": content,
+            }
+            # Backwards-compat: populate the legacy single-call fields when
+            # there's exactly one call so existing consumers (and the
+            # embedded-JSON code path in process_query) keep working without
+            # change. The legacy fields are intentionally absent for N>1 to
+            # force callers into the fan-out path.
+            if len(normalised) == 1:
+                parsed["tool"] = normalised[0]["name"]
+                parsed["tool_args"] = normalised[0]["tool_args"]
+            return parsed
 
         # Check for empty responses
         if not response or not response.strip():
@@ -1270,11 +1392,12 @@ Do NOT wrap conversational replies in JSON.
         """
         lower = tool_name.lower()
         suffix = f"_{lower}"
-        matches = [n for n in _TOOL_REGISTRY if n.lower().endswith(suffix)]
+        registry = self._tools_registry
+        matches = [n for n in registry if n.lower().endswith(suffix)]
         if len(matches) == 1:
             return matches[0]
         # Also try exact case-insensitive match
-        matches = [n for n in _TOOL_REGISTRY if n.lower() == lower]
+        matches = [n for n in registry if n.lower() == lower]
         if len(matches) == 1:
             return matches[0]
         return None
@@ -1303,7 +1426,7 @@ Do NOT wrap conversational replies in JSON.
         if not tool_name:
             return {"status": "error", "error": "No tool name provided"}
 
-        if tool_name not in _TOOL_REGISTRY:
+        if tool_name not in self._tools_registry:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
             # when registry has "mcp_time_get_current_time"). Local LLMs often
             # strip the mcp_<server>_ prefix.
@@ -1325,7 +1448,7 @@ Do NOT wrap conversational replies in JSON.
                     "error": f"Tool '{tool_name}' was denied by the user.",
                 }
 
-        tool = _TOOL_REGISTRY[tool_name]["function"]
+        tool = self._tools_registry[tool_name]["function"]
         sig = inspect.signature(tool)
 
         # Get required parameters (those without defaults)
@@ -1511,9 +1634,118 @@ Do NOT wrap conversational replies in JSON.
         conversation.append(tool_entry)
         return truncated_result
 
-    def _create_tool_message(self, tool_name: str, tool_output: Any) -> Dict[str, Any]:
+    def _is_loaded_ctx_too_small(self) -> bool:
+        """Probe Lemonade's health endpoint to see whether the active LLM is
+        loaded with a context size smaller than GAIA's expected 32K.
+
+        Used when a context-overflow error fires but ``str(exception)`` no
+        longer carries the raw ``n_ctx`` value (typical when AgentSDK
+        re-raises with the typed exception's friendly user_message).
+        Returns False on any probe failure so the caller falls through to
+        the safe in-loop trim path rather than crashing.
+        """
+        try:
+            import httpx
+
+            from gaia.llm.lemonade_manager import LemonadeManager
+
+            base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+            # ``api/v0/health`` exposes ``all_models_loaded`` with ctx_size.
+            # The base_url already ends in /api/v1; strip the v1 suffix to
+            # reach the v0 health endpoint.
+            health_url = base_url.replace("/api/v1", "/api/v0/health")
+            resp = httpx.get(health_url, timeout=3.0)
+            if resp.status_code != 200:
+                return False
+            data = resp.json()
+            for m in data.get("all_models_loaded", []):
+                if m.get("type") in ("llm", "vlm"):
+                    ctx = m.get("recipe_options", {}).get("ctx_size") or 0
+                    if 0 < ctx < 32768:
+                        return True
+            return False
+        except Exception:  # pylint: disable=broad-except
+            return False
+
+    def _shrink_messages_for_overflow(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Aggressively shrink the messages array after a context-overflow.
+
+        Strategy: keep the original user query, keep recent assistant tool_calls
+        and the LATEST tool result intact, but replace older tool-result
+        contents with a short stub. This preserves the structural shape of
+        the conversation (so the model can still reason about what tools have
+        been called) while dropping the bulk of the bytes.
+
+        Used by ``process_query``'s LLM-call retry loop when the model
+        reports ``exceed_context_size``. Returns a new list — the caller
+        must rebind ``messages``.
+        """
+        if not messages:
+            return messages
+        first = messages[0]  # user query
+        rest = messages[1:]
+        # Find indices of tool-result entries
+        tool_indices = [i for i, m in enumerate(rest) if m.get("role") == "tool"]
+        keep_intact = set(tool_indices[-1:]) if tool_indices else set()
+        shrunk_rest: List[Dict[str, Any]] = []
+        for i, m in enumerate(rest):
+            if m.get("role") == "tool" and i not in keep_intact:
+                # Replace bulky tool result with a stub — the model only
+                # needs to know SOMETHING was returned at this point.
+                shrunk_rest.append(
+                    {
+                        "role": "tool",
+                        "name": m.get("name", "unknown"),
+                        "tool_call_id": m.get("tool_call_id", "stub"),
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "[tool result omitted — context "
+                                    "overflow recovery; see latest result]"
+                                ),
+                            }
+                        ],
+                    }
+                )
+            elif (
+                m.get("role") == "assistant"
+                and isinstance(m.get("content"), str)
+                and len(m.get("content", "")) > 800
+            ):
+                # Truncate verbose assistant chain-of-thought too.
+                shrunk_rest.append(
+                    {
+                        "role": "assistant",
+                        "content": m["content"][:800] + "... (truncated)",
+                    }
+                )
+            else:
+                shrunk_rest.append(m)
+        return [first] + shrunk_rest
+
+    def _create_tool_message(
+        self,
+        tool_name: str,
+        tool_output: Any,
+        tool_call_id: str | None = None,
+    ) -> Dict[str, Any]:
         """
         Build a message structure representing a tool output for downstream LLM calls.
+
+        Args:
+            tool_name: The name of the tool that produced the output.
+            tool_output: The raw tool output (str / dict / list / etc).
+            tool_call_id: Optional id from the originating ``tool_calls`` array.
+                When provided, the tool message references the model's
+                actual call id so OpenAI-spec consumers can correlate
+                results to calls — this matters for parallel tool_calls
+                (issue #944) where multiple results need to be matched to
+                multiple calls in the prior assistant turn. When omitted,
+                a fresh uuid is synthesised for backward compatibility
+                with embedded-JSON paths that don't carry an id.
         """
         if isinstance(tool_output, str):
             text_content = tool_output
@@ -1528,8 +1760,48 @@ Do NOT wrap conversational replies in JSON.
         return {
             "role": "tool",
             "name": tool_name,
-            "tool_call_id": uuid.uuid4().hex,
+            "tool_call_id": tool_call_id or uuid.uuid4().hex,
             "content": [{"type": "text", "text": text_content}],
+        }
+
+    def _build_assistant_message(
+        self, raw_response: str, parsed: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Construct the assistant message to append to the LLM context.
+
+        For native ``tool_calls`` responses (issue #944) we MUST emit a
+        proper OpenAI-shape assistant turn — ``content`` (string or
+        null) plus ``tool_calls`` carrying the original ids — so that
+        the subsequent ``role=tool`` messages can correlate by
+        ``tool_call_id``. Stuffing the raw ``{"__tool_calls__": ...}``
+        sentinel envelope into ``content`` (the pre-fix behaviour) is
+        rejected by spec-strict providers and breaks parallel-call
+        result-to-call matching.
+
+        For embedded-JSON / plain-text responses we keep passing the raw
+        response text through unchanged.
+        """
+        tc_list = parsed.get("tool_calls")
+        if not tc_list:
+            return {"role": "assistant", "content": raw_response}
+        return {
+            "role": "assistant",
+            "content": parsed.get("content"),
+            "tool_calls": [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(
+                            tc["tool_args"],
+                            default=self._json_serialize_fallback,
+                        ),
+                    },
+                }
+                for tc in tc_list
+            ],
         }
 
     def _json_serialize_fallback(self, obj: Any) -> Any:
@@ -1680,6 +1952,32 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Dict containing the final result and operation details
         """
+        # T-X2 (issue #915): bind agent identity for the duration of the
+        # query so any tool body's `get_access_token_sync(...)` calls can
+        # resolve the per-agent grant via contextvars.
+        #
+        # `_agent_context` is intentionally PRIVATE — imported via the
+        # private path so a malicious tool body cannot import it from the
+        # public `gaia.connectors` API to forge an agent identity.
+        # See plan amendment A9.
+        from gaia.connectors.context import _agent_context
+
+        ns_id = getattr(self, "_gaia_namespaced_agent_id", None) or getattr(
+            self, "AGENT_ID", None
+        )
+        if ns_id is None:
+            return self._process_query_impl(user_input, max_steps, trace, filename)
+        with _agent_context(ns_id):
+            return self._process_query_impl(user_input, max_steps, trace, filename)
+
+    def _process_query_impl(
+        self,
+        user_input: str,
+        max_steps: int = None,
+        trace: bool = False,
+        filename: str = None,
+    ) -> Dict[str, Any]:
+        """Inner implementation of ``process_query`` — see public method docstring."""
         import time
 
         start_time = time.time()  # Track query processing start time
@@ -2082,69 +2380,127 @@ Do NOT wrap conversational replies in JSON.
                             prompt, f"Prompt (Step {steps_taken})"
                         )
 
-                # Get streaming response from AgentSDK with proper conversation history
-                try:
-                    response_stream = self.chat.send_messages_stream(
-                        messages=messages,
-                        system_prompt=self.system_prompt,
-                        tools=self._openai_tools,
-                    )
+                # Get streaming response. Same context-overflow retry-on-trim
+                # behaviour as the non-streaming branch below — needed because
+                # multi-step ReAct loops accumulate tool results in `messages`.
+                _retried_after_trim_stream = False
+                while True:
+                    try:
+                        response_stream = self.chat.send_messages_stream(
+                            messages=messages,
+                            system_prompt=self.system_prompt,
+                            tools=self._openai_tools,
+                        )
 
-                    # Process the streaming response chunks as they arrive
-                    full_response = ""
-                    for chunk_response in response_stream:
-                        if chunk_response.is_complete:
-                            response_stats = chunk_response.stats
-                            # Non-empty complete chunk = tool_calls sentinel from
-                            # native tool-calling path (no streaming for tool calls)
-                            if chunk_response.text:
-                                full_response = chunk_response.text
+                        # Process the streaming response chunks as they arrive
+                        full_response = ""
+                        for chunk_response in response_stream:
+                            if chunk_response.is_complete:
+                                response_stats = chunk_response.stats
+                                # Non-empty complete chunk = tool_calls sentinel from
+                                # native tool-calling path (no streaming for tool calls)
+                                if chunk_response.text:
+                                    full_response = chunk_response.text
+                            else:
+                                self.console.print_streaming_text(chunk_response.text)
+                                full_response += chunk_response.text
+
+                        self.console.print_streaming_text("", end_of_stream=True)
+                        response = full_response
+                        break
+                    except ConnectionError as e:
+                        error_msg = (
+                            f"LLM Server Connection Failed (streaming): {str(e)}"
+                        )
+                        logger.error(error_msg)
+                        self.console.print_error(error_msg)
+                        self.error_history.append(
+                            {
+                                "step": steps_taken,
+                                "error": error_msg,
+                                "type": "llm_connection_error",
+                            }
+                        )
+                        final_answer = (
+                            f"I'm having trouble reaching the language model right now. "
+                            f"Please make sure Lemonade Server is running.\n\n"
+                            f"*Technical details: {str(e)}*"
+                        )
+                        break
+                    except Exception as e:
+                        logger.error(f"Unexpected error during streaming: {e}")
+                        err_text = str(e).lower()
+                        is_ctx_overflow = (
+                            "exceed_context_size" in err_text
+                            or "exceeds the available context size" in err_text
+                            or "got too long" in err_text
+                        )
+                        # See non-streaming branch for explanation: re-raise
+                        # if model was loaded with the wrong (small) ctx so
+                        # the chat helper can reload it at 32K.
+                        is_wrong_ctx_loaded = is_ctx_overflow and (
+                            "context size (4096" in err_text
+                            or "context size (8192" in err_text
+                            or "context size (16384" in err_text
+                            or "n_ctx': 4096" in err_text
+                            or "n_ctx': 8192" in err_text
+                            or "n_ctx': 16384" in err_text
+                        )
+                        if is_ctx_overflow and not is_wrong_ctx_loaded:
+                            is_wrong_ctx_loaded = self._is_loaded_ctx_too_small()
+                        if is_wrong_ctx_loaded:
+                            self.error_history.append(
+                                {
+                                    "step": steps_taken,
+                                    "error": str(e),
+                                    "type": "llm_wrong_ctx_loaded_reraise",
+                                }
+                            )
+                            logger.warning(
+                                "Wrong ctx_size loaded (streaming) — re-raising"
+                                " so chat helper can reload model: %s",
+                                e,
+                            )
+                            raise
+                        if is_ctx_overflow and not _retried_after_trim_stream:
+                            messages = self._shrink_messages_for_overflow(messages)
+                            self.error_history.append(
+                                {
+                                    "step": steps_taken,
+                                    "error": str(e),
+                                    "type": "llm_context_overflow_trimmed",
+                                }
+                            )
+                            logger.warning(
+                                "Context overflow mid-loop (streaming) — "
+                                "shrunk messages to %d entries and retrying",
+                                len(messages),
+                            )
+                            _retried_after_trim_stream = True
+                            continue
+
+                        self.error_history.append(
+                            {
+                                "step": steps_taken,
+                                "error": str(e),
+                                "type": "llm_streaming_error",
+                            }
+                        )
+                        if is_ctx_overflow:
+                            final_answer = (
+                                "I had to trim the conversation to fit my "
+                                "memory but I'm still not making progress. "
+                                "Could you re-ask in a fresh chat with just "
+                                "the essentials?"
+                            )
                         else:
-                            self.console.print_streaming_text(chunk_response.text)
-                            full_response += chunk_response.text
-
-                    self.console.print_streaming_text("", end_of_stream=True)
-                    response = full_response
-                except ConnectionError as e:
-                    # Handle LLM server connection errors specifically
-                    error_msg = f"LLM Server Connection Failed (streaming): {str(e)}"
-                    logger.error(error_msg)
-                    self.console.print_error(error_msg)
-
-                    # Add error to history
-                    self.error_history.append(
-                        {
-                            "step": steps_taken,
-                            "error": error_msg,
-                            "type": "llm_connection_error",
-                        }
-                    )
-
-                    # Return error response
-                    final_answer = (
-                        f"I'm having trouble reaching the language model right now. "
-                        f"Please make sure Lemonade Server is running.\n\n"
-                        f"*Technical details: {str(e)}*"
-                    )
-                    break
-                except Exception as e:
-                    logger.error(f"Unexpected error during streaming: {e}")
-
-                    # Add to error history
-                    self.error_history.append(
-                        {
-                            "step": steps_taken,
-                            "error": str(e),
-                            "type": "llm_streaming_error",
-                        }
-                    )
-
-                    # Return error response
-                    final_answer = (
-                        f"Sorry, I ran into a problem while processing your request. "
-                        f"This might be a temporary issue — try again in a moment.\n\n"
-                        f"*Technical details: {str(e)}*"
-                    )
+                            final_answer = (
+                                f"Sorry, I ran into a problem while processing your request. "
+                                f"This might be a temporary issue — try again in a moment.\n\n"
+                                f"*Technical details: {str(e)}*"
+                            )
+                        break
+                if final_answer is not None:
                     break
             else:
                 # Use progress indicator for non-streaming mode
@@ -2173,54 +2529,130 @@ Do NOT wrap conversational replies in JSON.
                             f"[DEBUG] Current step: {self.current_step}/{self.total_plan_steps}"
                         )
 
-                # Get complete response from AgentSDK
-                try:
-                    chat_response = self.chat.send_messages(
-                        messages=messages,
-                        system_prompt=self.system_prompt,
-                        tools=self._openai_tools,
-                    )
-                    response = chat_response.text
-                    response_stats = chat_response.stats
-                except ConnectionError as e:
-                    self.console.stop_progress()
-                    error_msg = f"LLM Server Connection Failed: {str(e)}"
-                    logger.error(error_msg)
-                    self.console.print_error(error_msg)
+                # Get complete response from AgentSDK. On context overflow
+                # mid-loop (the cumulative messages array got too long during
+                # this turn — common after several search_file/index calls),
+                # trim the oldest tool-result messages and retry ONCE before
+                # giving up. Keeps the conversation salvageable instead of
+                # failing the whole turn.
+                _retried_after_trim = False
+                while True:
+                    try:
+                        chat_response = self.chat.send_messages(
+                            messages=messages,
+                            system_prompt=self.system_prompt,
+                            tools=self._openai_tools,
+                        )
+                        response = chat_response.text
+                        response_stats = chat_response.stats
+                        break  # success → exit retry loop
+                    except ConnectionError as e:
+                        self.console.stop_progress()
+                        error_msg = f"LLM Server Connection Failed: {str(e)}"
+                        logger.error(error_msg)
+                        self.console.print_error(error_msg)
+                        self.error_history.append(
+                            {
+                                "step": steps_taken,
+                                "error": error_msg,
+                                "type": "llm_connection_error",
+                            }
+                        )
+                        final_answer = (
+                            f"I'm having trouble reaching the language model right now. "
+                            f"Please make sure Lemonade Server is running.\n\n"
+                            f"*Technical details: {str(e)}*"
+                        )
+                        break
+                    except Exception as e:
+                        self.console.stop_progress()
+                        if self.debug:
+                            print(f"[DEBUG] Error calling LLM: {e}")
+                        logger.error(f"Unexpected error calling LLM: {e}")
 
-                    # Add error to history and update state
-                    self.error_history.append(
-                        {
-                            "step": steps_taken,
-                            "error": error_msg,
-                            "type": "llm_connection_error",
-                        }
-                    )
+                        # Did we hit a context-overflow mid-loop? Detect by
+                        # substring (typed exceptions get wrapped by AgentSDK).
+                        err_text = str(e).lower()
+                        is_ctx_overflow = (
+                            "exceed_context_size" in err_text
+                            or "exceeds the available context size" in err_text
+                            or "got too long" in err_text
+                        )
+                        # Detect "wrong ctx size loaded" — substring match on
+                        # error text first (when raw payload is preserved),
+                        # then probe Lemonade health if substring missed
+                        # (typical: AgentSDK stringifies typed exception to
+                        # user_message, dropping n_ctx detail).
+                        is_wrong_ctx_loaded = is_ctx_overflow and (
+                            "context size (4096" in err_text
+                            or "context size (8192" in err_text
+                            or "context size (16384" in err_text
+                            or "n_ctx': 4096" in err_text
+                            or "n_ctx': 8192" in err_text
+                            or "n_ctx': 16384" in err_text
+                        )
+                        if is_ctx_overflow and not is_wrong_ctx_loaded:
+                            is_wrong_ctx_loaded = self._is_loaded_ctx_too_small()
+                        if is_wrong_ctx_loaded:
+                            self.error_history.append(
+                                {
+                                    "step": steps_taken,
+                                    "error": str(e),
+                                    "type": "llm_wrong_ctx_loaded_reraise",
+                                }
+                            )
+                            logger.warning(
+                                "Wrong ctx_size loaded — re-raising so chat "
+                                "helper can reload model: %s",
+                                e,
+                            )
+                            raise
+                        if is_ctx_overflow and not _retried_after_trim:
+                            # Aggressive shrink: keep all message slots so the
+                            # model still sees its tool-call history, but cap
+                            # any single tool-result content to 500 chars and
+                            # drop all-but-last-2 tool results entirely.
+                            messages = self._shrink_messages_for_overflow(messages)
+                            self.error_history.append(
+                                {
+                                    "step": steps_taken,
+                                    "error": str(e),
+                                    "type": "llm_context_overflow_trimmed",
+                                }
+                            )
+                            logger.warning(
+                                "Context overflow mid-loop — shrunk messages "
+                                "to %d entries and retrying once",
+                                len(messages),
+                            )
+                            _retried_after_trim = True
+                            continue  # retry with smaller payload
 
-                    # Return error response
-                    final_answer = (
-                        f"I'm having trouble reaching the language model right now. "
-                        f"Please make sure Lemonade Server is running.\n\n"
-                        f"*Technical details: {str(e)}*"
-                    )
-                    break
-                except Exception as e:
-                    self.console.stop_progress()
-                    if self.debug:
-                        print(f"[DEBUG] Error calling LLM: {e}")
-                    logger.error(f"Unexpected error calling LLM: {e}")
-
-                    # Add to error history
-                    self.error_history.append(
-                        {"step": steps_taken, "error": str(e), "type": "llm_error"}
-                    )
-
-                    # Return error response
-                    final_answer = (
-                        f"Sorry, I ran into an unexpected problem. "
-                        f"This might be a temporary issue — try again in a moment.\n\n"
-                        f"*Technical details: {str(e)}*"
-                    )
+                        # Either context-overflow after trim, or unrelated.
+                        # Give up gracefully.
+                        self.error_history.append(
+                            {
+                                "step": steps_taken,
+                                "error": str(e),
+                                "type": "llm_error",
+                            }
+                        )
+                        if is_ctx_overflow:
+                            final_answer = (
+                                "I had to trim the conversation to fit my "
+                                "memory but I'm still not making progress. "
+                                "Could you re-ask in a fresh chat with just "
+                                "the essentials?"
+                            )
+                        else:
+                            final_answer = (
+                                f"Sorry, I ran into an unexpected problem. "
+                                f"This might be a temporary issue — try "
+                                f"again in a moment.\n\n"
+                                f"*Technical details: {str(e)}*"
+                            )
+                        break
+                if final_answer is not None:
                     break
 
                 # Stop the progress indicator
@@ -2231,13 +2663,67 @@ Do NOT wrap conversational replies in JSON.
             if self.show_prompts:
                 self.console.print_response(response, "LLM Response")
 
-            # Parse the response
-            parsed = self._parse_llm_response(response)
+            # Parse the response. Small models (e.g. 4B) sometimes emit malformed
+            # tool_calls JSON — concatenated enum values, unterminated strings,
+            # 1000+ char arguments. Don't fail the whole turn: log the error,
+            # nudge the model to retry with simpler args, and continue the loop.
+            try:
+                parsed = self._parse_llm_response(response)
+            except (ValueError, NotImplementedError) as parse_exc:
+                logger.warning(
+                    "Tool-call parse failed (step %d): %s — recovering with retry prompt",
+                    steps_taken,
+                    parse_exc,
+                )
+                self.error_history.append(
+                    {
+                        "step": steps_taken,
+                        "error": str(parse_exc),
+                        "type": "tool_call_parse_error",
+                    }
+                )
+                error_count += 1
+                # If we've already retried several times, give up gracefully and
+                # answer in plain text rather than spamming the user.
+                if error_count >= 3:
+                    final_answer = (
+                        "I had trouble formatting my tool call. Could you "
+                        "rephrase or break the request into smaller pieces?"
+                    )
+                    break
+                # Push a synthetic assistant turn + recovery user message so the
+                # next LLM call has context. Don't include the raw envelope to
+                # keep noise out of the conversation history.
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "[I tried to call a tool but my arguments were "
+                            "malformed.]"
+                        ),
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Your last tool call had malformed arguments. "
+                            "Please try again. Use ONLY the documented enum "
+                            "values for each argument (e.g. 'brief', "
+                            "'detailed', 'bullets' — never a long sentence). "
+                            "If you don't need a tool, answer in plain text."
+                        ),
+                    }
+                )
+                steps_taken += 1
+                continue
             logger.debug(f"Parsed response: {parsed}")
             conversation.append({"role": "assistant", "content": parsed})
 
-            # Add assistant response to messages for chat history
-            messages.append({"role": "assistant", "content": response})
+            # Add assistant response to messages for chat history (OpenAI
+            # shape for native tool_calls, raw text otherwise — see
+            # ``_build_assistant_message`` for the why).
+            messages.append(self._build_assistant_message(response, parsed))
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -2347,8 +2833,16 @@ Do NOT wrap conversational replies in JSON.
                 logger.debug(f"Parsed plan response: {parsed_plan}")
                 conversation.append({"role": "assistant", "content": parsed_plan})
 
-                # Add plan response to messages for chat history
-                messages.append({"role": "assistant", "content": plan_response})
+                # Add plan response to messages for chat history. Same
+                # OpenAI-shape rule as the main-response append (issue
+                # #944): a tool-calling-trained planner can emit native
+                # ``tool_calls`` instead of (or alongside) the expected
+                # plan JSON — those must be preserved as a structured
+                # assistant turn so the fan-out below can correlate
+                # results back via ``tool_call_id``.
+                messages.append(
+                    self._build_assistant_message(plan_response, parsed_plan)
+                )
 
                 # Display the agent's reasoning for the plan
                 self.console.print_thought(parsed_plan.get("thought", "Creating plan"))
@@ -2446,8 +2940,194 @@ Do NOT wrap conversational replies in JSON.
                     f"New plan created with {self.total_plan_steps} steps: {self.current_plan}"
                 )
 
-            # If the response contains a tool call, execute it
-            if parsed.get("tool") and "tool_args" in parsed:
+            # === Native parallel tool_calls fan-out (issue #944) ===
+            #
+            # Tool-calling-trained models (Gemma-4-E4B-it-GGUF — GAIA's
+            # default per #865 — and the Qwen3-Instruct line) routinely emit
+            # multiple ``tool_calls`` in a single response when the user
+            # utterance contains multiple distinct intents. We drain them
+            # sequentially within the same loop iteration, appending one
+            # ``role=tool`` message per call (with its real ``tool_call_id``)
+            # before re-prompting the LLM. This matches the OpenAI Chat
+            # Completions tools API contract and makes parallel calls
+            # behave like N independent sequential calls without the
+            # overhead of N LLM round-trips.
+            #
+            # The legacy single-tool path below ONLY fires for embedded
+            # JSON responses (no ``tool_calls`` field set) so that for
+            # native single calls we still get proper ``tool_call_id``
+            # linkage on the result message.
+            if parsed.get("tool_calls"):
+                tc_list = parsed["tool_calls"]
+                any_error = False
+                last_error = None
+                fanout_repeat_break = False
+
+                for fan_idx, tc in enumerate(tc_list):
+                    tool_name = tc["name"]
+                    tool_args = tc["tool_args"]
+                    tool_call_id = tc["id"]
+                    logger.debug(
+                        "Tool call %d/%d: %s with args %s",
+                        fan_idx + 1,
+                        len(tc_list),
+                        tool_name,
+                        tool_args,
+                    )
+
+                    # Display the tool call in real-time
+                    self.console.print_tool_usage(tool_name)
+                    if tool_args:
+                        self.console.pretty_print_json(tool_args, "Arguments")
+                    self.console.start_progress(f"Executing {tool_name}")
+
+                    # Loop detection — same shape as legacy path so
+                    # repeated calls across iterations are still caught.
+                    current_call = (tool_name, str(tool_args))
+                    tool_call_history.append(current_call)
+                    tool_call_log.append(current_call)
+                    if len(tool_call_history) > 5:
+                        tool_call_history.pop(0)
+                    consecutive_count = 0
+                    for prior in reversed(tool_call_history):
+                        if prior == current_call:
+                            consecutive_count += 1
+                        else:
+                            break
+                    if consecutive_count >= self.max_consecutive_repeats:
+                        self.console.stop_progress()
+                        final_answer = (
+                            f"Task completed with {tool_name}. "
+                            "No further action needed."
+                        )
+                        self.console.print_repeated_tool_warning()
+                        fanout_repeat_break = True
+                        break
+
+                    # Execute
+                    tool_result = self._execute_tool(tool_name, tool_args)
+                    self.console.stop_progress()
+
+                    # Result-based dedup for query family tools
+                    _QUERY_TOOLS = (
+                        "query_documents",
+                        "query_specific_file",
+                        "query_indexed_documents",
+                    )
+                    if tool_name in _QUERY_TOOLS:
+                        result_key = f"{tool_name}:{hash(str(tool_result))}"
+                        query_result_cache[result_key] = (
+                            query_result_cache.get(result_key, 0) + 1
+                        )
+                        if query_result_cache[result_key] >= 2:
+                            logger.debug(
+                                "[DEDUP] Same query result returned %d times "
+                                "— injecting stop signal",
+                                query_result_cache[result_key],
+                            )
+                            dedup_msg = (
+                                f"[SYSTEM] You have received this same result "
+                                f"from {tool_name} "
+                                f"{query_result_cache[result_key]} times. "
+                                "Querying again will not yield new "
+                                "information. STOP querying and answer "
+                                "directly from what you have retrieved, "
+                                "OR check your prior turn responses for "
+                                "relevant data, OR state that the "
+                                "information was not found in the document."
+                            )
+                            messages.append({"role": "user", "content": dedup_msg})
+
+                    # Domain hooks
+                    self._post_process_tool_result(tool_name, tool_args, tool_result)
+
+                    # Truncate large results before logging
+                    truncated_result = self._handle_large_tool_result(
+                        tool_name, tool_result, conversation, tool_args
+                    )
+
+                    self.console.pretty_print_json(tool_result, "Result")
+                    self.console.print_tool_complete()
+
+                    previous_outputs.append(
+                        {
+                            "tool": tool_name,
+                            "args": tool_args,
+                            "result": truncated_result,
+                        }
+                    )
+
+                    # Append the tool result message with the *real*
+                    # tool_call_id from the originating call so the next
+                    # LLM round can correlate this result with the right
+                    # call in the prior assistant turn (issue #944).
+                    messages.append(
+                        self._create_tool_message(
+                            tool_name,
+                            truncated_result,
+                            tool_call_id=tool_call_id,
+                        )
+                    )
+
+                    # Track errors but DON'T break early — drain all N
+                    # tool calls first so conversation history reflects
+                    # the full set, per #944 acceptance criterion (b).
+                    is_error = isinstance(tool_result, dict) and (
+                        tool_result.get("status") == "error"
+                        or tool_result.get("success") is False
+                        or tool_result.get("has_errors") is True
+                        or tool_result.get("return_code", 0) != 0
+                    )
+                    if is_error:
+                        error_count += 1
+                        last_error = (
+                            tool_result.get("error_brief")
+                            or tool_result.get("error")
+                            or tool_result.get("stderr")
+                            or tool_result.get("hint")
+                            or tool_result.get("suggested_fix")
+                            or (
+                                "Command failed with return code "
+                                f"{tool_result.get('return_code')}"
+                            )
+                        )
+                        logger.warning(
+                            "Tool execution error in parallel call "
+                            "%d/%d (count: %d): %s",
+                            fan_idx + 1,
+                            len(tc_list),
+                            error_count,
+                            last_error,
+                        )
+                        if not tool_result.get("error_displayed"):
+                            self.console.print_error(last_error)
+                        any_error = True
+
+                if fanout_repeat_break:
+                    break  # break outer while
+
+                if any_error:
+                    # All N results have been appended. Now transition to
+                    # error recovery so the next LLM round can react.
+                    self.execution_state = self.STATE_ERROR_RECOVERY
+                    self.console.print_state_info(
+                        "ERROR RECOVERY: Handling tool execution failure"
+                    )
+                    continue
+
+                # Otherwise fall through to stats / answer / next iter.
+                # The legacy ``if parsed.get("tool")`` branch below is
+                # gated to skip when ``tool_calls`` is set so it won't
+                # double-execute the first call.
+
+            # If the response contains a tool call, execute it (legacy
+            # embedded-JSON path). Skipped when ``tool_calls`` is set —
+            # those have already been dispatched by the fan-out above.
+            if (
+                parsed.get("tool")
+                and "tool_args" in parsed
+                and not parsed.get("tool_calls")
+            ):
 
                 # Display the current plan with the current step highlighted
                 if self.current_plan:

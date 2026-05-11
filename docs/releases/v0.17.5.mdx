@@ -1,0 +1,177 @@
+---
+title: "v0.17.5"
+description: "Gemma 4 default with native tool_calls, Chat Lite for low-memory hardware, semantic code search via CodeAgent, optional governance layer, Agent UI bundled in the PyPI wheel, and friendly ngrok tunnel diagnostics."
+---
+
+# GAIA v0.17.5 Release Notes
+
+GAIA v0.17.5 swaps the default model to Gemma 4 E4B, adds Chat Lite for machines that cannot host the 35B default, ships the Agent UI inside the PyPI wheel, and lands semantic code search and an optional governance layer. The C++ SDK gains VLM image support, mobile-tunnel diagnostics get a usability pass, and seven targeted bug fixes round out the patch.
+
+**Why upgrade:**
+- **Gemma 4 E4B is the new default across LLM and VLM roles** — single model in place of the previous LLM/VLM split, ~4.5B effective parameters, 128K context, ~5 GB footprint vs 19.7 GB previously.
+- **Chat Lite makes the Agent UI usable on 8–16 GB machines** — a Qwen3-4B sibling of ChatAgent plus Settings controls for active model, context size, and per-agent memory warnings.
+- **`pip install amd-gaia[ui]` now serves the real React UI** — the wheel contains the built `dist/`, byte-identical to the npm package.
+- **Semantic code search lands in CodeAgent** — `gaia-code index` plus the `code_index` tool mixin for FAISS-backed search across your repo.
+
+---
+
+## What's New
+
+### Gemma 4 E4B as the New Default Model
+
+Gemma 4 E4B (`Gemma-4-E4B-it-GGUF`) replaces Qwen 3.5 35B and the separate Qwen 3-VL-4B as the single default across the LLM and VLM roles, the installer profiles, the CLI, the Agent UI, and the eval suite (PR [#865](https://github.com/amd/gaia/pull/865)). Gemma 4 is natively multimodal at ~4.5B effective parameters with a 128K context window and an Apache 2.0 licence, so one model now covers what previously required loading two. The post-swap eval baseline beats the pre-swap Qwen baseline 14/15 vs 13/15 across the bundled scenarios.
+
+The minimum Lemonade version is now 10.2.0, and Lemonade's default port moves from 8000 to 13305 to match Lemonade's own default. A startup validator (`_validate_profile_model_registry()`) raises at import time if any `AGENT_PROFILES` entry references a model key that is not in `MODELS`.
+
+---
+
+### Native OpenAI `tool_calls` Path
+
+GAIA now passes `tools=[...]` to Lemonade for tool-capable models and consumes the response as native OpenAI `tool_calls` (PR [#865](https://github.com/amd/gaia/pull/865)). `LemonadeProvider.chat()` encodes tool calls as a sentinel JSON string (`{"__tool_calls__": ...}`) so existing callers keep their type signatures, and `_parse_llm_response` detects the sentinel to return the unified `{"tool": ..., "tool_args": ...}` dict downstream agents already use. The embedded-JSON format block (`_PLANNING_FORMAT` / `_CONVERSATIONAL_FORMAT`) is now excluded from the composed system prompt for tool-capable models — its presence actively prevented native `tool_calls` in prior testing. The legacy embedded-JSON path remains as a fallback for non-tool-calling models.
+
+---
+
+### Chat Lite + Settings Controls
+
+`chat-lite` is a new built-in agent that reuses `ChatAgent` but presets `model_id` to `Qwen3-4B-Instruct-2507-GGUF`, providing a working out-of-the-box option for hardware that cannot host the 35B Chat default (PR [#802](https://github.com/amd/gaia/pull/802)). It appears alongside Chat in the agent picker.
+
+To make per-agent model swapping practical, three new Settings controls land in the Agent UI:
+
+- **Active Model** — text field bound to the existing `custom_model` setting, with "Use agent default" as the placeholder. Empty falls through to the agent's registered `models[0]`.
+- **Context Size** — preset chips (4K / 8K / 16K / 32K) plus a numeric input; Apply reloads the active model via `/api/system/load-model`.
+- **Memory Warnings** — `AgentInfo.min_memory_gb` is a new optional field on registrations and manifests; Settings renders a warning before the user picks an agent whose requirement exceeds available memory.
+
+The pre-flight model loader in `_chat_helpers.py` now requires the specific expected model **with ctx ≥ 32K** rather than accepting any active LLM at any context size. This fixes the silent-truncation bug where Lemonade auto-loaded a requested model at its 4096 default context, truncating ChatAgent's >7K-token system prompt and producing an empty stream.
+
+---
+
+### Semantic Code Search via CodeAgent
+
+`CodeIndexToolsMixin` adds FAISS-backed semantic search of a codebase to `CodeAgent` (PR [#721](https://github.com/amd/gaia/pull/721)). Four `@tool` methods (`index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index`) compose into the agent via MRO, the same pattern as `RAGToolsMixin` and `FileIOToolsMixin`. The mixin is registered in `KNOWN_TOOLS` so other agents can opt in with `tools=["code_index"]`.
+
+The `gaia-code index` subcommand replaces the removed top-level `gaia index` verb; all index operations (`search`, `status`, `clear`, `chat`) now live under the existing `gaia-code` standalone binary. Indexing the GAIA repo itself produces 973 files → 24,349 semantic chunks using `nomic-embed-text-v2-moe-GGUF` via Lemonade Server. The `[code-index]` extras group has been folded into `[rag]`, so the install command is `pip install -e '.[rag]'`.
+
+---
+
+### Agent UI Bundled in the PyPI Wheel
+
+`pip install amd-gaia[ui] && gaia chat --ui` now serves a real React UI instead of the JSON / friendly-fallback page (PR [#908](https://github.com/amd/gaia/pull/908)). `setup.py` adds `gaia.apps.webui` to packages with `package_data` globs, and `MANIFEST.in` adds the authoritative `recursive-include` for the built `dist/`. Local builds produce a 1.41 MB wheel containing the nine webui assets (index.html, hashed JS/CSS, woff2 fonts, favicon).
+
+The publish pipeline now builds the bundle once in `build-npm` and reuses the artifact in `build-pypi`, so the wheel and the npm package ship a byte-identical bundle (no vite-hash drift between runners). A new `util/verify_wheel_dist.py` enforces a deny-list at CI time: sourcemaps, dotfiles, `node_modules`, and leaked `VITE_*` env values, plus wheel-size caps. `setup.py` raises `SystemExit` with a remediation hint if a wheel build cannot find `dist/index.html`, except on the `sdist`, `egg_info`, `develop`, and `editable_wheel` paths used by `pip install -e .`.
+
+---
+
+### Optional Governance Layer
+
+A new `gaia.governance` package adds an opt-in action-level governance layer for GAIA agents, with extension points for future workflow-level features (PR [#921](https://github.com/amd/gaia/pull/921)). The framework is modular: developers mix in `GovernedAgentMixin`, tag tools with risk levels, and configure a policy engine, reviewer, and audit log. `GaiaGovernanceAdapter` composes policy evaluation, checkpointing, receipt issuance, and policy-version binding into a single entry point, returning ALLOW / BLOCK / REVIEW decisions per tool call.
+
+The package ships with a comprehensive `README.md` and an `examples/governed_weather_agent.py` end-to-end demo. Because the layer is opt-in via mixin composition, existing agents are unaffected unless they explicitly enable it.
+
+---
+
+### Agent Eval Toolchain
+
+The Agent Eval suite is now a complete toolchain (PR [#779](https://github.com/amd/gaia/pull/779)): `runner.py` accepts custom `--scenario-dir` / `--corpus-dir` paths, tag filtering via `--tag`, JUnit XML output (`--output-format junit`), and custom personas. The CLI sheds the legacy `gaia groundtruth`, `gaia report`, `gaia visualize`, `gaia create-template`, `gaia batch-experiment`, and `gaia synthetic-data` commands (~1,900 lines). 27 test classes cover the full public API surface (scenario loading, runner, scorecard, corpus, CLI, audit), and three new guides land under `docs/guides/eval.mdx` (Getting Started, Scenario Authoring, CI/CD Integration). Roughly 15,879 lines of dead code in the previous evaluator, groundtruth generator, batch experiment runner, transcript/email generators, fix-code testbench, and Express.js webapp are removed.
+
+---
+
+### VLM Image Support in the C++ SDK
+
+The C++ SDK gains end-to-end vision support (PR [#858](https://github.com/amd/gaia/pull/858)). `gaia::Image` factories (`fromBytes` / `fromFile`) handle RFC 4648 base64 encoding, magic-byte MIME detection (PNG / JPEG / GIF / WebP / BMP), a 20 MiB size cap, and an `O_NOFOLLOW` + post-open `fstat` TOCTOU guard on POSIX. `gaia::ContentPart` adds text and `image_url` parts with `toJson()` producing the OpenAI vision wire format, and `gaia::Message` gains an additive `std::optional<std::vector<ContentPart>> parts` field that dispatches `toJson()` to array or string form — fully backward-compatible with existing aggregate-init sites.
+
+Two new `processQuery` overloads (`string + vector<Image>` and `vector<Message>` caller-composed) flow through a private `processQueryInternal` that is the sole writer of `conversationHistory_`. Image parts are stripped from history at end-of-turn so base64 is never retained across calls. An RAII `InFlightGuard` via `std::atomic<bool>` and `compare_exchange_strong` makes concurrent `processQuery` calls on the same Agent throw `std::runtime_error`. The `cpp/examples/vlm_agent.cpp` demo plus 35 new unit tests (Image, ContentPart / Message, agent-level mock HTTP) cover the surface, alongside an integration test against live Lemonade.
+
+---
+
+### Friendly ngrok Tunnel Diagnostics + Mobile Cookie Auth
+
+Mobile Access used to surface raw ngrok stderr (`ERR_NGROK_107`, `dial tcp ... no such host`, or in the worst case nothing) when a tunnel failed to start. PR [#872](https://github.com/amd/gaia/pull/872) parses every common ngrok failure into actionable guidance the modal renders verbatim. A preflight `_check_ngrok_authtoken_configured` honours `$NGROK_AUTHTOKEN` first, then v2 flat / v3 nested config layouts, and catches the unconfigured case before spawn. `_parse_ngrok_error` matches error codes plus English fragments and returns ready-to-paste install/config commands.
+
+The same PR adds an HttpOnly-cookie auth path so opening the QR-code URL in a mobile browser Just Works: `?token=<uuid>` in the URL is converted to a `gaia_tunnel_token` cookie on the SPA landing response, so React's same-origin `fetch('/api/...')` is authenticated automatically. Bearer-header auth continues to work for headerful clients. Two correctness fixes ride along — `pkill -f ngrok` becomes `pkill -x ngrok` (the broad form matched unrelated processes like `vim ngrok.md`), and operator-precedence parens are added to the network and TLS branches of `_parse_ngrok_error`.
+
+---
+
+### YAML Manifest Agent Format Removed
+
+Custom agents now have one definition format: a Python `agent.py` file (PR [#914](https://github.com/amd/gaia/pull/914)). The previous YAML-manifest path with dynamic `type()`-based class construction, Pydantic manifest validation, and per-agent MCP-config merging is gone — roughly 276 lines deleted from `src/gaia/agents/registry.py`. Every custom agent is now a regular Python class readable by mypy, IDEs, and `git grep`.
+
+The companion `agent.yaml` sidecar that declares `models:` next to a Python agent is unchanged. A directory containing only `agent.yaml` (no sibling `agent.py`) emits a `DeprecationWarning` and is skipped, with the warning enumerating which legacy manifest keys were ignored. `AgentRegistration.source` and `AgentInfo.source` are narrowed to `Literal["builtin", "custom_python"]`, with Pydantic enforcing the constraint at the API boundary.
+
+---
+
+## Bug Fixes
+
+- **Agent UI fresh-install crash on first launch** (PR [#935](https://github.com/amd/gaia/pull/935)) — Fixes a crash on the first launch after a fresh install where the webui server failed to initialise its database state before the renderer connected.
+- **Chat agent reasoning loops on out-of-scope questions** (PR [#919](https://github.com/amd/gaia/pull/919)) — The chat agent no longer enters reasoning loops or attempts to supplement an answer when the user's question falls outside the indexed corpus; it now returns a direct out-of-scope reply instead.
+- **`code_index` silent fallbacks tightened to fail loudly** (PR [#885](https://github.com/amd/gaia/pull/885)) — Replaces `except Exception: pass` blocks in the code-index path with specific exception handling that surfaces actionable errors, per the project's no-silent-fallbacks rule.
+- **Installer sets Lemonade ctx-size on install and idle server** (PR [#913](https://github.com/amd/gaia/pull/913)) — `gaia init` and the idle-server path now set Lemonade's `--ctx-size` so freshly installed setups don't auto-load models at the 4096 default and silently truncate large prompts.
+- **AppImage RAG dependencies missing from `[ui]` extra** (PR [#911](https://github.com/amd/gaia/pull/911)) — Adds the RAG dependencies to the `[ui]` extra so RAG works inside the AppImage build instead of failing with import errors at first use.
+- **Linux Lemonade install switched from `.deb` to PPA** (PR [#910](https://github.com/amd/gaia/pull/910)) — `gaia init` on Linux now installs Lemonade via the official PPA, which keeps the install up-to-date with `apt upgrade` and avoids stale `.deb` URL breakage.
+- **Bundled small bug fixes from @CodeLine9** (PR [#813](https://github.com/amd/gaia/pull/813)) — Aggregates a set of small correctness fixes originally proposed by @CodeLine9.
+
+---
+
+## Release & CI
+
+- **Renderer→backend port-wiring regression test** (PR [#909](https://github.com/amd/gaia/pull/909)) — Adds coverage that pins the renderer-to-backend port wiring so future Electron-shell refactors cannot silently drift the two sides apart.
+- **C++ memory-growth threshold widened to 75%** (PR [#874](https://github.com/amd/gaia/pull/874)) — `memory_per_step_growth_kb` was tripping on legitimate small variations on shared CI runners; widening to 75% removes the false positives without masking real leaks.
+- **Context7 + DeepWiki documentation steering** (PR [#864](https://github.com/amd/gaia/pull/864)) — Adds CI steering files so external code-browsing tools can resolve GAIA documentation without scraping.
+
+---
+
+## Docs
+
+- **`AGENTS.md` — multi-agent coordination rules** (PR [#904](https://github.com/amd/gaia/pull/904)) — New top-level document codifying how multiple agents collaborate within GAIA, intended for both contributors and external integrators.
+- **Contributing templates and guide refresh** (PR [#930](https://github.com/amd/gaia/pull/930)) — Updated issue templates, PR template, and `CONTRIBUTING.md` to match current project workflow and AI-agent guidance.
+- **Removed RAUX / Open-WebUI references** (PR [#931](https://github.com/amd/gaia/pull/931)) — Deployment docs no longer reference deprecated RAUX and Open-WebUI integrations.
+- **Mobile UI design-system spec** (PR [#905](https://github.com/amd/gaia/pull/905)) — New spec under `docs/spec/` covering the mobile UI tokens, components, and layout conventions used by the cookie-auth path.
+- **Multi-Agent Architecture and Small Business Agent Team spec** (PR [#679](https://github.com/amd/gaia/pull/679)) — Architectural spec for the multi-agent runtime and a worked example of a small-business agent team.
+- **AXIS × GAIA integration report and phased plan** (PR [#852](https://github.com/amd/gaia/pull/852)) — Plan document covering the AXIS integration's phasing.
+- **Email and calendar integration presentation** (PR [#853](https://github.com/amd/gaia/pull/853)) — Slide deck covering the email/calendar integration's design and roadmap.
+- **Cleared stale YAML-manifest references after removal** (PR [#918](https://github.com/amd/gaia/pull/918)) — Documentation cleanup following the YAML manifest deprecation in PR #914.
+
+---
+
+## Breaking Changes
+
+- **YAML manifest agent format removed** (PR [#914](https://github.com/amd/gaia/pull/914)) — Custom agents declared only via `agent.yaml` (no sibling `agent.py`) are no longer registered; a `DeprecationWarning` is emitted and the directory is skipped. Convert to a Python `agent.py` class. The `agent.yaml` sidecar that declares `models:` next to a Python agent is still supported.
+- **`gaia index` top-level CLI removed** (PR [#721](https://github.com/amd/gaia/pull/721)) — Use `gaia-code index` (and `search`, `status`, `clear`, `chat`) instead.
+- **Eval CLI surface trimmed** (PR [#779](https://github.com/amd/gaia/pull/779)) — `gaia groundtruth`, `gaia report`, `gaia visualize`, `gaia create-template`, `gaia batch-experiment`, and `gaia synthetic-data` are removed in favour of the consolidated `gaia eval` toolchain.
+- **`[code-index]` extras folded into `[rag]`** — Use `pip install -e '.[rag]'` instead of `pip install -e '.[code-index]'`.
+- **Minimum Lemonade version is now 10.2.0**, and Lemonade's default port moves from 8000 to 13305.
+
+---
+
+## Full Changelog
+
+**27 commits** since v0.17.4:
+
+- `ce9c808c` — fix(webui): fix fresh-install crash on first launch (#934) (#935)
+- `7bdf8bfa` — docs(contributing): refresh issue/PR templates and contributing guide (#930)
+- `a3b15267` — docs(deployment): remove RAUX/Open-WebUI references from docs (#931)
+- `db5e4c31` — feat(ui): friendly ngrok tunnel diagnostics + cookie auth for mobile (#872)
+- `2ec7fc71` — Feat/optional governance layer (#921)
+- `d8cf594c` — fix(chat-agent): block reasoning loops + supplementation on out-of-scope questions (#919)
+- `37e35eb1` — feat(agents): add Chat Lite + Settings model/ctx/memory controls (#802)
+- `f7b2e67f` — docs(spec): add mobile UI design-system spec (#905)
+- `99bea523` — feat(eval): Agent Eval Toolchain — v0.18.0 milestone (#779)
+- `773b5e84` — docs(agents): add AGENTS.md — multi-agent coordination rules (#904)
+- `046f50e0` — ci(cpp): widen memory_per_step_growth_kb threshold to 75% (#874)
+- `7e54e723` — fix(code_index): tighten silent-fallback paths to fail loudly (#885)
+- `667fa5ec` — docs(agents): clear stale YAML-manifest references after #914 (#918)
+- `098e08ec` — refactor(agents): remove YAML manifest agent support (#912) (#914)
+- `00bc8247` — fix(installer): set Lemonade ctx-size on install and idle server (#839) (#913)
+- `bcf69961` — fix(packaging): add RAG deps to [ui] extra so AppImage RAG works (#911)
+- `f83ea537` — feat(packaging): ship Agent UI dist/ in PyPI wheel (#908)
+- `fdf963dc` — test(ui): regression coverage for renderer→backend port wiring (#909)
+- `fb297cab` — fix(installer): switch Linux Lemonade install from .deb to PPA (#910)
+- `5d377713` — feat(llm): add Gemma 4 E4B as default and native tool_calls priority (#865)
+- `ac437e58` — feat(code-index): semantic code search via CodeAgent mixin and gaia-code CLI (#721)
+- `610b2b57` — ci: add Context7 + DeepWiki documentation steering (#864)
+- `c677a911` — feat(cpp): VLM image support in C++ SDK (#858)
+- `def8adb7` — docs(plans): AXIS × GAIA integration report and phased plan (#852)
+- `f15f5664` — docs(plans): email & calendar integration presentation (#853)
+- `243b3fcb` — spec: Multi-Agent Architecture + Small Business Agent Team (#679)
+- `dd3e9cbd` — fix: bundle small bug fixes originally submitted by @CodeLine9 (#813)
+
+Full Changelog: [v0.17.4...v0.17.5](https://github.com/amd/gaia/compare/v0.17.4...v0.17.5)

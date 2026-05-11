@@ -1,6 +1,7 @@
 id: sd_graceful_degradation
 name: "SD Tool -- Graceful Degradation"
 category: vision
+agent_type: chat
 severity: medium
 description: |
   Tests that the ChatAgent handles image generation requests gracefully —

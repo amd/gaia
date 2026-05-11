@@ -11,5 +11,17 @@ include src/gaia/interface/img/*
 include LICENSE
 include README.md
 
-# Include evaluation webapp files
-recursive-include src/gaia/eval/webapp *
+# Include the pre-built Agent UI bundle so `pip install amd-gaia[ui]` ships a
+# working browser UI. setuptools `package_data` recursive globs are unreliable
+# across versions, so we list the bundle here as the authoritative inclusion
+# rule. The CI publish pipeline runs `npm run build` before `python -m build`;
+# util/verify_wheel_dist.py asserts the wheel actually contains these files.
+recursive-include src/gaia/apps/webui/dist *.html *.js *.css *.svg *.png *.jpg *.jpeg *.webp *.ico *.webmanifest *.json *.woff *.woff2 *.ttf *.txt
+
+# Backstop deny-list — these patterns must never reach a published wheel even
+# if a developer accidentally checks them in or `npm run build` emits them.
+prune src/gaia/apps/webui/dist/node_modules
+global-exclude *.map
+global-exclude .DS_Store
+global-exclude .env
+global-exclude .env.*

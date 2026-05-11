@@ -1,6 +1,7 @@
 id: alphabet_10k_2024
 name: "Alphabet Inc 10-K FY2024 Earnings Analysis"
 category: real_world
+agent_type: doc
 severity: high
 description: |
   Agent must retrieve financial metrics from Alphabet's 2024 annual report excerpt.

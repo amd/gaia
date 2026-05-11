@@ -259,8 +259,13 @@ class CodeIndexSDK:
                         [self._faiss_index.reconstruct(i) for i in reused_indices],
                         dtype=np.float32,
                     )
-                except Exception as e:
-                    self.log.warning(f"Could not reuse embeddings: {e}")
+                except (RuntimeError, IndexError) as e:
+                    # FAISS raises RuntimeError on out-of-range / shape mismatch,
+                    # IndexError on stale chunk-id maps. Both mean the cache lost
+                    # sync with the index — log and re-embed from scratch.
+                    self.log.warning(
+                        f"Could not reuse embeddings (cache desync, will re-embed): {e}"
+                    )
                     reused_embeddings = None
 
         # Embed only new/changed chunks
@@ -305,11 +310,17 @@ class CodeIndexSDK:
             embedding_parts.append(new_embeddings)
 
         if not valid_chunks:
-            self.log.error("All embeddings failed — index not saved")
-            return IndexResult(
-                files_indexed=files_indexed,
-                chunks_created=0,
-                duration_seconds=time.time() - start,
+            # All embeddings failed AND there were chunks to embed. We already
+            # checked `if not all_chunks: return IndexResult(0, 0, …)` above
+            # for the empty-repo case, so reaching here means the embedding
+            # backend is broken. Returning IndexResult(0) here would lie —
+            # the caller can't tell empty-repo from Lemonade-down. Fail loudly.
+            raise RuntimeError(
+                f"Indexing aborted: all embedding calls failed for "
+                f"{len(new_chunks) + len(reused_chunks)} chunks. "
+                "Check that Lemonade Server is reachable and that "
+                f"{self.config.embedding_model!r} is loaded "
+                "(`lemonade-server load <model>` or `gaia init`)."
             )
 
         embeddings = np.concatenate(embedding_parts, axis=0)
@@ -360,24 +371,32 @@ class CodeIndexSDK:
         if not self._ensure_index_loaded():
             return []
 
-        # Verify embedding model matches index
+        # Verify embedding model matches index. Mixing query embeddings from
+        # one model against an index built with another silently returns
+        # garbage rankings — fail loudly instead of returning [].
         meta = self._metadata or {}
         indexed_model = meta.get("embedding_model", "")
         if indexed_model and indexed_model != self.config.embedding_model:
-            self.log.warning(
-                f"Embedding model mismatch: index built with '{indexed_model}', "
-                f"current model is '{self.config.embedding_model}'. "
-                "Re-run `index_repository()` to rebuild."
+            raise ValueError(
+                f"Embedding-model mismatch: index built with "
+                f"{indexed_model!r}, current config is "
+                f"{self.config.embedding_model!r}. Re-run "
+                "`index_repository()` (or `clear_index()` first) to rebuild "
+                "with the new model."
             )
-            return []
 
-        # Encode query
+        # Encode query — surface failures so callers can distinguish
+        # "Lemonade down" from "no matches found".
+        self._load_embedder()
         try:
-            self._load_embedder()
             query_emb = self._encode_texts([query])
-        except Exception as e:
-            self.log.error(f"Query encoding failed: {e}")
-            return []
+        except (RuntimeError, ConnectionError, TimeoutError) as e:
+            raise RuntimeError(
+                f"Query encoding failed against "
+                f"{self.config.embedding_model!r}: {e}. "
+                "Verify Lemonade Server is reachable and the embedding "
+                "model is loaded."
+            ) from e
 
         if query_emb.size == 0:
             return []
@@ -641,8 +660,18 @@ class CodeIndexSDK:
                     self.config.embedding_model,
                     llamacpp_args="--ubatch-size 2048 --split-mode none",
                 )
-        except Exception as e:
-            self.log.warning(f"Could not pre-load embedding model: {e}")
+        except (ConnectionError, TimeoutError, RuntimeError) as e:
+            # Re-raise with an actionable hint. Swallowing this caused
+            # opaque downstream encode failures — surface the root cause
+            # so the caller knows whether Lemonade is down vs. the model
+            # name is wrong vs. some other transport issue.
+            raise RuntimeError(
+                f"Could not load embedding model "
+                f"{self.config.embedding_model!r}: {e}. "
+                "Verify Lemonade Server is running "
+                "(`lemonade-server serve`) and that the model is "
+                "downloaded (`gaia download <model>`)."
+            ) from e
 
         self._embedder = self._llm_client
 
@@ -851,21 +880,30 @@ class CodeIndexSDK:
 
         try:
             import faiss
+        except ImportError as e:
+            raise ImportError(_MISSING_DEPS_MSG) from e
 
+        try:
             index = faiss.read_index(str(self._index_path))
-            expected = len(meta.get("chunks", []))
-            if index.ntotal != expected:
-                self.log.warning(
-                    f"Index/metadata mismatch: FAISS has {index.ntotal} vectors "
-                    f"but metadata has {expected} chunks — cache corrupt, ignoring"
-                )
-                return False
-            self._faiss_index = index
-            self._metadata = meta
-            return True
-        except Exception as e:
-            self.log.error(f"Failed to load FAISS index: {e}")
+        except (RuntimeError, OSError) as e:
+            # FAISS raises RuntimeError on a corrupt/incompatible binary,
+            # OSError on permission/IO failures. Both mean the cache is
+            # unusable and silent failure would mask it as "no results".
+            raise RuntimeError(
+                f"Failed to load FAISS index at {self._index_path}: {e}. "
+                "The cache may be corrupt; run `clear_index()` and re-index."
+            ) from e
+
+        expected = len(meta.get("chunks", []))
+        if index.ntotal != expected:
+            self.log.warning(
+                f"Index/metadata mismatch: FAISS has {index.ntotal} vectors "
+                f"but metadata has {expected} chunks — cache corrupt, ignoring"
+            )
             return False
+        self._faiss_index = index
+        self._metadata = meta
+        return True
 
     # ------------------------------------------------------------------
     # Serialization helpers

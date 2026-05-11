@@ -416,7 +416,7 @@ Replace `forge.config.cjs` with electron-builder's `build` section. **The existi
 - `npm run package:linux` produces working `.deb` and `.AppImage` artifacts on Linux
 - Locale pruning still strips Chromium translations (~45 MB savings)
 - The 4-part → 3-part version normalization still works
-- Existing GAIA UI launches cleanly (no missing `electron-squirrel-startup` errors)
+- Existing Gaia Agent UI launches cleanly (no missing `electron-squirrel-startup` errors)
 
 ### Phase E — Installer assets and branding
 
@@ -892,8 +892,8 @@ v0.17.2 release with desktop installer as the primary install path
 - Related issue (left as polish, not folded in): [#597 — First-run setup wizard](https://github.com/amd/gaia/issues/597)
 - Related stale PR (folded into Phase B): [#341 — Fix installer BOM and logger permissions](https://github.com/amd/gaia/pull/341)
 - Lemonade installer source (reference architecture): [lemonade-sdk/lemonade](https://github.com/lemonade-sdk/lemonade)
-- electron-builder docs: [https://www.electron.build/](https://www.electron.build/)
-- electron-updater docs: [https://www.electron.build/auto-update](https://www.electron.build/auto-update)
+- electron-builder (repo & docs): [https://github.com/electron-userland/electron-builder](https://github.com/electron-userland/electron-builder)
+- electron-updater / auto-update: [https://github.com/electron-userland/electron-builder#auto-update](https://github.com/electron-userland/electron-builder#auto-update)
 - NSIS docs: [https://nsis.sourceforge.io/Docs/](https://nsis.sourceforge.io/Docs/)
 - SignPath OSS program: [https://signpath.io/solutions/open-source-community](https://signpath.io/solutions/open-source-community)
 - Apple notarization: [https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)

@@ -69,41 +69,6 @@
     box-shadow: 0 0 0 3px rgba(237, 28, 36, 0.12);
 }
 
-/* Session hash badge -- copyable permalink */
-.session-hash-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 10px;
-    padding: 3px 8px;
-    border-radius: var(--radius-sm);
-    background: var(--bg-tertiary);
-    color: var(--text-muted);
-    font-weight: 500;
-    font-family: var(--font-mono);
-    white-space: nowrap;
-    border: 1px solid var(--border);
-    letter-spacing: 0.5px;
-    text-decoration: none;
-    cursor: pointer;
-    transition: all var(--duration) var(--ease);
-}
-.session-hash-badge:hover {
-    border-color: var(--amd-red);
-    color: var(--amd-red);
-    background: var(--amd-red-dim2);
-}
-.session-hash-badge.copied {
-    border-color: var(--accent-green);
-    color: var(--accent-green);
-    background: rgba(78, 201, 50, 0.08);
-}
-.session-hash-badge.copied::after {
-    content: 'copied';
-    font-size: 9px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
 
 .model-badge {
     font-size: 10px;
@@ -121,6 +86,16 @@
 .model-badge.no-model {
     color: var(--accent-gold);
     border-color: rgba(234, 179, 8, 0.25);
+}
+
+/* Context window size suffix on the model badge ("32K", "8K", etc.).
+   Slightly dimmer than the model name so the eye lands on the model
+   first, but still readable — this is the user's only visible signal
+   of how much context window they've actually got. */
+.model-badge .model-ctx-size {
+    color: var(--text-muted);
+    opacity: 0.75;
+    font-weight: 400;
 }
 
 /* ── Indexed documents context bar ───────────────────────────────── */
@@ -824,16 +799,11 @@
     position: relative;
 }
 
-/* Block cursor — terminal aesthetic, tracks caret position via inline style */
-.input-cursor {
-    position: absolute;
-    width: 10px;
-    height: 18px;
-    background: var(--amd-red);
-    animation: cursorBlink 1s step-end infinite;
-    pointer-events: none;
-    box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
-}
+/* Custom block cursor in the input box was removed — its 1 Hz red
+ * blink + red glow was visually distracting on every chat screen.
+ * The native browser caret is enough.  ``cursorBlink`` keyframes are
+ * still defined globally and used by the terminal-style cursors in
+ * AgentActivity / MessageBubble streaming indicators. */
 
 .input-box.has-attachments {
     flex-direction: column;
@@ -963,6 +933,34 @@
     color: white;
 }
 
+/* ── Policy alert toast ─────────────────────────────────────────── */
+.policy-alert-toast {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border-color: rgba(245, 158, 11, 0.35);
+    pointer-events: all;
+    animation: toastIn 200ms var(--ease), toastOut 200ms var(--ease) 5s forwards;
+}
+
+.policy-alert-toast-link {
+    background: none;
+    border: 0;
+    color: var(--accent-yellow);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    padding: 0;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+}
+
+.policy-alert-toast-missing {
+    color: var(--accent-yellow);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
 /* ── Responsive ──────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
@@ -971,7 +969,6 @@
     }
 
     .model-badge { display: none; }
-    .session-hash-badge { display: none; }
 
     .input-area {
         padding: 10px 12px max(10px, env(safe-area-inset-bottom));

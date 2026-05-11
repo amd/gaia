@@ -1,6 +1,7 @@
 id: table_extraction
 name: "HTML Table Extraction"
 category: rag_quality
+agent_type: doc
 severity: high
 description: |
   Agent must correctly parse and extract structured data from an HTML comparison

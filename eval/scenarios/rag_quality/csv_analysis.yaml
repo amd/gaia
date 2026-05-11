@@ -1,6 +1,7 @@
 id: csv_analysis
 name: "CSV Aggregation and Analysis"
 category: rag_quality
+agent_type: data
 severity: high
 description: |
   Tests the agent's ability to perform aggregation and analysis on CSV data.

@@ -24,7 +24,7 @@ from gaia.ui.database import SESSION_DEFAULT_MODEL as _DB_DEFAULT
 
 
 def _run_sync(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _make_session(model=_DB_DEFAULT, agent_type="bot"):

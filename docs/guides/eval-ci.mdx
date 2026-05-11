@@ -1,0 +1,500 @@
+---
+title: "CI/CD Integration"
+description: "Run Agent Eval in GitHub Actions with regression detection, cost budgeting, and baseline comparison"
+icon: "gears"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/eval/`](https://github.com/amd/gaia/tree/main/src/gaia/eval)
+</Info>
+
+## Overview
+
+The Agent Eval framework is designed for CI/CD integration. You can run evaluations on every push, compare results against baselines, detect regressions, and control costs with per-scenario budgets and timeouts.
+
+This guide covers:
+- Setting up GitHub Actions workflows
+- Baseline management for regression detection
+- Cost budgeting strategies
+- Interpreting scorecard diffs between releases
+
+---
+
+## Quick Start: GitHub Actions
+
+Here's a minimal workflow that runs the RAG quality scenarios on every push:
+
+```yaml title=".github/workflows/agent-eval.yml"
+name: Agent Eval
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install uv
+          uv pip install -e ".[eval]" --system
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Start Agent UI backend
+        run: |
+          uv run python -m gaia.ui.server &
+          sleep 5  # Wait for server to start
+
+      - name: Run Agent Eval (RAG quality)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          gaia eval agent \
+            --category rag_quality \
+            --budget 1.00 \
+            --timeout 300
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval/results/
+```
+
+<Warning>
+  The Agent UI backend requires a running Lemonade Server for inference. In CI, you can either:
+  - Use a cloud LLM provider via `--backend` pointing to a hosted instance
+  - Pre-install Lemonade Server in your CI environment
+  - Use a self-hosted runner with AMD hardware
+</Warning>
+
+---
+
+## Baseline Workflow
+
+Regression detection works by comparing scorecard results between runs. The typical workflow:
+
+### 1. Establish a Baseline
+
+After a known-good release, save the scorecard as a baseline:
+
+```bash
+gaia eval agent --save-baseline
+```
+
+This writes `eval/results/baseline.json`. Commit this file to your repository.
+
+### 2. Compare Against Baseline
+
+On subsequent runs, compare the current results against the saved baseline:
+
+```bash
+gaia eval agent --compare eval/results/latest/scorecard.json
+```
+
+When only one path is provided, it's compared against `eval/results/baseline.json` automatically.
+
+### 3. Explicit Two-File Comparison
+
+Compare any two scorecards directly:
+
+```bash
+gaia eval agent --compare eval/results/v1.0/scorecard.json eval/results/v1.1/scorecard.json
+```
+
+### Complete Baseline CI Workflow
+
+```yaml title=".github/workflows/agent-eval-regression.yml"
+name: Agent Eval Regression Check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/gaia/agents/**"
+      - "src/gaia/ui/**"
+      - "src/gaia/rag/**"
+
+jobs:
+  eval-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install uv
+          uv pip install -e ".[eval]" --system
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Start Agent UI backend
+        run: |
+          uv run python -m gaia.ui.server &
+          sleep 5
+
+      - name: Run eval and compare against baseline
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Run eval
+          gaia eval agent \
+            --category rag_quality \
+            --category context_retention \
+            --budget 1.50 \
+            --timeout 300
+
+          # Compare against committed baseline
+          gaia eval agent \
+            --compare eval/results/latest/scorecard.json
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-scorecard
+          path: |
+            eval/results/latest/scorecard.json
+            eval/results/latest/summary.md
+```
+
+---
+
+## Cost Budgeting
+
+### Per-Scenario Budget
+
+The `--budget` flag sets the maximum USD spend per scenario:
+
+```bash
+# Conservative: $1 per scenario
+gaia eval agent --budget 1.00
+
+# Default: $2 per scenario
+gaia eval agent
+
+# Generous: $5 per scenario (for complex multi-turn scenarios)
+gaia eval agent --budget 5.00
+```
+
+When a scenario exceeds its budget, it receives the `BUDGET_EXCEEDED` status and is excluded from quality metrics.
+
+### Typical Costs
+
+| Scope | Approximate Cost | Time |
+|-------|:----------------:|:----:|
+| Single scenario | $0.02 -- $0.10 | 30s -- 3min |
+| RAG quality category (7 scenarios) | $0.20 -- $0.70 | 5 -- 15min |
+| Context retention (4 scenarios) | $0.10 -- $0.40 | 3 -- 10min |
+| Full benchmark (54 scenarios) | $1.00 -- $5.00 | 20 -- 60min |
+| Architecture audit | $0.00 | < 1min |
+
+<Note>
+  Costs depend on the judge model. The default `claude-sonnet-4-6` is cost-effective. Using `claude-opus-4.1` as the judge increases costs ~5x but may improve scoring accuracy for edge cases.
+</Note>
+
+### Cost-Optimized CI Strategy
+
+Run different tiers of evaluation based on the trigger:
+
+```yaml title=".github/workflows/agent-eval-tiered.yml"
+name: Agent Eval (Tiered)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      full_eval:
+        description: "Run full benchmark"
+        type: boolean
+        default: false
+
+jobs:
+  # Always run: architecture audit (free)
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install uv
+          uv pip install -e ".[eval]" --system
+      - name: Architecture Audit
+        run: gaia eval agent --audit-only
+
+  # PR only: run core categories (~$0.50)
+  core-eval:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install uv
+          uv pip install -e ".[eval]" --system
+          npm install -g @anthropic-ai/claude-code
+      - name: Start backend
+        run: |
+          uv run python -m gaia.ui.server &
+          sleep 5
+      - name: Run core eval
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          gaia eval agent \
+            --category rag_quality \
+            --category context_retention \
+            --budget 1.00 \
+            --timeout 300
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-eval-results
+          path: eval/results/
+
+  # Manual or main push: full benchmark (~$3.00)
+  full-eval:
+    if: >
+      github.event_name == 'workflow_dispatch' && github.event.inputs.full_eval == 'true'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install uv
+          uv pip install -e ".[eval]" --system
+          npm install -g @anthropic-ai/claude-code
+      - name: Start backend
+        run: |
+          uv run python -m gaia.ui.server &
+          sleep 5
+      - name: Run full eval and save baseline
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          gaia eval agent --save-baseline --budget 2.00
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-eval-results
+          path: eval/results/
+```
+
+---
+
+## Interpreting Scorecard Diffs
+
+When you run `--compare`, the output shows per-scenario deltas:
+
+### Regressions (PASS to FAIL)
+
+```
+❌ REGRESSION: simple_factual_rag
+   Before: PASS (8.2/10)
+   After:  FAIL (3.1/10)
+   Delta:  -5.1 points
+```
+
+Regressions are highlighted and should block the PR. The trace file (`traces/simple_factual_rag.json`) contains the full conversation, dimension scores, and reasoning to help diagnose the issue.
+
+### Improvements (FAIL to PASS)
+
+```
+✅ IMPROVEMENT: cross_turn_file_recall
+   Before: FAIL (4.8/10)
+   After:  PASS (7.5/10)
+   Delta:  +2.7 points
+```
+
+### Score Drops Within Same Status
+
+```
+⚠️ SCORE DROP: hallucination_resistance
+   Before: PASS (9.1/10)
+   After:  PASS (6.2/10)
+   Delta:  -2.9 points
+```
+
+Even if the status stays PASS, a score drop of more than 2.0 points triggers a warning -- the scenario is getting closer to failing.
+
+### Category-Level Changes
+
+```
+## Category Summary
+| Category         | Before | After  | Change |
+|------------------|--------|--------|--------|
+| rag_quality      | 85%    | 71%    | -14%   |
+| context_retention| 75%    | 100%   | +25%   |
+```
+
+---
+
+## JUnit Output for CI
+
+Generate JUnit XML output for integration with CI dashboards (e.g., GitHub Actions test summary):
+
+```bash
+gaia eval agent --output-format junit
+```
+
+The JUnit output maps:
+- Each scenario = one test case
+- PASS = test passed
+- FAIL = test failed (with failure message from root cause analysis)
+- BLOCKED_BY_ARCHITECTURE = test skipped
+- Infrastructure statuses = test errored
+
+---
+
+## Timeout Management
+
+The `--timeout` flag sets the base timeout per scenario in seconds. The runner automatically scales it based on scenario complexity:
+
+```
+effective_timeout = max(base_timeout,
+                        120s startup overhead
+                        + num_docs x 90s per document
+                        + num_turns x 200s per turn)
+                   capped at 7200s (2 hours)
+```
+
+**CI recommendations:**
+
+| Context | Timeout | Reasoning |
+|---------|---------|-----------|
+| Quick PR check | `300` (5min) | Most single-turn RAG scenarios finish in 1-2 minutes |
+| Standard CI run | `900` (default) | Covers multi-turn and multi-document scenarios |
+| Full benchmark | `1200` | Extra buffer for large-document and vision scenarios |
+
+```bash
+# Quick PR check with tight timeout
+gaia eval agent --category rag_quality --timeout 300
+
+# Standard CI run
+gaia eval agent --timeout 900
+```
+
+---
+
+## Custom Scenario Directories
+
+Use `--scenario-dir` to include scenarios from external directories:
+
+```bash
+# Include project-specific scenarios alongside the built-in ones
+gaia eval agent --scenario-dir ~/my-project/eval-scenarios
+
+# Multiple additional directories
+gaia eval agent \
+  --scenario-dir ~/project-a/scenarios \
+  --scenario-dir ~/project-b/scenarios
+```
+
+Similarly, use `--corpus-dir` for additional corpus directories:
+
+```bash
+gaia eval agent --corpus-dir ~/my-project/eval-corpus
+```
+
+---
+
+## Best Practices for CI
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check">
+    - Run `--audit-only` on every push (free)
+    - Use `--category` to limit CI costs on PRs
+    - Save baselines after each release
+    - Upload `eval/results/` as artifacts
+    - Set `timeout-minutes` on the job
+    - Use `--budget` to cap per-scenario costs
+    - Trigger full benchmarks via `workflow_dispatch`
+  </Card>
+
+  <Card title="Don't" icon="xmark">
+    - Run the full 54-scenario benchmark on every commit
+    - Skip `--compare` -- regressions are the whole point
+    - Use `--fix` in CI (patches should be reviewed by humans)
+    - Ignore `BLOCKED_BY_ARCHITECTURE` -- track these as known issues
+    - Set budget too low ($0.50) -- scenarios may hit `BUDGET_EXCEEDED`
+  </Card>
+</CardGroup>
+
+<Warning>
+  Never use `--fix` in CI pipelines. Fix mode patches source code directly and should only be used in local development where changes can be reviewed before committing.
+</Warning>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Getting Started" icon="microscope" href="/guides/eval">
+    Run your first eval and read the scorecard
+  </Card>
+
+  <Card title="Scenario Authoring" icon="file-pen" href="/guides/eval-scenarios">
+    Write custom scenarios with YAML and ground truth
+  </Card>
+
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli#agent-eval">
+    Complete flag reference for `gaia eval agent`
+  </Card>
+
+  <Card title="Agent Eval Benchmark" icon="chart-bar" href="/eval">
+    Architecture deep-dive and scoring internals
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
