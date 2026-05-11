@@ -26,6 +26,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Stub heavy optional deps so this test can run in a minimal env.
+# CRITICAL: track which modules WE installed so we can remove them after the
+# ``gaia.agents.chat.agent`` import below. ``setdefault`` would otherwise
+# leave the MagicMocks resident in ``sys.modules`` for the rest of the
+# pytest session, and any later test that does a plain ``import faiss``
+# (e.g. ``tests/unit/test_code_index_sdk.py``) would silently receive a
+# MagicMock instead of the real module — masking real failures on Linux CI
+# where faiss-cpu isn't installed under the ``[api]`` extras.
+_stubbed_modules: list[str] = []
 for _mod in (
     "faiss",
     "numpy",
@@ -34,9 +42,18 @@ for _mod in (
     "pypdf",
     "pypdfium2",
 ):
-    sys.modules.setdefault(_mod, MagicMock())
+    if _mod not in sys.modules:
+        sys.modules[_mod] = MagicMock()
+        _stubbed_modules.append(_mod)
 
+# Import once: ``gaia.agents.chat.agent`` resolves its faiss/numpy/etc.
+# references at this point, so the cached module keeps working even after
+# we remove the stubs from ``sys.modules`` below.
 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+
+# Roll back the temporary stubs so they don't leak into downstream tests.
+for _mod in _stubbed_modules:
+    sys.modules.pop(_mod, None)
 
 # Hard ceilings — chosen so Gemma 4 E4B can comfortably prompt-process
 # the full system prompt + a typical RAG tool result + the user query

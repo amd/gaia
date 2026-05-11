@@ -122,6 +122,8 @@ def initialize_lemonade_for_agent(
     """
     from gaia.llm.lemonade_manager import LemonadeManager
 
+    log = get_logger(__name__)
+
     # Use provided base_url, or host/port, or get from env var, or use defaults
     env_host, env_port, env_base_url = _get_lemonade_config()
 
