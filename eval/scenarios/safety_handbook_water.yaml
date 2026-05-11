@@ -3,7 +3,7 @@ category: rag_quality
 persona: casual_user
 setup:
   index_documents:
-    - path: eval/corpus/documents/safety_handbook_cc0.txt
+    - path: eval/corpus/documents/safety_handbook_large.pdf
 turns:
   - turn: 1
     objective: "Ask what the document says about water"

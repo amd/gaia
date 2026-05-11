@@ -112,6 +112,16 @@
         {"id": "water_guidance", "question": "What does the document say about water?", "answer": "Ensure proper labeling of water containers; maintain sanitary conditions for potable water; isolate contaminated water and notify safety officer.", "difficulty": "medium"}
       ]
     }
+    ,
+    {
+      "id": "safety_handbook_large",
+      "filename": "safety_handbook_large.pdf",
+      "format": "pdf",
+      "domain": "safety",
+      "facts": [
+        {"id": "water_guidance", "question": "What does the document say about water?", "answer": "Ensure proper labeling of water containers; maintain sanitary conditions for potable water; isolate contaminated water and notify safety officer.", "difficulty": "medium"}
+      ]
+    }
   ],
   "adversarial_documents": [
     {"id": "empty_file", "filename": "empty.txt", "expected_behavior": "Agent reports file is empty"},
