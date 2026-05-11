@@ -169,9 +169,29 @@ def _classify_chat_exception(exc: BaseException):
         or "no route to host" in text
         or "couldn't connect" in text
     )
+    # Lemonade HTTP 5xx — typical when llama-server is mid-swap between
+    # models or hit an internal recovery state. ``LemonadeClient._send_request``
+    # raises ``LemonadeClientError("Request failed with status 503: ...")`` /
+    # 500/502/504 for these. Pre-iter2 these fell through to the generic
+    # "trouble connecting" UI fallback and the chat layer never retried —
+    # so a transient model-swap stall surfaced as a hard FAIL. Treat them
+    # as the network-flavour transient: retryable=True kicks the chat
+    # layer's auto-reload + one-retry path, which usually recovers.
+    is_backend_5xx = bool(
+        _re.search(r"failed with status 5\d\d", text)
+        or "internal server error" in text
+        or "service unavailable" in text
+        or "bad gateway" in text
+        or "gateway timeout" in text
+    )
     if is_timeout and not is_unreachable:
         return LemonadeUpstreamTimeoutError()
-    if "network_error" in text or "curl error" in text or is_unreachable:
+    if (
+        "network_error" in text
+        or "curl error" in text
+        or is_unreachable
+        or is_backend_5xx
+    ):
         return LemonadeNetworkError()
     return None
 

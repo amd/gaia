@@ -20,19 +20,20 @@ Gemma that the cold-start latency is still sane.
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Stub heavy optional deps so this test can run in a minimal env.
-# CRITICAL: track which modules WE installed so we can remove them after the
-# ``gaia.agents.chat.agent`` import below. ``setdefault`` would otherwise
-# leave the MagicMocks resident in ``sys.modules`` for the rest of the
-# pytest session, and any later test that does a plain ``import faiss``
-# (e.g. ``tests/unit/test_code_index_sdk.py``) would silently receive a
-# MagicMock instead of the real module — masking real failures on Linux CI
-# where faiss-cpu isn't installed under the ``[api]`` extras.
+# Stub heavy optional deps so this test can run in a minimal env, but ONLY
+# for modules that can't actually be imported in the current environment.
+# Stubbing an installed module poisons every transitive consumer's cache —
+# e.g. ``gaia.rag.sdk`` binds ``pypdf = <MagicMock>`` at import time, and
+# later PDF tests (``tests/unit/rag/test_pdf_extraction_errors.py``) get
+# that MagicMock back because the GAIA module stays cached after we pop
+# our stub from ``sys.modules``. The result was a flaky "blank PDF reads
+# as encrypted" failure that only fired when this test ran first.
 _stubbed_modules: list[str] = []
 for _mod in (
     "faiss",
@@ -42,18 +43,32 @@ for _mod in (
     "pypdf",
     "pypdfium2",
 ):
-    if _mod not in sys.modules:
-        sys.modules[_mod] = MagicMock()
-        _stubbed_modules.append(_mod)
+    if _mod in sys.modules:
+        continue
+    if importlib.util.find_spec(_mod) is not None:
+        # Real module is installed — let it import normally so downstream
+        # caches bind the real implementation, not a MagicMock.
+        continue
+    sys.modules[_mod] = MagicMock()
+    _stubbed_modules.append(_mod)
 
 # Import once: ``gaia.agents.chat.agent`` resolves its faiss/numpy/etc.
 # references at this point, so the cached module keeps working even after
 # we remove the stubs from ``sys.modules`` below.
 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
-# Roll back the temporary stubs so they don't leak into downstream tests.
+# Roll back the temporary stubs AND evict GAIA modules that bound them so
+# subsequent tests get a fresh import that resolves against the real
+# environment (or fails loudly if the real dep is missing).
 for _mod in _stubbed_modules:
     sys.modules.pop(_mod, None)
+if _stubbed_modules:
+    for _gaia_mod in (
+        "gaia.rag.sdk",
+        "gaia.agents.chat.agent",
+        "gaia.agents.chat.tools.rag_tools",
+    ):
+        sys.modules.pop(_gaia_mod, None)
 
 # Hard ceilings — chosen so Gemma 4 E4B can comfortably prompt-process
 # the full system prompt + a typical RAG tool result + the user query

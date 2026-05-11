@@ -60,7 +60,23 @@ def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
 def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]:
     """Send a message via SSE stream and collect the full response."""
     url = f"{base_url}/api/chat/send"
-    payload = {"session_id": session_id, "message": message, "stream": True}
+    # Pin the model to GAIA's canonical chat LLM so the UI backend can't
+    # fall back to its installer-time ``default_model_name`` (currently
+    # ``Qwen3.5-4B-GGUF``) and force Lemonade to swap models on every
+    # call. Without this, an eval scenario that defaults the session
+    # ends up thrashing Lemonade between Qwen↔Gemma for each turn, which
+    # routinely blew the per-scenario 930s budget (rag_quality
+    # ``negation_handling`` was the canary). Pin is harmless for users
+    # who haven't customised their default — the agent layer was already
+    # going to dispatch to Gemma anyway.
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    payload = {
+        "session_id": session_id,
+        "message": message,
+        "stream": True,
+        "model": DEFAULT_MODEL_NAME,
+    }
 
     try:
         r = requests.post(url, json=payload, stream=True, timeout=180)
