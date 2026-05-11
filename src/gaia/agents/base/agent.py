@@ -1661,11 +1661,61 @@ Do NOT wrap conversational replies in JSON.
             for m in data.get("all_models_loaded", []):
                 if m.get("type") in ("llm", "vlm"):
                     ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    if 0 < ctx < 32768:
+                    # Threshold tracks the chat / rag profile default
+                    # (65536); any loaded ctx below that is "too small"
+                    # for doc-Q&A flows and should trigger a reload.
+                    if 0 < ctx < 65536:
                         return True
             return False
         except Exception:  # pylint: disable=broad-except
             return False
+
+    def _extract_lemonade_user_message(self, exc: BaseException) -> Optional[str]:
+        """Return a typed Lemonade error's ``user_message`` if present in *exc*.
+
+        AgentSDK wraps backend exceptions in generic ``RuntimeError`` /
+        ``Exception`` with ``str(original)`` as the message; the typed-class
+        info is preserved on ``__cause__`` / ``__context__``. We walk both
+        chains and also fall back to substring-matching the stringified
+        exception, so callers get a typed actionable message regardless
+        of which layer raised.
+
+        Specifically prevents the generic "Sorry, I ran into an unexpected
+        problem. This might be a temporary issue — try again in a moment."
+        wrapper from clobbering the precise remediation messages on typed
+        errors like :class:`LemonadeUpstreamTimeoutError` (#1030) — that
+        wrapper actively misleads users on non-retryable failures.
+
+        Returns ``None`` for unrelated exceptions so the caller falls
+        through to its normal generic copy.
+        """
+        try:
+            from gaia.llm.providers.lemonade import LemonadeError
+            from gaia.ui._chat_helpers import _classify_chat_exception
+        except Exception:  # pylint: disable=broad-except
+            return None
+
+        # 1. Direct match anywhere in the cause chain.
+        cur: Optional[BaseException] = exc
+        seen: set = set()
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            if isinstance(cur, LemonadeError):
+                msg = getattr(cur, "user_message", None)
+                if msg:
+                    return str(msg)
+            cur = cur.__cause__ or cur.__context__
+
+        # 2. String-based reclassification — covers the case where the typed
+        # exception was stringified into a generic ``Exception`` by AgentSDK.
+        # ``_classify_chat_exception`` already does the timeout-vs-network
+        # split we need for #1030.
+        classified = _classify_chat_exception(exc)
+        if classified is not None:
+            msg = getattr(classified, "user_message", None)
+            if msg:
+                return str(msg)
+        return None
 
     def _shrink_messages_for_overflow(
         self, messages: List[Dict[str, Any]]
@@ -2645,12 +2695,23 @@ Do NOT wrap conversational replies in JSON.
                                 "the essentials?"
                             )
                         else:
-                            final_answer = (
-                                f"Sorry, I ran into an unexpected problem. "
-                                f"This might be a temporary issue — try "
-                                f"again in a moment.\n\n"
-                                f"*Technical details: {str(e)}*"
-                            )
+                            # If we have a typed Lemonade error in the
+                            # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``
+                            # from #1030), surface its actionable
+                            # ``user_message`` verbatim instead of wrapping it
+                            # with the generic "try again in a moment" copy —
+                            # that wrapper actively misleads users on
+                            # non-retryable failures.
+                            typed_msg = self._extract_lemonade_user_message(e)
+                            if typed_msg is not None:
+                                final_answer = typed_msg
+                            else:
+                                final_answer = (
+                                    f"Sorry, I ran into an unexpected problem. "
+                                    f"This might be a temporary issue — try "
+                                    f"again in a moment.\n\n"
+                                    f"*Technical details: {str(e)}*"
+                                )
                         break
                 if final_answer is not None:
                     break
