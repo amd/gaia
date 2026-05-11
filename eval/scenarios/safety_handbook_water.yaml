@@ -1,0 +1,16 @@
+id: safety_handbook_water
+category: rag_quality
+persona: casual_user
+setup:
+  index_documents:
+    - path: eval/corpus/documents/safety_handbook_cc0.txt
+turns:
+  - turn: 1
+    objective: "Ask what the document says about water"
+    persona: casual_user
+    success_criteria: "Agent cites the handbook guidance mentioning labeling, sanitary conditions, or emergency isolation of contaminated water."
+    ground_truth:
+      expected_phrases:
+        - "label"
+        - "sanitary"
+        - "isolate"

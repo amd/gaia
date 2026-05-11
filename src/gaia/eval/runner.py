@@ -1498,9 +1498,27 @@ def compare_scorecards(baseline_path, current_path):
             "delta": delta,
         }
 
+        # Check for time regressions: compare per-scenario elapsed seconds
+        b_elapsed = b.get("elapsed_s") or 0
+        c_elapsed = c.get("elapsed_s") or 0
+        time_regress = False
+        if isinstance(b_elapsed, (int, float)) and b_elapsed > 0:
+            try:
+                if c_elapsed > (b_elapsed * 2):
+                    time_regress = True
+            except Exception:
+                time_regress = False
+        if time_regress:
+            entry["baseline_elapsed_s"] = round(float(b_elapsed), 2)
+            entry["current_elapsed_s"] = round(float(c_elapsed), 2)
+            entry["time_regressed"] = True
+
         # Corpus availability change — not a quality signal
         if b_skipped or c_skipped:
             corpus_changed.append(entry)
+        elif entry.get("time_regressed"):
+            # Treat time regressions as score regressions to surface in CI
+            score_regressed.append(entry)
         elif not b_pass and c_pass:
             improved.append(entry)
         elif b_pass and not c_pass:

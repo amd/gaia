@@ -104,6 +104,17 @@
       ]
     }
   ],
+  "real_world_documents": [
+    {
+      "id": "safety_handbook_cc0",
+      "filename": "safety_handbook_cc0.txt",
+      "format": "text",
+      "domain": "safety",
+      "facts": [
+        {"id": "water_guidance", "question": "What does the document say about water?", "answer": "Ensure proper labeling of water containers; maintain sanitary conditions for potable water; isolate contaminated water and notify safety officer.", "difficulty": "medium"}
+      ]
+    }
+  ],
   "adversarial_documents": [
     {"id": "empty_file", "filename": "empty.txt", "expected_behavior": "Agent reports file is empty"},
     {"id": "unicode_heavy", "filename": "unicode_test.txt", "expected_behavior": "No encoding errors"},
