@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
-from gaia.agents.base.tools import get_tool_metadata
+from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -215,10 +215,13 @@ class SSEOutputHandler(OutputHandler):
         self._tool_count += 1
         self._last_tool_name = tool_name
         self._tool_start_time = time.monotonic()
+        # Prefer an explicit display label from the tool registry; fall back
+        # to the legacy description map in this module when none is provided.
+        detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
         event = {
             "type": "tool_start",
             "tool": tool_name,
-            "detail": _tool_description(tool_name),
+            "detail": detail_label,
         }
         # Attach MCP server name if this is an MCP tool.
         # _mcp_server is set by MCPTool.to_gaia_format() during registration

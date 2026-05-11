@@ -218,3 +218,25 @@ async def confirm_tool(request: ToolConfirmRequest):
         )
     handler.resolve_tool_confirmation(request.approved)
     return {"status": "ok", "approved": request.approved}
+
+
+class CancelStreamRequest(BaseModel):
+    session_id: str
+
+
+@router.post("/api/chat/cancel")
+async def cancel_stream(request: CancelStreamRequest):
+    """Cancel an active streaming chat session by setting its SSE handler cancelled flag.
+
+    This allows the frontend's Cancel button to gracefully request cancellation
+    without tearing down the HTTP connection.
+    """
+    from .._chat_helpers import _active_sse_handlers
+
+    handler = _active_sse_handlers.get(request.session_id)
+    if not handler:
+        raise HTTPException(
+            status_code=404, detail="No active chat session found for this session ID"
+        )
+    handler.cancelled.set()
+    return {"status": "ok", "cancelled": True}
