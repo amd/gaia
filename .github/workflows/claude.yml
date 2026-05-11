@@ -131,6 +131,10 @@ jobs:
 
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
 
+            ## Output style
+
+            CLAUDE.md "Issue Response Guidelines" sets the style — follow it. Lead with the verdict in 1–2 sentences; `file.py:line` references go AFTER the finding, not before; do not open with a labelled `In plain English:` preamble. Length caps: summary ≤400 words; each blocking-issue block ≤150; nits ≤50. The Summary → Issues → Strengths → Verdict structure stays as-is.
+
             ## FIRST ACTIONS (Do these immediately, in this order)
             1. Read `pr-diff.txt` — ALL changes in the PR (this IS the review target)
             2. Read `pr-files.txt` — changed file list
@@ -394,6 +398,10 @@ jobs:
 
             You are GAIA's AI assistant helping with pull request discussions.
 
+            ## Output style
+
+            CLAUDE.md "Issue Response Guidelines" sets the style — follow it. Lead with the answer in 1–2 sentences; `file.py:line` references go AFTER the finding; do not open with a labelled `In plain English:` preamble. Length cap: ≤200 words per reply.
+
             ## FIRST ACTIONS
             1. Read `pr-diff.txt` to see what changed
             2. Read `pr-files.txt` to see which files changed
@@ -566,6 +574,10 @@ jobs:
             ---
 
             You are GAIA's helpful AI assistant responding to issues and PR conversations.
+
+            ## Output style
+
+            CLAUDE.md "Issue Response Guidelines" sets the style — follow it. Lead with the diagnosis / answer in 1–2 sentences; `file.py:line` references go AFTER the finding (don't reference files you guessed at); do not open with a labelled `In plain English:` preamble. Length caps: quick answers 2–4 sentences; how-to / bug / feature replies ≤200 words.
 
             ## Context Detection
             This handler responds to:

@@ -83,6 +83,23 @@
 }
 .connector-status.ok { color: var(--accent-green); }
 .connector-status.idle { color: var(--text-muted); }
+/*
+ * "Disabled" pill (#1004) — distinct from .idle.
+ *
+ * .idle ("Not configured") is cool gray: the connector has never been
+ * touched. .disabled is a warm orange-tinted muted: the connector IS
+ * configured (credentials + grants live) but the user has paused it.
+ * Different colour communicates "you can re-enable this with one click"
+ * rather than "you need to set this up from scratch".
+ */
+.connector-status.disabled {
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 11px;
+}
 
 .connector-tile-chevron {
     margin-left: auto;
@@ -409,4 +426,257 @@
 @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
+}
+
+/* ── Per-MCP enable/disable toggle (#1004) ───────────────────────── */
+
+/*
+ * Toggle row inside the connector detail body. Sits above the
+ * credentials section so it's the first interaction the user sees on
+ * a configured MCP — flipping the connector off without losing any
+ * state.
+ */
+.connector-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    margin-bottom: 10px;
+}
+
+.connector-toggle-label {
+    flex: 1;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+}
+
+.connector-toggle-help {
+    margin: -4px 0 10px 14px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* ── Per-tile overflow menu (#1004) ──────────────────────────────── */
+
+.connector-tile-menu {
+    position: relative;
+    flex-shrink: 0;
+    /*
+     * The menu wrapper lives inside the tile-header <button>. We need
+     * pointer events to reach the trigger button without bubbling up
+     * to the parent (the trigger calls stopPropagation() on click but
+     * keyboard-driven activation also has to work).
+     */
+    display: inline-flex;
+    align-items: center;
+}
+
+.connector-tile-menu-trigger {
+    background: transparent;
+    border: none;
+    padding: 4px;
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    line-height: 0;
+}
+.connector-tile-menu-trigger:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+.connector-tile-menu-trigger:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 1px;
+}
+.connector-tile-menu-trigger:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.connector-tile-menu-popup {
+    /* position/top/right set via inline style (position:fixed) so the popup
+       escapes overflow:hidden on .connector-tile */
+    z-index: 1000;
+    min-width: 160px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color, var(--border-light));
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    /* Don't inherit the parent <button>'s cursor/text-align. */
+    text-align: left;
+}
+
+.connector-tile-menu-item {
+    background: transparent;
+    border: none;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+    text-align: left;
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1.4;
+}
+.connector-tile-menu-item:hover {
+    background: var(--bg-secondary);
+}
+.connector-tile-menu-item:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.connector-tile-menu-item--danger {
+    color: var(--text-danger, #d04a3a);
+}
+
+.connector-tile-menu-divider {
+    height: 1px;
+    background: var(--border-light);
+    margin: 4px 0;
+}
+
+/* ── Custom-agent MCP section (#1020) ─────────────────────────────── */
+
+/*
+ * Read-only section below the managed connectors list. Each tile shows one
+ * MCP server from a custom agent's local mcp_servers.json. No toggle, no
+ * overflow menu — the user edits the JSON directly to change these.
+ */
+.agent-mcps-section {
+    margin-top: 20px;
+}
+
+.agent-mcps-section-header {
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.agent-mcp-tile {
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    overflow: hidden;
+    transition: border-color var(--duration) var(--ease);
+}
+.agent-mcp-tile:hover,
+.agent-mcp-tile--open {
+    border-color: var(--border);
+}
+
+.agent-mcp-tile-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 14px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+}
+.agent-mcp-tile-header:hover {
+    background: var(--bg-hover, rgba(0,0,0,0.03));
+}
+[data-theme="dark"] .agent-mcp-tile-header:hover {
+    background: rgba(255,255,255,0.04);
+}
+
+.agent-mcp-server-name {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.agent-mcp-agent-label {
+    font-size: 11px;
+    font-family: var(--font-sans);
+    color: var(--text-muted);
+    flex: 1;
+}
+
+.agent-mcp-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-family: var(--font-sans);
+}
+.agent-mcp-status.enabled  { color: var(--accent-green); }
+.agent-mcp-status.disabled {
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 1px 8px;
+}
+
+.agent-mcp-readonly-badge {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+}
+
+.agent-mcp-chevron {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.agent-mcp-detail {
+    border-top: 1px solid var(--border-light);
+    padding: 12px 16px;
+}
+
+.agent-mcp-command-row {
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    word-break: break-all;
+}
+
+.agent-mcp-config-path {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    word-break: break-all;
+}
+
+.agent-mcp-config-hint {
+    font-size: 11px;
+    font-family: var(--font-sans);
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.connector-tile-menu-error {
+    padding: 6px 10px;
+    color: var(--text-danger, #d04a3a);
+    font-size: 11px;
+    border-top: 1px solid var(--border-light);
+    margin-top: 4px;
 }

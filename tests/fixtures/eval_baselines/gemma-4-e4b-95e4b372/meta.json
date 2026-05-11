@@ -1,0 +1,35 @@
+{
+  "model": "Gemma-4-E4B-it-GGUF",
+  "commit": "95e4b372",
+  "date": "2026-05-11",
+  "lemonade_url": "http://localhost:13305/api/v1",
+  "lemonade_version": "10.3.0",
+  "gemma_ctx_size": 65536,
+  "categories": ["rag_quality"],
+  "purpose": "post-#1030 / iter4-v2 baseline. Captures the post-optimization state with all five eval-driven fixes applied (eval/runner.py --bare gating, eval/claude.py auth message, MCP send_message model pin, _chat_helpers.py 5xx classification, rag_tools.py page-key omission) plus the chat-DB custom_model setting reset.",
+  "eval_model": "claude-sonnet-4-6",
+  "hardware": "Apple M-series (Kalin's MacBook Pro), Lemonade on metal",
+  "summary": {
+    "passed": 7,
+    "total_scenarios": 7,
+    "pass_rate": 1.0,
+    "avg_score": 9.08
+  },
+  "vs_prior_baseline": {
+    "prior_commit": "d71cd914",
+    "prior_avg_score": 9.43,
+    "prior_pass_rate": 1.0,
+    "delta_avg_score": -0.35,
+    "delta_pass_rate": 0.0,
+    "note": "Slight avg-score regression vs the original Gemma-4-E4B baseline (9.08 vs 9.43), but same 100% pass rate. The regression is concentrated in two scenarios (budget_query -0.35, hallucination_resistance -0.12) and is offset by gains elsewhere (csv_analysis +0.33, simple_factual_rag +0.20). Tradeoffs accepted as part of the model-pinning fix that unblocked negation_handling (FAIL→PASS) and table_extraction (TIMEOUT→PASS)."
+  },
+  "categories_not_captured": [
+    "tool_selection",
+    "context_retention"
+  ],
+  "rerun_notes": {
+    "model_swap_issue": "Original local run (5/7, eval-20260511-102504) suffered Lemonade swap thrash between Gemma-4-E4B and Qwen3.5-4B mid-scenario, causing negation_handling FAIL and table_extraction TIMEOUT. Root cause: UI's default_model_name was being overridden to Qwen3.5-4B by a stale custom_model setting in ~/.gaia/chat/gaia_chat.db. MCP send_message payload now explicitly pins Gemma per request.",
+    "pre_run_setup": "Pre-load Gemma at ctx_size=65536 via POST /api/v1/load before running. Confirm `model_loaded: Gemma-4-E4B-it-GGUF` in /api/v1/health.",
+    "to_reproduce": "Backend on :4211, then: gaia eval agent --category rag_quality --agent-type doc --backend http://localhost:4211"
+  }
+}

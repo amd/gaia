@@ -12,6 +12,7 @@ import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
 import './ChatView.css';
+import DashboardProgress from './DashboardProgress';
 
 
 const EMPTY_SUGGESTIONS = [
@@ -184,6 +185,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
     const [policyToast, setPolicyToast] = useState<{ tool: string; receiptId?: string } | null>(null);
+    const [showDashboardProgress, setShowDashboardProgress] = useState(false);
     // Agent picker dropdown state
     const [agentPickerOpen, setAgentPickerOpen] = useState(false);
     const agentPickerRef = useRef<HTMLDivElement>(null);
@@ -1075,6 +1077,23 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
 
+    // Listen for programmatic message dispatches from rich-content
+    // components (currently the EmailPreScanCard's Approve / Reply
+    // buttons). Wired as a window-level CustomEvent rather than prop
+    // drilling so any embedded component can reach the active session
+    // without ChatView having to know about it ahead of time.
+    useEffect(() => {
+        const handler = (evt: Event) => {
+            const ce = evt as CustomEvent<{ text?: string }>;
+            const text = ce.detail?.text;
+            if (typeof text === 'string' && text.trim()) {
+                sendMessageRef.current(text);
+            }
+        };
+        window.addEventListener('gaia:send-message', handler);
+        return () => window.removeEventListener('gaia:send-message', handler);
+    }, []);
+
     // Refocus input when streaming ends (textarea is disabled during streaming,
     // which causes the browser to drop focus — restore it so the user can
     // immediately type the next message without clicking).
@@ -1263,6 +1282,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
         >
+            {showDashboardProgress && (
+                <div className="dashboard-overlay">
+                    <DashboardProgress sessionId={sessionId} onClose={() => setShowDashboardProgress(false)} />
+                </div>
+            )}
             {/* Header */}
             <header className="chat-header">
                 <div className="chat-header-left">
@@ -1314,6 +1338,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     </button>
                     <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export chat">
                         <Download size={15} />
+                    </button>
+                    <button className="btn-icon-sm" onClick={() => setShowDashboardProgress((s) => !s)} title="Refresh dashboard" aria-label="Refresh dashboard">
+                        <ArrowDown size={15} />
                     </button>
                     <button
                         className={`notification-center-trigger ${notificationUnreadCount > 0 ? 'has-unread' : ''}`}

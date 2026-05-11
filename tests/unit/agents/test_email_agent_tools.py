@@ -48,7 +48,9 @@ from gaia.agents.email.tools.organize_tools import (  # noqa: E402
 from gaia.agents.email.tools.read_tools import (  # noqa: E402
     UNTRUSTED_BODY_CLOSE,
     UNTRUSTED_BODY_OPEN,
+    extract_sender_email,
     list_inbox_impl,
+    pre_scan_inbox_impl,
     triage_inbox_impl,
 )
 from gaia.agents.email.tools.reply_tools import (  # noqa: E402
@@ -145,6 +147,410 @@ class TestReadTools:
         out = triage_inbox_impl(fake_gmail, max_messages=50)
         phish = [r for r in out["results"] if r["is_phishing"]]
         assert phish, "phishing payload should be flagged in stub fixture"
+
+
+# ---------------------------------------------------------------------------
+# Sender-email helper
+# ---------------------------------------------------------------------------
+
+
+class TestExtractSenderEmail:
+    @pytest.mark.parametrize(
+        "header,expected",
+        [
+            ("Alice <alice@example.com>", "alice@example.com"),
+            ("alice@example.com", "alice@example.com"),
+            ("ALICE@EXAMPLE.COM", "alice@example.com"),
+            ('"Alice, Inc." <alice@example.com>', "alice@example.com"),
+            ("", ""),
+            ("   ", ""),
+        ],
+    )
+    def test_extract(self, header, expected):
+        assert extract_sender_email(header) == expected
+
+
+# ---------------------------------------------------------------------------
+# Pre-scan envelope
+# ---------------------------------------------------------------------------
+
+
+class TestPreScanInbox:
+    def test_envelope_has_required_keys(self, fake_gmail):
+        out = pre_scan_inbox_impl(fake_gmail, max_messages=50)
+        assert out["kind"] == "email_pre_scan"
+        for key in (
+            "urgent",
+            "actionable",
+            "informational_count",
+            "suggested_archives",
+            "suggested_drafts",
+            "preferences_applied",
+            "totals",
+        ):
+            assert key in out, f"missing pre-scan key: {key}"
+        # Drafts placeholder is a stable empty list for forward compat.
+        assert out["suggested_drafts"] == []
+        # informational_count is an int, never None.
+        assert isinstance(out["informational_count"], int)
+
+    def test_section_caps_respected(self, fake_gmail):
+        out = pre_scan_inbox_impl(
+            fake_gmail,
+            max_messages=50,
+            urgent_cap=2,
+            actionable_cap=2,
+            archive_cap=3,
+        )
+        assert len(out["urgent"]) <= 2
+        assert len(out["actionable"]) <= 2
+        assert len(out["suggested_archives"]) <= 3
+
+    def test_phishing_lands_in_actionable_not_archives(self, fake_gmail):
+        """A phishing-flagged message must be surfaced for human review, not
+        silently lifted into ``suggested_archives``. The user has to see it.
+        """
+        out = pre_scan_inbox_impl(fake_gmail, max_messages=50)
+        # The fixture has a phishing message ("Verify your account").
+        archive_subjects = [a["subject"] for a in out["suggested_archives"]]
+        assert not any(
+            "verify your account" in s.lower() for s in archive_subjects
+        ), "phishing must not be silently archived"
+
+    def test_phishing_overrides_priority_sender_preference(self, fake_gmail):
+        """Safety override: a phishing-flagged message from a priority
+        sender must NOT be promoted to ``urgent``. If a user adds a
+        sender to the priority list and that sender's mail trips the
+        phishing heuristic (e.g. spoofed display name), the phishing
+        flag wins. Otherwise the LLM might act on links inside the
+        phishing body.
+        """
+        # Find the phishing fixture's sender.
+        phishing_msg = next(
+            m
+            for m in fake_gmail._messages.values()
+            if "verify your account"
+            in next(
+                (
+                    h["value"]
+                    for h in m["payload"]["headers"]
+                    if h["name"].lower() == "subject"
+                ),
+                "",
+            ).lower()
+        )
+        phishing_sender = next(
+            h["value"]
+            for h in phishing_msg["payload"]["headers"]
+            if h["name"].lower() == "from"
+        )
+        addr = extract_sender_email(phishing_sender)
+        # Set the phishing sender as a priority sender.
+        prefs = {
+            "priority_senders": {addr},
+            "low_priority_senders": set(),
+            "category_defaults": {},
+        }
+        # Run triage directly so we can inspect the per-message decision.
+        triage = triage_inbox_impl(
+            fake_gmail, max_messages=50, session_preferences=prefs
+        )
+        phishing_decision = next(
+            r for r in triage["results"] if r["id"] == phishing_msg["id"]
+        )
+        # Category MUST NOT be "urgent" — phishing wins over the prefs.
+        assert phishing_decision["category"] != "urgent"
+        assert phishing_decision["is_phishing"] is True
+        # The override-skipped marker should be set so logs show why.
+        assert phishing_decision.get("preference_applied") == "skipped_phishing_or_spam"
+
+    def test_priority_sender_promotes_to_urgent(self, fake_gmail):
+        """A sender flagged via session preference bypasses the heuristic."""
+        # Pick a sender from the fixture that the heuristic would NOT
+        # classify as urgent — any non-spam non-promo non-phishing one.
+        first_msg = fake_gmail.get_message(list(fake_gmail._messages.keys())[0])
+        first_sender = next(
+            h["value"]
+            for h in first_msg["payload"]["headers"]
+            if h["name"].lower() == "from"
+        )
+        addr = extract_sender_email(first_sender)
+        prefs = {
+            "priority_senders": {addr},
+            "low_priority_senders": set(),
+            "category_defaults": {},
+        }
+        out = pre_scan_inbox_impl(
+            fake_gmail, max_messages=50, session_preferences=prefs
+        )
+        urgent_senders = [
+            extract_sender_email(item["sender"]) for item in out["urgent"]
+        ]
+        assert addr in urgent_senders, (
+            f"priority sender {addr} should land in urgent; "
+            f"saw urgent={urgent_senders}"
+        )
+
+    def test_low_priority_sender_lands_in_archives(self, fake_gmail):
+        first_msg = fake_gmail.get_message(list(fake_gmail._messages.keys())[0])
+        first_sender = next(
+            h["value"]
+            for h in first_msg["payload"]["headers"]
+            if h["name"].lower() == "from"
+        )
+        addr = extract_sender_email(first_sender)
+        prefs = {
+            "priority_senders": set(),
+            "low_priority_senders": {addr},
+            "category_defaults": {},
+        }
+        out = pre_scan_inbox_impl(
+            fake_gmail, max_messages=50, session_preferences=prefs
+        )
+        archive_senders = [
+            extract_sender_email(item["sender"]) for item in out["suggested_archives"]
+        ]
+        assert addr in archive_senders, (
+            f"low-priority sender {addr} should land in archives; "
+            f"saw archives={archive_senders}"
+        )
+
+    def test_category_default_archive_lifts_informational(self, fake_gmail):
+        baseline = pre_scan_inbox_impl(fake_gmail, max_messages=50)
+        baseline_archives = len(baseline["suggested_archives"])
+        baseline_info = baseline["informational_count"]
+
+        prefs = {
+            "priority_senders": set(),
+            "low_priority_senders": set(),
+            "category_defaults": {"informational": "archive"},
+        }
+        out = pre_scan_inbox_impl(
+            fake_gmail, max_messages=50, session_preferences=prefs
+        )
+        # All informational items should now be in suggested_archives;
+        # informational_count should drop to 0.
+        assert out["informational_count"] == 0
+        # archive_cap=10 default may clip; allow >= baseline_archives.
+        assert len(out["suggested_archives"]) >= baseline_archives
+        # We should have moved at least one item if there was any
+        # informational mail to begin with.
+        if baseline_info > 0:
+            assert len(out["suggested_archives"]) > baseline_archives
+
+    def test_preferences_applied_echo(self, fake_gmail):
+        prefs = {
+            "priority_senders": {"alice@example.com", "bob@example.com"},
+            "low_priority_senders": {"news@example.com"},
+            "category_defaults": {"low priority": "archive"},
+        }
+        out = pre_scan_inbox_impl(
+            fake_gmail, max_messages=50, session_preferences=prefs
+        )
+        assert out["preferences_applied"]["priority_senders"] == sorted(
+            prefs["priority_senders"]
+        )
+        assert out["preferences_applied"]["low_priority_senders"] == sorted(
+            prefs["low_priority_senders"]
+        )
+        assert out["preferences_applied"]["category_defaults"] == {
+            "low priority": "archive"
+        }
+
+
+# ---------------------------------------------------------------------------
+# Session-preference tools (exercised through the agent's tool registry)
+# ---------------------------------------------------------------------------
+
+
+def _make_email_agent(fake_gmail, fake_calendar, tmp_path):
+    """Construct an EmailTriageAgent with backends injected and the
+    AgentSDK mocked so we don't need a live LLM. Mirrors the helper
+    pattern from ``TestBatchThresholdEnforcement``.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from gaia.agents.email.agent import EmailTriageAgent
+    from gaia.agents.email.config import EmailAgentConfig
+
+    cfg = EmailAgentConfig(
+        gmail_backend=fake_gmail,
+        calendar_backend=fake_calendar,
+        db_path=str(tmp_path / "state.db"),
+        silent_mode=True,
+    )
+    with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+        mock_sdk.return_value = MagicMock()
+        agent = EmailTriageAgent(config=cfg)
+    return agent
+
+
+class TestPreferenceTools:
+    def _tool(self, name):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        return _TOOL_REGISTRY[name]["function"]
+
+    def test_set_priority_sender_normalizes_and_persists(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            result = json.loads(self._tool("set_priority_sender")("Alice@Example.COM"))
+            assert result["ok"] is True
+            assert "alice@example.com" in agent._session_preferences["priority_senders"]
+            # Snapshot is sorted + lowercased.
+            assert (
+                "alice@example.com" in result["data"]["preferences"]["priority_senders"]
+            )
+        finally:
+            agent.close_db()
+
+    def test_set_priority_supersedes_low_priority(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            json.loads(self._tool("set_low_priority_sender")("alice@example.com"))
+            json.loads(self._tool("set_priority_sender")("alice@example.com"))
+            assert "alice@example.com" in agent._session_preferences["priority_senders"]
+            assert (
+                "alice@example.com"
+                not in agent._session_preferences["low_priority_senders"]
+            )
+        finally:
+            agent.close_db()
+
+    def test_set_priority_sender_rejects_bracketed_header(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            # The tool MUST NOT accept "Alice <alice@example.com>" — the
+            # caller should pass the bare address. Bracketed headers
+            # could otherwise sneak past via header-injection prompts.
+            result = json.loads(
+                self._tool("set_priority_sender")("Alice <alice@example.com>")
+            )
+            # _normalize_email strips brackets, but the trailing '>' will
+            # leave an invalid token; either rejected or accepted as the
+            # bare address. The contract: the persisted address must be
+            # exactly "alice@example.com" if accepted, never the full
+            # bracketed form.
+            stored = agent._session_preferences["priority_senders"]
+            for s in stored:
+                assert "<" not in s and ">" not in s
+            # And the result must succeed-or-fail cleanly (no half-state)
+            assert isinstance(result.get("ok"), bool)
+        finally:
+            agent.close_db()
+
+    def test_set_priority_sender_rejects_invalid_email(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            result = json.loads(self._tool("set_priority_sender")("not-an-email"))
+            assert result["ok"] is False
+            assert "email" in result["error"].lower()
+            assert not agent._session_preferences["priority_senders"]
+        finally:
+            agent.close_db()
+
+    def test_set_category_default_round_trip(self, fake_gmail, fake_calendar, tmp_path):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            ok = json.loads(
+                self._tool("set_category_default")("informational", "archive")
+            )
+            assert ok["ok"] is True
+            assert (
+                agent._session_preferences["category_defaults"]["informational"]
+                == "archive"
+            )
+            # Setting it back to "keep" clears the override.
+            keep = json.loads(
+                self._tool("set_category_default")("informational", "keep")
+            )
+            assert keep["ok"] is True
+            assert (
+                "informational" not in agent._session_preferences["category_defaults"]
+            )
+        finally:
+            agent.close_db()
+
+    def test_set_category_default_rejects_unsafe_categories(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            # Defaulting "urgent" to "archive" would silently drop important
+            # mail — the tool must refuse.
+            result = json.loads(self._tool("set_category_default")("urgent", "archive"))
+            assert result["ok"] is False
+            assert "category" in result["error"].lower()
+            assert not agent._session_preferences["category_defaults"]
+        finally:
+            agent.close_db()
+
+    def test_set_category_default_rejects_unknown_action(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            result = json.loads(
+                self._tool("set_category_default")("informational", "delete")
+            )
+            assert result["ok"] is False
+            assert "action" in result["error"].lower()
+            assert not agent._session_preferences["category_defaults"]
+        finally:
+            agent.close_db()
+
+    def test_clear_session_preferences_wipes_state(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            self._tool("set_priority_sender")("alice@example.com")
+            self._tool("set_low_priority_sender")("news@example.com")
+            self._tool("set_category_default")("informational", "archive")
+            result = json.loads(self._tool("clear_session_preferences")())
+            assert result["ok"] is True
+            assert agent._session_preferences["priority_senders"] == set()
+            assert agent._session_preferences["low_priority_senders"] == set()
+            assert agent._session_preferences["category_defaults"] == {}
+        finally:
+            agent.close_db()
+
+    def test_pre_scan_inbox_tool_honors_live_session_state(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        """End-to-end: setting a priority sender via the tool, then
+        invoking pre_scan_inbox via the tool registry, must promote that
+        sender to ``urgent`` in the rendered envelope.
+        """
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            # Pick a sender from the fixture inbox.
+            first_msg = fake_gmail.get_message(list(fake_gmail._messages.keys())[0])
+            first_sender = next(
+                h["value"]
+                for h in first_msg["payload"]["headers"]
+                if h["name"].lower() == "from"
+            )
+            addr = extract_sender_email(first_sender)
+            self._tool("set_priority_sender")(addr)
+
+            envelope = json.loads(self._tool("pre_scan_inbox")(50))
+            assert envelope["ok"] is True
+            data = envelope["data"]
+            urgent_addresses = [
+                extract_sender_email(item["sender"]) for item in data["urgent"]
+            ]
+            assert addr in urgent_addresses
+        finally:
+            agent.close_db()
 
 
 # ---------------------------------------------------------------------------

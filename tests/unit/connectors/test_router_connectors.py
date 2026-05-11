@@ -331,3 +331,212 @@ class TestGrantsEndpoints:
             headers=UI_HEADER,
         )
         assert resp.status_code == 204
+
+
+# ---------------------------------------------------------------------------
+# POST /api/connectors/{connector_id}/enable | /disable  (#1004)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mcp_spec_in_registry(isolated_registry):
+    """Add a configured MCP spec to the test registry for #1004 tests."""
+    from gaia.connectors.spec import ConfigField, ConnectorSpec
+
+    spec = ConnectorSpec(
+        id="mcp-github",
+        display_name="GitHub MCP",
+        icon="🐙",
+        category="dev-tools",
+        tier=1,
+        type="mcp_server",
+        description="GitHub MCP server",
+        mcp_command="npx",
+        mcp_args=("-y", "@modelcontextprotocol/server-github"),
+        mcp_env_keys=("GITHUB_TOKEN",),
+        config_schema=(
+            ConfigField(key="GITHUB_TOKEN", label="Token", kind="secret", secret=True),
+        ),
+    )
+    isolated_registry.register(spec)
+    return spec
+
+
+@pytest.fixture
+def configured_mcp(mcp_spec_in_registry, tmp_path, monkeypatch):
+    """Pre-write an mcp_servers.json entry so the toggle endpoints can find it."""
+    import json
+
+    monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
+
+    gaia_dir = tmp_path / ".gaia"
+    gaia_dir.mkdir(parents=True, exist_ok=True)
+    (gaia_dir / "mcp_servers.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "mcp-github": {
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-github"],
+                        "env": {
+                            "GITHUB_TOKEN": {
+                                "$keyring": "gaia.connections:mcp-github:GITHUB_TOKEN"
+                            }
+                        },
+                        "disabled": False,
+                    }
+                }
+            }
+        )
+    )
+    return mcp_spec_in_registry
+
+
+class TestEnableDisableCsrf:
+    def test_enable_without_header_is_403(self, ui_api_client):
+        resp = ui_api_client.post("/api/connectors/mcp-github/enable")
+        assert resp.status_code == 403
+
+    def test_disable_without_header_is_403(self, ui_api_client):
+        resp = ui_api_client.post("/api/connectors/mcp-github/disable")
+        assert resp.status_code == 403
+
+
+class TestEnableDisableTypeGuard:
+    def test_enable_on_oauth_returns_400(self, ui_api_client):
+        resp = ui_api_client.post("/api/connectors/google/enable", headers=UI_HEADER)
+        assert resp.status_code == 400
+        assert "oauth_pkce" in (resp.json().get("detail") or "")
+
+    def test_disable_on_oauth_returns_400(self, ui_api_client):
+        resp = ui_api_client.post("/api/connectors/google/disable", headers=UI_HEADER)
+        assert resp.status_code == 400
+
+
+class TestEnableDisableUnknown:
+    def test_enable_unknown_id_returns_404(self, ui_api_client):
+        resp = ui_api_client.post(
+            "/api/connectors/mcp-totally-fake/enable", headers=UI_HEADER
+        )
+        assert resp.status_code == 404
+
+    def test_disable_unconfigured_returns_404(
+        self, ui_api_client, mcp_spec_in_registry
+    ):
+        # Spec is in the registry but no mcp_servers.json entry yet.
+        resp = ui_api_client.post(
+            "/api/connectors/mcp-github/disable", headers=UI_HEADER
+        )
+        assert resp.status_code == 404
+        assert "not configured" in (resp.json().get("detail") or "")
+
+
+class TestEnableDisableHappyPath:
+    def test_disable_returns_summary_with_enabled_false(
+        self, ui_api_client, configured_mcp
+    ):
+        resp = ui_api_client.post(
+            "/api/connectors/mcp-github/disable", headers=UI_HEADER
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["id"] == "mcp-github"
+        assert body["enabled"] is False
+        assert body["configured"] is True
+
+    def test_enable_returns_summary_with_enabled_true(
+        self, ui_api_client, configured_mcp
+    ):
+        # First disable, then re-enable.
+        ui_api_client.post("/api/connectors/mcp-github/disable", headers=UI_HEADER)
+        resp = ui_api_client.post(
+            "/api/connectors/mcp-github/enable", headers=UI_HEADER
+        )
+        assert resp.status_code == 200
+        assert resp.json()["enabled"] is True
+
+    def test_round_trip_persists_in_summary(self, ui_api_client, configured_mcp):
+        # Toggle off → GET reflects it
+        ui_api_client.post("/api/connectors/mcp-github/disable", headers=UI_HEADER)
+        resp = ui_api_client.get("/api/connectors/mcp-github")
+        assert resp.json()["enabled"] is False
+
+        # Toggle back on → GET reflects that too
+        ui_api_client.post("/api/connectors/mcp-github/enable", headers=UI_HEADER)
+        resp = ui_api_client.get("/api/connectors/mcp-github")
+        assert resp.json()["enabled"] is True
+
+
+class TestEnableDisableSseEvents:
+    def test_disable_emits_sse_event(self, ui_api_client, configured_mcp):
+        from gaia.ui.routers.connectors import _emitter
+
+        captured: list[dict] = []
+        original_emit = _emitter.emit
+
+        async def capture(event_type, payload):
+            captured.append({"type": event_type, "payload": payload})
+            await original_emit(event_type, payload)
+
+        _emitter.emit = capture  # type: ignore[assignment]
+        try:
+            ui_api_client.post("/api/connectors/mcp-github/disable", headers=UI_HEADER)
+        finally:
+            _emitter.emit = original_emit  # type: ignore[assignment]
+
+        assert any(
+            e["type"] == "connector.disabled"
+            and e["payload"] == {"connector_id": "mcp-github"}
+            for e in captured
+        )
+
+    def test_enable_emits_sse_event(self, ui_api_client, configured_mcp):
+        from gaia.ui.routers.connectors import _emitter
+
+        captured: list[dict] = []
+        original_emit = _emitter.emit
+
+        async def capture(event_type, payload):
+            captured.append({"type": event_type, "payload": payload})
+            await original_emit(event_type, payload)
+
+        _emitter.emit = capture  # type: ignore[assignment]
+        try:
+            ui_api_client.post("/api/connectors/mcp-github/disable", headers=UI_HEADER)
+            ui_api_client.post("/api/connectors/mcp-github/enable", headers=UI_HEADER)
+        finally:
+            _emitter.emit = original_emit  # type: ignore[assignment]
+
+        assert any(
+            e["type"] == "connector.enabled"
+            and e["payload"] == {"connector_id": "mcp-github"}
+            for e in captured
+        )
+
+
+class TestEnabledFieldInSummary:
+    def test_unconfigured_mcp_summary_has_enabled_true_default(
+        self, ui_api_client, mcp_spec_in_registry
+    ):
+        """An MCP that's never been configured still reports enabled=true so
+        the UI doesn't render a 'Disabled' pill on a fresh tile."""
+        resp = ui_api_client.get("/api/connectors/mcp-github")
+        body = resp.json()
+        assert body["configured"] is False
+        assert body["enabled"] is True
+
+    def test_configured_mcp_summary_reflects_disabled_flag(
+        self, ui_api_client, configured_mcp
+    ):
+        # Initially enabled
+        resp = ui_api_client.get("/api/connectors/mcp-github")
+        assert resp.json()["enabled"] is True
+
+        # Disable, then re-fetch
+        ui_api_client.post("/api/connectors/mcp-github/disable", headers=UI_HEADER)
+        resp = ui_api_client.get("/api/connectors/mcp-github")
+        assert resp.json()["enabled"] is False
+
+    def test_oauth_summary_always_reports_enabled_true(self, ui_api_client):
+        resp = ui_api_client.get("/api/connectors/google")
+        assert resp.json()["enabled"] is True

@@ -136,6 +136,53 @@ icon: "bug"
     gaia kill --lemonade
     ```
   </Accordion>
+
+  <Accordion title="The local model didn't respond in time" icon="hourglass-end">
+    You're seeing an error like:
+
+    > The local model didn't respond in time. The Lemonade Server is
+    > running, but its model call timed out — usually because the model
+    > is still warming up (cold KV cache) or the prompt is too large
+    > for the current hardware on a fresh load.
+
+    **What it means.** Lemonade Server itself is reachable; the upstream
+    inference call (libcurl → child `llama-server`) didn't return a
+    first token before Lemonade's internal timeout. This is distinct
+    from the connection-refused / unreachable case and uses its own
+    typed error (`LemonadeUpstreamTimeoutError`).
+
+    **Why it happens.**
+
+    - **Cold KV cache** — the first request after a model load or swap
+      always pays a one-time prompt-processing cost. The same query
+      will usually complete in a fraction of the time on the second try.
+    - **Prompt too large for the hardware** — heavy RAG retrieval or a
+      multi-doc index can push the request past the iGPU/NPU
+      prompt-processing budget on lower-spec systems. Reducing
+      retrieved chunks is the most direct fix.
+    - **Stale model state** — a recent unload/swap can leave the
+      llama-server child in a half-loaded state.
+
+    **Remediation, in order:**
+
+    1. Wait 30s and resend the same query. The first call primes the KV
+       cache; the second is materially faster.
+    2. Reduce retrieved RAG chunks for large documents:
+       ```bash
+       gaia chat --max-chunks 2 --index your_document.pdf
+       ```
+    3. Restart Lemonade cleanly:
+       ```bash
+       gaia kill && lemonade-server serve
+       ```
+    4. Close other GPU/NPU-heavy apps competing for the device (image
+       generators, other LLM servers, GPU benchmarks).
+
+    See [#1030](https://github.com/amd/gaia/issues/1030) for the
+    original report and the system-prompt-trim fix that reduces the
+    per-request prompt size by ~5× to keep this from firing on typical
+    indexed-PDF workflows.
+  </Accordion>
 </AccordionGroup>
 
 ---
