@@ -1,18 +1,19 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Catalog ledger test (#976).
+Catalog ledger test (#976, updated #1021).
 
 Replaces the previous "legacy ⊆ new" parity check. The MCP catalog has been
-intentionally reduced from 22 deployed entries down to 5 tested entries; the
-17 dropped entries are gone for cause (untested or redundant with another
-connector). This test asserts both ends of that ledger:
+intentionally reduced from 22 deployed entries down to 3 entries (#1021
+removed mcp-filesystem and mcp-fetch because no built-in agent consumes them
+through the connectors framework; custom agents supply their own
+mcp_servers.json instead). This test asserts both ends of that ledger:
 
-  * KEPT_IDS — exactly these 5 ids must remain in
+  * KEPT_IDS — exactly these 3 ids must remain in
     ``connectors.catalog.mcp_servers``. For each, field-by-field equivalence
     against the legacy ``mcp.py:_CATALOG`` row of the same name is asserted as
     a guard against silent drift during the migration.
-  * DELETED_IDS — these 17 ids must NOT be present. Regression guard against
+  * DELETED_IDS — these 19 ids must NOT be present. Regression guard against
     accidentally re-introducing untested catalog tiles.
 
 When ``src/gaia/ui/routers/mcp.py:_CATALOG`` is finally deleted (also part of
@@ -29,9 +30,7 @@ from gaia.connectors.registry import REGISTRY
 
 KEPT_IDS = frozenset(
     {
-        "mcp-filesystem",
         "mcp-github",
-        "mcp-fetch",
         "mcp-memory",
         "mcp-git",
     }
@@ -39,6 +38,12 @@ KEPT_IDS = frozenset(
 
 DELETED_IDS = frozenset(
     {
+        # Removed in #1021: no built-in agent consumes these via the connectors
+        # framework; the File/Web agents use Python-native tool mixins instead.
+        # Custom agents supply their own mcp_servers.json.
+        "mcp-filesystem",
+        "mcp-fetch",
+        # Removed in #976: untested / redundant entries.
         "mcp-playwright",
         "mcp-desktop-commander",
         "mcp-brave-search",

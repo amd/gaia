@@ -462,6 +462,51 @@ def _store_agent(
         )
 
 
+def reload_all_session_agents_mcp() -> int:
+    """
+    Call ``reload()`` on every cached agent's ``MCPClientManager`` (#1004).
+
+    Each `ChatAgent` instance owns its own per-instance `MCPClientManager`
+    (see `MCPClientMixin.__init__`); there is no process-wide singleton.
+    When a user toggles a connector via Settings → Connectors, the active
+    chat sessions need to pick up the new ``mcp_servers.json`` state on
+    their next turn — otherwise tools materialize/disappear only after
+    GAIA restart.
+
+    Wired as the ``McpServerHandler.reload_callback`` from the FastAPI
+    lifespan. Returns the count of managers reloaded for diagnostics.
+    """
+    count = 0
+    failed = 0
+    with _agent_cache_lock:
+        entries = list(_agent_cache.items())
+
+    for session_id, entry in entries:
+        agent = entry.get("agent")
+        manager = getattr(agent, "_mcp_manager", None)
+        if manager is None:
+            continue
+        try:
+            manager.reload()
+            count += 1
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 — defensive: one bad session must not break others
+            failed += 1
+            logger.warning(
+                "reload_all_session_agents_mcp: reload() failed for session %s (%s)",
+                session_id[:8],
+                e,
+            )
+
+    logger.info(
+        "reload_all_session_agents_mcp: reloaded %d session manager(s), %d failed",
+        count,
+        failed,
+    )
+    return count
+
+
 def _index_rag_with_progress(
     agent, fpath_list, sse_handler, *, rebuild_per_doc=False, label="document(s)"
 ):
