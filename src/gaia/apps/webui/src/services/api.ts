@@ -448,6 +448,11 @@ export async function confirmTool(sessionId: string, approved: boolean): Promise
     return apiFetch('POST', '/chat/confirm-tool', { session_id: sessionId, approved });
 }
 
+/** Cancel an active streaming chat session (sets SSE handler cancelled flag). */
+export async function cancelStream(sessionId: string): Promise<{ cancelled: boolean }> {
+    return apiFetch('POST', '/chat/cancel', { session_id: sessionId });
+}
+
 // -- Documents -----------------------------------------------------------------
 
 export async function listDocuments(): Promise<{ documents: Document[]; total: number; total_size_bytes: number; total_chunks: number }> {

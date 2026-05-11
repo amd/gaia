@@ -12,6 +12,7 @@ import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
 import './ChatView.css';
+import DashboardProgress from './DashboardProgress';
 
 
 const EMPTY_SUGGESTIONS = [
@@ -184,6 +185,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
     const [policyToast, setPolicyToast] = useState<{ tool: string; receiptId?: string } | null>(null);
+    const [showDashboardProgress, setShowDashboardProgress] = useState(false);
     // Agent picker dropdown state
     const [agentPickerOpen, setAgentPickerOpen] = useState(false);
     const agentPickerRef = useRef<HTMLDivElement>(null);
@@ -1263,6 +1265,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
         >
+            {showDashboardProgress && (
+                <div className="dashboard-overlay">
+                    <DashboardProgress sessionId={sessionId} onClose={() => setShowDashboardProgress(false)} />
+                </div>
+            )}
             {/* Header */}
             <header className="chat-header">
                 <div className="chat-header-left">
@@ -1314,6 +1321,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     </button>
                     <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export chat">
                         <Download size={15} />
+                    </button>
+                    <button className="btn-icon-sm" onClick={() => setShowDashboardProgress((s) => !s)} title="Refresh dashboard" aria-label="Refresh dashboard">
+                        <ArrowDown size={15} />
                     </button>
                     <button
                         className={`notification-center-trigger ${notificationUnreadCount > 0 ? 'has-unread' : ''}`}
