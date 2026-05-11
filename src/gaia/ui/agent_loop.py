@@ -380,7 +380,7 @@ class AgentLoop:
 
                 # Set incognito flag (respect private/memory settings)
                 if hasattr(agent, "_incognito"):
-                    memory_off = db.get_setting("memory_enabled", "true") == "false"
+                    memory_off = db.get_setting("memory_enabled", "false") == "false"
                     agent._incognito = memory_off
 
                 agent.process_query(tick_prompt)

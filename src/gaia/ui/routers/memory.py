@@ -1548,7 +1548,7 @@ def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
     if json_consent != db_consent:
         db.set_setting(_SYSTEM_DISCOVERY_KEY, "true" if json_consent else "false")
     return {
-        "memory_enabled": db.get_setting(_MEMORY_ENABLED_KEY, "true") == "true",
+        "memory_enabled": db.get_setting(_MEMORY_ENABLED_KEY, "false") == "true",
         "mcp_memory_enabled": db.get_setting(_MCP_MEMORY_ENABLED_KEY, "false")
         == "true",
         "system_discovery_consent": json_consent,
@@ -1560,7 +1560,7 @@ def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
     """Return memory-related feature settings.
 
     Keys:
-    - ``memory_enabled`` (bool): global memory on/off. Default true.
+    - ``memory_enabled`` (bool): global memory on/off. Default false (beta).
     - ``mcp_memory_enabled`` (bool): expose read tools to MCP clients. Default false.
     - ``system_discovery_consent`` (bool): allow system scanning (hardware, software,
       environment). Default false — requires explicit opt-in.
@@ -1578,7 +1578,7 @@ def update_memory_settings(
     Supported keys:
     - ``memory_enabled`` (bool): globally enable/disable all memory storage.
       When false, no knowledge or conversation data is written during any
-      chat session (equivalent to every session being private). Default true.
+      chat session (equivalent to every session being private). Default false (beta).
     - ``mcp_memory_enabled`` (bool): expose memory read tools to MCP clients
       for debug/troubleshooting. Default false.
     - ``system_discovery_consent`` (bool): allow system scanning. Default false.

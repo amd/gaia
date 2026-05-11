@@ -334,7 +334,7 @@ export function MemoryDashboard() {
     const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
 
     // Settings
-    const [memoryEnabled, setMemoryEnabled] = useState(true);
+    const [memoryEnabled, setMemoryEnabled] = useState(false);
     const [mcpMemoryEnabled, setMcpMemoryEnabled] = useState(false);
     const [systemDiscoveryConsent, setSystemDiscoveryConsent] = useState(false);
     const [settingsLoading, setSettingsLoading] = useState(false);

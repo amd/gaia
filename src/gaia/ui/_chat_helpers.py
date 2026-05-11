@@ -1039,7 +1039,7 @@ async def _get_chat_response(
 
         # Suppress memory writes when private session OR global memory is disabled.
         if hasattr(agent, "_incognito"):
-            memory_globally_off = db.get_setting("memory_enabled", "true") == "false"
+            memory_globally_off = db.get_setting("memory_enabled", "false") == "false"
             agent._incognito = memory_globally_off or bool(session.get("private", 0))
 
         # Restore conversation history (limited to prevent context overflow).
@@ -1510,7 +1510,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 # Suppress memory writes when private session OR global memory is disabled.
                 if hasattr(agent, "_incognito"):
                     memory_globally_off = (
-                        db.get_setting("memory_enabled", "true") == "false"
+                        db.get_setting("memory_enabled", "false") == "false"
                     )
                     agent._incognito = memory_globally_off or bool(
                         session.get("private", 0)
