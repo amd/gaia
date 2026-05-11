@@ -50,15 +50,15 @@ That's it. No "What changed" / "Files modified" / "Implementation notes" section
 
 **The "user-observable impact" test:** can a non-author understand the value in <30 seconds without reading the diff? If your description is "supports X protocol" or "refactors Y handler", you've described the *change* but not the *value*. Rewrite to "before: feature Z silently failed for users running model M; after: it works." Concrete observable behaviour beats abstract capability claims.
 
-**Layman-first lead (applies to PRs AND commit messages):**
+**Lead with the summary (PRs and commit messages):**
 
-The **first paragraph of every PR description** AND the **first line of the body of every non-trivial commit message** must be a plain-English summary of the change. A non-engineer — an AMD product manager, a community user reading the changelog, a triager who has never touched this corner of the codebase — must be able to understand the *what* and the *why* in 15 seconds without parsing the diff or decoding framework jargon.
+The first paragraph of every PR description AND the first line of every non-trivial commit-message body must summarize the change directly — what's different, why a reviewer should care, in ~3 sentences. No labelled prefix ("In plain English:", "Layman-first:") — just lead with the substance. If 3 sentences isn't enough, the change is doing more than one thing; ask whether to split.
 
-The layman paragraph **leads**; technical detail **follows**. This supplements technical detail, it does not replace it. Cap the layman summary at ~3 sentences; if you need more, the change is bundling multiple things and you should ask whether to split it.
+The summary leads; technical detail follows in the same body. Supplements technical detail, does not replace it.
 
-For commit messages: the conventional-commits title (`fix(agents): trim ChatAgent prompt …`) is the technical handle. The **first line of the body** (after the blank line under the title) is the layman lead, and the technical detail follows in the same body. PR #1034's commit message is a reasonable model — its body opens with `"ChatAgent system prompt had grown to ~52K chars …"` which is technical-but-readable rather than framework-jargon-only.
+For commit messages: the conventional-commits title (`fix(agents): trim ChatAgent prompt …`) is the technical handle; the first line of the body is the summary. PR #1034's commit body opens with `"ChatAgent system prompt had grown to ~52K chars …"` — direct, no preamble, technical-but-readable.
 
-The same layman-first rule applies to bot reviews and issue comments — see [Issue Response Guidelines](#issue-response-guidelines) below.
+The same rule applies to bot reviews and issue comments — see [Issue Response Guidelines](#issue-response-guidelines) below.
 
 **Hard rules:**
 
@@ -647,10 +647,10 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 ### Response Quality Guidelines
 
 #### Tone & Style
-- **Layman-first:** every response leads with a one-sentence plain-English summary of what's wrong / what's needed / what you'd recommend. Technical detail follows. Do not lead with a code reference or framework jargon — the issue author may not be a GAIA core dev, and even if they are, the first sentence should not require a file open to parse.
+- **Lead with the finding:** open every response with one sentence stating the diagnosis, the answer, or what you need from the author. No labelled prefix ("In plain English:", "TL;DR:") — just the finding.
 - **Professional but friendly:** Welcome contributors warmly while maintaining technical accuracy
-- **Concise:** Aim for 1-3 paragraphs for simple questions, expand for complex issues
-- **Specific:** Reference actual files with line numbers (e.g., `src/gaia/agents/base/agent.py:123`) — but AFTER the plain-English finding, not before it
+- **Concise:** 1–3 paragraphs for simple questions; expand only when the issue actually warrants it
+- **Specific:** Reference actual files with line numbers (e.g., `src/gaia/agents/base/agent.py:123`) — but AFTER the finding, not before it
 - **Helpful:** Provide next steps, code examples, or links to documentation
 - **Honest:** If you don't know something, say so and suggest escalation to @kovtcharov-amd
 
@@ -689,15 +689,15 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 
 - **Quick answers:** 2–4 sentences. One doc link if relevant. No code unless it directly answers the question.
 - **How-to questions:** One short paragraph of context, then the minimum viable code example, then one doc link. Cap at ~150 words.
-- **Bug reports:** Lead with "I think this is X" or "I need more info to tell" in plain English. Ask for specific reproduction steps. Reference `file.py:line` only if you have actually identified the location — never guess. Cap at ~200 words.
-- **Feature requests:** Lead with one sentence on whether the feature is in scope. Then 2–4 bullets on feasibility / existing patterns / next steps. Cap at ~200 words.
-- **Complex technical discussions:** Still allowed, but they must open with a 1–2 sentence layman framing before diving into the technical detail.
+- **Bug reports:** Open with "I think this is X" or "I need more info to tell." Ask for specific reproduction steps. Reference `file.py:line` only when you've actually identified the location — never guess. Cap at ~200 words.
+- **Feature requests:** Open with one sentence on whether the feature is in scope. Then 2–4 bullets on feasibility / existing patterns / next steps. Cap at ~200 words.
+- **Complex technical discussions:** Allowed, but open with a 1–2 sentence framing of the conclusion before diving into the technical detail.
 
 **Never:**
 - Write walls of text without structure
 - Repeat information already in the issue
 - Provide generic advice not specific to GAIA
-- **Never lead with a code reference.** `Looking at src/gaia/foo.py:123, ...` makes the response feel like a diff review; users want to know whether they did something wrong before they see the line number.
+- **Lead with a code reference.** `Looking at src/gaia/foo.py:123, ...` makes the response feel like a diff review; the reader wants the finding before the line number.
 
 #### Examples
 
@@ -746,8 +746,8 @@ the Lemonade `/api/v1/models` endpoint. The traceback at line 178 indicates that
 to bind on the canonical port (13305) due to an upstream proxy collision with `gaia mcp docker`.
 ```
 *This is bad because it leads with file paths and framework internals; a user filing a bug
-shouldn't have to decode it. Lead with a plain-English diagnosis ("looks like RAG can't reach
-the Lemonade server"), then drop the file references for the contributor who follows up.*
+shouldn't have to decode it. Lead with the diagnosis ("looks like RAG can't reach the
+Lemonade server"), then drop the file references for the contributor who follows up.*
 
 #### Community & Contributor Management
 
