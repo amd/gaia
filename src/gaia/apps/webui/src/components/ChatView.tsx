@@ -1337,15 +1337,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     )}
                 </div>
                 <div className="chat-header-right">
-                    <a
-                        className={`session-hash-badge ${hashCopied ? 'copied' : ''}`}
-                        href={`#${getSessionHash(sessionId)}`}
-                        onClick={handleCopyHash}
-                        title={hashCopied ? 'Copied!' : `Copy session link #${getSessionHash(sessionId)}`}
-                        aria-label={`Copy link for session ${getSessionHash(sessionId)}`}
-                    >
-                        #{getSessionHash(sessionId)}
-                    </a>
                     <span
                         className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
                         title={
