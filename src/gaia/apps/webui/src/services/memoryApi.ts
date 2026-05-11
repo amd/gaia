@@ -7,9 +7,12 @@ const API_BASE = '/api';
 
 async function memFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${API_BASE}${path}`;
+    const headers: Record<string, string> = {};
+    if (method !== 'GET') headers['X-Gaia-UI'] = '1';
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
     const init: RequestInit = {
         method,
-        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
         body: body !== undefined ? JSON.stringify(body) : undefined,
     };
     const res = await fetch(url, init);

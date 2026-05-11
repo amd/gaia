@@ -72,7 +72,7 @@ def client(test_store):
     db = ChatDatabase(":memory:")
     app.dependency_overrides[get_db] = lambda: db
 
-    with TestClient(app) as c:
+    with TestClient(app, headers={"X-Gaia-UI": "1"}) as c:
         yield c
 
     # Reset singleton so other tests get a fresh one
@@ -1274,10 +1274,10 @@ class TestMemorySettings:
         resp = client.get("/api/memory/settings")
         assert "memory_enabled" in resp.json()
 
-    def test_memory_enabled_default_true(self, client):
-        """memory_enabled defaults to true."""
+    def test_memory_enabled_default_false(self, client):
+        """memory_enabled defaults to false (beta — requires explicit opt-in)."""
         resp = client.get("/api/memory/settings")
-        assert resp.json()["memory_enabled"] is True
+        assert resp.json()["memory_enabled"] is False
 
     def test_put_settings_disables_memory(self, client):
         """PUT with memory_enabled=false persists and is returned."""

@@ -10,7 +10,7 @@ import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 
 # Single source of truth imported from the data layer so that all three
@@ -24,6 +24,13 @@ from ..dependencies import get_db
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["memory"])
+
+
+def _require_ui_header(request: Request) -> None:
+    """Require ``X-Gaia-UI: 1`` header as a lightweight CSRF guard."""
+    if request.headers.get("x-gaia-ui") != "1":
+        raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
+
 
 # Safe defaults returned when the data-layer lacks v2 methods.
 # Defined once here so memory_stats() doesn't repeat the literals.
@@ -942,7 +949,7 @@ def prune_memory(days: int = Query(90, ge=7, le=365)) -> Dict:
         raise HTTPException(500, f"Prune failed: {type(exc).__name__}")
 
 
-@router.delete("/api/memory/all")
+@router.delete("/api/memory/all", dependencies=[Depends(_require_ui_header)])
 def clear_all_memory() -> Dict:
     """Permanently delete all knowledge, tool history, and conversation data.
 
@@ -956,7 +963,9 @@ def clear_all_memory() -> Dict:
         raise HTTPException(500, f"Clear failed: {type(exc).__name__}")
 
 
-@router.post("/api/memory/reinitialize")
+@router.post(
+    "/api/memory/reinitialize", dependencies=[Depends(_require_ui_header)]
+)
 def reinitialize_memory() -> Dict:
     """Wipe all memory and re-run initialization from scratch.
 
@@ -1536,6 +1545,14 @@ _MEMORY_ENABLED_KEY = "memory_enabled"
 _SYSTEM_DISCOVERY_KEY = "system_discovery_consent"
 
 
+class MemorySettingsBody(BaseModel):
+    """Typed request body for PUT /api/memory/settings."""
+
+    memory_enabled: Optional[bool] = None
+    mcp_memory_enabled: Optional[bool] = None
+    system_discovery_consent: Optional[bool] = None
+
+
 def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
     """Read all memory settings from the DB and return as a dict.
 
@@ -1572,9 +1589,11 @@ def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
     return _get_memory_settings_dict(db)
 
 
-@router.put("/api/memory/settings")
+@router.put(
+    "/api/memory/settings", dependencies=[Depends(_require_ui_header)]
+)
 def update_memory_settings(
-    body: Dict,
+    body: MemorySettingsBody,
     db: ChatDatabase = Depends(get_db),
 ) -> Dict:
     """Update memory-related feature settings.
@@ -1589,22 +1608,20 @@ def update_memory_settings(
       When toggled ON, also persists the consent to ``~/.gaia/memory_settings.json``
       and triggers an immediate system context refresh.
     """
-    if "memory_enabled" in body:
+    if body.memory_enabled is not None:
         db.set_setting(
-            _MEMORY_ENABLED_KEY, "true" if body["memory_enabled"] else "false"
+            _MEMORY_ENABLED_KEY, "true" if body.memory_enabled else "false"
         )
-    if "mcp_memory_enabled" in body:
+    if body.mcp_memory_enabled is not None:
         db.set_setting(
-            _MCP_MEMORY_ENABLED_KEY, "true" if body["mcp_memory_enabled"] else "false"
+            _MCP_MEMORY_ENABLED_KEY, "true" if body.mcp_memory_enabled else "false"
         )
-    if "system_discovery_consent" in body:
-        consented = bool(body["system_discovery_consent"])
+    if body.system_discovery_consent is not None:
+        consented = body.system_discovery_consent
         db.set_setting(_SYSTEM_DISCOVERY_KEY, "true" if consented else "false")
-        # Sync to ~/.gaia/memory_settings.json so init_system_context() sees it
         from gaia.agents.base.memory import _save_memory_settings
 
         _save_memory_settings({"system_context_enabled": consented})
-        # When toggled ON, run system discovery immediately
         if consented:
             try:
                 refresh_result = _do_system_context_refresh()
