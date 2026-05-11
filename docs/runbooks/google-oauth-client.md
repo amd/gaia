@@ -96,13 +96,13 @@ For day-to-day development:
 
 Trouble: "Connect button does nothing in AgentUI."
 
-1. With `GAIA_DEBUG=1`, hit `GET /api/connections/_debug` — returns
+1. With `GAIA_DEBUG=1`, hit `GET /api/connections/_debug` - returns
    provider registration state, env-var presence, keyring backend,
    grants-path writability, and in-flight flow count.
 2. Check the AgentUI server log for "connections: tripwire sweep complete"
    — confirms lifespan fired.
 3. If the loopback callback timed out: try a different port (the loopback
-   uses an ephemeral port — `127.0.0.1:0` — so this is rare; firewall
+   uses an ephemeral port - `127.0.0.1:0` - so this is rare; firewall
    misconfig is the usual culprit).
 
 ## Security boundaries

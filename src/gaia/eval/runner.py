@@ -935,24 +935,36 @@ def run_scenario_subprocess(
     )
 
     claude_bin = shutil.which("claude") or "claude"
-    cmd = [
-        claude_bin,
-        "-p",
-        "--bare",  # skip hooks, CLAUDE.md, auto-memory — clean subprocess
-        "--no-session-persistence",  # don't save eval sessions to disk
-        "--output-format",
-        "json",
-        "--json-schema",
-        result_schema,
-        "--mcp-config",
-        str(MCP_CONFIG),
-        "--strict-mcp-config",
-        "--model",
-        model,
-        "--dangerously-skip-permissions",
-        "--max-budget-usd",
-        budget,
-    ]
+
+    # ``--bare`` gives a clean subprocess (skips hooks, CLAUDE.md auto-load,
+    # plugin sync, etc.) but per the Claude Code CLI docs it ALSO restricts
+    # Anthropic auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` only —
+    # OAuth and keychain are never read. So on a subscription-only setup
+    # (the common case for Claude Code Max users), ``--bare`` makes the
+    # eval fail-fast with ``Not logged in · Please run /login`` because
+    # the SDK can't see the user's existing OAuth session. We opt in to
+    # ``--bare`` only when an explicit API key is available; otherwise we
+    # let the subprocess inherit the parent's OAuth credentials.
+    cmd = [claude_bin, "-p"]
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        cmd.append("--bare")
+    cmd.extend(
+        [
+            "--no-session-persistence",  # don't save eval sessions to disk
+            "--output-format",
+            "json",
+            "--json-schema",
+            result_schema,
+            "--mcp-config",
+            str(MCP_CONFIG),
+            "--strict-mcp-config",
+            "--model",
+            model,
+            "--dangerously-skip-permissions",
+            "--max-budget-usd",
+            budget,
+        ]
+    )
 
     print(f"\n[RUN] {scenario_id} — invoking claude -p ...", flush=True)
     start = time.time()

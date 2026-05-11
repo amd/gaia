@@ -14,7 +14,9 @@ import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { PermissionPrompt } from './components/PermissionPrompt';
+import { NotificationCenter } from './components/NotificationCenter';
 import { useChatStore } from './stores/chatStore';
+import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash, findSessionByHash } from './utils/format';
@@ -73,6 +75,8 @@ function App() {
         setBackendConnected,
         setAgents,
     } = useChatStore();
+    const showNotificationPanel = useNotificationStore((s) => s.showPanel);
+    const setShowNotificationPanel = useNotificationStore((s) => s.setShowPanel);
 
     // Load agent list on mount, then poll every 30s.
     // Fingerprinting avoids re-renders when the list is unchanged.
@@ -546,9 +550,11 @@ function App() {
             <AnimatedPresence show={showFileBrowser}>
                 <FileBrowser />
             </AnimatedPresence>
-            {/* Settings is now a full page (SettingsPage), rendered inline above.
-               The legacy SettingsModal overlay is no longer needed. */}
-            {/* Memory Dashboard is now a full page, rendered inline above. */}
+            <AnimatedPresence show={showNotificationPanel}>
+                <div className="notification-center-popover">
+                    <NotificationCenter onClose={() => setShowNotificationPanel(false)} />
+                </div>
+            </AnimatedPresence>
 
             {/* Mobile Access Modal */}
             {!isMobile && (

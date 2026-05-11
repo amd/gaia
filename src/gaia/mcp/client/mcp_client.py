@@ -16,26 +16,58 @@ logger = get_logger(__name__)
 
 def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
     """
-    Resolve ``{"$keyring": "service:username"}`` references in *env*.
+    Resolve ``{"$keyring": "<service>:<connector_id>:<env_key>"}`` references in *env*.
 
-    Each value that is a dict with a ``"$keyring"`` key is resolved via
-    ``keyring.get_password(service, username)`` where the reference string
-    is split on the first ``:`` as ``<service>:<username>``.
+    The keyring lookup uses ``service`` and the two-part username
+    ``<connector_id>:<env_key>`` (first ``:`` splits service from username, so
+    ``ref.partition(":")`` gives the correct ``service`` / ``username`` pair
+    that ``McpServerHandler.configure`` writes).
 
-    Raises ``RuntimeError`` if any referenced keyring entry is absent —
-    the server is refused to spawn (plan amendment A5b: fail-closed).
+    Security invariants:
+
+    * ``service`` MUST equal ``gaia.connections``. Any other value would let a
+      corrupted ``mcp_servers.json`` (e.g. a malicious entry pointing at
+      ``"Chrome Safe Storage:Chrome:..."``) exfiltrate other applications'
+      keyring entries into the spawned MCP subprocess env. We refuse to
+      spawn instead.
+    * Missing keyring entries fail closed (raise ``ConnectorsError``) — the
+      MCP server is never spawned with empty env in place of a secret.
+
     Plain string values pass through unchanged.
     """
     if not env:
         return {}
-    import keyring  # pylint: disable=import-outside-toplevel
+
+    # Imports (keyring + connectors) are deferred to the branch that
+    # actually needs them. ``keyring`` is an optional dependency — if
+    # the env contains no ``$keyring`` references, plain values must
+    # pass through without forcing a keyring install.
+    keyring = None  # populated on first $keyring reference
+    SERVICE_NAME = None
+    ConnectorsError: type = Exception  # type: ignore[assignment]
 
     resolved: Dict[str, str] = {}
     missing: list[str] = []
     for key, value in env.items():
         if isinstance(value, dict) and "$keyring" in value:
+            if keyring is None:
+                # pylint: disable=import-outside-toplevel
+                import keyring as _keyring  # noqa: I001
+
+                from gaia.connectors.errors import ConnectorsError as _ConnectorsError
+                from gaia.connectors.store import SERVICE_NAME as _SERVICE_NAME
+
+                keyring = _keyring
+                ConnectorsError = _ConnectorsError
+                SERVICE_NAME = _SERVICE_NAME
             ref = value["$keyring"]
             service, _, username = ref.partition(":")
+            if service != SERVICE_NAME:
+                raise ConnectorsError(
+                    f"MCPClient: refusing to spawn — $keyring reference "
+                    f"{ref!r} points outside the gaia namespace "
+                    f"(service={service!r}). Only {SERVICE_NAME!r} is allowed."
+                )
             password = keyring.get_password(service, username)
             if password is None:
                 missing.append(ref)
@@ -44,10 +76,34 @@ def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
         else:
             resolved[key] = str(value)
     if missing:
-        raise RuntimeError(
-            f"MCPClient: refusing to spawn — missing keyring entries: {missing!r}. "
-            "Reconfigure the connector via Settings → Connectors or "
-            "`gaia connectors configure <id>`."
+        # Diagnostic parse — split each ref into (service, connector_id,
+        # env_key) for an actionable error pointing at `gaia connectors
+        # configure <id>`. Keep the raw refs in the message too for grep.
+        details = []
+        for ref in missing:
+            parts = ref.split(":", 2)
+            if len(parts) == 3:
+                _, connector_id, env_key = parts
+                details.append(
+                    f"connector_id={connector_id!r} env_key={env_key!r} ref={ref!r}"
+                )
+            else:
+                details.append(f"ref={ref!r}")
+        joined = "; ".join(details)
+        # Pull a connector_id from the first parseable ref for the recovery
+        # hint; if none parses, fall back to a generic message.
+        recovery_hint = ""
+        for ref in missing:
+            parts = ref.split(":", 2)
+            if len(parts) == 3:
+                recovery_hint = (
+                    f" Run `gaia connectors configure {parts[1]}` to "
+                    "re-supply the secret."
+                )
+                break
+        raise ConnectorsError(
+            f"MCPClient: refusing to spawn — missing keyring entries: "
+            f"{joined}.{recovery_hint}"
         )
     return resolved
 

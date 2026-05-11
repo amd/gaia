@@ -711,4 +711,29 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       expect(stats.size).toBeGreaterThan(0);
     });
   });
+
+  // ── CI AppImage Smoke Contract ───────────────────────────────────
+
+  describe('CI AppImage smoke configuration', () => {
+    it('should let the userns AppImage smoke skip gaia init', () => {
+      const workflowPath = path.join(
+        __dirname,
+        '../../.github/workflows/build-installers.yml',
+      );
+      const workflow = fs.readFileSync(workflowPath, 'utf8');
+
+      expect(workflow).toContain('GAIA_SKIP_GAIA_INIT: "1"');
+    });
+
+    it('should honor GAIA_SKIP_GAIA_INIT in the shared backend installer', () => {
+      const installerPath = path.join(
+        CHAT_APP_PATH,
+        'services/backend-installer.cjs',
+      );
+      const installer = fs.readFileSync(installerPath, 'utf8');
+
+      expect(installer).toContain('process.env.GAIA_SKIP_GAIA_INIT');
+      expect(installer).toContain('Skipping gaia init');
+    });
+  });
 });

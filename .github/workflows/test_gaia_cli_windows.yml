@@ -128,9 +128,19 @@ jobs:
 
           Write-Host "Lemonade server started successfully"
 
-          # Pull the model now that server is running
+          # Pull the model now that server is running.
+          # ``install-lemonade`` upgrades the runner to the expected
+          # LEMONADE_VERSION first, so newer-than-runner default models
+          # (e.g. Gemma-4-E4B-it-GGUF, which LemonadeManager preloads via
+          # ensure_ready) are already in the upgraded server's catalog --
+          # the preload step picks them up without any explicit pull here.
+          #
+          # v10.x replaced ``lemonade-server pull`` with ``lemonade pull``
+          # (the old form prints "This command is deprecated. Use
+          # 'lemonade pull --help' instead." and exits non-zero, killing
+          # this step under PowerShell).
           Write-Host "Pulling Llama-3.2-3B-Instruct-Hybrid model..."
-          lemonade-server pull Llama-3.2-3B-Instruct-Hybrid
+          lemonade pull Llama-3.2-3B-Instruct-Hybrid
 
       - name: Run Unit Tests (Direct CMD - Full Error Visibility)
         shell: cmd

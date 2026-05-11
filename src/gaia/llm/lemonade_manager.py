@@ -337,7 +337,15 @@ class LemonadeManager:
 
                 # Detect LLM-loaded state once for the branch decisions below.
                 llm_models_loaded = any(
-                    "image" not in model.get("labels", [])
+                    # Health-format ``type=="llm"`` is the precise check;
+                    # the label fallback covers any legacy code path that
+                    # populated ``status.loaded_models`` from the catalog.
+                    model.get("type") == "llm"
+                    or (
+                        model.get("type") is None
+                        and "image" not in model.get("labels", [])
+                        and "embeddings" not in model.get("labels", [])
+                    )
                     for model in status.loaded_models
                 )
 
@@ -500,13 +508,27 @@ class LemonadeManager:
 
         Returns True if reload succeeded and context is now sufficient.
         """
+        # Filter to the LLM(s) actually loaded. ``type=="llm"`` is the
+        # precise check on health-format entries; the label fallback
+        # covers legacy code paths that populate ``loaded_models`` from
+        # the catalog (which lacks ``type``). Embedding and image models
+        # are excluded — reloading them with an LLM ctx_size makes no
+        # sense and (pre-#1030 follow-up) used to load the wrong model
+        # entirely because ``nomic-embed-…`` sorts before ``Gemma-…``.
         llm_models = [
-            m for m in status.loaded_models if "image" not in m.get("labels", [])
+            m
+            for m in status.loaded_models
+            if m.get("type") == "llm"
+            or (
+                m.get("type") is None
+                and "image" not in m.get("labels", [])
+                and "embeddings" not in m.get("labels", [])
+            )
         ]
         if not llm_models:
             return False
 
-        model_id = llm_models[0].get("id", "")
+        model_id = llm_models[0].get("model_name") or llm_models[0].get("id", "")
         if not model_id:
             return False
 

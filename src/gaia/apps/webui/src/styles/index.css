@@ -232,6 +232,55 @@ a:hover { text-decoration: underline; }
     transform: scale(0.984) translateY(10px);
 }
 
+/* ── Notification center trigger/popover ───────────────────────── */
+.notification-center-trigger {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    box-shadow: var(--shadow-sm);
+    transition: color var(--duration-fast) var(--ease),
+                border-color var(--duration-fast) var(--ease),
+                background var(--duration-fast) var(--ease);
+}
+
+.notification-center-trigger:hover,
+.notification-center-trigger[aria-expanded="true"],
+.notification-center-trigger.has-unread {
+    color: var(--text-primary);
+    border-color: rgba(245, 158, 11, 0.45);
+    background: var(--bg-hover);
+}
+
+.notification-center-trigger-badge {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    border-radius: var(--radius-full);
+    background: var(--accent-yellow);
+    color: white;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 17px;
+    text-align: center;
+}
+
+.notification-center-popover {
+    position: fixed;
+    top: 52px;
+    right: 16px;
+    z-index: 120;
+}
+
 /* Ambient background glow — subtle radial gradients for depth (dark mode only).
  * Creates the atmosphere from the reference report design. */
 [data-theme="dark"] .main-content::before {

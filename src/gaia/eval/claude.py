@@ -63,11 +63,16 @@ class ClaudeClient:
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
             error_msg = (
-                "ANTHROPIC_API_KEY not found in environment.\n"
-                "Please add your Anthropic API key to the .env file:\n"
-                "  ANTHROPIC_API_KEY=your_api_key_here\n"
-                "Alternatively, export it as an environment variable:\n"
-                "  export ANTHROPIC_API_KEY=your_api_key_here\n"
+                "ANTHROPIC_API_KEY not found in environment.\n\n"
+                "Two ways to set this up:\n"
+                "  1. SUBSCRIPTION (recommended if you have Claude Code Max):\n"
+                "     Run `claude setup-token` in a terminal, follow the\n"
+                "     browser prompt, then export the printed token:\n"
+                "       export ANTHROPIC_API_KEY=<token>\n"
+                "  2. API KEY (alternative — billed to your Anthropic console):\n"
+                "       export ANTHROPIC_API_KEY=sk-ant-...\n"
+                "Either path can also be added to a `.env` file in the\n"
+                "repo root for persistence.\n"
             )
             self.log.error(error_msg)
             raise ValueError(error_msg)

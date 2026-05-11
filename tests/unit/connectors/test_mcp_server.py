@@ -310,7 +310,9 @@ class TestHealthCheck:
 class TestResolveKeyringRefs:
     def test_resolves_reference(self):
         with patch("keyring.get_password", return_value="resolved"):
-            result = _resolve_keyring_refs({"KEY": {"$keyring": "svc:user:KEY"}})
+            result = _resolve_keyring_refs(
+                {"KEY": {"$keyring": "gaia.connections:mcp-test:KEY"}}
+            )
         assert result["KEY"] == "resolved"
 
     def test_passes_through_plain_string(self):
@@ -318,9 +320,34 @@ class TestResolveKeyringRefs:
         assert result["KEY"] == "plain"
 
     def test_fails_closed_on_missing_entry(self):
+        from gaia.connectors.errors import ConnectorsError
+
         with patch("keyring.get_password", return_value=None):
-            with pytest.raises(RuntimeError, match="missing keyring entries"):
-                _resolve_keyring_refs({"KEY": {"$keyring": "svc:user:KEY"}})
+            with pytest.raises(ConnectorsError, match="missing keyring entries"):
+                _resolve_keyring_refs(
+                    {"KEY": {"$keyring": "gaia.connections:mcp-test:KEY"}}
+                )
+
+    def test_refuses_foreign_service(self):
+        """A $keyring ref outside ``gaia.connections`` is refused — never
+        forwarded to the keyring, preventing cross-service exfiltration via
+        a corrupted ``mcp_servers.json``."""
+        from gaia.connectors.errors import ConnectorsError
+
+        called = {"n": 0}
+
+        def fake_get(service, username):
+            called["n"] += 1
+            return "leaked-secret"
+
+        with patch("keyring.get_password", side_effect=fake_get):
+            with pytest.raises(ConnectorsError, match="outside the gaia namespace"):
+                _resolve_keyring_refs(
+                    {"KEY": {"$keyring": "Chrome Safe Storage:Chrome:K"}}
+                )
+        assert (
+            called["n"] == 0
+        ), "keyring.get_password must NOT be called for foreign services"
 
     def test_empty_env_returns_empty_dict(self):
         assert _resolve_keyring_refs({}) == {}
@@ -328,13 +355,16 @@ class TestResolveKeyringRefs:
 
     def test_resolves_multiple_refs(self):
         def fake_get(service, username):
-            return {"svc:key1": "val1", "svc:key2": "val2"}.get(f"{service}:{username}")
+            return {
+                "gaia.connections:mcp-test:K1": "val1",
+                "gaia.connections:mcp-test:K2": "val2",
+            }.get(f"{service}:{username}")
 
         with patch("keyring.get_password", side_effect=fake_get):
             result = _resolve_keyring_refs(
                 {
-                    "K1": {"$keyring": "svc:key1"},
-                    "K2": {"$keyring": "svc:key2"},
+                    "K1": {"$keyring": "gaia.connections:mcp-test:K1"},
+                    "K2": {"$keyring": "gaia.connections:mcp-test:K2"},
                 }
             )
         assert result == {"K1": "val1", "K2": "val2"}
@@ -416,13 +446,16 @@ class TestSecretHygiene:
 
 class TestCatalog:
     def test_mcp_catalog_entries_have_mcp_server_type(self):
+        # Count assertion lives in test_catalog_ledger.py; this just checks
+        # that the catalog still contains ``type="mcp_server"`` entries and
+        # that registration fires at import time.
         from gaia.connectors import catalog  # noqa: F401 — triggers registration
         from gaia.connectors.registry import REGISTRY
 
         mcp_specs = [s for s in REGISTRY.all() if s.type == "mcp_server"]
-        assert (
-            len(mcp_specs) >= 18
-        ), f"Expected >= 18 mcp_server specs, got {len(mcp_specs)}"
+        assert mcp_specs, "Expected at least one mcp_server spec in the registry"
+        for spec in mcp_specs:
+            assert spec.type == "mcp_server"
 
     def test_mcp_server_handler_registered(self):
         import gaia.connectors.mcp_server  # noqa: F401

@@ -45,3 +45,17 @@
     margin: 0 auto;
     box-sizing: border-box;
 }
+
+.danger-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 16px 0;
+}
+
+.danger-warning {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    line-height: 1.5;
+    font-family: var(--font-sans);
+}

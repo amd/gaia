@@ -101,6 +101,17 @@ export interface ConnectorRow {
      * Populated only when ``configurable === false``; null otherwise.
      */
     config_error: string | null;
+    /**
+     * Whether the connector is currently enabled (#1004).
+     *
+     * Meaningful only for ``type === 'mcp_server'`` — when ``false``, the
+     * connector retains its credentials and per-agent grants but is
+     * suppressed from agent tool lists. The backend defaults this to
+     * ``true`` for OAuth tiles and for not-yet-configured MCP tiles, so
+     * the UI never renders a "Disabled" pill where the concept doesn't
+     * apply.
+     */
+    enabled: boolean;
     account_id: string | null;
     scopes: string[];
     last_tested_at: string | null;
@@ -130,6 +141,20 @@ export interface ConnectorConfigField {
     required: boolean;
     placeholder: string;
     help_md: string;
+}
+
+/**
+ * One MCP server entry declared by a custom Python agent (#1020).
+ * Read-only — controlled by the agent's local mcp_servers.json.
+ */
+export interface AgentMcpServer {
+    agent_id: string;
+    agent_name: string;
+    config_path: string;
+    server_name: string;
+    command: string;
+    args: string[];
+    disabled: boolean;
 }
 
 export interface InferenceStats {
@@ -313,18 +338,6 @@ export interface MCPServerInfo {
     enabled: boolean;
 }
 
-export interface MCPCatalogEntry {
-    name: string;
-    display_name: string;
-    description: string;
-    category: string;
-    tier: number;
-    command: string;
-    args: string[];
-    env: Record<string, string>;
-    requires_config: string[];
-}
-
 export interface MCPServerStatus {
     name: string;
     connected: boolean;
@@ -371,13 +384,23 @@ export interface RetrievalChunk {
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
-    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error';
+    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
     /** Short label shown in collapsed view. */
     label: string;
     /** Detailed content shown when expanded. */
     detail?: string;
     /** Tool name (for type='tool'). */
     tool?: string;
+    /** Governance decision (for type='policy_alert'). */
+    decision?: string;
+    /** Governance policy reason (for type='policy_alert'). */
+    reason?: string;
+    /** Governance rule IDs (for type='policy_alert'). */
+    ruleIds?: string[];
+    /** Governance policy version (for type='policy_alert'). */
+    policyVersion?: string;
+    /** Governance receipt ID (for type='policy_alert'). */
+    receiptId?: string;
     /** Tool result summary (for type='tool'). */
     result?: string;
     /** Whether this step completed successfully. */

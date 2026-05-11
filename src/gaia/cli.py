@@ -122,6 +122,8 @@ def initialize_lemonade_for_agent(
     """
     from gaia.llm.lemonade_manager import LemonadeManager
 
+    log = get_logger(__name__)
+
     # Use provided base_url, or host/port, or get from env var, or use defaults
     env_host, env_port, env_base_url = _get_lemonade_config()
 
@@ -135,17 +137,21 @@ def initialize_lemonade_for_agent(
     if skip_if_external and (use_claude or use_chatgpt):
         return True, base_url or env_base_url
 
-    # Map agent names to context size requirements
-    # Complex agents need 32768+, simple ones can use default 4096
+    # Map agent names to context size requirements.
+    # `chat` and `rag` need 64K so doc-Q&A flows (system prompt + RAG
+    # retrieval + tool result + history) don't crush the window —
+    # `summarize_document` was hitting context overflow on 1-2 MB PDFs
+    # at the previous 32K default (#1030 follow-up). Users on tight RAM
+    # can override with the ``GAIA_CTX_SIZE`` env var.
     agent_context_sizes = {
         "code": 32768,
-        "chat": 32768,
+        "chat": 65536,
         "code_index": 32768,
         "jira": 32768,
         "blender": 32768,
         "docker": 32768,
         "talk": 32768,
-        "rag": 32768,
+        "rag": 65536,
         "email": 32768,  # email agent (#962) — needs room for body + thread context
         "sd": 8192,  # SD agent needs 8K for image + story workflow
         "mcp": 4096,
@@ -153,6 +159,28 @@ def initialize_lemonade_for_agent(
         "vlm": 8192,
     }
     required_ctx = agent_context_sizes.get(agent.lower(), 32768)
+
+    # Env-var override: lets users on lower-memory hardware dial back
+    # (or, in advanced cases, push higher up to the model's 128K max).
+    # Honors any positive integer; values lower than the requested ctx
+    # still load — the user is explicitly taking the trade-off.
+    _ctx_override = os.environ.get("GAIA_CTX_SIZE", "").strip()
+    if _ctx_override:
+        try:
+            _ctx_int = int(_ctx_override)
+            if _ctx_int > 0:
+                log.info(
+                    "GAIA_CTX_SIZE=%d overriding agent '%s' default of %d",
+                    _ctx_int,
+                    agent,
+                    required_ctx,
+                )
+                required_ctx = _ctx_int
+        except ValueError:
+            log.warning(
+                "GAIA_CTX_SIZE=%r is not a positive integer; ignoring",
+                _ctx_override,
+            )
 
     # LemonadeManager handles all validation and error printing
     # Pass base_url directly when provided to preserve full URL (https, ngrok, etc.)
@@ -590,6 +618,12 @@ async def async_main(action, **kwargs):
             # Create initial session if not loading one
             if not agent.current_session:
                 agent.current_session = agent.session_manager.create_session()
+                # Reset tool loader session state on new session
+                try:
+                    if hasattr(agent, "tool_loader"):
+                        agent.tool_loader.reset_session()
+                except Exception:
+                    pass
                 log.debug(f"Created new session: {agent.current_session.session_id}")
 
             # List tools if requested
@@ -809,6 +843,12 @@ def _launch_interactive_cli(log=None):
 
         if not agent.current_session:
             agent.current_session = agent.session_manager.create_session()
+            # Reset tool loader session state on new session
+            try:
+                if hasattr(agent, "tool_loader"):
+                    agent.tool_loader.reset_session()
+            except Exception:
+                pass
 
         interactive_mode(agent)
     except KeyboardInterrupt:
@@ -1475,6 +1515,59 @@ def main():
     )
     api_parser.set_defaults(action="api")
 
+    # Telegram adapter command (v0.18.2) - supports start|stop|status
+    telegram_parser = subparsers.add_parser(
+        "telegram",
+        help="Manage Telegram messaging adapter (start|stop|status)",
+        parents=[parent_parser],
+    )
+    telegram_subparsers = telegram_parser.add_subparsers(
+        dest="telegram_action", help="telegram action to perform"
+    )
+
+    # Start subcommand
+    t_start = telegram_subparsers.add_parser(
+        "start", help="Start the Telegram adapter (polling)"
+    )
+    t_start.add_argument("--token", required=True, help="Telegram bot token")
+    t_start.add_argument(
+        "--allowed-users",
+        help="Comma-separated Telegram user IDs allowed to interact (default: allow all)",
+    )
+    t_start.add_argument(
+        "--background",
+        action="store_true",
+        help="Run adapter in background/daemon mode (writes PID and health endpoint)",
+    )
+
+    # Stop subcommand
+    t_stop = telegram_subparsers.add_parser(
+        "stop", help="Stop background Telegram adapter"
+    )
+    t_stop.add_argument(
+        "--force",
+        action="store_true",
+        help="Force stop even if graceful shutdown fails",
+    )
+
+    # Status subcommand
+    t_status = telegram_subparsers.add_parser(
+        "status", help="Show status of Telegram adapter"
+    )
+    t_status.add_argument(
+        "--health-host",
+        default="127.0.0.1",
+        help="Health server host (default: 127.0.0.1)",
+    )
+    t_status.add_argument(
+        "--health-port",
+        type=int,
+        default=8765,
+        help="Health server port (default: 8765)",
+    )
+
+    telegram_parser.set_defaults(action="telegram")
+
     # Add model download command
     download_parser = subparsers.add_parser(
         "download",
@@ -2012,28 +2105,15 @@ Examples:
         help="Use stdio transport instead of HTTP (for Claude Code / eval runner integration)",
     )
 
-    # MCP Client commands (connect to external MCP servers)
-    mcp_add_parser = mcp_subparsers.add_parser(
-        "add", help="Add an MCP server connection"
-    )
-    mcp_add_parser.add_argument("name", help="Friendly name for the server")
-    mcp_add_parser.add_argument("command", help="Command to start the MCP server")
-    mcp_add_parser.add_argument(
-        "--config",
-        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
-    )
+    # MCP Client commands (connect to external MCP servers).
+    # `add` and `remove` moved to `gaia connectors mcp add/remove` (#977) so
+    # configuration goes through the connectors framework with keyring-backed
+    # secrets and per-agent grants.
 
     mcp_list_parser = mcp_subparsers.add_parser(
         "list", help="List configured MCP servers"
     )
     mcp_list_parser.add_argument(
-        "--config",
-        help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
-    )
-
-    mcp_remove_parser = mcp_subparsers.add_parser("remove", help="Remove an MCP server")
-    mcp_remove_parser.add_argument("name", help="Name of the server to remove")
-    mcp_remove_parser.add_argument(
         "--config",
         help="Path to MCP servers config file (default: ~/.gaia/mcp_servers.json)",
     )
@@ -2320,6 +2400,101 @@ Examples:
             log=log,
             debug=getattr(args, "debug", False),
             webui_dist=getattr(args, "ui_dist", None),
+        )
+        return
+
+    # Handle telegram scaffold command
+    if args.action == "telegram":
+        # Telegram management: start | stop | status
+        action = getattr(args, "telegram_action", None)
+        if action == "start":
+            try:
+                from gaia.messaging.telegram import run_telegram
+            except Exception as e:  # pragma: no cover - runtime import error
+                print(f"❌ Telegram support is not available: {e}", file=sys.stderr)
+                sys.exit(1)
+
+            allowed = None
+            if getattr(args, "allowed_users", None):
+                try:
+                    allowed = set(
+                        int(x.strip())
+                        for x in args.allowed_users.split(",")
+                        if x.strip()
+                    )
+                except ValueError:
+                    print(
+                        "Invalid --allowed-users format; expected comma-separated integers",
+                        file=sys.stderr,
+                    )
+                    sys.exit(2)
+
+            run_telegram(
+                token=args.token,
+                allowed_users=allowed,
+                background=getattr(args, "background", False),
+            )
+            return
+
+        if action == "stop":
+            import signal
+
+            pid_path = os.path.expanduser("~/.gaia/telegram.pid")
+            if not os.path.exists(pid_path):
+                print("Telegram adapter is not running (no PID file).")
+                return
+            try:
+                with open(pid_path, "r", encoding="utf-8") as f:
+                    pid = int(f.read().strip())
+                os.kill(pid, signal.SIGTERM)
+                print(f"Sent SIGTERM to Telegram adapter (pid {pid}).")
+                try:
+                    os.remove(pid_path)
+                except OSError:
+                    pass
+            except ProcessLookupError:
+                print("Process not found; removing stale PID file.")
+                try:
+                    os.remove(pid_path)
+                except OSError:
+                    pass
+            except PermissionError:
+                print("Permission denied when attempting to stop process. Try sudo.")
+                sys.exit(1)
+            except OSError as e:
+                print(f"Failed to stop Telegram adapter: {e}")
+                sys.exit(1)
+            return
+
+        if action == "status":
+            # Prefer health endpoint; fallback to pid file existence
+            import urllib.error
+            import urllib.request
+
+            host = getattr(args, "health_host", "127.0.0.1")
+            port = getattr(args, "health_port", 8765)
+            url = f"http://{host}:{port}/healthz"
+            try:
+                with urllib.request.urlopen(url, timeout=1) as resp:
+                    body = resp.read().decode("utf-8").strip()
+                    if resp.status == 200 and body == "ok":
+                        print(f"Telegram adapter: healthy ({url})")
+                        return
+            except urllib.error.URLError:
+                pass
+
+            pid_path = os.path.expanduser("~/.gaia/telegram.pid")
+            if os.path.exists(pid_path):
+                print(
+                    "Telegram adapter: PID file exists, but health check failed (may be starting or unhealthy)."
+                )
+            else:
+                print("Telegram adapter: not running")
+            return
+
+        print(
+            "No telegram action specified. Use: gaia telegram start|stop|status",
+            file=sys.stderr,
         )
         return
 
@@ -5470,12 +5645,8 @@ def handle_mcp_command(args):
         handle_mcp_docker(args)
     elif args.mcp_action == "serve":
         handle_mcp_serve(args)
-    elif args.mcp_action == "add":
-        handle_mcp_add(args)
     elif args.mcp_action == "list":
         handle_mcp_list(args)
-    elif args.mcp_action == "remove":
-        handle_mcp_remove(args)
     elif args.mcp_action == "tools":
         handle_mcp_tools(args)
     elif args.mcp_action == "test-client":
@@ -6106,39 +6277,6 @@ def handle_mcp_serve(args):
         print(f"❌ Error starting Agent UI MCP server: {e}")
 
 
-def handle_mcp_add(args):
-    """Add an MCP server connection."""
-    import shlex
-
-    from gaia.mcp import MCPClientManager
-    from gaia.mcp.client.config import MCPConfig
-
-    config = MCPConfig(args.config) if args.config else MCPConfig()
-    manager = MCPClientManager(config=config)
-
-    try:
-        print(f"📡 Connecting to MCP server '{args.name}'...")
-
-        # Parse command string into config dict (Anthropic format)
-        parts = shlex.split(args.command)
-        server_config = {"command": parts[0]}
-        if len(parts) > 1:
-            server_config["args"] = parts[1:]
-
-        client = manager.add_server(args.name, server_config)
-
-        tools = client.list_tools()
-        print(f"✅ Successfully connected to '{args.name}'")
-        print(f"   Server: {client.server_info.get('name', 'Unknown')}")
-        print(f"   Version: {client.server_info.get('version', 'Unknown')}")
-        print(f"   Tools: {len(tools)} available")
-
-        config_path = args.config if args.config else "~/.gaia/mcp_servers.json"
-        print(f"   Saved to: {config_path}")
-
-    except Exception as e:
-        print(f"❌ Error connecting to MCP server: {e}")
-
 
 def handle_mcp_list(args):
     """List configured MCP servers."""
@@ -6167,20 +6305,6 @@ def handle_mcp_list(args):
         command = server_config.get("command", "Unknown")
         print(f"\n🔹 {name}")
         print(f"   Command: {command}")
-
-
-def handle_mcp_remove(args):
-    """Remove an MCP server."""
-    from gaia.mcp import MCPConfig
-
-    config = MCPConfig(args.config) if args.config else MCPConfig()
-
-    if not config.server_exists(args.name):
-        print(f"❌ MCP server '{args.name}' not found")
-        return
-
-    config.remove_server(args.name)
-    print(f"✅ Removed MCP server '{args.name}'")
 
 
 def handle_mcp_tools(args):

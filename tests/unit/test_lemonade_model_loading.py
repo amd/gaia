@@ -70,13 +70,21 @@ class TestEnsureModelLoaded:
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
     def test_skips_load_when_model_already_loaded(self, mock_load, mock_status):
-        """Verify no load_model call when model already in loaded_models list."""
+        """Verify no load_model call when model already in loaded_models list.
+
+        After #1030 ``_ensure_model_loaded`` skips the reload only when the
+        loaded entry's ``recipe_options.ctx_size`` is at or above the GAIA
+        expected window. Unknown models (not in MODELS) default to 32K, so
+        the mock must report at least that to take the no-op branch — see
+        ``lemonade_client.py:_ensure_model_loaded`` "Loaded but under-sized"
+        comment for the reload path.
+        """
         # Setup
         client = LemonadeClient(host="localhost", port=13305)
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:13305",
             running=True,
-            loaded_models=[{"id": "model-a"}],
+            loaded_models=[{"id": "model-a", "recipe_options": {"ctx_size": 32768}}],
         )
 
         # Execute
@@ -284,7 +292,13 @@ class TestModelLoadingIntegration:
     def test_model_not_loaded_when_already_present(
         self, mock_openai_class, mock_load, mock_status
     ):
-        """Integration test: no load when model already in loaded_models list."""
+        """Integration test: no load when model already in loaded_models list.
+
+        Same shape as ``test_skips_load_when_model_already_loaded``: after
+        #1030 the loaded entry must carry ``recipe_options.ctx_size`` at or
+        above the GAIA-expected window (32K for unknown models), otherwise
+        the under-sized-reload branch fires.
+        """
         # Setup
         client = LemonadeClient(host="localhost", port=13305)
 
@@ -292,7 +306,9 @@ class TestModelLoadingIntegration:
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:13305",
             running=True,
-            loaded_models=[{"id": "existing-model"}],
+            loaded_models=[
+                {"id": "existing-model", "recipe_options": {"ctx_size": 32768}}
+            ],
         )
 
         # Mock OpenAI client

@@ -132,6 +132,7 @@ def _classify_chat_exception(exc: BaseException):
         LemonadeError,
         LemonadeModelNotLoadedError,
         LemonadeNetworkError,
+        LemonadeUpstreamTimeoutError,
     )
 
     # 1. Direct typed match anywhere in the cause chain.
@@ -139,8 +140,14 @@ def _classify_chat_exception(exc: BaseException):
     # (implicit ``raise ...`` inside an ``except`` block) so we don't lose the
     # typed-class metadata (e.g. ``LemonadeContextOverflowError.retryable``)
     # for handlers that re-raise without ``from``.
+    #
+    # Cycle protection: tracking visited ids defends against pathological
+    # exception graphs where ``a.__cause__ = b`` and ``b.__cause__ = a``.
+    # Without it the walker would loop forever and freeze the chat handler.
     cur: Optional[BaseException] = exc
-    while cur is not None:
+    _seen: set = set()
+    while cur is not None and id(cur) not in _seen:
+        _seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
         cur = cur.__cause__ or cur.__context__
@@ -162,12 +169,50 @@ def _classify_chat_exception(exc: BaseException):
         if m:
             try:
                 n_ctx = int(m.group(1))
-                if 0 < n_ctx < 32768:
+                # Threshold tracks the chat / rag profile default
+                # (65536) — see lemonade.py:_classify_lemonade_response.
+                if 0 < n_ctx < 65536:
                     err.retryable = True
             except ValueError:
                 pass
         return err
-    if "network_error" in text or "curl error" in text or "timeout was reached" in text:
+    # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
+    # hung) from real connectivity failures (#1030). The user-facing remediation
+    # is very different.
+    is_timeout = (
+        "timeout was reached" in text
+        or "timed out" in text
+        or "operation_timeout" in text
+    )
+    is_unreachable = (
+        "connection refused" in text
+        or "could not resolve host" in text
+        or "no route to host" in text
+        or "couldn't connect" in text
+    )
+    # Lemonade HTTP 5xx — typical when llama-server is mid-swap between
+    # models or hit an internal recovery state. ``LemonadeClient._send_request``
+    # raises ``LemonadeClientError("Request failed with status 503: ...")`` /
+    # 500/502/504 for these. Pre-iter2 these fell through to the generic
+    # "trouble connecting" UI fallback and the chat layer never retried —
+    # so a transient model-swap stall surfaced as a hard FAIL. Treat them
+    # as the network-flavour transient: retryable=True kicks the chat
+    # layer's auto-reload + one-retry path, which usually recovers.
+    is_backend_5xx = bool(
+        _re.search(r"failed with status 5\d\d", text)
+        or "internal server error" in text
+        or "service unavailable" in text
+        or "bad gateway" in text
+        or "gateway timeout" in text
+    )
+    if is_timeout and not is_unreachable:
+        return LemonadeUpstreamTimeoutError()
+    if (
+        "network_error" in text
+        or "curl error" in text
+        or is_unreachable
+        or is_backend_5xx
+    ):
         return LemonadeNetworkError()
     return None
 
@@ -481,6 +526,51 @@ def _store_agent(
             canonical,
             len(_agent_cache),
         )
+
+
+def reload_all_session_agents_mcp() -> int:
+    """
+    Call ``reload()`` on every cached agent's ``MCPClientManager`` (#1004).
+
+    Each `ChatAgent` instance owns its own per-instance `MCPClientManager`
+    (see `MCPClientMixin.__init__`); there is no process-wide singleton.
+    When a user toggles a connector via Settings → Connectors, the active
+    chat sessions need to pick up the new ``mcp_servers.json`` state on
+    their next turn — otherwise tools materialize/disappear only after
+    GAIA restart.
+
+    Wired as the ``McpServerHandler.reload_callback`` from the FastAPI
+    lifespan. Returns the count of managers reloaded for diagnostics.
+    """
+    count = 0
+    failed = 0
+    with _agent_cache_lock:
+        entries = list(_agent_cache.items())
+
+    for session_id, entry in entries:
+        agent = entry.get("agent")
+        manager = getattr(agent, "_mcp_manager", None)
+        if manager is None:
+            continue
+        try:
+            manager.reload()
+            count += 1
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 — defensive: one bad session must not break others
+            failed += 1
+            logger.warning(
+                "reload_all_session_agents_mcp: reload() failed for session %s (%s)",
+                session_id[:8],
+                e,
+            )
+
+    logger.info(
+        "reload_all_session_agents_mcp: reloaded %d session manager(s), %d failed",
+        count,
+        failed,
+    )
+    return count
 
 
 def _index_rag_with_progress(
@@ -1149,6 +1239,23 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     from gaia.ui.sse_handler import SSEOutputHandler
 
     session_id = request.session_id
+    sse_handler = None
+    producer = None
+    cleanup_done = False
+
+    def _cleanup_stream():
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+        cleanup_done = True
+        if sse_handler is not None:
+            sse_handler.cancelled.set()
+        _active_sse_handlers.pop(session_id, None)
+        if producer is not None:
+            producer.join(timeout=5.0)
+            if producer.is_alive():
+                logger.warning("Producer thread still running after stream ended")
+
     try:
         # Create SSE handler for streaming events
         sse_handler = SSEOutputHandler()
@@ -1638,10 +1745,51 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         # Also capture agent steps for persistence
         full_response = ""
         captured_steps = []  # Collect agent steps for DB persistence
+        persisted_policy_block_msg_id = None
+        persisted_policy_block_content = None
         step_id = 0
         idle_cycles = 0
         _stream_start = _time.time()
         _STREAM_TIMEOUT = 600  # 10 minutes — large system prompts need time
+
+        def _blocked_policy_steps():
+            return [
+                step
+                for step in captured_steps
+                if step.get("type") == "policy_alert"
+                and (step.get("decision") or "BLOCK").upper() == "BLOCK"
+            ]
+
+        def _policy_block_response(blocked_steps):
+            blocked_tool_names = ", ".join(
+                step.get("tool") or "unknown tool" for step in blocked_steps
+            )
+            return (
+                f"Blocked: {blocked_tool_names} "
+                f"{'is' if len(blocked_steps) == 1 else 'are'} "
+                "restricted by policy."
+            )
+
+        def _persist_policy_block_if_needed():
+            nonlocal persisted_policy_block_content, persisted_policy_block_msg_id
+
+            blocked_steps = _blocked_policy_steps()
+            if not blocked_steps:
+                return None
+
+            persisted_policy_block_content = _policy_block_response(blocked_steps)
+            if persisted_policy_block_msg_id is not None:
+                # ChatDatabase is single-writer SQLite today; make this replacement
+                # transactional before moving the chat DB to a multi-writer backend.
+                db.delete_message(request.session_id, persisted_policy_block_msg_id)
+            persisted_policy_block_msg_id = db.add_message(
+                request.session_id,
+                "assistant",
+                persisted_policy_block_content,
+                agent_steps=captured_steps if captured_steps else None,
+            )
+            return persisted_policy_block_msg_id
+
         while True:
             # Guard: total timeout for the streaming response
             if _time.time() - _stream_start > _STREAM_TIMEOUT:
@@ -1773,6 +1921,36 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
                     )
+                elif event_type == "policy_alert":
+                    step_id += 1
+                    for s in captured_steps:
+                        s["active"] = False
+                    tool_name = event.get("tool") or "unknown tool"
+                    reason = (
+                        event.get("reason")
+                        or event.get("message")
+                        or event.get("content")
+                        or "Tool execution was blocked by governance policy."
+                    )
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "policy_alert",
+                            "label": f"Policy blocked {tool_name}",
+                            "detail": reason,
+                            "tool": tool_name,
+                            "decision": event.get("decision") or "BLOCK",
+                            "reason": reason,
+                            "ruleIds": event.get("rule_ids") or [],
+                            "policyVersion": event.get("policy_version"),
+                            "receiptId": event.get("receipt_id"),
+                            "active": False,
+                            "success": False,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
+                    if (event.get("decision") or "BLOCK").upper() == "BLOCK":
+                        _persist_policy_block_if_needed()
 
                 # Pad each event so Chromium's receive buffer flushes immediately.
                 # Events < 512 bytes are held by Chromium until the buffer fills.
@@ -1811,12 +1989,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     yield status_data
                 continue
 
-        # Signal cancellation (handles client disconnect) then wait for producer
-        sse_handler.cancelled.set()
-        _active_sse_handlers.pop(session_id, None)
-        producer.join(timeout=5.0)
-        if producer.is_alive():
-            logger.warning("Producer thread still running after stream ended")
+        # Signal cancellation (handles client disconnect) then wait for producer.
+        _cleanup_stream()
 
         # Finalize all captured steps (mark as inactive)
         for s in captured_steps:
@@ -1826,7 +2000,15 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         if result_holder["error"]:
             error_msg = f"Agent error: {result_holder['error']}"
             if not full_response:
-                full_response = error_msg
+                blocked_alert_steps = _blocked_policy_steps()
+                if blocked_alert_steps:
+                    full_response = (
+                        persisted_policy_block_content
+                        or _policy_block_response(blocked_alert_steps)
+                    )
+                    full_response += f"\n\n[Error: {result_holder['error']}]"
+                else:
+                    full_response = error_msg
             else:
                 # Partial response exists -- append error notice so user knows
                 # the response may be incomplete
@@ -1873,6 +2055,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 full_response[:40],
             )
             full_response = result_holder.get("answer", "") or ""
+
+        blocked_alert_steps = _blocked_policy_steps()
+        if not full_response and blocked_alert_steps:
+            full_response = persisted_policy_block_content or _policy_block_response(
+                blocked_alert_steps
+            )
 
         # Save complete response to DB (including captured agent steps)
         if full_response:
@@ -1922,13 +2110,23 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     exc,
                 )
 
-            msg_id = db.add_message(
-                request.session_id,
-                "assistant",
-                full_response,
-                agent_steps=captured_steps if captured_steps else None,
-                inference_stats=inference_stats,
-            )
+            if (
+                persisted_policy_block_msg_id is not None
+                and full_response == persisted_policy_block_content
+            ):
+                msg_id = persisted_policy_block_msg_id
+            else:
+                if persisted_policy_block_msg_id is not None:
+                    # ChatDatabase is single-writer SQLite today; make this replacement
+                    # transactional before moving the chat DB to a multi-writer backend.
+                    db.delete_message(request.session_id, persisted_policy_block_msg_id)
+                msg_id = db.add_message(
+                    request.session_id,
+                    "assistant",
+                    full_response,
+                    agent_steps=captured_steps if captured_steps else None,
+                    inference_stats=inference_stats,
+                )
             # Fire-and-forget auto-titling: GAIA renames its own session
             # once the response is complete. Skips Eval: titles, throttled
             # to 30 s/session, runs on the same Lemonade slot the chat
@@ -1985,7 +2183,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
-        _active_sse_handlers.pop(session_id, None)
+        _cleanup_stream()
         error_msg = "Sorry, something went wrong on my end. This is usually a temporary issue — try sending your message again."
         try:
             db.add_message(request.session_id, "assistant", error_msg)
@@ -1993,6 +2191,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             pass
         error_data = json.dumps({"type": "error", "content": error_msg})
         yield f"data: {error_data}\n\n"
+    finally:
+        _cleanup_stream()
 
 
 # ── Document Indexing ────────────────────────────────────────────────────────

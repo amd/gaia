@@ -1,0 +1,15 @@
+---
+title: Telegram Adapter
+---
+
+# Telegram Adapter
+
+This guide describes how to configure the GAIA Telegram adapter to receive messages from Telegram users and stream responses back.
+
+Key points:
+
+- Install `python-telegram-bot` in your environment.
+- Configure a bot token via the Telegram BotFather and pass it to `run_telegram(token=...)`.
+- The adapter supports background daemon mode and per-user sessions.
+
+See `src/gaia/messaging/telegram.py` for the implementation details and configuration options.
