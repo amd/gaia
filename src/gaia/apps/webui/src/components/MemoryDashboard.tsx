@@ -1914,74 +1914,101 @@ export function MemoryDashboard() {
                                             When disabled, no knowledge or conversation data is stored during any session (global incognito).
                                         </span>
                                     </div>
-                                    {betaConfirm ? (
-                                        <div className="mem-delete-confirm" style={{ maxWidth: 340 }}>
-                                            <div style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 8 }}>
-                                                <strong style={{ color: '#f59e0b' }}>Beta Feature</strong>
-                                                <p style={{ margin: '6px 0 0', color: '#aaa' }}>
-                                                    Agent memory is a work-in-progress. Stored data may be lost during
-                                                    updates. Conversations and facts are stored locally on this machine.
-                                                </p>
-                                            </div>
-                                            <button
-                                                className="mem-toggle mem-toggle-on"
-                                                disabled={settingsLoading}
-                                                onClick={async () => {
-                                                    setSettingsLoading(true);
-                                                    try {
-                                                        const updated = await memoryApi.updateMemorySettings({
-                                                            memory_enabled: true,
-                                                        });
-                                                        setMemoryEnabled(updated.memory_enabled);
-                                                        showToast('Memory enabled', 'info');
-                                                    } catch (err) {
-                                                        log.system.warn('Failed to enable memory', err);
-                                                    } finally {
-                                                        setSettingsLoading(false);
-                                                        setBetaConfirm(false);
-                                                    }
-                                                }}
-                                            >
-                                                Enable
-                                            </button>
-                                            <button
-                                                className="btn-secondary"
-                                                onClick={() => setBetaConfirm(false)}
-                                                style={{ padding: '6px 14px', fontSize: 12 }}
-                                            >
-                                                Cancel
-                                            </button>
-                                        </div>
-                                    ) : (
-                                        <button
-                                            className={`mem-toggle${memoryEnabled ? ' mem-toggle-on' : ''}`}
-                                            disabled={settingsLoading}
-                                            onClick={async () => {
-                                                if (!memoryEnabled) {
-                                                    // Show beta warning before enabling
-                                                    setBetaConfirm(true);
-                                                    return;
-                                                }
-                                                // Disabling — no confirmation needed
-                                                setSettingsLoading(true);
-                                                try {
-                                                    const updated = await memoryApi.updateMemorySettings({
-                                                        memory_enabled: false,
-                                                    });
-                                                    setMemoryEnabled(updated.memory_enabled);
-                                                } catch (err) {
-                                                    log.system.warn('Failed to disable memory', err);
-                                                } finally {
-                                                    setSettingsLoading(false);
-                                                }
-                                            }}
-                                            aria-pressed={memoryEnabled}
-                                            aria-label={`Memory is ${memoryEnabled ? 'enabled' : 'disabled'}`}
-                                        >
-                                            {memoryEnabled ? 'On' : 'Off'}
-                                        </button>
-                                    )}
+                                    <button
+                                        className={`mem-toggle${memoryEnabled ? ' mem-toggle-on' : ''}`}
+                                        disabled={settingsLoading}
+                                        onClick={async () => {
+                                            if (!memoryEnabled) {
+                                                setBetaConfirm(true);
+                                                return;
+                                            }
+                                            setSettingsLoading(true);
+                                            try {
+                                                const updated = await memoryApi.updateMemorySettings({ memory_enabled: false });
+                                                setMemoryEnabled(updated.memory_enabled);
+                                            } catch (err) {
+                                                log.system.warn('Failed to disable memory', err);
+                                            } finally {
+                                                setSettingsLoading(false);
+                                            }
+                                        }}
+                                        aria-pressed={memoryEnabled}
+                                        aria-label={`Memory is ${memoryEnabled ? 'enabled' : 'disabled'}`}
+                                    >
+                                        {memoryEnabled ? 'On' : 'Off'}
+                                    </button>
                                 </div>
+                                {/* Floating beta confirmation modal */}
+                                {betaConfirm && (
+                                    <>
+                                        <div
+                                            style={{
+                                                position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+                                                zIndex: 9998, backdropFilter: 'blur(4px)',
+                                            }}
+                                            onClick={() => setBetaConfirm(false)}
+                                        />
+                                        <div style={{
+                                            position: 'fixed', top: '50%', left: '50%',
+                                            transform: 'translate(-50%, -50%)', zIndex: 9999,
+                                            background: '#1a1a2e', border: '1px solid #333',
+                                            borderRadius: 12, padding: '28px 32px', maxWidth: 420,
+                                            width: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+                                        }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                                                <span style={{
+                                                    fontSize: 11, fontWeight: 700, color: '#f59e0b',
+                                                    background: 'rgba(245,158,11,0.15)', padding: '3px 10px',
+                                                    borderRadius: 4, letterSpacing: '0.5px',
+                                                }}>BETA</span>
+                                                <span style={{ fontSize: 16, fontWeight: 600, color: '#e0e0e0' }}>
+                                                    Enable Agent Memory?
+                                                </span>
+                                            </div>
+                                            <p style={{ fontSize: 13, lineHeight: 1.6, color: '#999', margin: '0 0 8px' }}>
+                                                Agent memory is a work-in-progress. By enabling it:
+                                            </p>
+                                            <ul style={{ fontSize: 13, lineHeight: 1.7, color: '#999', margin: '0 0 24px', paddingLeft: 20 }}>
+                                                <li>Conversations and facts are stored <strong style={{ color: '#ccc' }}>locally on this machine</strong></li>
+                                                <li>Stored data <strong style={{ color: '#ccc' }}>may be lost</strong> during updates</li>
+                                                <li>You can disable it at any time from this settings panel</li>
+                                            </ul>
+                                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                                                <button
+                                                    className="btn-secondary"
+                                                    onClick={() => setBetaConfirm(false)}
+                                                    style={{ padding: '8px 20px', fontSize: 13, borderRadius: 6 }}
+                                                >
+                                                    Cancel
+                                                </button>
+                                                <button
+                                                    disabled={settingsLoading}
+                                                    onClick={async () => {
+                                                        setSettingsLoading(true);
+                                                        try {
+                                                            const updated = await memoryApi.updateMemorySettings({ memory_enabled: true });
+                                                            setMemoryEnabled(updated.memory_enabled);
+                                                            showToast('Memory enabled', 'info');
+                                                        } catch (err) {
+                                                            log.system.warn('Failed to enable memory', err);
+                                                        } finally {
+                                                            setSettingsLoading(false);
+                                                            setBetaConfirm(false);
+                                                        }
+                                                    }}
+                                                    style={{
+                                                        padding: '8px 24px', fontSize: 13, fontWeight: 600,
+                                                        borderRadius: 6, border: 'none', cursor: 'pointer',
+                                                        background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                                                        color: '#000',
+                                                    }}
+                                                >
+                                                    Enable Memory
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
                                         <span className="mem-setting-label">MCP memory access</span>
