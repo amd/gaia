@@ -78,48 +78,42 @@ try {
     }
     Write-Host ""
 
-    # Check installation. v10.x renamed the canonical binary to
-    # ``LemonadeServer.exe`` (PascalCase); the legacy ``lemonade-server``
-    # is now a deprecation shim that refuses ``serve --ctx-size ...`` with
-    # ``error: failed to start lemonade-server``. Prefer the new name,
-    # fall back to the legacy shim only for compat with older runners.
+    # Check installation. v10.x splits the old single binary into:
+    #   - ``LemonadeServer.exe`` (PascalCase) -- the actual server, but
+    #     it appears to be a tray/launcher with a different CLI shape
+    #     than the legacy ``lemonade-server serve --port ...`` we rely on.
+    #   - ``lemonade-server.exe`` -- a deprecation shim that still
+    #     translates ``serve --no-tray --port N`` correctly into the new
+    #     server invocation (proven working in test_gaia_cli_windows.yml).
+    #   - ``lemonade.exe`` -- the v10.x CLI for non-server commands (pull
+    #     etc.). ``lemonade-server pull`` is fully removed; calling it
+    #     prints a deprecation message and exits non-zero.
+    #
+    # So we deliberately use the shim for ``serve`` (it handles the
+    # arg translation) and ``lemonade`` for ``pull``. The shim refuses
+    # ``--ctx-size`` -- pin context per-model via the /load API instead.
     Write-Host "=== Checking Installation ==="
-    $lemonadeExe = $null
-    foreach ($name in @("LemonadeServer", "lemonade-server")) {
-        $found = Get-Command $name -ErrorAction SilentlyContinue
-        if ($found) {
-            $lemonadeExe = $found.Source
-            Write-Host "[OK] Found on PATH ($name): $lemonadeExe"
-            break
-        }
-    }
-    if (-not $lemonadeExe) {
-        if (Test-Path ".\.venv\Scripts\LemonadeServer.exe") {
-            $lemonadeExe = ".\.venv\Scripts\LemonadeServer.exe"
-            Write-Host "[OK] Found in .venv: $lemonadeExe"
-        } elseif (Test-Path ".\.venv\Scripts\lemonade-server.exe") {
-            $lemonadeExe = ".\.venv\Scripts\lemonade-server.exe"
-            Write-Host "[OK] Found in .venv (legacy): $lemonadeExe"
-        } else {
-            Write-Host "[ERROR] LemonadeServer/lemonade-server not found on PATH or in .venv"
-            exit 1
-        }
+    $lemonadeServerExe = $null
+    $lemonadeServerCmd = Get-Command "lemonade-server" -ErrorAction SilentlyContinue
+    if ($lemonadeServerCmd) {
+        $lemonadeServerExe = $lemonadeServerCmd.Source
+        Write-Host "[OK] Found 'lemonade-server' on PATH: $lemonadeServerExe"
+    } elseif (Test-Path ".\.venv\Scripts\lemonade-server.exe") {
+        $lemonadeServerExe = ".\.venv\Scripts\lemonade-server.exe"
+        Write-Host "[OK] Found 'lemonade-server' in .venv: $lemonadeServerExe"
+    } else {
+        Write-Host "[ERROR] lemonade-server not found on PATH or in .venv"
+        exit 1
     }
 
-    # v10.x's CLI verb for non-server commands is plain ``lemonade``; the
-    # legacy ``lemonade-server pull`` form prints "This command is
-    # deprecated. Use 'lemonade pull --help' instead." and exits non-zero,
-    # so we resolve a separate ``lemonade`` binary for pull operations and
-    # fall back to the legacy combined exe only when ``lemonade`` is
-    # missing.
     $lemonadeCli = $null
     $lemonadeCliCmd = Get-Command "lemonade" -ErrorAction SilentlyContinue
     if ($lemonadeCliCmd) {
         $lemonadeCli = $lemonadeCliCmd.Source
         Write-Host "[OK] Found CLI 'lemonade' at: $lemonadeCli"
     } else {
-        $lemonadeCli = $lemonadeExe
-        Write-Host "[WARN] 'lemonade' not on PATH; falling back to '$lemonadeExe' for pull operations"
+        $lemonadeCli = $lemonadeServerExe
+        Write-Host "[WARN] 'lemonade' not on PATH; falling back to '$lemonadeServerExe' for pull operations"
     }
     Write-Host ""
 
@@ -134,18 +128,18 @@ try {
         Write-Host ""
     }
 
-    # Start server.
-    #
-    # v10.x's ``LemonadeServer.exe serve`` (and the ``lemonade-server``
-    # deprecation shim) does NOT accept ``--ctx-size`` -- passing it
-    # writes ``error: failed to start lemonade-server`` to stderr and
-    # exits before bind, so the smoke test would time out waiting on a
-    # health endpoint that never came up. We set the per-model ctx_size
-    # through the /api/v1/load body below instead, which is the v10.x
-    # canonical way to pin a context window.
+    # Start server via the ``lemonade-server`` shim. We deliberately
+    # don't call ``LemonadeServer.exe`` directly -- on v10.2.0 it appears
+    # to be a tray/GUI launcher with a different CLI shape that emits no
+    # console output and never binds to the requested port when invoked
+    # with the legacy ``serve --port N --no-tray`` args. The shim still
+    # translates that arg shape correctly (proven by test_gaia_cli_windows
+    # which uses the same incantation against the same v10.2.0 runner).
+    # ``--ctx-size`` is omitted because the shim refuses it in v10.x; the
+    # ctx_size is set per-model on the /api/v1/load call below.
     Write-Host "=== Starting Server ==="
     $env:GGML_VK_DISABLE_COOPMAT = "1"
-    $serverProcess = Start-Process -FilePath $lemonadeExe `
+    $serverProcess = Start-Process -FilePath $lemonadeServerExe `
         -ArgumentList "serve", "--port", "$Port", "--no-tray" `
         -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput "lemonade-server-stdout.log" `
@@ -191,7 +185,7 @@ try {
     # ``lemonade-server pull``; the legacy form prints
     # ``This command is deprecated. Use 'lemonade pull --help' instead.``
     # and exits non-zero. ``$lemonadeCli`` resolves to plain ``lemonade``
-    # when available and falls back to ``$lemonadeExe`` for older
+    # when available and falls back to ``$lemonadeServerExe`` for older
     # installs.
     Write-Host "=== Pulling Primary Model: $ModelName ==="
     $pullOutput = & $lemonadeCli pull $ModelName 2>&1
