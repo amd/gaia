@@ -135,17 +135,21 @@ def initialize_lemonade_for_agent(
     if skip_if_external and (use_claude or use_chatgpt):
         return True, base_url or env_base_url
 
-    # Map agent names to context size requirements
-    # Complex agents need 32768+, simple ones can use default 4096
+    # Map agent names to context size requirements.
+    # `chat` and `rag` need 64K so doc-Q&A flows (system prompt + RAG
+    # retrieval + tool result + history) don't crush the window —
+    # `summarize_document` was hitting context overflow on 1-2 MB PDFs
+    # at the previous 32K default (#1030 follow-up). Users on tight RAM
+    # can override with the ``GAIA_CTX_SIZE`` env var.
     agent_context_sizes = {
         "code": 32768,
-        "chat": 32768,
+        "chat": 65536,
         "code_index": 32768,
         "jira": 32768,
         "blender": 32768,
         "docker": 32768,
         "talk": 32768,
-        "rag": 32768,
+        "rag": 65536,
         "email": 32768,  # email agent (#962) — needs room for body + thread context
         "sd": 8192,  # SD agent needs 8K for image + story workflow
         "mcp": 4096,
@@ -153,6 +157,28 @@ def initialize_lemonade_for_agent(
         "vlm": 8192,
     }
     required_ctx = agent_context_sizes.get(agent.lower(), 32768)
+
+    # Env-var override: lets users on lower-memory hardware dial back
+    # (or, in advanced cases, push higher up to the model's 128K max).
+    # Honors any positive integer; values lower than the requested ctx
+    # still load — the user is explicitly taking the trade-off.
+    _ctx_override = os.environ.get("GAIA_CTX_SIZE", "").strip()
+    if _ctx_override:
+        try:
+            _ctx_int = int(_ctx_override)
+            if _ctx_int > 0:
+                log.info(
+                    "GAIA_CTX_SIZE=%d overriding agent '%s' default of %d",
+                    _ctx_int,
+                    agent,
+                    required_ctx,
+                )
+                required_ctx = _ctx_int
+        except ValueError:
+            log.warning(
+                "GAIA_CTX_SIZE=%r is not a positive integer; ignoring",
+                _ctx_override,
+            )
 
     # LemonadeManager handles all validation and error printing
     # Pass base_url directly when provided to preserve full URL (https, ngrok, etc.)

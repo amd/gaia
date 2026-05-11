@@ -174,11 +174,18 @@ class LemonadeStatus:
 # Define available models
 MODELS = {
     # --- Primary model: Gemma 4 E4B (default for all roles) ---
+    # ctx_size = 65536 (64K): doubles the prior 32K default. Doc-Q&A flows
+    # (RAG retrieval results + history + tool result + system prompt)
+    # routinely cross 32K — `summarize_document` was hitting context
+    # overflow on 1–2 MB PDFs (#1030 follow-up). Gemma 4 E4B supports up
+    # to 128K natively; 64K is the compromise that fits comfortably on
+    # 16 GB shared-memory iGPUs while still removing the doc-Q&A ceiling.
+    # Low-memory users can dial down via the ``GAIA_CTX_SIZE`` env var.
     "gemma-4-e4b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="Gemma-4-E4B-it-GGUF",
         display_name="Gemma 4 E4B (Multimodal)",
-        min_ctx_size=32768,
+        min_ctx_size=65536,
         tool_calling=True,
     ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
@@ -233,7 +240,9 @@ AGENT_PROFILES = {
         name="chat",
         display_name="Chat Agent",
         models=["gemma-4-e4b", "nomic-embed"],
-        min_ctx_size=32768,
+        # 64K so doc-Q&A (RAG retrieval + history) doesn't crush the
+        # window. See ``gemma-4-e4b`` ModelRequirement note.
+        min_ctx_size=65536,
         description="Interactive chat with RAG and vision support",
     ),
     "code": AgentProfile(
@@ -254,7 +263,9 @@ AGENT_PROFILES = {
         name="rag",
         display_name="RAG System",
         models=["gemma-4-e4b", "nomic-embed"],
-        min_ctx_size=32768,
+        # 64K — doc Q&A is the headline use case here; smaller windows
+        # break summarize_document and large multi-chunk retrievals.
+        min_ctx_size=65536,
         description="Document Q&A with retrieval and vision",
     ),
     "blender": AgentProfile(
@@ -2422,16 +2433,44 @@ class LemonadeClient:
             # Model not loaded - load it (will download if needed without prompting)
             self.log.debug(f"Model '{model}' not loaded, loading...")
 
+            # Distinguish "needs download" from "needs memory-map" so the user
+            # sees an honest expectation. ``list_models`` returns per-model
+            # ``downloaded: bool`` flags. If we can't tell, fall through to
+            # the generic loading message — the load_model call below still
+            # auto-downloads when needed.
+            is_downloaded: Optional[bool] = None
+            try:
+                models_data = self.list_models()
+                for _m in models_data.get("data", []):
+                    if _m.get("id") == model:
+                        is_downloaded = bool(_m.get("downloaded", False))
+                        break
+            except Exception as _e:  # pylint: disable=broad-except
+                self.log.debug(f"Could not probe model download state: {_e}")
+
             try:
                 from rich.console import Console
 
                 console = Console()
-                console.print(
-                    f"[bold blue]🔄 Loading model:[/bold blue] [cyan]{model}[/cyan]..."
-                )
+                if is_downloaded is False:
+                    console.print(
+                        f"[bold yellow]📥 Downloading model:[/bold yellow] "
+                        f"[cyan]{model}[/cyan] (first run — this can take "
+                        f"several minutes on a typical connection)..."
+                    )
+                else:
+                    console.print(
+                        f"[bold blue]🔄 Loading model:[/bold blue] [cyan]{model}[/cyan]..."
+                    )
             except ImportError:
                 console = None
-                print(f"🔄 Loading model: {model}...")
+                if is_downloaded is False:
+                    print(
+                        f"📥 Downloading model: {model} (first run — this can "
+                        f"take several minutes)..."
+                    )
+                else:
+                    print(f"🔄 Loading model: {model}...")
 
             ctx_size = None
             for _key, req in MODELS.items():

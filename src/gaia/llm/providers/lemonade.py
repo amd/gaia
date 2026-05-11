@@ -158,17 +158,20 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         or "exceeds the available context size" in msg_blob
     ):
         # Mark retryable when the model was loaded with an unexpectedly
-        # small ctx (almost always 4096 from a pre-restart leftover).
-        # The chat layer's auto-reload at 32K will fix it, so let it try.
-        # GAIA expects 32K everywhere; threshold is a deliberate constant
-        # rather than imported to avoid a circular dep with lemonade_client.
+        # small ctx (typical: 4096 from a pre-restart leftover, or 32K
+        # from a Lemonade `lemonade load Gemma-4-E4B-it-GGUF` without
+        # ``--ctx-size``). The chat layer's auto-reload at the expected
+        # ctx will fix it, so let it try. GAIA's default expected ctx
+        # is 65536 for chat / rag profiles — threshold is a deliberate
+        # constant here rather than imported to avoid a circular dep
+        # with lemonade_client.
         n_ctx_reported = 0
         if isinstance(nested, dict):
             n_ctx_reported = nested.get("n_ctx") or 0
         if not n_ctx_reported and isinstance(err, dict):
             n_ctx_reported = err.get("n_ctx") or 0
         err_instance = LemonadeContextOverflowError(payload=response)
-        if 0 < n_ctx_reported < 32768:
+        if 0 < n_ctx_reported < 65536:
             err_instance.retryable = True
         return err_instance, True
     # Distinguish "upstream model call timed out" (reachable Lemonade,

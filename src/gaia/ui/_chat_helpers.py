@@ -148,7 +148,9 @@ def _classify_chat_exception(exc: BaseException):
         if m:
             try:
                 n_ctx = int(m.group(1))
-                if 0 < n_ctx < 32768:
+                # Threshold tracks the chat / rag profile default
+                # (65536) — see lemonade.py:_classify_lemonade_response.
+                if 0 < n_ctx < 65536:
                     err.retryable = True
             except ValueError:
                 pass
