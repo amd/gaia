@@ -1075,13 +1075,18 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
 
-    // Allow card components (e.g. EmailPreScanCard) to dispatch a chat message
-    // by emitting a gaia:send-message CustomEvent on window. The ref is used so
-    // this effect never needs to re-run when sendMessage changes identity.
+    // Listen for programmatic message dispatches from rich-content
+    // components (currently the EmailPreScanCard's Approve / Reply
+    // buttons). Wired as a window-level CustomEvent rather than prop
+    // drilling so any embedded component can reach the active session
+    // without ChatView having to know about it ahead of time.
     useEffect(() => {
-        const handler = (e: Event) => {
-            const text = (e as CustomEvent<{ text: string }>).detail?.text;
-            if (text) sendMessageRef.current(text);
+        const handler = (evt: Event) => {
+            const ce = evt as CustomEvent<{ text?: string }>;
+            const text = ce.detail?.text;
+            if (typeof text === 'string' && text.trim()) {
+                sendMessageRef.current(text);
+            }
         };
         window.addEventListener('gaia:send-message', handler);
         return () => window.removeEventListener('gaia:send-message', handler);
