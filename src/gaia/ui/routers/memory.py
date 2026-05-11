@@ -963,9 +963,7 @@ def clear_all_memory() -> Dict:
         raise HTTPException(500, f"Clear failed: {type(exc).__name__}")
 
 
-@router.post(
-    "/api/memory/reinitialize", dependencies=[Depends(_require_ui_header)]
-)
+@router.post("/api/memory/reinitialize", dependencies=[Depends(_require_ui_header)])
 def reinitialize_memory() -> Dict:
     """Wipe all memory and re-run initialization from scratch.
 
@@ -1589,9 +1587,7 @@ def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
     return _get_memory_settings_dict(db)
 
 
-@router.put(
-    "/api/memory/settings", dependencies=[Depends(_require_ui_header)]
-)
+@router.put("/api/memory/settings", dependencies=[Depends(_require_ui_header)])
 def update_memory_settings(
     body: MemorySettingsBody,
     db: ChatDatabase = Depends(get_db),
@@ -1609,9 +1605,7 @@ def update_memory_settings(
       and triggers an immediate system context refresh.
     """
     if body.memory_enabled is not None:
-        db.set_setting(
-            _MEMORY_ENABLED_KEY, "true" if body.memory_enabled else "false"
-        )
+        db.set_setting(_MEMORY_ENABLED_KEY, "true" if body.memory_enabled else "false")
     if body.mcp_memory_enabled is not None:
         db.set_setting(
             _MCP_MEMORY_ENABLED_KEY, "true" if body.mcp_memory_enabled else "false"
