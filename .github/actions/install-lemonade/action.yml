@@ -36,12 +36,13 @@ runs:
         Write-Host "=== Verifying Lemonade Server ==="
 
         function Find-LemonadeServer {
-            # Always check the well-known install dirs FIRST, so a fresh MSI
-            # install of v10.2.0 wins over a stale per-user shim (e.g. the
-            # ``LOCALAPPDATA\lemonade_server\bin\lemonade-server.bat`` left
-            # behind by an older bundled installer). Falling straight through
-            # to ``Get-Command`` would let that older shim shadow the MSI
-            # binary because the current shell's PATH wasn't refreshed.
+            # v10.x renamed the binary to ``LemonadeServer.exe`` (PascalCase)
+            # and left ``lemonade-server.exe`` as a deprecation shim that
+            # prints "WARNING: 'lemonade-server' is deprecated. Use
+            # 'LemonadeServer.exe' to start the server" -- on ``--version``
+            # that shim doesn't emit a parseable version. Always prefer the
+            # new name; only fall back to the legacy name when the new one
+            # is missing.
             $searchPaths = @(
                 "${env:ProgramFiles(x86)}\Lemonade Server\bin",
                 "$env:ProgramFiles\Lemonade Server\bin",
@@ -51,19 +52,33 @@ runs:
                 "${env:ProgramFiles(x86)}\Lemonade",
                 "$env:USERPROFILE\Lemonade",
                 "$env:LOCALAPPDATA\Lemonade",
-                "$env:LOCALAPPDATA\lemonade_server\bin"
+                "$env:LOCALAPPDATA\lemonade_server\bin",
+                "C:\windows\system32\config\systemprofile\AppData\Local\lemonade_server\bin"
             )
+
+            # Pass 1: prefer the new PascalCase exe (v10.x+).
+            foreach ($path in $searchPaths) {
+                $exePath = Join-Path $path "LemonadeServer.exe"
+                if (Test-Path $exePath) {
+                    Write-Host "Found LemonadeServer.exe at: $exePath"
+                    echo "$path" >> $env:GITHUB_PATH
+                    $env:PATH = "$path;$env:PATH"
+                    return $exePath
+                }
+            }
+
+            # Pass 2: fall back to the legacy hyphenated names.
             foreach ($path in $searchPaths) {
                 $exePath = Join-Path $path "lemonade-server.exe"
                 if (Test-Path $exePath) {
-                    Write-Host "Found lemonade-server.exe at: $exePath"
+                    Write-Host "Found lemonade-server.exe at: $exePath (legacy)"
                     echo "$path" >> $env:GITHUB_PATH
                     $env:PATH = "$path;$env:PATH"
                     return $exePath
                 }
                 $batPath = Join-Path $path "lemonade-server.bat"
                 if (Test-Path $batPath) {
-                    Write-Host "Found lemonade-server.bat at: $batPath"
+                    Write-Host "Found lemonade-server.bat at: $batPath (legacy)"
                     echo "$path" >> $env:GITHUB_PATH
                     $env:PATH = "$path;$env:PATH"
                     return $batPath
@@ -71,11 +86,13 @@ runs:
             }
 
             # Final fallback: anything ``Get-Command`` can resolve from the
-            # current shell's PATH.
-            $cmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
-            if ($cmd) {
-                Write-Host "Found via Get-Command: $($cmd.Source)"
-                return $cmd.Source
+            # current shell's PATH (LemonadeServer first, then lemonade-server).
+            foreach ($name in @("LemonadeServer", "lemonade-server")) {
+                $cmd = Get-Command $name -ErrorAction SilentlyContinue
+                if ($cmd) {
+                    Write-Host "Found via Get-Command ($name): $($cmd.Source)"
+                    return $cmd.Source
+                }
             }
 
             return $null
@@ -99,14 +116,33 @@ runs:
 
         function Get-LemonadeVersion {
             param([string]$LemonadeExe)
+            # Combine streams so a v10.x deprecation warning on stderr
+            # doesn't trip ``2>&1`` PowerShell error-record handling and
+            # still contributes its content for regex extraction. Also
+            # silence ``$ErrorActionPreference`` so a non-zero exit from
+            # the deprecation shim doesn't blow us out of the try block
+            # before we can pull the version string.
+            $prev = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
             try {
-                $versionOutput = & $LemonadeExe --version 2>&1
-                Write-Host $versionOutput
-                if ($versionOutput -match "(\d+\.\d+\.\d+)") {
-                    return $matches[1]
+                # Capture stdout + stderr to a single string. ``cmd /c`` is
+                # used because the deprecation shim mixes output streams in
+                # ways that PowerShell's native operators don't always join
+                # cleanly.
+                $versionOutput = & cmd /c "`"$LemonadeExe`" --version 2>&1"
+                $combined = ($versionOutput | Out-String)
+                Write-Host $combined
+                # Take the LAST x.y.z match -- the deprecation warning text
+                # itself doesn't include a version string, but we want to
+                # be resilient to any future preamble.
+                $allMatches = [regex]::Matches($combined, "(\d+\.\d+\.\d+)")
+                if ($allMatches.Count -gt 0) {
+                    return $allMatches[$allMatches.Count - 1].Value
                 }
             } catch {
-                Write-Host "Failed to query lemonade-server version: $_"
+                Write-Host "Exception while querying version from $LemonadeExe : $_"
+            } finally {
+                $ErrorActionPreference = $prev
             }
             return $null
         }
