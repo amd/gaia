@@ -204,6 +204,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     documents: [],
     setDocuments: (docs) => set({ documents: docs }),
 
+    // Surfaced cards (incremental results shown on the dashboard)
+    surfacedCards: [],
+    setSurfacedCards: (cards: any[]) => set({ surfacedCards: cards }),
+    addSurfacedCard: (card: any) => set((state) => ({ surfacedCards: [...state.surfacedCards, card] })),
+    clearSurfacedCards: () => set({ surfacedCards: [] }),
+
     // Connection / system status
     systemStatus: null,
     backendConnected: true, // Assume connected until proven otherwise

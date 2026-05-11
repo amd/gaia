@@ -20,6 +20,7 @@ def tool(
     func: Callable = None,
     *,
     atomic: bool = False,
+    display_label: str | None = None,
     **kwargs,  # pylint: disable=unused-argument
 ) -> Callable:
     """
@@ -67,14 +68,17 @@ def tool(
 
             params[name] = param_info
 
-        # Register the tool with atomic metadata
-        _TOOL_REGISTRY[tool_name] = {
+        # Register the tool with atomic metadata and optional display label
+        entry = {
             "name": tool_name,
             "description": f.__doc__ or "",
             "parameters": params,
             "function": f,
             "atomic": atomic,
         }
+        if display_label:
+            entry["display_label"] = display_label
+        _TOOL_REGISTRY[tool_name] = entry
 
         # Return the function unchanged
         return f
@@ -108,6 +112,23 @@ def get_tool_display_name(tool_name: str) -> str:
     if not tool:
         return tool_name
     return tool.get("display_name", tool_name)
+
+
+def get_tool_display_label(tool_name: str) -> str:
+    """Return human-friendly display label for a tool if available.
+
+    Falls back to `display_name` (for MCP tools) and finally the raw tool name.
+    """
+    tool = _TOOL_REGISTRY.get(tool_name)
+    if not tool:
+        return tool_name
+    # Preferred explicit label
+    if tool.get("display_label"):
+        return tool["display_label"]
+    # MCP display_name compatibility
+    if tool.get("display_name"):
+        return tool["display_name"]
+    return tool_name
 
 
 def get_tool_metadata(tool_name: str):

@@ -9,6 +9,7 @@ import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notifica
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import ProgressStrip from './ProgressStrip';
 import { getSessionHash } from '../utils/format';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
@@ -121,8 +122,8 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
         case 'tool_start':
             return {
                 id, type: 'tool',
-                // Label is determined by AgentActivity based on tool name
-                label: 'Using tool',
+                // Prefer server-provided human-friendly label when available
+                label: event.display_label || 'Using tool',
                 tool: event.tool,
                 detail: event.detail,
                 active: true, timestamp: ts,
@@ -175,6 +176,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         agents, activeAgentId, setActiveAgentId,
     } = useChatStore();
 
+    const surfacedCards = useChatStore((s) => s.surfacedCards);
+
     const { addNotification } = useNotificationStore();
     const pendingPrompt = useChatStore((s) => s.pendingPrompt);
 
@@ -192,6 +195,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
+    // Progress strip state for streaming tool progress
+    const [progress, setProgress] = useState<{ label?: string; detail?: string; latencyMs?: number; active?: boolean }>({ active: false });
     // Agent picker dropdown state
     const [agentPickerOpen, setAgentPickerOpen] = useState(false);
     const agentPickerRef = useRef<HTMLDivElement>(null);
@@ -838,6 +843,16 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         };
                     }
                     updateLastToolStep(updates);
+                    // Stream incremental surfaced cards for retrieval/classify results
+                    if (event.result_data?.chunks && event.result_data.chunks.length > 0) {
+                        const addCard = useChatStore.getState().addSurfacedCard;
+                        for (const c of event.result_data.chunks) {
+                            addCard({ id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`, preview: c.preview, content: c.content, source: c.source, score: c.score });
+                        }
+                    }
+                    if (typeof event.latency_ms === 'number') {
+                        setProgress((p) => ({ ...p, latencyMs: event.latency_ms }));
+                    }
                     return;
                 }
                 // Tool args update the last TOOL step with detail
@@ -911,6 +926,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     addAgentStep(step);
                     if (event.type === 'tool_start') {
                         toolOccurredRef.current = true;
+                        setProgress({ label: event.display_label || event.tool || 'Using tool', detail: event.detail, active: true });
                     }
                 }
             },
@@ -953,6 +969,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 setStreaming(false);
                 clearStreamContent();
                 clearAgentSteps();
+
+                // Clear progress strip
+                setProgress((p) => ({ ...p, active: false }));
 
                 // Refocus input so user can immediately type the next message
                 if (inputRef.current) inputRef.current.focus();
@@ -1128,6 +1147,19 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }).catch(() => {
             log.ui.warn('Clipboard write failed');
         });
+        // Keep a reference so UI can cancel the stream
+        abortRef.current = controller;
+
+        const handleCancel = () => {
+            try {
+                if (abortRef.current) {
+                    abortRef.current.abort();
+                }
+            } catch (err) {
+                console.error('Failed to abort stream', err);
+            }
+            setProgress((p) => ({ ...p, active: false }));
+        };
     }, [sessionId]);
 
     // Title editing
@@ -1296,6 +1328,28 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     </button>
                 </div>
             </header>
+
+            {/* Progress strip (shows current tool/status during streaming) */}
+            {progress?.active && (
+                <div style={{ padding: '8px 12px' }}>
+                    <ProgressStrip label={progress.label} detail={progress.detail} latencyMs={progress.latencyMs} active={progress.active} onCancel={() => { if (abortRef.current) abortRef.current.abort(); setProgress((p) => ({ ...p, active: false })); }} />
+                </div>
+            )}
+
+            {/* Surfaced incremental cards (streamed from tool_result events) */}
+            {surfacedCards && surfacedCards.length > 0 && (
+                <div className="surfaced-panel">
+                    <div className="surfaced-header">Surfaced</div>
+                    <div className="surfaced-cards">
+                        {surfacedCards.map((c: any) => (
+                            <div key={c.id} className="surfaced-card">
+                                <div className="surfaced-preview">{c.preview}</div>
+                                <div className="surfaced-source">{c.source}</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Indexed documents context bar — shows only docs attached to this session */}
             {sessionDocs.length > 0 && (() => {

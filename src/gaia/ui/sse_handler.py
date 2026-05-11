@@ -216,6 +216,9 @@ class SSEOutputHandler(OutputHandler):
             mcp_server = meta.get("_mcp_server")
             if mcp_server:
                 event["mcp_server"] = mcp_server
+            # Optional human-friendly label for frontend progress strips
+            if meta.get("display_label"):
+                event["display_label"] = meta.get("display_label")
         self._emit(event)
 
     def print_tool_complete(self):
