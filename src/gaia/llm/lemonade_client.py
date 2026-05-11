@@ -1331,6 +1331,17 @@ class LemonadeClient:
                 **kwargs,
             )
 
+        # Pre-flight: ensure the model is loaded at the GAIA-expected ctx.
+        # The streaming path already does this via
+        # ``_stream_chat_completions_with_openai`` -> ``_ensure_model_loaded``.
+        # Pre-#1030 follow-up the non-streaming path skipped the check, so
+        # when something (e.g. the RAG SDK's embedder warm-up) unloaded the
+        # LLM, the next non-streaming chat_completion let Lemonade auto-load
+        # Gemma at its own default ctx (32K) — bypassing
+        # MODELS[…].min_ctx_size and silently capping doc-Q&A at 32K.
+        if auto_download:
+            self._ensure_model_loaded(model, auto_download=True)
+
         # Note: self.base_url already includes /api/v1
         url = f"{self.base_url}/chat/completions"
         data = {
@@ -2421,17 +2432,52 @@ class LemonadeClient:
             return  # Skip if auto_download disabled
 
         try:
+            # Determine the ctx_size GAIA expects for this model. This lookup
+            # happens BEFORE the "already loaded" check so we can detect a
+            # model that's loaded at the wrong window and reload it — pre-#1030
+            # follow-up the function returned early on any match, leaving
+            # Gemma 4 loaded at Lemonade's default 32K even after GAIA
+            # bumped MODELS[…].min_ctx_size to 65536. That's why
+            # ``summarize_document`` kept hitting LemonadeContextOverflowError
+            # at 35K-token sections.
+            expected_ctx: Optional[int] = None
+            for _key, _req in MODELS.items():
+                if _req.model_id == model:
+                    expected_ctx = _req.min_ctx_size
+                    break
+            if expected_ctx is None:
+                expected_ctx = DEFAULT_CONTEXT_SIZE
+
             # Check current server state
             status = self.get_status()
-            loaded_models = [m.get("id", "") for m in status.loaded_models]
 
-            # If model already loaded, nothing to do
-            if model in loaded_models:
-                self.log.debug(f"Model '{model}' already loaded")
-                return
+            # Look the model up in the actually-loaded set (health-format).
+            # ``status.loaded_models`` now carries health entries enriched
+            # with ``id`` + ``recipe_options`` so we can read ctx_size.
+            loaded_entry: Optional[dict] = None
+            for _m in status.loaded_models:
+                if _m.get("id") == model or _m.get("model_name") == model:
+                    loaded_entry = _m
+                    break
 
-            # Model not loaded - load it (will download if needed without prompting)
-            self.log.debug(f"Model '{model}' not loaded, loading...")
+            if loaded_entry is not None:
+                loaded_ctx = (
+                    loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
+                )
+                if loaded_ctx >= expected_ctx:
+                    self.log.debug(
+                        f"Model '{model}' already loaded at ctx={loaded_ctx} "
+                        f"(expected >= {expected_ctx})"
+                    )
+                    return
+                # Loaded but under-sized — fall through to the reload path
+                # which calls /load with explicit ctx_size.
+                self.log.info(
+                    f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
+                    f"expects ctx={expected_ctx}; reloading."
+                )
+            else:
+                self.log.debug(f"Model '{model}' not loaded, loading...")
 
             # Distinguish "needs download" from "needs memory-map" so the user
             # sees an honest expectation. ``list_models`` returns per-model
@@ -2472,25 +2518,21 @@ class LemonadeClient:
                 else:
                     print(f"🔄 Loading model: {model}...")
 
-            ctx_size = None
-            for _key, req in MODELS.items():
-                if req.model_id == model:
-                    ctx_size = req.min_ctx_size
-                    break
-
-            if ctx_size is None:
-                # Model not in the built-in registry (e.g. a custom or
-                # community model surfaced via an agent's ``models`` list).
-                # Loading with Lemonade's 4096-token default would silently
-                # truncate GAIA's large system prompts and yield empty
-                # responses. Fall back to the GAIA-wide default.
-                ctx_size = DEFAULT_CONTEXT_SIZE
+            # ``expected_ctx`` was resolved above (either from MODELS or the
+            # GAIA-wide default). Pass it explicitly to /load so Lemonade
+            # doesn't fall back to its own 4096-token default and silently
+            # truncate GAIA's larger prompts.
+            if expected_ctx == DEFAULT_CONTEXT_SIZE and not any(
+                req.model_id == model for req in MODELS.values()
+            ):
                 self.log.info(
                     f"Model '{model}' not in MODELS registry; "
-                    f"defaulting to ctx_size={ctx_size} to fit agent prompts"
+                    f"defaulting to ctx_size={expected_ctx} to fit agent prompts"
                 )
 
-            self.load_model(model, auto_download=True, prompt=False, ctx_size=ctx_size)
+            self.load_model(
+                model, auto_download=True, prompt=False, ctx_size=expected_ctx
+            )
 
             # Print model ready message
             try:
@@ -3000,9 +3042,43 @@ class LemonadeClient:
                 # Fallback for older Lemonade versions
                 status.context_size = health.get("context_size", 0)
 
-            # Get loaded models
-            models_response = self.list_models()
-            status.loaded_models = models_response.get("data", [])
+            # Loaded models — source of truth is ``/health.all_models_loaded``,
+            # NOT ``/models`` (which returns the full catalog, not the subset
+            # currently in memory). The pre-#1030 code joined ``status.loaded_models
+            # = list_models().data`` which made downstream "what is loaded?"
+            # checks see every model on disk and pick the alphabetically-first
+            # one (``Gemma-3-4b-it-GGUF``) regardless of whether it was loaded
+            # — which is why ``_try_reload_with_ctx`` kept reloading the wrong
+            # model on every chat invocation.
+            #
+            # We enrich each health entry with the matching catalog entry's
+            # ``labels`` so the existing label-based filters (``"image" not in
+            # labels``) keep working, and expose both ``id`` (catalog-style)
+            # and ``model_name`` (health-style) so all known consumers parse
+            # correctly.
+            try:
+                catalog_by_id = {
+                    m.get("id"): m for m in self.list_models().get("data", [])
+                }
+            except Exception:  # pylint: disable=broad-except
+                catalog_by_id = {}
+
+            loaded_enriched = []
+            for hm in all_models:
+                name = hm.get("model_name") or hm.get("checkpoint", "")
+                catalog = catalog_by_id.get(name, {})
+                loaded_enriched.append(
+                    {
+                        "id": name,  # catalog-style key for backward compat
+                        "model_name": name,
+                        "type": hm.get("type"),
+                        "labels": catalog.get("labels", []),
+                        "recipe_options": hm.get("recipe_options", {}),
+                        "checkpoint": hm.get("checkpoint", ""),
+                        "_health": hm,
+                    }
+                )
+            status.loaded_models = loaded_enriched
         except Exception as e:
             self.log.debug(f"Failed to get status: {e}")
             status.running = False
