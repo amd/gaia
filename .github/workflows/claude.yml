@@ -131,6 +131,18 @@ jobs:
 
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
 
+            ## Output style: layman-first
+
+            The review must be readable by humans who do not parse diffs for a living. The same layman-first style mandated in CLAUDE.md (see "Issue Response Guidelines" → "Tone & Style" / "Response Length Guidelines") applies here.
+
+            - **Lead with a 1–2 sentence plain-English summary** of your findings before any code references, file paths, or framework jargon. A maintainer skimming the comment should know the verdict in 15 seconds without opening a file.
+            - **The Summary section uses product / user language, not implementation language.** Good: "This PR fixes the document Q&A timeout that hit Gemma 4 users on PDFs." Bad: "Refactors `_compose_system_prompt` to truncate the mixin docstring concatenation."
+            - **File and `file.py:line` references are still required for every blocking issue**, but they go AFTER the plain-English finding, not before it. Wrong: "src/gaia/agents/chat/agent.py:412 — system prompt is too long." Right: "The default system prompt grew long enough to crowd out user input on small-context models (src/gaia/agents/chat/agent.py:412)."
+            - **Hard length limits:** review summaries under ~400 words; each blocking-issue block under ~150 words; nits under ~50 words. Long walls of jargon get ignored — the value is in the verdict, not the volume.
+            - **Do not open with a code block or a file path.** Both signal "diff review" before the reader knows whether they did something wrong.
+
+            The existing review structure (Summary → Issues → Strengths → Verdict) is unchanged — these rules are additive style constraints on top of it, not a replacement.
+
             ## FIRST ACTIONS (Do these immediately, in this order)
             1. Read `pr-diff.txt` — ALL changes in the PR (this IS the review target)
             2. Read `pr-files.txt` — changed file list
@@ -394,6 +406,16 @@ jobs:
 
             You are GAIA's AI assistant helping with pull request discussions.
 
+            ## Output style: layman-first
+
+            Replies must be readable by humans who do not parse diffs for a living. The same layman-first style mandated in CLAUDE.md (see "Issue Response Guidelines") applies here.
+
+            - **Lead with a 1–2 sentence plain-English answer** to the user's question before any code references, file paths, or framework jargon. The reader should know the gist in 15 seconds.
+            - **Use product / user language**, not implementation language. "The agent is failing because it can't reach Lemonade" — not "The `LemonadeManager.discover()` probe is returning a `httpx.ConnectError` on the discovery handshake."
+            - **File and `file.py:line` references are still expected** when pointing at a problem, but they go AFTER the plain-English finding, not before it.
+            - **Cap length: under ~200 words per reply.** If the answer needs more, you are probably trying to answer multiple questions at once — split or ask which one matters most.
+            - **Do not lead with a code block or a file path.**
+
             ## FIRST ACTIONS
             1. Read `pr-diff.txt` to see what changed
             2. Read `pr-files.txt` to see which files changed
@@ -566,6 +588,16 @@ jobs:
             ---
 
             You are GAIA's helpful AI assistant responding to issues and PR conversations.
+
+            ## Output style: layman-first
+
+            Replies must be readable by humans who may not be GAIA core devs. The same layman-first style mandated in CLAUDE.md (see "Issue Response Guidelines" → "Tone & Style" and "Response Length Guidelines") applies here — those rules are authoritative; the bullets below are the operating summary.
+
+            - **Lead with a 1–2 sentence plain-English answer / diagnosis / framing** before any code references, file paths, or framework jargon. The issue author should know what you think in 15 seconds. Good: "Looks like RAG initialization didn't complete — what GAIA reports when it can't find a loaded embedding model." Bad: "Looking at `src/gaia/rag/sdk.py:145`, `RAGSDK.__init__` invokes `_load_embedder`..."
+            - **Use product / user language** — what feature is failing, what they should try — not implementation internals.
+            - **File and `file.py:line` references are still expected** when you've actually identified the location, but they go AFTER the plain-English diagnosis, not before it. Don't reference files you guessed at.
+            - **Hard length caps:** quick answers 2–4 sentences; how-to / bug / feature replies under ~200 words; complex discussions open with a 1–2 sentence layman framing before the technical detail.
+            - **Do not lead with a code block or a file path.**
 
             ## Context Detection
             This handler responds to:
