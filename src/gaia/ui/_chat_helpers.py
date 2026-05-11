@@ -111,6 +111,7 @@ def _classify_chat_exception(exc: BaseException):
         LemonadeError,
         LemonadeModelNotLoadedError,
         LemonadeNetworkError,
+        LemonadeUpstreamTimeoutError,
     )
 
     # 1. Direct typed match anywhere in the cause chain.
@@ -118,8 +119,14 @@ def _classify_chat_exception(exc: BaseException):
     # (implicit ``raise ...`` inside an ``except`` block) so we don't lose the
     # typed-class metadata (e.g. ``LemonadeContextOverflowError.retryable``)
     # for handlers that re-raise without ``from``.
+    #
+    # Cycle protection: tracking visited ids defends against pathological
+    # exception graphs where ``a.__cause__ = b`` and ``b.__cause__ = a``.
+    # Without it the walker would loop forever and freeze the chat handler.
     cur: Optional[BaseException] = exc
-    while cur is not None:
+    _seen: set = set()
+    while cur is not None and id(cur) not in _seen:
+        _seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
         cur = cur.__cause__ or cur.__context__
@@ -146,7 +153,23 @@ def _classify_chat_exception(exc: BaseException):
             except ValueError:
                 pass
         return err
-    if "network_error" in text or "curl error" in text or "timeout was reached" in text:
+    # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
+    # hung) from real connectivity failures (#1030). The user-facing remediation
+    # is very different.
+    is_timeout = (
+        "timeout was reached" in text
+        or "timed out" in text
+        or "operation_timeout" in text
+    )
+    is_unreachable = (
+        "connection refused" in text
+        or "could not resolve host" in text
+        or "no route to host" in text
+        or "couldn't connect" in text
+    )
+    if is_timeout and not is_unreachable:
+        return LemonadeUpstreamTimeoutError()
+    if "network_error" in text or "curl error" in text or is_unreachable:
         return LemonadeNetworkError()
     return None
 

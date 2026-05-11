@@ -71,10 +71,52 @@ class LemonadeContextOverflowError(LemonadeError):
 
 
 class LemonadeNetworkError(LemonadeError):
+    """Lemonade Server is unreachable (connection refused / DNS / TLS).
+
+    Distinct from :class:`LemonadeUpstreamTimeoutError`, which is when
+    Lemonade *is* reachable but its child llama-server didn't respond in
+    time. Don't auto-retry indefinitely — surface the connectivity issue.
+    """
+
     retryable = True
     user_message = (
         "Couldn't reach the local LLM. It may be loading or briefly busy "
         "— try sending the message again."
+    )
+
+
+class LemonadeUpstreamTimeoutError(LemonadeError):
+    """Lemonade Server is reachable but its upstream model call timed out.
+
+    This is the failure mode reported in #1030 — Lemonade's libcurl call
+    to its child llama-server returns "CURL error: Timeout was reached"
+    after the model takes too long to produce its first token. The
+    server itself is fine; it's the model inference that hung. This
+    typically happens when:
+
+    * The prompt is too large for the loaded model on this hardware
+      (heavy system prompt + huge tools schema).
+    * The model was just loaded and is still initialising the KV cache.
+    * Lemonade was just told to swap models and the swap is in flight.
+    * The user is on Windows with iGPU and Gemma 4 E4B (~4.5B params)
+      and the first inference cold-start exceeds Lemonade's internal
+      upstream timeout.
+
+    We mark this *non-retryable* because the chat layer's blind retry
+    will hit the same hung backend; surface a useful remediation
+    instead.
+    """
+
+    retryable = False
+    user_message = (
+        "The local model didn't respond in time. The Lemonade Server is "
+        "running, but its model call timed out — usually because the "
+        "model is still warming up (cold KV cache) or the prompt is too "
+        "large for the current hardware on a fresh load. Try:\n"
+        "  • Wait 30s and resend the same query — KV cache will be primed.\n"
+        "  • Restart Lemonade cleanly:  gaia kill  &&  lemonade-server serve\n"
+        "  • Reduce retrieved RAG chunks:  gaia chat --max-chunks 2 ...\n"
+        "  • Close other GPU/NPU-heavy apps competing for the device."
     )
 
 
@@ -129,12 +171,26 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         if 0 < n_ctx_reported < 32768:
             err_instance.retryable = True
         return err_instance, True
-    if (
-        "network_error" in type_blob
-        or "curl error" in msg_blob
-        or "timeout was reached" in msg_blob
-        or "connection refused" in msg_blob
-    ):
+    # Distinguish "upstream model call timed out" (reachable Lemonade,
+    # hung llama-server child) from "Lemonade unreachable" (true network
+    # error). #1030 — both used to be lumped together so the user got
+    # "couldn't reach the local LLM" even when the server was fine.
+    is_timeout = (
+        "timeout was reached" in msg_blob
+        or "timed out" in msg_blob
+        or "operation_timeout" in type_blob
+    )
+    is_unreachable = (
+        "connection refused" in msg_blob
+        or "could not resolve host" in msg_blob
+        or "no route to host" in msg_blob
+        or "couldn't connect" in msg_blob
+    )
+
+    if is_timeout and not is_unreachable:
+        return LemonadeUpstreamTimeoutError(payload=response), True
+
+    if "network_error" in type_blob or "curl error" in msg_blob or is_unreachable:
         return LemonadeNetworkError(payload=response), True
 
     # Recognised the error envelope but couldn't bucket it specifically.
