@@ -511,6 +511,9 @@ def _classify_project(path: Path, languages: List[str]) -> str:
         "build.gradle": "Java/Gradle project",
         "Gemfile": "Ruby project",
         "composer.json": "PHP project",
+    }
+    # Extensions that indicate project type (matched by suffix, not exact name)
+    ext_markers = {
         ".sln": "C#/.NET solution",
     }
     found: List[str] = []
@@ -522,6 +525,11 @@ def _classify_project(path: Path, languages: List[str]) -> str:
     for marker, label in markers.items():
         if marker in entries:
             found.append(label)
+
+    for entry_name in entries:
+        ext = os.path.splitext(entry_name)[1].lower()
+        if ext in ext_markers:
+            found.append(ext_markers[ext])
 
     # Framework-specific markers in subdirectories
     if (path / "src").is_dir():
@@ -2171,9 +2179,10 @@ class SystemDiscovery:
                     obsidian_marker = Path(entry.path) / ".obsidian"
                     if obsidian_marker.is_dir():
                         desc = f"Obsidian vault '{entry.name}'"
-                        if desc not in found_writing and f"Obsidian vault" not in str(
-                            found_writing
-                        ):
+                        already_found = any(
+                            "Obsidian vault" in item for item in found_writing
+                        )
+                        if not already_found:
                             found_writing.append(desc)
             except (PermissionError, OSError):
                 pass

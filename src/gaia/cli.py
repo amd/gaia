@@ -6277,7 +6277,6 @@ def handle_mcp_serve(args):
         print(f"❌ Error starting Agent UI MCP server: {e}")
 
 
-
 def handle_mcp_list(args):
     """List configured MCP servers."""
     from gaia.mcp import MCPConfig
