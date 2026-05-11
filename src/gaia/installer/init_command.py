@@ -1629,10 +1629,13 @@ class InitCommand:
                 )
             elif self.profile == "chat":
                 self.console.print(
-                    "    [cyan]gaia chat[/cyan]              Start interactive chat with RAG"
+                    "    [cyan]gaia chat[/cyan]                            Start interactive chat with RAG"
                 )
                 self.console.print(
-                    "    [cyan]gaia chat init[/cyan]         Setup document folder"
+                    "    [cyan]gaia chat --index report.pdf[/cyan]         Index a PDF for Q&A"
+                )
+                self.console.print(
+                    "    [cyan]gaia chat --watch ./docs[/cyan]             Auto-index a folder of docs"
                 )
             elif self.profile == "vlm":
                 self.console.print(
@@ -1683,9 +1686,14 @@ class InitCommand:
                 )
             elif self.profile == "chat":
                 self._print(
-                    "    gaia chat              # Start interactive chat with RAG"
+                    "    gaia chat                            # Start interactive chat with RAG"
                 )
-                self._print("    gaia chat init         # Setup document folder")
+                self._print(
+                    "    gaia chat --index report.pdf         # Index a PDF for Q&A"
+                )
+                self._print(
+                    "    gaia chat --watch ./docs             # Auto-index a folder of docs"
+                )
             elif self.profile == "vlm":
                 self._print(
                     "    gaia cache status      # Verify VLM model is available"

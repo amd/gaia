@@ -505,6 +505,11 @@ gaia chat --index doc1.pdf doc2.pdf doc3.pdf
 gaia chat --index report.pdf --query "Summarize the report"
 ```
 
+```bash Watch Folder
+# Auto-index every PDF in a folder, and any new ones dropped in later
+gaia chat --watch ./docs
+```
+
 ```bash Custom Settings
 gaia chat \
   --model Qwen3.5-35B-A3B-GGUF \
