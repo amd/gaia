@@ -78,18 +78,48 @@ try {
     }
     Write-Host ""
 
-    # Check installation - try PATH first, then .venv
+    # Check installation. v10.x renamed the canonical binary to
+    # ``LemonadeServer.exe`` (PascalCase); the legacy ``lemonade-server``
+    # is now a deprecation shim that refuses ``serve --ctx-size ...`` with
+    # ``error: failed to start lemonade-server``. Prefer the new name,
+    # fall back to the legacy shim only for compat with older runners.
     Write-Host "=== Checking Installation ==="
-    $lemonadeCmd = Get-Command "lemonade-server" -ErrorAction SilentlyContinue
-    if ($lemonadeCmd) {
-        $lemonadeExe = $lemonadeCmd.Source
-        Write-Host "[OK] Found on PATH: $lemonadeExe"
-    } elseif (Test-Path ".\.venv\Scripts\lemonade-server.exe") {
-        $lemonadeExe = ".\.venv\Scripts\lemonade-server.exe"
-        Write-Host "[OK] Found in .venv: $lemonadeExe"
+    $lemonadeExe = $null
+    foreach ($name in @("LemonadeServer", "lemonade-server")) {
+        $found = Get-Command $name -ErrorAction SilentlyContinue
+        if ($found) {
+            $lemonadeExe = $found.Source
+            Write-Host "[OK] Found on PATH ($name): $lemonadeExe"
+            break
+        }
+    }
+    if (-not $lemonadeExe) {
+        if (Test-Path ".\.venv\Scripts\LemonadeServer.exe") {
+            $lemonadeExe = ".\.venv\Scripts\LemonadeServer.exe"
+            Write-Host "[OK] Found in .venv: $lemonadeExe"
+        } elseif (Test-Path ".\.venv\Scripts\lemonade-server.exe") {
+            $lemonadeExe = ".\.venv\Scripts\lemonade-server.exe"
+            Write-Host "[OK] Found in .venv (legacy): $lemonadeExe"
+        } else {
+            Write-Host "[ERROR] LemonadeServer/lemonade-server not found on PATH or in .venv"
+            exit 1
+        }
+    }
+
+    # v10.x's CLI verb for non-server commands is plain ``lemonade``; the
+    # legacy ``lemonade-server pull`` form prints "This command is
+    # deprecated. Use 'lemonade pull --help' instead." and exits non-zero,
+    # so we resolve a separate ``lemonade`` binary for pull operations and
+    # fall back to the legacy combined exe only when ``lemonade`` is
+    # missing.
+    $lemonadeCli = $null
+    $lemonadeCliCmd = Get-Command "lemonade" -ErrorAction SilentlyContinue
+    if ($lemonadeCliCmd) {
+        $lemonadeCli = $lemonadeCliCmd.Source
+        Write-Host "[OK] Found CLI 'lemonade' at: $lemonadeCli"
     } else {
-        Write-Host "[ERROR] lemonade-server not found on PATH or in .venv"
-        exit 1
+        $lemonadeCli = $lemonadeExe
+        Write-Host "[WARN] 'lemonade' not on PATH; falling back to '$lemonadeExe' for pull operations"
     }
     Write-Host ""
 
@@ -104,11 +134,19 @@ try {
         Write-Host ""
     }
 
-    # Start server
+    # Start server.
+    #
+    # v10.x's ``LemonadeServer.exe serve`` (and the ``lemonade-server``
+    # deprecation shim) does NOT accept ``--ctx-size`` -- passing it
+    # writes ``error: failed to start lemonade-server`` to stderr and
+    # exits before bind, so the smoke test would time out waiting on a
+    # health endpoint that never came up. We set the per-model ctx_size
+    # through the /api/v1/load body below instead, which is the v10.x
+    # canonical way to pin a context window.
     Write-Host "=== Starting Server ==="
     $env:GGML_VK_DISABLE_COOPMAT = "1"
     $serverProcess = Start-Process -FilePath $lemonadeExe `
-        -ArgumentList "serve", "--port", "$Port", "--ctx-size", "$CtxSize", "--no-tray" `
+        -ArgumentList "serve", "--port", "$Port", "--no-tray" `
         -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput "lemonade-server-stdout.log" `
         -RedirectStandardError "lemonade-server-stderr.log"
@@ -147,9 +185,16 @@ try {
     }
     Write-Host ""
 
-    # Pull primary model
+    # Pull primary model.
+    #
+    # v10.x routes pull through the ``lemonade`` CLI rather than
+    # ``lemonade-server pull``; the legacy form prints
+    # ``This command is deprecated. Use 'lemonade pull --help' instead.``
+    # and exits non-zero. ``$lemonadeCli`` resolves to plain ``lemonade``
+    # when available and falls back to ``$lemonadeExe`` for older
+    # installs.
     Write-Host "=== Pulling Primary Model: $ModelName ==="
-    $pullOutput = & $lemonadeExe pull $ModelName 2>&1
+    $pullOutput = & $lemonadeCli pull $ModelName 2>&1
     Write-Host "Pull exit code: $LASTEXITCODE"
     if ($pullOutput) {
         $pullOutput | ForEach-Object { Write-Host "  $_" }
@@ -163,7 +208,7 @@ try {
         foreach ($model in $models) {
             $model = $model.Trim()
             Write-Host "Pulling: $model"
-            $pullOutput = & $lemonadeExe pull $model 2>&1
+            $pullOutput = & $lemonadeCli pull $model 2>&1
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  [WARN] Pull failed with exit code: $LASTEXITCODE"
             } else {
@@ -196,10 +241,12 @@ try {
     }
     Write-Host ""
 
-    # Load model
-    Write-Host "=== Loading Model: $ModelName ==="
+    # Load model. Now that ``--ctx-size`` is no longer accepted on
+    # ``serve``, we pin the requested ctx_size on the load call instead so
+    # the server slot has the right size when subsequent completions hit it.
+    Write-Host "=== Loading Model: $ModelName (ctx_size=$CtxSize) ==="
     try {
-        $loadBody = @{ model_name = $ModelName } | ConvertTo-Json
+        $loadBody = @{ model_name = $ModelName; ctx_size = $CtxSize } | ConvertTo-Json
         $loadResponse = Invoke-RestMethod -Uri "http://localhost:${Port}/api/v1/load" `
             -Method POST -ContentType "application/json" -Body $loadBody -TimeoutSec 120
         Write-Host "[OK] Model loaded: $($loadResponse | ConvertTo-Json -Compress)"
