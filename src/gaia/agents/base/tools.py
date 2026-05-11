@@ -120,15 +120,8 @@ def get_tool_display_label(tool_name: str) -> str:
     """
     tool = _TOOL_REGISTRY.get(tool_name)
     if not tool:
-        return tool_name
-    if tool.get("display_label"):
-        return tool["display_label"]
-    # Prefer a short description if available
-    desc = tool.get("description") or ""
-    if desc:
-        # Use first sentence if docstring is long
-        return desc.split(".\n", 1)[0].strip()
-    return tool_name
+        return None
+    return tool.get("display_label")
 
 
 def get_tool_metadata(tool_name: str):
