@@ -340,7 +340,7 @@ export function MemoryDashboard() {
     const [settingsLoading, setSettingsLoading] = useState(false);
     const [deleteConfirm, setDeleteConfirm] = useState(false);
     const [reinitConfirm, setReinitConfirm] = useState(false);
-    const [betaConfirm, setBetaConfirm] = useState(false);
+    const [betaConfirm, setBetaConfirm] = useState<null | 'memory' | 'mcp' | 'discovery'>(null);
 
     // Tab state
     const [activeTab, setActiveTab] = useState<DashboardTab>('dashboard');
@@ -1919,7 +1919,7 @@ export function MemoryDashboard() {
                                         disabled={settingsLoading}
                                         onClick={async () => {
                                             if (!memoryEnabled) {
-                                                setBetaConfirm(true);
+                                                setBetaConfirm('memory');
                                                 return;
                                             }
                                             setSettingsLoading(true);
@@ -1939,14 +1939,69 @@ export function MemoryDashboard() {
                                     </button>
                                 </div>
                                 {/* Floating beta confirmation modal */}
-                                {betaConfirm && (
+                                {betaConfirm && (() => {
+                                    const configs = {
+                                        memory: {
+                                            title: 'Enable Agent Memory?',
+                                            description: 'Agent memory is a work-in-progress. By enabling it:',
+                                            bullets: [
+                                                ['Conversations and facts are stored ', 'locally on this machine'],
+                                                ['Stored data ', 'may be lost', ' during updates'],
+                                                ['You can disable it at any time from this settings panel'],
+                                            ],
+                                            buttonLabel: 'Enable Memory',
+                                            onConfirm: async () => {
+                                                const updated = await memoryApi.updateMemorySettings({ memory_enabled: true });
+                                                setMemoryEnabled(updated.memory_enabled);
+                                                showToast('Memory enabled', 'info');
+                                            },
+                                        },
+                                        mcp: {
+                                            title: 'Enable MCP Memory Access?',
+                                            description: 'This exposes memory data to external MCP clients:',
+                                            bullets: [
+                                                ['MCP clients can ', 'read your stored memories', ' (read-only)'],
+                                                ['Requires an ', 'MCP server restart', ' to take effect'],
+                                                ['Intended for debugging and troubleshooting only'],
+                                            ],
+                                            buttonLabel: 'Enable MCP Access',
+                                            onConfirm: async () => {
+                                                const updated = await memoryApi.updateMemorySettings({ mcp_memory_enabled: true });
+                                                setMcpMemoryEnabled(updated.mcp_memory_enabled);
+                                                showToast('MCP memory access enabled', 'info');
+                                            },
+                                        },
+                                        discovery: {
+                                            title: 'Enable System Discovery?',
+                                            description: 'This scans your system to personalize responses:',
+                                            bullets: [
+                                                ['Collects ', 'hardware, software, and environment', ' information'],
+                                                ['Scans files, git repos, browser history, and SSH config'],
+                                                ['All data stays ', 'local on this machine'],
+                                            ],
+                                            buttonLabel: 'Enable Discovery',
+                                            onConfirm: async () => {
+                                                const updated = await memoryApi.updateMemorySettings({ system_discovery_consent: true });
+                                                setSystemDiscoveryConsent(updated.system_discovery_consent);
+                                                if (updated.system_context_error) {
+                                                    showToast(`System discovery enabled but scan failed: ${updated.system_context_error}`, 'error');
+                                                } else {
+                                                    const stored = updated.system_context_refresh?.stored ?? 0;
+                                                    showToast(`System discovery enabled — ${stored} system facts collected`, 'info');
+                                                }
+                                                loadAll();
+                                            },
+                                        },
+                                    };
+                                    const cfg = configs[betaConfirm];
+                                    return (
                                     <>
                                         <div
                                             style={{
                                                 position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
                                                 zIndex: 9998, backdropFilter: 'blur(4px)',
                                             }}
-                                            onClick={() => setBetaConfirm(false)}
+                                            onClick={() => setBetaConfirm(null)}
                                         />
                                         <div style={{
                                             position: 'fixed', top: '50%', left: '50%',
@@ -1962,21 +2017,27 @@ export function MemoryDashboard() {
                                                     borderRadius: 4, letterSpacing: '0.5px',
                                                 }}>BETA</span>
                                                 <span style={{ fontSize: 16, fontWeight: 600, color: '#e0e0e0' }}>
-                                                    Enable Agent Memory?
+                                                    {cfg.title}
                                                 </span>
                                             </div>
                                             <p style={{ fontSize: 13, lineHeight: 1.6, color: '#999', margin: '0 0 8px' }}>
-                                                Agent memory is a work-in-progress. By enabling it:
+                                                {cfg.description}
                                             </p>
                                             <ul style={{ fontSize: 13, lineHeight: 1.7, color: '#999', margin: '0 0 24px', paddingLeft: 20 }}>
-                                                <li>Conversations and facts are stored <strong style={{ color: '#ccc' }}>locally on this machine</strong></li>
-                                                <li>Stored data <strong style={{ color: '#ccc' }}>may be lost</strong> during updates</li>
-                                                <li>You can disable it at any time from this settings panel</li>
+                                                {cfg.bullets.map((parts, i) => (
+                                                    <li key={i}>
+                                                        {parts.map((part, j) =>
+                                                            j % 2 === 1
+                                                                ? <strong key={j} style={{ color: '#ccc' }}>{part}</strong>
+                                                                : <span key={j}>{part}</span>
+                                                        )}
+                                                    </li>
+                                                ))}
                                             </ul>
                                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
                                                 <button
                                                     className="btn-secondary"
-                                                    onClick={() => setBetaConfirm(false)}
+                                                    onClick={() => setBetaConfirm(null)}
                                                     style={{ padding: '8px 20px', fontSize: 13, borderRadius: 6 }}
                                                 >
                                                     Cancel
@@ -1986,14 +2047,12 @@ export function MemoryDashboard() {
                                                     onClick={async () => {
                                                         setSettingsLoading(true);
                                                         try {
-                                                            const updated = await memoryApi.updateMemorySettings({ memory_enabled: true });
-                                                            setMemoryEnabled(updated.memory_enabled);
-                                                            showToast('Memory enabled', 'info');
+                                                            await cfg.onConfirm();
                                                         } catch (err) {
-                                                            log.system.warn('Failed to enable memory', err);
+                                                            log.system.warn('Failed to update setting', err);
                                                         } finally {
                                                             setSettingsLoading(false);
-                                                            setBetaConfirm(false);
+                                                            setBetaConfirm(null);
                                                         }
                                                     }}
                                                     style={{
@@ -2003,12 +2062,13 @@ export function MemoryDashboard() {
                                                         color: '#000',
                                                     }}
                                                 >
-                                                    Enable Memory
+                                                    {cfg.buttonLabel}
                                                 </button>
                                             </div>
                                         </div>
                                     </>
-                                )}
+                                    );
+                                })()}
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
                                         <span className="mem-setting-label">MCP memory access</span>
@@ -2021,11 +2081,13 @@ export function MemoryDashboard() {
                                         className={`mem-toggle${mcpMemoryEnabled ? ' mem-toggle-on' : ''}`}
                                         disabled={settingsLoading}
                                         onClick={async () => {
+                                            if (!mcpMemoryEnabled) {
+                                                setBetaConfirm('mcp');
+                                                return;
+                                            }
                                             setSettingsLoading(true);
                                             try {
-                                                const updated = await memoryApi.updateMemorySettings({
-                                                    mcp_memory_enabled: !mcpMemoryEnabled,
-                                                });
+                                                const updated = await memoryApi.updateMemorySettings({ mcp_memory_enabled: false });
                                                 setMcpMemoryEnabled(updated.mcp_memory_enabled);
                                             } catch (err) {
                                                 log.system.warn('Failed to update memory settings', err);
@@ -2050,24 +2112,18 @@ export function MemoryDashboard() {
                                         className={`mem-toggle${systemDiscoveryConsent ? ' mem-toggle-on' : ''}`}
                                         disabled={settingsLoading}
                                         onClick={async () => {
+                                            if (!systemDiscoveryConsent) {
+                                                setBetaConfirm('discovery');
+                                                return;
+                                            }
                                             setSettingsLoading(true);
                                             try {
                                                 const updated = await memoryApi.updateMemorySettings({
-                                                    system_discovery_consent: !systemDiscoveryConsent,
+                                                    system_discovery_consent: false,
                                                 });
                                                 setSystemDiscoveryConsent(updated.system_discovery_consent);
-                                                if (updated.system_discovery_consent) {
-                                                    if (updated.system_context_error) {
-                                                        showToast(`System discovery enabled but scan failed: ${updated.system_context_error}`, 'error');
-                                                    } else {
-                                                        const stored = updated.system_context_refresh?.stored ?? 0;
-                                                        showToast(`System discovery enabled — ${stored} system facts collected`, 'info');
-                                                    }
-                                                    loadAll();
-                                                }
                                             } catch (err) {
                                                 log.system.warn('Failed to update system discovery setting', err);
-                                                showToast('Failed to update system discovery setting', 'error');
                                             } finally {
                                                 setSettingsLoading(false);
                                             }
