@@ -1145,6 +1145,16 @@ export function MemoryDashboard() {
                         </div>
                     ) : (
                         <>
+                            {!memoryEnabled && (
+                                <div className="mem-empty-state" style={{ margin: '40px 0' }}>
+                                    <div className="mem-empty-icon" style={{ opacity: 0.5 }}>
+                                        <Shield size={32} />
+                                    </div>
+                                    <p style={{ color: '#888', fontSize: 14 }}>Memory is disabled. Enable it in Settings below to start storing knowledge, conversations, and preferences.</p>
+                                </div>
+                            )}
+
+                            {memoryEnabled && <>
                             {/* ── 1. Header Stat Cards ─────────────── */}
                             <div className="mem-stat-cards">
                                 <div className="mem-stat-card" data-accent="purple">
@@ -1202,29 +1212,6 @@ export function MemoryDashboard() {
                                     </div>
                                 </div>
                             </div>
-
-                            {/* ── Global memory-disabled banner ──── */}
-                            {!memoryEnabled && (
-                                <div className="mem-disabled-banner">
-                                    <ShieldOff size={15} />
-                                    <span>Memory is globally disabled — no data is being stored in any session.</span>
-                                    <button
-                                        className="mem-disabled-banner-action"
-                                        disabled={settingsLoading}
-                                        onClick={async () => {
-                                            setSettingsLoading(true);
-                                            try {
-                                                const updated = await memoryApi.updateMemorySettings({ memory_enabled: true });
-                                                setMemoryEnabled(updated.memory_enabled);
-                                            } catch { /* ignore */ } finally {
-                                                setSettingsLoading(false);
-                                            }
-                                        }}
-                                    >
-                                        Re-enable
-                                    </button>
-                                </div>
-                            )}
 
                             {/* ── 2. Activity Timeline ─────────────── */}
                             <div className="mem-section">
@@ -1912,6 +1899,8 @@ export function MemoryDashboard() {
                                     </div>
                                 </div>
                             )}
+
+                            </>}
 
                             {/* ── Settings ─────────────────────── */}
                             <div className="mem-section">
