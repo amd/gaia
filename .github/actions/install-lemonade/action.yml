@@ -36,32 +36,65 @@ runs:
         Write-Host "=== Verifying Lemonade Server ==="
 
         function Find-LemonadeServer {
-            $cmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
-            if ($cmd) {
-                return $cmd.Source
-            }
-
-            # Search common installation paths if not on PATH yet.
+            # Always check the well-known install dirs FIRST, so a fresh MSI
+            # install of v10.2.0 wins over a stale per-user shim (e.g. the
+            # ``LOCALAPPDATA\lemonade_server\bin\lemonade-server.bat`` left
+            # behind by an older bundled installer). Falling straight through
+            # to ``Get-Command`` would let that older shim shadow the MSI
+            # binary because the current shell's PATH wasn't refreshed.
             $searchPaths = @(
                 "${env:ProgramFiles(x86)}\Lemonade Server\bin",
                 "$env:ProgramFiles\Lemonade Server\bin",
+                "$env:LOCALAPPDATA\Programs\Lemonade Server\bin",
                 "$env:LOCALAPPDATA\Programs\Lemonade",
                 "$env:ProgramFiles\Lemonade",
                 "${env:ProgramFiles(x86)}\Lemonade",
                 "$env:USERPROFILE\Lemonade",
-                "$env:LOCALAPPDATA\Lemonade"
+                "$env:LOCALAPPDATA\Lemonade",
+                "$env:LOCALAPPDATA\lemonade_server\bin"
             )
             foreach ($path in $searchPaths) {
                 $exePath = Join-Path $path "lemonade-server.exe"
                 if (Test-Path $exePath) {
-                    Write-Host "Found lemonade-server at: $exePath"
+                    Write-Host "Found lemonade-server.exe at: $exePath"
                     echo "$path" >> $env:GITHUB_PATH
                     $env:PATH = "$path;$env:PATH"
                     return $exePath
                 }
+                $batPath = Join-Path $path "lemonade-server.bat"
+                if (Test-Path $batPath) {
+                    Write-Host "Found lemonade-server.bat at: $batPath"
+                    echo "$path" >> $env:GITHUB_PATH
+                    $env:PATH = "$path;$env:PATH"
+                    return $batPath
+                }
+            }
+
+            # Final fallback: anything ``Get-Command`` can resolve from the
+            # current shell's PATH.
+            $cmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
+            if ($cmd) {
+                Write-Host "Found via Get-Command: $($cmd.Source)"
+                return $cmd.Source
             }
 
             return $null
+        }
+
+        function Refresh-EnvPath {
+            # Pull the most-current Path from both HKLM and HKCU. The MSI
+            # writes to one or both and the current shell otherwise keeps
+            # the pre-install PATH for the rest of the step.
+            try {
+                $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+            } catch { $machinePath = "" }
+            try {
+                $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+            } catch { $userPath = "" }
+            if ($machinePath -or $userPath) {
+                $env:PATH = "$machinePath;$userPath;$env:PATH"
+                Write-Host "Refreshed PATH from registry."
+            }
         }
 
         function Get-LemonadeVersion {
@@ -157,7 +190,17 @@ runs:
         if ($needsInstall) {
             Install-LemonadeMsi -Version $expectedVersion
 
-            # Re-locate after install (PATH may now include a fresh dir).
+            # Refresh PATH from registry so the MSI's freshly-added
+            # ``Program Files\Lemonade Server\bin`` shows up in this shell
+            # the same way the gaia init flow's
+            # ``LemonadeInstaller.refresh_path_from_registry`` does after
+            # an MSI install.
+            Refresh-EnvPath
+
+            # Re-locate after install. ``Find-LemonadeServer`` now searches
+            # the well-known install dirs first so the new v$expectedVersion
+            # exe in ``Program Files\Lemonade Server\bin`` wins over any
+            # stale per-user .bat that's still on the shell's PATH.
             $lemonadePath = Find-LemonadeServer
             if (-not $lemonadePath) {
                 Write-Host "ERROR: lemonade-server still not found on PATH after install."
@@ -166,8 +209,23 @@ runs:
             $installedVersion = Get-LemonadeVersion -LemonadeExe $lemonadePath
             Write-Host ""
             Write-Host "Post-install version: $installedVersion"
-            if ((Compare-SemVer -A $installedVersion -B $expectedVersion) -ne 0) {
-                Write-Host "WARNING: Post-install version ($installedVersion) does not match expected ($expectedVersion)."
+            $postCmp = Compare-SemVer -A $installedVersion -B $expectedVersion
+            if ($null -eq $postCmp -or $postCmp -lt 0) {
+                # Hard-fail: the MSI ran (exit 0) but we can't reach the
+                # expected version. Continuing would let downstream tests
+                # blow up on "model_name=... not registered" again with no
+                # signal pointing back to the install step.
+                Write-Host "ERROR: Post-install version ($installedVersion) is below expected ($expectedVersion)."
+                Write-Host "       MSI install may have failed silently or installed to an unexpected location."
+                Write-Host "       Run candidates seen on PATH:"
+                Get-Command lemonade-server -All -ErrorAction SilentlyContinue | ForEach-Object {
+                    Write-Host "         - $($_.Source)"
+                }
+                exit 1
+            } elseif ($postCmp -gt 0) {
+                Write-Host "WARNING: Post-install version ($installedVersion) is newer than expected ($expectedVersion); leaving as-is."
+            } else {
+                Write-Host "Post-install version matches expected."
             }
         }
 
