@@ -1,0 +1,75 @@
+id: memory_watchlist_monitoring
+name: "Memory Watch-List / Long-Running Monitoring Criteria"
+category: memory
+severity: high
+description: |
+  Tests whether the agent treats user-stated watch criteria as durable,
+  long-running interests rather than one-shot queries. The user defines several
+  watch items (real-estate, shopping, finance) with conditions, then later asks
+  what's outstanding — the agent must surface the original criteria and reason
+  about which one a fresh data point matches.
+
+  This covers the "monitor for new property listings", "track deals on a product",
+  and "alert for interesting options contracts" use cases. The watch criteria
+  must persist across many turns and survive intervening unrelated conversation.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Establish a real-estate watch"
+    user_message: "Add this to my watch list: I want to know about new land parcels for sale in Austin TX, 1+ acres, under $500K, ideally with road access. This is a long-running watch, not a one-time search."
+    ground_truth:
+      expected_answer: "Watch stored: Austin TX land, 1+ acres, <$500K, road access"
+    success_criteria: "Agent stores the watch as a durable interest using remember tool. Should explicitly include all four criteria (Austin TX, 1+ acres, <$500K, road access) and note it's long-running / a watch."
+
+  - turn: 2
+    objective: "Establish a shopping watch"
+    user_message: "Also watch for any sale on AirPods Pro 2nd gen — alert me when the price drops below $200, or if there's a refurbished unit under $170."
+    ground_truth:
+      expected_answer: "Watch stored: AirPods Pro 2 — sale <$200 OR refurb <$170"
+    success_criteria: "Agent stores both branches of the shopping watch (new <$200 OR refurb <$170). Must capture both thresholds, not collapse into one."
+
+  - turn: 3
+    objective: "Establish a finance / options watch"
+    user_message: "One more: AMD options — flag anything with open interest over 10,000 contracts on weekly expiries, especially OTM puts. That's an unusual-flow alert pattern."
+    ground_truth:
+      expected_answer: "Watch stored: AMD options, OI>10K, weekly expiries, focus on OTM puts"
+    success_criteria: "Agent stores the AMD options watch with all conditions: OI>10K, weekly expiries, OTM puts emphasis. Should not lose any of the three constraints."
+
+  - turn: 4
+    objective: "Insert unrelated turn (memory durability test)"
+    user_message: "Quick aside — what's the capital of Portugal?"
+    ground_truth:
+      expected_answer: "Lisbon"
+    success_criteria: "Agent answers 'Lisbon'. This turn just verifies the agent can handle interleaved unrelated chat without losing the watch memories."
+
+  - turn: 5
+    objective: "Recall all active watches"
+    user_message: "What am I currently watching for? Give me the full list."
+    ground_truth:
+      expected_answer: "All 3: Austin TX land 1+ac <$500K road; AirPods Pro 2 <$200 or refurb <$170; AMD options OI>10K weekly OTM puts"
+    success_criteria: "Agent surfaces ALL THREE watches with their key constraints. FAIL if any watch is missing or constraints are dropped (e.g. forgets the road-access requirement, the refurb branch, or the OTM-puts emphasis)."
+
+  - turn: 6
+    objective: "Match a new data point against stored criteria"
+    user_message: "I just saw a 2.3 acre lot in Austin listed for $475K with paved road access. Does that match anything I'm watching for?"
+    ground_truth:
+      expected_answer: "Yes — matches the Austin land watch (1+ acres ✓, <$500K ✓, road access ✓)"
+    success_criteria: "Agent matches the listing against the stored Austin land watch and explicitly checks each criterion (acreage, price, road access). Must conclude it IS a match. FAIL if agent doesn't recall the watch or doesn't run the criteria check."
+
+  - turn: 7
+    objective: "Update one watch criterion"
+    user_message: "Bump my Austin land budget up to $600K."
+    ground_truth:
+      expected_answer: "Watch updated: budget now $600K (was $500K)"
+    success_criteria: "Agent updates only the price criterion of the Austin land watch (not the others) using update_memory or remember with supersede. The 1+ acre and road access criteria must be retained, only the price ceiling changes."
+
+expected_outcome: |
+  Agent maintains a multi-item watch list as durable memory, recalls every watch
+  on request without dropping criteria, evaluates new data against the stored
+  rules, and supports targeted updates to a single criterion within a watch
+  without overwriting the others.

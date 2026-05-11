@@ -1,0 +1,59 @@
+id: memory_morning_brief_personalization
+name: "Memory Morning Brief Personalization"
+category: memory
+severity: high
+description: |
+  Tests whether the agent assembles a personalized daily brief from an interest
+  profile built up over multiple turns. This is the "personalized daily briefs"
+  consumer use case from issue #663 in the v0.20.0 milestone — the agent learns
+  what topics, sources, locations, and detail level YOU care about, then produces
+  a brief tailored to your stored profile.
+
+  The agent must use the remember tool to capture each interest as it is stated,
+  then synthesise the brief from those memories — not from generic defaults.
+
+persona: home_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Establish news topic interests"
+    user_message: "For my morning brief, I care about three news topics: AMD / chip industry, climate policy, and Premier League football (Arsenal specifically). Skip celebrity news and US politics. Please remember this."
+    ground_truth:
+      expected_answer: "Interests stored: AMD/chips, climate policy, Premier League (Arsenal). Skip: celebrity, US politics."
+    success_criteria: "Agent stores the three news topics AND the two skip topics. Should use remember tool with category=preference or interest. Must mention all five entries."
+
+  - turn: 2
+    objective: "Add weather location and brief style preferences"
+    user_message: "Also: I'm in Austin TX so weather should be local. And I want the whole brief short — bullet points only, under 200 words total. No fluff."
+    ground_truth:
+      expected_answer: "Location: Austin TX. Style: bullet points, <200 words, no fluff."
+    success_criteria: "Agent stores location (Austin TX) and brief style (bullets, ~200 word cap, no fluff). Acknowledges all three: location, format, length."
+
+  - turn: 3
+    objective: "Add calendar / day-plan preview preference"
+    user_message: "One more thing — at the end of the brief I want a one-liner of my top priority for the day if I've shared one, otherwise just a question prompting me for it."
+    ground_truth:
+      expected_answer: "Day-plan preference: top-priority one-liner OR a prompt question if none stored"
+    success_criteria: "Agent stores the day-plan rule with both branches (priority one-liner OR ask the user). Should be retrievable as a preference."
+
+  - turn: 4
+    objective: "Request the brief — agent must assemble from stored profile"
+    user_message: "OK — give me my morning brief for today."
+    ground_truth:
+      expected_answer: "Brief covering AMD/chips, climate, Arsenal, Austin weather, in bullets under 200 words, ending with day-priority prompt"
+    success_criteria: "The brief must reference at least 3 of the 4 personalized facets: (1) one of AMD/chip OR climate OR Arsenal news (synthesized or acknowledged), (2) Austin-specific weather (or note that it would fetch Austin), (3) bullet-point format with no long paragraphs, (4) ends with the day-priority prompt or one-liner. FAIL if brief includes celebrity gossip or US politics, exceeds 200 words, uses long paragraphs, or omits the location/topic personalization."
+
+  - turn: 5
+    objective: "Update an interest and re-request"
+    user_message: "Drop climate policy from my brief topics — I'm getting fatigued by it. Replace with renewable energy specifically."
+    ground_truth:
+      expected_answer: "Interest updated: climate policy removed, renewable energy added"
+    success_criteria: "Agent updates the stored interests using update_memory or remember-with-supersede. Confirms the swap. A subsequent brief should reference renewable energy and not climate policy."
+
+expected_outcome: |
+  Agent constructs a coherent interest profile from incremental statements, applies
+  it when assembling a daily brief, and updates the profile cleanly when the user
+  modifies an interest — demonstrating composable memory-driven personalization.

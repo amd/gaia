@@ -97,6 +97,11 @@ jobs:
           echo "✅ gaia sd --help passed"
 
       - name: Run unit tests
+        env:
+          # Skip memory init — Lemonade isn't available in this CI job; the
+          # unit tests don't exercise memory functionality (memory has its
+          # own dedicated tests with mocked embeddings).
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           echo "=== Running Unit Tests ==="
           echo "These are fast tests for core SDK components"
@@ -104,6 +109,8 @@ jobs:
           pytest tests/unit/ -v --tb=short --cov=src/gaia --cov-report=term-missing
 
       - name: Run DatabaseMixin integration tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           echo "=== Running DatabaseMixin Integration Tests ==="
           echo "Testing DatabaseMixin with Agent class"
@@ -111,6 +118,8 @@ jobs:
           pytest tests/integration/test_database_mixin_integration.py -v --tb=short
 
       - name: Run DatabaseAgent integration tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           echo "=== Running DatabaseAgent Integration Tests ==="
           echo "Testing DatabaseAgent with auto-registered tools"

@@ -57,6 +57,7 @@
               "quickstart",
               "guides/install",
               "guides/agent-ui",
+              "guides/memory",
               {
                 "group": "User Guides",
                 "pages": [
@@ -162,6 +163,7 @@
                     "group": "SDKs",
                     "pages": [
                       "sdk/sdks/chat",
+                      "sdk/sdks/memory",
                       "sdk/sdks/agent-ui",
                       "sdk/sdks/rag",
                       "sdk/sdks/code-index",

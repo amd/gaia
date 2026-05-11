@@ -17,7 +17,6 @@ import asyncio
 import copy
 import json
 import logging
-import os
 import re as _re
 import threading
 import time as _time
@@ -36,6 +35,28 @@ from .sse_handler import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _register_agent_memory_ops(agent) -> None:
+    """Register LLM-powered memory operations from a ChatAgent with the memory router.
+
+    Consolidation and reconciliation require a live LLM + FAISS index, so they
+    cannot run from the router's standalone MemoryStore.  This function wires
+    the agent's methods into module-level callables that the router can invoke.
+
+    Safe to call on every agent construction — the router just overwrites the
+    previous reference (all agents share the same DB, so any active agent works).
+    """
+    try:
+        from gaia.ui.routers import memory as _mem_router
+
+        if hasattr(agent, "consolidate_old_sessions"):
+            _mem_router._consolidate_fn = agent.consolidate_old_sessions
+        if hasattr(agent, "reconcile_memory"):
+            _mem_router._reconcile_fn = agent.reconcile_memory
+    except Exception:
+        pass  # Non-fatal: dashboard ops degrade gracefully when not registered
+
 
 # Active SSE handlers keyed by session_id.  The /api/chat/confirm-tool
 # endpoint looks up the handler here to resolve a pending confirmation.
@@ -1023,6 +1044,7 @@ async def _get_chat_response(
             )
             agent = ChatAgent(config)
             _store_agent(session_id, model_id, document_ids, agent, agent_type)
+            _register_agent_memory_ops(agent)
         else:
             # Non-chat agent: create via registry
             registry = _agent_registry
@@ -1058,6 +1080,7 @@ async def _get_chat_response(
                 )
                 agent = ChatAgent(config)
                 _store_agent(session_id, model_id, document_ids, agent, agent_type)
+                _register_agent_memory_ops(agent)
             else:
                 logger.info(
                     "chat: Creating new %s agent for session %s",
@@ -1103,6 +1126,11 @@ async def _get_chat_response(
                     agent,
                     agent_type,
                 )
+
+        # Suppress memory writes when private session OR global memory is disabled.
+        if hasattr(agent, "_incognito"):
+            memory_globally_off = db.get_setting("memory_enabled", "false") == "false"
+            agent._incognito = memory_globally_off or bool(session.get("private", 0))
 
         # Restore conversation history (limited to prevent context overflow).
         # Always re-inject from DB so the history is consistent with what was
@@ -1408,6 +1436,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         model_id,
                         _time.monotonic() - t_construct,
                     )
+                    _register_agent_memory_ops(agent)
                     agent.console = sse_handler  # Assign early so tool events flow
 
                     # Early-exit if consumer disconnected
@@ -1506,6 +1535,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         )
                         agent = ChatAgent(config)
                         agent.console = sse_handler
+                        _register_agent_memory_ops(agent)
                         if rag_file_paths and agent.rag:
                             _index_rag_with_progress(agent, rag_file_paths, sse_handler)
                         _store_agent(
@@ -1583,6 +1613,15 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         _mcp_status_cache[:] = mcp_report
                     if mcp_report:
                         sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
+
+                # Suppress memory writes when private session OR global memory is disabled.
+                if hasattr(agent, "_incognito"):
+                    memory_globally_off = (
+                        db.get_setting("memory_enabled", "false") == "false"
+                    )
+                    agent._incognito = memory_globally_off or bool(
+                        session.get("private", 0)
+                    )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -2025,13 +2064,20 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
         # Save complete response to DB (including captured agent steps)
         if full_response:
-            # Fetch last inference stats from Lemonade (non-blocking)
+            # Fetch last inference stats from Lemonade (non-blocking).
+            # Resolve the Lemonade URL via LemonadeManager so we follow the
+            # actually-running instance (matches the resolver used at
+            # _chat_helpers.py:331 and :747); raw os.environ lookup misses
+            # cases where Lemonade is on a non-default port and the env var
+            # isn't set, leaving stats silently empty in eval traces.
             inference_stats = None
             try:
                 import httpx
 
-                base_url = os.environ.get(
-                    "LEMONADE_BASE_URL", "http://localhost:13305/api/v1"
+                from gaia.llm.lemonade_manager import LemonadeManager
+
+                base_url = (
+                    LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
                 )
                 async with httpx.AsyncClient(timeout=3.0) as stats_client:
                     stats_resp = await stats_client.get(f"{base_url}/stats")
@@ -2047,8 +2093,22 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             "input_tokens": stats_data.get("input_tokens", 0),
                             "output_tokens": stats_data.get("output_tokens", 0),
                         }
-            except Exception:
-                pass
+                    else:
+                        logger.debug(
+                            "Lemonade /stats returned %d at %s — perf telemetry "
+                            "missing for this turn",
+                            stats_resp.status_code,
+                            base_url,
+                        )
+            except Exception as exc:  # pylint: disable=broad-except
+                # Don't fail the user's response if stats fetching breaks; log
+                # at debug so eval-time gaps are diagnosable without spamming
+                # production logs.
+                logger.debug(
+                    "Failed to fetch Lemonade /stats: %s — perf telemetry "
+                    "missing for this turn",
+                    exc,
+                )
 
             if (
                 persisted_policy_block_msg_id is not None

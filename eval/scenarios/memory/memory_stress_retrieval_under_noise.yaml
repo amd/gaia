@@ -1,0 +1,81 @@
+id: memory_stress_retrieval_under_noise
+name: "Memory Stress — Retrieval Under Noise"
+category: memory
+severity: high
+description: |
+  Stress test: store many semantically similar items so that vector retrieval
+  must discriminate between near-duplicates. The user stores 12 contacts who
+  share first names or roles, then asks queries that target one specific
+  contact. The agent must return the right one rather than collapsing
+  near-matches.
+
+  This catches a class of failure that capacity tests don't: the store has
+  reasonable size (12 items) but every item is a plausible match for the
+  query. Real users hit this constantly ("which Alex did I tell you about?").
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Seed 12 contacts that share first names / roles"
+    user_message: |
+      Please remember these 12 contacts as separate entries:
+      1. Alex Romero — frontend engineer at Acme, hired 2024
+      2. Alex Brennan — frontend engineer at Northwind, hired 2025
+      3. Alex Chen — backend engineer at Acme, hired 2026
+      4. Sam Patel — product manager at Acme, focused on payments
+      5. Sam O'Brien — product manager at Northwind, focused on growth
+      6. Sam Patel (different person) — designer at GreenLeaf
+      7. Jordan Liu — recruiter at Acme
+      8. Jordan Tate — recruiter at Northwind
+      9. Riley Vance — engineering manager at Acme
+      10. Riley Mendes — engineering manager at GreenLeaf
+      11. Casey Han — data scientist at Acme
+      12. Casey Han (different person) — data scientist at Northwind
+    ground_truth:
+      expected_answer: "12 distinct contact entries stored"
+    success_criteria: "Agent stores all 12 contacts as separate entries. Should NOT merge same-named people into one entry. Each entry should preserve its company affiliation as the disambiguator."
+
+  - turn: 2
+    objective: "Disambiguating retrieval by company"
+    user_message: "Which Alex is the backend engineer?"
+    ground_truth:
+      expected_answer: "Alex Chen at Acme"
+    success_criteria: "Agent returns Alex Chen specifically (not Alex Romero or Alex Brennan, who are frontend). FAIL if agent returns the wrong Alex, returns multiple Alexes, or says 'I don't know which one'."
+
+  - turn: 3
+    objective: "Disambiguating retrieval by hire date"
+    user_message: "Which Alex was hired most recently?"
+    ground_truth:
+      expected_answer: "Alex Chen (2026)"
+    success_criteria: "Agent compares stored hire dates (2024, 2025, 2026) and returns Alex Chen as the most recent. FAIL if agent returns a different Alex or claims it can't compare."
+
+  - turn: 4
+    objective: "Disambiguating two same-name people by role"
+    user_message: "Which Sam Patel is the designer?"
+    ground_truth:
+      expected_answer: "Sam Patel at GreenLeaf (designer)"
+    success_criteria: "Agent returns the GreenLeaf Sam Patel (designer), NOT the Acme Sam Patel (PM). FAIL if agent returns the PM, returns both without disambiguating, or claims they're the same person."
+
+  - turn: 5
+    objective: "Cross-role retrieval requiring multi-attribute filter"
+    user_message: "List the engineering managers across all companies."
+    ground_truth:
+      expected_answer: "Riley Vance (Acme) and Riley Mendes (GreenLeaf)"
+    success_criteria: "Agent returns BOTH Rileys (and only the Rileys). FAIL if agent returns only one EM, returns non-EMs, or omits a company."
+
+  - turn: 6
+    objective: "Negative-match retrieval (something that shouldn't match)"
+    user_message: "Do I know any Alex who is a designer?"
+    ground_truth:
+      expected_answer: "No — none of the three Alexes are designers"
+    success_criteria: "Agent correctly answers 'no' (none of the Alexes is a designer; all three are engineers). FAIL if agent fabricates a match or confuses Alex with Sam Patel (the GreenLeaf designer)."
+
+expected_outcome: |
+  Agent uses stored attributes (company, role, hire date) to discriminate
+  between same-named or same-role contacts. Retrieval picks the single
+  correct entry rather than averaging or merging near-matches; negative
+  queries return 'no match' rather than fabricating one.

@@ -1,0 +1,51 @@
+id: memory_proactive_surfacing
+name: "Memory Proactive Surfacing"
+category: memory
+severity: high
+description: |
+  Advanced test: the agent must proactively surface relevant stored knowledge
+  without being explicitly asked. The user stores context about a project, then
+  asks a related but distinct question — the agent should volunteer the stored
+  knowledge as part of its answer rather than waiting to be prompted.
+
+  This tests the 'recall naturally' design principle: the LLM decides when to
+  search memory and injects relevant context into answers unprompted.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Store a security constraint fact"
+    user_message: "Important context: we are HIPAA-compliant and all PHI must be stored encrypted at rest using AES-256. PII must never appear in log files. Please remember this as a hard constraint."
+    ground_truth:
+      expected_answer: "HIPAA compliance, AES-256 encryption at rest, PII not in logs"
+    success_criteria: "Agent stores the constraint as a fact or preference. Must mention HIPAA, AES-256, and the PII logging restriction."
+
+  - turn: 2
+    objective: "Store a second independent fact about tooling"
+    user_message: "Also remember: we use Elasticsearch for all application logging and Kibana for dashboards."
+    ground_truth:
+      expected_answer: "Elasticsearch for logging, Kibana for dashboards"
+    success_criteria: "Agent stores the tooling fact."
+
+  - turn: 3
+    objective: "Ask a question that should trigger proactive memory recall"
+    user_message: "How should I set up structured logging for our new patient intake service?"
+    ground_truth:
+      expected_answer: "Elasticsearch, but PII/PHI must NOT appear in logs (HIPAA), AES-256 for any stored data"
+    success_criteria: "Agent proactively applies BOTH stored memories: (1) recommends Elasticsearch/Kibana from stored tooling, AND (2) warns about HIPAA PII-in-logs constraint without being asked. FAIL if agent gives generic logging advice without referencing either the tooling stack or the HIPAA constraint."
+
+  - turn: 4
+    objective: "Test that constraint is applied to a concrete example"
+    user_message: "Our log format currently includes patient_id, timestamp, and error_message. Is there anything wrong with this?"
+    ground_truth:
+      expected_answer: "patient_id is PHI/PII — must not appear in logs per HIPAA constraint"
+    success_criteria: "Agent flags patient_id as a HIPAA violation based on the stored constraint. FAIL if agent approves the log format or fails to identify patient_id as PHI that must be excluded."
+
+expected_outcome: |
+  Agent proactively surfaces stored constraints and tooling context without
+  being prompted, applying them to new questions — demonstrating intelligent
+  memory-driven assistance rather than passive recall on request.

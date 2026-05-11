@@ -487,6 +487,213 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
         except Exception as e:
             return {"error": f"Screenshot failed: {e}"}
 
+    # ── Memory ────────────────────────────────────────────────────────
+    #
+    # Read tools register when EITHER:
+    #   * env GAIA_MEMORY_MCP_ALWAYS=1   (eval runner sets this), OR
+    #   * UI setting mcp_memory_enabled=True  (Memory Dashboard toggle)
+    #
+    # Admin tools (memory_clear, memory_seed) ALSO require env
+    # GAIA_MEMORY_ADMIN=1, mirroring the REST router gate.  Without that env
+    # var on the backend process, the admin REST endpoints return 403 even
+    # if the MCP tool is registered.  We register the tool anyway so the
+    # error surfaces to the eval simulator with an actionable message.
+
+    _mcp_always = os.environ.get("GAIA_MEMORY_MCP_ALWAYS") == "1"
+    _admin_enabled = os.environ.get("GAIA_MEMORY_ADMIN") == "1"
+    _ui_settings_enabled = False
+    if not _mcp_always:
+        _mem_settings = _api(backend_url, "get", "/memory/settings")
+        _ui_settings_enabled = isinstance(_mem_settings, dict) and _mem_settings.get(
+            "mcp_memory_enabled"
+        )
+    _memory_read_enabled = _mcp_always or _ui_settings_enabled
+
+    if _memory_read_enabled:
+
+        @mcp.tool()
+        def memory_stats() -> Dict[str, Any]:
+            """Return aggregate statistics for the agent's persistent memory store.
+
+            Shows knowledge counts (total, by category), retrieval counts,
+            embedding coverage, and conversation session counts.  Use this as
+            a quick sanity check during eval — total_items=0 after a clear,
+            >0 after a seed/remember, etc.
+            """
+            return _api(backend_url, "get", "/memory/stats")
+
+        @mcp.tool()
+        def memory_list(
+            category: str = "",
+            context: str = "",
+            entity: str = "",
+            search: str = "",
+            include_sensitive: bool = False,
+            include_superseded: bool = False,
+            limit: int = 20,
+        ) -> Dict[str, Any]:
+            """Browse stored memories. All parameters are optional filters.
+
+            Args:
+                category: Filter by category (fact, preference, skill, error,
+                    note, reminder).
+                context: Filter by context scope (global, work, personal, or
+                    custom).
+                entity: Filter by linked entity (e.g. ``person:alice``,
+                    ``app:chrome``).  Use to verify entity-tagged storage.
+                search: Full-text search query.
+                include_sensitive: Include items with ``sensitive=true``.
+                    Default False to mirror the dashboard.
+                include_superseded: Include items replaced by newer knowledge.
+                    Default False; set True to inspect supersession chains
+                    (used by adversarial-poisoning eval scenarios).
+                limit: Max results to return (default 20, max 200).
+            """
+            params: Dict[str, Any] = {
+                "limit": limit,
+                "order": "desc",
+                "sort_by": "updated_at",
+                "include_sensitive": str(bool(include_sensitive)).lower(),
+                "include_superseded": str(bool(include_superseded)).lower(),
+            }
+            if category:
+                params["category"] = category
+            if context:
+                params["context"] = context
+            if entity:
+                params["entity"] = entity
+            if search:
+                params["search"] = search
+            qs = "&".join(f"{k}={v}" for k, v in params.items())
+            return _api(backend_url, "get", f"/memory/knowledge?{qs}")
+
+        @mcp.tool()
+        def memory_recall(query: str, limit: int = 10) -> Dict[str, Any]:
+            """Search the agent's memory by keyword or concept.
+
+            Hybrid keyword + semantic search via the dashboard's
+            ``/memory/knowledge?search=...`` endpoint.  Returns the same
+            shape as ``memory_list``.
+
+            Args:
+                query: Search query (supports natural language).
+                limit: Max results (default 10).
+            """
+            import urllib.parse
+
+            qs = f"search={urllib.parse.quote(query)}&limit={limit}&order=desc"
+            return _api(backend_url, "get", f"/memory/knowledge?{qs}")
+
+        @mcp.tool()
+        def memory_get(knowledge_id: str) -> Dict[str, Any]:
+            """Fetch one knowledge entry by ID, including superseded rows.
+
+            Critical for adversarial / contradiction scenarios where the
+            judge needs to inspect ``superseded_by``, ``sensitive``, or
+            ``confidence`` on a specific row.  Unlike ``memory_list``, this
+            does NOT hide superseded items.
+
+            Args:
+                knowledge_id: UUID returned by an earlier remember / seed call.
+
+            Returns the full knowledge dict, or ``{"error": "..."}`` on 404.
+            """
+            return _api(backend_url, "get", f"/memory/knowledge/{knowledge_id}")
+
+        @mcp.tool()
+        def memory_get_by_entity(entity: str, limit: int = 20) -> Dict[str, Any]:
+            """List all active knowledge linked to one entity.
+
+            Wrapper around ``GET /api/memory/entities/{entity}``.  Use this
+            to verify that the agent's ``remember()`` call wrote the right
+            ``entity=person:name`` / ``entity=app:name`` tag.  Returns a list
+            of knowledge dicts (excludes superseded rows).
+
+            Args:
+                entity: The exact entity tag, e.g. ``person:alice``.
+                limit: Max rows to return (default 20).
+            """
+            return _api(
+                backend_url,
+                "get",
+                f"/memory/entities/{entity}?limit={limit}",
+            )
+
+        @mcp.tool()
+        def memory_get_conversation_turns(
+            session_id: str, limit: int = 50
+        ) -> Dict[str, Any]:
+            """List conversation turns persisted for a session.
+
+            Wraps ``GET /api/memory/conversations/{session_id}``.  Used to
+            verify that the agent's ``_after_process_query`` hook stored
+            user/assistant turns correctly — important for journaling and
+            session-continuity scenarios.
+
+            Args:
+                session_id: Memory session ID (different from the chat
+                    session ID returned by ``create_session``).  Read this
+                    from ``memory_stats()`` if you don't already have it.
+                limit: Max turns to return (default 50).
+            """
+            return _api(
+                backend_url,
+                "get",
+                f"/memory/conversations/{session_id}?limit={limit}",
+            )
+
+    if _admin_enabled:
+
+        @mcp.tool()
+        def memory_clear(scope: str = "all") -> Dict[str, Any]:
+            """**EVAL ONLY.** Wipe memory for a clean scenario start.
+
+            Calls ``POST /api/memory/admin/clear`` which is disabled in
+            production unless the backend is started with
+            ``GAIA_MEMORY_ADMIN=1``.
+
+            Args:
+                scope: ``"all"`` (default), ``"knowledge"``, or
+                    ``"conversations"``.  ``"all"`` wipes everything;
+                    the partials let cross-session-persistence tests keep
+                    knowledge while clearing conversations or vice versa.
+
+            Returns ``{"scope": ..., "cleared": {<table>: <rows>}}`` on
+            success or ``{"error": "..."}`` if the backend rejects.
+            """
+            return _api(
+                backend_url,
+                "post",
+                "/memory/admin/clear",
+                json={"scope": scope},
+            )
+
+        @mcp.tool()
+        def memory_seed(items: list) -> Dict[str, Any]:
+            """**EVAL ONLY.** Bulk-insert known knowledge rows for stress tests.
+
+            Bypasses dedup so two near-identical items become two rows —
+            the whole point is to plant a known cluttered state.  Calls
+            ``POST /api/memory/admin/seed`` which requires
+            ``GAIA_MEMORY_ADMIN=1`` on the backend.
+
+            Args:
+                items: List of dicts.  Each must have ``content`` (non-empty
+                    string) and may include ``category``, ``context``,
+                    ``domain``, ``entity``, ``sensitive``, ``confidence``,
+                    ``source``, ``due_at``.  Validation is whole-batch — a
+                    malformed item rejects all of them.
+
+            Returns ``{"count": N, "ids": [...]}`` on success or
+            ``{"error": "..."}`` on validation failure.
+            """
+            return _api(
+                backend_url,
+                "post",
+                "/memory/admin/seed",
+                json={"items": items},
+            )
+
     # ── Browser Navigation ────────────────────────────────────────
 
     # Track last opened URL to avoid duplicate tabs

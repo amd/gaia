@@ -374,7 +374,7 @@ class TunnelManager:
         ngrok_path = self._find_ngrok()
         if not ngrok_path:
             self._error = _NGROK_INSTALL_HINT
-            logger.error("ngrok not found on PATH")
+            logger.warning("ngrok not found on PATH")
             return self.get_status()
 
         # Preflight: is the ngrok authtoken configured? Catches the #1

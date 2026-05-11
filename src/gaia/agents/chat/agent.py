@@ -18,6 +18,7 @@ except ImportError:
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
@@ -111,6 +112,7 @@ class ChatAgentConfig:
 
 
 class ChatAgent(
+    MemoryMixin,
     Agent,
     RAGToolsMixin,
     FileToolsMixin,
@@ -285,6 +287,9 @@ class ChatAgent(
         # new conversation/session is created.
         self.tool_loader = ToolLoader()
 
+        # Initialize memory subsystem (before super().__init__ which calls _register_tools)
+        self.init_memory()
+
         # Store base URL for use in _register_tools() (VLM, etc.)
         self._base_url = effective_base_url
 
@@ -405,16 +410,11 @@ class ChatAgent(
             )
 
     def _get_mixin_prompts(self) -> list[str]:
-        """Only include SD prompt when SD is actually initialized (saves ~1000 tokens)."""
-        prompts = []
-        if hasattr(self, "get_sd_system_prompt") and hasattr(self, "sd_default_model"):
-            fragment = self.get_sd_system_prompt()
-            if fragment:
-                prompts.append(fragment)
-        if hasattr(self, "get_vlm_system_prompt"):
-            fragment = self.get_vlm_system_prompt()
-            if fragment:
-                prompts.append(fragment)
+        """Auto-discover mixin prompts, but exclude SD unless actually initialized."""
+        prompts = super()._get_mixin_prompts()
+        # Remove SD prompt if SD was not explicitly initialized (saves ~1000 tokens)
+        if not hasattr(self, "sd_default_model"):
+            prompts = [p for p in prompts if "Stable Diffusion" not in p]
         return prompts
 
     def _get_system_prompt(self) -> str:
@@ -539,6 +539,8 @@ No documents are currently indexed.
 - Have opinions, share them. Be playful, lightly sarcastic, funny when it fits.
 - Keep it short. Match length to question complexity. 1-2 sentences for greetings, simple lookups, capability questions. Multi-paragraph only for genuine analysis.
 - Vary your phrasing on greetings — don't lock onto one canned opener. Never list features or tools unprompted in a greeting.
+- **PREFER MEMORY OVER GENERIC** — if you have memories about the user (name, project, recent activity), USE THEM to personalize the greeting before falling back to a generic opener.
+- **FACT-SHARING RULE:** When the user shares personal information ("I'm Sam", "I work at X"), acknowledge what they told you. NEVER reply with a generic "What are you working on?"
 - Be honest and direct. No hedging, no "As an AI..." disclaimers, no sycophancy ("great question!", "what a wonderful idea!"). Push back respectfully when the user is wrong.
 
 **NEVER:**
@@ -960,6 +962,7 @@ No documents are currently indexed.
 
         # All other profiles get at least shell tools
         self.register_shell_tools()
+        self.register_memory_tools()  # Persistent memory tools
 
         if profile in ("doc", "full"):
             self.register_rag_tools()
@@ -987,6 +990,7 @@ No documents are currently indexed.
         if profile == "full":
             self.register_screenshot_tools()
         self._register_external_tools_conditional()
+        self._register_loop_control_tools()  # set_loop_state, request_user_input
 
         # Inline list_files — only for profiles that need file operations
         if profile in ("file", "data", "full"):
@@ -1574,6 +1578,107 @@ No documents are currently indexed.
             }
             for _name in _chat_exclude:
                 self._instance_tools.pop(_name, None)
+
+    def _register_loop_control_tools(self) -> None:
+        """Register set_loop_state and request_user_input tools for autonomous mode.
+
+        These tools are only meaningful when the agent runs inside AgentLoop, but
+        they are always registered so the LLM sees them in the system prompt and
+        can call them safely even in manual/interactive sessions (they no-op in
+        that context because the console has no loop_state_directive attribute).
+        """
+        from gaia.agents.base.tools import tool
+
+        _agent = self
+
+        @tool
+        def set_loop_state(
+            state: str,
+            reason: str = "",
+            wake_in_seconds: int = 0,
+        ) -> str:
+            """Signal the autonomous loop what to do next.
+
+            Call this when you have finished all current work or need to pause.
+            Only effective when running inside the AgentLoop (autonomous mode).
+
+            Args:
+                state: "idle"      — nothing more to do right now.
+                       "scheduled" — wake me up in wake_in_seconds seconds.
+                       "paused"    — stop the autonomous loop (user must restart).
+                reason: Human-readable explanation (shown in activity log).
+                wake_in_seconds: Seconds until next wakeup (only for "scheduled").
+                    Minimum: 30. Maximum: 86400 (24 hours).
+            """
+            valid_states = {"idle", "scheduled", "paused"}
+            if state not in valid_states:
+                return (
+                    f"Invalid state '{state}'. Must be one of: {sorted(valid_states)}"
+                )
+
+            # Clamp wake_in_seconds for "scheduled" state
+            if state == "scheduled":
+                wake_in_seconds = max(30, min(86400, wake_in_seconds))
+
+            if hasattr(_agent.console, "loop_state_directive"):
+                _agent.console.loop_state_directive = {
+                    "directive": state,
+                    "reason": reason,
+                    "wake_in_seconds": wake_in_seconds,
+                }
+
+            msg = f"Loop state set to '{state}'."
+            if reason:
+                msg += f" Reason: {reason}"
+            if state == "scheduled":
+                msg += f" Next wakeup in {wake_in_seconds}s."
+            return msg
+
+        @tool
+        def request_user_input(
+            message: str,
+            choices: list = None,
+            default_if_no_response: str = None,
+            timeout_seconds: int = 300,
+            continue_if_no_response: bool = True,
+        ) -> str:
+            """Ask the user a question and wait for their response.
+
+            Args:
+                message: The question to present to the user.
+                choices: Optional list of choices (renders as buttons in the UI).
+                default_if_no_response: Value to use if no response received before
+                    timeout. If not set and continue_if_no_response=True, returns
+                    "__NO_RESPONSE__". Always check the return value.
+                timeout_seconds: How long to wait (min 10, default 300).
+                continue_if_no_response: If True, continue after timeout.
+                    If False, the loop pauses until user re-engages.
+
+            Returns:
+                User's response, chosen option, or "__NO_RESPONSE__" on timeout.
+                ALWAYS check for "__NO_RESPONSE__" before proceeding.
+            """
+            console = _agent.console
+            if hasattr(console, "request_user_input_blocking"):
+                return console.request_user_input_blocking(
+                    message=message,
+                    choices=choices,
+                    default_if_no_response=default_if_no_response,
+                    timeout_seconds=timeout_seconds,
+                    continue_if_no_response=continue_if_no_response,
+                )
+            # Fallback for non-SSE consoles (interactive sessions)
+            try:
+                return (
+                    input(f"\n[Agent asking]: {message}\n> ").strip()
+                    or "__NO_RESPONSE__"
+                )
+            except (EOFError, OSError):
+                return (
+                    default_if_no_response
+                    if default_if_no_response is not None
+                    else "__NO_RESPONSE__"
+                )
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools

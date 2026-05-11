@@ -1,0 +1,48 @@
+id: memory_conflict_resolution
+name: "Memory Conflict Resolution"
+category: memory
+severity: high
+description: |
+  Advanced test: the user states a fact, then later contradicts it. The agent
+  must update its memory (using update_memory or remember with supersede) and
+  serve the corrected fact thereafter — not the stale one.
+
+  Tests the Zep-inspired fact lineage / supersede logic in MemoryStore.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Establish an initial fact"
+    user_message: "For context: our API gateway currently runs on port 8080 and uses basic HTTP auth. Please remember this."
+    ground_truth:
+      expected_answer: "API gateway on port 8080, basic HTTP auth"
+    success_criteria: "Agent stores the fact: API gateway port 8080 and basic HTTP auth."
+
+  - turn: 2
+    objective: "Contradict the stored fact with an update"
+    user_message: "Update: we just migrated the API gateway to port 443 with OAuth 2.0. The old port 8080 config is no longer valid. Please update your memory."
+    ground_truth:
+      expected_answer: "API gateway updated to port 443 with OAuth 2.0, port 8080 deprecated"
+    success_criteria: "Agent acknowledges the update and stores the new fact (port 443, OAuth 2.0), marking the old one as superseded or outdated. Should call update_memory or remember with updated content."
+
+  - turn: 3
+    objective: "Ask a question that relies on the corrected fact"
+    user_message: "What port should our monitoring agent connect to for the API gateway?"
+    ground_truth:
+      expected_answer: "Port 443 (not 8080)"
+    success_criteria: "Agent states port 443. FAIL if agent says port 8080 (stale fact) or says it doesn't know. The updated fact must win over the superseded one."
+
+  - turn: 4
+    objective: "Ask about auth to confirm the full update was retained"
+    user_message: "And what auth method does the gateway use now?"
+    ground_truth:
+      expected_answer: "OAuth 2.0"
+    success_criteria: "Agent states OAuth 2.0 (not basic HTTP auth). FAIL if agent says basic HTTP auth or is uncertain."
+
+expected_outcome: |
+  Agent correctly updates conflicting facts in memory and serves the most
+  recent version — demonstrating fact lifecycle management (supersede/update).

@@ -44,6 +44,7 @@ from ._chat_helpers import _get_chat_response  # noqa: F401
 from ._chat_helpers import _index_document  # noqa: F401
 from ._chat_helpers import _resolve_rag_paths  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
+from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
 from .database import ChatDatabase
@@ -53,7 +54,9 @@ from .routers import chat as chat_router_mod
 from .routers import connectors as connectors_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
+from .routers import goals as goals_router_mod
 from .routers import mcp as mcp_router_mod
+from .routers import memory as memory_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
@@ -300,6 +303,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             depends_on=lemonade_id,
         )
 
+        # Start autonomous agent loop
+        await agent_loop.start(db=db, app_state=app.state)
+        logger.info("AgentLoop started")
+
         # Start document file monitor for auto re-indexing
         monitor = DocumentMonitor(
             db=db,
@@ -366,11 +373,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         yield
 
         # Shutdown
+        await agent_loop.stop()
+        logger.info("AgentLoop stopped")
         await queue.shutdown()
         await monitor.stop()
         logger.info("Document file monitor stopped")
         db.close()
         logger.info("Database connection closed")
+        memory_router_mod.close_store()
+        logger.info("Memory store connection closed")
+        goals_router_mod.close_store()
+        logger.info("Goal store connection closed")
 
     app = FastAPI(
         title="GAIA Agent UI API",
@@ -447,6 +460,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(documents_router_mod.router)
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)
+    app.include_router(goals_router_mod.router)
+    app.include_router(memory_router_mod.router)
     app.include_router(mcp_router_mod.router)
     # Issue #915 — OAuth connections (Settings page + agent grants).
     app.include_router(connectors_router_mod.router)

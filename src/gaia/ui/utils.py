@@ -136,6 +136,7 @@ def session_to_response(session: dict) -> SessionResponse:
         system_prompt=session.get("system_prompt"),
         message_count=session.get("message_count", 0),
         document_ids=session.get("document_ids", []),
+        private=bool(session.get("private", 0)),
         agent_type=session.get("agent_type") or "chat",
     )
 

@@ -23,6 +23,16 @@ When `expected_answer` IS a non-null string, these force correctness=0:
 - Lazy refusal: agent says "can't find" without calling a query tool first
 - Hallucinated source: agent claims a fact "from the document" that contradicts ground_truth
 
+## STEP 2B — MEMORY VERIFICATION (when applicable)
+
+If the turn's `success_criteria` contains the literal token `VERIFY VIA MCP:`, you MUST call the named `memory_*` tools (e.g. `memory_recall`, `memory_list`, `memory_get_by_entity`, `memory_get_conversation_turns`) and use the returned data — not the agent's prose — to evaluate the verification clauses.
+
+- If verification PASSES (memory state matches what the clause asserts), score correctness based on both the agent's response AND the verified state.
+- If verification FAILS (the tool returns a result that contradicts the clause, e.g. expected ≥1 item but got 0, or an item that should be superseded is still active), set `correctness=0` and explain the mismatch in `reasoning` (cite the tool call and what it returned).
+- If verification cannot be performed (tool error, server unreachable, malformed response), set `correctness=0` and note the failure in `reasoning`. Do not guess.
+
+Verification failure trumps a plausible-sounding response: an agent that confidently claims "I've stored that" while `memory_recall` returns nothing is wrong, full stop.
+
 ## STEP 3 — SCORE EACH DIMENSION (0-10)
 
 - **correctness** (25%): Factual accuracy vs ground_truth. 10=exact, 7=minor omissions, 4=partial, 0=wrong/hallucinated

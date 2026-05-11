@@ -28,6 +28,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -207,7 +208,17 @@ USER_CORPUS_DIR = Path.home() / ".gaia" / "eval" / "corpus"
 # Personas defined in eval/prompts/simulator.md.  validate_scenario enforces this list.
 # Custom personas are allowed — these are documented defaults.
 _KNOWN_PERSONAS = frozenset(
-    {"casual_user", "power_user", "confused_user", "adversarial_user", "data_analyst"}
+    {
+        "casual_user",
+        "power_user",
+        "confused_user",
+        "adversarial_user",
+        "data_analyst",
+        "home_user",
+        "small_business_owner",
+        "student",
+        "creative_professional",
+    }
 )
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -409,8 +420,15 @@ def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
     return scenarios
 
 
-def build_scenario_prompt(scenario_data, manifest_data, backend_url, agent_type=None):
+def build_scenario_prompt(
+    scenario_data, manifest_data, backend_url, keep_sessions=False, agent_type=None
+):  # pylint: disable=unused-argument
     """Build the prompt passed to `claude -p` for one scenario.
+
+    Sessions are always preserved (never deleted) so they remain available
+    for manual inspection in the Agent UI.  The *keep_sessions* parameter
+    is retained for backward compatibility with existing callers but has
+    no effect.
 
     When *agent_type* is set, the simulator is instructed to create sessions
     bound to that agent registration ID (e.g. "gaia-lite"). Without it, the
@@ -679,8 +697,18 @@ def _aggregate_performance(result: dict, scenario_id: str) -> None:
         result["performance_summary"] = None
 
 
-def preflight_check(backend_url):
-    """Check prerequisites before running scenarios."""
+def preflight_check(backend_url, scenarios=None):
+    """Check prerequisites before running scenarios.
+
+    Args:
+        backend_url: Agent UI backend URL.
+        scenarios: Optional iterable of ``(path, scenario_data)`` tuples — when
+            provided, also verifies any category-specific prerequisites (e.g.
+            memory scenarios need ``GAIA_MEMORY_ADMIN=1`` on the backend so
+            the eval simulator can reset state between runs).
+
+    Returns a list of error strings; empty list means preflight passed.
+    """
     import urllib.error
     import urllib.request
 
@@ -721,7 +749,68 @@ def preflight_check(backend_url):
         except FileNotFoundError:
             errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
 
+    # Memory-category preflight — required only when memory scenarios are queued.
+    # Memory scenarios call memory_clear(scope=all) to reset state between turns;
+    # that endpoint is gated by GAIA_MEMORY_ADMIN=1 on the backend process.
+    # Without this, every memory scenario would silently inherit state from the
+    # previous run and produce flaky pass/fail results.
+    has_memory_scenarios = scenarios is not None and any(
+        (sd or {}).get("category") == "memory" for _path, sd in scenarios
+    )
+    if has_memory_scenarios:
+        memory_admin_error = _probe_memory_admin(backend_url)
+        if memory_admin_error:
+            errors.append(memory_admin_error)
+
     return errors
+
+
+def _probe_memory_admin(backend_url: str) -> Optional[str]:
+    """Verify the backend has ``GAIA_MEMORY_ADMIN=1`` set.
+
+    Probes ``POST /api/memory/admin/seed`` with an empty items list — the
+    endpoint short-circuits to ``{"count": 0, "ids": []}`` without writing
+    anything when admin is enabled, or returns 403 with an actionable
+    message when it isn't.
+
+    Returns ``None`` on success, or an error string ready for the preflight
+    error list.
+    """
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{backend_url}/api/memory/admin/seed",
+        data=b'{"items":[]}',
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            if r.status == 200:
+                return None
+            return (
+                f"Memory admin probe returned unexpected HTTP {r.status} "
+                f"from {backend_url}/api/memory/admin/seed"
+            )
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return (
+                "Memory scenarios require GAIA_MEMORY_ADMIN=1 on the backend, "
+                "but the backend at "
+                f"{backend_url} returned 403 from /api/memory/admin/seed. "
+                "Restart the Agent UI backend with that env var set, e.g.:\n"
+                "    GAIA_MEMORY_ADMIN=1 GAIA_MEMORY_MCP_ALWAYS=1 gaia chat --ui"
+            )
+        return (
+            f"Memory admin probe failed with HTTP {e.code} from {backend_url}: "
+            f"{e.reason}"
+        )
+    except urllib.error.URLError as e:
+        return (
+            f"Memory admin probe could not reach {backend_url}: {e}. "
+            "Is the Agent UI backend running?"
+        )
 
 
 def _load_merged_manifest(extra_corpus_dirs=None):
@@ -813,6 +902,7 @@ def run_scenario_subprocess(
     model,
     budget,
     timeout,
+    keep_sessions=False,
     extra_corpus_dirs=None,
     agent_type=None,
 ):
@@ -821,7 +911,11 @@ def run_scenario_subprocess(
     manifest_data = _load_merged_manifest(extra_corpus_dirs=extra_corpus_dirs)
 
     prompt = build_scenario_prompt(
-        scenario_data, manifest_data, backend_url, agent_type=agent_type
+        scenario_data,
+        manifest_data,
+        backend_url,
+        keep_sessions=keep_sessions,
+        agent_type=agent_type,
     )
 
     result_schema = json.dumps(
@@ -977,11 +1071,6 @@ def run_scenario_subprocess(
                 if isinstance(result, dict):
                     result["scenario_id"] = scenario_id
                 result["elapsed_s"] = elapsed
-                score = result.get("overall_score")
-                score_str = f"{score:.1f}" if isinstance(score, (int, float)) else "n/a"
-                print(
-                    f"[DONE] {scenario_id} — {result.get('status')} {score_str}/10 ({elapsed:.0f}s)"
-                )
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"[ERROR] {scenario_id} — JSON parse error: {e}", file=sys.stderr)
                 result = {
@@ -1162,6 +1251,18 @@ def run_scenario_subprocess(
     trace_path = traces_dir / f"{scenario_id}.json"
     trace_path.write_text(
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    # Print final [DONE] line here — AFTER all score/status overrides — so the
+    # displayed status always reflects the fully-corrected result, not the raw
+    # LLM output which may still show the pre-override status.
+    elapsed_final = result.get("elapsed_s", 0)
+    score_final = result.get("overall_score")
+    score_str_final = (
+        f"{score_final:.1f}" if isinstance(score_final, (int, float)) else "n/a"
+    )
+    print(
+        f"[DONE] {scenario_id} — {result.get('status')} {score_str_final}/10 ({elapsed_final:.0f}s)"
     )
 
     return result
@@ -1583,6 +1684,7 @@ class AgentEvalRunner:
         fix_mode=False,
         max_fix_iterations=3,
         target_pass_rate=0.90,
+        keep_sessions=False,
     ):
         """Run eval scenarios. Returns scorecard dict.
 
@@ -1611,6 +1713,7 @@ class AgentEvalRunner:
                 fix_mode=fix_mode,
                 max_fix_iterations=max_fix_iterations,
                 target_pass_rate=target_pass_rate,
+                keep_sessions=keep_sessions,
             )
 
     def _run_locked(
@@ -1620,6 +1723,7 @@ class AgentEvalRunner:
         fix_mode=False,
         max_fix_iterations=3,
         target_pass_rate=0.90,
+        keep_sessions=False,
     ):
         """Internal entry — holds the eval lock; only called by ``run()``."""
 
@@ -1645,7 +1749,7 @@ class AgentEvalRunner:
             print(f"[INFO] Targeting agent_type='{self.agent_type}'")
 
         # Pre-flight
-        errors = preflight_check(self.backend_url)
+        errors = preflight_check(self.backend_url, scenarios=scenarios)
         if errors:
             print("[ERROR] Pre-flight check failed:", file=sys.stderr)
             for e in errors:
@@ -1728,6 +1832,7 @@ class AgentEvalRunner:
                 self.model,
                 self.budget,
                 effective_timeout,
+                keep_sessions=keep_sessions,
                 extra_corpus_dirs=(
                     self.extra_corpus_dirs if self.extra_corpus_dirs else None
                 ),
@@ -1823,6 +1928,7 @@ class AgentEvalRunner:
                     self.model,
                     self.budget,
                     effective_timeout,
+                    keep_sessions=keep_sessions,
                     extra_corpus_dirs=(
                         self.extra_corpus_dirs if self.extra_corpus_dirs else None
                     ),

@@ -69,6 +69,10 @@ jobs:
           uv pip install --system pytest-mock
 
       - name: Run Chat Agent Unit Tests
+        env:
+          # Skip memory init — Lemonade isn't available in this CI job; the
+          # ChatAgent unit tests don't exercise memory functionality.
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           echo "================================================================"
           echo "                    CHAT AGENT UNIT TESTS"
@@ -90,6 +94,8 @@ jobs:
           fi
 
       - name: Run Chat Agent Session Tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           echo ""
           echo "================================================================"
@@ -112,6 +118,8 @@ jobs:
           fi
 
       - name: Run Chat Agent Path Validation Tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           echo ""
           echo "================================================================"
