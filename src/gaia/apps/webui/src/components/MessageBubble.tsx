@@ -13,7 +13,6 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import gaiaRobot from '../assets/gaia-robot.png';
 import type { Message, AgentStep } from '../types';
-import { EmailPreScanCard, isPreScanPayload } from './email/EmailPreScanCard';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -241,9 +240,60 @@ function stripBogusCodeFences(text: string): string {
     );
 }
 
+/**
+ * Promote bare structured-payload JSON to fenced blocks so card components render
+ * even when the LLM skips the fenced-block output format instruction.
+ * Detects JSON starting with {"kind":"<known-payload>"} using brace-depth tracking
+ * to handle nested objects, then wraps it in the appropriate language-tagged fence.
+ */
+const STRUCTURED_PAYLOAD_KINDS: Record<string, string> = {
+    'email_pre_scan': 'email_pre_scan',
+    'email-pre-scan': 'email_pre_scan',
+};
+
+function promoteStructuredPayloads(text: string): string {
+    const trimmed = text.trimStart();
+    if (!trimmed.startsWith('{')) return text;
+
+    // Fast-reject: must have "kind" near the start
+    const kindMatch = trimmed.match(/^\{"kind"\s*:\s*"([^"]+)"/);
+    if (!kindMatch) return text;
+    const lang = STRUCTURED_PAYLOAD_KINDS[kindMatch[1]];
+    if (!lang) return text;
+
+    // Find the matching closing brace with string-aware depth tracking so that
+    // `}` characters inside JSON string values don't prematurely end the scan.
+    let depth = 0;
+    let end = -1;
+    let inString = false;
+    let escape = false;
+    for (let i = 0; i < trimmed.length; i++) {
+        const ch = trimmed[i];
+        if (escape) { escape = false; continue; }
+        if (inString) {
+            if (ch === '\\') escape = true;
+            else if (ch === '"') inString = false;
+            continue;
+        }
+        if (ch === '"') inString = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}' && --depth === 0) { end = i; break; }
+    }
+    if (end === -1) return text;
+
+    const jsonPart = trimmed.slice(0, end + 1);
+    const rest = trimmed.slice(end + 1);
+    const leading = text.slice(0, text.length - trimmed.length);
+    return `${leading}\`\`\`${lang}\n${jsonPart}\n\`\`\`\n${rest}`;
+}
+
 function cleanToolCallContent(content: string): string {
     if (!content) return content;
     let cleaned = content;
+
+    // Promote bare structured-payload JSON (e.g. email_pre_scan) to fenced blocks
+    // so card components mount even when the LLM omits the fenced-block wrapper.
+    cleaned = promoteStructuredPayloads(cleaned);
 
     // Remove all tool-call JSON blocks from the content
     cleaned = cleaned.replace(TOOL_CALL_JSON_RE, '');
