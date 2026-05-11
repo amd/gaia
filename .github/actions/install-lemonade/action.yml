@@ -2,10 +2,16 @@
 # SPDX-License-Identifier: MIT
 
 name: 'Install Lemonade Server'
-description: 'Verifies Lemonade Server is available and exports its path'
+description: 'Verifies Lemonade Server matches the GAIA-expected version, upgrading via the matching MSI when the runner is behind.'
 
-# Note: This action uses the pre-installed lemonade-server on the runner.
-# It does NOT install a new version to avoid conflicts.
+# This action checks the lemonade-server already installed on the runner
+# against the version GAIA expects (``src/gaia/version.LEMONADE_VERSION``).
+# When the runner is at an older version, it downloads the matching MSI
+# from the lemonade-sdk GitHub releases and installs it silently — same
+# release URL the gaia init flow uses (``src/gaia/installer/lemonade_installer.py:GITHUB_RELEASE_BASE``).
+# This keeps the runner's model catalog (e.g. Gemma-4-E4B-it-GGUF, the
+# LemonadeManager default) aligned with what GAIA expects so preload/pull
+# operations don't 422 with "model_name not registered".
 
 outputs:
   lemonade-path:
@@ -23,19 +29,19 @@ runs:
         echo "LEMONADE_VERSION=$lemonadeVersion" >> $env:GITHUB_ENV
         Write-Host "Expected Lemonade version: $lemonadeVersion"
 
-    - name: Verify Lemonade Server
+    - name: Verify and (if needed) Upgrade Lemonade Server
       id: verify
       shell: powershell
       run: |
         Write-Host "=== Verifying Lemonade Server ==="
 
-        # Check if lemonade-server is already available
-        $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
+        function Find-LemonadeServer {
+            $cmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
+            if ($cmd) {
+                return $cmd.Source
+            }
 
-        if (-not $lemonadeCmd) {
-            Write-Host "lemonade-server not found in PATH, searching common locations..."
-
-            # Search common installation paths
+            # Search common installation paths if not on PATH yet.
             $searchPaths = @(
                 "${env:ProgramFiles(x86)}\Lemonade Server\bin",
                 "$env:ProgramFiles\Lemonade Server\bin",
@@ -45,49 +51,129 @@ runs:
                 "$env:USERPROFILE\Lemonade",
                 "$env:LOCALAPPDATA\Lemonade"
             )
-
-            $found = $false
             foreach ($path in $searchPaths) {
                 $exePath = Join-Path $path "lemonade-server.exe"
                 if (Test-Path $exePath) {
                     Write-Host "Found lemonade-server at: $exePath"
-                    Write-Host "Adding to PATH"
                     echo "$path" >> $env:GITHUB_PATH
                     $env:PATH = "$path;$env:PATH"
-                    $found = $true
-                    break
+                    return $exePath
                 }
             }
 
-            if (-not $found) {
-                Write-Host "ERROR: lemonade-server not found"
-                Write-Host "Please ensure Lemonade Server is installed on this runner"
-                exit 1
-            }
-
-            # Verify it's now available
-            $lemonadeCmd = Get-Command lemonade-server -ErrorAction SilentlyContinue
+            return $null
         }
 
-        $lemonadePath = $lemonadeCmd.Source
-        Write-Host "lemonade-server verified at: $lemonadePath"
-
-        $versionOutput = & lemonade-server --version 2>&1
-        Write-Host $versionOutput
-
-        # Extract version and compare
-        if ($versionOutput -match "(\d+\.\d+\.\d+)") {
-            $installedVersion = $matches[1]
-            Write-Host ""
-            Write-Host "Installed version: $installedVersion"
-            Write-Host "Expected version:  $env:LEMONADE_VERSION"
-
-            if ($installedVersion -ne $env:LEMONADE_VERSION) {
-                Write-Host ""
-                Write-Host "WARNING: Version mismatch!"
-                Write-Host "The runner has v$installedVersion but GAIA expects v$env:LEMONADE_VERSION"
-                Write-Host "Tests will proceed with v$installedVersion"
+        function Get-LemonadeVersion {
+            param([string]$LemonadeExe)
+            try {
+                $versionOutput = & $LemonadeExe --version 2>&1
+                Write-Host $versionOutput
+                if ($versionOutput -match "(\d+\.\d+\.\d+)") {
+                    return $matches[1]
+                }
+            } catch {
+                Write-Host "Failed to query lemonade-server version: $_"
             }
+            return $null
+        }
+
+        function Compare-SemVer {
+            # Returns -1 if A < B, 0 if equal, 1 if A > B. $null on parse failure.
+            param([string]$A, [string]$B)
+            try {
+                $va = [version]$A
+                $vb = [version]$B
+            } catch {
+                return $null
+            }
+            return $va.CompareTo($vb)
+        }
+
+        function Install-LemonadeMsi {
+            param([string]$Version)
+            $url = "https://github.com/lemonade-sdk/lemonade/releases/download/v$Version/lemonade.msi"
+            $dest = Join-Path $env:RUNNER_TEMP "lemonade-$Version.msi"
+
+            Write-Host "Downloading Lemonade Server MSI from: $url"
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec 600
+            } catch {
+                Write-Host "ERROR: MSI download failed: $_"
+                throw
+            }
+
+            Write-Host "Running silent MSI install (msiexec /i $dest /quiet /norestart)..."
+            $msi = Start-Process -FilePath "msiexec.exe" `
+                -ArgumentList "/i", $dest, "/quiet", "/norestart", "/L*v", "$env:RUNNER_TEMP\lemonade-msi.log" `
+                -PassThru -Wait
+            Write-Host "msiexec exit code: $($msi.ExitCode)"
+            if ($msi.ExitCode -ne 0) {
+                Write-Host "===== MSI install log (tail) ====="
+                Get-Content "$env:RUNNER_TEMP\lemonade-msi.log" -Tail 80 -ErrorAction SilentlyContinue
+                Write-Host "==================================="
+                throw "MSI install failed with exit code $($msi.ExitCode). See log above."
+            }
+            Write-Host "MSI install completed."
+        }
+
+        # Locate (or note absence of) the currently-installed lemonade-server.
+        $lemonadePath = Find-LemonadeServer
+        $installedVersion = $null
+        if ($lemonadePath) {
+            $installedVersion = Get-LemonadeVersion -LemonadeExe $lemonadePath
+        } else {
+            Write-Host "lemonade-server not found on this runner."
+        }
+
+        $expectedVersion = $env:LEMONADE_VERSION
+        Write-Host ""
+        Write-Host "Installed version: $installedVersion"
+        Write-Host "Expected version:  $expectedVersion"
+
+        # Decide whether to upgrade. We upgrade only when the runner is
+        # strictly behind the expected version. If the runner is ahead
+        # (someone manually installed a newer one), we leave it alone
+        # rather than downgrading.
+        $needsInstall = $false
+        if (-not $installedVersion) {
+            Write-Host "No existing install detected — will install v$expectedVersion."
+            $needsInstall = $true
+        } else {
+            $cmp = Compare-SemVer -A $installedVersion -B $expectedVersion
+            if ($cmp -eq $null) {
+                Write-Host "Could not parse versions for comparison; reinstalling v$expectedVersion to be safe."
+                $needsInstall = $true
+            } elseif ($cmp -lt 0) {
+                Write-Host "Runner is behind expected version — upgrading to v$expectedVersion."
+                $needsInstall = $true
+            } elseif ($cmp -gt 0) {
+                Write-Host "Runner is AHEAD of expected version. Leaving as-is."
+            } else {
+                Write-Host "Runner version matches expected. No install needed."
+            }
+        }
+
+        if ($needsInstall) {
+            Install-LemonadeMsi -Version $expectedVersion
+
+            # Re-locate after install (PATH may now include a fresh dir).
+            $lemonadePath = Find-LemonadeServer
+            if (-not $lemonadePath) {
+                Write-Host "ERROR: lemonade-server still not found on PATH after install."
+                exit 1
+            }
+            $installedVersion = Get-LemonadeVersion -LemonadeExe $lemonadePath
+            Write-Host ""
+            Write-Host "Post-install version: $installedVersion"
+            if ((Compare-SemVer -A $installedVersion -B $expectedVersion) -ne 0) {
+                Write-Host "WARNING: Post-install version ($installedVersion) does not match expected ($expectedVersion)."
+            }
+        }
+
+        if (-not $lemonadePath) {
+            Write-Host "ERROR: lemonade-server not available after verify/install step."
+            exit 1
         }
 
         # Export path for use by other steps
@@ -95,4 +181,4 @@ runs:
         echo "LEMONADE_SERVER_PATH=$lemonadePath" >> $env:GITHUB_ENV
 
         Write-Host ""
-        Write-Host "Lemonade Server ready"
+        Write-Host "Lemonade Server ready at: $lemonadePath"
