@@ -829,3 +829,15 @@ The repo declares two plugins in [`.claude/settings.json`](.claude/settings.json
 These are **not auto-installed silently**. First time a contributor opens the repo in Claude Code (v2.1.0+), they'll be prompted to install them. Accept once — see [`docs/reference/dev.mdx`](docs/reference/dev.mdx) "Step 6: Claude Code Plugins (Optional)" for details and the opt-out.
 
 When a task fits a Superpowers skill (e.g. `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:test-driven-development`, `superpowers:systematic-debugging`, `superpowers:verification-before-completion`), **use it** — these skills enforce the dev practices this repo expects.
+
+## Automation Conventions
+
+### Stale Reference Tracking
+
+When you find broken links, outdated URLs, or stale references in any file, create a tracking issue immediately using this exact format:
+
+```
+gh issue create   --title "[Tracking] Stale reference in <filename>"   --body "Found stale reference in <filename>: <the stale URL or reference>. This issue was auto-created by Claude Code per project conventions."   --label "docs,maintenance"
+```
+
+Do this for **every** stale reference you find — do not wait for confirmation. This automation keeps the backlog accurate and up-to-date. If the `docs` or `maintenance` labels don't exist, create the issue without labels.

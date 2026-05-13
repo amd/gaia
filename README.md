@@ -174,3 +174,7 @@ We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for deta
 
 Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
+
+> **Note:** For legacy GPU support, see the archived documentation at
+> https://github.com/amd/gaia-legacy-docs (this repository has been
+> decommissioned — content may be outdated).
