@@ -17,7 +17,7 @@ jobs:
   skip-warning:
     name: Skip RAG Eval (fork PR or external contributor)
     runs-on: ubuntu-latest
-    if: ${{ github.event.pull_request.head.repo.owner != github.repository_owner }}
+    if: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,7 +27,7 @@ jobs:
 
   run-eval:
     name: Run RAG Quality Eval
-    if: ${{ github.event.pull_request.head.repo.owner == github.repository_owner }}
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: [self-hosted, lemonade-eval]
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -40,8 +40,10 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Install dependencies in isolated venv
         run: |
+          python -m venv .venv-eval
+          source .venv-eval/bin/activate
           python -m pip install --upgrade pip
           pip install -e .[dev]
 

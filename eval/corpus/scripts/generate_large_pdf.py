@@ -20,13 +20,13 @@ def make_pdf(path: str, target_bytes: int = 1_500_000) -> None:
     left_margin = 72
     top = height - 72
 
-    # Create pages until target size reached. This is robust across platforms.
-    section = 1
-    # Use a temporary canvas path then move to final path to allow incremental writes
-    temp_path = path + ".tmp"
-    c = canvas.Canvas(temp_path, pagesize=letter)
+    # Heuristic: approximate bytes per page and compute pages needed
+    bytes_per_page = 6000
+    num_pages = max(10, int(target_bytes // bytes_per_page))
 
-    while True:
+    c = canvas.Canvas(path, pagesize=letter)
+    section = 1
+    for _ in range(num_pages):
         text = c.beginText(left_margin, top)
         text.setFont(font_name, font_size)
         block = "Section %d:\n\n" % section + (SAMPLE_PARAGRAPH * 20)
@@ -41,21 +41,9 @@ def make_pdf(path: str, target_bytes: int = 1_500_000) -> None:
                     text.setFont(font_name, font_size)
         c.drawText(text)
         c.showPage()
-        c.save()
-
-        # Check file size and continue appending pages until target reached
-        try:
-            size = os.path.getsize(temp_path)
-        except OSError:
-            size = 0
-        if size >= target_bytes:
-            # Move to final path
-            os.replace(temp_path, path)
-            break
-        # Re-open canvas in append mode by creating a new canvas and drawing existing pages
-        # Simpler approach: re-create canvas and write one more page block per loop
-        c = canvas.Canvas(temp_path, pagesize=letter)
         section += 1
+
+    c.save()
 
 def main():
     p = argparse.ArgumentParser()
