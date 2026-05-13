@@ -12,6 +12,19 @@ from unittest.mock import patch
 class TestSDAgent(unittest.TestCase):
     """Test SD Agent functionality."""
 
+    def setUp(self):
+        """Snapshot ``_TOOL_REGISTRY`` so tests that call ``_register_tools``
+        don't leak the closure (which captures ``self``) into later tests."""
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        self._registry_snapshot = dict(_TOOL_REGISTRY)
+
+    def tearDown(self):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(self._registry_snapshot)
+
     def test_story_file_creation(self):
         """Test that story is saved to .txt file alongside image."""
         from gaia.agents.sd import SDAgent, SDAgentConfig
@@ -291,6 +304,90 @@ class TestSDAgent(unittest.TestCase):
             self.assertEqual(resolved["enabled"], True)
             self.assertEqual(resolved["ratio"], 0.5)
             self.assertIsNone(resolved["nothing"])
+
+    def test_create_story_error_includes_recent_png_hint(self):
+        """Issue #1023 follow-up: when ``image_path`` doesn't exist, the tool
+        error message names the most-recent PNG in ``sd_output_dir`` so the
+        next LLM turn has a verbatim breadcrumb to retry with.
+
+        Reproduces klkr1's Try #1 / Try #2 (model hallucinated extra path
+        segments).  The fix doesn't auto-correct the path (that would be a
+        silent fallback per CLAUDE.md); it just makes the error message
+        useful enough that the model can fix its own next call.
+        """
+        from pathlib import Path
+
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+        from gaia.agents.sd.agent import SDAgent
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            real_png = Path(tmpdir) / "real_image.png"
+            real_png.write_bytes(b"fake png bytes")
+
+            # __new__ + manual attribute set is the leanest way to exercise
+            # the closure -- avoids the LemonadeClient / Agent.__init__ heavy
+            # bring-up and keeps the test honest about what's under test.
+            agent = SDAgent.__new__(SDAgent)
+            agent.sd_output_dir = Path(tmpdir)
+            agent._register_tools()
+
+            tool_fn = _TOOL_REGISTRY["create_story_from_image"]["function"]
+            result = tool_fn("Z:/wrong/hallucinated_path.png", "whimsical")
+
+            self.assertEqual(result["status"], "error")
+            self.assertIn("Z:/wrong/hallucinated_path.png", result["error"])
+            # Canonical PNG path is surfaced -- resolved to absolute so it
+            # matches what generate_image would have produced.
+            self.assertIn(str(real_png.resolve()), result["error"])
+            self.assertIn("verbatim", result["error"].lower())
+
+    def test_create_story_error_defensive_on_empty_dir(self):
+        """No PNGs in the output dir -> minimal error, no hint, no exception.
+
+        The hint logic is intentionally defensive: a bug in the path-scan
+        path must never raise from inside the error path (that'd turn a
+        ``status: error`` return into a hard tool-execution failure for
+        the agent loop).  Confirms the fallback returns the bare error
+        when there's nothing useful to surface.
+        """
+        from pathlib import Path
+
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+        from gaia.agents.sd.agent import SDAgent
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Empty dir on purpose: no PNG to recommend.
+            agent = SDAgent.__new__(SDAgent)
+            agent.sd_output_dir = Path(tmpdir)
+            agent._register_tools()
+
+            tool_fn = _TOOL_REGISTRY["create_story_from_image"]["function"]
+            result = tool_fn("Z:/wrong/path.png", "whimsical")
+
+            self.assertEqual(result["status"], "error")
+            self.assertIn("Z:/wrong/path.png", result["error"])
+            # No hint suffix when there are no candidates.
+            self.assertNotIn("verbatim", result["error"].lower())
+            self.assertNotIn("most recently", result["error"].lower())
+
+    def test_system_prompt_pins_literal_PREV_directive(self):
+        """Issue #1023 follow-up: the SDAgent system prompt MUST explicitly
+        tell the model to use the literal ``$PREV.image_path`` placeholder
+        rather than retyping the path.  Pins the wording so a future prompt
+        refactor can't silently drop the directive.
+        """
+        from gaia.agents.sd.agent import SDAgent
+
+        # Skip __init__; we only need the bound method.
+        agent = SDAgent.__new__(SDAgent)
+        prompt = agent._get_system_prompt()
+
+        # The literal placeholder appears in the example.
+        self.assertIn("$PREV.image_path", prompt)
+        # And the explicit "do NOT type the path yourself" directive
+        # (added in this PR) is present.
+        self.assertIn("LITERAL TEXT", prompt)
+        self.assertIn("do NOT", prompt)
 
 
 if __name__ == "__main__":

@@ -1068,10 +1068,61 @@ Do NOT wrap conversational replies in JSON.
             try:
                 envelope = json.loads(response)
             except json.JSONDecodeError as exc:
+                # Issue #1023: smaller LLMs occasionally emit envelopes with
+                # (a) single-backslash Windows paths -> ``Invalid \escape``,
+                # or (b) trailing commentary after the closing brace ->
+                # ``Extra data``.  Mirror the inner-arguments recovery
+                # (``json.loads`` on ``arguments`` below): retry once via
+                # ``_repair_invalid_json_escapes``, then fall back to
+                # ``raw_decode`` for the trailing-garbage case.  Only
+                # surface the original parse error if both attempts fail.
+                envelope = None
+                repaired = _repair_invalid_json_escapes(response)
+                if repaired != response:
+                    try:
+                        envelope = json.loads(repaired)
+                        logger.debug(
+                            "[PARSE] repaired invalid backslash escape(s) "
+                            "in native tool_calls envelope"
+                        )
+                    except json.JSONDecodeError:
+                        envelope = None
+                if envelope is None and exc.msg.startswith("Extra data"):
+                    # ``raw_decode`` parses one JSON value and returns
+                    # (obj, end_idx); the suffix is whatever the model
+                    # appended after the structured payload (commentary,
+                    # whitespace, a stray brace).  Logged at info so a
+                    # steady stream surfaces in production telemetry --
+                    # if it's persistent, the prompt needs tightening,
+                    # not the parser.
+                    try:
+                        decoder = json.JSONDecoder()
+                        envelope, end_idx = decoder.raw_decode(response)
+                        logger.info(
+                            "[PARSE] tolerated trailing data after native "
+                            "tool_calls envelope (%d chars discarded)",
+                            len(response) - end_idx,
+                        )
+                    except json.JSONDecodeError:
+                        envelope = None
+                if envelope is None:
+                    raise ValueError(
+                        f"Malformed native tool_calls envelope: {exc}"
+                    ) from exc
+            # Issue #1023: after the recovery path (repair or ``raw_decode``)
+            # an envelope can be syntactically valid JSON without the
+            # ``__tool_calls__`` key -- e.g. ``raw_decode`` of
+            # ``{"foo":1}<trailing>`` returns ``{"foo":1}``.  Convert the
+            # bare ``envelope["__tool_calls__"]`` lookup into a checked one
+            # so the recovery branch at L2820 (which only catches
+            # ``ValueError``/``NotImplementedError``) handles it -- a bare
+            # ``KeyError`` would escape and crash the session.
+            raw_tool_calls = envelope.get("__tool_calls__")
+            if raw_tool_calls is None:
                 raise ValueError(
-                    f"Malformed native tool_calls envelope: {exc}"
-                ) from exc
-            raw_tool_calls = envelope["__tool_calls__"]
+                    "Malformed native tool_calls envelope: parsed prefix "
+                    "lacks __tool_calls__ key."
+                )
             finish_reason = envelope.get("finish_reason", "")
             if finish_reason == "length":
                 # ``finish_reason="length"`` from the OpenAI completions API
@@ -2845,13 +2896,38 @@ Do NOT wrap conversational replies in JSON.
                     }
                 )
                 error_count += 1
+                # Issue #1023: pull the most recent successful image path
+                # out of step_results so both the recovery prompt and the
+                # give-up fallback can surface it.  When the SD two-step
+                # flow's step-1 succeeded and step-2 parse-failed, the
+                # canonical path is the breadcrumb the model needs to
+                # retry verbatim, and the breadcrumb the user needs in the
+                # final answer so the successful generation isn't lost.
+                # No-op for agents that don't emit ``image_path``.
+                _last_image_path = next(
+                    (
+                        r["image_path"]
+                        for r in reversed(step_results)
+                        if isinstance(r, dict)
+                        and r.get("status") == "success"
+                        and r.get("image_path")
+                    ),
+                    None,
+                )
                 # If we've already retried several times, give up gracefully and
                 # answer in plain text rather than spamming the user.
                 if error_count >= 3:
-                    final_answer = (
-                        "I had trouble formatting my tool call. Could you "
-                        "rephrase or break the request into smaller pieces?"
-                    )
+                    if _last_image_path:
+                        final_answer = (
+                            f"I generated your image at `{_last_image_path}`, "
+                            "but I couldn't finish the follow-up step. "
+                            "Try asking for the next step in a fresh message."
+                        )
+                    else:
+                        final_answer = (
+                            "I had trouble formatting my tool call. Could you "
+                            "rephrase or break the request into smaller pieces?"
+                        )
                     break
                 # Push a synthetic assistant turn + recovery user message so the
                 # next LLM call has context. Don't include the raw envelope to
@@ -2865,16 +2941,32 @@ Do NOT wrap conversational replies in JSON.
                         ),
                     }
                 )
+                _recovery_content = (
+                    "Your last tool call had malformed arguments. "
+                    "Please try again. Use ONLY the documented enum "
+                    "values for each argument (e.g. 'brief', "
+                    "'detailed', 'bullets' — never a long sentence). "
+                    "If you don't need a tool, answer in plain text."
+                )
+                if _last_image_path:
+                    _recovery_content += (
+                        f"\n\nYour previous step generated an image at "
+                        f"`{_last_image_path}`. If your next tool call "
+                        "needs this path, copy that string VERBATIM — do "
+                        "not retype it."
+                    )
+                    # Marker so production-log triage can tell "model
+                    # received the canonical path and still mangled it"
+                    # from "model never saw the hint."  Pre-mortem note
+                    # in the plan flagged this gap.
+                    logger.info(
+                        "[PARSE-RECOVERY] injected canonical image_path=%s",
+                        _last_image_path,
+                    )
                 messages.append(
                     {
                         "role": "user",
-                        "content": (
-                            "Your last tool call had malformed arguments. "
-                            "Please try again. Use ONLY the documented enum "
-                            "values for each argument (e.g. 'brief', "
-                            "'detailed', 'bullets' — never a long sentence). "
-                            "If you don't need a tool, answer in plain text."
-                        ),
+                        "content": _recovery_content,
                     }
                 )
                 steps_taken += 1
@@ -3378,6 +3470,15 @@ Do NOT wrap conversational replies in JSON.
                         isinstance(tool_result, dict)
                         and tool_result.get("status") in ("error", "denied")
                     )
+
+                # Issue #1023: mirror the plan-execution branch (L2330) so
+                # ``step_results`` is consistent regardless of whether the
+                # LLM emitted a multi-step plan or a series of single-tool
+                # responses.  Downstream consumers (parse-error recovery
+                # prompt, give-up fallback) read ``step_results`` for the
+                # canonical ``image_path`` — without this append, the
+                # legacy single-tool path leaves them empty-handed.
+                step_results.append(tool_result)
 
                 # Result-based dedup: if this tool (query family) returns the same result
                 # it returned in a prior call, inject a correction so the agent stops looping.

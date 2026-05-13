@@ -140,7 +140,10 @@ EXAMPLE multi-step plan (generate image then write story):
 Step 1 tool: generate_image with prompt, model="SDXL-Turbo", size="512x512", steps=4
 Step 2 tool: create_story_from_image with image_path="$PREV.image_path", story_style="whimsical"
 
-The system automatically substitutes $PREV.image_path with the actual path from step 1.
+CRITICAL: in step 2's tool args, use the LITERAL TEXT `$PREV.image_path` — do NOT
+type the path yourself. The system substitutes the real path at execution time.
+Typing the path yourself causes file-not-found errors when the model reconstructs
+the path from context instead of copying it.
 
 RULES:
 - Generate ONE image by default (multiple only if explicitly requested: "3 images", "variations")
@@ -159,7 +162,29 @@ RULES:
             """Generate a creative short story (2-3 paragraphs) based on an image."""
             path = Path(image_path)
             if not path.exists():
-                return {"status": "error", "error": f"Image not found: {image_path}"}
+                # Issue #1023: smaller LLMs sometimes hallucinate the path
+                # (extra ``.gaia`` segment, leading ``.`` before ``cache``).
+                # Surface the canonical path of the most-recent PNG in the
+                # SD output dir so the next LLM turn can retry verbatim.
+                # Defensive: any error scanning the dir falls back to the
+                # plain error so the tool never raises from its own error
+                # path.
+                hint = ""
+                try:
+                    out_dir = self.sd_output_dir.resolve()
+                    pngs = [p for p in out_dir.glob("*.png") if p.is_file()]
+                    if pngs:
+                        latest = max(pngs, key=lambda p: p.stat().st_mtime)
+                        hint = (
+                            f" The most recently generated image is at "
+                            f"'{latest}'. Use that path verbatim."
+                        )
+                except (OSError, AttributeError):
+                    hint = ""
+                return {
+                    "status": "error",
+                    "error": f"Image not found at '{image_path}'.{hint}",
+                }
 
             # Read image bytes
             image_bytes = path.read_bytes()
