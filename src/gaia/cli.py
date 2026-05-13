@@ -3426,7 +3426,9 @@ Let me know your answer!
                     regressed = result.get("regressed", [])
                     score_regressed = result.get("score_regressed", [])
                     time_regressed = result.get("time_regressed", [])
-                    total_issues = len(regressed) + len(score_regressed) + len(time_regressed)
+                    total_issues = (
+                        len(regressed) + len(score_regressed) + len(time_regressed)
+                    )
                     if total_issues > 0:
                         print(
                             f"[ERROR] Detected {total_issues} issue(s) (status regressions, score regressions, or time regressions); failing."
