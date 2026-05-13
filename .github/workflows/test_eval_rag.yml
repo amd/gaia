@@ -46,6 +46,8 @@ jobs:
           source .venv-eval/bin/activate
           python -m pip install --upgrade pip
           pip install -e .[dev]
+          # Make venv bin available to subsequent workflow steps
+          echo "$PWD/.venv-eval/bin" >> "$GITHUB_PATH"
 
       - name: Run eval rag_quality compare
         # This runner must have a running Lemonade Server with the Gemma model loaded
