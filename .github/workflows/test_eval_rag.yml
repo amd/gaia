@@ -15,9 +15,9 @@ concurrency:
 
 jobs:
   skip-warning:
-    name: Skip RAG Eval (no Anthropic key)
+    name: Skip RAG Eval (fork PR or external contributor)
     runs-on: ubuntu-latest
-    if: ${{ secrets.ANTHROPIC_API_KEY == '' }}
+    if: ${{ github.event.pull_request.head.repo.owner != github.repository_owner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,7 +27,7 @@ jobs:
 
   run-eval:
     name: Run RAG Quality Eval
-    if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    if: ${{ github.event.pull_request.head.repo.owner == github.repository_owner }}
     runs-on: [self-hosted, lemonade-eval]
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
