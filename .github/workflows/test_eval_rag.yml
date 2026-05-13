@@ -14,8 +14,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  skip-warning:
+    name: Skip RAG Eval (no Anthropic key)
+    runs-on: ubuntu-latest
+    if: ${{ secrets.ANTHROPIC_API_KEY == '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Notify skipped
+        run: |
+          echo "[SKIP] ANTHROPIC_API_KEY not available in this run (fork PR or missing secret). Skipping RAG eval job."
+
   run-eval:
     name: Run RAG Quality Eval
+    if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     runs-on: [self-hosted, lemonade-eval]
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
