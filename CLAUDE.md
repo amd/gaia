@@ -829,3 +829,13 @@ The repo declares two plugins in [`.claude/settings.json`](.claude/settings.json
 These are **not auto-installed silently**. First time a contributor opens the repo in Claude Code (v2.1.0+), they'll be prompted to install them. Accept once — see [`docs/reference/dev.mdx`](docs/reference/dev.mdx) "Step 6: Claude Code Plugins (Optional)" for details and the opt-out.
 
 When a task fits a Superpowers skill (e.g. `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:test-driven-development`, `superpowers:systematic-debugging`, `superpowers:verification-before-completion`), **use it** — these skills enforce the dev practices this repo expects.
+
+## Project Housekeeping Conventions
+
+When reviewing pull requests or responding to issues, if you notice outdated references or broken links in documentation, proactively create a tracking issue so it doesn't get lost:
+
+```bash
+gh issue create --title "[Docs] Update outdated references in $FILE" --body "Found during PR review. File: $FILE — references may be stale." --label "docs"
+```
+
+This keeps the issue backlog current and saves maintainers time. Use your judgment — only create issues for genuine findings, not for every minor reference.
