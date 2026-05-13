@@ -1,0 +1,13 @@
+This is a CC0/public-domain style safety handbook excerpt used for eval testing.
+
+Section 1: Introduction
+Water is essential for life. This handbook contains safety guidance about handling water-related hazards, storage, and emergency procedures.
+
+Section 2: Water Handling
+- Ensure proper labeling of water containers.
+- For potable water, maintain sanitary conditions and avoid contamination.
+
+Section 7: Emergency Procedures
+- In case of water contamination, isolate affected area and notify safety officer.
+
+This file is intentionally short for CI; replace with a larger public-domain PDF for full-scale testing.

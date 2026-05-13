@@ -1456,6 +1456,7 @@ def compare_scorecards(baseline_path, current_path):
     improved = []
     regressed = []
     score_regressed = []
+    time_regressed = []
     unchanged = []
     only_in_baseline = []
     only_in_current = []
@@ -1498,9 +1499,24 @@ def compare_scorecards(baseline_path, current_path):
             "delta": delta,
         }
 
+        # Check for time regressions: compare per-scenario elapsed seconds
+        b_elapsed = b.get("elapsed_s") or 0
+        c_elapsed = c.get("elapsed_s") or 0
+        time_regress = False
+        if isinstance(b_elapsed, (int, float)) and b_elapsed > 0:
+            if isinstance(c_elapsed, (int, float)) and c_elapsed > (b_elapsed * 2):
+                time_regress = True
+        if time_regress:
+            entry["baseline_elapsed_s"] = round(float(b_elapsed), 2)
+            entry["current_elapsed_s"] = round(float(c_elapsed), 2)
+            entry["time_regressed"] = True
+
         # Corpus availability change — not a quality signal
         if b_skipped or c_skipped:
             corpus_changed.append(entry)
+        elif entry.get("time_regressed"):
+            # Time regressions reported separately from score regressions
+            time_regressed.append(entry)
         elif not b_pass and c_pass:
             improved.append(entry)
         elif b_pass and not c_pass:
@@ -1567,6 +1583,15 @@ def compare_scorecards(baseline_path, current_path):
                 f"    {e['scenario_id']:<40} {e['baseline_score']:.1f} → {e['current_score']:.1f} ({e['delta']:+.1f})"
             )
 
+    if time_regressed:
+        print(
+            f"\n[~] TIME REGRESSION ({len(time_regressed)} scenario(s)) — elapsed > 2x baseline:"
+        )
+        for e in time_regressed:
+            print(
+                f"    {e['scenario_id']:<40} {e.get('baseline_elapsed_s', 0):.1f}s → {e.get('current_elapsed_s', 0):.1f}s"
+            )
+
     if unchanged:
         # Split into score-changed vs truly same
         score_changed = [e for e in unchanged if abs(e["delta"]) >= 0.1]
@@ -1617,6 +1642,10 @@ def compare_scorecards(baseline_path, current_path):
         print(
             f"[WARN] {len(score_regressed)} score regression(s) detected (still passing but score dropped ≥{_SCORE_REGRESSION_THRESHOLD})!"
         )
+    if time_regressed:
+        print(
+            f"[WARN] {len(time_regressed)} time regression(s) detected (elapsed time > 2x baseline)!"
+        )
     if not regressed and not score_regressed and improved:
         print(
             f"[OK]   Net improvement: {len(improved)} scenario(s) fixed, 0 regressions."
@@ -1629,6 +1658,7 @@ def compare_scorecards(baseline_path, current_path):
         "improved": improved,
         "regressed": regressed,
         "score_regressed": score_regressed,
+        "time_regressed": time_regressed,
         "unchanged": unchanged,
         "only_in_baseline": only_in_baseline,
         "only_in_current": only_in_current,

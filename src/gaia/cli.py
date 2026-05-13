@@ -3412,15 +3412,34 @@ Let me know your answer!
                             print(
                                 "  Run `gaia eval agent --save-baseline` first to save a baseline."
                             )
-                            return
-                        compare_scorecards(str(baseline_path), compare_paths[0])
+                            sys.exit(1)
+                        result = compare_scorecards(
+                            str(baseline_path), compare_paths[0]
+                        )
                     elif len(compare_paths) == 2:
-                        compare_scorecards(compare_paths[0], compare_paths[1])
+                        result = compare_scorecards(compare_paths[0], compare_paths[1])
                     else:
                         print("[ERROR] --compare accepts 1 or 2 paths")
+                        sys.exit(1)
+
+                    # If compare detected regressions or significant score drops, fail non-zero
+                    regressed = result.get("regressed", [])
+                    score_regressed = result.get("score_regressed", [])
+                    time_regressed = result.get("time_regressed", [])
+                    total_issues = (
+                        len(regressed) + len(score_regressed) + len(time_regressed)
+                    )
+                    if total_issues > 0:
+                        print(
+                            f"[ERROR] Detected {total_issues} issue(s) (status regressions, score regressions, or time regressions); failing."
+                        )
+                        sys.exit(2)
+                    # Otherwise success
+                    sys.exit(0)
                 except FileNotFoundError as e:
                     print(f"[ERROR] {e}")
-                return
+                    sys.exit(1)
+                # compare handled; no further action
 
             from gaia.eval.runner import AgentEvalRunner
 
