@@ -3423,22 +3423,10 @@ Let me know your answer!
                         sys.exit(1)
 
                     # If compare detected regressions or significant score drops, fail non-zero
-                    regressed = (
-                        result.get("regressed", []) if isinstance(result, dict) else []
-                    )
-                    score_regressed = (
-                        result.get("score_regressed", [])
-                        if isinstance(result, dict)
-                        else []
-                    )
-                    time_regressed = (
-                        result.get("time_regressed", [])
-                        if isinstance(result, dict)
-                        else []
-                    )
-                    total_issues = (
-                        len(regressed) + len(score_regressed) + len(time_regressed)
-                    )
+                    regressed = result.get("regressed", [])
+                    score_regressed = result.get("score_regressed", [])
+                    time_regressed = result.get("time_regressed", [])
+                    total_issues = len(regressed) + len(score_regressed) + len(time_regressed)
                     if total_issues > 0:
                         print(
                             f"[ERROR] Detected {total_issues} issue(s) (status regressions, score regressions, or time regressions); failing."
@@ -3449,7 +3437,7 @@ Let me know your answer!
                 except FileNotFoundError as e:
                     print(f"[ERROR] {e}")
                     sys.exit(1)
-                return
+                # compare handled; no further action
 
             from gaia.eval.runner import AgentEvalRunner
 

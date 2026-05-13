@@ -4,9 +4,10 @@ import os
 from textwrap import wrap
 
 SAMPLE_PARAGRAPH = (
-    "This is a synthetic safety handbook section. "
-    "It contains many repeated words to simulate a text-heavy PDF used for RAG indexing. "
-    "Sections include procedures, labeling, sanitary guidance, and emergency isolation steps. "
+    "This is a synthetic safety handbook section about water safety. "
+    "It contains repeated guidance to simulate a text-heavy PDF used for RAG indexing. "
+    "Guidance covers labeling of water containers, maintaining sanitary water conditions, "
+    "and emergency isolation procedures for contaminated water. Follow-up steps include notifying the safety officer and tagging affected areas. "
 )
 
 def make_pdf(path: str, target_bytes: int = 1_500_000) -> None:
@@ -19,12 +20,15 @@ def make_pdf(path: str, target_bytes: int = 1_500_000) -> None:
     left_margin = 72
     top = height - 72
 
+    # Estimate pages needed: rough bytes per page estimate (conservative)
+    bytes_per_page = 5000
+    num_pages = max(10, min(5000, target_bytes // bytes_per_page))
+
     section = 1
-    # Increased internal repetition to grow size faster
-    while section < 300: 
+    for _ in range(int(num_pages)):
         text = c.beginText(left_margin, top)
         text.setFont(font_name, font_size)
-        block = "Section %d:\n" % section + (SAMPLE_PARAGRAPH * 10)
+        block = "Section %d:\n\n" % section + (SAMPLE_PARAGRAPH * 8)
         for para in block.split("\n\n"):
             wrapped = wrap(para, 100)
             for ln in wrapped:
@@ -37,6 +41,7 @@ def make_pdf(path: str, target_bytes: int = 1_500_000) -> None:
         c.drawText(text)
         c.showPage()
         section += 1
+
     c.save()
 
 def main():
