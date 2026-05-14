@@ -14,11 +14,49 @@ GAIA Agent Memory is a persistent knowledge system that gives your agent a **sec
   Memory is currently integrated into the Chat Agent. Any agent built on the GAIA Agent base class can add memory via the `MemoryMixin` -- see the [Memory SDK Reference](/sdk/sdks/memory) for developer details.
 </Note>
 
+<Note>
+  **Memory is opt-in (beta) and disabled by default.** This feature is still under active development -- every new GAIA install ships with memory off, so you'll see standard chat behavior until you turn it on. See [Enable Memory](#enable-memory) below before trying any examples on this page.
+</Note>
+
+---
+
+## Enable Memory
+
+Memory is off by default. Turn it on once and it stays on for every future `gaia chat` session on this machine.
+
+### Via the Agent UI (recommended)
+
+1. Launch the Agent UI: `gaia chat --ui`
+2. Click the **Brain** icon in the toolbar to open the Memory Dashboard.
+3. Click the **Off** toggle next to *Memory*; a confirmation modal appears. Click **Enable Memory** in the modal to confirm. The agent picks up the change on its next message -- no restart needed.
+
+### Via the API (for headless / scripted setups)
+
+```bash
+curl -X PUT http://localhost:4200/api/memory/settings \
+  -H "Content-Type: application/json" \
+  -H "X-Gaia-UI: 1" \
+  -d '{"memory_enabled": true}'
+```
+
+Verify it stuck:
+
+```bash
+curl http://localhost:4200/api/memory/settings
+# → {"memory_enabled": true, ...}
+```
+
+Until you enable memory, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory Dashboard's knowledge browser) will activate -- sessions run in "incognito" mode and nothing is written to `~/.gaia/memory.db`.
+
+<Note>
+  Once enabled, conversations are summarized into `~/.gaia/memory.db` -- a **plaintext SQLite file** (not encrypted). The [Sensitive Data](#sensitive-data) section below explains the `sensitive` flag for controlling system-prompt visibility; do not store passwords or tokens in agent memory.
+</Note>
+
 ---
 
 ## Try It Right Now
 
-Five minutes. No setup beyond `gaia chat`. Here's what a second brain feels like:
+Five minutes after you enable memory (above). Here's what a second brain feels like:
 
 <Steps>
   <Step title="Start a conversation">
@@ -87,7 +125,7 @@ Five minutes. No setup beyond `gaia chat`. Here's what a second brain feels like
 
 Agent memory operates on four principles:
 
-1. **Store automatically** -- conversations, tool calls, errors, and preferences are captured without manual effort
+1. **Store automatically once enabled** -- conversations, tool calls, errors, and preferences are captured without manual effort
 2. **Recall naturally** -- hybrid semantic+keyword search finds memories by meaning, not just exact words. The LLM decides when to search using its own tools (no forced pre-query step).
 3. **Learn continuously** -- LLM extraction from every conversation, not just regex patterns. The agent sees what it already knows and decides what's new, what's changed, and what's contradicted -- like intelligent memory management.
 4. **Be temporally aware** -- the agent knows the current time, what is coming up, what is overdue, and proactively surfaces time-sensitive items
@@ -129,7 +167,7 @@ Everything is stored in a single file at `~/.gaia/memory.db` (SQLite with WAL mo
   </Step>
 
   <Step title="Start chatting">
-    Memory is active automatically. The agent injects relevant knowledge into its system prompt and uses memory tools during conversation:
+    With memory enabled (see [Enable Memory](#enable-memory) above), the agent injects relevant knowledge into its system prompt and uses memory tools during conversation:
 
     ```bash
     gaia chat
@@ -503,7 +541,7 @@ Agent: "Before we plan -- it's the end of the week. How did
 
 ## Intelligent Extraction
 
-After each conversation turn, the agent automatically decides what's worth remembering -- without you saying "remember." This isn't pattern matching; the LLM sees your existing memory alongside the new conversation and makes intelligent decisions:
+After each conversation turn (with memory enabled), the agent automatically decides what's worth remembering -- without you saying "remember." This isn't pattern matching; the LLM sees your existing memory alongside the new conversation and makes intelligent decisions:
 
 - **ADD** -- new knowledge not already in memory
 - **UPDATE** -- a fact has changed (old version preserved with lineage)
