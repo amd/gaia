@@ -1,0 +1,127 @@
+---
+title: "v0.18.0"
+description: "Agent memory v2 with hybrid search and an observability dashboard, ChatAgent decomposed into composable Chat/FileIO/DocumentQA agents, parallel tool-call support, Telegram Phase 0 scaffold, and a fix for the RAG-on-PDF timeout with Gemma 4."
+---
+
+# GAIA v0.18.0 Release Notes
+
+GAIA v0.18.0 is a minor release centred on agent memory and composability. Agent memory v2 ships a hybrid-search second brain with automatic LLM extraction and a live observability dashboard, so sessions no longer start from blank. The ChatAgent has been decomposed into three independently composable agents — Chat, FileIO, and DocumentQA — each with a narrower surface that is easier to test and reason about. Parallel tool calls reduce multi-tool round-trips, a Telegram adapter scaffold enables Phase 0 of mobile messaging, and the RAG-on-PDF timeout that broke document Q&A with Gemma 4 in v0.17.6 is fixed. CI now enforces RAG quality baselines and prompt-size budgets so similar regressions cannot ship undetected.
+
+**Why upgrade:**
+- **Agent memory v2** — sessions retain facts across turns via hybrid (semantic + keyword) search and automatic LLM extraction, surfaced through a live observability dashboard.
+- **ChatAgent split** — `ChatAgent`, `FileIOAgent`, and `DocumentQAAgent` replace the monolithic class; each is independently testable and composable via the `tools=` parameter.
+- **RAG-on-PDF timeout fixed** — document Q&A with Gemma 4 no longer times out on large PDFs; the production regression introduced in v0.17.6 is resolved.
+- **Parallel tool calls** — agents invoke multiple tools in a single LLM turn, reducing round-trips for multi-tool workflows.
+- **Telegram scaffold** — `gaia telegram start|stop|status` and per-user session isolation are in place for Phase 1 message handling.
+
+---
+
+## What's New
+
+### Agent Memory v2
+
+A second-brain memory system lands at `src/gaia/agents/memory/` (PR [#606](https://github.com/amd/gaia/pull/606)) with hybrid search, automatic LLM extraction, and an observability dashboard. Memories are extracted from conversation turns using a dedicated LLM pass and stored with both semantic and keyword indices, so retrieval works even when the query phrasing differs from the stored fact. The observability dashboard (wired via the SSE streaming progress endpoint added in PR [#1032](https://github.com/amd/gaia/pull/1032)) surfaces memory insertion, retrieval scores, and eviction events in real time.
+
+Per-user memory isolation is enforced at the session layer. Memory extraction runs asynchronously after each turn so it does not add latency to the agent's response.
+
+---
+
+### ChatAgent Split into Chat, FileIO, and DocumentQA
+
+The monolithic `ChatAgent` has been split into three focused agents (PR [#979](https://github.com/amd/gaia/pull/979)): `ChatAgent` handles conversational turns only, `FileIOAgent` owns file reading and writing, and `DocumentQAAgent` owns document question-answering with RAG. All three inherit from the same `Agent` base and compose via the `tools=` parameter, so consumers that need the full capability set can compose them explicitly rather than taking everything from one class. Tests in `tests/unit/test_agents_split.py` cover each agent in isolation.
+
+The existing `ChatAgent` API is preserved as a backward-compatible composition shim. Migration to the split agents is optional for v0.18.0; the shim will be deprecated in a future minor release.
+
+---
+
+### Parallel Tool Calls
+
+Agents now issue multiple tool calls in a single LLM turn for tool-calling models (PR [#946](https://github.com/amd/gaia/pull/946)). When the model returns an array of `tool_calls` in one response, the agent executes them concurrently and batches the results into a single context update. This cuts the number of Lemonade round-trips for multi-tool workflows — a file-search and web-lookup pair completes in one pass rather than two sequential turns.
+
+---
+
+### Telegram Adapter Scaffold (Phase 0)
+
+A `python-telegram-bot`-backed adapter lands at `src/gaia/messaging/telegram.py` (PR [#951](https://github.com/amd/gaia/pull/951)), with `gaia telegram start|stop|status` CLI subcommands and per-user session isolation via `_USER_SESSIONS`. Shared message ingestion helpers live in `src/gaia/messaging/ingest.py`. Install with the `[telegram]` extras group (`python-telegram-bot>=20.3`).
+
+This is Phase 0 only: the scaffold and session plumbing are in place. Phase 1 will add message handling, VLM/RAG ingestion, and an allowed-users gate (tracked in [#889](https://github.com/amd/gaia/issues/889)).
+
+---
+
+### Connectors: Per-MCP Toggle and Single-Writer Enforcement
+
+Two connectors-framework improvements land together. PR [#1018](https://github.com/amd/gaia/pull/1018) adds a per-MCP enable/disable toggle to the Settings UI, letting users pause individual servers without removing them from the catalog. PR [#998](https://github.com/amd/gaia/pull/998) enforces single-writer access at the MCP layer — concurrent writes from multiple agent sessions are serialised, and an attempt to write without holding the lock surfaces as an actionable error rather than a silent data race.
+
+---
+
+### File Navigation, Web Browsing, and Write Security
+
+`FileSearchToolsMixin`, a web browsing tool, and a scratchpad mixin land together in PR [#495](https://github.com/amd/gaia/pull/495), composable into any agent via `tools=["file_search"]`. A write security guardrail is added at the same time: write tools check the requesting agent's `allowed_paths` before dispatching, so custom agents cannot write outside their declared scope. The `KNOWN_TOOLS` registry is updated with entries for each new mixin.
+
+---
+
+### Email Agent UI and Policy Alerts
+
+Three Email Triage Agent UI improvements ship in this release: a pre-scan triage card with in-chat Connect and session preference controls (PR [#995](https://github.com/amd/gaia/pull/995)), a dedicated pre-scan triage card component (PR [#1039](https://github.com/amd/gaia/pull/1039)), and a synthetic `.mbox` dataset for repeatable eval runs (PR [#928](https://github.com/amd/gaia/pull/928)). Policy alert cards, notifications, and durable receipts for confirmation-gated actions land in PR [#952](https://github.com/amd/gaia/pull/952).
+
+---
+
+## Bug Fixes
+
+- **RAG-on-PDF timeouts on Gemma 4** (PR [#1034](https://github.com/amd/gaia/pull/1034), closes [#1030](https://github.com/amd/gaia/issues/1030)) — Document Q&A timed out on large PDFs when Gemma 4 was the active model. The root cause was a missing prompt-size budget check at the agent level; Lemonade was receiving requests that exceeded the model's context window. The fix adds the budget check at composition time and adds CI gates (PR [#1040](https://github.com/amd/gaia/pull/1040)) that enforce it on every PR.
+- **Envelope-level parse failure crashed SD recovery** (PR [#1047](https://github.com/amd/gaia/pull/1047), closes [#1023](https://github.com/amd/gaia/issues/1023)) — Malformed LLM responses at the envelope level bypassed the step-1 context in SD recovery, producing an unhandled exception. Envelope-level parse repair now falls through to a clean recovery path with step-1 context preserved.
+- **Windows-path tool args corrupted by backslash normalisation** (PR [#1027](https://github.com/amd/gaia/pull/1027)) — Tool argument paths containing Windows backslashes were double-escaped before dispatch, causing file-not-found errors for agents on Windows.
+- **Blender `send_command` hung against a persistent-connection server** (PR [#1026](https://github.com/amd/gaia/pull/1026), closes [#1022](https://github.com/amd/gaia/issues/1022)) — The Blender MCP adapter blocked indefinitely when the remote Blender instance kept the connection alive. A read timeout is now applied.
+- **`gaia chat init` in post-install banner** (PR [#1029](https://github.com/amd/gaia/pull/1029), closes [#1024](https://github.com/amd/gaia/issues/1024)) — The installer banner printed `gaia chat init` as the suggested first command, but that subcommand does not exist. Replaced with `gaia init`.
+- **Keyring treated as a required dependency** (PR [#1028](https://github.com/amd/gaia/pull/1028)) — `_resolve_keyring_refs` raised `ImportError` on systems without `keyring` installed, even for agents that do not use it. The import is now guarded.
+- **electron-builder download URLs stale** (PR [#953](https://github.com/amd/gaia/pull/953)) — URLs in `docs/deployment/code-signing.mdx`, `docs/plans/desktop-installer.mdx`, and `installer/nsis/installer.nsh` returned 404 after electron-builder reorganised its download paths.
+
+---
+
+## Tooling & Docs
+
+- **RAG eval CI gates** (PR [#1040](https://github.com/amd/gaia/pull/1040), closes [#1033](https://github.com/amd/gaia/issues/1033)) — Every PR now runs RAG quality baselines and a prompt-size budget check. The gates encode the lessons from the Gemma 4 RAG regression directly into the pipeline.
+- **Fork-PR authors now receive Claude review** (PR [#932](https://github.com/amd/gaia/pull/932)) — `allowed_non_write_users: "*"` is set for `pr-review` and `issue-handler` jobs; prompt-injection mitigations are documented in a header comment.
+- **Eval runs mandated before merging LLM-affecting changes** (PR [#1036](https://github.com/amd/gaia/pull/1036)) — `CLAUDE.md` requires `gaia eval agent` runs against the affected category for any change touching system prompts, tool docstrings, error classification, or the default model.
+- **GAIA website** (PR [#369](https://github.com/amd/gaia/pull/369)) — [amd-gaia.ai](https://amd-gaia.ai) goes live, consolidating all documentation, SDK references, and guides under a single public URL.
+- **Custom agent guide reorganised** (PR [#997](https://github.com/amd/gaia/pull/997)) — Connectors section moved to a dedicated page; export/import workflow documented.
+- **Lemonade PPA docs** (PR [#801](https://github.com/amd/gaia/pull/801)) — Linux install instructions now reference the Launchpad PPA and fix the v10.2.0 navbar label.
+- **Broken Lemonade CLI URL fixed** (PR [#996](https://github.com/amd/gaia/pull/996)) — URL in `docs/guides/docker.mdx` was returning 404 after the Lemonade docs reorganised.
+- **WhatsApp adapter evaluation** (PR [#950](https://github.com/amd/gaia/pull/950)) — Decision document and evaluation spec for a future WhatsApp adapter, including TOS risk analysis.
+
+---
+
+## Full Changelog
+
+**28 commits** since v0.17.6:
+
+- `b4cedd63` — fix(ci): add rag eval CI gates and prompt-size budget tests (#1033) (#1040)
+- `95f54474` — fix(agent): envelope-level parse repair + step-1 context in SD recovery (#1047)
+- `74f637a4` — feat(memory): agent memory v2 — second brain with hybrid search, LLM extraction, and observability dashboard (#606)
+- `a00b6a01` — fix(installer): drop bogus 'gaia chat init' from post-install banner (#1024) (#1029)
+- `d99619ab` — fix(agent): repair Windows-path tool args; gate SD override (#1023) (#1027)
+- `a99d6cba` — feat: dashboard SSE streaming progress (#1007) (#1032)
+- `bb05366c` — fix(lint): remove unused os import in test_disconnect_clears_grants (#1035)
+- `416ac1a0` — docs(lemonade): use Launchpad PPA for Linux install + fix v10.2.0 navbar label (#801)
+- `546a2260` — fix(blender): unblock send_command hang against persistent-connection server (#1022) (#1026)
+- `6444b8d8` — fix(mcp): make keyring a true optional dependency in _resolve_keyring_refs (#1028)
+- `4167b616` — feat(email): daily-driver UI pass — pre-scan card, in-chat Connect, session prefs (#995)
+- `241c0d9a` — fix(agents): RAG-on-PDF timeouts on Gemma 4 (#1030) (#1034)
+- `c755cba0` — docs(process): mandate eval runs + layman-led summaries (#1036)
+- `a927ce3e` — fix(agents): support parallel tool_calls (#944) (#946)
+- `60ee037c` — Reorganize custom agent guide: move connectors section, add export/import (#997)
+- `e42c0b4e` — feat(ui): email pre-scan triage card + dev server launch config (#1039)
+- `91f58722` — docs(spec): add WhatsApp messaging adapter evaluation and decision document (#950)
+- `6ad10fc4` — feat(connectors): per-MCP enable/disable toggle in Settings UI (#1004) (#1018)
+- `b8e0cfa0` — fix(connectors): MCP single-writer enforcement + security hardening (#976) (#998)
+- `9149326e` — feat(ui): policy alert cards, notifications, and durable receipts (#952)
+- `8d8fdd74` — fix(installer): update electron-builder URLs (#953)
+- `1beb810e` — docs(guides): fix broken Lemonade CLI docs URL in docker.mdx (#996)
+- `30de1b29` — feat(messaging): add Telegram adapter scaffold (Phase 0 of #889) (#951)
+- `32db67c4` — feat(email): synthetic .mbox dataset for email triage tests (#928)
+- `cbcc95d3` — Add GAIA website (#369)
+- `d25d9330` — feat(agents): file navigation, web browsing, scratchpad tools, and write security guardrails (#495)
+- `7fadc3f7` — feat(agents): split ChatAgent into Chat, FileIO, and DocumentQA agents (#979)
+- `577436a7` — ci(claude): allow fork-PR authors to trigger Claude review (#932)
+
+Full Changelog: [v0.17.6...v0.18.0](https://github.com/amd/gaia/compare/v0.17.6...v0.18.0)
