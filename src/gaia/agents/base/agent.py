@@ -78,6 +78,25 @@ class HardwareRequirement:
     reason: str = ""
 
 
+# Prefixes for tools that represent SD (Stable Diffusion) capability.
+# Used to detect whether the agent has attempted image-generation tools.
+_SD_CAPABILITY_TOOLS = ["generate_image"]
+
+
+def _repair_invalid_json_escapes(s: str) -> str:
+    """Repair invalid JSON backslash escapes by doubling a single backslash
+    when it precedes a non-JSON-escape character.
+
+    Preserves valid JSON escapes like \n, \t, \\\", \\uXXXX, etc. Idempotent.
+    """
+    # Valid JSON escape characters after a backslash
+    valid = r'"\\/bfnrtu'
+    # Replace a single backslash not preceded by another backslash and not
+    # followed by a valid escape char with a doubled backslash.
+    repaired = re.sub(rf"(?<!\\)\\(?![{valid}])", r"\\\\", s)
+    return repaired
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.

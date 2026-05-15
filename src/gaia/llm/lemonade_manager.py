@@ -37,8 +37,6 @@ _DEVICE_PRIORITY = ["amd_npu", "amd_igpu", "amd_dgpu", "cpu"]
 class HardwareRequirementError(Exception):
     """Raised when an agent's hardware requirement is not met by the host."""
 
-    pass
-
 
 # Re-export for backwards compatibility — existing callers import
 # ``DEFAULT_CONTEXT_SIZE`` from this module. Single source of truth lives
