@@ -95,17 +95,20 @@ def _repair_invalid_json_escapes(s: str) -> str:
     # Valid JSON escape characters after a backslash
     valid = '"\\/bfnrtu'
 
-    # Pair-consumption: replace occurrences of backslash + non-valid-escape
-    # with doubled-backslash + that character. Repeat until stable so that
-    # sequences like "\\\U" are handled consistently and the function
-    # remains idempotent.
-    pattern = re.compile(r"\\([^" + re.escape(valid) + r"\\])")
-    prev = None
-    curr = s
-    while prev != curr:
-        prev = curr
-        curr = pattern.sub(r"\\\\\1", prev)
-    return curr
+    # Single-pass consumption: replace a backslash followed by a single
+    # character; if that character is not a valid JSON escape (and is not
+    # itself a backslash), double the backslash. This keeps the operation
+    # idempotent on already-repaired inputs and avoids non-terminating
+    # repeated-replacement loops.
+    def _fix(m: re.Match) -> str:
+        ch = m.group(1)
+        # Preserve already-double-backslashes and valid JSON escapes
+        if ch == "\\" or ch in valid:
+            return "\\" + ch
+        # Otherwise double the backslash so the JSON parser accepts it
+        return "\\\\" + ch
+
+    return re.sub(r"\\(.)", _fix, s)
 
 
 class Agent(abc.ABC):
