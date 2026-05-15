@@ -18,7 +18,7 @@ import re
 import subprocess
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Literal, Optional, Tuple
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
@@ -74,13 +74,13 @@ class HardwareRequirement:
         reason: optional human-friendly reason displayed on error
     """
 
-    min_device: Literal["cpu", "amd_igpu", "amd_npu"]
+    min_device: Literal["cpu", "amd_igpu", "amd_npu", "amd_dgpu"]
     reason: str = ""
 
 
 # Prefixes for tools that represent SD (Stable Diffusion) capability.
 # Used to detect whether the agent has attempted image-generation tools.
-_SD_CAPABILITY_TOOLS = ["generate_image"]
+_SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
 
 
 def _repair_invalid_json_escapes(s: str) -> str:
@@ -90,11 +90,32 @@ def _repair_invalid_json_escapes(s: str) -> str:
     Preserves valid JSON escapes like \n, \t, \\\", \\uXXXX, etc. Idempotent.
     """
     # Valid JSON escape characters after a backslash
-    valid = r'"\\/bfnrtu'
-    # Replace a single backslash not preceded by another backslash and not
-    # followed by a valid escape char with a doubled backslash.
-    repaired = re.sub(rf"(?<!\\)\\(?![{valid}])", r"\\\\", s)
-    return repaired
+    valid = '"\\/bfnrtu'
+
+    # Iterate to preserve idempotence. Double a backslash if it is not
+    # itself escaped and the following character is not a valid JSON
+    # escape character. This handles Windows paths like C:\Users\K and
+    # leaves valid escapes such as \n, \t, \\ untouched.
+    out = []
+    i = 0
+    L = len(s)
+    while i < L:
+        ch = s[i]
+        if ch == "\\":
+            prev = s[i - 1] if i > 0 else None
+            nxt = s[i + 1] if i + 1 < L else None
+            if prev != "\\" and (nxt is None or nxt not in valid):
+                out.append("\\\\")
+                i += 1
+                continue
+            else:
+                out.append("\\")
+                i += 1
+                continue
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 class Agent(abc.ABC):
@@ -270,13 +291,8 @@ Do NOT wrap conversational replies in JSON.
             from gaia.llm.lemonade_manager import LemonadeManager
 
             # Resolve declarative per-agent hardware requirement (if any)
-            required_min_device = None
-            try:
-                req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
-                if req is not None:
-                    required_min_device = req.min_device
-            except Exception:
-                required_min_device = None
+            req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
+            required_min_device = req.min_device if req is not None else None
 
             LemonadeManager.ensure_ready(
                 min_context_size=min_context_size,

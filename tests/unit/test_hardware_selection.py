@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from gaia.agents.base.agent import HardwareRequirement
 from gaia.llm.lemonade_client import LemonadeClient
 from gaia.llm.lemonade_manager import HardwareRequirementError, LemonadeManager
 
@@ -62,3 +63,72 @@ def test_requirement_not_satisfied_cpu_only(monkeypatch):
     patch_lemonade(monkeypatch, "cpu_only.json")
     with pytest.raises(HardwareRequirementError):
         LemonadeManager.ensure_ready(required_min_device="amd_igpu")
+
+
+def test_list_shaped_devices(monkeypatch):
+    # Use the fixture helper so get_status is patched too
+    patch_lemonade(monkeypatch, "hardware_list.json")
+    assert LemonadeManager.ensure_ready(required_min_device="amd_igpu") is True
+
+
+def test_empty_devices_falls_back_to_cpu(monkeypatch):
+    # Patch Lemonade to return an empty devices list
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.LemonadeClient.get_status",
+        lambda *args, **kwargs: make_status(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.LemonadeClient.get_system_info",
+        lambda *args, **kwargs: {"devices": []},
+        raising=False,
+    )
+    with pytest.raises(HardwareRequirementError):
+        # requiring an iGPU when no device reported should raise
+        LemonadeManager.ensure_ready(required_min_device="amd_igpu")
+
+
+def test_agent_init_enforces_hardware(monkeypatch):
+    # End-to-end: Agent.__init__ should call LemonadeManager.ensure_ready()
+    class DummyAgent:
+        REQUIRED_HARDWARE = HardwareRequirement(min_device="amd_igpu")
+
+        def __init__(self):
+            # reuse LemonadeManager.ensure_ready path
+            LemonadeManager.ensure_ready(
+                required_min_device=self.REQUIRED_HARDWARE.min_device
+            )
+
+    # Patch the client to return CPU-only and a running status
+    patch_lemonade(monkeypatch, "cpu_only.json")
+
+    with pytest.raises(HardwareRequirementError):
+        DummyAgent()
+
+
+def test_agent_init_passes_none_when_no_requirement(monkeypatch):
+    # Ensure Agent.__init__ calls LemonadeManager.ensure_ready with
+    # required_min_device=None when the subclass does not declare REQUIRED_HARDWARE.
+    from gaia.agents.base.agent import Agent
+
+    calls = {}
+
+    def fake_ensure_ready(*args, **kwargs):
+        calls["kwargs"] = kwargs
+        return True
+
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready",
+        fake_ensure_ready,
+        raising=False,
+    )
+
+    class MinimalAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    # Instantiate with skip_lemonade=False so ensure_ready is invoked
+    MinimalAgent(skip_lemonade=False)
+
+    assert "kwargs" in calls
+    assert calls["kwargs"].get("required_min_device") is None

@@ -209,6 +209,14 @@ class LemonadeManager:
                      If provided, host and port are parsed from it.
             host: Override host (default: from LEMONADE_BASE_URL env or localhost)
             port: Override port (default: from LEMONADE_BASE_URL env or 13305)
+            required_min_device: Optional device tier required by the caller.
+                If provided, Lemonade is queried at runtime via
+                `LemonadeClient.get_system_info()` and the detected device
+                capability is compared against `required_min_device`. NOTE:
+                This method queries the running Lemonade server at runtime; it
+                does NOT read or write a local `~/.gaia/` hardware config.
+                The resolved `recipe` is computed and logged for debugging,
+                but is NOT applied to the Lemonade server by this method.
 
         Returns:
             True if Lemonade server is ready, False otherwise.
@@ -419,7 +427,8 @@ class LemonadeManager:
                                 for item in devices:
                                     if isinstance(item, dict):
                                         # try common keys
-                                        for k in ("id", "name", "type"):
+                                        # Prefer explicit device_type when available.
+                                        for k in ("device_type", "type", "id", "name"):
                                             if k in item:
                                                 detected.add(str(item[k]))
                                                 break
@@ -460,7 +469,11 @@ class LemonadeManager:
                     except HardwareRequirementError:
                         raise
                     except Exception as e:
-                        cls._log.warning(f"Failed to resolve hardware devices: {e}")
+                        # Propagate as a HardwareRequirementError so callers
+                        # cannot silently ignore device-resolution failures.
+                        raise HardwareRequirementError(
+                            f"Failed to resolve hardware devices: {e}"
+                        ) from e
 
                 # Only warn if:
                 # 1. Context size is non-zero (0 means no model loaded or model still loading)
