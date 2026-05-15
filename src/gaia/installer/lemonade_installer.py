@@ -678,7 +678,7 @@ class LemonadeInstaller:
                     error=(
                         f"Failed to add Lemonade PPA (system={self.system}, root={is_root}).\n"
                         f"add-apt-repository output:\n{(result.stdout + result.stderr).strip()}\n"
-                        "See https://amd-gaia.ai/reference/troubleshooting"
+                        "See https://amd-gaia.ai/docs/reference/troubleshooting"
                     ),
                 )
 
@@ -705,7 +705,7 @@ class LemonadeInstaller:
                         f"apt-get install lemonade-server failed (step=Install, root={is_root}):\n"
                         f"{(result.stdout + result.stderr).strip()}\n"
                         "Your apt state may be partial — run 'sudo dpkg --configure -a' to recover.\n"
-                        "See https://amd-gaia.ai/reference/troubleshooting"
+                        "See https://amd-gaia.ai/docs/reference/troubleshooting"
                     ),
                 )
 

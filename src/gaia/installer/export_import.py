@@ -152,7 +152,7 @@ def export_custom_agents(output_path: Path) -> ExportResult:
             log.warning(
                 "export: skipping legacy YAML-only agent directory %s "
                 "(YAML manifest agents were removed in v0.17.5; convert to "
-                "agent.py — see https://amd-gaia.ai/guides/custom-agent)",
+                "agent.py — see https://amd-gaia.ai/docs/guides/custom-agent)",
                 d,
             )
     if not agent_dirs:
@@ -378,7 +378,7 @@ def import_agent_bundle(bundle_path: Path) -> ImportResult:
                             f"manifest (agent.yaml) but no agent.py. YAML "
                             f"manifest agents were removed in v0.17.5. "
                             f"Convert this agent to agent.py and re-export "
-                            f"(see https://amd-gaia.ai/guides/custom-agent)."
+                            f"(see https://amd-gaia.ai/docs/guides/custom-agent)."
                         )
                     else:
                         result.errors.append(

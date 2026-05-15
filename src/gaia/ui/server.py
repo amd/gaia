@@ -661,7 +661,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     (download at
     <a href="https://github.com/amd/gaia/releases">github.com/amd/gaia/releases</a>).
     For browser-mode setup and troubleshooting, see
-    <a href="https://amd-gaia.ai/guides/agent-ui">amd-gaia.ai/guides/agent-ui</a>.
+    <a href="https://amd-gaia.ai/docs/guides/agent-ui">amd-gaia.ai/docs/guides/agent-ui</a>.
   </p>
   <ul>
     <li><a href="/docs">API documentation</a> (<code>/docs</code>)</li>

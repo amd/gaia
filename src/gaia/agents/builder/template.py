@@ -34,8 +34,8 @@ def _build_header(class_name: str, agent_id: str, flavor: str) -> List[str]:
     return [
         f"# {class_name} -- Custom GAIA Agent{flavor}",
         f"# Location: ~/.gaia/agents/{agent_id}/agent.py",
-        "# Docs: https://amd-gaia.ai/sdk/core/agent-system",
-        "#        https://amd-gaia.ai/sdk/patterns",
+        "# Docs: https://amd-gaia.ai/docs/sdk/core/agent-system",
+        "#        https://amd-gaia.ai/docs/sdk/patterns",
         "",
     ]
 
@@ -102,7 +102,7 @@ def _render_basic(
         '    #         kwargs.setdefault("model_id", "Qwen3-0.6B-GGUF")',
         "    #         super().__init__(**kwargs)",
         "    #",
-        "    # MCP: https://amd-gaia.ai/sdk/infrastructure/mcp",
+        "    # MCP: https://amd-gaia.ai/docs/sdk/infrastructure/mcp",
         "",
     ]
 
@@ -282,7 +282,7 @@ def _render_with_tools(
         [
             "",
             "    # -- Advanced (optional) -----------------------------------------",
-            "    # See https://amd-gaia.ai/sdk/patterns for more composition examples.",
+            "    # See https://amd-gaia.ai/docs/sdk/patterns for more composition examples.",
             "",
         ]
     )

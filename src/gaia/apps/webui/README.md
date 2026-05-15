@@ -75,8 +75,8 @@ For a native desktop experience, download the installer from
 
 ## Documentation
 
-- [Agent UI Guide](https://amd-gaia.ai/guides/agent-ui) — Full setup and usage guide
-- [Agent UI SDK Reference](https://amd-gaia.ai/sdk/sdks/agent-ui) — Backend API, models, endpoints
+- [Agent UI Guide](https://amd-gaia.ai/docs/guides/agent-ui) — Full setup and usage guide
+- [Agent UI SDK Reference](https://amd-gaia.ai/docs/sdk/sdks/agent-ui) — Backend API, models, endpoints
 - [GAIA Documentation](https://amd-gaia.ai) — Complete GAIA framework docs
 
 ## Development
