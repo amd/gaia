@@ -27,6 +27,7 @@ from gaia.logger import get_logger
 _RECIPE_BY_DEVICE = {
     "amd_npu": "oga-hybrid",
     "amd_igpu": "oga-hybrid",
+    "amd_dgpu": "oga-hybrid",
     "cpu": "oga-cpu",
 }
 

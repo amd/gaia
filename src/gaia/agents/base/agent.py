@@ -84,38 +84,28 @@ _SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
 
 
 def _repair_invalid_json_escapes(s: str) -> str:
-    """Repair invalid JSON backslash escapes by doubling a single backslash
-    when it precedes a non-JSON-escape character.
+    """Repair invalid JSON backslash escapes using pair-consumption.
 
-    Preserves valid JSON escapes like \n, \t, \\\", \\uXXXX, etc. Idempotent.
+    This implementation repeatedly replaces a backslash followed by a
+    non-JSON-escape character with a doubled backslash and the character,
+    using a regex-based pair-consumption approach. The operation is
+    idempotent: applying it multiple times will not further change a
+    previously-repaired string.
     """
     # Valid JSON escape characters after a backslash
     valid = '"\\/bfnrtu'
 
-    # Iterate to preserve idempotence. Double a backslash if it is not
-    # itself escaped and the following character is not a valid JSON
-    # escape character. This handles Windows paths like C:\Users\K and
-    # leaves valid escapes such as \n, \t, \\ untouched.
-    out = []
-    i = 0
-    L = len(s)
-    while i < L:
-        ch = s[i]
-        if ch == "\\":
-            prev = s[i - 1] if i > 0 else None
-            nxt = s[i + 1] if i + 1 < L else None
-            if prev != "\\" and (nxt is None or nxt not in valid):
-                out.append("\\\\")
-                i += 1
-                continue
-            else:
-                out.append("\\")
-                i += 1
-                continue
-        else:
-            out.append(ch)
-            i += 1
-    return "".join(out)
+    # Pair-consumption: replace occurrences of backslash + non-valid-escape
+    # with doubled-backslash + that character. Repeat until stable so that
+    # sequences like "\\\U" are handled consistently and the function
+    # remains idempotent.
+    pattern = re.compile(r"\\([^" + re.escape(valid) + r"\\])")
+    prev = None
+    curr = s
+    while prev != curr:
+        prev = curr
+        curr = pattern.sub(r"\\\\\1", prev)
+    return curr
 
 
 class Agent(abc.ABC):
