@@ -1323,7 +1323,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         </>
                     )}
                 </div>
-                <div className="chat-header-right">
+                <div className="task-header-right">
                     <span
                         className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
                         title={
