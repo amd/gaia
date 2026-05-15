@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.tools import tool
 from gaia.agents.email import action_store
@@ -468,7 +468,8 @@ class OrganizeToolsMixin:
                     batch_id=batch_id,
                     debug=debug_flag,
                 )
-                agent._record_organize_op("", "")
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
                 return _envelope_ok(
                     {
                         "batch_id": batch_id,
@@ -502,7 +503,8 @@ class OrganizeToolsMixin:
                     batch_id=batch_id,
                     debug=debug_flag,
                 )
-                agent._record_organize_op("", "")
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
                 return _envelope_ok(
                     {
                         "batch_id": batch_id,
@@ -536,7 +538,8 @@ class OrganizeToolsMixin:
                     batch_id=batch_id,
                     debug=debug_flag,
                 )
-                agent._record_organize_op("", "")
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
                 return _envelope_ok(
                     {
                         "batch_id": batch_id,
@@ -570,7 +573,8 @@ class OrganizeToolsMixin:
                     batch_id=batch_id,
                     debug=debug_flag,
                 )
-                agent._record_organize_op("", "")
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
                 return _envelope_ok(
                     {
                         "batch_id": batch_id,
@@ -615,7 +619,8 @@ class OrganizeToolsMixin:
                     batch_id=batch_id,
                     debug=debug_flag,
                 )
-                agent._record_organize_op("", "")
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
                 return _envelope_ok(
                     {
                         "batch_id": batch_id,
@@ -655,7 +660,8 @@ class OrganizeToolsMixin:
                     batch_id=batch_id,
                     debug=debug_flag,
                 )
-                agent._record_organize_op("", "")
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
                 return _envelope_ok(
                     {
                         "batch_id": batch_id,
@@ -708,7 +714,8 @@ class OrganizeToolsMixin:
                     batch_id=batch_id,
                     debug=debug_flag,
                 )
-                agent._record_organize_op("", "")
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
                 return _envelope_ok(
                     {
                         "batch_id": batch_id,
