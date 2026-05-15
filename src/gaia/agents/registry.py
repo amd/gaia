@@ -748,7 +748,7 @@ class AgentRegistry:
             warnings.warn(
                 f"YAML manifest agents are no longer supported. "
                 f"Convert {agent_dir}/agent.yaml to agent.py "
-                f"(see https://amd-gaia.ai/guides/custom-agent). Skipping.",
+                f"(see https://amd-gaia.ai/docs/guides/custom-agent). Skipping.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -838,7 +838,7 @@ class AgentRegistry:
                             f"{sorted(leftover)} are ignored; only `models:` is "
                             "read from the companion YAML. Move these into "
                             "agent.py "
-                            "(see https://amd-gaia.ai/guides/custom-agent).",
+                            "(see https://amd-gaia.ai/docs/guides/custom-agent).",
                             DeprecationWarning,
                             stacklevel=2,
                         )

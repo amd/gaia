@@ -25,7 +25,7 @@ GOOGLE_SPEC = ConnectorSpec(
         "[Google Account security page](https://myaccount.google.com/permissions)."
     ),
     product_url="https://workspace.google.com/",
-    docs_url="https://amd-gaia.ai/connectors/google",
+    docs_url="https://amd-gaia.ai/docs/connectors/google",
     default_scopes=(
         "openid",
         "email",
