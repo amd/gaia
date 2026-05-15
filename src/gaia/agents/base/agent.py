@@ -17,7 +17,8 @@ import os
 import re
 import subprocess
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Literal
+from dataclasses import dataclass
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
@@ -64,6 +65,19 @@ TOOLS_REQUIRING_CONFIRMATION = {
 }
 
 
+@dataclass(frozen=True)
+class HardwareRequirement:
+    """Declarative hardware requirement for Agents.
+
+    Fields:
+        min_device: one of 'cpu', 'amd_igpu', 'amd_npu'
+        reason: optional human-friendly reason displayed on error
+    """
+
+    min_device: Literal["cpu", "amd_igpu", "amd_npu"]
+    reason: str = ""
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -105,6 +119,11 @@ class Agent(abc.ABC):
     # Empty list = no external connections required (the default for built-ins).
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = []
 
+    # Declarative per-agent hardware requirement.  Agents that need a
+    # minimum tier (e.g., NPU) should set this ClassVar to a
+    # `HardwareRequirement` instance. Example:
+    #   REQUIRED_HARDWARE: ClassVar[Optional[HardwareRequirement]] = HardwareRequirement(min_device="amd_npu")
+    REQUIRED_HARDWARE: ClassVar[Optional["HardwareRequirement"]] = None
     # Response format templates — agents select via response_mode attribute.
     # "planning" (default): JSON-only responses with thought/goal/plan/tool structure.
     # "conversational": plain text for conversation, JSON only for tool calls.
@@ -231,10 +250,20 @@ Do NOT wrap conversational replies in JSON.
         if not (use_claude or use_chatgpt or skip_lemonade):
             from gaia.llm.lemonade_manager import LemonadeManager
 
+            # Resolve declarative per-agent hardware requirement (if any)
+            required_min_device = None
+            try:
+                req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
+                if req is not None:
+                    required_min_device = req.min_device
+            except Exception:
+                required_min_device = None
+
             LemonadeManager.ensure_ready(
                 min_context_size=min_context_size,
                 quiet=silent_mode,
                 base_url=base_url,
+                required_min_device=required_min_device,
             )
 
         # Initialize state management

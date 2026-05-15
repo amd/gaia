@@ -22,6 +22,23 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.logger import get_logger
 
+
+# Allow-list mapping from detected device -> Lemonade recipe
+# UNCERTAIN: confirm full recipe vocabulary with lemonade-specialist
+_RECIPE_BY_DEVICE = {
+    "amd_npu": "oga-hybrid",
+    "amd_igpu": "oga-hybrid",
+    "cpu": "oga-cpu",
+}
+
+# Device capability priority (high -> low)
+_DEVICE_PRIORITY = ["amd_npu", "amd_igpu", "amd_dgpu", "cpu"]
+
+
+class HardwareRequirementError(Exception):
+    """Raised when an agent's hardware requirement is not met by the host."""
+    pass
+
 # Re-export for backwards compatibility — existing callers import
 # ``DEFAULT_CONTEXT_SIZE`` from this module. Single source of truth lives
 # in ``gaia.llm.lemonade_client``.
@@ -179,6 +196,7 @@ class LemonadeManager:
         base_url: Optional[str] = None,
         host: Optional[str] = None,
         port: Optional[int] = None,
+        required_min_device: Optional[str] = None,
     ) -> bool:
         """Ensure Lemonade server is running with sufficient context size.
 
@@ -376,6 +394,55 @@ class LemonadeManager:
                     f"(context: {cls._context_size} tokens)"
                 )
 
+                # If a caller requested a minimum device tier, resolve
+                # detected devices and ensure the requirement is met.
+                if required_min_device:
+                    try:
+                        sys_info = client.get_system_info()
+                        devices = sys_info.get("devices", {})
+                        detected = set()
+                        # devices may be a dict or a list; handle both
+                        if isinstance(devices, dict):
+                            detected = set(devices.keys())
+                        elif isinstance(devices, list):
+                            # list of strings or list of dicts
+                            if all(isinstance(x, str) for x in devices):
+                                detected = set(devices)
+                            else:
+                                for item in devices:
+                                    if isinstance(item, dict):
+                                        # try common keys
+                                        for k in ("id", "name", "type"):
+                                            if k in item:
+                                                detected.add(str(item[k]))
+                                                break
+                        # Find highest-capability detected device
+                        highest = None
+                        for dev in _DEVICE_PRIORITY:
+                            if dev in detected:
+                                highest = dev
+                                break
+                        if highest is None:
+                            # assume CPU-only host if nothing reported
+                            highest = "cpu"
+
+                        # Check capability ordering: lower index == higher capability
+                        req_idx = _DEVICE_PRIORITY.index(required_min_device) if required_min_device in _DEVICE_PRIORITY else len(_DEVICE_PRIORITY)-1
+                        detected_idx = _DEVICE_PRIORITY.index(highest) if highest in _DEVICE_PRIORITY else len(_DEVICE_PRIORITY)-1
+                        if detected_idx <= req_idx:
+                            # Satisfied: determine recipe (allow-listed)
+                            recipe = _RECIPE_BY_DEVICE.get(highest, _RECIPE_BY_DEVICE.get("cpu"))
+                            cls._log.debug(f"Hardware requirement satisfied: {highest} -> recipe={recipe}")
+                        else:
+                            # Not satisfied: raise actionable error
+                            raise HardwareRequirementError(
+                                f"Hardware requirement not met: required={required_min_device}, detected={sorted(list(detected))}"
+                            )
+                    except HardwareRequirementError:
+                        raise
+                    except Exception as e:
+                        cls._log.warning(f"Failed to resolve hardware devices: {e}")
+
                 # Only warn if:
                 # 1. Context size is non-zero (0 means no model loaded or model still loading)
                 # 2. Context size is less than required
@@ -401,10 +468,9 @@ class LemonadeManager:
 
                 return True
 
-            except LemonadeClientError:
-                # Actionable error from the preload helper — propagate so the
-                # caller sees the three-part guidance instead of a silent
-                # return False (CLAUDE.md "no silent fallbacks").
+            except (LemonadeClientError, HardwareRequirementError):
+                # Actionable errors - propagate so callers see the cause and
+                # can handle/report it (no silent fallbacks).
                 raise
             except Exception as e:
                 cls._log.warning(f"Failed to initialize Lemonade: {e}")
