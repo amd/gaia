@@ -17,8 +17,8 @@ import os
 import re
 import subprocess
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Literal
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Literal, Optional
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace

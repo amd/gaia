@@ -4,9 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from gaia.llm.lemonade_manager import LemonadeManager, HardwareRequirementError
 from gaia.llm.lemonade_client import LemonadeClient
-
+from gaia.llm.lemonade_manager import HardwareRequirementError, LemonadeManager
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures", "hardware")
 
@@ -20,7 +19,9 @@ def load_fixture(name: str):
 def make_status(running=True, context_size=32768, loaded_models=None):
     if loaded_models is None:
         loaded_models = [{"id": "gemma", "labels": []}]
-    return SimpleNamespace(running=running, context_size=context_size, loaded_models=loaded_models)
+    return SimpleNamespace(
+        running=running, context_size=context_size, loaded_models=loaded_models
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +42,9 @@ def patch_lemonade(monkeypatch, fixture_file: str):
         return data
 
     monkeypatch.setattr(LemonadeClient, "get_status", fake_get_status, raising=False)
-    monkeypatch.setattr(LemonadeClient, "get_system_info", fake_get_system_info, raising=False)
+    monkeypatch.setattr(
+        LemonadeClient, "get_system_info", fake_get_system_info, raising=False
+    )
 
 
 def test_requirement_satisfied_npu(monkeypatch):

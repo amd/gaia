@@ -22,7 +22,6 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.logger import get_logger
 
-
 # Allow-list mapping from detected device -> Lemonade recipe
 # UNCERTAIN: confirm full recipe vocabulary with lemonade-specialist
 _RECIPE_BY_DEVICE = {
@@ -37,7 +36,9 @@ _DEVICE_PRIORITY = ["amd_npu", "amd_igpu", "amd_dgpu", "cpu"]
 
 class HardwareRequirementError(Exception):
     """Raised when an agent's hardware requirement is not met by the host."""
+
     pass
+
 
 # Re-export for backwards compatibility — existing callers import
 # ``DEFAULT_CONTEXT_SIZE`` from this module. Single source of truth lives
@@ -435,12 +436,24 @@ class LemonadeManager:
                             highest = "cpu"
 
                         # Check capability ordering: lower index == higher capability
-                        req_idx = _DEVICE_PRIORITY.index(required_min_device) if required_min_device in _DEVICE_PRIORITY else len(_DEVICE_PRIORITY)-1
-                        detected_idx = _DEVICE_PRIORITY.index(highest) if highest in _DEVICE_PRIORITY else len(_DEVICE_PRIORITY)-1
+                        req_idx = (
+                            _DEVICE_PRIORITY.index(required_min_device)
+                            if required_min_device in _DEVICE_PRIORITY
+                            else len(_DEVICE_PRIORITY) - 1
+                        )
+                        detected_idx = (
+                            _DEVICE_PRIORITY.index(highest)
+                            if highest in _DEVICE_PRIORITY
+                            else len(_DEVICE_PRIORITY) - 1
+                        )
                         if detected_idx <= req_idx:
                             # Satisfied: determine recipe (allow-listed)
-                            recipe = _RECIPE_BY_DEVICE.get(highest, _RECIPE_BY_DEVICE.get("cpu"))
-                            cls._log.debug(f"Hardware requirement satisfied: {highest} -> recipe={recipe}")
+                            recipe = _RECIPE_BY_DEVICE.get(
+                                highest, _RECIPE_BY_DEVICE.get("cpu")
+                            )
+                            cls._log.debug(
+                                f"Hardware requirement satisfied: {highest} -> recipe={recipe}"
+                            )
                         else:
                             # Not satisfied: raise actionable error
                             raise HardwareRequirementError(
