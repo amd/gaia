@@ -43,21 +43,27 @@ function scopeLabel(scope: string): string {
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
-import type { ConnectorRow } from '../types';
+import type { AgentMcpServer, ConnectorRow } from '../types';
+import { ConnectorTileMenu } from './ConnectorTileMenu';
 import './ConnectorsSection.css';
 
 // ── ConnectorsSection ────────────────────────────────────────────────────────
 
 export function ConnectorsSection() {
     const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
+    const [agentMcps, setAgentMcps] = useState<AgentMcpServer[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         try {
-            const { connectors: rows } = await api.listConnectors();
+            const [{ connectors: rows }, { agent_mcps: mcps }] = await Promise.all([
+                api.listConnectors(),
+                api.listAgentMcps(),
+            ]);
             setConnectors(rows);
+            setAgentMcps(mcps);
             setError(null);
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
@@ -119,17 +125,26 @@ export function ConnectorsSection() {
                     <Loader2 size={16} className="spin" />
                 </div>
             ) : (
-                <div className="connectors-list">
-                    {connectors.map((c) => (
-                        <ConnectorTile
-                            key={c.id}
-                            connector={c}
-                            expanded={expanded === c.id}
-                            onToggle={() => toggle(c.id)}
-                            onChanged={() => void onChanged(c.id)}
+                <>
+                    <div className="connectors-list">
+                        {connectors.map((c) => (
+                            <ConnectorTile
+                                key={c.id}
+                                connector={c}
+                                expanded={expanded === c.id}
+                                onToggle={() => toggle(c.id)}
+                                onChanged={() => void onChanged(c.id)}
+                            />
+                        ))}
+                    </div>
+                    {agentMcps.length > 0 && (
+                        <AgentMcpsSection
+                            servers={agentMcps}
+                            expanded={expanded}
+                            onToggle={toggle}
                         />
-                    ))}
-                </div>
+                    )}
+                </>
             )}
         </section>
     );
@@ -148,6 +163,25 @@ function ConnectorTile({
     onToggle: () => void;
     onChanged: () => void;
 }) {
+    // Three exclusive status states for the tile header pill (#1004):
+    //   - configured + enabled   → "Configured" / account_id (green ok)
+    //   - configured + disabled  → "Disabled"               (warm muted)
+    //   - not configured         → "Not configured"         (cool muted)
+    const renderStatus = () => {
+        if (!connector.configured) {
+            return <span className="connector-status idle">Not configured</span>;
+        }
+        if (connector.type === 'mcp_server' && connector.enabled === false) {
+            return <span className="connector-status disabled">Disabled</span>;
+        }
+        return (
+            <span className="connector-status ok">
+                <CheckCircle2 size={12} />
+                {connector.account_id ?? 'Configured'}
+            </span>
+        );
+    };
+
     return (
         <div className={`connector-tile${expanded ? ' connector-tile--open' : ''}`}>
             <button
@@ -157,14 +191,8 @@ function ConnectorTile({
             >
                 <span className="connector-tile-name">{connector.display_name}</span>
                 <span className="connector-tile-type">{connector.type === 'oauth_pkce' ? 'OAuth' : 'MCP'}</span>
-                {connector.configured ? (
-                    <span className="connector-status ok">
-                        <CheckCircle2 size={12} />
-                        {connector.account_id ?? 'Configured'}
-                    </span>
-                ) : (
-                    <span className="connector-status idle">Not configured</span>
-                )}
+                {renderStatus()}
+                <ConnectorTileMenu connector={connector} onChanged={onChanged} />
                 <span className="connector-tile-chevron">
                     {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </span>
@@ -452,6 +480,29 @@ function MCPServerConfigureBody({
         }
     };
 
+    // Per-MCP enable/disable toggle (#1004). The toggle row appears only
+    // for already-configured MCP connectors — toggling on a never-
+    // configured connector has no meaning. Detail-view toggle and the
+    // tile-header overflow menu both call the same enableConnector /
+    // disableConnector helpers, so the SSE refresh keeps both surfaces
+    // in sync.
+    const handleToggleEnabled = async () => {
+        setBusy(true);
+        setErr(null);
+        try {
+            if (connector.enabled) {
+                await api.disableConnector(connector.id);
+            } else {
+                await api.enableConnector(connector.id);
+            }
+            onChanged();
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
     return (
         <div className="configure-body">
             {connector.description && (
@@ -461,6 +512,31 @@ function MCPServerConfigureBody({
                 <div className="configure-error">
                     <AlertCircle size={12} /> {err}
                 </div>
+            )}
+            {connector.configured && (
+                <div className="connector-toggle-row">
+                    <span className="connector-toggle-label">Active</span>
+                    <span className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            checked={connector.enabled !== false}
+                            onChange={() => void handleToggleEnabled()}
+                            disabled={busy}
+                            aria-label={
+                                connector.enabled
+                                    ? 'Disable this MCP server'
+                                    : 'Enable this MCP server'
+                            }
+                        />
+                        <span className="toggle-track" />
+                    </span>
+                </div>
+            )}
+            {connector.configured && connector.enabled === false && (
+                <p className="connector-toggle-help">
+                    Credentials and per-agent grants are preserved.
+                    Re-enable to make this server's tools available again.
+                </p>
             )}
             {connector.mcp_env_keys.map((key) => (
                 <div key={key} className="mcp-key-row">
@@ -596,6 +672,93 @@ function AgentGrantCard({
         </div>
     );
 }
+
+// ── AgentMcpsSection ─────────────────────────────────────────────────────────
+
+/**
+ * Read-only section listing MCP servers declared by custom Python agents
+ * (#1020). These are controlled by the agent's local mcp_servers.json;
+ * the user edits that file directly — no toggle or disconnect action here.
+ */
+function AgentMcpsSection({
+    servers,
+    expanded,
+    onToggle,
+}: {
+    servers: AgentMcpServer[];
+    expanded: string | null;
+    onToggle: (key: string) => void;
+}) {
+    return (
+        <div className="agent-mcps-section">
+            <div className="agent-mcps-section-header">Custom agent servers</div>
+            <div className="connectors-list">
+                {servers.map((s) => {
+                    const key = `${s.agent_id}::${s.server_name}`;
+                    return (
+                        <AgentMcpTile
+                            key={key}
+                            server={s}
+                            expanded={expanded === key}
+                            onToggle={() => onToggle(key)}
+                        />
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
+function AgentMcpTile({
+    server,
+    expanded,
+    onToggle,
+}: {
+    server: AgentMcpServer;
+    expanded: boolean;
+    onToggle: () => void;
+}) {
+    const cmdDisplay = [server.command, ...server.args].join(' ');
+
+    return (
+        <div className={`agent-mcp-tile${expanded ? ' agent-mcp-tile--open' : ''}`}>
+            <button
+                type="button"
+                className="agent-mcp-tile-header"
+                onClick={onToggle}
+                aria-expanded={expanded}
+            >
+                <span className="agent-mcp-server-name">{server.server_name}</span>
+                <span className="agent-mcp-agent-label">via {server.agent_name}</span>
+                {server.disabled ? (
+                    <span className="agent-mcp-status disabled">Disabled</span>
+                ) : (
+                    <span className="agent-mcp-status enabled">
+                        <CheckCircle2 size={11} /> Active
+                    </span>
+                )}
+                <span className="agent-mcp-readonly-badge">read-only</span>
+                <span className="agent-mcp-chevron">
+                    {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </span>
+            </button>
+
+            {expanded && (
+                <div className="agent-mcp-detail">
+                    {cmdDisplay && (
+                        <div className="agent-mcp-command-row">{cmdDisplay}</div>
+                    )}
+                    <div className="agent-mcp-config-path">{server.config_path}</div>
+                    <div className="agent-mcp-config-hint">
+                        Edit the agent's <code>mcp_servers.json</code> to change this server.
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ── ConnectorAgentGrants ─────────────────────────────────────────────────────
 
 function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
     const { agents } = useChatStore();

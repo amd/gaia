@@ -119,9 +119,13 @@ jobs:
 
           Write-Host "Lemonade server started successfully"
 
-          # Pull the model now that server is running
+          # Pull the model now that server is running. v10.x replaced
+          # ``lemonade-server pull`` with ``lemonade pull`` -- the old form
+          # prints "This command is deprecated. Use 'lemonade pull --help'
+          # instead." and exits non-zero, which under PowerShell + the
+          # default error-on-stderr behaviour kills this step.
           Write-Host "Pulling Llama-3.2-3B-Instruct-Hybrid model..."
-          lemonade-server pull Llama-3.2-3B-Instruct-Hybrid
+          lemonade pull Llama-3.2-3B-Instruct-Hybrid
 
 
 

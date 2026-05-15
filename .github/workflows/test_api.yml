@@ -78,7 +78,14 @@ jobs:
               $serverJob = Start-Job -ScriptBlock {
                   # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
                   $env:GGML_VK_DISABLE_COOPMAT = "1"
-                  & lemonade-server serve --ctx-size 8192 --host localhost --port 13305 --no-tray 2>&1
+                  # v10.x ``lemonade-server serve`` (deprecation shim) and
+                  # ``LemonadeServer.exe serve`` no longer accept
+                  # ``--ctx-size`` and abort with "error: failed to start
+                  # lemonade-server" if it's passed. Drop the flag here; the
+                  # API tests don't pin a specific window, and any future
+                  # need for a larger ctx can be set per-model via the
+                  # ``/api/v1/load`` body.
+                  & lemonade-server serve --host localhost --port 13305 --no-tray 2>&1
               }
               Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
               $env:LEMONADE_JOB_ID = $serverJob.Id

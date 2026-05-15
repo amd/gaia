@@ -41,14 +41,16 @@ If *any* of those is uncertain, **do not commit** — surface the uncertainty to
 
 **Target shape (default — most PRs need only this):**
 
-1. **One-paragraph "Why this matters"** — the user-observable impact in plain English. Lead with the *before-state* (what was broken / missing) and the *after-state* (what now works). If a reviewer stops after this paragraph, they should know whether to merge.
-2. **Test plan** — checkbox list of how to verify. Specific commands beat vague prose.
+1. **One-paragraph "Why this matters"** — the user-observable impact, in concise direct prose (~3 sentences max). Lead with the *before-state* (what was broken / missing) and the *after-state* (what now works). No labelled prefix (`In plain English:`, `Layman-first:`); just lead with the substance. If a reviewer stops after this paragraph, they should know whether to merge.
+2. **Test plan** — checkbox list of how to verify. Specific commands beat vague prose. Only list items a reviewer can actually verify before merge.
 
 That's it. No "What changed" / "Files modified" / "Implementation notes" sections by default — the diff shows what changed; the commit messages explain how. The PR description's job is to sell the merge.
 
 **Add a short threads list ONLY if** the PR genuinely bundles multiple logical changes a reviewer needs to evaluate independently. Each bullet: one line, with a *why this matters* clause. Not every commit — only changes a reviewer can't infer from the title.
 
 **The "user-observable impact" test:** can a non-author understand the value in <30 seconds without reading the diff? If your description is "supports X protocol" or "refactors Y handler", you've described the *change* but not the *value*. Rewrite to "before: feature Z silently failed for users running model M; after: it works." Concrete observable behaviour beats abstract capability claims.
+
+**Same rule for commit messages:** the conventional-commits title is the technical handle; the first line of the body is the summary (concise direct prose, no labelled prefix). PR #1034's body opens with `"ChatAgent system prompt had grown to ~52K chars …"` — direct, no preamble. The same rule applies to bot reviews and issue comments — see [Issue Response Guidelines](#issue-response-guidelines).
 
 **Hard rules:**
 
@@ -67,6 +69,7 @@ That's it. No "What changed" / "Files modified" / "Implementation notes" section
 - ❌ A "What changed" bullet list when the title + commit message body already cover it
 - ❌ Naming files in the description ("modified `agent.py`") — the diff already shows that
 - ❌ Burying the user impact under a section labelled "Summary"; lead with the impact
+- ❌ Opening with "Refactors X handler" / "Migrates to Y protocol" / "Adopts Z abstraction" — implementation-language leads tell the reviewer *what changed* but not *why they should care*; lead with the user / reviewer impact instead
 
 **Title convention:** conventional commits style (`feat(scope):`, `fix(scope):`, `docs(scope):`, `ci(scope):`), under ~70 chars, descriptive of the *change*, not the *why* (the body carries the why).
 
@@ -150,6 +153,37 @@ This self-review step is mandatory - never skip verification of your output.
 2. Check existing mixins in agent subdirectories (e.g., `chat/tools/`, `code/tools/`)
 3. Extract shared logic into base classes or mixins when patterns repeat
 
+### Code Comments — Short or Skip
+
+**Default to no comments.** Write one only when the *why* is non-obvious — a hidden constraint, a subtle invariant, a workaround for a specific bug. Never explain *what* the code does (identifiers should already do that).
+
+**Keep WHY comments to one short line.** Multi-paragraph "history of how we got here" blocks are noise — the diff, commit message, and linked issue carry the history. Inline comments are read at the speed of code, not the speed of a postmortem.
+
+**Don't reference the current task, fix, or callers inline.** Patterns like `"Pre-#1030 follow-up the non-streaming path skipped the check…"` or `"Added for the Y flow"` belong in the PR description and commit body. Inline they rot as soon as the code moves.
+
+**Bad** (verbose, history-tagged, will rot):
+
+```python
+# Pre-flight: ensure the model is loaded at the GAIA-expected ctx.
+# The streaming path already does this via
+# ``_stream_chat_completions_with_openai`` -> ``_ensure_model_loaded``.
+# Pre-#1030 follow-up the non-streaming path skipped the check, so
+# when something (e.g. the RAG SDK's embedder warm-up) unloaded the
+# LLM, the next non-streaming chat_completion let Lemonade auto-load
+# Gemma at its own default ctx (32K) — bypassing
+# MODELS[…].min_ctx_size and silently capping doc-Q&A at 32K.
+self._ensure_model_loaded()
+```
+
+**Good** (one line, names the invariant the call enforces):
+
+```python
+# Re-check ctx — embedder warm-up can quietly unload the chat model.
+self._ensure_model_loaded()
+```
+
+The PR / commit message is where multi-paragraph context lives. The code carries the one line a future reader needs to not break it.
+
 ### No Silent Fallbacks — Fail Loudly
 
 **Do not add fallbacks, default-to-something-that-works-ish behavior, or silent degradation paths.** Either the operation succeeds as intended, or it raises an actionable error. Applies to every layer: agents, LLM clients, CLI, CI workflows, config loaders, RAG, API server, Electron apps.
@@ -223,6 +257,42 @@ gaia mcp status
 # Bad - avoid unless debugging
 python -m gaia.mcp.mcp_bridge
 ```
+
+### IMPORTANT: Run agent evals when changing LLM-affecting code paths — do NOT skip
+
+**Unit tests catch code paths; they don't catch LLM behavior.** When a change touches an LLM-affecting surface, you MUST run `gaia eval agent` against the relevant category and compare to the committed baseline before claiming the change is done. Skipping the eval is how regressions that pass every unit test still ship to users.
+
+**Changes that REQUIRE an eval run before merge:**
+
+- ChatAgent / DocumentQAAgent / FileIOAgent / ChatAgentLite system prompts (`_get_system_prompt()`) or any mixin prompt fragment
+- The base agent's `_compose_system_prompt`, prompt-assembly order, or `_format_tools_for_prompt`
+- Tool registration, tool docstrings, or the JSON tool schema sent to Lemonade
+- Error classification (`LemonadeError` subclasses, `_classify_chat_exception`, `_extract_lemonade_user_message`) or the agent-loop catchall
+- The default LLM model, tokenizer config, or the `is_tool_calling_model` mapping
+- Tool-call response parsing / native-tool-call sentinel handling
+
+**Claude API access is almost always already available** when you are running from a Claude Code session — the user's subscription provides Claude API usage by default. Do not assume otherwise, and do not skip the eval on the assumption that no key is configured. Check first:
+
+```bash
+echo "${ANTHROPIC_API_KEY:0:8}"   # prints the first 8 chars if set
+```
+
+If it's empty, ask the user to export the key from their subscription rather than skipping the eval. "I didn't run the eval because I assumed no key was available" is not acceptable.
+
+**How to run:**
+
+```bash
+# Terminal 1 — backend (needed by gaia eval agent)
+python -m gaia.ui.server --port 4200 --host 127.0.0.1
+
+# Terminal 2 — eval the affected category, compare to baseline
+gaia eval agent --category rag_quality --agent-type doc \
+  --compare tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json
+```
+
+**Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), regenerate the baseline with `--save-baseline` and call it out explicitly in the PR description — the reviewer needs to see the diff between baselines, not just the new score.
+
+**#1030 (the Gemma-4 RAG-PDF timeout) is the canonical example of what happens when this rule is skipped:** a prompt change passed every unit test, then broke document Q&A in production. #1033 tracks the systemic CI gaps that let it through.
 
 ### IMPORTANT: Run agent evals SERIALLY, never in parallel
 
@@ -600,9 +670,10 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 ### Response Quality Guidelines
 
 #### Tone & Style
+- **Lead with the finding:** open every response with one sentence stating the diagnosis, the answer, or what you need from the author. No labelled "In plain English:" preamble — just the finding. (`TL;DR:` is fine if a long review genuinely warrants one; `In plain English:` reads as performative plain-talk and is forbidden.)
 - **Professional but friendly:** Welcome contributors warmly while maintaining technical accuracy
-- **Concise:** Aim for 1-3 paragraphs for simple questions, expand for complex issues
-- **Specific:** Reference actual files with line numbers (e.g., `src/gaia/agents/base/agent.py:123`)
+- **Concise:** 1–3 paragraphs for simple questions; expand only when the issue actually warrants it
+- **Specific:** Reference actual files with line numbers (e.g., `src/gaia/agents/base/agent.py:123`) — but AFTER the finding, not before it
 - **Helpful:** Provide next steps, code examples, or links to documentation
 - **Honest:** If you don't know something, say so and suggest escalation to @kovtcharov-amd
 
@@ -639,28 +710,30 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 
 #### Response Length Guidelines
 
-- **Quick answers:** 1 paragraph + link to docs
-- **How-to questions:** 2-3 paragraphs + code example + links
-- **Bug reports:** Ask for reproduction steps (if missing), check similar issues, reference relevant code
-- **Feature requests:** 2-4 paragraphs discussing feasibility, existing patterns, AMD optimization opportunities
-- **Complex technical discussions:** Be thorough but use headers/bullets for readability
+- **Quick answers:** 2–4 sentences. One doc link if relevant. No code unless it directly answers the question.
+- **How-to questions:** One short paragraph of context, then the minimum viable code example, then one doc link. Cap at ~150 words.
+- **Bug reports:** Open with "I think this is X" or "I need more info to tell." Ask for specific reproduction steps. Reference `file.py:line` only when you've actually identified the location — never guess. Cap at ~200 words.
+- **Feature requests:** Open with one sentence on whether the feature is in scope. Then 2–4 bullets on feasibility / existing patterns / next steps. Cap at ~200 words.
+- **Complex technical discussions:** Allowed, but open with a 1–2 sentence framing of the conclusion before diving into the technical detail.
 
 **Never:**
 - Write walls of text without structure
 - Repeat information already in the issue
 - Provide generic advice not specific to GAIA
+- **Lead with a code reference.** `Looking at src/gaia/foo.py:123, ...` makes the response feel like a diff review; the reader wants the finding before the line number.
 
 #### Examples
 
 **Good Response (Bug Report):**
 ```
-Thanks for reporting this! The error you're seeing in `gaia chat` appears to be related to RAG initialization.
+Looks like RAG initialization didn't complete — the symptom you're hitting is what happens
+when GAIA can't find a loaded embedding model. Two quick checks:
 
-Looking at src/gaia/rag/sdk.py:145, the initialization expects a model path. Could you confirm:
-1. Did you run `gaia chat init` first?
-2. What's the output of `gaia chat status`?
+1. Did you run `gaia init --profile chat` first?
+2. Could you share the output of `gaia diagnostics`?
 
-See docs/guides/chat.mdx for the full setup process. This might also be related to #123.
+If both look right, paste the output of `gaia chat --debug` and I can dig in further. Setup
+walkthrough lives at docs/guides/chat.mdx.
 ```
 
 **Bad Response (Too Generic):**
@@ -686,6 +759,18 @@ Would you be interested in contributing this? See CONTRIBUTING.md for how to get
 Looking at your code, the issue is on line 45 where you're using subprocess.call() with user input. Here's how an attacker could exploit it: [detailed exploit]. You should use shlex.quote() like this: [code example].
 ```
 *This is bad because it discusses exploit details publicly. Should escalate privately instead.*
+
+**Bad Response (Excessively Technical):**
+```
+The error originates in `src/gaia/rag/sdk.py:145` where `RAGSDK.__init__` invokes
+`_load_embedder` which raises if `self.config.embedding_model` cannot be resolved by
+the Lemonade `/api/v1/models` endpoint. The traceback at line 178 indicates that
+`httpx.ConnectError` was raised because the `LemonadeManager` discovery probe failed
+to bind on the canonical port (13305) due to an upstream proxy collision with `gaia mcp docker`.
+```
+*This is bad because it leads with file paths and framework internals; a user filing a bug
+shouldn't have to decode it. Lead with the diagnosis ("looks like RAG can't reach the
+Lemonade server"), then drop the file references for the contributor who follows up.*
 
 #### Community & Contributor Management
 

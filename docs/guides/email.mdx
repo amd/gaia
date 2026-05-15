@@ -89,11 +89,46 @@ Email-body inference runs on your local Lemonade instance. The agent **rejects**
 | `-v, --verbose` | Emit structured logs for every triage decision and tool call. Recommended when benchmarking against other email agents. |
 | `--debug` | Adds full prompt + LLM-response logging to verbose. Sensitive payloads in logs — use with care. |
 
+## Daily-driver pre-scan (Agent UI)
+
+The Agent UI rendering of Email Triage is built around a **pre-scan** view — a structured triage card that surfaces what's worth your attention without making you read prose. Open Agent UI, pick **Email Triage** from the agent picker, and click the **"Run a pre-scan"** conversation starter (or just type it).
+
+The card shows three sections:
+
+- **Urgent** — messages that need your attention right now (top 5).
+- **Needs a response** — messages requiring a reply or decision (top 5).
+- **Suggested archives** — low-priority messages the agent recommends archiving (top 10).
+
+Plus an **informational count** for the rest, so you know how much you're not seeing.
+
+Each row carries inline action buttons:
+
+- **Reply / Archive** (primary) — Reply for urgent + actionable rows; Archive for suggested-archive rows. Clicking dispatches the corresponding tool call back through the chat (with confirmation when the action requires it).
+- **Open** — open the message in Gmail in a new tab.
+- **Dismiss** — remove the row from the visible card without affecting Gmail.
+
+If you haven't connected Google yet, the agent surfaces a one-click **Connect Google** button inline in the chat — no need to navigate to Settings → Connections manually.
+
+### In-session preferences (in-memory, wiped on restart)
+
+Tell the agent how you want classification to behave for this session:
+
+- *"Treat boss@company.com as urgent"* → calls `set_priority_sender`. That sender bypasses the heuristic and lands in **Urgent** for the rest of the session.
+- *"Treat newsletter@stripe.com as low priority"* → calls `set_low_priority_sender`. That sender lands in **Suggested archives**.
+- *"Default informational mail to archive"* → calls `set_category_default("informational", "archive")`. Informational items lift into **Suggested archives** until you reset.
+- *"Clear my preferences"* → calls `clear_session_preferences`.
+
+Preferences are stored in process memory only — restarting the agent (or quitting Agent UI) wipes them. This is deliberate: the goal is to prove the value of session-scoped learning before we wire up persistent memory. Once persistent memory ships, the same tools will write through to it without changing this surface.
+
 ## Action surface
 
 ### Read
 
-`list_inbox`, `get_message`, `get_thread`, `search_messages`, `list_labels`, `triage_inbox`
+`list_inbox`, `get_message`, `get_thread`, `search_messages`, `list_labels`, `triage_inbox`, `pre_scan_inbox`
+
+### Session preferences (in-memory; wiped on agent restart)
+
+`set_priority_sender`, `set_low_priority_sender`, `set_category_default`, `clear_session_preferences`
 
 ### Organize (reversible via the undo log)
 

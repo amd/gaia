@@ -1,0 +1,186 @@
+id: memory_stress_capacity
+name: "Memory Stress — Capacity (100 items)"
+category: memory
+severity: high
+description: |
+  Stress test: write 100 distinct facts into memory across a few batched
+  turns, then exercise targeted retrieval. Validates that the memory store
+  scales beyond a handful of items and that retrieval still resolves to the
+  correct entry once the store is densely populated.
+
+  This is the consumer-critical "second brain at scale" scenario — without
+  it, our existing tests (each with 3-7 stored items) say nothing about
+  what happens when a user has been using gaia for weeks.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Store batch 1 of 25 contacts (names + roles)"
+    user_message: |
+      Please remember each of these contacts as separate entries:
+      1. Alice Chen — VP Engineering, Acme
+      2. Brian Patel — CFO, Acme
+      3. Carol Nguyen — Senior PM, Northwind
+      4. David Okafor — Staff Engineer, Northwind
+      5. Eva Rossi — Designer, Pinecone Studio
+      6. Frank Weber — Product Lead, Pinecone Studio
+      7. Grace Lin — CTO, Helix Bio
+      8. Henry Adler — Lead Researcher, Helix Bio
+      9. Iris Kovac — Recruiter, TalentForge
+      10. Jordan Park — VP Sales, TalentForge
+      11. Kim Reyes — Sales Engineer, GreenLeaf
+      12. Liam Schmidt — Customer Success, GreenLeaf
+      13. Mira Tanaka — Data Scientist, Drift
+      14. Noah Becker — ML Engineer, Drift
+      15. Olivia Costa — Frontend Lead, Apex
+      16. Priya Rao — Backend Lead, Apex
+      17. Quentin Moss — Director of Ops, BrightWave
+      18. Riya Khanna — Strategy, BrightWave
+      19. Samir Haddad — Founder, Polytope
+      20. Tara Mendes — Co-founder, Polytope
+      21. Uri Levi — Researcher, Yondr Labs
+      22. Vera Bauer — Postdoc, Yondr Labs
+      23. Wes Carrington — Investor, Mossfield Capital
+      24. Xiomara Ruiz — Analyst, Mossfield Capital
+      25. Yuki Sato — Designer, Mossfield Capital
+    ground_truth:
+      expected_answer: "25 contact entries stored (names + roles + companies)"
+    success_criteria: "Agent stores all 25 contacts using the remember tool, with names, roles, and companies preserved. Should issue ~25 remember calls (one per contact, or batched). Should not collapse them into a single blob."
+
+  - turn: 2
+    objective: "Store batch 2 of 25 project facts"
+    user_message: |
+      Now remember these 25 projects, one entry each:
+      Aurora — RAG over engineering docs, owner Alice Chen
+      Borealis — VLM evals, owner Mira Tanaka
+      Castor — payments rewrite, owner Priya Rao
+      Drift-Sim — synthetic data pipeline, owner Noah Becker
+      Echo — internal AI assistant, owner Olivia Costa
+      Falcon — observability dashboards, owner Quentin Moss
+      Gemini-Refresh — model upgrade, owner David Okafor
+      Halo — onboarding flow, owner Frank Weber
+      Iron — auth refactor, owner Henry Adler
+      Jade — dataset labelling, owner Uri Levi
+      Kiwi — pricing experiments, owner Brian Patel
+      Lumen — UI redesign, owner Eva Rossi
+      Magpie — sales forecasting, owner Jordan Park
+      Nimbus — CI rebuild, owner Liam Schmidt
+      Opal — privacy review, owner Riya Khanna
+      Pine — recruiting funnel, owner Iris Kovac
+      Quill — drafting tools, owner Yuki Sato
+      Rust-Migration — perf-critical paths, owner Carol Nguyen
+      Saturn — analytics revamp, owner Vera Bauer
+      Tide — deal pipeline, owner Wes Carrington
+      Umbra — security audit, owner Grace Lin
+      Vector — embeddings infra, owner Mira Tanaka
+      Willow — training infra, owner Henry Adler
+      Xeno — partner integrations, owner Samir Haddad
+      Yarn — content tooling, owner Tara Mendes
+    ground_truth:
+      expected_answer: "25 project entries stored"
+    success_criteria: "Agent stores all 25 projects with names + descriptions + owners. Should not lose owner mappings or collapse to summary."
+
+  - turn: 3
+    objective: "Store batch 3 of 25 quick facts"
+    user_message: |
+      Remember these 25 facts as separate items:
+      - I prefer mornings for deep work
+      - I drink decaf after 2pm
+      - My favorite editor is neovim
+      - I run on Tuesdays and Thursdays
+      - I dislike open-plan offices
+      - I cook on weekends
+      - My preferred meeting length is 30 minutes
+      - I take notes by hand first
+      - I review emails in batches twice a day
+      - My laptop is a Framework 16
+      - I use Linux at home, macOS at work
+      - My commute is by bike, 22 minutes
+      - I rotate three pairs of shoes
+      - I read 2 books a month, fiction and non-fiction
+      - My phone is on do-not-disturb after 9pm
+      - I keep a paper journal for personal stuff
+      - I prefer chess to other strategy games
+      - I have a dog named Pippin
+      - I'm vegetarian, my partner is vegan
+      - I use a standing desk
+      - My coffee order is a flat white
+      - I buy groceries on Sundays
+      - I prefer trains to flights for short trips
+      - I find conferences exhausting
+      - I'm learning Portuguese
+    ground_truth:
+      expected_answer: "25 personal preference / lifestyle facts stored"
+    success_criteria: "Agent stores all 25 personal facts. Total stored after turn 3 should be ~75 entries."
+
+  - turn: 4
+    objective: "Store batch 4 of 25 references"
+    user_message: |
+      And last batch, remember these 25 reference items:
+      - Linear workspace: linear.app/myteam
+      - GitHub org: github.com/myteam
+      - Production AWS account ID: 123456789012
+      - Staging AWS account ID: 987654321098
+      - VPN: vpn.myteam.dev port 443
+      - On-call rotation tool: PagerDuty schedule MAIN
+      - Slack #engineering for general engineering chat
+      - Slack #incidents for outages
+      - Notion workspace: myteam.notion.site
+      - Figma org: figma.com/myteam
+      - Pricing playbook: notion://pricing-playbook
+      - Hiring rubric: notion://hiring-rubric-2026
+      - Brand kit: figma://brand-kit-v3
+      - Company OKRs: notion://okrs-q3-2026
+      - Customer list (top 50): salesforce report TOP50-Q3
+      - SOC2 evidence: drive folder soc2-2026-q3
+      - DPA template: drive doc DPA-template-v4
+      - Vendor security questionnaire: drive doc VSQ-v2
+      - Engineering ladder: notion://eng-ladder
+      - Code review checklist: notion://review-checklist
+      - Production runbook: notion://runbook-prod
+      - Disaster recovery plan: notion://dr-plan
+      - Architecture diagram: drive//arch-2026
+      - API style guide: notion://api-style-guide
+      - Frontend style guide: notion://fe-style-guide
+    ground_truth:
+      expected_answer: "25 reference / link entries stored"
+    success_criteria: "All 25 references stored. Total stored after turn 4 should be ~100 entries."
+
+  - turn: 5
+    objective: "Targeted retrieval — exact name lookup"
+    user_message: "Who owns project Magpie?"
+    ground_truth:
+      expected_answer: "Jordan Park"
+    success_criteria: "Agent answers 'Jordan Park' (or 'Jordan Park, VP Sales at TalentForge'). FAIL if agent says it doesn't know, returns the wrong owner, or returns multiple candidates without picking the right one."
+
+  - turn: 6
+    objective: "Targeted retrieval — cross-fact join"
+    user_message: "Which projects does Mira Tanaka own?"
+    ground_truth:
+      expected_answer: "Borealis (VLM evals) and Vector (embeddings infra)"
+    success_criteria: "Agent returns BOTH Borealis AND Vector. FAIL if only one is returned (suggests retrieval missed one) or if any other project is included."
+
+  - turn: 7
+    objective: "Retrieval under semantic ambiguity"
+    user_message: "What do I prefer for short-distance travel?"
+    ground_truth:
+      expected_answer: "Trains over flights for short trips; bike commute 22 minutes"
+    success_criteria: "Agent surfaces the train preference for short trips AND/OR the bike commute. FAIL if agent says 'I don't know' or invents an answer not present in the stored facts."
+
+  - turn: 8
+    objective: "Retrieval that requires precise scoping (not over-recalling)"
+    user_message: "What's the staging AWS account ID?"
+    ground_truth:
+      expected_answer: "987654321098"
+    success_criteria: "Agent returns 987654321098 specifically (not the production ID 123456789012). FAIL if agent returns the wrong ID, both IDs without distinction, or no ID at all."
+
+expected_outcome: |
+  After 100 stored items across 4 batches, the agent retrieves specific
+  facts by name, joins across categories (owner → projects), resolves
+  semantic queries to the right stored fact, and discriminates between
+  near-duplicate entries (prod vs. staging IDs). Failures here indicate
+  retrieval quality or the store's index degrades at scale.

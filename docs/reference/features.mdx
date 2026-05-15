@@ -64,13 +64,16 @@ gaia chat --index manual.pdf
 # Multiple documents
 gaia chat --index doc1.pdf doc2.pdf
 
+# Watch a folder and auto-index any PDF dropped into it
+gaia chat --watch ./docs
+
 # Show detailed statistics
 gaia chat --show-stats
 ```
 
 **Key features:**
 - **Conversation History**: Maintains context across messages with configurable history length
-- **Document Q&A**: RAG support for querying PDF documents with --index option
+- **Document Q&A**: RAG support for querying PDF documents with `--index` (one-off) or `--watch` (auto-index a folder)
 - **Interactive Commands**: Built-in commands for session management and debugging
 - **Streaming Responses**: Real-time response streaming for better user experience
 - **Model Flexibility**: Support for different LLM models with automatic prompt formatting

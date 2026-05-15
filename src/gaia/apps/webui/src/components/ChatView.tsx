@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Bot, ChevronDown, Plus } from 'lucide-react';
+import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY, selectUnreadCount } from '../stores/notificationStore';
@@ -11,7 +11,9 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
+
 import './ChatView.css';
+import DashboardProgress from './DashboardProgress';
 
 
 const EMPTY_SUGGESTIONS = [
@@ -158,7 +160,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
-        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
+        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, setShowMemoryDashboard, isLoadingMessages, setLoadingMessages,
         systemStatus,
         agents, activeAgentId, setActiveAgentId,
     } = useChatStore();
@@ -184,6 +186,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
     const [policyToast, setPolicyToast] = useState<{ tool: string; receiptId?: string } | null>(null);
+    const [showDashboardProgress, setShowDashboardProgress] = useState(false);
     // Agent picker dropdown state
     const [agentPickerOpen, setAgentPickerOpen] = useState(false);
     const agentPickerRef = useRef<HTMLDivElement>(null);
@@ -1075,6 +1078,23 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
 
+    // Listen for programmatic message dispatches from rich-content
+    // components (currently the EmailPreScanCard's Approve / Reply
+    // buttons). Wired as a window-level CustomEvent rather than prop
+    // drilling so any embedded component can reach the active session
+    // without ChatView having to know about it ahead of time.
+    useEffect(() => {
+        const handler = (evt: Event) => {
+            const ce = evt as CustomEvent<{ text?: string }>;
+            const text = ce.detail?.text;
+            if (typeof text === 'string' && text.trim()) {
+                sendMessageRef.current(text);
+            }
+        };
+        window.addEventListener('gaia:send-message', handler);
+        return () => window.removeEventListener('gaia:send-message', handler);
+    }, []);
+
     // Refocus input when streaming ends (textarea is disabled during streaming,
     // which causes the browser to drop focus — restore it so the user can
     // immediately type the next message without clicking).
@@ -1142,6 +1162,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }
     };
 
+
+
     // Title editing
     const startEditTitle = () => {
         setTitleDraft(session?.title || '');
@@ -1155,6 +1177,17 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }
         setEditingTitle(false);
     };
+
+    // Toggle private (incognito) mode
+    const handleTogglePrivate = useCallback(async () => {
+        if (!sessionId) return;
+        try {
+            const updated = await api.toggleSessionPrivacy(sessionId);
+            updateSessionInList(sessionId, { private: updated.private });
+        } catch (err) {
+            log.ui.warn('Failed to toggle private mode', err);
+        }
+    }, [sessionId, updateSessionInList]);
 
     // Export
     const handleExport = async () => {
@@ -1258,14 +1291,19 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
     return (
         <main
-            className={`chat-view ${isDragOver ? 'drag-active' : ''}`}
+            className={`task-view ${isDragOver ? 'drag-active' : ''}`}
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
         >
+            {showDashboardProgress && (
+                <div className="dashboard-overlay">
+                    <DashboardProgress sessionId={sessionId} onClose={() => setShowDashboardProgress(false)} />
+                </div>
+            )}
             {/* Header */}
-            <header className="chat-header">
-                <div className="chat-header-left">
+            <header className="task-header">
+                <div className="task-header-left">
                     {editingTitle ? (
                         <input
                             className="title-edit"
@@ -1274,12 +1312,12 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             onBlur={saveTitle}
                             onKeyDown={(e) => e.key === 'Enter' && saveTitle()}
                             autoFocus
-                            aria-label="Edit chat title"
+                            aria-label="Edit task title"
                         />
                     ) : (
                         <>
-                            <h3 className="chat-title">{session?.title || 'Chat'}</h3>
-                            <button className="btn-icon-sm" onClick={startEditTitle} title="Rename" aria-label="Rename chat">
+                            <h3 className="task-title">{session?.title || 'New Task'}</h3>
+                            <button className="btn-icon-sm" onClick={startEditTitle} title="Rename" aria-label="Rename task">
                                 <Edit3 size={13} />
                             </button>
                         </>
@@ -1312,8 +1350,23 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files" aria-label="Browse files">
                         <FolderSearch size={15} />
                     </button>
-                    <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export chat">
+                    <button
+                        className={`btn-icon-sm${session?.private ? ' active' : ''}`}
+                        onClick={handleTogglePrivate}
+                        title={session?.private ? 'Private mode on — click to disable' : 'Enable private mode (nothing saved to memory)'}
+                        aria-label={session?.private ? 'Disable private mode' : 'Enable private mode'}
+                        aria-pressed={!!session?.private}
+                    >
+                        <EyeOff size={15} />
+                    </button>
+                    <button className="btn-icon-sm" onClick={() => setShowMemoryDashboard(true)} title="Memory" aria-label="Open memory dashboard">
+                        <Brain size={15} />
+                    </button>
+                    <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export task">
                         <Download size={15} />
+                    </button>
+                    <button className="btn-icon-sm" onClick={() => setShowDashboardProgress((s) => !s)} title="Refresh dashboard" aria-label="Refresh dashboard">
+                        <ArrowDown size={15} />
                     </button>
                     <button
                         className={`notification-center-trigger ${notificationUnreadCount > 0 ? 'has-unread' : ''}`}
@@ -1418,19 +1471,19 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 )}
 
                 {showEmptyState && (
-                    <div className="empty-chat">
-                        <div className="empty-chat-icon">
+                    <div className="empty-task">
+                        <div className="empty-task-icon">
                             <MessageSquare size={36} strokeWidth={1.2} />
                         </div>
-                        <h4 className="empty-chat-title">What can I help you with?</h4>
-                        <p className="empty-chat-desc">
+                        <h4 className="empty-task-title">What can I help you with?</h4>
+                        <p className="empty-task-desc">
                             Ask about your documents, search files, or analyze data &mdash; powered by local AI.
                         </p>
-                        <div className="empty-chat-suggestions">
+                        <div className="empty-task-suggestions">
                             {EMPTY_SUGGESTIONS.map((s) => (
                                 <button
                                     key={s}
-                                    className="empty-chat-chip"
+                                    className="empty-task-chip"
                                     onClick={() => handleSuggestionClick(s)}
                                 >
                                     {s}
@@ -1443,7 +1496,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 {messages.map((msg, idx) => {
                     // Show a solid terminal cursor on the last assistant message
                     // (only when not actively streaming — the streaming bubble has its own cursor)
-                    const isLastAssistant = false; // cursor only during streaming, not on completed messages
+                    const isLastAssistant = !isStreaming && !streamEnding
+                        && msg.role === 'assistant'
+                        && messages.slice(idx + 1).every((m) => m.role !== 'assistant');
                     // During stream-ending, skip rendering the just-completed
                     // assistant message entirely — the streaming bubble shows it.
                     // This prevents the flash/jump when transitioning.

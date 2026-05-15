@@ -110,7 +110,13 @@ jobs:
             $serverJob = Start-Job -ScriptBlock {
                 # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
                 $env:GGML_VK_DISABLE_COOPMAT = "1"
-                & lemonade-server serve --host localhost --port 13305 --ctx-size 8192 --no-tray 2>&1
+                # v10.x ``lemonade-server serve`` (deprecation shim) and
+                # ``LemonadeServer.exe serve`` no longer accept
+                # ``--ctx-size`` and abort with "error: failed to start
+                # lemonade-server" when it's passed. RAG loads its model via
+                # the runtime API which already pins the right ctx_size on
+                # the load call.
+                & lemonade-server serve --host localhost --port 13305 --no-tray 2>&1
             }
             Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
             $env:LEMONADE_JOB_ID = $serverJob.Id
