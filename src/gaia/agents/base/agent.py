@@ -2929,44 +2929,54 @@ Do NOT wrap conversational replies in JSON.
                             "rephrase or break the request into smaller pieces?"
                         )
                     break
+                # Select retry prompt based on error type.
+                is_parallel = isinstance(parse_exc, NotImplementedError)
+                assistant_msg = (
+                    "[I tried to call multiple tools at once, but only one "
+                    "tool call is allowed per turn.]"
+                    if is_parallel
+                    else "[I tried to call a tool but my arguments were "
+                    "malformed.]"
+                )
+                user_msg = (
+                    "You tried to call multiple tools in one response. "
+                    "You can only call ONE tool per turn. Please call a "
+                    "single tool, then wait for the result before calling "
+                    "the next one."
+                    if is_parallel
+                    else "Your last tool call had malformed arguments. "
+                    "Please try again. Use ONLY the documented enum "
+                    "values for each argument (e.g. 'brief', "
+                    "'detailed', 'bullets' — never a long sentence). "
+                    "If you don't need a tool, answer in plain text."
+                )
+                if _last_image_path and is_parallel:
+                    # Parallel tool call failure — image path hint not relevant.
+                    pass
+                elif _last_image_path:
+                    user_msg += (
+                        f"\n\nYour previous step generated an image at "
+                        f"`{_last_image_path}`. If your next tool call "
+                        "needs this path, copy that string VERBATIM — do "
+                        "not retype it."
+                    )
+                    logger.info(
+                        "[PARSE-RECOVERY] injected canonical image_path=%s",
+                        _last_image_path,
+                    )
                 # Push a synthetic assistant turn + recovery user message so the
                 # next LLM call has context. Don't include the raw envelope to
                 # keep noise out of the conversation history.
                 messages.append(
                     {
                         "role": "assistant",
-                        "content": (
-                            "[I tried to call a tool but my arguments were "
-                            "malformed.]"
-                        ),
+                        "content": assistant_msg,
                     }
                 )
-                _recovery_content = (
-                    "Your last tool call had malformed arguments. "
-                    "Please try again. Use ONLY the documented enum "
-                    "values for each argument (e.g. 'brief', "
-                    "'detailed', 'bullets' — never a long sentence). "
-                    "If you don't need a tool, answer in plain text."
-                )
-                if _last_image_path:
-                    _recovery_content += (
-                        f"\n\nYour previous step generated an image at "
-                        f"`{_last_image_path}`. If your next tool call "
-                        "needs this path, copy that string VERBATIM — do "
-                        "not retype it."
-                    )
-                    # Marker so production-log triage can tell "model
-                    # received the canonical path and still mangled it"
-                    # from "model never saw the hint."  Pre-mortem note
-                    # in the plan flagged this gap.
-                    logger.info(
-                        "[PARSE-RECOVERY] injected canonical image_path=%s",
-                        _last_image_path,
-                    )
                 messages.append(
                     {
                         "role": "user",
-                        "content": _recovery_content,
+                        "content": user_msg,
                     }
                 )
                 steps_taken += 1

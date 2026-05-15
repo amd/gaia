@@ -39,6 +39,7 @@ async def main(args: Any) -> int:
         debug=bool(getattr(args, "debug", False) or getattr(args, "verbose", False)),
         streaming=False,
         silent_mode=False,
+        show_stats=bool(getattr(args, "show_stats", False)),
     )
     try:
         agent = EmailTriageAgent(config=config)
@@ -49,9 +50,9 @@ async def main(args: Any) -> int:
 
     try:
         if getattr(args, "query", None):
-            return await _one_shot(agent, args.query)
+            return await _one_shot(agent, args.query, args)
         if getattr(args, "interactive", False):
-            return await _interactive(agent)
+            return await _interactive(agent, args)
         # No query and not interactive — print a helpful usage hint.
         print(
             "Usage: gaia email -q '<your question>' OR gaia email -i\n"
@@ -75,10 +76,10 @@ def _extract_answer(result: Any) -> str:
     return str(result)
 
 
-async def _one_shot(agent: EmailTriageAgent, query: str) -> int:
+async def _one_shot(agent: EmailTriageAgent, query: str, args: Any = None) -> int:
     """Run a single query and print the result."""
     try:
-        result = await agent.process_query(query)
+        result = await agent.process_query(query, trace=getattr(args, "trace", False) if args else False)
         print(_extract_answer(result))
         return 0
     except Exception as exc:
@@ -87,7 +88,7 @@ async def _one_shot(agent: EmailTriageAgent, query: str) -> int:
         return 1
 
 
-async def _interactive(agent: EmailTriageAgent) -> int:
+async def _interactive(agent: EmailTriageAgent, args: Any = None) -> int:
     """REPL loop — reads queries from stdin until EOF or ``/quit``."""
     print("Email Triage Agent — interactive. Enter a query, or '/quit' to exit.\n")
     while True:
@@ -101,7 +102,7 @@ async def _interactive(agent: EmailTriageAgent) -> int:
         if query in ("/quit", "/exit", "/q"):
             return 0
         try:
-            result = await agent.process_query(query)
+            result = await agent.process_query(query, trace=getattr(args, "trace", False) if args else False)
             print(_extract_answer(result))
         except Exception as exc:
             log.exception("email-agent interactive query failed")
