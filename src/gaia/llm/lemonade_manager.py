@@ -23,7 +23,11 @@ from gaia.llm.lemonade_client import (
 from gaia.logger import get_logger
 
 # Allow-list mapping from detected device -> Lemonade recipe
-# UNCERTAIN: confirm full recipe vocabulary with lemonade-specialist
+# TODO: Confirm full recipe vocabulary with the Lemonade specialist
+# (@kovtcharov-amd). Currently we map hybrid-capable devices to
+# 'oga-hybrid'. Before wiring recipe -> startup (dispatch), verify whether
+# device-specific recipes exist (e.g., 'oga-npu', 'oga-dgpu') and update
+# this allow-list accordingly.
 _RECIPE_BY_DEVICE = {
     "amd_npu": "oga-hybrid",
     "amd_igpu": "oga-hybrid",
