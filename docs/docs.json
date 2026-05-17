@@ -64,6 +64,8 @@
                   "guides/index",
                   "guides/hardware-advisor",
                   "guides/chat",
+                  "guides/browse",
+                  "guides/analyze",
                   "guides/talk",
                   "guides/code",
                   "guides/telegram-adapter",
