@@ -24,7 +24,6 @@ import pytest
 
 from gaia.agents.registry import AgentRegistry
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
