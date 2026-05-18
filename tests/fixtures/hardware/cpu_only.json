@@ -1,0 +1,5 @@
+{
+  "devices": {
+    "cpu": { "cores": 4, "ram_gb": 8 }
+  }
+}

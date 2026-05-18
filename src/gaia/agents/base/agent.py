@@ -17,7 +17,8 @@ import os
 import re
 import subprocess
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Literal, Optional, Tuple
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
@@ -64,47 +65,50 @@ TOOLS_REQUIRING_CONFIRMATION = {
 }
 
 
-# Issue #1023: smaller LLMs (Gemma-4-E4B-class) sometimes emit Windows paths
-# in tool-call arguments with single backslashes (e.g. ``C:\Users\Klaus``)
-# where strict JSON requires the backslashes doubled.  ``json.loads`` rejects
-# any backslash NOT followed by one of: " \ / b f n r t u  -- so ``\U`` (and
-# the other dozen-or-so cases) errors with "Invalid \escape: ...".
-# ``_repair_invalid_json_escapes`` doubles only the offending backslashes,
-# leaving valid escapes (\n, \t, \uXXXX, etc.) untouched.  Idempotent.
-#
-# The pattern matches a backslash followed by one character (DOTALL so the
-# next char can also be a newline).  The replacement callback decides whether
-# to keep the pair (valid escape) or double the leading backslash (invalid).
-# Consuming the pair in a single match -- rather than just matching the lone
-# backslash -- keeps the function idempotent: running it twice on ``\\X``
-# does not produce ``\\\\X``.
-_JSON_BACKSLASH_PAIR_RE = re.compile(r"\\(.)", re.DOTALL)
-_VALID_JSON_ESCAPE_NEXT_CHARS = frozenset('"\\/bfnrtu')
+@dataclass(frozen=True)
+class HardwareRequirement:
+    """Declarative hardware requirement for Agents.
+
+    Fields:
+        min_device: one of 'cpu', 'amd_igpu', 'amd_npu'
+        reason: optional human-friendly reason displayed on error
+    """
+
+    min_device: Literal["cpu", "amd_igpu", "amd_npu", "amd_dgpu"]
+    reason: str = ""
+
+
+# Prefixes for tools that represent SD (Stable Diffusion) capability.
+# Used to detect whether the agent has attempted image-generation tools.
+_SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
 
 
 def _repair_invalid_json_escapes(s: str) -> str:
-    """Double any backslash that strict JSON would reject as an invalid escape.
+    """Repair invalid JSON backslash escapes using pair-consumption.
 
-    Used as a one-shot recovery pass when ``json.loads`` raises on tool-call
-    arguments emitted by under-escaping LLMs.  Already-valid JSON is returned
-    unchanged (idempotent).
+    This implementation repeatedly replaces a backslash followed by a
+    non-JSON-escape character with a doubled backslash and the character,
+    using a regex-based pair-consumption approach. The operation is
+    idempotent: applying it multiple times will not further change a
+    previously-repaired string.
     """
+    # Valid JSON escape characters after a backslash
+    valid = '"\\/bfnrtu'
 
-    def _fix(match: "re.Match[str]") -> str:
-        nxt = match.group(1)
-        if nxt in _VALID_JSON_ESCAPE_NEXT_CHARS:
-            return match.group(0)
-        return "\\\\" + nxt
+    # Single-pass consumption: replace a backslash followed by a single
+    # character; if that character is not a valid JSON escape (and is not
+    # itself a backslash), double the backslash. This keeps the operation
+    # idempotent on already-repaired inputs and avoids non-terminating
+    # repeated-replacement loops.
+    def _fix(m: re.Match) -> str:
+        ch = m.group(1)
+        # Preserve already-double-backslashes and valid JSON escapes
+        if ch == "\\" or ch in valid:
+            return "\\" + ch
+        # Otherwise double the backslash so the JSON parser accepts it
+        return "\\\\" + ch
 
-    return _JSON_BACKSLASH_PAIR_RE.sub(_fix, s)
-
-
-# Capability tools whose post-call outcome (success / error) gates the
-# verbose-failure override in ``process_query``.  Currently a single-element
-# tuple, but kept as a tuple to mirror the prefix-match style used elsewhere
-# (``startswith``) and so future capability tools (e.g. ``generate_video``)
-# slot in without restructuring the guard logic.
-_SD_CAPABILITY_TOOLS = ("generate_image",)
+    return re.sub(r"\\(.)", _fix, s)
 
 
 class Agent(abc.ABC):
@@ -148,6 +152,11 @@ class Agent(abc.ABC):
     # Empty list = no external connections required (the default for built-ins).
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = []
 
+    # Declarative per-agent hardware requirement.  Agents that need a
+    # minimum tier (e.g., NPU) should set this ClassVar to a
+    # `HardwareRequirement` instance. Example:
+    #   REQUIRED_HARDWARE: ClassVar[Optional[HardwareRequirement]] = HardwareRequirement(min_device="amd_npu")
+    REQUIRED_HARDWARE: ClassVar[Optional["HardwareRequirement"]] = None
     # Response format templates — agents select via response_mode attribute.
     # "planning" (default): JSON-only responses with thought/goal/plan/tool structure.
     # "conversational": plain text for conversation, JSON only for tool calls.
@@ -274,10 +283,15 @@ Do NOT wrap conversational replies in JSON.
         if not (use_claude or use_chatgpt or skip_lemonade):
             from gaia.llm.lemonade_manager import LemonadeManager
 
+            # Resolve declarative per-agent hardware requirement (if any)
+            req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
+            required_min_device = req.min_device if req is not None else None
+
             LemonadeManager.ensure_ready(
                 min_context_size=min_context_size,
                 quiet=silent_mode,
                 base_url=base_url,
+                required_min_device=required_min_device,
             )
 
         # Initialize state management
