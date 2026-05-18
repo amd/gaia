@@ -143,9 +143,8 @@
 }
 
 .agent-hub-card.active {
-    border-left: 3px solid var(--amd-red);
     border-color: var(--amd-red);
-    box-shadow: 0 0 0 1px rgba(237, 28, 36, 0.1);
+    box-shadow: inset 3px 0 0 var(--amd-red), 0 0 0 1px var(--amd-red-dim);
 }
 
 .agent-hub-card.disabled {

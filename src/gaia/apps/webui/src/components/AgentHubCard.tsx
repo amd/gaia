@@ -82,7 +82,7 @@ export function AgentHubCard({ agent, isActive, isElectron, onSelect, onStartCha
                 {connections.length > 0 ? (
                     <span className="agent-hub-card-meta-item">
                         <Shield size={12} />
-                        {connections.map((c: any) => c.connector_id).join(', ')}
+                        {connections.map((c) => c.connector_id).join(', ')}
                     </span>
                 ) : (
                     <span className="agent-hub-card-meta-item">

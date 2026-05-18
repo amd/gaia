@@ -109,7 +109,13 @@ export function AgentHubGrid({ agents, activeAgentId, onSelect, onStartChat, onC
                     />
                 ))}
                 {onCreateAgent && (
-                    <div className="agent-hub-card create-new" onClick={onCreateAgent}>
+                    <div
+                        className="agent-hub-card create-new"
+                        role="button"
+                        tabIndex={0}
+                        onClick={onCreateAgent}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCreateAgent(); } }}
+                    >
                         <div className="create-icon"><Plus size={22} /></div>
                         <div className="create-title">Build a Custom Agent</div>
                         <div className="create-desc">Create a new agent through conversation</div>

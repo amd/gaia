@@ -6,6 +6,8 @@ import { Wrench, Cpu, Shield, X, HardDrive } from 'lucide-react';
 import { getAgentIcon } from './agentIcons';
 import type { AgentInfo } from '../types';
 
+const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI;
+
 interface AgentDetailModalProps {
     agent: AgentInfo;
     onClose: () => void;
@@ -18,6 +20,9 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
     const starters = agent.conversation_starters ?? [];
     const models = agent.models ?? [];
     const toolsCount = agent.tools_count ?? 0;
+    const isNative = agent.source === 'native';
+    const canStart = !isNative || isElectron;
+    const DetailIcon = getAgentIcon(agent.icon);
 
     // Close on Escape
     const handleKey = useCallback((e: KeyboardEvent) => {
@@ -31,27 +36,33 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
 
     return (
         <div className="agent-detail-overlay" onClick={onClose}>
-            <div className="agent-detail-modal" onClick={(e) => e.stopPropagation()}>
+            <div
+                className="agent-detail-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="agent-detail-title"
+                onClick={(e) => e.stopPropagation()}
+            >
                 {/* Header */}
                 <div className="agent-detail-header">
                     <div className="agent-detail-icon">
-                        {(() => { const Icon = getAgentIcon(agent.icon); return <Icon size={24} />; })()}
+                        <DetailIcon size={24} />
                     </div>
                     <div className="agent-detail-title-area">
-                        <h2 className="agent-detail-name">{agent.name}</h2>
+                        <h2 id="agent-detail-title" className="agent-detail-name">{agent.name}</h2>
                         <div className="agent-hub-card-badges">
                             {agent.source === 'builtin' && <span className="agent-badge agent-badge-builtin">Built-in</span>}
                             {agent.source === 'native' && <span className="agent-badge agent-badge-native">Native</span>}
                             {agent.source === 'custom_python' && <span className="agent-badge agent-badge-custom">Custom</span>}
-                            {agent.category && agent.category !== 'general' && (
-                                <span className="agent-badge agent-badge-category">{agent.category}</span>
-                            )}
                             {agent.language && agent.language !== 'python' && (
                                 <span className="agent-badge agent-badge-native">{agent.language.toUpperCase()}</span>
                             )}
+                            {agent.category && agent.category !== 'general' && (
+                                <span className="agent-badge agent-badge-category">{agent.category}</span>
+                            )}
                         </div>
                     </div>
-                    <button className="agent-detail-close" onClick={onClose}>
+                    <button className="agent-detail-close" onClick={onClose} aria-label="Close">
                         <X size={18} />
                     </button>
                 </div>
@@ -112,7 +123,7 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                         <div className="agent-detail-section-title">Access Rights</div>
                         {connections.length > 0 ? (
                             <div className="agent-detail-permissions">
-                                {connections.map((c: any, i: number) => (
+                                {connections.map((c, i) => (
                                     <div key={i} className="agent-detail-permission">
                                         <Shield size={14} />
                                         <span>{c.connector_id}</span>
@@ -146,6 +157,8 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                                     <button
                                         key={s}
                                         className="agent-detail-starter-chip"
+                                        disabled={!canStart}
+                                        title={!canStart ? 'Available in GAIA Desktop' : undefined}
                                         onClick={() => { onStartChat(agent.id, s); onClose(); }}
                                     >
                                         {s}

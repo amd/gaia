@@ -105,7 +105,7 @@ class TestBuiltinAgentHubMetadata:
 class TestNativeAgentDiscovery:
     """Verify native agent discovery from agent-manifest.json."""
 
-    def test_discover_native_agents_from_manifest(self, tmp_path):
+    def test_discover_native_agents_from_manifest(self, tmp_path, monkeypatch):
         manifest = {
             "manifest_version": 1,
             "agents": [
@@ -120,28 +120,14 @@ class TestNativeAgentDiscovery:
                 },
             ],
         }
-        manifest_path = tmp_path / "agent-manifest.json"
-        manifest_path.write_text(json.dumps(manifest))
+        (tmp_path / ".gaia").mkdir(exist_ok=True)
+        (tmp_path / ".gaia" / "agent-manifest.json").write_text(
+            json.dumps(manifest)
+        )
 
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         registry = AgentRegistry()
-        # Patch the manifest location search
-        with patch.object(
-            AgentRegistry,
-            "_discover_native_agents",
-            wraps=registry._discover_native_agents,
-        ):
-            # Directly call with patched path
-            original = Path.home
-            try:
-                Path.home = staticmethod(lambda: tmp_path)
-                # Create the expected path structure
-                (tmp_path / ".gaia").mkdir(exist_ok=True)
-                manifest_dest = tmp_path / ".gaia" / "agent-manifest.json"
-                manifest_dest.write_text(json.dumps(manifest))
-
-                registry._discover_native_agents()
-            finally:
-                Path.home = original
+        registry._discover_native_agents()
 
         reg = registry.get("health-agent")
         assert reg is not None
@@ -152,14 +138,10 @@ class TestNativeAgentDiscovery:
         assert "system" in reg.tags
         assert reg.namespaced_agent_id == "native:health-agent"
 
-    def test_no_manifest_file_is_noop(self, tmp_path):
+    def test_no_manifest_file_is_noop(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         registry = AgentRegistry()
-        original = Path.home
-        try:
-            Path.home = staticmethod(lambda: tmp_path)
-            registry._discover_native_agents()
-        finally:
-            Path.home = original
+        registry._discover_native_agents()
         assert len(registry.list()) == 0
 
     def test_native_factory_raises(self):
