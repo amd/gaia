@@ -1,0 +1,245 @@
+---
+title: "Agent Hub Platform"
+description: "End-to-end agent hub: packaging, distribution, discovery, and installation for GAIA agents"
+icon: "grid-2x2"
+---
+
+# Agent Hub Platform
+
+<Note>
+**Milestone:** v0.29 | **Status:** In Progress | **Priority:** High
+</Note>
+
+---
+
+## Overview
+
+The Agent Hub is a centralized platform for discovering, installing, and managing GAIA agents. It covers the full lifecycle: manifest format, versioning, Python wheel + C++ binary packaging, R2 cloud distribution, install/update/rollback API, Agent Hub UI (Installed/Available tabs with hardware compatibility checks), developer workflow (init/test/pack/publish), security tiers, and 5-interface standard (TUI, CLI, pipe, API server, MCP server) per agent package.
+
+## Key Design Decisions
+
+1. **Production agents live in `hub/agents/`.** All production agents (chat, doc, file, data, web, email, jira, blender, etc.) are standalone packages in `hub/agents/python/` and `hub/agents/cpp/`. They `import gaia` from the **published PyPI package** (`amd-gaia`), not from the source tree. Third-party contributors follow the identical pattern. `src/gaia/agents/` retains only the framework: base classes, shared tool mixins, and the registry.
+
+2. **`pip install amd-gaia` ships the framework only.** The core wheel provides `Agent`, `@tool`, `MCPAgent`, `AgentConsole`, LLM clients, RAG, MCP, etc. Production agents are separate wheels (`gaia-agent-chat`, `gaia-agent-doc`, etc.) published to the Hub. A meta-package `amd-gaia[agents]` installs all AMD production agents for convenience.
+
+3. **Manifest file is `gaia-agent.yaml`.** Every agent has a manifest declaring its metadata, version (starting at `0.1.0`), system requirements, permissions, interface modes, and Hub display info.
+
+4. **C++ agents get a Python backend subprocess launcher** so they work in both Electron and web contexts via JSON-RPC over stdio.
+
+5. **Per-agent manifest files on R2** (not a single global catalog). A lightweight `index.json` is rebuilt from per-agent manifests by a Cloudflare Worker on publish.
+
+6. **5-interface standard per agent:** TUI, CLI, pipe, REST API server, MCP stdio server — following the pattern from the gaia-bash C++ agent (PR #985).
+
+---
+
+## Phase 0: Restructure — `hub/agents/` Directory
+
+### Directory structure
+
+```
+hub/
+├── agents/
+│   ├── python/
+│   │   ├── chat/
+│   │   │   ├── gaia-agent.yaml          # manifest (v0.1.0)
+│   │   │   ├── pyproject.toml           # depends on amd-gaia
+│   │   │   ├── gaia_agent_chat/
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── agent.py             # from gaia.agents.base import Agent
+│   │   │   ├── tests/
+│   │   │   └── README.md
+│   │   ├── doc/
+│   │   ├── file/
+│   │   ├── data/
+│   │   ├── web/
+│   │   ├── email/
+│   │   ├── jira/
+│   │   ├── blender/
+│   │   ├── docker/
+│   │   ├── summarize/
+│   │   ├── sd/
+│   │   ├── emr/
+│   │   └── routing/
+│   └── cpp/
+│       ├── bash/
+│       ├── health/
+│       └── wifi/
+└── README.md
+```
+
+### What stays in `src/gaia/agents/`
+
+Only the **framework** — the building blocks every agent imports:
+
+```
+src/gaia/agents/
+├── base/          # Agent, MCPAgent, ApiAgent, @tool, AgentConsole, errors
+├── tools/         # shared tool mixins (FileSearchTools, etc.)
+├── registry.py    # AgentRegistry
+├── builder/       # BuilderAgent (scaffolding tool)
+└── __init__.py
+```
+
+### Migration strategy
+
+1. Move agent code from `src/gaia/agents/<name>/` to `hub/agents/python/<name>/gaia_agent_<name>/`
+2. Rewrite imports — agents import from the installed `amd-gaia` package
+3. Add `pyproject.toml` per agent with `dependencies = ["amd-gaia>={min_gaia_version}"]`
+4. Add `gaia-agent.yaml` per agent — every agent starts at `version: 0.1.0`
+5. Update `setup.py` to remove agent packages from the core wheel
+6. Add `amd-gaia[agents]` extras that installs all production agent wheels
+7. Update registry — builtin agents discovered via `gaia-agent.yaml` scan, not hardcoded
+
+---
+
+## Phase 1: Agent Manifest + Registry Enhancement
+
+### `gaia-agent.yaml` manifest format
+
+```yaml
+id: chat
+name: Chat
+version: 0.1.0
+description: "General conversation — fast, personality-first"
+author: AMD
+license: MIT
+
+# Hub display
+category: conversation
+tags: [chat, general, personality]
+icon: message-circle
+avatar: avatar.png
+screenshots: []
+readme: README.md
+conversation_starters:
+  - "What can you help me with?"
+
+# Technical
+language: python
+min_gaia_version: "0.18.0"
+models: [Qwen3.5-35B-A3B-GGUF]
+tools_count: 0
+security_tier: verified
+
+# System requirements
+requirements:
+  min_memory_gb: 8
+  min_disk_gb: 2
+  min_context_size: 32768
+  platforms: [win-x64, linux-x64, darwin-arm64]
+  npu: optional
+  gpu_vram_gb: 0
+
+# Python-specific
+python:
+  entry_module: gaia_agent_chat.agent
+  entry_class: ChatAgent
+  dependencies: []
+
+# Permissions
+permissions:
+  - filesystem:read
+  - network:none
+
+# Interface modes
+interfaces:
+  tui: true
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: true
+```
+
+### Registry reads `gaia-agent.yaml`
+
+The registry scans `~/.gaia/agents/*/gaia-agent.yaml` directly. Each manifest provides `python.entry_module` and `python.entry_class`. Uses `importlib.util.spec_from_file_location()` with `submodule_search_locations` for thread-safe loading.
+
+### C++ subprocess launcher
+
+`NativeAgentLauncher` in `src/gaia/hub/native_launcher.py` — spawns C++ agents as subprocesses with JSON-RPC over stdio, enabling native agents in web context (not just Electron).
+
+---
+
+## Phase 2: Versioning + Packaging
+
+- **Python wheels:** `gaia agent pack` reads `gaia-agent.yaml`, generates `pyproject.toml`, builds `.whl`
+- **C++ binaries:** Static linking via vcpkg, CI matrix for win-x64/linux-x64/darwin-arm64
+- **Version bumping:** `gaia agent version patch|minor|major`
+- **Install isolation:** `uv pip install --target ~/.gaia/agents/{id}/site-packages/`
+
+---
+
+## Phase 3: R2 Distribution
+
+- **Bucket structure:** Per-agent manifests at `agents/{id}/manifest.json`, versioned artifacts, lightweight `index.json`
+- **Cloudflare Worker:** Auth per publisher, version immutability, server-side SHA-256, index rebuild
+- **`gaia agent publish`:** validate → test → pack → upload
+- **Deprecation:** `gaia agent deprecate <id> --message "..."`
+- **Security tiers:** verified (AMD), community (publisher-signed), experimental (opt-in)
+- **Native trust:** Confirmation prompt for non-verified C++ agents
+
+---
+
+## Phase 4: Backend Install/Catalog API
+
+- **`GET /api/agents/catalog`** — R2 index + local registry merge + per-agent compatibility check
+- **`POST /api/agents/install`** — system check → download → verify → install → hot-register
+- **`DELETE /api/agents/{id}`** — uninstall
+- **`POST /api/agents/{id}/rollback`** — restore from `.backup/`
+- **Progress polling:** `GET /api/agents/{id}/install-status`
+- **Compatibility:** Platform, RAM, disk, GPU/NPU, context size checks with green/yellow/red UI indicators
+
+---
+
+## Phase 5: Frontend — Hub as Splash Page
+
+- **Tabs:** Installed (with update badges) / Available (with install buttons + download size + compatibility)
+- **Card states:** installed, available, update_available, installing
+- **Install progress:** Polling-based progress bar on card
+- **Offline:** Cached catalog with banner
+- **Unified `AgentInfo` TypeScript type** with status, version, compatibility, security_tier fields
+
+---
+
+## Phase 6: CLI Commands
+
+```bash
+gaia agent list | search | info               # Discovery
+gaia agent install | update | uninstall        # Management
+gaia agent rollback | update --all             # Recovery
+gaia agent run <id> [--prompt | --api | --mcp] # Execution
+gaia agent init | test | version | pack        # Development
+gaia agent publish | login                     # Distribution
+```
+
+---
+
+## Phase 7: Developer Experience
+
+- **`gaia agent init <name> --language python|cpp`** — proper package structure with `gaia-agent.yaml`
+- **`gaia agent test --lint`** (CI-safe) and **`--live`** (requires LLM)
+- **Full workflow:** init → develop → test → version → pack → publish
+
+---
+
+## Milestone: v0.29 — Agent Hub Platform
+
+| Issue | Phase | Priority |
+|-------|-------|----------|
+| #1102 | Phase 0: Restructure hub/agents/ | P0 |
+| #1091 | Phase 1: gaia-agent.yaml manifest | P0 |
+| #1098 | Phase 7: gaia agent init scaffolding | P0 |
+| #264 | Phase 6: Agent Hub CLI | P0 |
+| #1101 | Phase 1: API/MCP interface standard | P1 |
+| #1093 | Phase 2: Python wheel packaging | P1 |
+| #1094 | Phase 2: C++ binary packaging + CI | P1 |
+| #1099 | Phase 7: gaia agent test quality gates | P1 |
+| #465 | Phase 4: Agent Lifecycle Manager | P1 |
+| #1095 | Phase 3: R2 bucket + Worker API | P2 |
+| #1096 | Phase 4: Backend catalog/install API | P2 |
+| #1097 | Phase 5: Frontend install flow | P2 |
+| #1100 | Phase 3: Security tiers + trust | P2 |
+| #1092 | Phase 1: C++ subprocess launcher | P2 |
+| #468 | Phase 4: Progressive install executor | P2 |
+| #285 | Phase 1: Scope skills for agents | P2 |
+| #546 | Phase 0: Port example agents | P2 |
