@@ -4,9 +4,7 @@
 """Tests for Agent Hub metadata in the /api/agents endpoint."""
 
 import json
-import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -133,8 +131,6 @@ class TestNativeAgentDiscovery:
             wraps=registry._discover_native_agents,
         ):
             # Directly call with patched path
-            import gaia.agents.registry as reg_mod
-
             original = Path.home
             try:
                 Path.home = staticmethod(lambda: tmp_path)
