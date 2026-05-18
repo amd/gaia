@@ -1,0 +1,43 @@
+---
+title: "Analyst Agent"
+description: "Load structured rows into scratchpad tables and query them with a focused GAIA agent."
+---
+
+# Analyst Agent
+
+The Analyst Agent is a focused structured-data agent for users who want scratchpad table tools without the full Chat Agent tool surface. It is useful for CSV-style rows, extracted records, and calculations that should be performed by SQL instead of mental arithmetic.
+
+## Quick start
+
+```bash
+gaia analyze -q "Create a sales table, insert these rows, and calculate revenue by region"
+```
+
+Use interactive mode when you want to build up tables and ask follow-up questions:
+
+```bash
+gaia analyze
+```
+
+## Tool surface
+
+`gaia analyze --list-tools` shows the exact tools available in your installed version. The focused Analyst Agent exposes:
+
+- `create_table` for creating scratchpad tables.
+- `insert_data` for loading structured rows.
+- `query_data` for SQL calculations and filtering.
+- `list_tables` for inspecting available tables.
+- `drop_table` for removing scratchpad tables.
+
+The Analyst Agent does not register browser tools. Use `gaia browse` for web research, or `gaia chat` when you need the broader mixed tool set.
+
+## Local model options
+
+By default, `gaia analyze` uses the local Lemonade backend configured for GAIA. You can override the model or backend with the common agent flags:
+
+```bash
+gaia analyze --model Qwen3-4B-Instruct-2507-GGUF -q "Summarize this table"
+gaia analyze --use-claude -q "Normalize these rows and calculate totals"
+```
+
+The Agent UI registry also exposes `data` and `data-lite`; `data-lite` uses GAIA's lightweight local model profile for shorter analysis tasks.

@@ -388,19 +388,17 @@ class AgentRegistry:
 
         # --- Data Agent (data analysis with scratchpad) ---
         def data_factory(**kwargs):
-            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+            from gaia.agents.analyst.agent import AnalystAgent, AnalystAgentConfig
 
-            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+            valid_fields = {f.name for f in dataclasses.fields(AnalystAgentConfig)}
             filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-            filtered.setdefault("prompt_profile", "data")
-            filtered.setdefault("enable_scratchpad", True)
-            config = ChatAgentConfig(**filtered)
-            return ChatAgent(config=config)
+            config = AnalystAgentConfig(**filtered)
+            return AnalystAgent(config=config)
 
         self._register(
             AgentRegistration(
                 id="data",
-                name="Data Agent",
+                name="Analyst Agent",
                 description="Data analysis — CSV, Excel, structured queries and tables",
                 source="builtin",
                 conversation_starters=[
@@ -415,25 +413,21 @@ class AgentRegistry:
                 namespaced_agent_id="builtin:data",
             )
         )
-        logger.info(
-            "registry: Registered built-in agent: data (ChatAgent, profile=data)"
-        )
+        logger.info("registry: Registered built-in agent: data (AnalystAgent)")
 
         # --- Web Agent (web research) ---
         def web_factory(**kwargs):
-            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+            from gaia.agents.browser.agent import BrowserAgent, BrowserAgentConfig
 
-            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+            valid_fields = {f.name for f in dataclasses.fields(BrowserAgentConfig)}
             filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-            filtered.setdefault("prompt_profile", "web")
-            filtered.setdefault("enable_browser", True)
-            config = ChatAgentConfig(**filtered)
-            return ChatAgent(config=config)
+            config = BrowserAgentConfig(**filtered)
+            return BrowserAgent(config=config)
 
         self._register(
             AgentRegistration(
                 id="web",
-                name="Web Agent",
+                name="Browser Agent",
                 description="Web research — search, fetch pages, and download files",
                 source="builtin",
                 conversation_starters=[
@@ -448,7 +442,7 @@ class AgentRegistry:
                 namespaced_agent_id="builtin:web",
             )
         )
-        logger.info("registry: Registered built-in agent: web (ChatAgent, profile=web)")
+        logger.info("registry: Registered built-in agent: web (BrowserAgent)")
 
         # --- Lite variants of all 5 agents ---
         # Each agent (chat, doc, file, data, web) has a "-lite" variant that
@@ -527,6 +521,38 @@ class AgentRegistry:
 
             def _make_lite_factory(_profile, _extra):
                 def factory(**kwargs):
+                    if _profile == "data":
+                        from gaia.agents.analyst.agent import (
+                            AnalystAgent,
+                            AnalystAgentConfig,
+                        )
+
+                        valid_fields = {
+                            f.name for f in dataclasses.fields(AnalystAgentConfig)
+                        }
+                        filtered = {
+                            k: v for k, v in kwargs.items() if k in valid_fields
+                        }
+                        filtered.setdefault("model_id", _LITE_MODELS[0])
+                        config = AnalystAgentConfig(**filtered)
+                        return AnalystAgent(config=config)
+
+                    if _profile == "web":
+                        from gaia.agents.browser.agent import (
+                            BrowserAgent,
+                            BrowserAgentConfig,
+                        )
+
+                        valid_fields = {
+                            f.name for f in dataclasses.fields(BrowserAgentConfig)
+                        }
+                        filtered = {
+                            k: v for k, v in kwargs.items() if k in valid_fields
+                        }
+                        filtered.setdefault("model_id", _LITE_MODELS[0])
+                        config = BrowserAgentConfig(**filtered)
+                        return BrowserAgent(config=config)
+
                     from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
                     valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
