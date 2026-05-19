@@ -5,7 +5,7 @@
 
 .agent-hub {
     width: 100%;
-    max-width: 960px;
+    max-width: 820px;
     margin: 0 auto;
 }
 
@@ -83,13 +83,13 @@
 
 .agent-hub-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
 }
 
-@media (max-width: 1200px) {
+@media (min-width: 1400px) {
     .agent-hub-grid {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(3, 1fr);
     }
 }
 
@@ -115,7 +115,7 @@
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    padding: 20px;
+    padding: 16px;
     cursor: pointer;
     transition: all 200ms ease;
     position: relative;
