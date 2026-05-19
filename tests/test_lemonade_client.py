@@ -895,14 +895,8 @@ class TestLemonadeClientMock(unittest.TestCase):
 
         # Collect events from streaming pull
         events = []
-        callback_events = []
 
-        def test_callback(event_type, data):
-            callback_events.append((event_type, data))
-
-        for event in self.client.pull_model_stream(
-            model_name=TEST_MODEL, progress_callback=test_callback
-        ):
+        for event in self.client.pull_model_stream(model_name=TEST_MODEL):
             events.append(event)
 
         # Verify we got all events
@@ -913,11 +907,6 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertEqual(events[2]["file"], "config.json")
         self.assertEqual(events[3]["event"], "complete")
         self.assertEqual(events[3]["percent"], 100)
-
-        # Verify callback was called
-        self.assertEqual(len(callback_events), 4)
-        self.assertEqual(callback_events[0][0], "progress")
-        self.assertEqual(callback_events[3][0], "complete")
 
     @responses.activate
     def test_pull_model_stream_error(self):
@@ -993,38 +982,31 @@ class TestLemonadeClientMock(unittest.TestCase):
         """Test get_required_models returns correct models for chat agent."""
         model_ids = self.client.get_required_models("chat")
 
-        # Chat agent requires qwen3-coder-30b, nomic-embed, qwen2.5-vl-7b
-        self.assertIn("Qwen3.5-35B-A3B-GGUF", model_ids)
+        self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
         self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
-        self.assertIn("Qwen3-VL-4B-Instruct-GGUF", model_ids)
 
     def test_get_required_models_for_code(self):
         """Test get_required_models returns correct models for code agent."""
         model_ids = self.client.get_required_models("code")
 
-        # Code agent only requires qwen3-coder-30b
-        self.assertIn("Qwen3.5-35B-A3B-GGUF", model_ids)
+        self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
         self.assertEqual(len(model_ids), 1)
 
     def test_get_required_models_for_minimal(self):
         """Test get_required_models returns correct models for minimal agent."""
         model_ids = self.client.get_required_models("minimal")
 
-        # Minimal agent only requires qwen3-0.6b
-        self.assertIn("Qwen3-0.6B-GGUF", model_ids)
+        self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
         self.assertEqual(len(model_ids), 1)
 
     def test_get_required_models_all(self):
         """Test get_required_models returns all unique models."""
         model_ids = self.client.get_required_models("all")
 
-        # Should have all unique models
-        self.assertIn("Qwen3.5-35B-A3B-GGUF", model_ids)
+        # All profiles use gemma-4-e4b; some also use nomic-embed
+        self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
         self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
-        self.assertIn("Qwen3-VL-4B-Instruct-GGUF", model_ids)
-        self.assertIn("Qwen3-0.6B-GGUF", model_ids)
-        # Should be exactly 4 unique models
-        self.assertEqual(len(model_ids), 4)
+        self.assertEqual(len(model_ids), 2)
 
     def test_get_required_models_unknown_agent(self):
         """Test get_required_models returns empty list for unknown agent."""
@@ -1091,7 +1073,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         # Mock /models endpoint (used by check_model_available via list_models)
         models_response = {
             "data": [
-                {"id": "Qwen3-0.6B-GGUF", "downloaded": True},
+                {"id": "Gemma-4-E4B-it-GGUF", "downloaded": True},
             ]
         }
         responses.add(
@@ -1114,7 +1096,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         # Mock /models endpoint (used by check_model_available via list_models)
         models_response = {
             "data": [
-                {"id": "Qwen3-0.6B-GGUF", "downloaded": False},
+                {"id": "Gemma-4-E4B-it-GGUF", "downloaded": False},
             ]
         }
         responses.add(
@@ -1140,21 +1122,12 @@ class TestLemonadeClientMock(unittest.TestCase):
             content_type="text/event-stream",
         )
 
-        callback_calls = []
-
-        def track_progress(event_type, data):
-            callback_calls.append((event_type, data))
-
-        result = self.client.download_agent_models(
-            "minimal", progress_callback=track_progress
-        )
+        result = self.client.download_agent_models("minimal")
 
         self.assertTrue(result["success"])
         self.assertEqual(len(result["models"]), 1)
         self.assertEqual(result["models"][0]["status"], "completed")
         self.assertFalse(result["models"][0]["skipped"])
-        # Verify progress callbacks were called
-        self.assertGreater(len(callback_calls), 0)
 
     @responses.activate
     def test_validate_context_size_sufficient(self):
@@ -2227,6 +2200,100 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             print(f"❌ Error during responses request: {error_str}")
             # Don't fail - responses endpoint might not be fully implemented yet
             print("⚠️  Responses endpoint might not be fully implemented yet")
+
+    def test_integration_api_key_no_key_health_check(self):
+        """Integration: health check works without an API key (backward compat)."""
+        os.environ.pop("LEMONADE_API_KEY", None)
+        client = create_lemonade_client(
+            model=TEST_MODEL,
+            host=HOST,
+            port=PORT,
+            auto_start=False,
+            auto_load=False,
+            keep_alive=True,
+        )
+        # Should succeed — local Lemonade without auth configured accepts all requests
+        result = client.health_check()
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("status"), "ok")
+        print("✓ Health check without API key succeeds (backward compat)")
+
+    def test_integration_api_key_with_key_health_check(self):
+        """Integration: health check works with LEMONADE_API_KEY set.
+
+        Local Lemonade without authentication configured ignores the Authorization
+        header, so this verifies the header is sent without breaking the request.
+        """
+        os.environ["LEMONADE_API_KEY"] = "integration-test-key"
+        try:
+            client = create_lemonade_client(
+                model=TEST_MODEL,
+                host=HOST,
+                port=PORT,
+                auto_start=False,
+                auto_load=False,
+                keep_alive=True,
+            )
+            self.assertEqual(client.api_key, "integration-test-key")
+            result = client.health_check()
+            self.assertIsNotNone(result)
+            self.assertEqual(result.get("status"), "ok")
+            print("✓ Health check with LEMONADE_API_KEY set succeeds (header accepted)")
+        finally:
+            os.environ.pop("LEMONADE_API_KEY", None)
+
+    def test_integration_api_key_401_raises_actionable_error(self):
+        """Integration: a Lemonade server returning 401 raises LemonadeClientError
+        naming LEMONADE_API_KEY without leaking the key value or Bearer token."""
+        import http.server
+        import threading
+        import time
+
+        class _UnauthorizedHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                # Simulate a misconfigured proxy reflecting the Authorization header
+                # back in the response body — our error must NOT include this.
+                self.wfile.write(
+                    b'{"error":"Unauthorized","detail":"Authorization: Bearer secret-key"}'
+                )
+
+            def log_message(self, *args):
+                pass
+
+        mock_port = 19399
+        server = http.server.HTTPServer(("localhost", mock_port), _UnauthorizedHandler)
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        time.sleep(0.05)
+
+        try:
+            client = create_lemonade_client(
+                model=TEST_MODEL,
+                host="localhost",
+                port=mock_port,
+                auto_start=False,
+                auto_load=False,
+                keep_alive=True,
+                api_key="secret-key",
+            )
+            with self.assertRaises(LemonadeClientError) as ctx:
+                client.health_check()
+            msg = str(ctx.exception)
+            self.assertIn(
+                "LEMONADE_API_KEY", msg, "Error must name the env var to fix"
+            )
+            self.assertNotIn(
+                "secret-key", msg, "Error must NOT contain the key value"
+            )
+            self.assertNotIn(
+                "Bearer", msg, "Error must NOT contain the Bearer token"
+            )
+            print(f"✓ 401 raises actionable error: {msg}")
+        finally:
+            server.shutdown()
 
 
 if __name__ == "__main__":
