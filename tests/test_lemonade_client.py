@@ -17,6 +17,7 @@ import requests
 import responses
 
 from gaia.llm.lemonade_client import (
+    LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
     create_lemonade_client,
@@ -1578,7 +1579,7 @@ class TestLemonadeClientMock(unittest.TestCase):
 
     @responses.activate
     def test_get_status_propagates_401_instead_of_returning_not_running(self):
-        # get_status() must re-raise LemonadeClientError on 401 rather than
+        # get_status() must raise LemonadeAuthError on 401 rather than
         # swallowing it and returning status.running=False.
         responses.add(
             responses.GET,
@@ -1589,7 +1590,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         client = LemonadeClient(
             host=HOST, port=PORT, api_key="wrong-key", verbose=False
         )
-        with self.assertRaises(LemonadeClientError) as ctx:
+        with self.assertRaises(LemonadeAuthError) as ctx:
             client.get_status()
         self.assertIn("LEMONADE_API_KEY", str(ctx.exception))
 

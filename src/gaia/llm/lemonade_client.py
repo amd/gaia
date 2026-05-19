@@ -382,6 +382,10 @@ class LemonadeClientError(Exception):
     """Base exception for Lemonade client errors."""
 
 
+class LemonadeAuthError(LemonadeClientError):
+    """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
+
+
 class ModelDownloadCancelledError(LemonadeClientError):
     """Raised when a model download is cancelled by user."""
 
@@ -1403,7 +1407,7 @@ class LemonadeClient:
             )
 
             if response.status_code == 401:
-                raise LemonadeClientError(
+                raise LemonadeAuthError(
                     "Lemonade returned 401 Unauthorized for /chat/completions. "
                     "Verify LEMONADE_API_KEY is correct (currently "
                     f"{'set' if self.api_key else 'unset'})."
@@ -1574,7 +1578,7 @@ class LemonadeClient:
             # Fixed-string error: do NOT include str(e), as the OpenAI SDK's
             # exception may stringify the failing request including its
             # Authorization header.
-            raise LemonadeClientError(
+            raise LemonadeAuthError(
                 "Lemonade rejected the API key (401 Unauthorized) on "
                 "streaming chat completions. Verify LEMONADE_API_KEY is correct."
             )
@@ -1680,7 +1684,7 @@ class LemonadeClient:
             )
 
             if response.status_code == 401:
-                raise LemonadeClientError(
+                raise LemonadeAuthError(
                     "Lemonade returned 401 Unauthorized for /completions. "
                     "Verify LEMONADE_API_KEY is correct (currently "
                     f"{'set' if self.api_key else 'unset'})."
@@ -1775,7 +1779,7 @@ class LemonadeClient:
             )
 
         except openai.AuthenticationError:
-            raise LemonadeClientError(
+            raise LemonadeAuthError(
                 "Lemonade rejected the API key (401 Unauthorized) on "
                 "streaming text completions. Verify LEMONADE_API_KEY is correct."
             )
@@ -2152,7 +2156,7 @@ class LemonadeClient:
             )
 
             if response.status_code == 401:
-                raise LemonadeClientError(
+                raise LemonadeAuthError(
                     "Lemonade returned 401 Unauthorized for /pull. "
                     "Verify LEMONADE_API_KEY is correct (currently "
                     f"{'set' if self.api_key else 'unset'})."
@@ -2363,7 +2367,7 @@ class LemonadeClient:
             )
 
             if response.status_code == 401:
-                raise LemonadeClientError(
+                raise LemonadeAuthError(
                     "Lemonade returned 401 Unauthorized for /responses. "
                     "Verify LEMONADE_API_KEY is correct (currently "
                     f"{'set' if self.api_key else 'unset'})."
@@ -3153,7 +3157,7 @@ class LemonadeClient:
                     }
                 )
             status.loaded_models = loaded_enriched
-        except LemonadeClientError:
+        except LemonadeAuthError:
             raise  # propagate auth errors; don't misreport as "server not running"
         except Exception as e:
             self.log.debug(f"Failed to get status: {e}")
@@ -3661,7 +3665,7 @@ class LemonadeClient:
             # Also keeps ``_execute_with_auto_download._is_model_error`` from
             # substring-matching an auth message into a model-not-found retry.
             if response.status_code == 401:
-                raise LemonadeClientError(
+                raise LemonadeAuthError(
                     "Lemonade returned 401 Unauthorized. Verify LEMONADE_API_KEY "
                     f"is correct (currently {'set' if self.api_key else 'unset'}). "
                     "See https://lemonade-server.ai/docs/guide/configuration/"
