@@ -2282,15 +2282,9 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             with self.assertRaises(LemonadeClientError) as ctx:
                 client.health_check()
             msg = str(ctx.exception)
-            self.assertIn(
-                "LEMONADE_API_KEY", msg, "Error must name the env var to fix"
-            )
-            self.assertNotIn(
-                "secret-key", msg, "Error must NOT contain the key value"
-            )
-            self.assertNotIn(
-                "Bearer", msg, "Error must NOT contain the Bearer token"
-            )
+            self.assertIn("LEMONADE_API_KEY", msg, "Error must name the env var to fix")
+            self.assertNotIn("secret-key", msg, "Error must NOT contain the key value")
+            self.assertNotIn("Bearer", msg, "Error must NOT contain the Bearer token")
             print(f"✓ 401 raises actionable error: {msg}")
         finally:
             server.shutdown()
