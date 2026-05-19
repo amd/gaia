@@ -73,6 +73,7 @@ export function AgentHubGrid({ agents, activeAgentId, onSelect, onStartChat, onC
                             <input
                                 type="text"
                                 placeholder="Search agents..."
+                                aria-label="Search agents"
                                 value={search}
                                 onChange={(e) => setSearch(e.target.value)}
                             />
@@ -80,6 +81,7 @@ export function AgentHubGrid({ agents, activeAgentId, onSelect, onStartChat, onC
                         {categories.length > 0 && (
                             <select
                                 className="agent-hub-filter"
+                                aria-label="Filter by category"
                                 value={categoryFilter}
                                 onChange={(e) => setCategoryFilter(e.target.value)}
                             >
