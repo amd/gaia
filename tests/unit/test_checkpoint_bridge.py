@@ -2,10 +2,10 @@ import pytest
 
 from gaia.governance.checkpoint_bridge import InMemoryCheckpointBridge
 from gaia.governance.schemas import (
-    WorkflowTransition,
-    GovernanceDecision,
     CheckpointResolution,
+    GovernanceDecision,
     TransitionOutcome,
+    WorkflowTransition,
 )
 
 
@@ -22,7 +22,9 @@ def make_transition():
 
 
 def make_decision():
-    return GovernanceDecision(decision="REVIEW", reason="r", policy_version="v1", rule_ids=["r1"])
+    return GovernanceDecision(
+        decision="REVIEW", reason="r", policy_version="v1", rule_ids=["r1"]
+    )
 
 
 def test_create_and_get_checkpoint():
@@ -43,7 +45,9 @@ def test_resolve_checkpoint_approve_and_reject():
     rec = b.create_checkpoint(t, d)
 
     # Approve
-    resolution = CheckpointResolution(resolution="APPROVE", actor_id="alice", reason="ok")
+    resolution = CheckpointResolution(
+        resolution="APPROVE", actor_id="alice", reason="ok"
+    )
     outcome = b.resolve_checkpoint(rec.checkpoint_id, resolution)
     assert outcome.status == "RESUMED"
 
@@ -57,7 +61,9 @@ def test_resolve_checkpoint_approve_and_reject():
 def test_resolve_unknown_checkpoint_raises():
     b = InMemoryCheckpointBridge()
     with pytest.raises(Exception):
-        b.resolve_checkpoint("nonexistent", CheckpointResolution(resolution="APPROVE", actor_id="x"))
+        b.resolve_checkpoint(
+            "nonexistent", CheckpointResolution(resolution="APPROVE", actor_id="x")
+        )
 
 
 def test_resolve_twice_raises_invalid_resolution():
