@@ -121,9 +121,7 @@ class TestNativeAgentDiscovery:
             ],
         }
         (tmp_path / ".gaia").mkdir(exist_ok=True)
-        (tmp_path / ".gaia" / "agent-manifest.json").write_text(
-            json.dumps(manifest)
-        )
+        (tmp_path / ".gaia" / "agent-manifest.json").write_text(json.dumps(manifest))
 
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         registry = AgentRegistry()
