@@ -5,7 +5,7 @@ import pytest
 
 from gaia.agents.base.agent import Agent
 from gaia.governance.mixin import GovernedAgentMixin
-from gaia.governance.schemas import CheckpointResolution, GovernanceDecision
+from gaia.governance.schemas import GovernanceDecision, TransitionOutcome
 
 
 class _SimpleAgent(GovernedAgentMixin, Agent):
@@ -135,13 +135,6 @@ def test_emit_policy_alert_handles_exceptions(monkeypatch, agent, caplog):
     assert any(
         "governance: failed to emit policy alert" in r.message for r in caplog.records
     )
-
-
-from unittest.mock import MagicMock
-
-import pytest
-
-from gaia.governance.schemas import GovernanceDecision, TransitionOutcome
 
 
 @pytest.mark.parametrize(

@@ -4,7 +4,6 @@ from gaia.governance.checkpoint_bridge import InMemoryCheckpointBridge
 from gaia.governance.schemas import (
     CheckpointResolution,
     GovernanceDecision,
-    TransitionOutcome,
     WorkflowTransition,
 )
 
