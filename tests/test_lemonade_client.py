@@ -1577,6 +1577,23 @@ class TestLemonadeClientMock(unittest.TestCase):
             logging.disable(logging.NOTSET)
 
     @responses.activate
+    def test_get_status_propagates_401_instead_of_returning_not_running(self):
+        # get_status() must re-raise LemonadeClientError on 401 rather than
+        # swallowing it and returning status.running=False.
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/health",
+            json={"error": "Unauthorized"},
+            status=401,
+        )
+        client = LemonadeClient(
+            host=HOST, port=PORT, api_key="wrong-key", verbose=False
+        )
+        with self.assertRaises(LemonadeClientError) as ctx:
+            client.get_status()
+        self.assertIn("LEMONADE_API_KEY", str(ctx.exception))
+
+    @responses.activate
     @patch("gaia.llm.lemonade_client.LemonadeClient._ensure_model_loaded")
     def test_401_does_not_trigger_auto_download_retry(self, _mock_ensure):
         # Wrong key → 401 from chat completions. The auto-download retry

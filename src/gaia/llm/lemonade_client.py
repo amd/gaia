@@ -3153,6 +3153,8 @@ class LemonadeClient:
                     }
                 )
             status.loaded_models = loaded_enriched
+        except LemonadeClientError:
+            raise  # propagate auth errors; don't misreport as "server not running"
         except Exception as e:
             self.log.debug(f"Failed to get status: {e}")
             status.running = False
