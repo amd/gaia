@@ -1784,6 +1784,10 @@ Do NOT wrap conversational replies in JSON.
         try:
             import httpx
 
+            from gaia.llm.lemonade_client import (
+                lemonade_auth_headers,
+                resolve_lemonade_api_key,
+            )
             from gaia.llm.lemonade_manager import LemonadeManager
 
             base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
@@ -1791,7 +1795,11 @@ Do NOT wrap conversational replies in JSON.
             # The base_url already ends in /api/v1; strip the v1 suffix to
             # reach the v0 health endpoint.
             health_url = base_url.replace("/api/v1", "/api/v0/health")
-            resp = httpx.get(health_url, timeout=3.0)
+            resp = httpx.get(
+                health_url,
+                timeout=3.0,
+                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+            )
             if resp.status_code != 200:
                 return False
             data = resp.json()

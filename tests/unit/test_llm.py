@@ -298,6 +298,38 @@ class TestVLMMimeTypeDetection(unittest.TestCase):
         self.assertEqual(detect_image_mime_type(riff_not_webp), "image/png")
 
 
+class TestVLMClientApiKeyForwarding(unittest.TestCase):
+    """Issue #1139: VLMClient must forward api_key to its inner LemonadeClient.
+
+    VLMClient does NOT call ``resolve_lemonade_api_key`` itself — it forwards
+    the raw kwarg so the canonical resolution happens once inside
+    LemonadeClient. These tests prove that contract.
+    """
+
+    def test_vlm_client_forwards_explicit_api_key_to_lemonade_client(self):
+        from unittest.mock import patch
+
+        # VLMClient does a deferred ``from gaia.llm.lemonade_client import LemonadeClient``
+        # inside ``__init__``; patch the symbol where it lives.
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lc:
+            from gaia.llm.vlm_client import VLMClient
+
+            VLMClient(api_key="abc-1139", auto_load=False)
+            self.assertEqual(mock_lc.call_args.kwargs.get("api_key"), "abc-1139")
+
+    def test_vlm_client_default_api_key_is_none_so_lemonade_client_resolves_env(self):
+        """VLMClient must NOT pre-resolve the env var; LemonadeClient does that."""
+        from unittest.mock import patch
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lc:
+            from gaia.llm.vlm_client import VLMClient
+
+            VLMClient(auto_load=False)
+            # ``api_key`` is forwarded as None (not a resolved value); the
+            # inner LemonadeClient is responsible for the env-var fallback.
+            self.assertIsNone(mock_lc.call_args.kwargs.get("api_key"))
+
+
 class TestLemonadeManagerContextMessage(unittest.TestCase):
     """Test cases for LemonadeManager context message formatting."""
 

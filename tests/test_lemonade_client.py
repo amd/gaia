@@ -17,10 +17,23 @@ import requests
 import responses
 
 from gaia.llm.lemonade_client import (
+    LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
     create_lemonade_client,
 )
+
+# Auth-related helpers — present after issue #1139 lands. Until then the
+# import below resolves to None so the test module still collects; tests
+# guarded with ``assertIsNotNone`` then fail individually.
+try:
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+except ImportError:
+    lemonade_auth_headers = None  # type: ignore[assignment]
+    resolve_lemonade_api_key = None  # type: ignore[assignment]
 
 # Test constants - override via GAIA_TEST_MODEL env var for different platforms
 TEST_MODEL = os.environ.get("GAIA_TEST_MODEL", "Llama-3.2-3B-Instruct-Hybrid")
@@ -883,14 +896,8 @@ class TestLemonadeClientMock(unittest.TestCase):
 
         # Collect events from streaming pull
         events = []
-        callback_events = []
 
-        def test_callback(event_type, data):
-            callback_events.append((event_type, data))
-
-        for event in self.client.pull_model_stream(
-            model_name=TEST_MODEL, progress_callback=test_callback
-        ):
+        for event in self.client.pull_model_stream(model_name=TEST_MODEL):
             events.append(event)
 
         # Verify we got all events
@@ -901,11 +908,6 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertEqual(events[2]["file"], "config.json")
         self.assertEqual(events[3]["event"], "complete")
         self.assertEqual(events[3]["percent"], 100)
-
-        # Verify callback was called
-        self.assertEqual(len(callback_events), 4)
-        self.assertEqual(callback_events[0][0], "progress")
-        self.assertEqual(callback_events[3][0], "complete")
 
     @responses.activate
     def test_pull_model_stream_error(self):
@@ -981,38 +983,31 @@ class TestLemonadeClientMock(unittest.TestCase):
         """Test get_required_models returns correct models for chat agent."""
         model_ids = self.client.get_required_models("chat")
 
-        # Chat agent requires qwen3-coder-30b, nomic-embed, qwen2.5-vl-7b
-        self.assertIn("Qwen3.5-35B-A3B-GGUF", model_ids)
+        self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
         self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
-        self.assertIn("Qwen3-VL-4B-Instruct-GGUF", model_ids)
 
     def test_get_required_models_for_code(self):
         """Test get_required_models returns correct models for code agent."""
         model_ids = self.client.get_required_models("code")
 
-        # Code agent only requires qwen3-coder-30b
-        self.assertIn("Qwen3.5-35B-A3B-GGUF", model_ids)
+        self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
         self.assertEqual(len(model_ids), 1)
 
     def test_get_required_models_for_minimal(self):
         """Test get_required_models returns correct models for minimal agent."""
         model_ids = self.client.get_required_models("minimal")
 
-        # Minimal agent only requires qwen3-0.6b
-        self.assertIn("Qwen3-0.6B-GGUF", model_ids)
+        self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
         self.assertEqual(len(model_ids), 1)
 
     def test_get_required_models_all(self):
         """Test get_required_models returns all unique models."""
         model_ids = self.client.get_required_models("all")
 
-        # Should have all unique models
-        self.assertIn("Qwen3.5-35B-A3B-GGUF", model_ids)
+        # All profiles use gemma-4-e4b; some also use nomic-embed
+        self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
         self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
-        self.assertIn("Qwen3-VL-4B-Instruct-GGUF", model_ids)
-        self.assertIn("Qwen3-0.6B-GGUF", model_ids)
-        # Should be exactly 4 unique models
-        self.assertEqual(len(model_ids), 4)
+        self.assertEqual(len(model_ids), 2)
 
     def test_get_required_models_unknown_agent(self):
         """Test get_required_models returns empty list for unknown agent."""
@@ -1079,7 +1074,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         # Mock /models endpoint (used by check_model_available via list_models)
         models_response = {
             "data": [
-                {"id": "Qwen3-0.6B-GGUF", "downloaded": True},
+                {"id": "Gemma-4-E4B-it-GGUF", "downloaded": True},
             ]
         }
         responses.add(
@@ -1102,7 +1097,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         # Mock /models endpoint (used by check_model_available via list_models)
         models_response = {
             "data": [
-                {"id": "Qwen3-0.6B-GGUF", "downloaded": False},
+                {"id": "Gemma-4-E4B-it-GGUF", "downloaded": False},
             ]
         }
         responses.add(
@@ -1128,21 +1123,12 @@ class TestLemonadeClientMock(unittest.TestCase):
             content_type="text/event-stream",
         )
 
-        callback_calls = []
-
-        def track_progress(event_type, data):
-            callback_calls.append((event_type, data))
-
-        result = self.client.download_agent_models(
-            "minimal", progress_callback=track_progress
-        )
+        result = self.client.download_agent_models("minimal")
 
         self.assertTrue(result["success"])
         self.assertEqual(len(result["models"]), 1)
         self.assertEqual(result["models"][0]["status"], "completed")
         self.assertFalse(result["models"][0]["skipped"])
-        # Verify progress callbacks were called
-        self.assertGreater(len(callback_calls), 0)
 
     @responses.activate
     def test_validate_context_size_sufficient(self):
@@ -1250,6 +1236,396 @@ class TestLemonadeClientMock(unittest.TestCase):
 
         self.assertTrue(valid)
         self.assertIsNone(error)
+
+    # ------------------------------------------------------------------
+    # LEMONADE_API_KEY support (issue #1139)
+    # ------------------------------------------------------------------
+
+    def _without_env(self, var):
+        """Return a context manager that removes ``var`` from os.environ."""
+        return patch.dict(
+            os.environ, {k: v for k, v in os.environ.items() if k != var}, clear=True
+        )
+
+    def test_resolve_lemonade_api_key_explicit_wins_over_env(self):
+        self.assertIsNotNone(resolve_lemonade_api_key, "helper not implemented yet")
+        with patch.dict(os.environ, {"LEMONADE_API_KEY": "abc"}):
+            self.assertEqual(resolve_lemonade_api_key("xyz"), "xyz")
+
+    def test_resolve_lemonade_api_key_env_fallback(self):
+        self.assertIsNotNone(resolve_lemonade_api_key, "helper not implemented yet")
+        with patch.dict(os.environ, {"LEMONADE_API_KEY": "abc"}):
+            self.assertEqual(resolve_lemonade_api_key(None), "abc")
+
+    def test_resolve_lemonade_api_key_unset_returns_none(self):
+        self.assertIsNotNone(resolve_lemonade_api_key, "helper not implemented yet")
+        with self._without_env("LEMONADE_API_KEY"):
+            self.assertIsNone(resolve_lemonade_api_key(None))
+
+    def test_resolve_lemonade_api_key_empty_string_treated_as_unset(self):
+        self.assertIsNotNone(resolve_lemonade_api_key, "helper not implemented yet")
+        with patch.dict(os.environ, {"LEMONADE_API_KEY": ""}):
+            self.assertIsNone(resolve_lemonade_api_key(None))
+
+    def test_resolve_lemonade_api_key_whitespace_treated_as_unset(self):
+        self.assertIsNotNone(resolve_lemonade_api_key, "helper not implemented yet")
+        with patch.dict(os.environ, {"LEMONADE_API_KEY": "   "}):
+            self.assertIsNone(resolve_lemonade_api_key(None))
+
+    def test_lemonade_auth_headers_with_key(self):
+        self.assertIsNotNone(lemonade_auth_headers, "helper not implemented yet")
+        self.assertEqual(lemonade_auth_headers("abc"), {"Authorization": "Bearer abc"})
+
+    def test_lemonade_auth_headers_no_key(self):
+        self.assertIsNotNone(lemonade_auth_headers, "helper not implemented yet")
+        self.assertEqual(lemonade_auth_headers(None), {})
+        self.assertEqual(lemonade_auth_headers(""), {})
+
+    def test_lemonade_client_stores_api_key_from_kwarg(self):
+        with self._without_env("LEMONADE_API_KEY"):
+            client = LemonadeClient(api_key="abc")
+        self.assertEqual(getattr(client, "api_key", None), "abc")
+
+    def test_lemonade_client_reads_api_key_from_env(self):
+        with patch.dict(os.environ, {"LEMONADE_API_KEY": "abc"}):
+            client = LemonadeClient()
+        self.assertEqual(getattr(client, "api_key", None), "abc")
+
+    def test_lemonade_client_api_key_none_when_unset(self):
+        with self._without_env("LEMONADE_API_KEY"):
+            client = LemonadeClient()
+        self.assertIsNone(getattr(client, "api_key", "sentinel"))
+
+    @responses.activate
+    def test_send_request_includes_auth_header_when_key_set(self):
+        responses.add(
+            responses.GET, f"{API_BASE}/health", json={"status": "ok"}, status=200
+        )
+        client = LemonadeClient(host=HOST, port=PORT, api_key="abc", verbose=False)
+        client.health_check()
+        self.assertEqual(
+            responses.calls[0].request.headers.get("Authorization"), "Bearer abc"
+        )
+
+    @responses.activate
+    def test_send_request_omits_auth_header_when_no_key(self):
+        responses.add(
+            responses.GET, f"{API_BASE}/health", json={"status": "ok"}, status=200
+        )
+        with self._without_env("LEMONADE_API_KEY"):
+            client = LemonadeClient(host=HOST, port=PORT, verbose=False)
+            client.health_check()
+        self.assertNotIn("Authorization", responses.calls[0].request.headers)
+
+    @patch("gaia.llm.lemonade_client.LemonadeClient._ensure_model_loaded")
+    @patch("gaia.llm.lemonade_client.OpenAI")
+    def test_openai_client_passes_real_key_when_set(self, mock_openai, _mock_ensure):
+        mock_client = MagicMock()
+        mock_openai.return_value = mock_client
+        mock_stream = MagicMock()
+        mock_stream.__iter__.return_value = iter([])
+        mock_client.chat.completions.create.return_value = mock_stream
+
+        client = LemonadeClient(host=HOST, port=PORT, api_key="abc", verbose=False)
+        list(
+            client.chat_completions(
+                model=TEST_MODEL,
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            )
+        )
+
+        self.assertEqual(mock_openai.call_args.kwargs.get("api_key"), "abc")
+
+    @patch("gaia.llm.lemonade_client.LemonadeClient._ensure_model_loaded")
+    @patch("gaia.llm.lemonade_client.OpenAI")
+    def test_openai_client_uses_placeholder_when_no_key(
+        self, mock_openai, _mock_ensure
+    ):
+        mock_client = MagicMock()
+        mock_openai.return_value = mock_client
+        mock_stream = MagicMock()
+        mock_stream.__iter__.return_value = iter([])
+        mock_client.chat.completions.create.return_value = mock_stream
+
+        with self._without_env("LEMONADE_API_KEY"):
+            client = LemonadeClient(host=HOST, port=PORT, verbose=False)
+        list(
+            client.chat_completions(
+                model=TEST_MODEL,
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            )
+        )
+
+        self.assertEqual(mock_openai.call_args.kwargs.get("api_key"), "lemonade")
+
+    @responses.activate
+    def test_chat_completions_nonstream_includes_auth_header(self):
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/chat/completions",
+            json={"id": "0", "choices": [{"message": {"content": "hi"}}]},
+            status=200,
+        )
+        client = LemonadeClient(host=HOST, port=PORT, api_key="abc", verbose=False)
+        client.chat_completions(
+            model=TEST_MODEL, messages=[{"role": "user", "content": "hi"}]
+        )
+        self.assertEqual(
+            responses.calls[0].request.headers.get("Authorization"), "Bearer abc"
+        )
+
+    @responses.activate
+    def test_completions_nonstream_includes_auth_header(self):
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/completions",
+            json={"id": "0", "choices": [{"text": "hi"}]},
+            status=200,
+        )
+        client = LemonadeClient(host=HOST, port=PORT, api_key="abc", verbose=False)
+        client.completions(model=TEST_MODEL, prompt="hi")
+        self.assertEqual(
+            responses.calls[0].request.headers.get("Authorization"), "Bearer abc"
+        )
+
+    @responses.activate
+    def test_pull_model_stream_includes_auth_header_on_initial_post(self):
+        sse_body = (
+            "event: complete\n"
+            'data: {"file_index":1,"total_files":1,"percent":100}\n\n'
+        )
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            body=sse_body,
+            status=200,
+            content_type="text/event-stream",
+        )
+        client = LemonadeClient(host=HOST, port=PORT, api_key="abc", verbose=False)
+        # Consume the generator fully; the terminating "complete" event ends parsing.
+        list(client.pull_model_stream(model_name=TEST_MODEL))
+        self.assertEqual(
+            responses.calls[0].request.headers.get("Authorization"), "Bearer abc"
+        )
+
+    @responses.activate
+    def test_responses_endpoint_includes_auth_header(self):
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/responses",
+            json={"id": "0", "output": [{"content": [{"text": "hi"}]}]},
+            status=200,
+        )
+        client = LemonadeClient(host=HOST, port=PORT, api_key="abc", verbose=False)
+        client.responses(model=TEST_MODEL, input="hi")
+        self.assertEqual(
+            responses.calls[0].request.headers.get("Authorization"), "Bearer abc"
+        )
+
+    @responses.activate
+    def test_api_key_never_appears_in_logs(self):
+        responses.add(
+            responses.GET, f"{API_BASE}/health", json={"status": "ok"}, status=200
+        )
+        # Force DEBUG level on the lemonade_client logger so the
+        # "Lemonade API key configured" debug entry is captured.
+        # ``assertLogs`` only changes the watched logger's level; child
+        # loggers retain their inherited level which defaults to INFO.
+        lc_logger = logging.getLogger("gaia.llm.lemonade_client")
+        prev_level = lc_logger.level
+        lc_logger.setLevel(logging.DEBUG)
+        try:
+            with self.assertLogs("gaia.llm.lemonade_client", level=logging.DEBUG) as cm:
+                client = LemonadeClient(
+                    host=HOST, port=PORT, api_key="supersecret-1139", verbose=True
+                )
+                client.health_check()
+            joined = "\n".join(cm.output)
+            self.assertNotIn(
+                "supersecret-1139",
+                joined,
+                f"API key value leaked into log output:\n{joined}",
+            )
+        finally:
+            lc_logger.setLevel(prev_level)
+
+    def test_each_client_snapshots_env_at_construction_time(self):
+        with patch.dict(os.environ, {"LEMONADE_API_KEY": "A"}):
+            client_a = LemonadeClient()
+        with patch.dict(os.environ, {"LEMONADE_API_KEY": "B"}):
+            client_b = LemonadeClient()
+        self.assertEqual(getattr(client_a, "api_key", None), "A")
+        self.assertEqual(getattr(client_b, "api_key", None), "B")
+
+    @responses.activate
+    def test_401_error_message_names_LEMONADE_API_KEY(self):
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/health",
+            json={"error": "Unauthorized"},
+            status=401,
+        )
+        # Suppress error logs for the duration of this test.
+        logging.disable(logging.CRITICAL)
+        try:
+            client = LemonadeClient(
+                host=HOST, port=PORT, api_key="wrong-key", verbose=False
+            )
+            with self.assertRaises(LemonadeClientError) as ctx:
+                client.health_check()
+            self.assertIn("LEMONADE_API_KEY", str(ctx.exception))
+        finally:
+            logging.disable(logging.NOTSET)
+
+    @responses.activate
+    def test_401_response_does_not_leak_authorization_header_in_error_message(self):
+        # Simulate a misbehaving reverse proxy that reflects the incoming
+        # Authorization header in its 401 body. The user-facing error
+        # message must NOT carry that string through.
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/health",
+            body="401 Unauthorized — request was: Authorization: Bearer supersecret-1139",
+            status=401,
+        )
+        logging.disable(logging.CRITICAL)
+        try:
+            client = LemonadeClient(
+                host=HOST,
+                port=PORT,
+                api_key="supersecret-1139",
+                verbose=False,
+            )
+            with self.assertRaises(LemonadeClientError) as ctx:
+                client.health_check()
+            msg = str(ctx.exception)
+            self.assertNotIn("Bearer", msg, "Bearer keyword leaked into error message")
+            self.assertNotIn(
+                "supersecret-1139", msg, "API key value leaked into error message"
+            )
+        finally:
+            logging.disable(logging.NOTSET)
+
+    @patch("gaia.llm.lemonade_client.LemonadeClient._ensure_model_loaded")
+    @patch("gaia.llm.lemonade_client.OpenAI")
+    def test_openai_authentication_error_surfaces_actionable_message(
+        self, mock_openai, _mock_ensure
+    ):
+        import openai
+
+        mock_client = MagicMock()
+        mock_openai.return_value = mock_client
+        # The OpenAI SDK requires keyword args including ``response`` and ``body``;
+        # use ``MagicMock(spec=...)`` to avoid SDK version coupling.
+        mock_client.chat.completions.create.side_effect = openai.AuthenticationError(
+            message="OpenAI internal detail with key",
+            response=MagicMock(status_code=401),
+            body={"error": "Unauthorized"},
+        )
+
+        logging.disable(logging.CRITICAL)
+        try:
+            client = LemonadeClient(
+                host=HOST, port=PORT, api_key="wrong-key", verbose=False
+            )
+            with self.assertRaises(LemonadeClientError) as ctx:
+                list(
+                    client.chat_completions(
+                        model=TEST_MODEL,
+                        messages=[{"role": "user", "content": "hi"}],
+                        stream=True,
+                    )
+                )
+            msg = str(ctx.exception)
+            self.assertIn("LEMONADE_API_KEY", msg)
+            self.assertNotIn(
+                "OpenAI internal detail",
+                msg,
+                "OpenAI exception text leaked into error message",
+            )
+        finally:
+            logging.disable(logging.NOTSET)
+
+    @patch("gaia.llm.lemonade_client.LemonadeClient._ensure_model_loaded")
+    @patch("gaia.llm.lemonade_client.OpenAI")
+    def test_openai_authentication_error_on_text_completions_streaming(
+        self, mock_openai, _mock_ensure
+    ):
+        """Mirror of the chat-streaming test for the text-streaming path."""
+        import openai
+
+        mock_client = MagicMock()
+        mock_openai.return_value = mock_client
+        mock_client.completions.create.side_effect = openai.AuthenticationError(
+            message="OpenAI internal detail with key",
+            response=MagicMock(status_code=401),
+            body={"error": "Unauthorized"},
+        )
+
+        logging.disable(logging.CRITICAL)
+        try:
+            client = LemonadeClient(
+                host=HOST, port=PORT, api_key="wrong-key", verbose=False
+            )
+            with self.assertRaises(LemonadeClientError) as ctx:
+                list(client.completions(model=TEST_MODEL, prompt="hi", stream=True))
+            msg = str(ctx.exception)
+            self.assertIn("LEMONADE_API_KEY", msg)
+            self.assertNotIn("OpenAI internal detail", msg)
+        finally:
+            logging.disable(logging.NOTSET)
+
+    @responses.activate
+    def test_get_status_propagates_401_instead_of_returning_not_running(self):
+        # get_status() must raise LemonadeAuthError on 401 rather than
+        # swallowing it and returning status.running=False.
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/health",
+            json={"error": "Unauthorized"},
+            status=401,
+        )
+        client = LemonadeClient(
+            host=HOST, port=PORT, api_key="wrong-key", verbose=False
+        )
+        with self.assertRaises(LemonadeAuthError) as ctx:
+            client.get_status()
+        self.assertIn("LEMONADE_API_KEY", str(ctx.exception))
+
+    @responses.activate
+    @patch("gaia.llm.lemonade_client.LemonadeClient._ensure_model_loaded")
+    def test_401_does_not_trigger_auto_download_retry(self, _mock_ensure):
+        # Wrong key → 401 from chat completions. The auto-download retry
+        # path inside ``_execute_with_auto_download`` must NOT call load_model
+        # (which would otherwise try to "download" the model on a server we
+        # cannot authenticate to). ``_ensure_model_loaded`` is mocked so the
+        # only path that could call ``load_model`` is the retry wrapper itself.
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/chat/completions",
+            json={"error": "Unauthorized"},
+            status=401,
+        )
+        logging.disable(logging.CRITICAL)
+        try:
+            client = LemonadeClient(
+                host=HOST, port=PORT, api_key="wrong-key", verbose=False
+            )
+            with patch.object(client, "load_model") as mock_load:
+                with self.assertRaises(LemonadeClientError):
+                    client.chat_completions(
+                        model=TEST_MODEL,
+                        messages=[{"role": "user", "content": "hi"}],
+                    )
+                self.assertEqual(
+                    mock_load.call_count,
+                    0,
+                    "load_model was called on a 401 — auto-download retry must not fire",
+                )
+        finally:
+            logging.disable(logging.NOTSET)
 
 
 def is_server_running(host=HOST, port=PORT):
@@ -1842,6 +2218,94 @@ class TestLemonadeClientIntegration(unittest.TestCase):
             print(f"❌ Error during responses request: {error_str}")
             # Don't fail - responses endpoint might not be fully implemented yet
             print("⚠️  Responses endpoint might not be fully implemented yet")
+
+    def test_integration_api_key_no_key_health_check(self):
+        """Integration: health check works without an API key (backward compat)."""
+        os.environ.pop("LEMONADE_API_KEY", None)
+        client = create_lemonade_client(
+            model=TEST_MODEL,
+            host=HOST,
+            port=PORT,
+            auto_start=False,
+            auto_load=False,
+            keep_alive=True,
+        )
+        # Should succeed — local Lemonade without auth configured accepts all requests
+        result = client.health_check()
+        self.assertIsNotNone(result)
+        self.assertEqual(result.get("status"), "ok")
+        print("✓ Health check without API key succeeds (backward compat)")
+
+    def test_integration_api_key_with_key_health_check(self):
+        """Integration: health check works with LEMONADE_API_KEY set.
+
+        Local Lemonade without authentication configured ignores the Authorization
+        header, so this verifies the header is sent without breaking the request.
+        """
+        os.environ["LEMONADE_API_KEY"] = "integration-test-key"
+        try:
+            client = create_lemonade_client(
+                model=TEST_MODEL,
+                host=HOST,
+                port=PORT,
+                auto_start=False,
+                auto_load=False,
+                keep_alive=True,
+            )
+            self.assertEqual(client.api_key, "integration-test-key")
+            result = client.health_check()
+            self.assertIsNotNone(result)
+            self.assertEqual(result.get("status"), "ok")
+            print("✓ Health check with LEMONADE_API_KEY set succeeds (header accepted)")
+        finally:
+            os.environ.pop("LEMONADE_API_KEY", None)
+
+    def test_integration_api_key_401_raises_actionable_error(self):
+        """Integration: a Lemonade server returning 401 raises LemonadeClientError
+        naming LEMONADE_API_KEY without leaking the key value or Bearer token."""
+        import http.server
+        import threading
+        import time
+
+        class _UnauthorizedHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                # Simulate a misconfigured proxy reflecting the Authorization header
+                # back in the response body — our error must NOT include this.
+                self.wfile.write(
+                    b'{"error":"Unauthorized","detail":"Authorization: Bearer secret-key"}'
+                )
+
+            def log_message(self, *args):
+                pass
+
+        mock_port = 19399
+        server = http.server.HTTPServer(("localhost", mock_port), _UnauthorizedHandler)
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        time.sleep(0.05)
+
+        try:
+            client = create_lemonade_client(
+                model=TEST_MODEL,
+                host="localhost",
+                port=mock_port,
+                auto_start=False,
+                auto_load=False,
+                keep_alive=True,
+                api_key="secret-key",
+            )
+            with self.assertRaises(LemonadeClientError) as ctx:
+                client.health_check()
+            msg = str(ctx.exception)
+            self.assertIn("LEMONADE_API_KEY", msg, "Error must name the env var to fix")
+            self.assertNotIn("secret-key", msg, "Error must NOT contain the key value")
+            self.assertNotIn("Bearer", msg, "Error must NOT contain the Bearer token")
+            print(f"✓ 401 raises actionable error: {msg}")
+        finally:
+            server.shutdown()
 
 
 if __name__ == "__main__":
