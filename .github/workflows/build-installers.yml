@@ -1008,6 +1008,45 @@ jobs:
           wait "$APP_PID" 2>/dev/null || true
           echo "userns-restricted PASS (--no-sandbox fallback + /api/health 200)"
 
+  custom-agent-mcp-harness:
+    name: Custom agent MCP harness (${{ matrix.os }})
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install GAIA with MCP test dependencies
+        run: python -m pip install -e ".[dev,mcp]"
+
+      - name: Run custom-agent MCP harness
+        env:
+          GAIA_INSTALLER_HARNESS_ARTIFACT_DIR: ${{ runner.temp }}/gaia-installer-agent-harness
+        run: >
+          python -m pytest
+          tests/fixtures/mcp/dummy_server/test_dummy_server.py
+          tests/installer/test_custom_agent_mcp_harness.py
+          -v --tb=short
+
+      - name: Upload custom-agent MCP harness logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: custom-agent-mcp-harness-${{ matrix.os }}
+          path: ${{ runner.temp }}/gaia-installer-agent-harness
+          if-no-files-found: ignore
+
   # ─── Wayland visibility (DEFERRED — issue #782 follow-up) ───────────
   # The plan calls for a headless Wayland compositor (cage -s or weston
   # --backend=headless-backend.so) plus pixel-diff via grim, to verify
@@ -1076,7 +1115,8 @@ jobs:
   # publish.yml (or any caller) should wait on.
   #
   # The smoke jobs (appimage-structural-smoke, appimage-distro-matrix,
-  # appimage-userns-restricted) are issue #782 regression guards — a
+  # appimage-userns-restricted) are issue #782 regression guards. The
+  # custom-agent MCP harness is issue #993's installed-runtime guard. A
   # broken AppImage that still builds but does not launch would slip past
   # if we gated only on `build`.
   build-complete:
@@ -1087,6 +1127,7 @@ jobs:
       - appimage-structural-smoke
       - appimage-distro-matrix
       - appimage-userns-restricted
+      - custom-agent-mcp-harness
       - dmg-structural-smoke
     if: always()
     steps:
@@ -1097,18 +1138,20 @@ jobs:
           structural_result="${{ needs.appimage-structural-smoke.result }}"
           distro_result="${{ needs.appimage-distro-matrix.result }}"
           userns_result="${{ needs.appimage-userns-restricted.result }}"
+          mcp_harness_result="${{ needs.custom-agent-mcp-harness.result }}"
           dmg_result="${{ needs.dmg-structural-smoke.result }}"
           echo "build:                       $build_result"
           echo "appimage-structural-smoke:   $structural_result"
           echo "appimage-distro-matrix:      $distro_result"
           echo "appimage-userns-restricted:  $userns_result"
+          echo "custom-agent-mcp-harness:    $mcp_harness_result"
           echo "dmg-structural-smoke:        $dmg_result"
           fail=0
           if [ "$build_result" != "success" ]; then
             echo "::error::One or more platform installer builds failed"
             fail=1
           fi
-          for r in "$structural_result" "$distro_result" "$userns_result" "$dmg_result"; do
+          for r in "$structural_result" "$distro_result" "$userns_result" "$mcp_harness_result" "$dmg_result"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
               echo "::error::Installer smoke job failed (status: $r)"
               fail=1

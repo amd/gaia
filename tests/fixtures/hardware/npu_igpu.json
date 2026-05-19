@@ -1,0 +1,7 @@
+{
+  "devices": {
+    "amd_npu": { "power_mode": "performance", "npu_cores": 2 },
+    "amd_igpu": { "memory_mb": 4096 },
+    "cpu": { "cores": 8 }
+  }
+}

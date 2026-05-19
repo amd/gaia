@@ -1,3 +1,4 @@
+import sys
 from importlib import import_module
 
 
@@ -15,3 +16,102 @@ def test_instantiate_new_agents():
 
     f = fileio_mod.FileIOAgent()
     assert f is not None
+
+
+def test_instantiate_browser_and_analyst_agents(tmp_path):
+    browser_mod = import_module("gaia.agents.browser.agent")
+    analyst_mod = import_module("gaia.agents.analyst.agent")
+
+    browser = browser_mod.BrowserAgent()
+    assert {"fetch_page", "search_web", "download_file"} <= set(
+        browser.get_tools_info()
+    )
+    assert "query_data" not in browser.get_tools_info()
+    browser.close()
+
+    analyst = analyst_mod.AnalystAgent(
+        analyst_mod.AnalystAgentConfig(
+            scratchpad_db_path=str(tmp_path / "scratchpad.db")
+        )
+    )
+    assert {
+        "create_table",
+        "insert_data",
+        "query_data",
+        "list_tables",
+        "drop_table",
+    } == set(analyst.get_tools_info())
+    analyst.close()
+
+
+def test_registry_uses_specialized_browser_and_analyst_agents(tmp_path):
+    from gaia.agents.analyst.agent import AnalystAgent
+    from gaia.agents.browser.agent import BrowserAgent
+    from gaia.agents.registry import AgentRegistry
+
+    registry = AgentRegistry()
+    registry._register_builtin_agents()
+
+    web = registry.create_agent("web")
+    assert isinstance(web, BrowserAgent)
+    assert {"fetch_page", "search_web", "download_file"} <= set(web.get_tools_info())
+    web.close()
+
+    data = registry.create_agent(
+        "data", scratchpad_db_path=str(tmp_path / "scratchpad.db")
+    )
+    assert isinstance(data, AnalystAgent)
+    assert "query_data" in data.get_tools_info()
+    assert "fetch_page" not in data.get_tools_info()
+    data.close()
+
+
+def test_registry_uses_specialized_lite_browser_and_analyst_agents(tmp_path):
+    from gaia.agents.analyst.agent import AnalystAgent
+    from gaia.agents.browser.agent import BrowserAgent
+    from gaia.agents.registry import AgentRegistry
+
+    registry = AgentRegistry()
+    registry._register_builtin_agents()
+
+    lite_model = registry.get("web-lite").models[0]
+    web = registry.create_agent("web-lite")
+    assert isinstance(web, BrowserAgent)
+    assert web.config.model_id == lite_model
+    assert {"fetch_page", "search_web", "download_file"} <= set(web.get_tools_info())
+    web.close()
+
+    lite_model = registry.get("data-lite").models[0]
+    data = registry.create_agent(
+        "data-lite", scratchpad_db_path=str(tmp_path / "scratchpad.db")
+    )
+    assert isinstance(data, AnalystAgent)
+    assert data.config.model_id == lite_model
+    assert "query_data" in data.get_tools_info()
+    assert "fetch_page" not in data.get_tools_info()
+    data.close()
+
+
+def test_browse_and_analyze_cli_list_tools(monkeypatch, tmp_path, capsys):
+    from gaia import cli
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    original_argv = sys.argv
+    try:
+        sys.argv = ["gaia", "browse", "--no-lemonade-check", "--list-tools"]
+        cli.main()
+        browse_output = capsys.readouterr().out
+        assert "Registered Tools for BrowserAgent" in browse_output
+        assert "fetch_page" in browse_output
+        assert "search_web" in browse_output
+        assert "query_data" not in browse_output
+
+        sys.argv = ["gaia", "analyze", "--no-lemonade-check", "--list-tools"]
+        cli.main()
+        analyze_output = capsys.readouterr().out
+        assert "Registered Tools for AnalystAgent" in analyze_output
+        assert "query_data" in analyze_output
+        assert "create_table" in analyze_output
+        assert "fetch_page" not in analyze_output
+    finally:
+        sys.argv = original_argv

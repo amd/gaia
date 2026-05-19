@@ -508,13 +508,15 @@ async def async_main(action, **kwargs):
     action_to_agent = {
         "prompt": "minimal",  # Basic prompts use minimal profile
         "chat": "chat",
+        "browse": "chat",
+        "analyze": "chat",
         "talk": "talk",
         "stats": "minimal",
     }
 
     # Initialize Lemonade with agent-specific profile
     lemonade_base_url = kwargs.get("base_url")  # May be None if not specified
-    if action in action_to_agent:
+    if action in action_to_agent and not kwargs.get("no_lemonade_check", False):
         agent_profile = action_to_agent[action]
         use_claude = kwargs.get("use_claude", False)
         use_chatgpt = kwargs.get("use_chatgpt", False)
@@ -684,6 +686,73 @@ async def async_main(action, **kwargs):
                     agent.stop_watching()
             except Exception:  # pylint: disable=broad-except
                 pass
+    elif action in ("browse", "analyze"):
+        if action == "browse":
+            from gaia.agents.browser.agent import BrowserAgent, BrowserAgentConfig
+
+            agent = BrowserAgent(
+                BrowserAgentConfig(
+                    use_claude=kwargs.get("use_claude", False),
+                    use_chatgpt=kwargs.get("use_chatgpt", False),
+                    claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
+                    base_url=kwargs.get("base_url"),
+                    model_id=kwargs.get("model", None),
+                    max_steps=kwargs.get("max_steps", 100),
+                    streaming=kwargs.get("stream", False),
+                    show_prompts=kwargs.get("show_prompts", False),
+                    show_stats=kwargs.get("show_stats", False),
+                    silent_mode=not (
+                        kwargs.get("debug", False) or kwargs.get("list_tools", False)
+                    ),
+                    debug=kwargs.get("debug", False),
+                    allowed_paths=kwargs.get("allowed_paths", None),
+                )
+            )
+        else:
+            from gaia.agents.analyst.agent import AnalystAgent, AnalystAgentConfig
+
+            agent = AnalystAgent(
+                AnalystAgentConfig(
+                    use_claude=kwargs.get("use_claude", False),
+                    use_chatgpt=kwargs.get("use_chatgpt", False),
+                    claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
+                    base_url=kwargs.get("base_url"),
+                    model_id=kwargs.get("model", None),
+                    max_steps=kwargs.get("max_steps", 100),
+                    streaming=kwargs.get("stream", False),
+                    show_prompts=kwargs.get("show_prompts", False),
+                    show_stats=kwargs.get("show_stats", False),
+                    silent_mode=not (
+                        kwargs.get("debug", False) or kwargs.get("list_tools", False)
+                    ),
+                    debug=kwargs.get("debug", False),
+                    allowed_paths=kwargs.get("allowed_paths", None),
+                )
+            )
+
+        try:
+            if kwargs.get("list_tools", False):
+                agent.list_tools(verbose=True)
+                return 0
+
+            query = kwargs.get("query")
+            if query:
+                result = agent.process_query(query, trace=kwargs.get("trace", False))
+                if kwargs.get("show_stats", False) and result.get("duration"):
+                    agent.console.display_stats(result)
+                return 0 if result["status"] == "success" else 1
+
+            print(f"Starting {agent.__class__.__name__}. Type /quit to exit.")
+            while True:
+                user_input = input("\nYou: ").strip()
+                if not user_input:
+                    continue
+                if user_input.lower() in {"/quit", "/exit"}:
+                    return 0
+                agent.process_query(user_input, trace=kwargs.get("trace", False))
+        finally:
+            if hasattr(agent, "close"):
+                agent.close()
     elif action == "talk":
         # Use TalkSDK for voice functionality
         from gaia.talk.sdk import TalkConfig, TalkSDK
@@ -1124,6 +1193,32 @@ def main():
         default=None,
         help="Path to pre-built Agent UI frontend dist directory (used with --ui)",
     )
+    for agent_command, agent_help in (
+        ("browse", "Web research with search, page fetch, and download tools"),
+        ("analyze", "Structured data analysis with scratchpad tables"),
+    ):
+        agent_parser = subparsers.add_parser(
+            agent_command,
+            help=agent_help,
+            parents=[parent_parser],
+        )
+        agent_parser.add_argument(
+            "--query",
+            "-q",
+            type=str,
+            help="Single query to execute (defaults to interactive mode if not provided)",
+        )
+        agent_parser.add_argument(
+            "--show-prompts", action="store_true", help="Display prompts sent to LLM"
+        )
+        agent_parser.add_argument(
+            "--debug", action="store_true", help="Enable debug output"
+        )
+        agent_parser.add_argument(
+            "--allowed-paths",
+            nargs="+",
+            help="Allowed directory paths for file operations",
+        )
     talk_parser = subparsers.add_parser(
         "talk", help="Start voice conversation with Gaia", parents=[parent_parser]
     )
@@ -2499,7 +2594,7 @@ Examples:
         return
 
     # Handle core Gaia CLI commands
-    if args.action in ["prompt", "chat", "talk", "stats"]:
+    if args.action in ["prompt", "chat", "browse", "analyze", "talk", "stats"]:
         kwargs = {
             k: v for k, v in vars(args).items() if v is not None and k != "action"
         }

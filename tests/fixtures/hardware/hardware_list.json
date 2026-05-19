@@ -1,0 +1,12 @@
+{
+  "devices": [
+    {
+      "device_type": "amd_igpu",
+      "name": "Radeon Vega"
+    },
+    {
+      "device_type": "cpu",
+      "name": "x86_64"
+    }
+  ]
+}

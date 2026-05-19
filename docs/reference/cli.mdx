@@ -545,6 +545,45 @@ During a chat session, use these special commands:
 | `/help` | Show available commands |
 | `quit`, `exit`, `bye` | End the chat session |
 
+### Specialized Agent Commands
+
+Use focused agent commands when you want a smaller tool surface than the full chat agent.
+
+```bash
+gaia browse [OPTIONS]
+gaia analyze [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--query, -q` | string | - | Single query to execute |
+| `--model` | string | auto-selected by agent | Override the model used by the agent |
+| `--allowed-paths` | path(s) | - | Restrict local file paths used by agent tools |
+| `--stats`, `--show-stats` | flag | false | Show performance statistics |
+| `--stream` | flag | false | Enable streaming responses |
+| `--show-prompts` | flag | false | Display prompts sent to LLM |
+| `--debug` | flag | false | Enable debug output |
+| `--list-tools` | flag | false | List available tools and exit |
+
+**Examples:**
+
+<CodeGroup>
+```bash Browser Agent
+gaia browse --query "Search the web for AMD GAIA documentation"
+```
+
+```bash Analyst Agent
+gaia analyze --query 'Create a transactions table with date TEXT and amount REAL'
+```
+
+```bash Inspect Tools
+gaia browse --list-tools
+gaia analyze --list-tools
+```
+</CodeGroup>
+
 ---
 
 ### Prompt Command
