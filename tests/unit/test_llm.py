@@ -450,5 +450,45 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
                 mock_print_context.assert_not_called()
 
 
+class TestGetLemonadeConfigNormalization(unittest.TestCase):
+    """Verify _get_lemonade_config normalizes LEMONADE_BASE_URL to include /api/v1."""
+
+    def test_env_url_without_api_suffix_is_normalized(self):
+        """LEMONADE_BASE_URL without /api/v1 should be normalized (issue #1158)."""
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        with patch.dict(os.environ, {"LEMONADE_BASE_URL": "http://remote:13305"}):
+            _host, _port, base_url = _get_lemonade_config()
+            self.assertEqual(base_url, "http://remote:13305/api/v1")
+
+    def test_env_url_with_api_suffix_unchanged(self):
+        """LEMONADE_BASE_URL already containing /api/v1 should not be doubled."""
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        with patch.dict(
+            os.environ, {"LEMONADE_BASE_URL": "http://remote:13305/api/v1"}
+        ):
+            _host, _port, base_url = _get_lemonade_config()
+            self.assertEqual(base_url, "http://remote:13305/api/v1")
+
+    def test_env_url_with_trailing_slash_normalized(self):
+        """Trailing slash should be stripped before appending /api/v1."""
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        with patch.dict(os.environ, {"LEMONADE_BASE_URL": "http://remote:13305/"}):
+            _host, _port, base_url = _get_lemonade_config()
+            self.assertEqual(base_url, "http://remote:13305/api/v1")
+
+    def test_env_url_host_and_port_extracted(self):
+        """Host and port should be correctly parsed from the normalized URL."""
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        with patch.dict(os.environ, {"LEMONADE_BASE_URL": "http://myhost:9000"}):
+            host, port, base_url = _get_lemonade_config()
+            self.assertEqual(host, "myhost")
+            self.assertEqual(port, 9000)
+            self.assertEqual(base_url, "http://myhost:9000/api/v1")
+
+
 if __name__ == "__main__":
     unittest.main()

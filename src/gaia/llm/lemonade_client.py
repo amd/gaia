@@ -61,7 +61,7 @@ def _get_lemonade_config() -> tuple:
     Get Lemonade host, port, and base_url from environment or defaults.
 
     Parses LEMONADE_BASE_URL env var if set, otherwise uses defaults.
-    The base_url is expected to include /api/v1 suffix per documentation.
+    Normalizes the URL to include /api/v1 suffix if omitted.
 
     Returns:
         Tuple of (host, port, base_url)
@@ -69,6 +69,9 @@ def _get_lemonade_config() -> tuple:
     from urllib.parse import urlparse
 
     base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+    # Normalize: ensure base_url includes /api/v1 suffix (users often omit it)
+    if not base_url.rstrip("/").endswith(f"/api/{LEMONADE_API_VERSION}"):
+        base_url = f"{base_url.rstrip('/')}/api/{LEMONADE_API_VERSION}"
     # Parse the URL to extract host and port for backwards compatibility
     parsed = urlparse(base_url)
     host = parsed.hostname or DEFAULT_HOST
