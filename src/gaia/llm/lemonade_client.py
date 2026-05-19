@@ -83,6 +83,29 @@ def _get_lemonade_config() -> tuple:
     return (host, port, base_url)
 
 
+def resolve_lemonade_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    """Resolve the Lemonade API key from argument, env var, or None.
+
+    Empty or whitespace-only env values are treated as unset to avoid
+    sending a malformed ``Bearer `` header to authenticated Lemonade
+    servers (which would reject it).
+    """
+    if api_key is not None:
+        return api_key
+    env_value = os.getenv("LEMONADE_API_KEY")
+    if env_value is None:
+        return None
+    stripped = env_value.strip()
+    return stripped or None
+
+
+def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
+    """Return ``Authorization`` headers for Lemonade, or empty when unauthenticated."""
+    if not api_key:
+        return {}
+    return {"Authorization": f"Bearer {api_key}"}
+
+
 # =========================================================================
 # Model Configuration Defaults
 # =========================================================================
@@ -702,6 +725,7 @@ class LemonadeClient:
         base_url: Optional[str] = None,
         verbose: bool = True,
         keep_alive: bool = False,
+        api_key: Optional[str] = None,
     ):
         """
         Initialize the Lemonade client.
@@ -713,6 +737,8 @@ class LemonadeClient:
             base_url: Base URL for the Lemonade server (defaults to LEMONADE_BASE_URL env var)
             verbose: If False, reduce logging verbosity during initialization
             keep_alive: If True, don't terminate server in __del__
+            api_key: API key for an authenticated Lemonade server (defaults to
+                LEMONADE_API_KEY env var; ``None`` for unauthenticated)
         """
         from urllib.parse import urlparse
 
@@ -744,6 +770,7 @@ class LemonadeClient:
         self.log = get_logger(__name__)
         self.keep_alive = keep_alive
         self._log_file = None
+        self.api_key = resolve_lemonade_api_key(api_key)
 
         # Track active downloads for cancellation support
         self.active_downloads: Dict[str, DownloadTask] = {}
@@ -756,6 +783,9 @@ class LemonadeClient:
         self.log.debug(f"Initialized Lemonade client for {host}:{port}")
         if model:
             self.log.debug(f"Initial model set to: {model}")
+        if self.api_key:
+            # Never log the key value itself — only its presence.
+            self.log.debug("Lemonade API key configured")
 
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
@@ -1368,9 +1398,16 @@ class LemonadeClient:
             response = requests.post(
                 url,
                 json=data,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **self._auth_headers()},
                 timeout=timeout,
             )
+
+            if response.status_code == 401:
+                raise LemonadeClientError(
+                    "Lemonade returned 401 Unauthorized for /chat/completions. "
+                    "Verify LEMONADE_API_KEY is correct (currently "
+                    f"{'set' if self.api_key else 'unset'})."
+                )
 
             if response.status_code != 200:
                 error_msg = (
@@ -1434,10 +1471,13 @@ class LemonadeClient:
         # Proactively ensure model is loaded before making request
         self._ensure_model_loaded(model, auto_download)
 
-        # Create a client just for this request
+        # Create a client just for this request.
+        # ``api_key`` is required by the OpenAI SDK (rejects None/"" with
+        # OpenAIError); when no real key is configured the placeholder is
+        # ignored by Lemonade itself on unauthenticated servers.
         client = OpenAI(
             base_url=self.base_url,
-            api_key="lemonade",  # required, but unused
+            api_key=self.api_key or "lemonade",
             timeout=timeout,
         )
 
@@ -1530,6 +1570,14 @@ class LemonadeClient:
                 f"Completed streaming chat completion. Generated {tokens_generated} tokens."
             )
 
+        except openai.AuthenticationError:
+            # Fixed-string error: do NOT include str(e), as the OpenAI SDK's
+            # exception may stringify the failing request including its
+            # Authorization header.
+            raise LemonadeClientError(
+                "Lemonade rejected the API key (401 Unauthorized) on "
+                "streaming chat completions. Verify LEMONADE_API_KEY is correct."
+            )
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             error_type = e.__class__.__name__
             error_msg = str(e)
@@ -1627,9 +1675,16 @@ class LemonadeClient:
             response = requests.post(
                 url,
                 json=data,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **self._auth_headers()},
                 timeout=timeout,
             )
+
+            if response.status_code == 401:
+                raise LemonadeClientError(
+                    "Lemonade returned 401 Unauthorized for /completions. "
+                    "Verify LEMONADE_API_KEY is correct (currently "
+                    f"{'set' if self.api_key else 'unset'})."
+                )
 
             if response.status_code != 200:
                 error_msg = f"Error in completions (status {response.status_code}): {response.text}"
@@ -1687,7 +1742,7 @@ class LemonadeClient:
 
         client = OpenAI(
             base_url=self.base_url,
-            api_key="lemonade",  # required, but unused
+            api_key=self.api_key or "lemonade",
             timeout=timeout,
         )
 
@@ -1719,6 +1774,11 @@ class LemonadeClient:
                 f"Completed streaming text completion. Generated {tokens_generated} tokens."
             )
 
+        except openai.AuthenticationError:
+            raise LemonadeClientError(
+                "Lemonade rejected the API key (401 Unauthorized) on "
+                "streaming text completions. Verify LEMONADE_API_KEY is correct."
+            )
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             error_type = e.__class__.__name__
             self.log.error(f"OpenAI {error_type}: {str(e)}")
@@ -2086,10 +2146,17 @@ class LemonadeClient:
             response = requests.post(
                 url,
                 json=request_data,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **self._auth_headers()},
                 timeout=(connect_timeout, read_timeout),
                 stream=True,
             )
+
+            if response.status_code == 401:
+                raise LemonadeClientError(
+                    "Lemonade returned 401 Unauthorized for /pull. "
+                    "Verify LEMONADE_API_KEY is correct (currently "
+                    f"{'set' if self.api_key else 'unset'})."
+                )
 
             if response.status_code != 200:
                 error_msg = f"Error pulling model (status {response.status_code}): {response.text}"
@@ -2291,9 +2358,16 @@ class LemonadeClient:
             response = requests.post(
                 url,
                 json=data,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **self._auth_headers()},
                 timeout=timeout,
             )
+
+            if response.status_code == 401:
+                raise LemonadeClientError(
+                    "Lemonade returned 401 Unauthorized for /responses. "
+                    "Verify LEMONADE_API_KEY is correct (currently "
+                    f"{'set' if self.api_key else 'unset'})."
+                )
 
             if response.status_code != 200:
                 error_msg = f"Error in responses (status {response.status_code}): {response.text}"
@@ -3540,6 +3614,10 @@ class LemonadeClient:
 
         return status
 
+    def _auth_headers(self) -> Dict[str, str]:
+        """Authorization headers for this client's configured API key."""
+        return lemonade_auth_headers(self.api_key)
+
     def _send_request(
         self,
         method: str,
@@ -3563,7 +3641,7 @@ class LemonadeClient:
             LemonadeClientError: If the request fails
         """
         try:
-            headers = {"Content-Type": "application/json"}
+            headers = {"Content-Type": "application/json", **self._auth_headers()}
 
             if method.lower() == "get":
                 response = requests.get(url, headers=headers, timeout=timeout)
@@ -3573,6 +3651,20 @@ class LemonadeClient:
                 )
             else:
                 raise LemonadeClientError(f"Unsupported HTTP method: {method}")
+
+            # 401 must be caught BEFORE the generic 4xx branch so the wrong-key
+            # error never includes ``response.text`` — some misconfigured
+            # reverse proxies reflect the request Authorization header in the
+            # 401 body, which would leak the key into our user-visible error.
+            # Also keeps ``_execute_with_auto_download._is_model_error`` from
+            # substring-matching an auth message into a model-not-found retry.
+            if response.status_code == 401:
+                raise LemonadeClientError(
+                    "Lemonade returned 401 Unauthorized. Verify LEMONADE_API_KEY "
+                    f"is correct (currently {'set' if self.api_key else 'unset'}). "
+                    "See https://lemonade-server.ai/docs/guide/configuration/"
+                    "#api-key-and-security"
+                )
 
             if response.status_code >= 400:
                 raise LemonadeClientError(
@@ -3599,6 +3691,7 @@ def create_lemonade_client(
     verbose: bool = True,
     background: str = "terminal",
     keep_alive: bool = False,
+    api_key: Optional[str] = None,
 ) -> LemonadeClient:
     """
     Factory function to create and configure a LemonadeClient instance.
@@ -3623,6 +3716,8 @@ def create_lemonade_client(
                    - "silent": Run in background with output to log file
                    - "none": Run in foreground
         keep_alive: If True, don't terminate server when client is deleted
+        api_key: API key for an authenticated Lemonade server
+                 (defaults to env var LEMONADE_API_KEY; ``None`` for unauthenticated)
 
     Returns:
         A configured LemonadeClient instance
@@ -3644,6 +3739,7 @@ def create_lemonade_client(
         port=server_port,
         verbose=verbose,
         keep_alive=keep_alive,
+        api_key=api_key,
     )
 
     # Auto-start server if requested
