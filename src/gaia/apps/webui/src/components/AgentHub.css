@@ -87,12 +87,6 @@
     gap: 14px;
 }
 
-@media (min-width: 1400px) {
-    .agent-hub-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
-}
-
 @media (max-width: 768px) {
     .agent-hub-grid {
         grid-template-columns: 1fr;
