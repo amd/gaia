@@ -184,19 +184,23 @@ def initialize_lemonade_for_agent(
 
     # LemonadeManager handles all validation and error printing
     # Pass base_url directly when provided to preserve full URL (https, ngrok, etc.)
-    if base_url:
-        success = LemonadeManager.ensure_ready(
-            min_context_size=required_ctx,
-            quiet=quiet,
-            base_url=base_url,
-        )
-    else:
-        success = LemonadeManager.ensure_ready(
-            min_context_size=required_ctx,
-            quiet=quiet,
-            host=host,
-            port=port,
-        )
+    try:
+        if base_url:
+            success = LemonadeManager.ensure_ready(
+                min_context_size=required_ctx,
+                quiet=quiet,
+                base_url=base_url,
+            )
+        else:
+            success = LemonadeManager.ensure_ready(
+                min_context_size=required_ctx,
+                quiet=quiet,
+                host=host,
+                port=port,
+            )
+    except LemonadeClientError as e:
+        print(f"❌ Error: {e}", file=sys.stderr)
+        return False, None
 
     if not success:
         return False, None

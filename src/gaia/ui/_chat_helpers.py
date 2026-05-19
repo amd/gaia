@@ -293,6 +293,11 @@ async def _generate_session_title(
     """
     import httpx  # pylint: disable=import-outside-toplevel
 
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
     prompt = (
         "Summarise the user's task in 3 to 6 plain words for a tab/window "
         "title.  Reply with ONLY the title, no quotes, no trailing "
@@ -313,6 +318,7 @@ async def _generate_session_title(
                     # for the same conversation.
                     "temperature": 0.3,
                 },
+                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
             )
             if resp.status_code != 200:
                 logger.debug(
@@ -830,10 +836,15 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
     try:
         import httpx
 
+        from gaia.llm.lemonade_client import (
+            lemonade_auth_headers,
+            resolve_lemonade_api_key,
+        )
         from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
 
         base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
-        resp = httpx.get(f"{base_url}/health", timeout=5.0)
+        _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+        resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
             return
         data = resp.json()
@@ -884,7 +895,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         with model_load_lock:
             # Re-check after acquiring the lock: another thread may have
             # already loaded the expected model with sufficient context.
-            resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
+            resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
             if resp2.status_code == 200:
                 models2 = [
                     m
@@ -2074,13 +2085,20 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             try:
                 import httpx
 
+                from gaia.llm.lemonade_client import (
+                    lemonade_auth_headers,
+                    resolve_lemonade_api_key,
+                )
                 from gaia.llm.lemonade_manager import LemonadeManager
 
                 base_url = (
                     LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
                 )
+                _auth = lemonade_auth_headers(resolve_lemonade_api_key())
                 async with httpx.AsyncClient(timeout=3.0) as stats_client:
-                    stats_resp = await stats_client.get(f"{base_url}/stats")
+                    stats_resp = await stats_client.get(
+                        f"{base_url}/stats", headers=_auth
+                    )
                     if stats_resp.status_code == 200:
                         stats_data = stats_resp.json()
                         inference_stats = {

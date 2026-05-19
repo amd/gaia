@@ -110,6 +110,7 @@ ENV/
 
 # Claude Code local settings
 .claude/settings.local.json
+.claude/skill-meta/
 
 # Local customizations
 util/custom/
