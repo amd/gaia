@@ -66,7 +66,9 @@ function App() {
         showDocLibrary,
         showFileBrowser,
         showSettings,
+        setShowSettings,
         showMemoryDashboard,
+        setShowMemoryDashboard,
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
@@ -514,6 +516,7 @@ function App() {
 
             <Sidebar
                 onNewTask={handleNewTask}
+                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); window.history.replaceState(null, '', window.location.pathname); }}
                 tunnelActive={tunnelActive}
                 tunnelLoading={tunnelLoading}
                 onMobileToggle={handleMobileToggle}

@@ -80,6 +80,24 @@ def _require_tunnel_inactive(request: Request) -> None:
 
 
 def _reg_to_info(reg) -> AgentInfo:
+    # required_connections may contain ConnectorRequirement objects (with
+    # .connector_id/.scopes/.reason) or plain strings (legacy shorthand
+    # used by connectors-demo). Normalise both into dicts for the API
+    # response, keyed as "connector_id" to match the TypeScript
+    # ConnectorRequirement interface.
+    connections = []
+    for cr in reg.required_connections:
+        if isinstance(cr, str):
+            connections.append({"connector_id": cr, "scopes": [], "reason": ""})
+        else:
+            connections.append(
+                {
+                    "connector_id": cr.connector_id,
+                    "scopes": list(cr.scopes),
+                    "reason": cr.reason,
+                }
+            )
+
     return AgentInfo(
         id=reg.id,
         name=reg.name,
@@ -88,17 +106,13 @@ def _reg_to_info(reg) -> AgentInfo:
         conversation_starters=reg.conversation_starters,
         models=reg.models,
         min_memory_gb=reg.min_memory_gb,
-        # T-X2 (issue #915): surface declared connection requirements so the
-        # AgentUI consent dialog can render the prompt at agent-selection time.
-        required_connections=[
-            {
-                "connector_id": cr.connector_id,
-                "scopes": list(cr.scopes),
-                "reason": cr.reason,
-            }
-            for cr in reg.required_connections
-        ],
+        required_connections=connections,
         namespaced_agent_id=reg.namespaced_agent_id,
+        category=reg.category,
+        tags=reg.tags,
+        icon=reg.icon,
+        tools_count=reg.tools_count,
+        language=reg.language,
     )
 
 

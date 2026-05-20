@@ -36,6 +36,12 @@ export interface AgentInfo {
      * are `custom:<sha256-prefix>:<id>`. Pass this to the grants endpoint.
      */
     namespaced_agent_id?: string;
+    /** Agent Hub metadata — used to render rich discovery cards. */
+    category?: string;
+    tags?: string[];
+    icon?: string;
+    tools_count?: number;
+    language?: string;
 }
 
 export interface DiskAgentInfo {
