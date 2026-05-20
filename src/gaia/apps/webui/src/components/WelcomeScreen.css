@@ -4,7 +4,7 @@
 .welcome {
     flex: 1;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
     padding: 40px 40px 24px;
     overflow-y: auto;
