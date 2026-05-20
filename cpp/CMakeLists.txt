@@ -305,6 +305,7 @@ if(GAIA_BUILD_TESTS)
     target_link_libraries(tests_mock PRIVATE
         gaia::gaia_core
         GTest::gtest_main
+        GTest::gmock
     )
 
     # VLM tests need httplib (mock LLM server) and the fixtures directory.

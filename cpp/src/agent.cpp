@@ -765,7 +765,9 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
         // Display reasoning.
         // Skip when streaming — the raw tokens were already printed during callLlm().
-        if (!config_.streaming) {
+        // Exception: structuredEvents mode emits both stream tokens AND structured events,
+        // so the TUI/WebUI gets live progress AND parsed agent activity.
+        if (!config_.streaming || config_.structuredEvents) {
             console_->printThought(parsed.thought);
             console_->printGoal(parsed.goal);
         }
@@ -773,7 +775,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // ---- Handle final answer ----
         if (parsed.answer.has_value()) {
             finalAnswer = parsed.answer.value();
-            if (!config_.streaming) console_->printFinalAnswer(finalAnswer);
+            if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer);
             break;
         }
 
@@ -858,7 +860,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // No tool call and no answer — treat response as conversational
         if (!parsed.toolName.has_value() && !parsed.answer.has_value()) {
             finalAnswer = response;
-            if (!config_.streaming) console_->printFinalAnswer(finalAnswer);
+            if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer);
             break;
         }
     }

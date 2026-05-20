@@ -13,6 +13,8 @@
 //   gaia-bash --list-sessions     List saved sessions and exit
 //   gaia-bash --model <name>      Override the default model
 //   gaia-bash --no-tui            Force CleanConsole output
+//   gaia-bash --json-events       Emit JSONL events to stdout (for TUI/WebUI)
+//   gaia-bash --query "text"      Non-interactive single query (pair with --json-events)
 //   gaia-bash --debug             Enable debug logging
 
 #include <iostream>
@@ -26,6 +28,7 @@
 #include "mcp_server.h"
 
 #include <gaia/clean_console.h>
+#include <gaia/json_event_handler.h>
 #include <gaia/repl.h>
 #include <gaia/session.h>
 #include <gaia/types.h>
@@ -50,6 +53,8 @@ static void printUsage(const char* progName) {
               << "  " << progName << " --list-sessions       List saved sessions\n"
               << "  " << progName << " --model <name>        Override model\n"
               << "  " << progName << " --no-tui              Force plain console output\n"
+              << "  " << progName << " --json-events         JSONL events to stdout (for TUI/WebUI)\n"
+              << "  " << progName << " --query \"<text>\"       Non-interactive query (use with --json-events)\n"
               << "  " << progName << " --debug               Enable debug logging\n"
               << "  " << progName << " --help                Show this help\n";
 }
@@ -89,6 +94,8 @@ int main(int argc, char* argv[]) {
         bool serveMode = false;
         bool mcpMode = false;
         bool noTui = false;
+        bool jsonEvents = false;
+        std::string queryArg;
         bool debug = false;
         bool showHelp = false;
         bool listSessionsFlag = false;
@@ -138,6 +145,16 @@ int main(int argc, char* argv[]) {
                 }
             } else if (arg == "--no-tui") {
                 noTui = true;
+            } else if (arg == "--json-events") {
+                jsonEvents = true;
+            } else if (arg == "--query") {
+                if (i + 1 < argc) {
+                    queryArg = argv[++i];
+                } else {
+                    std::cerr << color::RED << "Error: --query requires a value"
+                              << color::RESET << "\n";
+                    return 1;
+                }
             } else if (arg == "--debug") {
                 debug = true;
             } else if (arg[0] == '-') {
@@ -205,6 +222,40 @@ int main(int argc, char* argv[]) {
             gaia::McpServer mcpServer(mcpAgent);
 
             mcpServer.run();  // blocking, reads stdin
+            return 0;
+        }
+
+        // Handle --json-events mode (JSONL subprocess for TUI/WebUI)
+        if (jsonEvents) {
+            gaia::AgentConfig jeConfig;
+            jeConfig.debug = debug;
+            jeConfig.contextSize = 32768;
+            jeConfig.streaming = false;       // avoid raw JSON tokens in output
+            jeConfig.structuredEvents = true;  // emit thought/goal/answer events
+            if (!modelOverride.empty()) jeConfig.modelId = modelOverride;
+
+            gaia::BashAgent jeAgent(jeConfig);
+            jeAgent.setOutputHandler(std::make_unique<gaia::JsonEventOutputHandler>());
+            // In JSON events mode, auto-allow all tools (TUI handles confirmation)
+            jeAgent.setToolConfirmCallback(
+                [](const std::string&, const gaia::json&) {
+                    return gaia::ToolConfirmResult::ALLOW_ONCE;
+                });
+
+            // --query "text" runs a single query
+            std::string jeQuery = queryArg.empty() ? query : queryArg;
+            if (!jeQuery.empty()) {
+                jeAgent.processQuery(jeQuery);
+                return 0;
+            }
+
+            // Interactive JSONL mode: read queries from stdin, emit events to stdout.
+            // Each line on stdin is a user query; events go to stdout as JSONL.
+            std::string line;
+            while (std::getline(std::cin, line)) {
+                if (line.empty()) continue;
+                jeAgent.processQuery(line);
+            }
             return 0;
         }
 

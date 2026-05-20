@@ -297,6 +297,9 @@ struct AgentConfig {
     bool showPrompts = false;
     bool streaming = defaultStreaming();  // also controlled by GAIA_STREAMING=1
     bool silentMode = false;
+    bool structuredEvents = false;  // Always emit structured events (thought, goal, answer)
+                                    // even during streaming. Used by JsonEventOutputHandler
+                                    // so the TUI/WebUI gets both stream tokens AND agent events.
     double temperature = 0.7;  // LLM sampling temperature (0.0 = deterministic)
 
     /// Validate config fields; throws std::invalid_argument on violation.
