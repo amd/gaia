@@ -127,7 +127,6 @@ class BashEvalAdapter:
         try:
             response = self.send_query(prompt)
             result["response"] = response
-            result["success"] = True
 
             # Extract response content
             content = ""
@@ -143,14 +142,16 @@ class BashEvalAdapter:
             if ground_truth and scenario_id in ground_truth:
                 gt = ground_truth[scenario_id]
                 errors = self._validate_ground_truth(content, gt)
-                if errors:
-                    result["errors"] = errors
-                    result["success"] = len(errors) == 0
+                result["errors"] = errors
+
+            result["success"] = len(result["errors"]) == 0
 
         except requests.RequestException as e:
             result["errors"].append(f"HTTP error: {e}")
+            result["success"] = False
         except Exception as e:
             result["errors"].append(f"Unexpected error: {e}")
+            result["success"] = False
 
         return result
 
@@ -188,6 +189,37 @@ class BashEvalAdapter:
             term = gt["response_must_contain"]
             if term.lower() not in content_lower:
                 errors.append(f"Response must contain: '{term}'")
+
+        # Check expected_tools — verify tool names appear in response
+        for tool in gt.get("expected_tools", []):
+            if tool.lower() not in content_lower:
+                errors.append(f"Expected tool '{tool}' not mentioned in response")
+
+        # Check tool_args_must_contain — verify tool arguments in response
+        for arg_name, arg_val in gt.get("tool_args_must_contain", {}).items():
+            val_str = str(arg_val).lower()
+            if val_str not in content_lower:
+                errors.append(
+                    f"Expected tool arg '{arg_name}={arg_val}' not found in response"
+                )
+
+        # Check error expectations
+        if gt.get("expect_error"):
+            if "error" not in content_lower:
+                errors.append("Expected error response but none found")
+
+        if gt.get("expect_nonzero_exit"):
+            # Look for non-zero exit code indicators
+            has_nonzero = any(
+                indicator in content_lower
+                for indicator in ["exit code", "exit_code", "non-zero", "failed", "error"]
+            )
+            if not has_nonzero:
+                errors.append("Expected non-zero exit code but not indicated")
+
+        if gt.get("expect_timeout"):
+            if "timeout" not in content_lower and "timed_out" not in content_lower:
+                errors.append("Expected timeout but not indicated in response")
 
         return errors
 

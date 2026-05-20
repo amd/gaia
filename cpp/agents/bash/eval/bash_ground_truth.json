@@ -5,7 +5,7 @@
     "bash-write-dedup": {
       "must_contain": ["set -e", "md5sum", "find"],
       "must_not_contain": ["eval"],
-      "expected_tools": ["file_write"],
+      "expected_tools": ["file_write", "bash_execute"],
       "shellcheck_max_warnings": 2
     },
     "bash-write-backup": {

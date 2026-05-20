@@ -108,13 +108,15 @@ json BashTools::doBashExecute(const json& args) {
     std::string stdoutStr = result.stdout_output;
     std::string stderrStr = result.stderr_output;
 
+    static constexpr const char* TRUNCATION_MSG = "\n... [output truncated at 32 KB]";
+    static const size_t TRUNC_LEN = std::strlen(TRUNCATION_MSG);
     if (stdoutStr.size() > MAX_OUTPUT_BYTES) {
-        stdoutStr.resize(MAX_OUTPUT_BYTES);
-        stdoutStr += "\n... [output truncated at 32 KB]";
+        stdoutStr.resize(MAX_OUTPUT_BYTES - TRUNC_LEN);
+        stdoutStr += TRUNCATION_MSG;
     }
     if (stderrStr.size() > MAX_OUTPUT_BYTES) {
-        stderrStr.resize(MAX_OUTPUT_BYTES);
-        stderrStr += "\n... [output truncated at 32 KB]";
+        stderrStr.resize(MAX_OUTPUT_BYTES - TRUNC_LEN);
+        stderrStr += TRUNCATION_MSG;
     }
 
     return {
