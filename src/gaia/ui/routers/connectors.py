@@ -63,8 +63,16 @@ from gaia.connectors.grants import (
     list_agent_grants,
     revoke_agent_grant,
 )
-from gaia.connectors.handler import configure, disconnect, health_check
-from gaia.connectors.mcp_server import is_mcp_server_configured
+from gaia.connectors.handler import (
+    _HANDLER_REGISTRY,
+    configure,
+    disconnect,
+    health_check,
+)
+from gaia.connectors.mcp_server import (
+    _read_mcp_servers_json,
+    is_mcp_server_configured,
+)
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.store import peek_connection
 
@@ -274,8 +282,28 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
             account_id = blob.get("account_email")
             scopes = list(blob.get("scopes", []))
 
-    elif spec.type == "mcp_server":
+    # ``enabled`` is meaningful only for ``mcp_server`` connectors. We
+    # default to ``True`` for both not-configured connectors AND OAuth so
+    # the UI doesn't render a "Disabled" pill where the concept doesn't
+    # apply.
+    enabled = True
+
+    if spec.type == "mcp_server":
         configured = is_mcp_server_configured(spec.id)
+        if configured:
+            try:
+                entry = _read_mcp_servers_json().get(spec.id, {})
+                enabled = not entry.get("disabled", False)
+            except ConnectorsError as e:
+                # Corrupt mcp_servers.json — log loudly so the user has
+                # a path to a fix, but don't crash the whole catalog
+                # list (one bad entry would make every tile unavailable).
+                logger.warning(
+                    "connectors-summary: cannot read mcp_servers.json for "
+                    "%s (%s); rendering tile with default enabled=true",
+                    spec.id,
+                    e,
+                )
 
     return {
         "id": spec.id,
@@ -292,8 +320,10 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "config_error": config_error,
         "account_id": account_id,
         "scopes": scopes,
+        "enabled": enabled,
         "mcp_env_keys": list(spec.mcp_env_keys),
         "default_scopes": list(spec.default_scopes),
+        "available_scopes": list(spec.available_scopes),
         # OAuth setup form (e.g. Google client_id/client_secret) — empty
         # tuple for connectors that don't need first-time provider creds.
         "oauth_setup_fields": [
@@ -340,6 +370,8 @@ async def connector_events() -> StreamingResponse:
       - ``connector.configured``        ({connector_id, account_id})
       - ``connector.disconnected``      ({connector_id})
       - ``connector.tested``            ({connector_id, ok, detail})
+      - ``connector.enabled``           ({connector_id})
+      - ``connector.disabled``          ({connector_id})
       - ``connector.oauth.completed``   ({connector_id, account_email})
       - ``connector.oauth.error``       ({connector_id, error})
       - ``connector.grant.changed``     ({connector_id, agent_id, scopes})
@@ -394,6 +426,78 @@ async def debug_state() -> Dict[str, Any]:
         "catalog_size": len(REGISTRY.all()),
         "configured_ids": configured_ids,
     }
+
+
+@router.get("/agent-mcps")
+async def list_agent_mcps(request: Request) -> Dict[str, Any]:
+    """Return MCP servers declared by custom-Python agents (#1020).
+
+    Scans each registered custom agent's ``mcp_servers.json`` (if present) and
+    returns a flat sorted list of server entries.  Servers are sorted: enabled
+    first (alphabetical), then disabled (alphabetical).
+
+    These entries are read-only — they are controlled by each agent's local
+    config file, not the global connectors framework.  The UI renders them in a
+    separate "Custom agent servers" section with no toggle or disconnect action.
+    """
+    registry = getattr(request.app.state, "agent_registry", None)
+    if registry is None:
+        # Registry not yet initialised (e.g. test client without lifespan).
+        return {"agent_mcps": []}
+
+    servers: List[Dict[str, Any]] = []
+
+    for reg in registry.list():
+        if reg.source != "custom_python" or reg.agent_dir is None:
+            continue
+        config_path = reg.agent_dir / "mcp_servers.json"
+        if not config_path.exists():
+            continue
+        try:
+            with open(config_path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            if not isinstance(raw, dict):
+                raise ValueError(
+                    f"top-level JSON must be an object, got {type(raw).__name__}"
+                )
+            mcp_servers_data = raw.get("mcpServers", raw.get("servers", {}))
+            if not isinstance(mcp_servers_data, dict):
+                raise ValueError("'mcpServers' must be an object")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "agent-mcps: failed to read %s for agent %r: %s",
+                config_path,
+                reg.id,
+                exc,
+            )
+            continue
+
+        for server_name, server_cfg in mcp_servers_data.items():
+            if not isinstance(server_cfg, dict):
+                logger.warning(
+                    "agent-mcps: skipping non-object server %r in %s",
+                    server_name,
+                    config_path,
+                )
+                continue
+            raw_args = server_cfg.get("args", [])
+            args = [str(a) for a in raw_args] if isinstance(raw_args, list) else []
+            servers.append(
+                {
+                    "agent_id": reg.id,
+                    "agent_name": reg.name,
+                    "config_path": str(config_path),
+                    "server_name": server_name,
+                    "command": str(server_cfg.get("command", "")),
+                    "args": args,
+                    "disabled": bool(server_cfg.get("disabled", False)),
+                }
+            )
+
+    # Enabled (disabled=False) first, then disabled; alphabetical within each group.
+    servers.sort(key=lambda s: (s["disabled"], s["server_name"].lower()))
+
+    return {"agent_mcps": servers}
 
 
 @router.get("/{connector_id}/grants")
@@ -485,6 +589,67 @@ async def disconnect_connector(connector_id: str) -> Response:
 
     await _emitter.emit("connector.disconnected", {"connector_id": connector_id})
     return Response(status_code=204)
+
+
+async def _set_connector_enabled(connector_id: str, enabled: bool) -> Dict[str, Any]:
+    """Shared implementation for ``POST /{id}/enable`` and ``POST /{id}/disable``.
+
+    The toggle is meaningful only for ``mcp_server`` connectors that have
+    already been configured. Unknown ids → 404; non-MCP types → 400; not-yet-
+    configured ids → bubble up the handler's ``ConnectorsError`` as 500.
+
+    On success, emits ``connector.enabled`` or ``connector.disabled`` on the
+    SSE stream and returns the updated connector summary.
+    """
+    try:
+        spec = REGISTRY.get(connector_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
+
+    if spec.type != "mcp_server":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Connector type {spec.type!r} does not support enable/disable. "
+                "Only mcp_server connectors can be toggled."
+            ),
+        )
+
+    if not is_mcp_server_configured(connector_id):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Connector {connector_id!r} is not configured. "
+                "Configure it before toggling its enabled state."
+            ),
+        )
+
+    handler = _HANDLER_REGISTRY.get("mcp_server")
+    if handler is None:  # pragma: no cover — handler registers at import time
+        raise HTTPException(status_code=500, detail="MCP handler not registered")
+
+    try:
+        await handler.set_enabled(connector_id, enabled)
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
+
+    event_name = "connector.enabled" if enabled else "connector.disabled"
+    await _emitter.emit(event_name, {"connector_id": connector_id})
+    return _connector_summary(connector_id)
+
+
+@router.post("/{connector_id}/enable", dependencies=[Depends(_require_ui_header)])
+async def enable_connector(connector_id: str) -> Dict[str, Any]:
+    """Enable a previously-disabled MCP connector. Tools materialize live."""
+    return await _set_connector_enabled(connector_id, True)
+
+
+@router.post("/{connector_id}/disable", dependencies=[Depends(_require_ui_header)])
+async def disable_connector(connector_id: str) -> Dict[str, Any]:
+    """Disable a configured MCP connector without clearing its credentials."""
+    return await _set_connector_enabled(connector_id, False)
 
 
 @router.post("/{connector_id}/authorize", dependencies=[Depends(_require_ui_header)])

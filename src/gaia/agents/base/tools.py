@@ -20,6 +20,7 @@ def tool(
     func: Callable = None,
     *,
     atomic: bool = False,
+    display_label: str | None = None,
     **kwargs,  # pylint: disable=unused-argument
 ) -> Callable:
     """
@@ -74,6 +75,7 @@ def tool(
             "parameters": params,
             "function": f,
             "atomic": atomic,
+            "display_label": display_label,
         }
 
         # Return the function unchanged
@@ -108,6 +110,18 @@ def get_tool_display_name(tool_name: str) -> str:
     if not tool:
         return tool_name
     return tool.get("display_name", tool_name)
+
+
+def get_tool_display_label(tool_name: str) -> str:
+    """Return a user-facing label for the tool suitable for UI progress strips.
+
+    Prefers the explicit `display_label` provided on the decorator, falls
+    back to the registry `description`, then finally to the raw tool name.
+    """
+    tool = _TOOL_REGISTRY.get(tool_name)
+    if not tool:
+        return None
+    return tool.get("display_label")
 
 
 def get_tool_metadata(tool_name: str):

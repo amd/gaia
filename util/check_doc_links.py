@@ -56,6 +56,9 @@ SKIP_DOMAINS = {
     "your-domain",
     "grafana.internal",
     "marketplace.visualstudio.com",  # Blocks automated requests with 404
+    "dl.acm.org",  # Blocks automated requests with CAPTCHAs
+    "platform.openai.com",  # Rate-limits CI bots
+    "www.npmjs.com",  # Returns 403 to automated requests
 }
 
 # URL patterns to skip
@@ -67,6 +70,7 @@ SKIP_PATTERNS = [
     r"\{[{%]",  # Template variables like {{ var }}
     r"^\$\{",  # JS template literals
     r"^url$",  # Placeholder "url" in markdown syntax examples
+    r"`$",  # Trailing backtick from inline code extraction (e.g. `https://...`)
     r"github\.com/amd/gaia/compare/",  # Release compare URLs (tags may not exist yet)
     r"github\.com/amd/gaia/(blob|tree)/main/",  # Same-repo links (may 404 during PRs before merge)
     r"https?://(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)",  # RFC1918 private IPs (example URLs in docs)
@@ -236,6 +240,12 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
             return "warning", f"URL error: {reason} (may block automated requests)"
         if hasattr(reason, "errno") and reason.errno in (104, 111):
             return "warning", f"URL error: {reason} (may block automated requests)"
+        # SSL handshake timeouts are transient CI network issues, not dead links.
+        # They arrive as URLError(SSLError("_ssl.c:...: The handshake operation timed out"))
+        # rather than a Python-level TimeoutError, so they must be caught here.
+        reason_str = str(reason).lower()
+        if "timed out" in reason_str or "handshake" in reason_str:
+            return "warning", f"URL error: {reason} (SSL/network timeout)"
         return "broken", f"URL error: {reason}"
     except TimeoutError:
         return "warning", "timeout"

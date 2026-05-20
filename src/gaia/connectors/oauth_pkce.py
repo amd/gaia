@@ -42,7 +42,7 @@ class OAuthPkceHandler:
 
     ``get_credential`` returns an access-token dict compatible with
     Google's token endpoint; the dict shape is:
-      ``{"access_token": str, "expires_at": int, "scopes": [str]}``
+      ``{"access_token": str, "scopes": [str]}``
 
     This class is stateless — it delegates all persistent state to
     ``tokens.py`` (in-memory cache) and ``store.py`` (keyring; the
@@ -69,12 +69,9 @@ class OAuthPkceHandler:
         """
         provider_id = spec.oauth_provider_ref or spec.id
         account_email = account_id or DEFAULT_ACCOUNT
-        token_str, expires_at = await get_or_refresh(
-            provider_id, account_email=account_email
-        )
+        token_str = await get_or_refresh(provider_id, account_email=account_email)
         return {
             "access_token": token_str,
-            "expires_at": expires_at,
             "scopes": list(required_scopes or spec.default_scopes),
         }
 
@@ -134,12 +131,23 @@ class OAuthPkceHandler:
         *,
         account_id: Optional[str] = None,
     ) -> None:
-        """Remove stored tokens. The keyring deletion is the source of
-        truth — once the blob is gone, ``store.peek_connection`` returns
-        ``None`` and the catalog UI shows "not configured" automatically."""
+        """Remove stored tokens AND per-agent grants. Keyring deletion is the
+        source of truth for "is this configured" — once the blob is gone,
+        ``store.peek_connection`` returns ``None`` and the catalog UI shows
+        "not configured". Grant cleanup prevents silent inheritance: if the
+        same ``connector_id`` is reconnected later, the new tokens must NOT
+        carry the prior user's agent consents."""
         provider_id = spec.oauth_provider_ref or spec.id
         account_email = account_id or DEFAULT_ACCOUNT
         delete_connection(provider_id, account_email=account_email)
+
+        # Wipe per-agent grants for this connector_id. Local import keeps the
+        # module-level dependency graph identical to before (grants depends on
+        # nothing else here).
+        from gaia.connectors.grants import revoke_all_grants_for
+
+        revoke_all_grants_for(spec.id)
+
         logger.info("oauth_pkce: disconnected connector_id=%s", spec.id)
 
     async def test(self, spec: ConnectorSpec) -> Dict[str, Any]:

@@ -51,15 +51,34 @@ def _keyring_ref(connector_id: str, env_key: str) -> str:
 
 
 def _write_mcp_servers_json(servers: Dict[str, Any]) -> None:
-    """Atomically overwrite ``mcp_servers.json`` with *servers* dict."""
+    """Atomically overwrite ``mcp_servers.json`` with *servers* dict.
+
+    File is written mode 0600 (parent 0700). ``os.replace`` would otherwise
+    inherit the destination's prior mode (or umask for new files), which on a
+    multi-user machine leaves any plaintext env value (custom MCP entries
+    that escape the keyring path, ChatAgent dynamic registrations, etc.)
+    world-readable.
+    """
     path = _mcp_servers_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:  # Windows or read-only mount
+        pass
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".mcp_servers_", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"mcpServers": servers}, f, indent=2)
             f.write("\n")
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:  # Windows
+            pass
         os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
     except Exception:
         try:
             os.unlink(tmp)
@@ -114,6 +133,17 @@ class McpServerHandler:
 
     def __init__(self, reload_callback: Optional[Callable[[], None]] = None) -> None:
         self._reload = reload_callback
+
+    def set_reload_callback(self, callback: Optional[Callable[[], None]]) -> None:
+        """Attach (or replace) the reload callback after construction.
+
+        The handler singleton is registered at module-import time, well before
+        the FastAPI app's ``MCPClientManager`` exists. The lifespan startup
+        hook calls this setter to wire ``manager.reload`` so a subsequent
+        ``configure`` / ``disconnect`` / ``set_enabled`` makes new tools
+        materialize without restarting GAIA (#1004).
+        """
+        self._reload = callback
 
     # ------------------------------------------------------------------
     # ConnectorHandler Protocol implementation
@@ -218,7 +248,7 @@ class McpServerHandler:
         *,
         account_id: Optional[str] = None,
     ) -> None:
-        """Remove the MCP server entry and delete keyring slots."""
+        """Remove the MCP server entry, keyring slots, and per-agent grants."""
         # Remove from mcp_servers.json.
         servers = _read_mcp_servers_json()
         if spec.id in servers:
@@ -233,10 +263,56 @@ class McpServerHandler:
             except keyring.errors.PasswordDeleteError:
                 pass  # already absent — idempotent
 
+        # Wipe per-agent grants. If the same connector_id is re-added later
+        # (custom MCP, repeat OAuth, etc.) the new connector must NOT inherit
+        # the previous user's consent without an explicit re-grant.
+        from gaia.connectors.grants import revoke_all_grants_for
+
+        revoke_all_grants_for(spec.id)
+
         logger.info("mcp_server: disconnected connector_id=%s", spec.id)
 
         if self._reload is not None:
             self._reload()
+
+    async def set_enabled(self, connector_id: str, enabled: bool) -> None:
+        """
+        Flip the ``disabled`` flag on an existing entry in ``mcp_servers.json``.
+
+        Unlike ``configure``/``disconnect`` this method touches **only** the
+        ``disabled`` field — keyring entries, env block ``$keyring`` references,
+        command, args, and per-agent grants are all preserved. The reload
+        callback fires so live agents pick up the change without a restart.
+
+        Raises ``ConnectorsError`` if ``connector_id`` is not present in
+        ``mcp_servers.json`` (the toggle is meaningful only for already-
+        configured connectors).
+        """
+        servers = _read_mcp_servers_json()
+        if connector_id not in servers:
+            raise ConnectorsError(
+                f"set_enabled({connector_id!r}, enabled={enabled}): "
+                f"connector is not configured. Configure it first via "
+                f"Settings → Connectors or `gaia connectors configure {connector_id}`."
+            )
+
+        servers[connector_id]["disabled"] = not enabled
+        _write_mcp_servers_json(servers)
+
+        logger.info(
+            "mcp_server: %s connector_id=%s",
+            "enabled" if enabled else "disabled",
+            connector_id,
+        )
+
+        if self._reload is not None:
+            self._reload()
+        else:
+            logger.warning(
+                "McpServerHandler.set_enabled: reload_callback not set; "
+                "the toggle has been persisted but the running agent's tool list "
+                "will not reflect the change until GAIA is restarted."
+            )
 
     async def test(self, spec: ConnectorSpec) -> Dict[str, Any]:
         """

@@ -58,19 +58,24 @@
               "quickstart",
               "guides/install",
               "guides/agent-ui",
+              "guides/memory",
               {
                 "group": "User Guides",
                 "pages": [
                   "guides/index",
                   "guides/hardware-advisor",
                   "guides/chat",
+                  "guides/browse",
+                  "guides/analyze",
                   "guides/talk",
                   "guides/code",
+                  "guides/telegram-adapter",
                   "guides/code-index",
                   "guides/sd",
                   "guides/emr",
                   "guides/blender",
                   "guides/jira",
+                  "guides/email",
                   "guides/docker",
                   "guides/routing",
                   "guides/custom-agent",
@@ -161,6 +166,7 @@
                     "group": "SDKs",
                     "pages": [
                       "sdk/sdks/chat",
+                      "sdk/sdks/memory",
                       "sdk/sdks/agent-ui",
                       "sdk/sdks/rag",
                       "sdk/sdks/code-index",
@@ -287,7 +293,9 @@
               "spec/prisma-tools-mixin",
               "spec/typescript-tools-mixin",
               "spec/external-tools-mixin",
-              "spec/web-tools-mixin"
+              "spec/web-tools-mixin",
+              "spec/browser-tools",
+              "spec/file-system-agent"
             ]
           },
           {
@@ -425,6 +433,9 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.18.1",
+              "releases/v0.18.0",
+              "releases/v0.17.6",
               "releases/v0.17.5",
               "releases/v0.17.4",
               "releases/v0.17.3",
@@ -474,7 +485,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.17.5 \u00b7 Lemonade 10.2.0",
+        "label": "v0.18.1 \u00b7 Lemonade 10.2.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

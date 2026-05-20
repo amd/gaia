@@ -12,6 +12,7 @@ export interface Session {
     system_prompt: string | null;
     message_count: number;
     document_ids: string[];
+    private?: boolean;
     agent_type?: string;
 }
 
@@ -35,6 +36,20 @@ export interface AgentInfo {
      * are `custom:<sha256-prefix>:<id>`. Pass this to the grants endpoint.
      */
     namespaced_agent_id?: string;
+    /** Agent Hub metadata — used to render rich discovery cards. */
+    category?: string;
+    tags?: string[];
+    icon?: string;
+    tools_count?: number;
+    language?: string;
+}
+
+export interface DiskAgentInfo {
+    id: string;
+    name: string;
+    registered: boolean;
+    registered_agent_id?: string | null;
+    source?: string | null;
 }
 
 /**
@@ -100,11 +115,23 @@ export interface ConnectorRow {
      * Populated only when ``configurable === false``; null otherwise.
      */
     config_error: string | null;
+    /**
+     * Whether the connector is currently enabled (#1004).
+     *
+     * Meaningful only for ``type === 'mcp_server'`` — when ``false``, the
+     * connector retains its credentials and per-agent grants but is
+     * suppressed from agent tool lists. The backend defaults this to
+     * ``true`` for OAuth tiles and for not-yet-configured MCP tiles, so
+     * the UI never renders a "Disabled" pill where the concept doesn't
+     * apply.
+     */
+    enabled: boolean;
     account_id: string | null;
     scopes: string[];
     last_tested_at: string | null;
     mcp_env_keys: string[];
     default_scopes: string[];
+    available_scopes: string[];
     /**
      * First-time setup fields the user fills in to provide OAuth-app
      * client credentials (e.g. Google Cloud Console client_id +
@@ -128,6 +155,20 @@ export interface ConnectorConfigField {
     required: boolean;
     placeholder: string;
     help_md: string;
+}
+
+/**
+ * One MCP server entry declared by a custom Python agent (#1020).
+ * Read-only — controlled by the agent's local mcp_servers.json.
+ */
+export interface AgentMcpServer {
+    agent_id: string;
+    agent_name: string;
+    config_path: string;
+    server_name: string;
+    command: string;
+    args: string[];
+    disabled: boolean;
 }
 
 export interface InferenceStats {
@@ -192,6 +233,16 @@ export interface ModelStatus {
 export interface Settings {
     custom_model: string | null;
     model_status: ModelStatus | null;
+    /** Persisted context window size override (tokens). null = use default 32768. */
+    context_size: number | null;
+}
+
+/** Status of the GAIA Agent UI MCP server (exposes UI tools to Claude Code etc.). */
+export interface AgentMCPServerStatus {
+    running: boolean;
+    port: number;
+    pid: number | null;
+    url: string | null;
 }
 
 /**
@@ -301,18 +352,6 @@ export interface MCPServerInfo {
     enabled: boolean;
 }
 
-export interface MCPCatalogEntry {
-    name: string;
-    display_name: string;
-    description: string;
-    category: string;
-    tier: number;
-    command: string;
-    args: string[];
-    env: Record<string, string>;
-    requires_config: string[];
-}
-
 export interface MCPServerStatus {
     name: string;
     connected: boolean;
@@ -359,13 +398,23 @@ export interface RetrievalChunk {
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
-    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error';
+    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
     /** Short label shown in collapsed view. */
     label: string;
     /** Detailed content shown when expanded. */
     detail?: string;
     /** Tool name (for type='tool'). */
     tool?: string;
+    /** Governance decision (for type='policy_alert'). */
+    decision?: string;
+    /** Governance policy reason (for type='policy_alert'). */
+    reason?: string;
+    /** Governance rule IDs (for type='policy_alert'). */
+    ruleIds?: string[];
+    /** Governance policy version (for type='policy_alert'). */
+    policyVersion?: string;
+    /** Governance receipt ID (for type='policy_alert'). */
+    receiptId?: string;
     /** Tool result summary (for type='tool'). */
     result?: string;
     /** Whether this step completed successfully. */

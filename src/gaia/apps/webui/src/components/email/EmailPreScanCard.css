@@ -1,0 +1,286 @@
+/* EmailPreScanCard — structured triage view rendered inside an
+ * assistant message bubble. Intentionally compact: dense rows with
+ * inline actions, distinct from the regular markdown content so the
+ * user knows this is a deliberate, actionable summary. */
+
+.email-pre-scan {
+    background: var(--bg-card, #ffffff);
+    border: 1px solid var(--border-light, #e2e2e2);
+    border-radius: 12px;
+    padding: 14px 16px 12px;
+    margin: 8px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--text-primary, #1a1a1a);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.email-pre-scan__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.email-pre-scan__title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-primary, #1a1a1a);
+}
+
+.email-pre-scan__totals {
+    margin-left: auto;
+    color: var(--text-muted, #6a6a6a);
+    font-size: 12px;
+}
+
+/* ── Section ────────────────────────────────────────────────────────── */
+
+.email-pre-scan__section {
+    border: 1px solid var(--border-light, #e2e2e2);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg-section, #fafafa);
+}
+
+.email-pre-scan__section-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: var(--bg-section-header, #f3f3f3);
+    border-bottom: 1px solid var(--border-light, #e2e2e2);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary, #2a2a2a);
+}
+
+.email-pre-scan__section-title {
+    flex: 1;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.email-pre-scan__section-count {
+    background: var(--bg-pill, #e2e2e2);
+    color: var(--text-secondary, #2a2a2a);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* Section accents — a subtle left rail per intent so the user can
+ * spot the urgent group at a glance without reading the title. */
+.email-pre-scan__section--urgent {
+    border-left: 3px solid var(--color-danger, #c0392b);
+}
+.email-pre-scan__section--actionable {
+    border-left: 3px solid var(--color-accent, #d96b22);
+}
+.email-pre-scan__section--archive {
+    border-left: 3px solid var(--color-muted, #98a2b3);
+}
+
+/* ── Row ────────────────────────────────────────────────────────────── */
+
+.email-pre-scan__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.email-pre-scan__row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-faint, #ececec);
+}
+.email-pre-scan__row:last-child {
+    border-bottom: none;
+}
+.email-pre-scan__row:hover {
+    background: var(--bg-row-hover, #f6f6f6);
+}
+
+.email-pre-scan__row-text {
+    flex: 1;
+    min-width: 0; /* allow ellipsis on overflow */
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.email-pre-scan__row-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+
+.email-pre-scan__row-sender {
+    font-weight: 600;
+    color: var(--text-primary, #1a1a1a);
+    flex-shrink: 0;
+    max-width: 180px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.email-pre-scan__row-subject {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-primary, #1a1a1a);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.email-pre-scan__row-reason {
+    color: var(--text-muted, #6a6a6a);
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── Action buttons ─────────────────────────────────────────────────── */
+
+.email-pre-scan__row-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.email-pre-scan__action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: var(--bg-button, #ffffff);
+    border: 1px solid var(--border-light, #d8d8d8);
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text-secondary, #2a2a2a);
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease;
+}
+.email-pre-scan__action:hover {
+    background: var(--bg-button-hover, #f0f0f0);
+    border-color: var(--border-medium, #c0c0c0);
+}
+.email-pre-scan__action:focus-visible {
+    outline: 2px solid var(--color-accent, #d96b22);
+    outline-offset: 1px;
+}
+.email-pre-scan__action:disabled {
+    opacity: 0.55;
+    cursor: progress;
+}
+.email-pre-scan__action:disabled:hover {
+    /* Suppress the hover transition while disabled so the user reads
+       it as inactive rather than primed-but-unresponsive. */
+    background: var(--bg-button, #ffffff);
+    border-color: var(--border-light, #d8d8d8);
+}
+
+.email-pre-scan__action--primary {
+    background: var(--color-accent, #d96b22);
+    color: #ffffff;
+    border-color: var(--color-accent, #d96b22);
+}
+.email-pre-scan__action--primary:hover {
+    background: var(--color-accent-hover, #c25a14);
+    border-color: var(--color-accent-hover, #c25a14);
+}
+
+.email-pre-scan__action--ghost {
+    border-color: transparent;
+    color: var(--text-muted, #6a6a6a);
+}
+.email-pre-scan__action--ghost:hover {
+    background: var(--bg-button-hover, #ececec);
+    color: var(--text-primary, #1a1a1a);
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────── */
+
+.email-pre-scan__empty {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    color: var(--text-muted, #6a6a6a);
+    font-style: italic;
+    background: var(--bg-section, #fafafa);
+    border: 1px dashed var(--border-light, #e2e2e2);
+    border-radius: 8px;
+}
+
+/* ── Preference chip row ────────────────────────────────────────────── */
+
+.email-pre-scan__preferences {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-faint, #ececec);
+    font-size: 11.5px;
+    color: var(--text-muted, #6a6a6a);
+}
+
+.email-pre-scan__preferences-label {
+    font-weight: 500;
+}
+
+.email-pre-scan__preferences-chip {
+    background: var(--bg-pill, #eceef1);
+    color: var(--text-secondary, #2a2a2a);
+    border-radius: 999px;
+    padding: 2px 10px;
+}
+
+/* ── Dark-theme overrides ───────────────────────────────────────────── */
+/* Mirror the existing component-level overrides — the app uses CSS
+ * custom properties for the tokens above, so these defaults only fire
+ * when no theme is applied. We layer dark overrides via the theme
+ * attribute on document.body, matching the app convention. */
+
+[data-theme='dark'] .email-pre-scan {
+    background: var(--bg-card, #1a1c1f);
+    border-color: var(--border-light, #2c2f33);
+    color: var(--text-primary, #e8e8e8);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+[data-theme='dark'] .email-pre-scan__section {
+    background: var(--bg-section, #141618);
+    border-color: var(--border-light, #2c2f33);
+}
+[data-theme='dark'] .email-pre-scan__section-header {
+    background: var(--bg-section-header, #1d2024);
+    border-bottom-color: var(--border-light, #2c2f33);
+}
+[data-theme='dark'] .email-pre-scan__row {
+    border-bottom-color: var(--border-faint, #232629);
+}
+[data-theme='dark'] .email-pre-scan__row:hover {
+    background: var(--bg-row-hover, #1f2225);
+}
+[data-theme='dark'] .email-pre-scan__action {
+    background: var(--bg-button, #232629);
+    border-color: var(--border-light, #2c2f33);
+    color: var(--text-secondary, #cfcfcf);
+}
+[data-theme='dark'] .email-pre-scan__action:hover {
+    background: var(--bg-button-hover, #2a2e32);
+}
+[data-theme='dark'] .email-pre-scan__empty {
+    background: var(--bg-section, #141618);
+    border-color: var(--border-light, #2c2f33);
+}

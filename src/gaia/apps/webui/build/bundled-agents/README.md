@@ -6,5 +6,5 @@ GAIA installer. Each subdirectory becomes an agent that is automatically seeded 
 
 The `zoo-agent/` here is a working example. To ship your own agent, replace it with
 (or add alongside) a directory containing your `agent.py`. See the
-[Custom Installer Playbook](https://amd-gaia.ai/playbooks/custom-installer) for the
+[Custom Installer Playbook](https://amd-gaia.ai/docs/playbooks/custom-installer) for the
 full walkthrough.

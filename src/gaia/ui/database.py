@@ -179,12 +179,19 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for file_mtime: %s", e)
 
-        # Add agent_type column to sessions for agent selection
+        # Add private column to sessions for per-session incognito mode,
+        # and agent_type column for per-session agent selection.
         try:
             sess_cols = [
                 row[1]
                 for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
             ]
+            if "private" not in sess_cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN private INTEGER NOT NULL DEFAULT 0"
+                )
+                self._conn.commit()
+                logger.info("Migrated sessions table: added private column")
             if "agent_type" not in sess_cols:
                 self._conn.execute(
                     "ALTER TABLE sessions ADD COLUMN agent_type TEXT DEFAULT 'chat'"
@@ -196,7 +203,7 @@ class ChatDatabase:
                 self._conn.commit()
                 logger.info("Migrated sessions table: added agent_type column")
         except Exception as e:
-            logger.debug("Migration check for agent_type: %s", e)
+            logger.debug("Migration check for sessions columns: %s", e)
 
     def close(self):
         """Close database connection."""
@@ -229,6 +236,7 @@ class ChatDatabase:
         model: str = None,
         system_prompt: str = None,
         document_ids: List[str] = None,
+        private: bool = False,
         agent_type: str = None,
     ) -> Dict[str, Any]:
         """Create a new chat session."""
@@ -240,9 +248,18 @@ class ChatDatabase:
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, agent_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (session_id, title, now, now, model, system_prompt, agent_type),
+                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private, agent_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    title,
+                    now,
+                    now,
+                    model,
+                    system_prompt,
+                    1 if private else 0,
+                    agent_type,
+                ),
             )
 
             # Attach documents if provided
@@ -317,9 +334,10 @@ class ChatDatabase:
         title: str = None,
         system_prompt: str = None,
         document_ids: list = None,
+        private: bool = None,
         agent_type: str = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title, system prompt, agent_type, and/or document_ids."""
+        """Update session title, system prompt, agent_type, private flag, and/or document_ids."""
         updates = []
         params = []
 
@@ -329,6 +347,9 @@ class ChatDatabase:
         if system_prompt is not None:
             updates.append("system_prompt = ?")
             params.append(system_prompt)
+        if private is not None:
+            updates.append("private = ?")
+            params.append(1 if private else 0)
         if agent_type is not None:
             updates.append("agent_type = ?")
             params.append(agent_type)

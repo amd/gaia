@@ -25,7 +25,7 @@ GOOGLE_SPEC = ConnectorSpec(
         "[Google Account security page](https://myaccount.google.com/permissions)."
     ),
     product_url="https://workspace.google.com/",
-    docs_url="https://amd-gaia.ai/connectors/google",
+    docs_url="https://amd-gaia.ai/docs/connectors/google",
     default_scopes=(
         "openid",
         "email",
@@ -37,6 +37,12 @@ GOOGLE_SPEC = ConnectorSpec(
         "profile",
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.send",
+        # gmail.modify is required by the email triage agent (#962) for label
+        # mutations, archive, trash/untrash, and starring. Listed in
+        # available_scopes so the per-agent grant ledger will accept the
+        # token request — without this entry, every organize/trash tool call
+        # on the email agent would raise AuthRequiredError at runtime.
+        "https://www.googleapis.com/auth/gmail.modify",
         "https://www.googleapis.com/auth/calendar.readonly",
         "https://www.googleapis.com/auth/calendar.events",
         "https://www.googleapis.com/auth/drive.readonly",

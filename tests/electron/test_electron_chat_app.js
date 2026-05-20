@@ -270,6 +270,12 @@ describe('Chat App Integration', () => {
       expect(apiContent).toContain('onError');
     });
 
+    it('should route policy_alert as an agent activity event', () => {
+      expect(apiContent).toContain('AGENT_EVENT_TYPES');
+      expect(apiContent).toContain("'policy_alert'");
+      expect(apiContent).toContain('callbacks.onAgentEvent(event)');
+    });
+
     it('should have document management functions', () => {
       expect(apiContent).toContain('listDocuments');
       expect(apiContent).toContain('uploadDocumentByPath');
@@ -344,6 +350,10 @@ describe('Chat App Integration', () => {
       expect(typesContent).toContain("'chunk'");
       expect(typesContent).toContain("'done'");
       expect(typesContent).toContain("'error'");
+      expect(typesContent).toContain("'policy_alert'");
+      expect(typesContent).toContain('rule_ids?: string[]');
+      expect(typesContent).toContain('policy_version?: string');
+      expect(typesContent).toContain('receipt_id?: string');
     });
   });
 
@@ -460,9 +470,9 @@ describe('Chat App Integration', () => {
       expect(appContent).toContain('DocumentLibrary');
     });
 
-    it('should conditionally render SettingsModal', () => {
+    it('should conditionally render SettingsPage', () => {
       expect(appContent).toContain('showSettings');
-      expect(appContent).toContain('SettingsModal');
+      expect(appContent).toContain('SettingsPage');
     });
   });
 
@@ -526,7 +536,7 @@ describe('Chat App Integration', () => {
   describe('additional components', () => {
     const additionalComponents = [
       'DocumentLibrary',
-      'SettingsModal',
+      'SettingsPage',
     ];
 
     additionalComponents.forEach(name => {
@@ -1077,6 +1087,81 @@ describe('Chat App Integration', () => {
       expect(chatContent).toContain('aria-label="Export chat"');
       expect(chatContent).toContain('aria-label="Attach documents"');
     });
+
+    it('should convert policy_alert events into policy steps and notifications', () => {
+      expect(chatContent).toContain("case 'policy_alert'");
+      expect(chatContent).toContain("type: 'policy_alert'");
+      expect(chatContent).toContain('ruleIds: event.rule_ids ?? []');
+      expect(chatContent).toContain('policyVersion: event.policy_version');
+      expect(chatContent).toContain('receiptId: event.receipt_id');
+      expect(chatContent).toContain('setPolicyToast');
+      expect(chatContent).toContain('View receipt');
+      expect(chatContent).toContain('Receipt unavailable');
+    });
+  });
+
+  describe('Policy alert UI coverage', () => {
+    let agentActivityContent;
+    let notificationContent;
+    let notificationCss;
+    let agentTypesContent;
+
+    beforeAll(() => {
+      agentActivityContent = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/components/AgentActivity.tsx'),
+        'utf8'
+      );
+      notificationContent = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/components/NotificationCenter.tsx'),
+        'utf8'
+      );
+      notificationCss = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/components/NotificationCenter.css'),
+        'utf8'
+      );
+      agentTypesContent = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/types/agent.ts'),
+        'utf8'
+      );
+    });
+
+    it('should render inline Policy Shield cards with policy metadata', () => {
+      expect(agentActivityContent).toContain("step.type === 'policy_alert'");
+      expect(agentActivityContent).toContain('FlowPolicyAlert');
+      expect(agentActivityContent).toContain('Policy Shield');
+      expect(agentActivityContent).toContain('Blocked by policy');
+      expect(agentActivityContent).toContain('step.ruleIds.join');
+      expect(agentActivityContent).toContain('step.policyVersion');
+      expect(agentActivityContent).toContain('Receipt unavailable');
+    });
+
+    it('should model policy notifications separately from permission prompts', () => {
+      expect(agentTypesContent).toContain("| 'policy_alert'");
+      expect(agentTypesContent).toContain('decision?: string');
+      expect(agentTypesContent).toContain('reason?: string');
+      expect(agentTypesContent).toContain('ruleIds?: string[]');
+      expect(agentTypesContent).toContain('policyVersion?: string');
+      expect(agentTypesContent).toContain('receiptId?: string');
+    });
+
+    it('should render policy notification details without permission actions', () => {
+      expect(notificationContent).toContain("policy_alert");
+      expect(notificationContent).toContain("label: 'Policy'");
+      expect(notificationContent).toContain('notification-policy-details');
+      expect(notificationContent).toContain('Reason: {n.reason}');
+      expect(notificationContent).toContain('Rules: <code>{n.ruleIds.join');
+      expect(notificationContent).toContain('Policy: <code>{n.policyVersion}</code>');
+      expect(notificationContent).toContain('Receipt unavailable');
+      expect(notificationContent).toContain("n.type === 'permission_request' && !n.response");
+      expect(notificationContent).not.toContain("n.type === 'policy_alert' && !n.response");
+    });
+
+    it('should style policy notifications distinctly from permission requests', () => {
+      expect(notificationCss).toContain('.notification-item.notif-type-policy');
+      expect(notificationCss).toContain('.notif-type-policy .notification-icon');
+      expect(notificationCss).toContain('.notification-policy-details');
+      expect(notificationCss).toContain('.notification-policy-reason');
+    });
   });
 
   describe('ChatView CSS enhancements', () => {
@@ -1102,6 +1187,11 @@ describe('Chat App Integration', () => {
       expect(chatCss).toContain('text-overflow: ellipsis');
     });
 
+    it('should use the native browser caret instead of a custom block cursor', () => {
+      expect(chatCss).toContain('Custom block cursor in the input box was removed');
+      expect(chatCss).toContain('The native browser caret is enough');
+      expect(chatCss).not.toContain('.input-cursor');
+    });
   });
 
   // ── MessageBubble Enhancements ────────────────────────────────────
@@ -1182,13 +1272,13 @@ describe('Chat App Integration', () => {
     });
   });
 
-  // ── Settings Modal Enhancements ───────────────────────────────────
+  // ── Settings Page Enhancements ────────────────────────────────────
 
-  describe('SettingsModal enhancements', () => {
+  describe('SettingsPage enhancements', () => {
     let settingsContent;
 
     beforeAll(() => {
-      const settingsPath = path.join(CHAT_APP_PATH, 'src/components/SettingsModal.tsx');
+      const settingsPath = path.join(CHAT_APP_PATH, 'src/components/SettingsPage.tsx');
       settingsContent = fs.readFileSync(settingsPath, 'utf8');
     });
 
@@ -1196,13 +1286,13 @@ describe('Chat App Integration', () => {
       expect(settingsContent).toContain('__APP_VERSION__');
     });
 
-    it('should have ARIA role dialog', () => {
-      expect(settingsContent).toContain('role="dialog"');
-      expect(settingsContent).toContain('aria-modal="true"');
+    it('should render as a full-page settings view', () => {
+      expect(settingsContent).toContain('settings-page');
+      expect(settingsContent).toContain('settings-page-body');
     });
 
     it('should have danger zone section at bottom', () => {
-      expect(settingsContent).toContain('danger-zone');
+      expect(settingsContent).toContain('danger-divider');
       expect(settingsContent).toContain('danger-warning');
     });
 
@@ -1211,16 +1301,21 @@ describe('Chat App Integration', () => {
     });
   });
 
-  describe('SettingsModal CSS enhancements', () => {
+  describe('SettingsPage CSS enhancements', () => {
     let settingsCss;
 
     beforeAll(() => {
-      const cssPath = path.join(CHAT_APP_PATH, 'src/components/SettingsModal.css');
+      const cssPath = path.join(CHAT_APP_PATH, 'src/components/SettingsPage.css');
       settingsCss = fs.readFileSync(cssPath, 'utf8');
     });
 
+    it('should have full-page layout styles', () => {
+      expect(settingsCss).toContain('.settings-page');
+      expect(settingsCss).toContain('.settings-page-header');
+      expect(settingsCss).toContain('.settings-page-body');
+    });
+
     it('should have danger zone styles', () => {
-      expect(settingsCss).toContain('.danger-zone');
       expect(settingsCss).toContain('.danger-divider');
       expect(settingsCss).toContain('.danger-warning');
     });

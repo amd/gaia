@@ -645,7 +645,28 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       const content = fs.readFileSync(versionPyPath, 'utf8');
       const match = content.match(/__version__\s*=\s*"([^"]+)"/);
       expect(match).not.toBeNull();
-      expect(pkg.version).toBe(match[1]);
+
+      // package.json tracks the last *published* PyPI version; version.py is
+      // bumped ahead of PyPI during development. They must match at release
+      // time but may legitimately differ pre-release. Assert package.json has a
+      // valid semver and is not AHEAD of version.py (that would be a bug).
+      // Allows PEP 440 pre-release suffixes (rcN, .devN, aN, bN) on either side;
+      // the lead-ahead comparison is on the numeric MAJOR.MINOR.PATCH prefix
+      // only — a released pkg vs a pre-release py with the same triple will
+      // not flag here, which is intentional (release tagging closes that gap).
+      const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)([.\-+a-z0-9]*)$/i;
+      const pkgSemver = pkg.version.match(SEMVER_RE);
+      const pySemver = match[1].match(SEMVER_RE);
+      expect(pkgSemver).not.toBeNull();
+      expect(pySemver).not.toBeNull();
+      const pkgParts = [pkgSemver[1], pkgSemver[2], pkgSemver[3]].map(Number);
+      const pyParts = [pySemver[1], pySemver[2], pySemver[3]].map(Number);
+      const pkgAhead = pkgParts.some(
+        (n, i) =>
+          n > pyParts[i] &&
+          pkgParts.slice(0, i).every((m, j) => m === pyParts[j]),
+      );
+      expect(pkgAhead).toBe(false);
     });
 
     it('should have .npmignore for clean publishing', () => {
@@ -688,6 +709,31 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       const cssPath = path.join(CHAT_APP_PATH, 'src/styles/index.css');
       const stats = fs.statSync(cssPath);
       expect(stats.size).toBeGreaterThan(0);
+    });
+  });
+
+  // ── CI AppImage Smoke Contract ───────────────────────────────────
+
+  describe('CI AppImage smoke configuration', () => {
+    it('should let the userns AppImage smoke skip gaia init', () => {
+      const workflowPath = path.join(
+        __dirname,
+        '../../.github/workflows/build-installers.yml',
+      );
+      const workflow = fs.readFileSync(workflowPath, 'utf8');
+
+      expect(workflow).toContain('GAIA_SKIP_GAIA_INIT: "1"');
+    });
+
+    it('should honor GAIA_SKIP_GAIA_INIT in the shared backend installer', () => {
+      const installerPath = path.join(
+        CHAT_APP_PATH,
+        'services/backend-installer.cjs',
+      );
+      const installer = fs.readFileSync(installerPath, 'utf8');
+
+      expect(installer).toContain('process.env.GAIA_SKIP_GAIA_INIT');
+      expect(installer).toContain('Skipping gaia init');
     });
   });
 });

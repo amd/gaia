@@ -350,8 +350,12 @@ class TestRegistry:
         reg = AgentRegistry()
         reg.discover()
         agent = next(a for a in reg.list() if a.id == "connectors-demo")
-        assert "google" in agent.required_connections
-        assert "mcp-github" in agent.required_connections
+        # #962 fix — connectors_demo now registers ConnectorRequirement
+        # objects (not bare strings; the previous form silently broke
+        # ``_reg_to_info`` in agents.py). Check by connector_id.
+        connector_ids = {r.connector_id for r in agent.required_connections}
+        assert "google" in connector_ids
+        assert "mcp-github" in connector_ids
 
     def test_namespaced_agent_id_matches_module_constant(self):
         # The registry's namespaced id must agree with the module-level

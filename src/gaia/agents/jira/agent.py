@@ -29,6 +29,11 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.tools import tool
 
+# (urlparse was previously used in a debug log line — see agent.py:635
+# — but was removed along with a CodeQL py/clear-text-logging-sensitive-data
+# false positive. Re-add the import if you need URL parsing again.)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -630,7 +635,11 @@ JQL RULES:
             else:
                 params["fields"] = "key,summary,status,priority,issuetype,assignee"
 
-            logger.debug(f"Making API request to: {url}")
+            # Log a constant endpoint label rather than extracting from the
+            # URL — ``urlparse(url).path`` is safe in practice but CodeQL's
+            # taint analysis can't prove that the path component doesn't
+            # carry credentials, and logs the alert as a false positive.
+            logger.debug("Making API request to: /rest/api/3/search/jql")
 
             async with session.get(url, headers=headers, params=params) as response:
                 response.raise_for_status()

@@ -1,0 +1,32 @@
+---
+title: "v0.18.1"
+description: "Patch release fixing broken amd-gaia.ai documentation links across connectors, Agent UI, registry, and installer; and restoring the horizontal navbar layout in the Agent UI ChatView."
+---
+
+# GAIA v0.18.1 Release Notes
+
+GAIA v0.18.1 is a patch release covering two regressions reported after v0.18.0. The first is a sweep of broken `amd-gaia.ai/...` documentation links across connector cards, the Agent UI splash, the agent registry, the installer, and BuilderAgent templates — every link was missing the `/docs/` prefix the Mintlify site serves all content under, so 12 in-product "Learn More" / troubleshooting URLs were silently 404'ing. The second is a CSS class typo in the Agent UI `ChatView` top navbar that broke the right-side flex container, stacking the action icons vertically instead of laying them out horizontally.
+
+**Why upgrade:**
+- **Documentation links resolve again** — every `amd-gaia.ai/...` URL surfaced by GAIA (connector catalog, Agent UI server splash, agent registry error guidance, BuilderAgent templates, installer messages, WebUI metadata) now routes through the `/docs/` prefix Mintlify expects. Two regression tests prevent the prefix from silently dropping again.
+- **Agent UI navbar action icons render horizontally** — the right-side container of the `ChatView` top navbar referenced a CSS class that didn't exist (`chat-header-right` vs the defined `task-header-right`), so the action icons stacked vertically at all viewport widths. The one-line rename restores `display: flex`.
+
+---
+
+## Key Changes
+
+Both changes in v0.18.1 are bug fixes targeting regressions reported after v0.18.0 shipped.
+
+- **Broken `amd-gaia.ai` documentation links across multiple surfaces** (PR [#1061](https://github.com/amd/gaia/pull/1061), closes [#1058](https://github.com/amd/gaia/issues/1058)) — Every "Learn More", troubleshooting, and SDK doc link in `src/gaia/` was pointing at a bare `https://amd-gaia.ai/<path>` URL that 404'd, because the Mintlify Documentation tab serves all content under `/docs/`. The fix inserts the missing `/docs/` prefix across all 12 affected locations — the connector catalog, the Agent UI server splash, agent registry error guidance, BuilderAgent template doc-comments, installer messages, and WebUI metadata — and adds `tests/unit/test_amd_gaia_urls.py` plus `tests/unit/connectors/test_catalog_docs_url.py` so the prefix can't silently drop again.
+- **Agent UI top-navbar action icons stacked vertically** (PR [#1060](https://github.com/amd/gaia/pull/1060), fixes [#1059](https://github.com/amd/gaia/issues/1059)) — The right-side container of `ChatView`'s top navbar (`<div className="chat-header-right">`) referenced a CSS class that didn't exist; the correctly defined rule providing `display: flex` is `.task-header-right`. Renaming the one JSX `className` restores the horizontal layout at all viewport widths without touching any other file.
+
+---
+
+## Full Changelog
+
+**2 commits** since v0.18.0:
+
+- `ae94190a` — fix(connectors): route all amd-gaia.ai URLs through /docs/ prefix (#1061)
+- `896dc203` — fix(webui): restore flex layout on top navbar right container (#1060)
+
+Full Changelog: [v0.18.0...v0.18.1](https://github.com/amd/gaia/compare/v0.18.0...v0.18.1)

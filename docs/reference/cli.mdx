@@ -223,6 +223,11 @@ GAIA works with Lemonade Server in two modes:
     (e.g., `http://192.168.1.100:13305/api/v1`). The environment variable auto-detects
     remote mode when the hostname is not localhost/127.0.0.1/::1.
 
+    If the remote Lemonade Server requires authentication, also set
+    `LEMONADE_API_KEY` to the regular API key — GAIA sends it as
+    `Authorization: Bearer <key>` on every Lemonade-bound request
+    (see [Lemonade docs](https://lemonade-server.ai/docs/guide/configuration/#api-key-and-security)).
+
     1. **Checks Remote Server** — Verifies remote Lemonade server version via API
     2. **Checks Connectivity** — Verifies remote server is reachable
     3. **Downloads Models** — Downloads models on the remote server via REST API
@@ -505,6 +510,11 @@ gaia chat --index doc1.pdf doc2.pdf doc3.pdf
 gaia chat --index report.pdf --query "Summarize the report"
 ```
 
+```bash Watch Folder
+# Auto-index every PDF in a folder, and any new ones dropped in later
+gaia chat --watch ./docs
+```
+
 ```bash Custom Settings
 gaia chat \
   --model Qwen3.5-35B-A3B-GGUF \
@@ -539,6 +549,45 @@ During a chat session, use these special commands:
 | `/stats` | Show performance statistics (tokens/sec, latency, token counts) |
 | `/help` | Show available commands |
 | `quit`, `exit`, `bye` | End the chat session |
+
+### Specialized Agent Commands
+
+Use focused agent commands when you want a smaller tool surface than the full chat agent.
+
+```bash
+gaia browse [OPTIONS]
+gaia analyze [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--query, -q` | string | - | Single query to execute |
+| `--model` | string | auto-selected by agent | Override the model used by the agent |
+| `--allowed-paths` | path(s) | - | Restrict local file paths used by agent tools |
+| `--stats`, `--show-stats` | flag | false | Show performance statistics |
+| `--stream` | flag | false | Enable streaming responses |
+| `--show-prompts` | flag | false | Display prompts sent to LLM |
+| `--debug` | flag | false | Enable debug output |
+| `--list-tools` | flag | false | List available tools and exit |
+
+**Examples:**
+
+<CodeGroup>
+```bash Browser Agent
+gaia browse --query "Search the web for AMD GAIA documentation"
+```
+
+```bash Analyst Agent
+gaia analyze --query 'Create a transactions table with date TEXT and amount REAL'
+```
+
+```bash Inspect Tools
+gaia browse --list-tools
+gaia analyze --list-tools
+```
+</CodeGroup>
 
 ---
 
@@ -700,6 +749,35 @@ gaia blender --example 2
 ```
 
 [→ Full Blender Agent Documentation](/guides/blender)
+
+---
+
+### Email Command
+
+<Card title="Email Triage" icon="envelope" href="/guides/email">
+  Read, organize, and reply to Gmail with all email content processed locally on your machine.
+</Card>
+
+```bash
+gaia email -q "<query>"           # one-shot
+gaia email -i                     # interactive REPL
+gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `-q, --query` | string | – | Single query to send to the agent (non-interactive). |
+| `-i, --interactive` | flag | false | REPL loop until `/quit`. |
+| `-v, --verbose` | flag | false | Emit structured logs for every triage decision and tool call. |
+| `--debug` | flag | false | Adds full prompt + LLM-response logging (sensitive payloads in logs). |
+
+**Setup:** requires the Google connector. Run `gaia connectors connect google` first; you'll be asked to grant Gmail and Calendar scopes.
+
+**Privacy:** all email body inference runs locally on Lemonade — the agent **rejects** any non-local LLM endpoint at startup.
+
+[→ Full Email Triage Agent Documentation](/guides/email)
 
 ---
 
@@ -1371,6 +1449,75 @@ Node.js must be installed. Dependencies are automatically installed on first run
 
 ---
 
+## Memory
+
+<Card title="Agent Memory Guide" icon="brain" href="/guides/memory">
+  Persistent second brain — remembers facts, preferences, and workflows across sessions
+</Card>
+
+Manage agent memory: run day-zero onboarding and view memory statistics.
+
+### Commands
+
+<Tabs>
+  <Tab title="status">
+    Show aggregate memory statistics.
+
+    ```bash
+    gaia memory status
+    ```
+
+    **Output includes:**
+    - Knowledge entries by category (fact, preference, error, skill) and context
+    - Conversation count and session history
+    - Tool call success rates and error counts
+    - Upcoming and overdue time-sensitive items
+    - Database size
+  </Tab>
+
+  <Tab title="bootstrap">
+    Run day-zero onboarding to populate memory.
+
+    ```bash
+    gaia memory bootstrap [OPTIONS]
+    ```
+
+    **Options:**
+
+    | Option | Description |
+    |--------|-------------|
+    | `--chat-only` | Conversational questions only (skip system scan) |
+    | `--discover` | System discovery scan only (skip questions) |
+    | `--reset` | Delete all discovery-sourced items (preserves user edits) |
+
+    **Examples:**
+
+    Full onboarding (conversational + system scan):
+    ```bash
+    gaia memory bootstrap
+    ```
+
+    Questions only:
+    ```bash
+    gaia memory bootstrap --chat-only
+    ```
+
+    Re-run system discovery:
+    ```bash
+    gaia memory bootstrap --discover
+    ```
+
+    Reset discovered items:
+    ```bash
+    gaia memory bootstrap --reset
+    ```
+  </Tab>
+</Tabs>
+
+[→ Full Memory Guide](/guides/memory) · [→ Memory SDK Reference](/sdk/sdks/memory)
+
+---
+
 ## Utility Commands
 
 ### Stats Command
@@ -1676,6 +1823,9 @@ For more help, see:
   </Card>
   <Card title="Evaluation Framework" icon="chart-bar" href="/reference/eval">
     Testing and benchmarking
+  </Card>
+  <Card title="Agent Memory" icon="brain" href="/guides/memory">
+    Persistent memory across sessions
   </Card>
 </CardGroup>
 

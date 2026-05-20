@@ -95,7 +95,13 @@ export type JsonRpcMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotificat
 
 // ── Notification Types ───────────────────────────────────────────────────
 
-export type NotificationType = 'permission_request' | 'security_alert' | 'status_change' | 'info' | 'error';
+export type NotificationType =
+  | 'permission_request'
+  | 'policy_alert'
+  | 'security_alert'
+  | 'status_change'
+  | 'info'
+  | 'error';
 export type NotificationPriority = 'low' | 'medium' | 'high' | 'critical';
 
 export interface GaiaNotification {
@@ -112,6 +118,12 @@ export interface GaiaNotification {
   /** For permission_request type. */
   tool?: string;
   toolArgs?: Record<string, unknown>;
+  /** For policy_alert type. */
+  decision?: string;
+  reason?: string;
+  ruleIds?: string[];
+  policyVersion?: string;
+  receiptId?: string;
   actions?: string[];
   timeoutSeconds?: number;
   /** Response (after user action). */

@@ -1,0 +1,40 @@
+id: memory_error_avoidance
+name: "Memory Error Pattern Avoidance"
+category: memory
+severity: high
+description: |
+  Tests that the agent stores an error pattern via the `remember` tool (category=error)
+  and then recalls and applies it to avoid repeating the mistake. This validates the
+  procedural memory tier — error patterns are injected into the system prompt for
+  future sessions.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Report an error pattern and ask the agent to remember it"
+    user_message: "Important: we discovered that running 'uv pip install' without specifying --python causes packages to install into the wrong virtualenv on Windows. Please remember this as an error pattern to avoid."
+    ground_truth:
+      expected_answer: "Error pattern stored: uv pip install without --python installs to wrong venv on Windows"
+    success_criteria: "Agent acknowledges the error pattern and stores it using the remember tool with category=error. Must mention both the command (uv pip install) and the consequence (wrong virtualenv)."
+
+  - turn: 2
+    objective: "Ask agent for help with a task that could trigger the remembered error"
+    user_message: "I need to install the 'requests' package. What command should I use?"
+    ground_truth:
+      expected_answer: "uv pip install requests --python <path> to ensure the correct virtualenv"
+    success_criteria: "Agent provides a uv pip install command that includes the --python flag (or equivalent), demonstrating it recalled and applied the error pattern. FAIL if agent suggests 'uv pip install requests' without --python or without any virtualenv guidance."
+
+  - turn: 3
+    objective: "Verify agent can explain why it included the --python flag"
+    user_message: "Why did you include the --python flag in that command?"
+    ground_truth:
+      expected_answer: "Because of the stored error pattern about wrong virtualenv on Windows"
+    success_criteria: "Agent explicitly references the previously stored error pattern or its own memory as the reason for including --python. FAIL if agent cannot explain the reason or gives a generic response without referencing the earlier warning."
+
+expected_outcome: |
+  Agent stores an error pattern, proactively applies it when relevant, and can
+  explain why it modified its recommendation based on stored knowledge.

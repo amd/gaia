@@ -2,16 +2,32 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone } from 'lucide-react';
+import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, Brain, EyeOff } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { getSessionHash } from '../utils/format';
 import gaiaRobot from '../assets/gaia-robot.png';
 import type { Session } from '../types';
 import './Sidebar.css';
 
+/** Copy a session's hash link to the clipboard. */
+function copySessionLink(e: React.MouseEvent, sessionId: string) {
+    e.stopPropagation();
+    e.preventDefault();
+    const hash = getSessionHash(sessionId);
+    const url = `${window.location.origin}${window.location.pathname}#${hash}`;
+    navigator.clipboard.writeText(url).then(() => {
+        log.ui.info(`Copied session link: ${url}`);
+    }).catch(() => {
+        // Fallback: select the URL in a temporary input
+        log.ui.warn('Clipboard write failed');
+    });
+}
+
 interface SidebarProps {
     onNewTask: () => void;
+    onHome?: () => void;
     tunnelActive?: boolean;
     tunnelLoading?: boolean;
     onMobileToggle?: () => void;
@@ -28,6 +44,14 @@ function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSele
     onDelete: (e: React.MouseEvent | React.KeyboardEvent, id: string) => void;
     formatTime: (iso: string) => string;
 }) {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopyHash = useCallback((e: React.MouseEvent) => {
+        copySessionLink(e, s.id);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+    }, [s.id]);
+
     return (
         <div
             className={`session-item ${isActive ? 'active' : ''} ${isDeleting ? 'session-deleting' : ''}`}
@@ -38,7 +62,19 @@ function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSele
             aria-label={`Open task: ${s.title}`}
             aria-current={isActive ? 'true' : undefined}
         >
-            <span className="session-title">{s.title}</span>
+            <span className="session-title">
+                {s.private && <EyeOff size={10} className="session-private-icon" aria-label="Private session" />}
+                {s.title}
+            </span>
+            <a
+                className={`session-hash ${copied ? 'copied' : ''}`}
+                href={`#${getSessionHash(s.id)}`}
+                onClick={handleCopyHash}
+                title={copied ? 'Copied!' : `Copy link #${getSessionHash(s.id)}`}
+                aria-label={`Copy link for session ${getSessionHash(s.id)}`}
+            >
+                #{getSessionHash(s.id)}
+            </a>
             <span className="session-time">{formatTime(s.updated_at)}</span>
             {isPendingDelete ? (
                 <button
@@ -66,10 +102,10 @@ function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSele
     );
 }
 
-export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
+export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
     const {
         sessions, currentSessionId, setCurrentSession, removeSession, addSession,
-        setMessages, theme, toggleTheme, setShowSettings,
+        setMessages, theme, toggleTheme, setShowSettings, setShowMemoryDashboard,
         sidebarOpen, setSidebarOpen, setLoadingMessages,
         sidebarCollapsed, toggleSidebarCollapsed,
         sidebarWidth, setSidebarWidth,
@@ -314,7 +350,7 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
             aria-label="Task sidebar"
         >
             <div className="sidebar-top">
-                <div className="sidebar-brand">
+                <button className="sidebar-brand" onClick={onHome} title="Agent Hub" aria-label="Go to Agent Hub">
                     <div className="brand-icon" aria-hidden="true">
                         <img src={gaiaRobot} alt="" width={28} height={28} />
                     </div>
@@ -323,7 +359,7 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                         <span className="brand-version">v{__APP_VERSION__}</span>
                         <span className="beta-badge">BETA</span>
                     </div>
-                </div>
+                </button>
                 <div className="sidebar-top-actions">
                     <button className="new-task-btn" onClick={onNewTask} title="New Task" aria-label="New Task">
                         <Plus size={18} />
@@ -414,6 +450,9 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                             <Smartphone size={17} />
                         </button>
                     )}
+                    <button className="btn-icon" onClick={() => setShowMemoryDashboard(true)} title="Memory Dashboard" aria-label="Memory Dashboard">
+                        <Brain size={17} />
+                    </button>
                     <button className="btn-icon" onClick={() => setShowSettings(true)} title="Settings" aria-label="Settings">
                         <Settings size={17} />
                     </button>

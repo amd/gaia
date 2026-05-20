@@ -21,12 +21,14 @@ import functools
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -206,7 +208,17 @@ USER_CORPUS_DIR = Path.home() / ".gaia" / "eval" / "corpus"
 # Personas defined in eval/prompts/simulator.md.  validate_scenario enforces this list.
 # Custom personas are allowed — these are documented defaults.
 _KNOWN_PERSONAS = frozenset(
-    {"casual_user", "power_user", "confused_user", "adversarial_user", "data_analyst"}
+    {
+        "casual_user",
+        "power_user",
+        "confused_user",
+        "adversarial_user",
+        "data_analyst",
+        "home_user",
+        "small_business_owner",
+        "student",
+        "creative_professional",
+    }
 )
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -214,7 +226,9 @@ DEFAULT_BACKEND = "http://localhost:4200"
 DEFAULT_BUDGET = "2.00"
 DEFAULT_TIMEOUT = 900  # seconds per scenario (base)
 # Extra seconds reserved for claude subprocess + MCP server cold-start.
-_STARTUP_OVERHEAD_S = 120
+_STARTUP_OVERHEAD_S = (
+    240  # 4 min startup (MCP init + prompt ingestion, higher on Windows)
+)
 # Hard upper bound — a misconfigured scenario cannot tie up CI for more than 2 hours.
 _MAX_EFFECTIVE_TIMEOUT_S = 7200
 
@@ -406,8 +420,15 @@ def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
     return scenarios
 
 
-def build_scenario_prompt(scenario_data, manifest_data, backend_url, agent_type=None):
+def build_scenario_prompt(
+    scenario_data, manifest_data, backend_url, keep_sessions=False, agent_type=None
+):  # pylint: disable=unused-argument
     """Build the prompt passed to `claude -p` for one scenario.
+
+    Sessions are always preserved (never deleted) so they remain available
+    for manual inspection in the Agent UI.  The *keep_sessions* parameter
+    is retained for backward compatibility with existing callers but has
+    no effect.
 
     When *agent_type* is set, the simulator is instructed to create sessions
     bound to that agent registration ID (e.g. "gaia-lite"). Without it, the
@@ -509,8 +530,8 @@ After all turns, call get_messages(session_id) for the persisted full trace.
 ### Phase 4: Scenario judgment
 Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
 
-### Phase 5: Cleanup
-Call delete_session(session_id)
+### Phase 5: Preserve session
+Do NOT call delete_session. Leave the session intact so it can be reviewed in the Agent UI after the eval completes.
 
 ### Phase 6: Return result
 Return a single JSON object to stdout with this structure:
@@ -676,8 +697,18 @@ def _aggregate_performance(result: dict, scenario_id: str) -> None:
         result["performance_summary"] = None
 
 
-def preflight_check(backend_url):
-    """Check prerequisites before running scenarios."""
+def preflight_check(backend_url, scenarios=None):
+    """Check prerequisites before running scenarios.
+
+    Args:
+        backend_url: Agent UI backend URL.
+        scenarios: Optional iterable of ``(path, scenario_data)`` tuples — when
+            provided, also verifies any category-specific prerequisites (e.g.
+            memory scenarios need ``GAIA_MEMORY_ADMIN=1`` on the backend so
+            the eval simulator can reset state between runs).
+
+    Returns a list of error strings; empty list means preflight passed.
+    """
     import urllib.error
     import urllib.request
 
@@ -700,13 +731,86 @@ def preflight_check(backend_url):
         errors.append(f"MCP config not found: {MCP_CONFIG}")
 
     # Check claude CLI
-    result = subprocess.run(
-        ["claude", "--version"], capture_output=True, text=True, check=False
-    )
-    if result.returncode != 0:
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
         errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
+    else:
+        try:
+            result = subprocess.run(
+                [claude_bin, "--version"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                errors.append(
+                    "'claude' CLI not found on PATH — install Claude Code CLI"
+                )
+        except FileNotFoundError:
+            errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
+
+    # Memory-category preflight — required only when memory scenarios are queued.
+    # Memory scenarios call memory_clear(scope=all) to reset state between turns;
+    # that endpoint is gated by GAIA_MEMORY_ADMIN=1 on the backend process.
+    # Without this, every memory scenario would silently inherit state from the
+    # previous run and produce flaky pass/fail results.
+    has_memory_scenarios = scenarios is not None and any(
+        (sd or {}).get("category") == "memory" for _path, sd in scenarios
+    )
+    if has_memory_scenarios:
+        memory_admin_error = _probe_memory_admin(backend_url)
+        if memory_admin_error:
+            errors.append(memory_admin_error)
 
     return errors
+
+
+def _probe_memory_admin(backend_url: str) -> Optional[str]:
+    """Verify the backend has ``GAIA_MEMORY_ADMIN=1`` set.
+
+    Probes ``POST /api/memory/admin/seed`` with an empty items list — the
+    endpoint short-circuits to ``{"count": 0, "ids": []}`` without writing
+    anything when admin is enabled, or returns 403 with an actionable
+    message when it isn't.
+
+    Returns ``None`` on success, or an error string ready for the preflight
+    error list.
+    """
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{backend_url}/api/memory/admin/seed",
+        data=b'{"items":[]}',
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            if r.status == 200:
+                return None
+            return (
+                f"Memory admin probe returned unexpected HTTP {r.status} "
+                f"from {backend_url}/api/memory/admin/seed"
+            )
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            return (
+                "Memory scenarios require GAIA_MEMORY_ADMIN=1 on the backend, "
+                "but the backend at "
+                f"{backend_url} returned 403 from /api/memory/admin/seed. "
+                "Restart the Agent UI backend with that env var set, e.g.:\n"
+                "    GAIA_MEMORY_ADMIN=1 GAIA_MEMORY_MCP_ALWAYS=1 gaia chat --ui"
+            )
+        return (
+            f"Memory admin probe failed with HTTP {e.code} from {backend_url}: "
+            f"{e.reason}"
+        )
+    except urllib.error.URLError as e:
+        return (
+            f"Memory admin probe could not reach {backend_url}: {e}. "
+            "Is the Agent UI backend running?"
+        )
 
 
 def _load_merged_manifest(extra_corpus_dirs=None):
@@ -798,6 +902,7 @@ def run_scenario_subprocess(
     model,
     budget,
     timeout,
+    keep_sessions=False,
     extra_corpus_dirs=None,
     agent_type=None,
 ):
@@ -806,7 +911,11 @@ def run_scenario_subprocess(
     manifest_data = _load_merged_manifest(extra_corpus_dirs=extra_corpus_dirs)
 
     prompt = build_scenario_prompt(
-        scenario_data, manifest_data, backend_url, agent_type=agent_type
+        scenario_data,
+        manifest_data,
+        backend_url,
+        keep_sessions=keep_sessions,
+        agent_type=agent_type,
     )
 
     result_schema = json.dumps(
@@ -825,22 +934,37 @@ def run_scenario_subprocess(
         }
     )
 
-    cmd = [
-        "claude",
-        "-p",
-        "--output-format",
-        "json",
-        "--json-schema",
-        result_schema,
-        "--mcp-config",
-        str(MCP_CONFIG),
-        "--strict-mcp-config",
-        "--model",
-        model,
-        "--dangerously-skip-permissions",
-        "--max-budget-usd",
-        budget,
-    ]
+    claude_bin = shutil.which("claude") or "claude"
+
+    # ``--bare`` gives a clean subprocess (skips hooks, CLAUDE.md auto-load,
+    # plugin sync, etc.) but per the Claude Code CLI docs it ALSO restricts
+    # Anthropic auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` only —
+    # OAuth and keychain are never read. So on a subscription-only setup
+    # (the common case for Claude Code Max users), ``--bare`` makes the
+    # eval fail-fast with ``Not logged in · Please run /login`` because
+    # the SDK can't see the user's existing OAuth session. We opt in to
+    # ``--bare`` only when an explicit API key is available; otherwise we
+    # let the subprocess inherit the parent's OAuth credentials.
+    cmd = [claude_bin, "-p"]
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        cmd.append("--bare")
+    cmd.extend(
+        [
+            "--no-session-persistence",  # don't save eval sessions to disk
+            "--output-format",
+            "json",
+            "--json-schema",
+            result_schema,
+            "--mcp-config",
+            str(MCP_CONFIG),
+            "--strict-mcp-config",
+            "--model",
+            model,
+            "--dangerously-skip-permissions",
+            "--max-budget-usd",
+            budget,
+        ]
+    )
 
     print(f"\n[RUN] {scenario_id} — invoking claude -p ...", flush=True)
     start = time.time()
@@ -947,11 +1071,6 @@ def run_scenario_subprocess(
                 if isinstance(result, dict):
                     result["scenario_id"] = scenario_id
                 result["elapsed_s"] = elapsed
-                score = result.get("overall_score")
-                score_str = f"{score:.1f}" if isinstance(score, (int, float)) else "n/a"
-                print(
-                    f"[DONE] {scenario_id} — {result.get('status')} {score_str}/10 ({elapsed:.0f}s)"
-                )
             except (json.JSONDecodeError, KeyError) as e:
                 print(f"[ERROR] {scenario_id} — JSON parse error: {e}", file=sys.stderr)
                 result = {
@@ -1112,12 +1231,38 @@ def run_scenario_subprocess(
     # non-Lemonade providers and does not affect pass/fail.
     _aggregate_performance(result, scenario_id)
 
+    # Latency validation — flag excessive TTFT as a UX concern
+    _MAX_TTFT_S = 30.0  # fail threshold for time-to-first-token
+    perf_summary = result.get("performance_summary") or {}
+    avg_ttft = perf_summary.get("avg_time_to_first_token")
+    if isinstance(avg_ttft, (int, float)) and avg_ttft > _MAX_TTFT_S:
+        result.setdefault("latency_warning", []).append(
+            f"avg TTFT {avg_ttft:.1f}s exceeds {_MAX_TTFT_S}s threshold"
+        )
+        print(
+            f"[WARN] {scenario_id} — slow TTFT: {avg_ttft:.1f}s "
+            f"(threshold: {_MAX_TTFT_S}s)",
+            file=sys.stderr,
+        )
+
     # Write trace file
     traces_dir = run_dir / "traces"
     traces_dir.mkdir(exist_ok=True)
     trace_path = traces_dir / f"{scenario_id}.json"
     trace_path.write_text(
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    # Print final [DONE] line here — AFTER all score/status overrides — so the
+    # displayed status always reflects the fully-corrected result, not the raw
+    # LLM output which may still show the pre-override status.
+    elapsed_final = result.get("elapsed_s", 0)
+    score_final = result.get("overall_score")
+    score_str_final = (
+        f"{score_final:.1f}" if isinstance(score_final, (int, float)) else "n/a"
+    )
+    print(
+        f"[DONE] {scenario_id} — {result.get('status')} {score_str_final}/10 ({elapsed_final:.0f}s)"
     )
 
     return result
@@ -1183,8 +1328,6 @@ Fix failures in this order:
 
 def run_fix_iteration(scorecard, run_dir, iteration):
     """Invoke Claude Code to fix failing scenarios. Returns fix log entry."""
-    import shutil
-
     # Load fixer prompt from file if available, fall back to inline FIXER_PROMPT
     fixer_prompt_path = EVAL_DIR / "prompts" / "fixer.md"
     fixer_template = (
@@ -1313,6 +1456,7 @@ def compare_scorecards(baseline_path, current_path):
     improved = []
     regressed = []
     score_regressed = []
+    time_regressed = []
     unchanged = []
     only_in_baseline = []
     only_in_current = []
@@ -1355,9 +1499,24 @@ def compare_scorecards(baseline_path, current_path):
             "delta": delta,
         }
 
+        # Check for time regressions: compare per-scenario elapsed seconds
+        b_elapsed = b.get("elapsed_s") or 0
+        c_elapsed = c.get("elapsed_s") or 0
+        time_regress = False
+        if isinstance(b_elapsed, (int, float)) and b_elapsed > 0:
+            if isinstance(c_elapsed, (int, float)) and c_elapsed > (b_elapsed * 2):
+                time_regress = True
+        if time_regress:
+            entry["baseline_elapsed_s"] = round(float(b_elapsed), 2)
+            entry["current_elapsed_s"] = round(float(c_elapsed), 2)
+            entry["time_regressed"] = True
+
         # Corpus availability change — not a quality signal
         if b_skipped or c_skipped:
             corpus_changed.append(entry)
+        elif entry.get("time_regressed"):
+            # Time regressions reported separately from score regressions
+            time_regressed.append(entry)
         elif not b_pass and c_pass:
             improved.append(entry)
         elif b_pass and not c_pass:
@@ -1424,6 +1583,15 @@ def compare_scorecards(baseline_path, current_path):
                 f"    {e['scenario_id']:<40} {e['baseline_score']:.1f} → {e['current_score']:.1f} ({e['delta']:+.1f})"
             )
 
+    if time_regressed:
+        print(
+            f"\n[~] TIME REGRESSION ({len(time_regressed)} scenario(s)) — elapsed > 2x baseline:"
+        )
+        for e in time_regressed:
+            print(
+                f"    {e['scenario_id']:<40} {e.get('baseline_elapsed_s', 0):.1f}s → {e.get('current_elapsed_s', 0):.1f}s"
+            )
+
     if unchanged:
         # Split into score-changed vs truly same
         score_changed = [e for e in unchanged if abs(e["delta"]) >= 0.1]
@@ -1474,6 +1642,10 @@ def compare_scorecards(baseline_path, current_path):
         print(
             f"[WARN] {len(score_regressed)} score regression(s) detected (still passing but score dropped ≥{_SCORE_REGRESSION_THRESHOLD})!"
         )
+    if time_regressed:
+        print(
+            f"[WARN] {len(time_regressed)} time regression(s) detected (elapsed time > 2x baseline)!"
+        )
     if not regressed and not score_regressed and improved:
         print(
             f"[OK]   Net improvement: {len(improved)} scenario(s) fixed, 0 regressions."
@@ -1486,6 +1658,7 @@ def compare_scorecards(baseline_path, current_path):
         "improved": improved,
         "regressed": regressed,
         "score_regressed": score_regressed,
+        "time_regressed": time_regressed,
         "unchanged": unchanged,
         "only_in_baseline": only_in_baseline,
         "only_in_current": only_in_current,
@@ -1541,6 +1714,7 @@ class AgentEvalRunner:
         fix_mode=False,
         max_fix_iterations=3,
         target_pass_rate=0.90,
+        keep_sessions=False,
     ):
         """Run eval scenarios. Returns scorecard dict.
 
@@ -1569,6 +1743,7 @@ class AgentEvalRunner:
                 fix_mode=fix_mode,
                 max_fix_iterations=max_fix_iterations,
                 target_pass_rate=target_pass_rate,
+                keep_sessions=keep_sessions,
             )
 
     def _run_locked(
@@ -1578,6 +1753,7 @@ class AgentEvalRunner:
         fix_mode=False,
         max_fix_iterations=3,
         target_pass_rate=0.90,
+        keep_sessions=False,
     ):
         """Internal entry — holds the eval lock; only called by ``run()``."""
 
@@ -1603,7 +1779,7 @@ class AgentEvalRunner:
             print(f"[INFO] Targeting agent_type='{self.agent_type}'")
 
         # Pre-flight
-        errors = preflight_check(self.backend_url)
+        errors = preflight_check(self.backend_url, scenarios=scenarios)
         if errors:
             print("[ERROR] Pre-flight check failed:", file=sys.stderr)
             for e in errors:
@@ -1676,6 +1852,8 @@ class AgentEvalRunner:
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
+            # Per-scenario agent_type from YAML overrides CLI --agent-type
+            scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
             result = run_scenario_subprocess(
                 scenario_path,
                 scenario_data,
@@ -1684,10 +1862,11 @@ class AgentEvalRunner:
                 self.model,
                 self.budget,
                 effective_timeout,
+                keep_sessions=keep_sessions,
                 extra_corpus_dirs=(
                     self.extra_corpus_dirs if self.extra_corpus_dirs else None
                 ),
-                agent_type=self.agent_type,
+                agent_type=scenario_agent_type,
             )
             results.append(result)
 
@@ -1770,6 +1949,7 @@ class AgentEvalRunner:
                 effective_timeout = _compute_effective_timeout(
                     self.timeout, scenario_data
                 )
+                scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
                 result = run_scenario_subprocess(
                     scenario_path,
                     scenario_data,
@@ -1778,10 +1958,11 @@ class AgentEvalRunner:
                     self.model,
                     self.budget,
                     effective_timeout,
+                    keep_sessions=keep_sessions,
                     extra_corpus_dirs=(
                         self.extra_corpus_dirs if self.extra_corpus_dirs else None
                     ),
-                    agent_type=self.agent_type,
+                    agent_type=scenario_agent_type,
                 )
                 rerun_results.append(result)
 

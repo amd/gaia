@@ -510,15 +510,32 @@ jobs:
     steps:
       - name: Refresh Context7
         run: |
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          # Fail loudly on unexpected status; 429 is the only tolerated non-2xx.
+          BODY_FILE=$(mktemp)
+          HTTP_STATUS=$(curl -s -o "$BODY_FILE" -w "%{http_code}" \
             -X POST https://context7.com/api/v1/refresh \
             -H "Authorization: Bearer ${{ secrets.CONTEXT7_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d '{"libraryName": "/amd/gaia"}')
+          BODY=$(cat "$BODY_FILE")
+          rm -f "$BODY_FILE"
           if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "202" ]; then
             echo "Context7 refresh triggered (HTTP $HTTP_STATUS)"
           elif [ "$HTTP_STATUS" = "429" ]; then
-            echo "::warning::Context7 rate limited — refresh skipped"
+            echo "::warning::Context7 rate limited (HTTP 429) — refresh skipped"
+            # Body is third-party content; bracket with stop-commands so any
+            # ::cmd:: lines inside cannot inject GHA workflow commands.
+            TOKEN=$(uuidgen)
+            echo "::stop-commands::$TOKEN"
+            echo "Response body:"
+            echo "$BODY"
+            echo "::$TOKEN::"
           else
-            echo "::warning::Context7 refresh returned HTTP $HTTP_STATUS"
+            echo "::error::Context7 refresh failed (HTTP $HTTP_STATUS) — see body below"
+            TOKEN=$(uuidgen)
+            echo "::stop-commands::$TOKEN"
+            echo "Response body:"
+            echo "$BODY"
+            echo "::$TOKEN::"
+            exit 1
           fi

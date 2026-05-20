@@ -1,6 +1,7 @@
 id: simple_factual_rag
 name: "Simple Factual RAG"
 category: rag_quality
+agent_type: doc
 severity: critical
 description: |
   Direct fact lookup from a financial report.

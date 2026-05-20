@@ -3,7 +3,10 @@
     "gaia-agent-ui": {
       "command": "uv",
       "args": ["run", "python", "-m", "gaia.mcp.servers.agent_ui_mcp", "--stdio"],
-      "env": {}
+      "env": {
+        "GAIA_MEMORY_MCP_ALWAYS": "1",
+        "GAIA_MEMORY_ADMIN": "1"
+      }
     }
   }
 }

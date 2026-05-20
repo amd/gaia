@@ -1,6 +1,7 @@
 id: department_budget_xlsx
 name: "Meridian Technology Solutions Department Budget FY2024"
 category: real_world
+agent_type: data
 severity: high
 description: |
   Agent must analyze a three-sheet Excel budget file (Budget vs Actual, Headcount, Summary)

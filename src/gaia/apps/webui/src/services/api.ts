@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPCatalogEntry, MCPServerStatus, AgentInfo } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo } from '../types';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -112,9 +112,13 @@ export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number
     return apiFetch('GET', '/agents');
 }
 
+export async function listDiskAgents(): Promise<{ agents: DiskAgentInfo[]; total: number }> {
+    return apiFetch('GET', '/agents/disk', undefined, { 'x-gaia-ui': '1' });
+}
+
 // -- Connections (issue #915) ---------------------------------------------------
 
-import type { ConnectorInfo, ConnectorRow } from '../types';
+import type { AgentMcpServer, ConnectorInfo, ConnectorRow } from '../types';
 
 // New framework endpoints (T-8b) — /api/connectors
 const UI_HEADER = { 'x-gaia-ui': '1' };
@@ -136,7 +140,7 @@ export async function authorizeConnector(
 
 export async function configureConnector(
     connectorId: string,
-    config: Record<string, string>,
+    config: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
     return apiFetch('POST', `/connectors/${connectorId}/configure`, { config }, UI_HEADER);
 }
@@ -149,6 +153,44 @@ export async function testConnector(
 
 export async function disconnectConnector(connectorId: string): Promise<void> {
     await apiFetch<unknown>('DELETE', `/connectors/${connectorId}`, undefined, UI_HEADER);
+}
+
+/**
+ * Enable a previously-disabled MCP connector (#1004).
+ *
+ * Returns the updated ConnectorRow with `enabled: true`. The backend
+ * triggers a live reload of every cached chat session's MCPClientManager
+ * so the connector's tools materialize without restarting GAIA.
+ *
+ * Throws when called against a non-MCP connector (server returns 400).
+ */
+export async function enableConnector(connectorId: string): Promise<ConnectorRow> {
+    return apiFetch('POST', `/connectors/${connectorId}/enable`, {}, UI_HEADER);
+}
+
+/**
+ * Disable a configured MCP connector without clearing credentials (#1004).
+ *
+ * Credentials, the env-block ``$keyring`` references, and per-agent grants
+ * are preserved. The backend triggers a live reload so the connector's
+ * tools disappear from active agents' tool lists. Re-enable with
+ * ``enableConnector`` to make tools available again.
+ *
+ * Throws when called against a non-MCP connector (server returns 400).
+ */
+export async function disableConnector(connectorId: string): Promise<ConnectorRow> {
+    return apiFetch('POST', `/connectors/${connectorId}/disable`, {}, UI_HEADER);
+}
+
+/**
+ * List MCP servers declared by custom Python agents (#1020).
+ *
+ * Returns a flat sorted list (enabled first, alphabetical) of server entries
+ * from each custom agent's local mcp_servers.json. These are read-only — the
+ * UI renders them without a toggle or disconnect action.
+ */
+export async function listAgentMcps(): Promise<{ agent_mcps: AgentMcpServer[] }> {
+    return apiFetch('GET', '/connectors/agent-mcps');
 }
 
 export async function listConnectorGrants(connectorId: string): Promise<{
@@ -243,12 +285,16 @@ export async function getSession(id: string): Promise<Session> {
     return apiFetch('GET', `/sessions/${id}`);
 }
 
-export async function updateSession(id: string, data: { title?: string; system_prompt?: string; agent_type?: string }): Promise<Session> {
+export async function updateSession(id: string, data: { title?: string; system_prompt?: string; private?: boolean; agent_type?: string }): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}`, data);
 }
 
 export async function deleteSession(id: string): Promise<void> {
     return apiFetch('DELETE', `/sessions/${id}`);
+}
+
+export async function toggleSessionPrivacy(id: string): Promise<Session> {
+    return apiFetch('PATCH', `/sessions/${id}/private`);
 }
 
 export async function getMessages(sessionId: string): Promise<{ messages: Message[]; total: number }> {
@@ -292,7 +338,7 @@ export interface StreamCallbacks {
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
-    'permission_request',
+    'permission_request', 'policy_alert',
 ]);
 
 export function sendMessageStream(
@@ -446,6 +492,11 @@ export async function confirmToolExecution(
 /** Confirm or deny a tool execution (simplified API for permission_request events). */
 export async function confirmTool(sessionId: string, approved: boolean): Promise<{ status: string; approved: boolean }> {
     return apiFetch('POST', '/chat/confirm-tool', { session_id: sessionId, approved });
+}
+
+/** Cancel an active streaming chat session (sets SSE handler cancelled flag). */
+export async function cancelStream(sessionId: string): Promise<{ cancelled: boolean }> {
+    return apiFetch('POST', '/chat/cancel', { session_id: sessionId });
 }
 
 // -- Documents -----------------------------------------------------------------
@@ -618,30 +669,33 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
 
 // -- MCP Server Management -------------------------------------------------------
 
+// MCP server configuration moved to the connectors framework (#927):
+//   - Catalog tiles  → POST /api/connectors/{id}/configure (see connectorsStore)
+//   - Custom servers → CLI `gaia connectors mcp add` today; UI in #977
+//   - Catalog list   → GET /api/connectors/catalog (filter by type='mcp_server')
+// Only read-only runtime endpoints remain:
+
 export async function listMCPServers(): Promise<{ servers: MCPServerInfo[] }> {
     return apiFetch('GET', '/mcp/servers');
 }
 
-export async function addMCPServer(data: { name: string; command: string; args?: string[]; env?: Record<string, string> }): Promise<{ status: string; name: string }> {
-    return apiFetch('POST', '/mcp/servers', data);
-}
-
-export async function removeMCPServer(name: string): Promise<{ status: string; name: string }> {
-    return apiFetch('DELETE', `/mcp/servers/${name}`);
-}
-
-export async function enableMCPServer(name: string): Promise<{ status: string; name: string }> {
-    return apiFetch('POST', `/mcp/servers/${name}/enable`);
-}
-
-export async function disableMCPServer(name: string): Promise<{ status: string; name: string }> {
-    return apiFetch('POST', `/mcp/servers/${name}/disable`);
-}
-
-export async function getMCPCatalog(): Promise<{ catalog: MCPCatalogEntry[] }> {
-    return apiFetch('GET', '/mcp/catalog');
-}
-
 export async function getMCPRuntimeStatus(): Promise<{ servers: MCPServerStatus[] }> {
     return apiFetch('GET', '/mcp/status');
+}
+
+// -- Agent UI MCP Server (exposes Agent UI as MCP tools for Claude Code etc.) -----------
+
+export async function getAgentMCPServerStatus(): Promise<AgentMCPServerStatus> {
+    return apiFetch('GET', '/mcp/agent-server/status');
+}
+
+export async function startAgentMCPServer(port?: number, backendUrl?: string): Promise<AgentMCPServerStatus & { status: string }> {
+    const body: Record<string, unknown> = {};
+    if (port !== undefined) body.port = port;
+    if (backendUrl !== undefined) body.backend_url = backendUrl;
+    return apiFetch('POST', '/mcp/agent-server/start', Object.keys(body).length ? body : undefined);
+}
+
+export async function stopAgentMCPServer(): Promise<{ status: string; pid?: number }> {
+    return apiFetch('POST', '/mcp/agent-server/stop');
 }

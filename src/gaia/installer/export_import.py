@@ -101,6 +101,26 @@ def _is_custom_agent_dir(path: Path) -> bool:
     return path.is_dir() and (path / "agent.py").is_file()
 
 
+def list_exportable_custom_agent_dirs() -> List[Path]:
+    """Return custom agent directories that would be included in an export."""
+    agents_root = _agents_root()
+    if not agents_root.exists():
+        return []
+
+    agent_dirs: List[Path] = []
+    for d in sorted(agents_root.iterdir(), key=lambda p: p.name):
+        if _is_custom_agent_dir(d):
+            agent_dirs.append(d)
+        elif d.is_dir() and (d / "agent.yaml").is_file():
+            log.warning(
+                "export: skipping legacy YAML-only agent directory %s "
+                "(YAML manifest agents were removed in v0.17.5; convert to "
+                "agent.py — see https://amd-gaia.ai/docs/guides/custom-agent)",
+                d,
+            )
+    return agent_dirs
+
+
 def _validate_agent_id(agent_id: str) -> None:
     """Raise ValueError if the agent id is unsafe or malformed."""
     if not isinstance(agent_id, str) or not agent_id.strip():
@@ -139,22 +159,7 @@ def export_custom_agents(output_path: Path) -> ExportResult:
         ValueError: If there are no custom agents to export.
     """
     output_path = Path(output_path)
-    agents_root = _agents_root()
-
-    if not agents_root.exists():
-        raise ValueError("No custom agents found to export")
-
-    agent_dirs: List[Path] = []
-    for d in sorted(agents_root.iterdir(), key=lambda p: p.name):
-        if _is_custom_agent_dir(d):
-            agent_dirs.append(d)
-        elif d.is_dir() and (d / "agent.yaml").is_file():
-            log.warning(
-                "export: skipping legacy YAML-only agent directory %s "
-                "(YAML manifest agents were removed in v0.17.5; convert to "
-                "agent.py — see https://amd-gaia.ai/guides/custom-agent)",
-                d,
-            )
+    agent_dirs = list_exportable_custom_agent_dirs()
     if not agent_dirs:
         raise ValueError("No custom agents found to export")
 
@@ -378,7 +383,7 @@ def import_agent_bundle(bundle_path: Path) -> ImportResult:
                             f"manifest (agent.yaml) but no agent.py. YAML "
                             f"manifest agents were removed in v0.17.5. "
                             f"Convert this agent to agent.py and re-export "
-                            f"(see https://amd-gaia.ai/guides/custom-agent)."
+                            f"(see https://amd-gaia.ai/docs/guides/custom-agent)."
                         )
                     else:
                         result.errors.append(

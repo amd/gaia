@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Lock, Zap, FileText, DollarSign, Terminal, Bot, Plus } from 'lucide-react';
+import { Lock, Zap, FileText, DollarSign, Terminal } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
+import { AgentHubGrid } from './AgentHubGrid';
 import './WelcomeScreen.css';
 
 interface WelcomeScreenProps {
@@ -157,20 +158,18 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                         expandedDesc="No API keys, no subscriptions, no hidden costs. Fully open-source." />
                 </div>
 
-                {agents.length > 1 && (
-                    <div className="agent-pills">
-                        {agents.map((agent) => (
-                            <button
-                                key={agent.id}
-                                className={`agent-pill${agent.id === activeAgentId ? ' active' : ''}`}
-                                onClick={() => setActiveAgentId(agent.id)}
-                                title={agent.description || agent.name}
-                            >
-                                <Bot size={14} />
-                                <span>{agent.name}</span>
-                            </button>
-                        ))}
-                    </div>
+                {agents.length > 0 && (
+                    <AgentHubGrid
+                        agents={agents}
+                        activeAgentId={activeAgentId}
+                        onSelect={setActiveAgentId}
+                        onStartChat={(id, prompt) => {
+                            setActiveAgentId(id);
+                            if (prompt) onSendPrompt(prompt);
+                            else onNewTask();
+                        }}
+                        onCreateAgent={onCreateAgent}
+                    />
                 )}
 
                 {/* First-run setup hints. Size hint is sourced from the
@@ -206,12 +205,6 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                     <button className="btn-primary start-btn" onClick={onNewTask} disabled={isInitializing}>
                         Start a New Task
                     </button>
-                    {onCreateAgent && (
-                        <button className="build-agent-btn" onClick={onCreateAgent} disabled={isInitializing}>
-                            <Plus size={14} />
-                            Build a Custom Agent
-                        </button>
-                    )}
                 </div>
 
                 <div className="suggestions">

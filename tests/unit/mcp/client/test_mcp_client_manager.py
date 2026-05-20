@@ -12,10 +12,26 @@ from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
 
 def _mock_home(monkeypatch, home_dir: Path):
-    """Monkeypatch Path.home() and HOME/USERPROFILE to use a custom directory."""
+    """Monkeypatch Path.home() and HOME/USERPROFILE to use a custom directory.
+
+    Also patches os.path.expanduser so that any code reaching through to the
+    OS-level home resolution (e.g. Path("~").expanduser()) is redirected.
+    """
+    import os as _os
+
+    _real_expanduser = _os.path.expanduser
+
+    def _fake_expanduser(path: str) -> str:
+        if path == "~":
+            return str(home_dir)
+        if path.startswith("~/") or path.startswith("~\\"):
+            return str(home_dir) + path[1:]
+        return _real_expanduser(path)
+
     monkeypatch.setenv("HOME", str(home_dir))
     monkeypatch.setenv("USERPROFILE", str(home_dir))
     monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+    monkeypatch.setattr(_os.path, "expanduser", _fake_expanduser)
 
 
 class TestMCPClientManager:
@@ -227,6 +243,11 @@ class TestMCPClientManager:
 class TestMCPConfig:
     """Test MCPConfig functionality."""
 
+    @pytest.fixture(autouse=True)
+    def isolate_home(self, monkeypatch, tmp_path):
+        """Redirect Path.home() to tmp_path so tests never touch ~/.gaia/."""
+        _mock_home(monkeypatch, tmp_path)
+
     def test_config_creates_default_file_path(self, tmp_path, monkeypatch):
         """Test that config uses global path when no local mcp_servers.json exists."""
         empty_dir = tmp_path / "no_local"
@@ -239,35 +260,26 @@ class TestMCPConfig:
         expected_path = tmp_path / ".gaia" / "mcp_servers.json"
         assert config.config_file == expected_path
 
-    def test_add_server_saves_config(self, tmp_path):
-        """Test that add_server persists to file."""
-        config_file = tmp_path / "test_config.json"
-        config = MCPConfig(str(config_file))
-
-        config.add_server("test", {"command": "npx", "args": ["-y", "server"]})
-
-        assert config_file.exists()
-        assert config.server_exists("test")
-
-    def test_remove_server_deletes_from_config(self, tmp_path):
-        """Test that remove_server removes from file."""
-        config_file = tmp_path / "test_config.json"
-        config = MCPConfig(str(config_file))
-
-        config.add_server("test", {"command": "npx", "args": ["-y", "server"]})
-        config.remove_server("test")
-
-        assert not config.server_exists("test")
-
     def test_get_server_returns_config(self, tmp_path):
         """Test that get_server returns correct configuration."""
-        config_file = tmp_path / "test_config.json"
-        config = MCPConfig(str(config_file))
+        import json
 
-        config.add_server(
-            "test", {"command": "npx", "args": ["-y", "server"], "env": {"DEBUG": "1"}}
+        config_file = tmp_path / "test_config.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "test": {
+                            "command": "npx",
+                            "args": ["-y", "server"],
+                            "env": {"DEBUG": "1"},
+                        }
+                    }
+                }
+            )
         )
 
+        config = MCPConfig(str(config_file))
         server_config = config.get_server("test")
         assert server_config["command"] == "npx"
         assert server_config["args"] == ["-y", "server"]
@@ -275,59 +287,44 @@ class TestMCPConfig:
 
     def test_get_servers_returns_all(self, tmp_path):
         """Test that get_servers returns all configurations."""
+        import json
+
         config_file = tmp_path / "test_config.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "server1": {"command": "npx", "args": ["-y", "s1"]},
+                        "server2": {"command": "npx", "args": ["-y", "s2"]},
+                    }
+                }
+            )
+        )
+
         config = MCPConfig(str(config_file))
-
-        config.add_server("server1", {"command": "npx", "args": ["-y", "s1"]})
-        config.add_server("server2", {"command": "npx", "args": ["-y", "s2"]})
-
         servers = config.get_servers()
         assert len(servers) == 2
         assert "server1" in servers
         assert "server2" in servers
 
     def test_config_persists_across_instances(self, tmp_path):
-        """Test that configuration persists across instances."""
+        """File-on-disk state survives across MCPConfig instances."""
+        import json
+
         config_file = tmp_path / "test_config.json"
+        config_file.write_text(
+            json.dumps(
+                {"mcpServers": {"test": {"command": "npx", "args": ["-y", "server"]}}}
+            )
+        )
 
-        # First instance
+        # Both instances load the same on-disk state.
         config1 = MCPConfig(str(config_file))
-        config1.add_server("test", {"command": "npx", "args": ["-y", "server"]})
-
-        # Second instance should load from file
+        assert config1.server_exists("test")
         config2 = MCPConfig(str(config_file))
         assert config2.server_exists("test")
         assert config2.get_server("test")["command"] == "npx"
         assert config2.get_server("test")["args"] == ["-y", "server"]
-
-    def test_config_uses_mcpServers_key(self, tmp_path):
-        """Test that config file uses 'mcpServers' as root key (Anthropic format)."""
-        import json
-
-        config_file = tmp_path / "test_config.json"
-        config = MCPConfig(str(config_file))
-
-        config.add_server(
-            "github",
-            {
-                "command": "npx",
-                "args": ["-y", "@modelcontextprotocol/server-github"],
-                "env": {"GITHUB_TOKEN": "ghp_xxx"},
-            },
-        )
-
-        # Read the file directly and verify format
-        with open(config_file, "r") as f:
-            data = json.load(f)
-
-        assert "mcpServers" in data
-        assert "servers" not in data  # Old key should not be present
-        assert "github" in data["mcpServers"]
-        assert data["mcpServers"]["github"]["command"] == "npx"
-        assert data["mcpServers"]["github"]["args"] == [
-            "-y",
-            "@modelcontextprotocol/server-github",
-        ]
 
     def test_config_reads_command_and_args_separately(self, tmp_path):
         """Test that config correctly reads command and args as separate fields."""
@@ -353,28 +350,15 @@ class TestMCPConfig:
         assert server["args"] == ["mcp-server-time"]
 
     def test_config_handles_missing_file(self, tmp_path):
-        """Test that config handles missing file gracefully."""
-        # Config file doesn't exist yet (but parent dir does)
+        """Test that config handles missing file gracefully (read-only)."""
         config_file = tmp_path / "config.json"
         assert not config_file.exists()
 
         config = MCPConfig(str(config_file))
 
-        # Should have empty servers when file doesn't exist
+        # Should have empty servers when file doesn't exist; no crash.
         assert config.get_servers() == {}
         assert not config.server_exists("any")
-
-        # Should be able to add servers (creates file)
-        config.add_server("test", {"command": "echo", "args": ["test"]})
-        assert config.server_exists("test")
-        assert config_file.exists()
-
-        # Verify file contents
-        import json
-
-        data = json.loads(config_file.read_text())
-        assert "mcpServers" in data
-        assert "test" in data["mcpServers"]
 
     def test_config_reads_env_field(self, tmp_path):
         """Test that config reads env field from mcpServers format."""

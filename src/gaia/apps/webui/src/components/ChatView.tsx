@@ -2,16 +2,18 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Bot, ChevronDown, Plus } from 'lucide-react';
+import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
-import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY } from '../stores/notificationStore';
+import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY, selectUnreadCount } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
+
 import './ChatView.css';
+import DashboardProgress from './DashboardProgress';
 
 
 const EMPTY_SUGGESTIONS = [
@@ -115,9 +117,36 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 detail: event.content, success: false,
                 active: false, timestamp: ts,
             };
+        case 'policy_alert': {
+            const toolName = event.tool || 'unknown tool';
+            const reason =
+                event.reason ||
+                event.message ||
+                event.content ||
+                'Tool execution was blocked by governance policy.';
+            return {
+                id,
+                type: 'policy_alert',
+                label: `Policy blocked ${toolName}`,
+                detail: reason,
+                tool: toolName,
+                decision: event.decision || 'BLOCK',
+                reason,
+                ruleIds: event.rule_ids ?? [],
+                policyVersion: event.policy_version,
+                receiptId: event.receipt_id,
+                success: false,
+                active: false,
+                timestamp: ts,
+            };
+        }
         default:
             return null;
     }
+}
+
+function policyReceiptAnchor(receiptId: string): string {
+    return `policy-receipt-${encodeURIComponent(receiptId)}`;
 }
 
 interface ChatViewProps {
@@ -131,12 +160,16 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
-        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
+        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, setShowMemoryDashboard, isLoadingMessages, setLoadingMessages,
         systemStatus,
         agents, activeAgentId, setActiveAgentId,
     } = useChatStore();
 
-    const { addNotification } = useNotificationStore();
+    const addNotification = useNotificationStore((s) => s.addNotification);
+    const showNotificationPanel = useNotificationStore((s) => s.showPanel);
+    const setNotificationPanelVisible = useNotificationStore((s) => s.setShowPanel);
+    const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
+    const notificationUnreadCount = useNotificationStore(selectUnreadCount);
     const pendingPrompt = useChatStore((s) => s.pendingPrompt);
 
     const session = sessions.find((s) => s.id === sessionId);
@@ -152,6 +185,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
+    const [policyToast, setPolicyToast] = useState<{ tool: string; receiptId?: string } | null>(null);
+    const [showDashboardProgress, setShowDashboardProgress] = useState(false);
     // Agent picker dropdown state
     const [agentPickerOpen, setAgentPickerOpen] = useState(false);
     const agentPickerRef = useRef<HTMLDivElement>(null);
@@ -234,6 +269,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // and eliminating extension-triggered "runtime.lastError" floods.
     const streamBufferRef = useRef('');
     const streamRafRef = useRef<number | null>(null);
+    const policyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     /** Timestamp of the last auto-scroll (used for throttling). */
     const lastScrollRef = useRef(0);
@@ -372,6 +408,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 clearTimeout(scrollTimerRef.current);
                 scrollTimerRef.current = null;
             }
+            if (policyToastTimerRef.current) {
+                clearTimeout(policyToastTimerRef.current);
+                policyToastTimerRef.current = null;
+            }
+            setPolicyToast(null);
             streamBufferRef.current = '';
             // Revoke any attachment blob URLs to prevent memory leaks
             setAttachments(prev => {
@@ -743,6 +784,40 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     return;
                 }
 
+                if (event.type === 'policy_alert') {
+                    const toolName = event.tool || 'unknown tool';
+                    const reason =
+                        event.reason ||
+                        event.message ||
+                        event.content ||
+                        'Tool execution was blocked by governance policy.';
+                    const notification: GaiaNotification = {
+                        id: event.receipt_id ?? `policy-${Date.now()}-${stepIdRef.current + 1}`,
+                        type: 'policy_alert',
+                        agentId: sessionId,
+                        agentName: 'GAIA',
+                        title: `Blocked: ${toolName} is restricted by policy.`,
+                        message: reason,
+                        timestamp: Date.now(),
+                        read: false,
+                        dismissed: false,
+                        priority: 'critical',
+                        tool: toolName,
+                        decision: event.decision || 'BLOCK',
+                        reason,
+                        ruleIds: event.rule_ids ?? [],
+                        policyVersion: event.policy_version,
+                        receiptId: event.receipt_id,
+                    };
+                    addNotification(notification);
+                    const step = agentEventToStep(event, stepIdRef);
+                    if (step) addAgentStep(step);
+                    setPolicyToast({ tool: toolName, receiptId: event.receipt_id });
+                    if (policyToastTimerRef.current) clearTimeout(policyToastTimerRef.current);
+                    policyToastTimerRef.current = setTimeout(() => setPolicyToast(null), 5200);
+                    return;
+                }
+
                 // Tool completion updates the last TOOL step (not just the last step,
                 // since thinking/status events may have been interleaved during execution)
                 if (event.type === 'tool_end') {
@@ -885,7 +960,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     ...s, active: false,
                 }));
 
-                if (content) {
+                const hasPolicyAlert = stepsSnapshot.some((s) => s.type === 'policy_alert');
+                if (content || hasPolicyAlert) {
                     // Update msg count ref so poll doesn't re-fetch what we just added
                     lastMsgCountRef.current = useChatStore.getState().messages.length + 1;
                     const assistantMsg: Message = {
@@ -917,11 +993,13 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     api.getMessages(sessionId)
                         .then((data) => {
                             if (useChatStore.getState().currentSessionId !== sessionId) return;
-                            const msgs = (data.messages || []).map((m: any) => ({
-                                ...m,
-                                agentSteps: m.agentSteps || m.agent_steps || undefined,
-                                stats: m.stats || m.inference_stats || undefined,
-                            }));
+                            const msgs: Message[] = (data.messages || []).map((m: any) => {
+                                return {
+                                    ...m,
+                                    agentSteps: m.agentSteps || m.agent_steps || undefined,
+                                    stats: m.stats || m.inference_stats || undefined,
+                                };
+                            });
                             setMessages(msgs);
                             lastMsgCountRef.current = msgs.length;
                         })
@@ -995,10 +1073,27 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }, undefined, undefined, activeAgentId);
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId, addNotification]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
+
+    // Listen for programmatic message dispatches from rich-content
+    // components (currently the EmailPreScanCard's Approve / Reply
+    // buttons). Wired as a window-level CustomEvent rather than prop
+    // drilling so any embedded component can reach the active session
+    // without ChatView having to know about it ahead of time.
+    useEffect(() => {
+        const handler = (evt: Event) => {
+            const ce = evt as CustomEvent<{ text?: string }>;
+            const text = ce.detail?.text;
+            if (typeof text === 'string' && text.trim()) {
+                sendMessageRef.current(text);
+            }
+        };
+        window.addEventListener('gaia:send-message', handler);
+        return () => window.removeEventListener('gaia:send-message', handler);
+    }, []);
 
     // Refocus input when streaming ends (textarea is disabled during streaming,
     // which causes the browser to drop focus — restore it so the user can
@@ -1067,6 +1162,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }
     };
 
+
+
     // Title editing
     const startEditTitle = () => {
         setTitleDraft(session?.title || '');
@@ -1080,6 +1177,17 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }
         setEditingTitle(false);
     };
+
+    // Toggle private (incognito) mode
+    const handleTogglePrivate = useCallback(async () => {
+        if (!sessionId) return;
+        try {
+            const updated = await api.toggleSessionPrivacy(sessionId);
+            updateSessionInList(sessionId, { private: updated.private });
+        } catch (err) {
+            log.ui.warn('Failed to toggle private mode', err);
+        }
+    }, [sessionId, updateSessionInList]);
 
     // Export
     const handleExport = async () => {
@@ -1183,14 +1291,19 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
     return (
         <main
-            className={`chat-view ${isDragOver ? 'drag-active' : ''}`}
+            className={`task-view ${isDragOver ? 'drag-active' : ''}`}
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
         >
+            {showDashboardProgress && (
+                <div className="dashboard-overlay">
+                    <DashboardProgress sessionId={sessionId} onClose={() => setShowDashboardProgress(false)} />
+                </div>
+            )}
             {/* Header */}
-            <header className="chat-header">
-                <div className="chat-header-left">
+            <header className="task-header">
+                <div className="task-header-left">
                     {editingTitle ? (
                         <input
                             className="title-edit"
@@ -1199,18 +1312,18 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             onBlur={saveTitle}
                             onKeyDown={(e) => e.key === 'Enter' && saveTitle()}
                             autoFocus
-                            aria-label="Edit chat title"
+                            aria-label="Edit task title"
                         />
                     ) : (
                         <>
-                            <h3 className="chat-title">{session?.title || 'Chat'}</h3>
-                            <button className="btn-icon-sm" onClick={startEditTitle} title="Rename" aria-label="Rename chat">
+                            <h3 className="task-title">{session?.title || 'New Task'}</h3>
+                            <button className="btn-icon-sm" onClick={startEditTitle} title="Rename" aria-label="Rename task">
                                 <Edit3 size={13} />
                             </button>
                         </>
                     )}
                 </div>
-                <div className="chat-header-right">
+                <div className="task-header-right">
                     <span
                         className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
                         title={
@@ -1237,8 +1350,37 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files" aria-label="Browse files">
                         <FolderSearch size={15} />
                     </button>
-                    <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export chat">
+                    <button
+                        className={`btn-icon-sm${session?.private ? ' active' : ''}`}
+                        onClick={handleTogglePrivate}
+                        title={session?.private ? 'Private mode on — click to disable' : 'Enable private mode (nothing saved to memory)'}
+                        aria-label={session?.private ? 'Disable private mode' : 'Enable private mode'}
+                        aria-pressed={!!session?.private}
+                    >
+                        <EyeOff size={15} />
+                    </button>
+                    <button className="btn-icon-sm" onClick={() => setShowMemoryDashboard(true)} title="Memory" aria-label="Open memory dashboard">
+                        <Brain size={15} />
+                    </button>
+                    <button className="btn-icon-sm" onClick={handleExport} title="Export" aria-label="Export task">
                         <Download size={15} />
+                    </button>
+                    <button className="btn-icon-sm" onClick={() => setShowDashboardProgress((s) => !s)} title="Refresh dashboard" aria-label="Refresh dashboard">
+                        <ArrowDown size={15} />
+                    </button>
+                    <button
+                        className={`notification-center-trigger ${notificationUnreadCount > 0 ? 'has-unread' : ''}`}
+                        onClick={() => setNotificationPanelVisible(!showNotificationPanel)}
+                        aria-label="Open notification center"
+                        aria-expanded={showNotificationPanel}
+                        title="Notifications"
+                    >
+                        <Bell size={15} />
+                        {notificationUnreadCount > 0 && (
+                            <span className="notification-center-trigger-badge">
+                                {notificationUnreadCount > 99 ? '99+' : notificationUnreadCount}
+                            </span>
+                        )}
                     </button>
                 </div>
             </header>
@@ -1329,19 +1471,19 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 )}
 
                 {showEmptyState && (
-                    <div className="empty-chat">
-                        <div className="empty-chat-icon">
+                    <div className="empty-task">
+                        <div className="empty-task-icon">
                             <MessageSquare size={36} strokeWidth={1.2} />
                         </div>
-                        <h4 className="empty-chat-title">What can I help you with?</h4>
-                        <p className="empty-chat-desc">
+                        <h4 className="empty-task-title">What can I help you with?</h4>
+                        <p className="empty-task-desc">
                             Ask about your documents, search files, or analyze data &mdash; powered by local AI.
                         </p>
-                        <div className="empty-chat-suggestions">
+                        <div className="empty-task-suggestions">
                             {EMPTY_SUGGESTIONS.map((s) => (
                                 <button
                                     key={s}
-                                    className="empty-chat-chip"
+                                    className="empty-task-chip"
                                     onClick={() => handleSuggestionClick(s)}
                                 >
                                     {s}
@@ -1417,6 +1559,33 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 <div className="drag-overlay">
                     <Upload size={32} strokeWidth={1.5} />
                     <span>Drop files to index</span>
+                </div>
+            )}
+
+            {policyToast && (
+                <div className="toast policy-alert-toast" role="alert">
+                    <span>Blocked: {policyToast.tool} is restricted by policy.</span>
+                    {policyToast.receiptId ? (
+                        <button
+                            type="button"
+                            className="policy-alert-toast-link"
+                            onClick={() => {
+                                const receiptId = policyToast.receiptId;
+                                if (!receiptId) return;
+                                setNotificationTypeFilter('policy_alert');
+                                setNotificationPanelVisible(true);
+                                window.setTimeout(() => {
+                                    document
+                                        .getElementById(policyReceiptAnchor(receiptId))
+                                        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }, 80);
+                            }}
+                        >
+                            View receipt
+                        </button>
+                    ) : (
+                        <span className="policy-alert-toast-missing">Receipt unavailable</span>
+                    )}
                 </div>
             )}
 

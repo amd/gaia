@@ -73,6 +73,7 @@ class VLMClient:
         vlm_model: str = "Gemma-4-E4B-it-GGUF",
         base_url: Optional[str] = None,
         auto_load: bool = True,
+        api_key: Optional[str] = None,
     ):
         """
         Initialize VLM client.
@@ -81,6 +82,10 @@ class VLMClient:
             vlm_model: Vision model to use for image extraction
             base_url: Lemonade server API URL (defaults to LEMONADE_BASE_URL env var)
             auto_load: Automatically load VLM model on first use
+            api_key: API key for an authenticated Lemonade server. Forwarded
+                AS-IS to the inner ``LemonadeClient``, which handles the
+                ``LEMONADE_API_KEY`` env-var fallback. VLMClient does NOT
+                pre-resolve the env var (single source of truth).
         """
         # Use provided base_url, fall back to env var, then default
         if base_url is None:
@@ -100,7 +105,9 @@ class VLMClient:
         # Get base server URL (without /api/v1) for user-facing messages
         self.server_url = f"http://{host}:{port}"
 
-        self.client = LemonadeClient(model=vlm_model, host=host, port=port)
+        self.client = LemonadeClient(
+            model=vlm_model, host=host, port=port, api_key=api_key
+        )
         self.auto_load = auto_load
         self.vlm_loaded = False
 

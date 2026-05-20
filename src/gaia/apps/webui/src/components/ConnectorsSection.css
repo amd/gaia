@@ -43,7 +43,7 @@
     align-items: center;
     gap: 10px;
     width: 100%;
-    padding: 10px 14px;
+    padding: 12px 16px;
     background: none;
     border: none;
     cursor: pointer;
@@ -83,6 +83,23 @@
 }
 .connector-status.ok { color: var(--accent-green); }
 .connector-status.idle { color: var(--text-muted); }
+/*
+ * "Disabled" pill (#1004) — distinct from .idle.
+ *
+ * .idle ("Not configured") is cool gray: the connector has never been
+ * touched. .disabled is a warm orange-tinted muted: the connector IS
+ * configured (credentials + grants live) but the user has paused it.
+ * Different colour communicates "you can re-enable this with one click"
+ * rather than "you need to set this up from scratch".
+ */
+.connector-status.disabled {
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 11px;
+}
 
 .connector-tile-chevron {
     margin-left: auto;
@@ -94,7 +111,7 @@
 
 .connector-detail {
     border-top: 1px solid var(--border-light);
-    padding: 14px;
+    padding: 16px 18px;
 }
 
 .configure-body { }
@@ -266,7 +283,7 @@
     text-transform: uppercase;
     letter-spacing: 1.5px;
     color: var(--text-muted);
-    margin-bottom: 6px;
+    margin-bottom: 8px;
 }
 
 .grants-empty {
@@ -276,40 +293,115 @@
     font-style: italic;
 }
 
-.grant-row {
+/* ── Unified agent grant card ─────────────────────────────────── */
+
+/* One card per agent — same layout whether granted or pending. */
+.grant-agent-card {
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    margin-top: 6px;
+    background: var(--bg-secondary);
+}
+
+.grant-agent-card-name {
+    font-size: 12px;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+    margin-bottom: 10px;
+}
+
+.grant-scope-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-top: 1px solid var(--border-light);
+    padding-top: 8px;
+}
+
+.grant-scope-item {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 4px 0;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 0;
+    cursor: pointer;
+    user-select: none;
+}
+
+.grant-scope-label {
     font-size: 12px;
     font-family: var(--font-sans);
-}
-
-.grant-agent {
-    font-weight: 500;
-    min-width: 7rem;
-    color: var(--text-primary);
-}
-
-.grant-scopes {
-    flex: 1;
     color: var(--text-secondary);
-    word-break: break-all;
+    line-height: 1.3;
+    flex: 1;
 }
 
-.btn-grant-revoke {
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--text-muted);
-    padding: 2px;
-    border-radius: 3px;
-    display: flex;
-    align-items: center;
-    transition: color var(--duration) var(--ease);
+/* ── Toggle switch ────────────────────────────────────────────────── */
+
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 30px;
+    height: 17px;
     flex-shrink: 0;
 }
-.btn-grant-revoke:hover { color: var(--accent-red, #e55); }
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+.toggle-track {
+    position: absolute;
+    inset: 0;
+    background: var(--border);
+    border-radius: 999px;
+    transition: background var(--duration) var(--ease);
+    cursor: pointer;
+}
+
+.toggle-track::before {
+    content: '';
+    position: absolute;
+    width: 13px;
+    height: 13px;
+    left: 2px;
+    top: 2px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform var(--duration) var(--ease);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+.toggle-switch input:checked + .toggle-track {
+    background: var(--accent-blue, #4e9de0);
+}
+
+.toggle-switch input:checked + .toggle-track::before {
+    transform: translateX(13px);
+}
+
+.toggle-switch input:focus-visible + .toggle-track {
+    outline: 2px solid var(--accent-blue, #4e9de0);
+    outline-offset: 2px;
+}
+
+.grant-scope-warning {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 7px;
+    font-size: 11px;
+    font-family: var(--font-sans);
+    color: var(--text-muted);
+}
+.grant-scope-warning--error { color: var(--accent-red, #e55); }
+
+/* .spin / @keyframes spin are defined globally in src/styles/index.css */
 
 /* ── Shared ───────────────────────────────────────────────────── */
 
@@ -334,4 +426,257 @@
 @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
+}
+
+/* ── Per-MCP enable/disable toggle (#1004) ───────────────────────── */
+
+/*
+ * Toggle row inside the connector detail body. Sits above the
+ * credentials section so it's the first interaction the user sees on
+ * a configured MCP — flipping the connector off without losing any
+ * state.
+ */
+.connector-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    margin-bottom: 10px;
+}
+
+.connector-toggle-label {
+    flex: 1;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+}
+
+.connector-toggle-help {
+    margin: -4px 0 10px 14px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* ── Per-tile overflow menu (#1004) ──────────────────────────────── */
+
+.connector-tile-menu {
+    position: relative;
+    flex-shrink: 0;
+    /*
+     * The menu wrapper lives inside the tile-header <button>. We need
+     * pointer events to reach the trigger button without bubbling up
+     * to the parent (the trigger calls stopPropagation() on click but
+     * keyboard-driven activation also has to work).
+     */
+    display: inline-flex;
+    align-items: center;
+}
+
+.connector-tile-menu-trigger {
+    background: transparent;
+    border: none;
+    padding: 4px;
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    line-height: 0;
+}
+.connector-tile-menu-trigger:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+.connector-tile-menu-trigger:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 1px;
+}
+.connector-tile-menu-trigger:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.connector-tile-menu-popup {
+    /* position/top/right set via inline style (position:fixed) so the popup
+       escapes overflow:hidden on .connector-tile */
+    z-index: 1000;
+    min-width: 160px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color, var(--border-light));
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    /* Don't inherit the parent <button>'s cursor/text-align. */
+    text-align: left;
+}
+
+.connector-tile-menu-item {
+    background: transparent;
+    border: none;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+    text-align: left;
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1.4;
+}
+.connector-tile-menu-item:hover {
+    background: var(--bg-secondary);
+}
+.connector-tile-menu-item:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.connector-tile-menu-item--danger {
+    color: var(--text-danger, #d04a3a);
+}
+
+.connector-tile-menu-divider {
+    height: 1px;
+    background: var(--border-light);
+    margin: 4px 0;
+}
+
+/* ── Custom-agent MCP section (#1020) ─────────────────────────────── */
+
+/*
+ * Read-only section below the managed connectors list. Each tile shows one
+ * MCP server from a custom agent's local mcp_servers.json. No toggle, no
+ * overflow menu — the user edits the JSON directly to change these.
+ */
+.agent-mcps-section {
+    margin-top: 20px;
+}
+
+.agent-mcps-section-header {
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.agent-mcp-tile {
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    overflow: hidden;
+    transition: border-color var(--duration) var(--ease);
+}
+.agent-mcp-tile:hover,
+.agent-mcp-tile--open {
+    border-color: var(--border);
+}
+
+.agent-mcp-tile-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 14px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+}
+.agent-mcp-tile-header:hover {
+    background: var(--bg-hover, rgba(0,0,0,0.03));
+}
+[data-theme="dark"] .agent-mcp-tile-header:hover {
+    background: rgba(255,255,255,0.04);
+}
+
+.agent-mcp-server-name {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.agent-mcp-agent-label {
+    font-size: 11px;
+    font-family: var(--font-sans);
+    color: var(--text-muted);
+    flex: 1;
+}
+
+.agent-mcp-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-family: var(--font-sans);
+}
+.agent-mcp-status.enabled  { color: var(--accent-green); }
+.agent-mcp-status.disabled {
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 1px 8px;
+}
+
+.agent-mcp-readonly-badge {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+}
+
+.agent-mcp-chevron {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.agent-mcp-detail {
+    border-top: 1px solid var(--border-light);
+    padding: 12px 16px;
+}
+
+.agent-mcp-command-row {
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    word-break: break-all;
+}
+
+.agent-mcp-config-path {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    word-break: break-all;
+}
+
+.agent-mcp-config-hint {
+    font-size: 11px;
+    font-family: var(--font-sans);
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.connector-tile-menu-error {
+    padding: 6px 10px;
+    color: var(--text-danger, #d04a3a);
+    font-size: 11px;
+    border-top: 1px solid var(--border-light);
+    margin-top: 4px;
 }

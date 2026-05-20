@@ -92,6 +92,12 @@ on:
       - 'src/gaia/apps/webui/main.cjs'
       - 'src/gaia/apps/webui/bin/**'
       - 'src/gaia/apps/webui/services/**'
+      # Cover the installer-smoke test tree (issue #941) so a PR that
+      # only touches the smoke-test layer still triggers structural smoke.
+      # Narrower than `tests/electron/**` so Jest-only edits to e.g.
+      # test_electron_chat_app.js don't re-run the multi-platform build.
+      - 'tests/electron/_helpers/**'
+      - 'tests/electron/*-smoke.test.mjs'
       - 'tests/electron/fixtures/**'
       - 'src/gaia/version.py'
 
@@ -228,6 +234,75 @@ jobs:
           cp "${tmpdir}/uv-x86_64-unknown-linux-gnu/uv" "${DEST_DIR}/uv"
           chmod 0755 "${DEST_DIR}/uv"
           "${DEST_DIR}/uv" --version
+
+      - name: Fetch uv binary (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          UV_VERSION="0.5.14"
+          UV_ZIP="uv-x86_64-pc-windows-msvc.zip"
+          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_ZIP}"
+          # This must be set to the official tarball SHA256 (archive digest).
+          # DO NOT merge this PR without replacing the placeholder below
+          # with the real value — the build intentionally fails if the
+          # checksum is not provided so we never ship an unverified uv.
+          UV_TARBALL_SHA256="ee2468e40320a0a2a36435e66bbd0d861228c4c06767f22d97876528138f4ba0"
+
+          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/win-x64"
+          mkdir -p "${DEST_DIR}"
+          tmpdir="$(mktemp -d)"
+          echo "Downloading ${UV_URL}"
+          curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_ZIP}" "${UV_URL}"
+
+          if [ -z "${UV_TARBALL_SHA256}" ] || [ "${UV_TARBALL_SHA256}" = "REPLACE_ME_WIN_UV_TARBALL_SHA256" ]; then
+            echo "ERROR: UV_TARBALL_SHA256 is not set in the workflow. Set it to the upstream tarball SHA256 to proceed." >&2
+            exit 1
+          fi
+
+          echo "${UV_TARBALL_SHA256}  ${tmpdir}/${UV_ZIP}" | sha256sum -c -
+
+          unzip -q "${tmpdir}/${UV_ZIP}" -d "${tmpdir}"
+          # Copy uv.exe from extracted tree — fail if not found.
+          FOUND=$(find "${tmpdir}" -type f -iname uv.exe | head -n1 || true)
+          if [ -z "${FOUND}" ]; then
+            echo "ERROR: uv.exe not found in the downloaded archive" >&2
+            exit 1
+          fi
+          cp "${FOUND}" "${DEST_DIR}/uv.exe"
+          chmod 0755 "${DEST_DIR}/uv.exe"
+          "${DEST_DIR}/uv.exe" --version || true
+
+          # Compute SHA256 of the extracted binary and inject into source
+          BIN_SHA=$(sha256sum "${DEST_DIR}/uv.exe" | cut -d' ' -f1)
+          echo "Computed uv.exe SHA256: ${BIN_SHA}"
+          # Replace placeholder in backend-installer.cjs so runtime can verify
+          sed -i "s/<WIN_UV_EXTRACTED_SHA256_PLACEHOLDER>/${BIN_SHA}/g" src/gaia/apps/webui/services/backend-installer.cjs
+
+      - name: Fetch uv binary (macOS)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          UV_VERSION="0.5.14"
+          UV_TARBALL="uv-aarch64-apple-darwin.tar.gz"
+          # Upstream tarball SHA256 (archive digest)
+          UV_SHA256="d548dffc256014c4c8c693e148140a3a21bcc2bf066a35e1d5f0d24c91d32112"
+          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
+          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/mac-arm64"
+          mkdir -p "${DEST_DIR}"
+          tmpdir="$(mktemp -d)"
+          echo "Downloading ${UV_URL}"
+          curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_TARBALL}" "${UV_URL}"
+          echo "${UV_SHA256}  ${tmpdir}/${UV_TARBALL}" | shasum -a 256 -c -
+          tar -xzf "${tmpdir}/${UV_TARBALL}" -C "${tmpdir}"
+          cp "${tmpdir}/uv-aarch64-apple-darwin/uv" "${DEST_DIR}/uv"
+          chmod 0755 "${DEST_DIR}/uv"
+          "${DEST_DIR}/uv" --version
+          # Echo the extracted-binary SHA (pre-codesign). To bump the
+          # runtime's POST-codesign digest (BUNDLED_UV_SHA256[mac-arm64]),
+          # run CI and copy the value from the dmg-structural-smoke output.
+          shasum -a 256 "${DEST_DIR}/uv"
 
       - name: Build frontend (Vite)
         working-directory: src/gaia/apps/webui
@@ -531,6 +606,46 @@ jobs:
         env:
           GAIA_APPIMAGE: ${{ steps.locate.outputs.appimage }}
         run: node --test tests/electron/appimage-smoke.test.mjs
+
+  # ─── DMG structural smoke (issue #941) ──────────────────────────────
+  # Mirrors appimage-structural-smoke for the macOS DMG. Catches the
+  # failure mode that bit v0.17.5: a darwin-arm64 install that hard-fails
+  # in ensure-uv on first launch because the bundled uv either was never
+  # shipped or has the wrong SHA256 against BUNDLED_UV_SHA256[mac-arm64]
+  # in backend-installer.cjs.
+  #
+  # MUST be present in build-complete `needs:` below — without that
+  # wiring, a failing DMG smoke does not block release-readiness.
+  dmg-structural-smoke:
+    name: DMG structural smoke
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: macos-latest  # Apple Silicon (arm64) — matches build matrix
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download macOS installer artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: macos-installer  # ${{ matrix.platform }}-installer with platform=macos
+          path: ${{ runner.temp }}/macos-installer
+
+      - name: Locate DMG
+        id: locate
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG=$(ls "${RUNNER_TEMP}/macos-installer"/*.dmg | head -n1)
+          echo "Found DMG: ${DMG}"
+          echo "dmg=${DMG}" >> "$GITHUB_OUTPUT"
+
+      - name: Structural smoke (uv binary, mode, sha256, --version)
+        env:
+          GAIA_DMG: ${{ steps.locate.outputs.dmg }}
+        run: node --test tests/electron/dmg-smoke.test.mjs
 
   appimage-distro-matrix:
     name: AppImage distro matrix
@@ -844,6 +959,7 @@ jobs:
         shell: bash
         env:
           WHEEL_PATH: ${{ steps.locate-wheel.outputs.path }}
+          GAIA_SKIP_GAIA_INIT: "1"
         run: |
           set -euo pipefail
           APPIMAGE=$(ls "${RUNNER_TEMP}/linux-installer"/*.AppImage | head -n1)
@@ -891,6 +1007,45 @@ jobs:
           kill "$APP_PID" 2>/dev/null || true
           wait "$APP_PID" 2>/dev/null || true
           echo "userns-restricted PASS (--no-sandbox fallback + /api/health 200)"
+
+  custom-agent-mcp-harness:
+    name: Custom agent MCP harness (${{ matrix.os }})
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install GAIA with MCP test dependencies
+        run: python -m pip install -e ".[dev,mcp]"
+
+      - name: Run custom-agent MCP harness
+        env:
+          GAIA_INSTALLER_HARNESS_ARTIFACT_DIR: ${{ runner.temp }}/gaia-installer-agent-harness
+        run: >
+          python -m pytest
+          tests/fixtures/mcp/dummy_server/test_dummy_server.py
+          tests/installer/test_custom_agent_mcp_harness.py
+          -v --tb=short
+
+      - name: Upload custom-agent MCP harness logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: custom-agent-mcp-harness-${{ matrix.os }}
+          path: ${{ runner.temp }}/gaia-installer-agent-harness
+          if-no-files-found: ignore
 
   # ─── Wayland visibility (DEFERRED — issue #782 follow-up) ───────────
   # The plan calls for a headless Wayland compositor (cage -s or weston
@@ -960,7 +1115,8 @@ jobs:
   # publish.yml (or any caller) should wait on.
   #
   # The smoke jobs (appimage-structural-smoke, appimage-distro-matrix,
-  # appimage-userns-restricted) are issue #782 regression guards — a
+  # appimage-userns-restricted) are issue #782 regression guards. The
+  # custom-agent MCP harness is issue #993's installed-runtime guard. A
   # broken AppImage that still builds but does not launch would slip past
   # if we gated only on `build`.
   build-complete:
@@ -971,6 +1127,8 @@ jobs:
       - appimage-structural-smoke
       - appimage-distro-matrix
       - appimage-userns-restricted
+      - custom-agent-mcp-harness
+      - dmg-structural-smoke
     if: always()
     steps:
       - name: Verify all platform builds and smoke tests succeeded
@@ -980,22 +1138,26 @@ jobs:
           structural_result="${{ needs.appimage-structural-smoke.result }}"
           distro_result="${{ needs.appimage-distro-matrix.result }}"
           userns_result="${{ needs.appimage-userns-restricted.result }}"
+          mcp_harness_result="${{ needs.custom-agent-mcp-harness.result }}"
+          dmg_result="${{ needs.dmg-structural-smoke.result }}"
           echo "build:                       $build_result"
           echo "appimage-structural-smoke:   $structural_result"
           echo "appimage-distro-matrix:      $distro_result"
           echo "appimage-userns-restricted:  $userns_result"
+          echo "custom-agent-mcp-harness:    $mcp_harness_result"
+          echo "dmg-structural-smoke:        $dmg_result"
           fail=0
           if [ "$build_result" != "success" ]; then
             echo "::error::One or more platform installer builds failed"
             fail=1
           fi
-          for r in "$structural_result" "$distro_result" "$userns_result"; do
+          for r in "$structural_result" "$distro_result" "$userns_result" "$mcp_harness_result" "$dmg_result"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
-              echo "::error::AppImage smoke job failed (status: $r)"
+              echo "::error::Installer smoke job failed (status: $r)"
               fail=1
             fi
           done
           if [ "$fail" -eq 1 ]; then
             exit 1
           fi
-          echo "All platform installers built and AppImage smoke suite passed."
+          echo "All platform installers built and installer smoke suite passed."

@@ -80,7 +80,9 @@ class TestAgentBaseClassDefault:
 # Agents that intentionally declare REQUIRED_CONNECTORS — they exist to
 # demonstrate or exercise the connectors framework and are exempt from the
 # "no connector requirements for built-ins" invariant.
-_CONNECTOR_DEMO_AGENTS: frozenset[str] = frozenset({"connectors-demo"})
+# - ``connectors-demo`` is the framework's reference consumer.
+# - ``email`` (#962) is the first concrete provider — Gmail + Calendar.
+_CONNECTOR_DEMO_AGENTS: frozenset[str] = frozenset({"connectors-demo", "email"})
 
 
 class TestBuiltinPath:
@@ -216,7 +218,7 @@ class TestAgentInfoSerialization:
             models=[],
             required_connections=[
                 {
-                    "provider": "google",
+                    "connector_id": "google",
                     "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
                     "reason": "test",
                 }

@@ -17,26 +17,53 @@ import {
     ExternalLink,
     ChevronDown,
     ChevronUp,
-    X,
 } from 'lucide-react';
+
+// Human-readable labels for well-known OAuth scope URIs.
+// Unrecognised scopes fall back to the last path segment of the URI.
+const SCOPE_LABELS: Record<string, string> = {
+    'https://www.googleapis.com/auth/gmail.readonly':        'Read emails',
+    'https://www.googleapis.com/auth/gmail.modify':          'Organize emails (archive, label, trash)',
+    'https://www.googleapis.com/auth/gmail.send':            'Send emails on your behalf',
+    'https://www.googleapis.com/auth/gmail.compose':         'Compose emails',
+    'https://www.googleapis.com/auth/calendar.readonly':     'View calendar events',
+    'https://www.googleapis.com/auth/calendar.events':       'Create & respond to calendar events',
+    'https://www.googleapis.com/auth/drive.readonly':        'Read Google Drive files',
+    'https://www.googleapis.com/auth/drive.file':            'Manage Drive files created by this app',
+    'https://www.googleapis.com/auth/spreadsheets.readonly': 'Read Google Sheets',
+    'https://www.googleapis.com/auth/spreadsheets':          'Edit Google Sheets',
+    'openid':   'Identify you',
+    'email':    'See your email address',
+    'profile':  'See your basic profile info',
+};
+
+function scopeLabel(scope: string): string {
+    return SCOPE_LABELS[scope] ?? scope.split(/[/.:]/).pop() ?? scope;
+}
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
-import type { ConnectorRow } from '../types';
+import type { AgentMcpServer, ConnectorRow } from '../types';
+import { ConnectorTileMenu } from './ConnectorTileMenu';
 import './ConnectorsSection.css';
 
 // ── ConnectorsSection ────────────────────────────────────────────────────────
 
 export function ConnectorsSection() {
     const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
+    const [agentMcps, setAgentMcps] = useState<AgentMcpServer[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         try {
-            const { connectors: rows } = await api.listConnectors();
+            const [{ connectors: rows }, { agent_mcps: mcps }] = await Promise.all([
+                api.listConnectors(),
+                api.listAgentMcps(),
+            ]);
             setConnectors(rows);
+            setAgentMcps(mcps);
             setError(null);
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
@@ -98,17 +125,26 @@ export function ConnectorsSection() {
                     <Loader2 size={16} className="spin" />
                 </div>
             ) : (
-                <div className="connectors-list">
-                    {connectors.map((c) => (
-                        <ConnectorTile
-                            key={c.id}
-                            connector={c}
-                            expanded={expanded === c.id}
-                            onToggle={() => toggle(c.id)}
-                            onChanged={() => void onChanged(c.id)}
+                <>
+                    <div className="connectors-list">
+                        {connectors.map((c) => (
+                            <ConnectorTile
+                                key={c.id}
+                                connector={c}
+                                expanded={expanded === c.id}
+                                onToggle={() => toggle(c.id)}
+                                onChanged={() => void onChanged(c.id)}
+                            />
+                        ))}
+                    </div>
+                    {agentMcps.length > 0 && (
+                        <AgentMcpsSection
+                            servers={agentMcps}
+                            expanded={expanded}
+                            onToggle={toggle}
                         />
-                    ))}
-                </div>
+                    )}
+                </>
             )}
         </section>
     );
@@ -127,6 +163,25 @@ function ConnectorTile({
     onToggle: () => void;
     onChanged: () => void;
 }) {
+    // Three exclusive status states for the tile header pill (#1004):
+    //   - configured + enabled   → "Configured" / account_id (green ok)
+    //   - configured + disabled  → "Disabled"               (warm muted)
+    //   - not configured         → "Not configured"         (cool muted)
+    const renderStatus = () => {
+        if (!connector.configured) {
+            return <span className="connector-status idle">Not configured</span>;
+        }
+        if (connector.type === 'mcp_server' && connector.enabled === false) {
+            return <span className="connector-status disabled">Disabled</span>;
+        }
+        return (
+            <span className="connector-status ok">
+                <CheckCircle2 size={12} />
+                {connector.account_id ?? 'Configured'}
+            </span>
+        );
+    };
+
     return (
         <div className={`connector-tile${expanded ? ' connector-tile--open' : ''}`}>
             <button
@@ -136,14 +191,8 @@ function ConnectorTile({
             >
                 <span className="connector-tile-name">{connector.display_name}</span>
                 <span className="connector-tile-type">{connector.type === 'oauth_pkce' ? 'OAuth' : 'MCP'}</span>
-                {connector.configured ? (
-                    <span className="connector-status ok">
-                        <CheckCircle2 size={12} />
-                        {connector.account_id ?? 'Configured'}
-                    </span>
-                ) : (
-                    <span className="connector-status idle">Not configured</span>
-                )}
+                {renderStatus()}
+                <ConnectorTileMenu connector={connector} onChanged={onChanged} />
                 <span className="connector-tile-chevron">
                     {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </span>
@@ -205,7 +254,9 @@ function OAuthConfigureBody({
         try {
             const r = await api.authorizeConnector(
                 connector.id,
-                connector.default_scopes,
+                connector.available_scopes?.length
+                    ? connector.available_scopes
+                    : connector.default_scopes,
             );
             openAuthUrl(r.authorization_url);
             // onChanged is called via the 'focus' listener when the user returns.
@@ -244,7 +295,13 @@ function OAuthConfigureBody({
         setBusy(true);
         setErr(null);
         try {
-            const result = await api.configureConnector(connector.id, setupValues);
+            const scopes = connector.available_scopes?.length
+                ? connector.available_scopes
+                : connector.default_scopes;
+            const result = await api.configureConnector(connector.id, {
+                ...setupValues,
+                scopes,
+            });
             const url =
                 typeof result.authorization_url === 'string'
                     ? result.authorization_url
@@ -423,6 +480,29 @@ function MCPServerConfigureBody({
         }
     };
 
+    // Per-MCP enable/disable toggle (#1004). The toggle row appears only
+    // for already-configured MCP connectors — toggling on a never-
+    // configured connector has no meaning. Detail-view toggle and the
+    // tile-header overflow menu both call the same enableConnector /
+    // disableConnector helpers, so the SSE refresh keeps both surfaces
+    // in sync.
+    const handleToggleEnabled = async () => {
+        setBusy(true);
+        setErr(null);
+        try {
+            if (connector.enabled) {
+                await api.disableConnector(connector.id);
+            } else {
+                await api.enableConnector(connector.id);
+            }
+            onChanged();
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
     return (
         <div className="configure-body">
             {connector.description && (
@@ -432,6 +512,31 @@ function MCPServerConfigureBody({
                 <div className="configure-error">
                     <AlertCircle size={12} /> {err}
                 </div>
+            )}
+            {connector.configured && (
+                <div className="connector-toggle-row">
+                    <span className="connector-toggle-label">Active</span>
+                    <span className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            checked={connector.enabled !== false}
+                            onChange={() => void handleToggleEnabled()}
+                            disabled={busy}
+                            aria-label={
+                                connector.enabled
+                                    ? 'Disable this MCP server'
+                                    : 'Enable this MCP server'
+                            }
+                        />
+                        <span className="toggle-track" />
+                    </span>
+                </div>
+            )}
+            {connector.configured && connector.enabled === false && (
+                <p className="connector-toggle-help">
+                    Credentials and per-agent grants are preserved.
+                    Re-enable to make this server's tools available again.
+                </p>
             )}
             {connector.mcp_env_keys.map((key) => (
                 <div key={key} className="mcp-key-row">
@@ -489,12 +594,176 @@ function MCPServerConfigureBody({
 
 // ── ConnectorAgentGrants ─────────────────────────────────────────────────────
 
+/**
+ * Unified scope-toggle card for one agent (granted or not).
+ * Toggling a scope auto-saves immediately — no explicit button needed.
+ * Granted scopes start ON; not-yet-granted scopes start OFF.
+ */
+function AgentGrantCard({
+    agent,
+    connectorId,
+    grantedScopes,
+    onChanged,
+}: {
+    agent: { namespaced_agent_id?: string; name: string; required_connections?: Array<{ connector_id: string; scopes: string[]; reason: string }> };
+    connectorId: string;
+    grantedScopes: string[];
+    onChanged: () => void;
+}) {
+    const req = agent.required_connections?.find((rc) => rc.connector_id === connectorId);
+    const agentId = agent.namespaced_agent_id;
+    if (!req || !agentId) return null;
+
+    const [localScopes, setLocalScopes] = useState<Set<string>>(() => new Set(grantedScopes));
+    const [busyScope, setBusyScope] = useState<string | null>(null);
+    const [err, setErr] = useState<string | null>(null);
+
+    // Sync when the parent reloads grants after a successful API call.
+    useEffect(() => {
+        setLocalScopes(new Set(grantedScopes));
+    }, [grantedScopes.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const toggleScope = async (scope: string) => {
+        if (busyScope !== null) return; // one request at a time
+        const next = new Set(localScopes);
+        next.has(scope) ? next.delete(scope) : next.add(scope);
+        setLocalScopes(next); // optimistic
+        setBusyScope(scope);
+        setErr(null);
+        try {
+            if (next.size === 0) {
+                await api.revokeConnectorAgentGrant(connectorId, agentId);
+            } else {
+                await api.grantConnectorAgent(connectorId, agentId, [...next]);
+            }
+            onChanged();
+        } catch (e) {
+            setLocalScopes(new Set(grantedScopes)); // revert
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusyScope(null);
+        }
+    };
+
+    return (
+        <div className="grant-agent-card">
+            <div className="grant-agent-card-name">{agent.name}</div>
+            <div className="grant-scope-list">
+                {req.scopes.map((scope) => (
+                    <label key={scope} className="grant-scope-item">
+                        <span className="grant-scope-label">{scopeLabel(scope)}</span>
+                        <span className="toggle-switch">
+                            <input
+                                type="checkbox"
+                                checked={localScopes.has(scope)}
+                                onChange={() => void toggleScope(scope)}
+                                disabled={busyScope !== null}
+                            />
+                            <span className="toggle-track" />
+                        </span>
+                    </label>
+                ))}
+            </div>
+            {err && (
+                <div className="grant-scope-warning grant-scope-warning--error">
+                    <AlertCircle size={11} /> {err}
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ── AgentMcpsSection ─────────────────────────────────────────────────────────
+
+/**
+ * Read-only section listing MCP servers declared by custom Python agents
+ * (#1020). These are controlled by the agent's local mcp_servers.json;
+ * the user edits that file directly — no toggle or disconnect action here.
+ */
+function AgentMcpsSection({
+    servers,
+    expanded,
+    onToggle,
+}: {
+    servers: AgentMcpServer[];
+    expanded: string | null;
+    onToggle: (key: string) => void;
+}) {
+    return (
+        <div className="agent-mcps-section">
+            <div className="agent-mcps-section-header">Custom agent servers</div>
+            <div className="connectors-list">
+                {servers.map((s) => {
+                    const key = `${s.agent_id}::${s.server_name}`;
+                    return (
+                        <AgentMcpTile
+                            key={key}
+                            server={s}
+                            expanded={expanded === key}
+                            onToggle={() => onToggle(key)}
+                        />
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
+function AgentMcpTile({
+    server,
+    expanded,
+    onToggle,
+}: {
+    server: AgentMcpServer;
+    expanded: boolean;
+    onToggle: () => void;
+}) {
+    const cmdDisplay = [server.command, ...server.args].join(' ');
+
+    return (
+        <div className={`agent-mcp-tile${expanded ? ' agent-mcp-tile--open' : ''}`}>
+            <button
+                type="button"
+                className="agent-mcp-tile-header"
+                onClick={onToggle}
+                aria-expanded={expanded}
+            >
+                <span className="agent-mcp-server-name">{server.server_name}</span>
+                <span className="agent-mcp-agent-label">via {server.agent_name}</span>
+                {server.disabled ? (
+                    <span className="agent-mcp-status disabled">Disabled</span>
+                ) : (
+                    <span className="agent-mcp-status enabled">
+                        <CheckCircle2 size={11} /> Active
+                    </span>
+                )}
+                <span className="agent-mcp-readonly-badge">read-only</span>
+                <span className="agent-mcp-chevron">
+                    {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </span>
+            </button>
+
+            {expanded && (
+                <div className="agent-mcp-detail">
+                    {cmdDisplay && (
+                        <div className="agent-mcp-command-row">{cmdDisplay}</div>
+                    )}
+                    <div className="agent-mcp-config-path">{server.config_path}</div>
+                    <div className="agent-mcp-config-hint">
+                        Edit the agent's <code>mcp_servers.json</code> to change this server.
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ── ConnectorAgentGrants ─────────────────────────────────────────────────────
+
 function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
     const { agents } = useChatStore();
     const [grants, setGrants] = useState<Record<string, string[]>>({});
     const [loading, setLoading] = useState(true);
-    const [revoking, setRevoking] = useState<string | null>(null);
-    const [revokeErr, setRevokeErr] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         try {
@@ -509,49 +778,28 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
 
     useEffect(() => { void load(); }, [load]);
 
-    const revoke = async (agentId: string) => {
-        setRevoking(agentId);
-        setRevokeErr(null);
-        try {
-            await api.revokeConnectorAgentGrant(connectorId, agentId);
-            void load();
-        } catch (e) {
-            setRevokeErr(e instanceof Error ? e.message : String(e));
-        } finally {
-            setRevoking(null);
-        }
-    };
-
     if (loading) return null;
+
+    // Every agent that declares a requirement for this connector — granted or not.
+    const relevantAgents = agents.filter(
+        (a) => a.namespaced_agent_id && a.required_connections?.some((rc) => rc.connector_id === connectorId),
+    );
 
     return (
         <div className="connection-grants">
             <div className="grants-header">Per-agent grants</div>
-            {revokeErr && (
-                <div className="configure-error" style={{ marginBottom: 6 }}>
-                    <AlertCircle size={12} /> {revokeErr}
-                </div>
-            )}
-            {Object.entries(grants).length === 0 ? (
-                <div className="grants-empty">No agents have been granted access yet.</div>
+            {relevantAgents.length === 0 ? (
+                <div className="grants-empty">No agents require access to this connector.</div>
             ) : (
-                Object.entries(grants).map(([agentId, scopes]) => {
-                    const agent = agents.find((a) => a.namespaced_agent_id === agentId);
-                    return (
-                        <div key={agentId} className="grant-row">
-                            <span className="grant-agent">{agent ? agent.name : agentId}</span>
-                            <span className="grant-scopes">{scopes.join(', ')}</span>
-                            <button
-                                className="btn-grant-revoke"
-                                disabled={revoking === agentId}
-                                onClick={() => void revoke(agentId)}
-                                aria-label={`Revoke ${agentId}`}
-                            >
-                                <X size={11} />
-                            </button>
-                        </div>
-                    );
-                })
+                relevantAgents.map((agent) => (
+                    <AgentGrantCard
+                        key={agent.namespaced_agent_id}
+                        agent={agent}
+                        connectorId={connectorId}
+                        grantedScopes={grants[agent.namespaced_agent_id!] ?? []}
+                        onChanged={() => void load()}
+                    />
+                ))
             )}
         </div>
     );

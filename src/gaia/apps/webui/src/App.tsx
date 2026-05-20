@@ -8,12 +8,15 @@ import { ChatView } from './components/ChatView';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { FileBrowser } from './components/FileBrowser';
+import { MemoryDashboard } from './components/MemoryDashboard';
 import { SettingsPage } from './components/SettingsPage';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { PermissionPrompt } from './components/PermissionPrompt';
+import { NotificationCenter } from './components/NotificationCenter';
 import { useChatStore } from './stores/chatStore';
+import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash, findSessionByHash } from './utils/format';
@@ -63,6 +66,9 @@ function App() {
         showDocLibrary,
         showFileBrowser,
         showSettings,
+        setShowSettings,
+        showMemoryDashboard,
+        setShowMemoryDashboard,
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
@@ -71,6 +77,8 @@ function App() {
         setBackendConnected,
         setAgents,
     } = useChatStore();
+    const showNotificationPanel = useNotificationStore((s) => s.showPanel);
+    const setShowNotificationPanel = useNotificationStore((s) => s.setShowPanel);
 
     // Load agent list on mount, then poll every 30s.
     // Fingerprinting avoids re-renders when the list is unchanged.
@@ -508,6 +516,7 @@ function App() {
 
             <Sidebar
                 onNewTask={handleNewTask}
+                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); window.history.replaceState(null, '', window.location.pathname); }}
                 tunnelActive={tunnelActive}
                 tunnelLoading={tunnelLoading}
                 onMobileToggle={handleMobileToggle}
@@ -516,6 +525,8 @@ function App() {
             <div className="main-content">
                 {showSettings ? (
                     <SettingsPage />
+                ) : showMemoryDashboard ? (
+                    <MemoryDashboard />
                 ) : (
                     <>
                         {/* Connection / LLM status banner */}
@@ -541,6 +552,11 @@ function App() {
             </AnimatedPresence>
             <AnimatedPresence show={showFileBrowser}>
                 <FileBrowser />
+            </AnimatedPresence>
+            <AnimatedPresence show={showNotificationPanel}>
+                <div className="notification-center-popover">
+                    <NotificationCenter onClose={() => setShowNotificationPanel(false)} />
+                </div>
             </AnimatedPresence>
 
             {/* Mobile Access Modal */}
