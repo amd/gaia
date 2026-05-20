@@ -1,12 +1,12 @@
 import pytest
 
 from gaia.governance.checkpoint_bridge import InMemoryCheckpointBridge
+from gaia.governance.exceptions import CheckpointNotFoundError, InvalidResolutionError
 from gaia.governance.schemas import (
     CheckpointResolution,
     GovernanceDecision,
     WorkflowTransition,
 )
-from gaia.governance.exceptions import CheckpointNotFoundError, InvalidResolutionError
 
 
 def make_transition():
