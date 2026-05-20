@@ -6,6 +6,7 @@ from gaia.governance.schemas import (
     GovernanceDecision,
     WorkflowTransition,
 )
+from gaia.governance.exceptions import CheckpointNotFoundError, InvalidResolutionError
 
 
 def make_transition():
@@ -59,7 +60,7 @@ def test_resolve_checkpoint_approve_and_reject():
 
 def test_resolve_unknown_checkpoint_raises():
     b = InMemoryCheckpointBridge()
-    with pytest.raises(Exception):
+    with pytest.raises(CheckpointNotFoundError):
         b.resolve_checkpoint(
             "nonexistent", CheckpointResolution(resolution="APPROVE", actor_id="x")
         )
@@ -73,6 +74,6 @@ def test_resolve_twice_raises_invalid_resolution():
     res = CheckpointResolution(resolution="APPROVE", actor_id="a")
     out = b.resolve_checkpoint(rec.checkpoint_id, res)
     assert out.status == "RESUMED"
-    # Second resolution should raise
-    with pytest.raises(Exception):
+    # Second resolution should raise InvalidResolutionError
+    with pytest.raises(InvalidResolutionError):
         b.resolve_checkpoint(rec.checkpoint_id, res)

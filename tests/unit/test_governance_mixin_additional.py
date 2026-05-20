@@ -24,8 +24,6 @@ class _SimpleAgent(GovernedAgentMixin, Agent):
 @pytest.fixture
 def agent(monkeypatch):
     # Patch heavy AgentSDK used in Agent.__init__
-    from unittest.mock import MagicMock
-
     monkeypatch.setattr("gaia.agents.base.agent.AgentSDK", MagicMock())
     a = _SimpleAgent(silent_mode=True, skip_lemonade=True)
     return a
@@ -60,7 +58,6 @@ def test_resolve_canonical_tool_name_exception_logs_and_returns_raw(agent, caplo
 def test_handle_review_checkpoint_approved(monkeypatch, agent):
     # Adapter resolves checkpoint to RESUMED
     adapter = MagicMock()
-    from gaia.governance.schemas import TransitionOutcome
 
     transition = MagicMock()
     decision = GovernanceDecision(
@@ -83,7 +80,6 @@ def test_handle_review_checkpoint_approved(monkeypatch, agent):
 
 def test_handle_review_checkpoint_rejected(monkeypatch, agent):
     adapter = MagicMock()
-    from gaia.governance.schemas import TransitionOutcome
 
     transition = MagicMock()
     decision = GovernanceDecision(
