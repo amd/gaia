@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo } from '../types';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -110,6 +110,10 @@ export async function downloadModel(modelName: string, force = false): Promise<{
 
 export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number }> {
     return apiFetch('GET', '/agents');
+}
+
+export async function listDiskAgents(): Promise<{ agents: DiskAgentInfo[]; total: number }> {
+    return apiFetch('GET', '/agents/disk', undefined, { 'x-gaia-ui': '1' });
 }
 
 // -- Connections (issue #915) ---------------------------------------------------
