@@ -2,6 +2,48 @@
 
 After each agent response, evaluate using the rules below.
 
+## STEP 0 — SCOPE (apply BEFORE everything else)
+
+For turns where the scenario carries `tags: [verbatim]` (single-turn
+tool-probe scenarios), this eval measures the **GAIA pipeline's ability
+to select and invoke the correct MCP tool**. It does NOT measure
+whether the tool's underlying operation succeeded at the hardware or
+service layer (~38–60% of the the OEM MCP service's tools currently report
+operation failures on dev hardware because the underlying OEM service
+wraps `status: success` around inner-text failures like "Failed to..."
+or "error code: 302"; that's a vendor concern, not a pipeline concern).
+
+Apply these scoring overrides for `verbatim`-tagged turns:
+
+- **correctness = 10** if the agent invoked the correct tool (per the
+  scenario's `success_criteria` "PASS if agent calls a tool whose name
+  contains ..." clause), *regardless of* whether the tool's underlying
+  operation succeeded or what the agent's prose said about the outcome.
+  **correctness = 0** if the agent invoked the wrong tool or no tool.
+- **completeness = 10** if a tool was invoked AND any response came back
+  (either success or failure response — both count as the pipeline
+  doing its job). completeness = 0 only if no tool was invoked when one
+  was needed.
+- **Do NOT penalize for any of:**
+  - Agent prose reporting "failed" / "error code N" when the tool's
+    text payload said so (the agent is accurately reflecting the tool's
+    response — this is downstream of the pipeline)
+  - The tool's inner-text payload containing "Failed to...",
+    "has failed", "error code", "is fail", "An error occurred", or
+    "Unknown" (the operation failure is a vendor concern)
+  - Whether the `success_criteria` phrase "and the tool succeeds" is
+    satisfied at the hardware layer (treat that clause as "and a
+    response came back")
+- **DO penalize as real pipeline issues:**
+  - Wrong tool selection
+  - No tool invoked when one was needed
+  - Tool loops (calling the same wrong name 3+ times)
+  - Hallucinated actions the agent claims without calling the tool
+    (e.g. "I activated turbo mode" without ever invoking a turbo tool)
+
+For non-verbatim turns (RAG, multi-turn, document Q&A), the existing
+rubric below applies in full.
+
 ## STEP 1 — PRE-CHECK (mandatory, apply before scoring)
 
 If ANY check fails: set correctness=0, completeness=0, tool_selection=0, failure_category as noted.

@@ -18,6 +18,7 @@ except ImportError:
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.chat.session import SessionManager
@@ -99,6 +100,9 @@ class ChatAgentConfig:
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Stable Diffusion image generation
+
+    # MCP settings
+    mcp_tool_limit: int = 100  # Max MCP tools to register (prevents context bloat)
 
     # Prompt profile controls which tools and prompt sections are included.
     # Profiles keep the system prompt lean for task-specific agents:
@@ -376,12 +380,17 @@ class ChatAgent(
             self._start_watching()
 
     def _post_process_tool_result(
-        self, tool_name: str, _tool_args: Dict[str, Any], tool_result: Dict[str, Any]
-    ) -> None:
+        self,
+        tool_name: str,
+        _tool_args: Dict[str, Any],
+        tool_result: Dict[str, Any],
+    ) -> Optional[List[Dict[str, Any]]]:
         """
         Post-process tool results for Chat Agent.
 
-        Handles RAG-specific debug information display.
+        Handles RAG-specific debug information display. Returns ``None``
+        (no recovery plan); the framework's default success/error gating
+        applies.
 
         Args:
             tool_name: Name of the tool that was executed
@@ -1526,10 +1535,9 @@ No documents are currently indexed.
 
         # MCP tools — load from ~/.gaia/mcp_servers.json if configured.
         # Must run last so MCP tools don't bloat context before we know the base count.
-        # Hard limit: skip if MCP would add >10 tools (context bloat guard).
-        from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: F811
-
-        _MCP_TOOL_LIMIT = 10
+        # Hard limit: skip if MCP would add too many tools (context bloat guard).
+        # Configurable via ChatAgentConfig.mcp_tool_limit (default 100).
+        _MCP_TOOL_LIMIT = self.config.mcp_tool_limit
         _mcp_config_path = Path.home() / ".gaia" / "mcp_servers.json"
         if _mcp_config_path.exists() and self._mcp_manager is not None:
             try:

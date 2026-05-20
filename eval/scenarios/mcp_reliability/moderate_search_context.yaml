@@ -1,0 +1,34 @@
+id: mcp_search_with_context
+name: "Search with Context -- Query and Filter"
+category: mcp_reliability
+severity: high
+description: |
+  Agent is asked to search for information with specific context constraints.
+  Tests the agent's ability to translate contextual requirements into
+  appropriate tool parameters.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask a question that requires the agent to search within an indexed document"
+    user_message: "What was the Q3 revenue for Acme Corp?"
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million"
+    success_criteria: |
+      Agent queries the indexed document and returns the correct Q3 revenue figure.
+      The agent should use a search or query tool to retrieve the answer.
+      PASS if agent returns $14.2 million (or equivalent) and used a tool to find it.
+      FAIL if agent hallucinates a different number.
+      FAIL if agent says it cannot find the information despite the document being indexed.
+
+expected_outcome: |
+  Agent uses its search/query tools to retrieve the answer from the indexed
+  document, demonstrating reliable tool-assisted information retrieval.

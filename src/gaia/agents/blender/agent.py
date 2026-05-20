@@ -5,7 +5,7 @@ Blender-specific agent for creating and modifying 3D scenes.
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
@@ -433,10 +433,16 @@ Examples of colored requests:
                 return {"status": "error", "error": str(e)}
 
     def _post_process_tool_result(
-        self, tool_name: str, tool_args: Dict[str, Any], tool_result: Dict[str, Any]
-    ) -> None:
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        tool_result: Dict[str, Any],
+    ) -> Optional[List[Dict[str, Any]]]:
         """
         Post-process the tool result for Blender-specific handling.
+
+        Returns ``None`` (no recovery plan); the framework's default
+        success/error gating applies.
 
         Args:
             tool_name: Name of the tool that was executed
