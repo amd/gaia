@@ -7,7 +7,7 @@
 # - pr-comment (pull_request_review_comment): ❌ Only non-fork PRs - GitHub doesn't expose secrets to this event on forks
 # - release-notes (workflow_run): ✅ Fires when "Publish Release" succeeds on a v* tag — generates docs + GH release notes
 #
-# Action version: All 4 jobs use `anthropics/claude-code-action@<v1.0.99 SHA>`. v0 `@beta`
+# Action version: All jobs use `anthropics/claude-code-action@<v1.0.99 SHA>`. v0 `@beta`
 # was stuck on a 2025-08-22 SHA that predates `pull_request_target` support (merged
 # 2025-09-22) and Opus 4.7 support (v1.0.98). v1's API replaces `direct_prompt` /
 # `custom_instructions` / `model` / `max_turns` with `prompt` + `claude_args`.
@@ -323,8 +323,8 @@ jobs:
             - Make it easy for maintainers to accept suggestions with one click
 
           claude_args: |
-            --max-turns 50
-            --model claude-opus-4-7
+            --max-turns 75
+            --model claude-sonnet-4-6
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
