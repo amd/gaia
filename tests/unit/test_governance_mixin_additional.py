@@ -167,6 +167,10 @@ def test_governance_decision_matrix(
         )
         # Provide a reviewer that approves so the execution proceeds
         agent._governance_reviewer = lambda name, args, decision: True
+        # Adapter should resolve the checkpoint as RESUMED when reviewer approves
+        adapter.resolve_checkpoint.return_value = TransitionOutcome(
+            status="RESUMED", reason="ok", checkpoint_id="chk", metadata={}
+        )
     elif outcome_status == "CONTINUE":
         adapter.handle_transition.return_value = TransitionOutcome(
             status="CONTINUE", reason="ok", checkpoint_id=None, metadata={}
