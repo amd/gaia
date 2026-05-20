@@ -34,7 +34,8 @@
 }
 
 .welcome-inner {
-    max-width: 680px;
+    max-width: 1200px;
+    width: 100%;
     text-align: center;
     position: relative;
     z-index: 1;
