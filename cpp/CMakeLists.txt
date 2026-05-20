@@ -74,17 +74,23 @@ if(NOT httplib_FOUND)
 endif()
 
 # FTXUI — reactive TUI framework (optional, gated behind GAIA_BUILD_TUI)
+# FTXUI must always be built static — it doesn't export symbols for DLL builds,
+# so BUILD_SHARED_LIBS=ON causes LNK1181 on Windows.
 option(GAIA_BUILD_TUI "Build FTXUI-based TUI console" ON)
 if(GAIA_BUILD_TUI)
     find_package(ftxui QUIET)
     if(NOT ftxui_FOUND)
         message(STATUS "FTXUI not found -- fetching via FetchContent")
+        # Save and override BUILD_SHARED_LIBS so FTXUI always builds static
+        set(_GAIA_SAVE_BSL ${BUILD_SHARED_LIBS})
+        set(BUILD_SHARED_LIBS OFF)
         FetchContent_Declare(
             ftxui
             GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI
             GIT_TAG        v6.1.9
         )
         FetchContent_MakeAvailable(ftxui)
+        set(BUILD_SHARED_LIBS ${_GAIA_SAVE_BSL})
     endif()
 endif()
 
@@ -123,6 +129,7 @@ add_library(gaia_core
     src/git_tools.cpp
     src/session.cpp
     src/repl.cpp
+    src/json_event_handler.cpp
 )
 
 # TUI sources (conditional on FTXUI availability)
@@ -292,6 +299,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_git_tools.cpp
         tests/test_session.cpp
         tests/test_repl.cpp
+        tests/test_json_event_handler.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE

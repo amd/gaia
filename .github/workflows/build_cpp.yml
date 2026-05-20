@@ -107,6 +107,7 @@ jobs:
           cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release \
                 -DGAIA_BUILD_TESTS=OFF -DGAIA_BUILD_EXAMPLES=OFF \
                 -DGAIA_BUILD_INTEGRATION_TESTS=OFF \
+                -DGAIA_BUILD_TUI=OFF \
                 -DCMAKE_INSTALL_PREFIX="${{ runner.temp }}/gaia_install"
           cmake --build cpp/build --config Release --parallel
           cmake --install cpp/build --config Release
