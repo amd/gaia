@@ -829,3 +829,9 @@ The repo declares two plugins in [`.claude/settings.json`](.claude/settings.json
 These are **not auto-installed silently**. First time a contributor opens the repo in Claude Code (v2.1.0+), they'll be prompted to install them. Accept once — see [`docs/reference/dev.mdx`](docs/reference/dev.mdx) "Step 6: Claude Code Plugins (Optional)" for details and the opt-out.
 
 When a task fits a Superpowers skill (e.g. `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:test-driven-development`, `superpowers:systematic-debugging`, `superpowers:verification-before-completion`), **use it** — these skills enforce the dev practices this repo expects.
+
+## Learned Skills
+
+**Read these before starting related tasks:**
+
+- `.claude/skills/lemonade-client-patterns.md` - Patterns, gotchas, and conventions for modifying LemonadeClient and threading changes through its callers (providers, VLM, UI routers, agent base). Covers: deferred import patch targets, assertLogs child logger levels, SSE test hang prevention, 401 error safety, openai.AuthenticationError ordering. (tags: lemonade, authentication, env-vars, testing, httpx, openai-sdk, tdd)

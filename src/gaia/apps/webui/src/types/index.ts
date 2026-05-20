@@ -38,6 +38,14 @@ export interface AgentInfo {
     namespaced_agent_id?: string;
 }
 
+export interface DiskAgentInfo {
+    id: string;
+    name: string;
+    registered: boolean;
+    registered_agent_id?: string | null;
+    source?: string | null;
+}
+
 /**
  * Issue #915 — declarative scope claim on an agent.
  */
