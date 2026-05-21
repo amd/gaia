@@ -2,24 +2,29 @@
 # SPDX-License-Identifier: MIT
 
 """
-Post-run failure analyzer for the OEM MCP tool-calling reliability eval.
+Post-run failure analyzer for the MCP tool-calling reliability eval.
 
-Reads per-scenario trace JSON files (written by `gaia eval agent`) and the
-the OEM MCP service logs, then emits structured failure reports and per-tool
-rollups:
+Reads per-scenario trace JSON files (written by `gaia eval agent`) and,
+optionally, downstream MCP service logs, then emits structured failure
+reports and per-tool rollups:
 
     <run_dir>/failure_report.json   (list of FailureRecord dicts)
     <run_dir>/failure_report.md     (grouped by tool, worst-first)
-    <run_dir>/per_tool_report.json  (41-tool rollup)
-    <run_dir>/per_tool_report.md    (gate table: X of 41 tools meet 90%)
+    <run_dir>/per_tool_report.json  (per-tool rollup)
+    <run_dir>/per_tool_report.md    (gate table: X tools meet pass threshold)
 
 Usage:
     python -m gaia.eval.analyze_failures \\
         --run-id eval-YYYYMMDD-HHMMSS \\
         [--results-dir eval/results] \\
-        [--tool-log-dir C:/ProgramData/OEM/OEMService] \\
+        [--tool-log-dir /path/to/mcp/service/logs] \\
+        [--tool-log-tz-offset-hours -4] \\
         [--scenarios-dir eval/scenarios/mcp_tool_reliability] \\
         [--iterations-glob "eval-20260423-*"]
+
+The service-log correlation is optional and vendor-agnostic: any directory
+containing ``*.log`` files in the bracketed-timestamp format below will be
+parsed; non-matching lines are silently skipped.
 
 If --iterations-glob is supplied, all matching run_dirs are merged (one
 FailureRecord per iteration). Otherwise the single run_id contributes
@@ -48,7 +53,6 @@ log = get_logger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RESULTS_DIR = REPO_ROOT / "eval" / "results"
 DEFAULT_SCENARIOS_DIR = REPO_ROOT / "eval" / "scenarios" / "mcp_tool_reliability"
-DEFAULT_OEM_LOG_DIR = Path("C:/ProgramData/OEM/OEMService")
 
 # Statuses that count as "failures" for the analyzer. Anything not in this set
 # and not {"PASS", "SKIPPED_NO_DOCUMENT"} still gets a record as "ERRORED".
@@ -75,7 +79,7 @@ class ToolScenario:
 
 
 @dataclass
-class OEMLogEntry:
+class ToolLogEntry:
     timestamp: datetime
     tool_name: str
     args: str
@@ -247,16 +251,15 @@ def load_scorecards(run_dirs: List[Path]) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# the OEM MCP log parsing
+# MCP service log parsing
 # ---------------------------------------------------------------------------
 
-# the OEM MCP service log format (v2, confirmed on-host 2026-04-29):
+# Bracketed-timestamp service log format (vendor-agnostic):
 #   [2026-04-26 16:33:26.918] [INFO] tool_activity_indicator_disable | Tool called: ...
 #   [2026-04-26 16:33:26.984] [DEBUG] tool_activity_indicator_disable | Sending command: ...
-# The timestamp is local wall-clock (OEM service runs in the host's local tz).
-# We assume EDT (UTC-4) for correlation; misalignment is bounded by the
-# correlate_log_to_turn window_s parameter.
-_OEM_LOG_LINE = re.compile(
+# The timestamp is local wall-clock; pass --tool-log-tz-offset-hours to
+# convert to UTC for correlation with trace timestamps.
+_TOOL_LOG_LINE = re.compile(
     r"^\[(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)\]\s+"
     r"\[(?P<level>INFO|DEBUG|WARN|ERROR|FATAL)\]\s+"
     r"(?P<context>[^|]+?)\s*\|\s*"
@@ -264,60 +267,50 @@ _OEM_LOG_LINE = re.compile(
     re.IGNORECASE,
 )
 
-# Tool-call heuristic. The service logs full tool names in the context field
-# (e.g. "tool_activity_indicator_disable") for tool-routing entries, and
-# command names (e.g. "DarkMode") for downstream WebSocket entries. We extract
-# the most specific match available.
+# Tool-call heuristic. Service logs commonly carry tool/command names in the
+# context field (e.g. "tool_perf_silent", "launch_app"); fall back to scanning
+# the message body.
 _TOOL_HINT = re.compile(
     r"(?P<tool>tool_[a-z0-9_]+|launch_[a-z0-9_]+|ms_settings_[a-z0-9_]+|meeting_mode_[a-z0-9_]+)",
     re.IGNORECASE,
 )
 
-# Local-tz offset applied when converting OEM log timestamps to UTC.
-# Eval runs are on a single host; this is the host's standard offset.
-_OEM_LOG_TZ_OFFSET = timedelta(hours=-4)  # EDT
 
-
-def _parse_tool_timestamp(s: str) -> Optional[datetime]:
+def _parse_tool_timestamp(
+    s: str, tz_offset: timedelta = timedelta(0)
+) -> Optional[datetime]:
     """Parse '2026-04-26 16:33:26.918' (local tz) → aware UTC datetime."""
     s = s.strip()
     for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
         try:
             dt = datetime.strptime(s, fmt)
-            return (dt - _OEM_LOG_TZ_OFFSET).replace(tzinfo=timezone.utc)
+            return (dt - tz_offset).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
     return None
 
 
-def parse_tool_logs(log_dir: Optional[Path]) -> List[OEMLogEntry]:
-    """Parse the OEM MCP service log files under log_dir. Tolerate absence.
+def parse_tool_logs(
+    log_dir: Optional[Path],
+    tz_offset: timedelta = timedelta(0),
+    file_glob: str = "*.log",
+) -> List[ToolLogEntry]:
+    """Parse MCP service log files under log_dir. Tolerate absence.
 
-    Picks up files named the OEM MCP service*.log and OEMService*.log.
+    Any file matching ``file_glob`` (default ``*.log``) whose lines match the
+    bracketed-timestamp format is parsed; non-matching lines are skipped.
     """
     if not log_dir:
         log.info("No --tool-log-dir provided; skipping service log correlation.")
         return []
     if not log_dir.exists():
-        log.warning(f"OEM log dir does not exist: {log_dir}")
+        log.warning(f"Tool log dir does not exist: {log_dir}")
         return []
 
-    entries: List[OEMLogEntry] = []
-    patterns = (
-        "the OEM MCP service*.log",
-        "the OEM MCP service_UI*.log",
-        "OEMService*.log",
-    )
-    seen: set = set()
-    files: List[Path] = []
-    for pat in patterns:
-        for p in log_dir.glob(pat):
-            if p in seen:
-                continue
-            seen.add(p)
-            files.append(p)
+    entries: List[ToolLogEntry] = []
+    files = sorted(set(log_dir.glob(file_glob)))
     if not files:
-        log.warning(f"No OEM log files matched under {log_dir}")
+        log.warning(f"No log files matched {file_glob!r} under {log_dir}")
         return []
 
     for lf in files:
@@ -327,16 +320,14 @@ def parse_tool_logs(log_dir: Optional[Path]) -> List[OEMLogEntry]:
             log.warning(f"Could not read {lf}: {e}")
             continue
         for raw in text.splitlines():
-            m = _OEM_LOG_LINE.match(raw)
+            m = _TOOL_LOG_LINE.match(raw)
             if not m:
                 continue
-            ts = _parse_tool_timestamp(m.group("ts"))
+            ts = _parse_tool_timestamp(m.group("ts"), tz_offset=tz_offset)
             if ts is None:
                 continue
             body = m.group("body").strip()
             ctx = m.group("context").strip()
-            # Prefer the context field (e.g. "tool_perf_silent" or
-            # "launch_purifiedview"); fall back to scanning the body.
             tool_name = ""
             ctx_match = _TOOL_HINT.match(ctx)
             if ctx_match:
@@ -346,7 +337,7 @@ def parse_tool_logs(log_dir: Optional[Path]) -> List[OEMLogEntry]:
                 if th:
                     tool_name = th.group("tool").lower()
             entries.append(
-                OEMLogEntry(
+                ToolLogEntry(
                     timestamp=ts,
                     tool_name=tool_name,
                     args="",
@@ -356,7 +347,7 @@ def parse_tool_logs(log_dir: Optional[Path]) -> List[OEMLogEntry]:
                 )
             )
     entries.sort(key=lambda e: e.timestamp)
-    log.info(f"Parsed {len(entries)} OEM log entries from {len(files)} file(s).")
+    log.info(f"Parsed {len(entries)} log entries from {len(files)} file(s).")
     return entries
 
 
@@ -370,10 +361,10 @@ def correlate_log_to_turn(
     turn_offset_s: float,
     expected_tool: str,
     observed_tools: List[str],
-    tool_entries: List[OEMLogEntry],
+    tool_entries: List[ToolLogEntry],
     window_s: int = 60,
 ) -> Dict[str, Any]:
-    """Find OEM log activity near the turn's time window and bucket it.
+    """Find service log activity near the turn's time window and bucket it.
 
     bucket ∈ {"no_service_call", "wrong_tool", "service_error", "service_ok",
               "no_log_data"}
@@ -469,7 +460,7 @@ def _parse_scorecard_start(scorecard: Optional[Dict[str, Any]]) -> Optional[date
 def build_failure_records(
     traces: List[Dict[str, Any]],
     scenarios: Dict[str, ToolScenario],
-    tool_entries: List[OEMLogEntry],
+    tool_entries: List[ToolLogEntry],
     scorecards_by_run: Dict[str, Dict[str, Any]],
     run_config: Dict[str, Any],
 ) -> List[FailureRecord]:
@@ -508,7 +499,7 @@ def build_failure_records(
         agent_response = (failing_turn or {}).get("agent_response") or ""
         agent_response_excerpt = agent_response[:300]
 
-        # Correlate OEM service logs
+        # Correlate downstream MCP service logs
         scorecard = scorecards_by_run.get(tr.get("_run_id", ""))
         scenario_start = _parse_scorecard_start(scorecard)
         # Turn offset: sum elapsed across prior turns is unavailable; best-effort
@@ -837,7 +828,7 @@ def _self_check(
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="gaia.eval.analyze_failures",
-        description="Post-run failure analyzer for the OEM MCP tool reliability eval.",
+        description="Post-run failure analyzer for the MCP tool reliability eval.",
     )
     parser.add_argument(
         "--run-id",
@@ -860,8 +851,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--tool-log-dir",
         type=Path,
         default=None,
-        help="the OEM MCP service log dir (e.g. C:/ProgramData/OEM/OEMService). "
+        help="Directory containing downstream MCP service logs to correlate "
+        "with traces (e.g. /var/log/mcp-service or C:/ProgramData/.../logs). "
         "If omitted, service-log correlation is skipped.",
+    )
+    parser.add_argument(
+        "--tool-log-tz-offset-hours",
+        type=float,
+        default=0.0,
+        help="Local-tz offset of the service log timestamps in hours "
+        "(default: 0 = UTC). Use -4 for EDT, -5 for EST, etc.",
+    )
+    parser.add_argument(
+        "--tool-log-glob",
+        default="*.log",
+        help="Glob for service log files under --tool-log-dir (default: '*.log').",
     )
     parser.add_argument(
         "--iterations-glob",
@@ -917,7 +921,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             scorecards_by_run[rid] = sc
     print(f"[ANALYZE] Loaded {len(scorecards)} scorecard(s)")
 
-    tool_entries = parse_tool_logs(args.tool_log_dir)
+    tool_entries = parse_tool_logs(
+        args.tool_log_dir,
+        tz_offset=timedelta(hours=args.tool_log_tz_offset_hours),
+        file_glob=args.tool_log_glob,
+    )
 
     # Derive run_config from the first scorecard we find (fallbacks if absent)
     run_config = {

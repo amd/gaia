@@ -13,6 +13,14 @@ from gaia.mcp.client.mcp_client import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _reset_logged_sanitisations():
+    """Isolate the warn-once module global from prior tests."""
+    mcp_client._logged_sanitisations.clear()
+    yield
+    mcp_client._logged_sanitisations.clear()
+
+
 @pytest.mark.parametrize(
     "raw,expected",
     [
@@ -42,7 +50,6 @@ def test_sanitise_idempotent():
 
 def test_sanitise_warns_once_per_distinct_raw(caplog):
     """The warning must fire exactly once per distinct raw input."""
-    mcp_client._logged_sanitisations.clear()
     with caplog.at_level(logging.WARNING, logger="gaia.mcp.client.mcp_client"):
         sanitise_server_name("tool_mcp")
         sanitise_server_name("tool_mcp")
@@ -53,7 +60,6 @@ def test_sanitise_warns_once_per_distinct_raw(caplog):
 
 def test_sanitise_does_not_warn_on_clean_input(caplog):
     """Clean inputs (no change) must not emit a warning."""
-    mcp_client._logged_sanitisations.clear()
     with caplog.at_level(logging.WARNING, logger="gaia.mcp.client.mcp_client"):
         sanitise_server_name("tool")
         sanitise_server_name("clean_name")

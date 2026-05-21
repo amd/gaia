@@ -18,9 +18,9 @@ except ImportError:
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin

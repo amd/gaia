@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: MIT
 
 import asyncio
+import json
 import logging
 import os
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -916,9 +918,6 @@ def _print_reliability_summary(scorecards, pass_threshold=0.90):
     Groups scenario results across iterations and computes per-scenario pass rates.
     Prints a colorized table and a GO/NO_GO readiness signal.
     """
-    import json
-    from collections import defaultdict
-
     # Collect per-scenario results across all iterations
     by_scenario = defaultdict(list)
     for sc in scorecards:
@@ -1206,7 +1205,8 @@ def main():
         type=int,
         default=100,
         help="Maximum MCP tools to register (default: 100). "
-        "Increase for MCP servers with many tools (e.g., the OEM MCP has ~49).",
+        "Larger tool sets bloat the system prompt and degrade small-model "
+        "tool-calling accuracy — keep this as low as your workflow allows.",
     )
 
     # Agent UI
@@ -2669,7 +2669,6 @@ Examples:
 
     # Handle summarize command
     if args.action == "summarize":
-        import json
 
         from gaia.apps.summarize.app import SummarizerApp, SummaryConfig
         from gaia.apps.summarize.html_viewer import HTMLViewer
@@ -3659,7 +3658,6 @@ Let me know your answer!
             # (saves the last iteration's scorecard)
             last_scorecard = all_scorecards[-1] if all_scorecards else None
             if getattr(args, "save_baseline", False) and last_scorecard:
-                import json
 
                 from gaia.eval.runner import RESULTS_DIR
 
@@ -5754,7 +5752,6 @@ def handle_agent_export(args):
 
 def handle_agent_import(args):
     """Import a custom agent .zip bundle into ~/.gaia/agents/."""
-    import json
     import zipfile
 
     # Lazy import to keep CLI startup fast.
@@ -6124,7 +6121,6 @@ def handle_mcp_status(args):
 
             # Try the new /status endpoint for comprehensive details
             try:
-                import json
                 import urllib.request
 
                 # First try the new /status endpoint
@@ -6212,7 +6208,6 @@ def handle_mcp_test(args):
     log = get_logger(__name__)
 
     try:
-        import json
         import urllib.parse
         import urllib.request
 
@@ -6295,7 +6290,6 @@ def handle_mcp_agent(args):
     log = get_logger(__name__)
 
     try:
-        import json
         import urllib.parse
         import urllib.request
 
