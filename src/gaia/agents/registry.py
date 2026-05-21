@@ -5,6 +5,7 @@
 import dataclasses
 import hashlib
 import importlib
+import importlib.metadata
 import importlib.util
 import inspect
 import os
@@ -23,6 +24,8 @@ from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+AGENT_ENTRY_POINT_GROUP = "gaia.agents"
 
 # KNOWN_TOOLS maps tool name -> (module_path, class_name) for lazy import.
 # Consumed by BuilderAgent's template (src/gaia/agents/builder/template.py) to
@@ -285,7 +288,10 @@ class AgentRegistry:
         else:
             logger.info("registry: No custom agent directory found at %s", agents_dir)
 
-        # 3. Discover native (C++/binary) agents from agent-manifest.json
+        # 3. Discover installed Python agents exposed by standalone wheels
+        self._discover_entry_point_agents()
+
+        # 4. Discover native (C++/binary) agents from agent-manifest.json
         self._discover_native_agents()
 
         agent_ids = list(self._agents.keys())
@@ -835,6 +841,59 @@ class AgentRegistry:
             logger.debug(
                 "registry: BuilderAgent not available, skipping built-in registration"
             )
+
+    # ------------------------------------------------------------------
+    # Installed Python agent discovery
+    # ------------------------------------------------------------------
+
+    def _discover_entry_point_agents(self) -> None:
+        """Register installed Python agents from the ``gaia.agents`` group."""
+        entry_points = importlib.metadata.entry_points()
+        if hasattr(entry_points, "select"):
+            agent_entry_points = entry_points.select(group=AGENT_ENTRY_POINT_GROUP)
+        else:
+            agent_entry_points = entry_points.get(AGENT_ENTRY_POINT_GROUP, [])
+
+        registered = 0
+        for entry_point in agent_entry_points:
+            try:
+                registration = self._load_entry_point_registration(entry_point)
+            except Exception as exc:
+                logger.warning(
+                    "registry: Failed to load agent entry point %s: %s",
+                    entry_point.name,
+                    exc,
+                )
+                continue
+
+            if registration.id in self._agents:
+                logger.warning(
+                    "registry: entry point agent %s skipped — ID already registered",
+                    registration.id,
+                )
+                continue
+
+            self._register(registration)
+            registered += 1
+
+        if registered:
+            logger.info("registry: Registered %d entry point agent(s)", registered)
+
+    def _load_entry_point_registration(self, entry_point) -> AgentRegistration:
+        loaded = entry_point.load()
+        registration = loaded() if callable(loaded) else loaded
+        if not isinstance(registration, AgentRegistration):
+            raise TypeError(
+                f"{AGENT_ENTRY_POINT_GROUP} entry point {entry_point.name!r} "
+                "must load an AgentRegistration or a zero-argument callable "
+                "returning one"
+            )
+        if not registration.namespaced_agent_id:
+            registration = dataclasses.replace(
+                registration,
+                namespaced_agent_id=f"installed:{registration.id}",
+            )
+        return registration
 
     # ------------------------------------------------------------------
     # Native (C++/binary) agent discovery

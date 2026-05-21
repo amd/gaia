@@ -12,6 +12,7 @@ import platform
 import sys
 import textwrap
 import warnings
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -396,6 +397,85 @@ class TestDirectoryDiscovery:
         # Should not raise, just skip
         registry._load_from_dir(agent_dir)
         assert len(registry.list()) == 0
+
+
+# ---------------------------------------------------------------------------
+# Installed wheel entry point discovery
+# ---------------------------------------------------------------------------
+
+
+class TestEntryPointDiscovery:
+    def _entry_point(self, name, loaded):
+        return SimpleNamespace(name=name, load=lambda: loaded)
+
+    def test_discovers_agent_registration_entry_point(self, monkeypatch):
+        registration = AgentRegistration(
+            id="hub-chat",
+            name="Hub Chat",
+            description="Standalone hub agent",
+            source="custom_python",
+            conversation_starters=["Hello"],
+            factory=lambda **kw: "created",
+            agent_dir=None,
+            models=["Qwen3.5-35B-A3B-GGUF"],
+            category="conversation",
+            tags=["hub"],
+            icon="message-circle",
+            tools_count=1,
+        )
+        entry_point = self._entry_point("hub-chat", lambda: registration)
+        entry_points = SimpleNamespace(select=lambda group: [entry_point])
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            lambda: entry_points,
+        )
+
+        registry = AgentRegistry()
+        registry._discover_entry_point_agents()
+
+        reg = registry.get("hub-chat")
+        assert reg is not None
+        assert reg.name == "Hub Chat"
+        assert reg.namespaced_agent_id == "installed:hub-chat"
+        assert registry.create_agent("hub-chat") == "created"
+
+    def test_entry_point_does_not_override_existing_agent(self, monkeypatch):
+        existing = AgentRegistration(
+            id="chat",
+            name="Existing Chat",
+            description="Existing registration",
+            source="builtin",
+            conversation_starters=[],
+            factory=lambda **kw: "existing",
+            agent_dir=None,
+            models=[],
+            namespaced_agent_id="builtin:chat",
+        )
+        replacement = AgentRegistration(
+            id="chat",
+            name="Replacement Chat",
+            description="Should not replace existing registrations",
+            source="custom_python",
+            conversation_starters=[],
+            factory=lambda **kw: "replacement",
+            agent_dir=None,
+            models=[],
+        )
+        entry_point = self._entry_point("chat", lambda: replacement)
+        entry_points = SimpleNamespace(select=lambda group: [entry_point])
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            lambda: entry_points,
+        )
+
+        registry = AgentRegistry()
+        registry._register(existing)
+        registry._discover_entry_point_agents()
+
+        assert registry.get("chat").name == "Existing Chat"
+        assert registry.create_agent("chat") == "existing"
 
 
 # ---------------------------------------------------------------------------
