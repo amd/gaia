@@ -424,11 +424,10 @@ class TestEntryPointDiscovery:
             tools_count=1,
         )
         entry_point = self._entry_point("hub-chat", lambda: registration)
-        entry_points = SimpleNamespace(select=lambda group: [entry_point])
         monkeypatch.setattr(
             registry_module.importlib.metadata,
             "entry_points",
-            lambda group: entry_points.select(group=group),
+            lambda group: [entry_point],
         )
 
         registry = AgentRegistry()
@@ -516,6 +515,29 @@ class TestEntryPointDiscovery:
         registry._discover_entry_point_agents()
 
         assert registry.get("hub-chat").namespaced_agent_id == "wheel:hub-chat"
+
+    def test_entry_point_source_is_coerced_to_installed(self, monkeypatch):
+        registration = AgentRegistration(
+            id="hub-chat",
+            name="Hub Chat",
+            description="Standalone hub agent",
+            source="builtin",
+            conversation_starters=[],
+            factory=lambda **kw: "created",
+            agent_dir=None,
+            models=[],
+        )
+        entry_point = self._entry_point("hub-chat", lambda: registration)
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            lambda group: [entry_point],
+        )
+
+        registry = AgentRegistry()
+        registry._discover_entry_point_agents()
+
+        assert registry.get("hub-chat").source == "installed"
 
 
 # ---------------------------------------------------------------------------
