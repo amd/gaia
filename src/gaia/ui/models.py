@@ -174,7 +174,7 @@ class AgentInfo(BaseModel):
     id: str
     name: str
     description: str
-    source: Literal["builtin", "custom_python", "native"]
+    source: Literal["builtin", "custom_python", "native", "installed"]
     conversation_starters: List[str] = Field(default_factory=list)
     models: List[str] = Field(default_factory=list)
     # Minimum free system memory (GB) the agent recommends before loading its
