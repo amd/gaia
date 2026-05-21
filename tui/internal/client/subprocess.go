@@ -6,12 +6,33 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/amd/gaia/tui/internal/event"
 )
+
+// detectLemonadeURL probes common Lemonade Server ports and returns the first reachable URL.
+func detectLemonadeURL() string {
+	ports := []string{"13305", "8000"}
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	for _, port := range ports {
+		url := "http://localhost:" + port + "/api/v1"
+		resp, err := client.Get(url + "/models")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				return url
+			}
+		}
+	}
+	return ""
+}
 
 // SubprocessClient communicates with a C++ agent via stdin/stdout JSONL.
 // Send() calls must be serialized — do not overlap two Send() calls.
@@ -52,6 +73,16 @@ func (s *SubprocessClient) start() error {
 	s.cmd = exec.Command(parts[0], parts[1:]...)
 	s.stderr = &bytes.Buffer{}
 	s.cmd.Stderr = s.stderr
+
+	// Auto-detect Lemonade URL if not set in environment
+	if os.Getenv("LEMONADE_BASE_URL") == "" {
+		if url := detectLemonadeURL(); url != "" {
+			s.cmd.Env = append(os.Environ(), "LEMONADE_BASE_URL="+url)
+			if s.debug {
+				fmt.Fprintf(os.Stderr, "[DEBUG] Auto-detected Lemonade at %s\n", url)
+			}
+		}
+	}
 
 	stdinPipe, err := s.cmd.StdinPipe()
 	if err != nil {

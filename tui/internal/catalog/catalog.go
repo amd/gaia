@@ -152,7 +152,7 @@ func seedAgents() []Agent {
 			ID: "bash", Name: "Bash", Description: "Shell command execution and automation",
 			Category: "DevOps", Tags: []string{"shell", "bash", "terminal", "cli"},
 			Icon: "🖥️", Version: "0.1.0", Status: StatusInstalled,
-			BinaryPath: "gaia-bash", BinaryArgs: []string{"--json-events"},
+			BinaryPath: "gaia-bash", BinaryArgs: []string{"--json-events", "--model", "Gemma-4-E4B-it-GGUF"},
 		},
 
 		// --- Available (not yet downloaded) ---
