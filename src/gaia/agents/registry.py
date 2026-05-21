@@ -849,10 +849,12 @@ class AgentRegistry:
     def _discover_entry_point_agents(self) -> None:
         """Register installed Python agents from the ``gaia.agents`` group."""
         entry_points = importlib.metadata.entry_points()
-        if hasattr(entry_points, "select"):
-            agent_entry_points = entry_points.select(group=AGENT_ENTRY_POINT_GROUP)
+        select_entry_points = getattr(entry_points, "select", None)
+        if callable(select_entry_points):
+            agent_entry_points = select_entry_points(group=AGENT_ENTRY_POINT_GROUP)
         else:
-            agent_entry_points = entry_points.get(AGENT_ENTRY_POINT_GROUP, [])
+            entry_points_for_group = getattr(entry_points, "get")
+            agent_entry_points = entry_points_for_group(AGENT_ENTRY_POINT_GROUP, [])
 
         registered = 0
         for entry_point in agent_entry_points:
