@@ -34,7 +34,7 @@ func newAgentDelegate() agentDelegate {
 }
 
 func (d agentDelegate) Height() int  { return 3 }
-func (d agentDelegate) Spacing() int { return 0 }
+func (d agentDelegate) Spacing() int { return 1 }
 func (d agentDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {
 	return nil
 }

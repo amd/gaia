@@ -236,22 +236,22 @@ func (m HubModel) View() string {
 }
 
 func (m HubModel) renderHeader() string {
+	logoText := "" +
+		"   ╔══╗ ╔══╗ ╦ ╔══╗\n" +
+		"   ║ ═╦ ╠══╣ ║ ╠══╣\n" +
+		"   ╚══╝ ╩  ╩ ╩ ╩  ╩"
+
 	logo := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("212")).
 		Bold(true).
-		Render("  ██████╗  █████╗ ██╗ █████╗\n" +
-			"  ██╔════╝ ██╔══██╗██║██╔══██╗\n" +
-			"  ██║  ███╗███████║██║███████║\n" +
-			"  ██║   ██║██╔══██║██║██╔══██║\n" +
-			"  ╚██████╔╝██║  ██║██║██║  ██║\n" +
-			"   ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝")
+		Render(logoText)
 
 	subtitle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("243")).
 		Italic(true).
-		Render("  Local AI Agent Hub — by AMD")
+		Render("   Local AI Agent Hub — by AMD")
 
-	return logo + "\n" + subtitle
+	return "\n" + logo + "\n" + subtitle + "\n"
 }
 
 func (m HubModel) renderDashboard() string {
@@ -296,7 +296,7 @@ func (m *HubModel) refreshList() {
 }
 
 func (m *HubModel) resizeList() {
-	overhead := 13 // logo(6) + subtitle(1) + dashboard(1) + tabs(1) + divider(1) + status(1) + footer(1) + padding(1)
+	overhead := 11 // logo(3) + subtitle(1) + blanks(2) + dashboard(1) + tabs(1) + divider(1) + footer(1) + padding(1)
 	h := m.height - overhead
 	if h < 5 {
 		h = 5
