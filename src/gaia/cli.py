@@ -1081,7 +1081,8 @@ def _print_reliability_summary(scorecards, pass_threshold=0.90):
         print(f"[RELIABILITY] Report saved → {report_path}")
 
 
-def main():
+def build_parser():
+    """Build and return the root argparse parser."""
     import argparse
 
     # Create the main parser
@@ -1089,9 +1090,6 @@ def main():
         description=f"Gaia CLI - Interact with Gaia AI agents. \n{version}",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-
-    # Get logger instance
-    log = get_logger(__name__)
 
     # Add version argument
     parser.add_argument(
@@ -2618,6 +2616,12 @@ Examples:
     )
 
     _register_uninstall_subparser(subparsers, parent_parser)
+    return parser
+
+
+def main():
+    parser = build_parser()
+    log = get_logger(__name__)
 
     args = parser.parse_args()
 

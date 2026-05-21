@@ -74,28 +74,6 @@ jobs:
           pytest tests/unit/test_packaging.py -v --tb=short
           echo "✅ Packaging integrity checks passed"
 
-      - name: Validate CLI commands (dry-run)
-        run: |
-          echo "=== Validating CLI Commands ==="
-          echo "Testing CLI help and argument parsing (no server required)"
-          echo ""
-          # Validate gaia init command parses correctly
-          gaia init --help
-          echo "✅ gaia init --help passed"
-
-          # Validate other core commands
-          gaia --help
-          echo "✅ gaia --help passed"
-
-          gaia chat --help
-          echo "✅ gaia chat --help passed"
-
-          gaia prompt --help
-          echo "✅ gaia prompt --help passed"
-
-          gaia sd --help
-          echo "✅ gaia sd --help passed"
-
       - name: Run unit tests
         env:
           # Skip memory init — Lemonade isn't available in this CI job; the
@@ -131,12 +109,8 @@ jobs:
         run: |
           echo ""
           echo "=== Test Coverage ==="
-          echo "CLI Validation (Dry-Run):"
-          echo "  - gaia init --help: Command parsing and argument validation"
-          echo "  - gaia --help: Main CLI entry point"
-          echo "  - gaia chat --help: Chat command validation"
-          echo "  - gaia prompt --help: Prompt command validation"
-          echo "  - gaia sd --help: Image generation command validation"
+          echo "CLI Smoke Tests (pytest, auto-discovered):"
+          echo "  - tests/unit/cli/test_cli_smoke.py: --help for every subcommand + console script"
           echo ""
           echo "Unit Tests:"
           echo "  - SDToolsMixin: Stable Diffusion image generation for agents"
