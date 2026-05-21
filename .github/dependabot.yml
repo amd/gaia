@@ -4,7 +4,7 @@
 # Dependabot configuration for automated dependency updates
 # This file configures Dependabot to check for updates to Python, JavaScript, and GitHub Actions dependencies
 #
-# For detailed documentation on adding/modifying entries, see: docs/dependency-management.md
+# For detailed documentation on adding/modifying entries, see: docs/reference/dependency-management.mdx
 # Official Dependabot docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 
 version: 2
@@ -18,7 +18,7 @@ updates:
     labels:
       - "dependencies"
       - "python"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
     # Group all Python dependency updates together to reduce PR noise
     groups:
       python-dependencies:
@@ -34,14 +34,35 @@ updates:
     labels:
       - "dependencies"
       - "javascript"
-    open-pull-requests-limit: 0
-    ignore:
-      # Ignore node_modules from app builds - they have their own configs below
-      - dependency-name: "*"
-        update-types: ["version-update:semver-patch"]
+    open-pull-requests-limit: 5
+    # Group all root-workspace dependency updates into one PR per cycle to reduce noise.
+    # Without this stanza, removing the prior `ignore:` block would open one PR per outdated
+    # dependency and hit `open-pull-requests-limit` immediately. See #1157.
+    groups:
+      root-npm-dependencies:
+        patterns:
+          - "*"
 
   # Note: Electron framework (src/gaia/electron) is scanned via the root workspace
   # configuration above, so no separate entry is needed.
+
+  # JavaScript - Agent UI (flagship Electron + React + Vite app, published as @amd-gaia/agent-ui).
+  # The root workspace glob `src/gaia/apps/*/webui` does NOT match this path (it's `webui`
+  # directly under `apps/`, not under `apps/<name>/webui`), so it needs its own entry.
+  - package-ecosystem: "npm"
+    directory: "/src/gaia/apps/webui"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "electron"
+    open-pull-requests-limit: 5
+    groups:
+      agent-ui-dependencies:
+        patterns:
+          - "*"
 
   # JavaScript - Example Electron app
   - package-ecosystem: "npm"
@@ -54,7 +75,7 @@ updates:
       - "javascript"
       - "electron"
       - "example-app"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
     groups:
       example-app-dependencies:
         patterns:
@@ -71,7 +92,7 @@ updates:
       - "javascript"
       - "electron"
       - "jira-app"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
     groups:
       jira-app-dependencies:
         patterns:
@@ -88,7 +109,7 @@ updates:
       - "javascript"
       - "electron"
       - "emr-dashboard"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
     groups:
       emr-dashboard-dependencies:
         patterns:
@@ -103,7 +124,7 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
     groups:
       github-actions:
         patterns:
