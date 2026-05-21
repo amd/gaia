@@ -946,7 +946,13 @@ def _print_reliability_summary(scorecards, pass_threshold=0.90):
             all_pass = False
         rows.append((sid, pass_count, total, rate, passed))
 
-    # Print table
+    # Print table — guard colour codes so piped output (CI, log files,
+    # non-ANSI Windows shells) stays clean.
+    use_color = sys.stdout.isatty()
+    green = "\033[32m" if use_color else ""
+    red = "\033[31m" if use_color else ""
+    reset = "\033[0m" if use_color else ""
+
     print(f"\n{'=' * 72}")
     print(f"  MCP RELIABILITY SUMMARY  ({n_iterations} iterations)")
     print(f"{'=' * 72}")
@@ -955,10 +961,9 @@ def _print_reliability_summary(scorecards, pass_threshold=0.90):
 
     for sid, pass_count, total, rate, passed in rows:
         rate_str = f"{pass_count}/{total} ({rate:.0%})"
-        if passed:
-            result_str = f"\033[32m{'PASS':>8}\033[0m"
-        else:
-            result_str = f"\033[31m{'FAIL':>8}\033[0m"
+        colour = green if passed else red
+        label = "PASS" if passed else "FAIL"
+        result_str = f"{colour}{label:>8}{reset}"
         print(f"  {sid:<40} {rate_str:>12} {result_str}")
 
     print(f"  {'-' * 40} {'-' * 12} {'-' * 8}")
@@ -966,12 +971,12 @@ def _print_reliability_summary(scorecards, pass_threshold=0.90):
     # Readiness signal
     if all_pass:
         print(
-            f"\n  Readiness: \033[32mGO\033[0m (all scenarios >= {pass_threshold:.0%})"
+            f"\n  Readiness: {green}GO{reset} (all scenarios >= {pass_threshold:.0%})"
         )
     else:
         failing = sum(1 for _, _, _, _, p in rows if not p)
         print(
-            f"\n  Readiness: \033[31mNO_GO\033[0m ({failing} scenario(s) below {pass_threshold:.0%})"
+            f"\n  Readiness: {red}NO_GO{reset} ({failing} scenario(s) below {pass_threshold:.0%})"
         )
     print(f"{'=' * 72}\n")
 
@@ -4940,8 +4945,6 @@ def _bootstrap_infer():
     review.  All browser data is sensitive — explicit consent is requested before
     reading it.
     """
-    import json as _json
-
     from gaia.agents.base.discovery import SystemDiscovery
     from gaia.agents.base.memory_store import MemoryStore
 
@@ -5136,7 +5139,7 @@ def _bootstrap_infer():
             if cleaned.endswith("```"):
                 cleaned = cleaned[: cleaned.rfind("```")]
 
-        insights = _json.loads(cleaned.strip())
+        insights = json.loads(cleaned.strip())
         if not isinstance(insights, list):
             raise ValueError("Expected a JSON array")
         # Validate each item

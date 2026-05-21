@@ -8,10 +8,9 @@ For turns where the scenario carries `tags: [verbatim]` (single-turn
 tool-probe scenarios), this eval measures the **GAIA pipeline's ability
 to select and invoke the correct MCP tool**. It does NOT measure
 whether the tool's underlying operation succeeded at the hardware or
-service layer (~38–60% of the the OEM MCP service's tools currently report
-operation failures on dev hardware because the underlying OEM service
-wraps `status: success` around inner-text failures like "Failed to..."
-or "error code: 302"; that's a vendor concern, not a pipeline concern).
+service layer (downstream MCP services can wrap `status: success`
+around inner-text failures like "Failed to..." or "error code: 302";
+that's a vendor concern, not a pipeline concern).
 
 Apply these scoring overrides for `verbatim`-tagged turns:
 

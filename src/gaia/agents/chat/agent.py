@@ -392,6 +392,10 @@ class ChatAgent(
         (no recovery plan); the framework's default success/error gating
         applies.
 
+        Subclasses that override this AND set ``single_tool_per_turn=True``
+        must call ``super()._post_process_tool_result(...)`` so the base
+        class can set ``_single_tool_done`` on the success path.
+
         Args:
             tool_name: Name of the tool that was executed
             _tool_args: Arguments that were passed to the tool (unused)
