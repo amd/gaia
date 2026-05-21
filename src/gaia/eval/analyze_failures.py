@@ -19,8 +19,11 @@ Usage:
         [--results-dir eval/results] \\
         [--tool-log-dir /path/to/mcp/service/logs] \\
         [--tool-log-tz-offset-hours -4] \\
-        [--scenarios-dir eval/scenarios/mcp_tool_reliability] \\
+        [--scenarios-dir eval/scenarios/mcp_reliability] \\
         [--iterations-glob "eval-20260423-*"]
+
+For vendor-coupled scenarios held outside this repo (gitignored), pass
+``--scenarios-dir <path>`` pointing at that local directory.
 
 The service-log correlation is optional and vendor-agnostic: any directory
 containing ``*.log`` files in the bracketed-timestamp format below will be
@@ -52,7 +55,10 @@ log = get_logger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RESULTS_DIR = REPO_ROOT / "eval" / "results"
-DEFAULT_SCENARIOS_DIR = REPO_ROOT / "eval" / "scenarios" / "mcp_tool_reliability"
+# Public, generic scenarios. Vendor-coupled scenarios (gitignored) live under
+# eval/scenarios/mcp_tool_reliability/ and require --scenarios-dir to point at
+# them explicitly.
+DEFAULT_SCENARIOS_DIR = REPO_ROOT / "eval" / "scenarios" / "mcp_reliability"
 
 # Statuses that count as "failures" for the analyzer. Anything not in this set
 # and not {"PASS", "SKIPPED_NO_DOCUMENT"} still gets a record as "ERRORED".

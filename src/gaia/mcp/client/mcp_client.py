@@ -152,7 +152,7 @@ class MCPTool:
     input_schema: Dict[str, Any]
 
     def to_gaia_format(
-        self, prefix: str, raw_server_name: str = None
+        self, prefix: str, raw_server_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """Convert MCP tool schema to GAIA _TOOL_REGISTRY format.
 

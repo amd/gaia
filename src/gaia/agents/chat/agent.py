@@ -388,13 +388,9 @@ class ChatAgent(
         """
         Post-process tool results for Chat Agent.
 
-        Handles RAG-specific debug information display. Returns ``None``
-        (no recovery plan); the framework's default success/error gating
-        applies.
-
-        Subclasses that override this AND set ``single_tool_per_turn=True``
-        must call ``super()._post_process_tool_result(...)`` so the base
-        class can set ``_single_tool_done`` on the success path.
+        Handles RAG-specific debug information display, then delegates
+        to ``super()`` so the base class can set ``_single_tool_done``
+        for ``single_tool_per_turn=True`` agents on the success path.
 
         Args:
             tool_name: Name of the tool that was executed
@@ -421,6 +417,7 @@ class ChatAgent(
             print(
                 f"  - Final chunks returned: {debug_info.get('final_chunks_returned', 0)}"
             )
+        return super()._post_process_tool_result(tool_name, _tool_args, tool_result)
 
     def _get_mixin_prompts(self) -> list[str]:
         """Auto-discover mixin prompts, but exclude SD unless actually initialized."""

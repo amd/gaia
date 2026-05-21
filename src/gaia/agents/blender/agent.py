@@ -441,12 +441,9 @@ Examples of colored requests:
         """
         Post-process the tool result for Blender-specific handling.
 
-        Returns ``None`` (no recovery plan); the framework's default
-        success/error gating applies.
-
-        Subclasses that override this AND set ``single_tool_per_turn=True``
-        must call ``super()._post_process_tool_result(...)`` so the base
-        class can set ``_single_tool_done`` on the success path.
+        Delegates to ``super()`` so the base class can set
+        ``_single_tool_done`` for ``single_tool_per_turn=True`` agents
+        on the success path.
 
         Args:
             tool_name: Name of the tool that was executed
@@ -483,6 +480,7 @@ Examples of colored requests:
                                     f"Updating name in future step {i+1} from {args['name']} to {actual_name}"
                                 )
                                 self.current_plan[i]["tool_args"]["name"] = actual_name
+        return super()._post_process_tool_result(tool_name, tool_args, tool_result)
 
     def _track_object_name(self, result):
         """
