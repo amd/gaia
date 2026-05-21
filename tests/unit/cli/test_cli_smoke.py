@@ -1,21 +1,4 @@
-"""Smoke test every gaia subcommand and standalone console script with --help.
-
-Subcommands are auto-discovered from `gaia.cli.build_parser()` — adding a
-new subcommand without --help coverage will fail this test at collection time.
-
-Console scripts are auto-discovered from importlib.metadata's
-`console_scripts` group, filtered to `gaia-*` (excluding `gaia-cli` which is
-a documented alias of `gaia`).
-
-Three layers of coverage per console_scripts entry:
-  - In-process argparse `--help` for every subcommand (fast, ~50 cases)
-  - Subprocess `python -m <module> --help` for the standalone binaries
-    (uses the project's portable `[sys.executable, "-m", ...]` convention
-    from tests/test_eval.py — does not depend on PATH layout)
-  - `shutil.which()` per gaia* binary to verify the console_scripts shim
-    actually installed on PATH (closes the gap from removing the manual
-    `gaia --help` shell step in test_unit.yml)
-"""
+"""Smoke-test every gaia subcommand and standalone console script with --help."""
 
 from __future__ import annotations
 
@@ -36,12 +19,7 @@ def _iter_subcommands(
     prefix: tuple[str, ...] = (),
     seen: set[int] | None = None,
 ) -> Iterator[tuple[str, ...]]:
-    """Recursively yield every subcommand path as a tuple of names.
-
-    Yields BOTH intermediate groups AND leaves so that `gaia mcp --help`
-    is covered in addition to `gaia mcp start --help`. Deduplicates by
-    parser id() to guard against future argparse aliases.
-    """
+    """Recursively yield every subcommand path; deduplicates parser aliases by id()."""
     if seen is None:
         seen = set()
 
@@ -214,13 +192,12 @@ def test_console_script_minimum_count() -> None:
 
 
 @pytest.mark.parametrize("binary", _GAIA_BINARIES)
+@pytest.mark.skipif(
+    not _GAIA_BINARIES,
+    reason="package not installed; run `pip install -e .` to enable binary PATH checks",
+)
 def test_gaia_binary_on_path(binary: str) -> None:
-    """Every `gaia*` console_scripts entry is reachable on PATH after `pip install`.
-
-    Replaces the manual `gaia init --help`, `gaia --help`, etc. shell
-    steps removed from test_unit.yml. Checks shim presence only — does
-    not run the binary — so it cannot fail for runtime reasons.
-    """
+    """Every `gaia*` console_scripts shim is reachable on PATH after `pip install`."""
     assert shutil.which(binary) is not None, (
         f"Binary {binary!r} not found on PATH. The console_scripts shim "
         f"from setup.py may not have been installed. Run `pip install -e .`"

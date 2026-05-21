@@ -1082,7 +1082,7 @@ def _print_reliability_summary(scorecards, pass_threshold=0.90):
 
 
 def build_parser():
-    """Build the root argparse parser; exposed so tests can introspect the subparser tree."""
+    """Build and return the root argparse parser."""
     import argparse
 
     # Create the main parser
