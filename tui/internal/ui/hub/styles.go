@@ -2,10 +2,16 @@ package hub
 
 import "github.com/charmbracelet/lipgloss"
 
+// AMD-inspired color palette: greens and teals from the GAIA robot mascot
 var (
+	// Primary accent — muted green (matches GAIA robot)
+	accentColor = lipgloss.Color("114")
+	// Bright accent — for selected/highlighted items
+	brightAccent = lipgloss.Color("150")
+
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("212")).
+			Foreground(brightAccent).
 			Padding(0, 1)
 
 	dashboardStyle = lipgloss.NewStyle().
@@ -18,7 +24,7 @@ var (
 
 	tabActive = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("212")).
+			Foreground(brightAccent).
 			Underline(true).
 			Padding(0, 2)
 
@@ -36,7 +42,7 @@ var (
 
 	// Agent list item styles
 	selectedItemStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("212")).
+				Foreground(brightAccent).
 				Bold(true)
 
 	normalItemStyle = lipgloss.NewStyle().
@@ -48,9 +54,9 @@ var (
 	selectedDescStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("252"))
 
-	// Status dots
-	activeDot   = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●")
-	idleDot     = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("●")
+	// Status dots — green for active, amber for idle, dim for installed
+	activeDot    = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●")
+	idleDot      = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("●")
 	installedDot = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("●")
 	availableDot = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("○")
 	comingSoonDot = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("◌")

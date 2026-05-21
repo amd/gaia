@@ -11,7 +11,7 @@ const (
 
 var helpBoxStyle = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
-	BorderForeground(lipgloss.Color("212")).
+	BorderForeground(lipgloss.Color("114")).
 	Padding(1, 2)
 
 // RenderHelpOverlay renders a help panel centered over a background view.

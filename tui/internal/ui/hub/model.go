@@ -236,22 +236,28 @@ func (m HubModel) View() string {
 }
 
 func (m HubModel) renderHeader() string {
-	logoText := "" +
-		"   ╔══╗ ╔══╗ ╦ ╔══╗\n" +
-		"   ║ ═╦ ╠══╣ ║ ╠══╣\n" +
-		"   ╚══╝ ╩  ╩ ╩ ╩  ╩"
+	// Robot head inspired by the GAIA mascot (green robot with cyan eyes)
+	robotLine1 := lipgloss.NewStyle().Foreground(lipgloss.Color("107")).Render("       ╭───────╮")
+	robotLine2 := lipgloss.NewStyle().Foreground(lipgloss.Color("107")).Render("    ◠  │") +
+		lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(" ◉   ◉ ") +
+		lipgloss.NewStyle().Foreground(lipgloss.Color("107")).Render("│")
+	robotLine3 := lipgloss.NewStyle().Foreground(lipgloss.Color("107")).Render("       │  ═══  │")
+	robotLine4 := lipgloss.NewStyle().Foreground(lipgloss.Color("107")).Render("       ╰───────╯")
 
-	logo := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("212")).
+	gaiaText := lipgloss.NewStyle().
 		Bold(true).
-		Render(logoText)
+		Foreground(lipgloss.Color("150")).
+		Render("  G A I A")
 
 	subtitle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("243")).
 		Italic(true).
-		Render("   Local AI Agent Hub — by AMD")
+		Render("  Local AI Agent Hub")
 
-	return "\n" + logo + "\n" + subtitle + "\n"
+	return "\n" + robotLine1 + gaiaText + "\n" +
+		robotLine2 + "\n" +
+		robotLine3 + subtitle + "\n" +
+		robotLine4 + "\n"
 }
 
 func (m HubModel) renderDashboard() string {

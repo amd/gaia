@@ -43,7 +43,7 @@ func NewConfirmModel(id, title, message string) ConfirmModel {
 var (
 	confirmBorder = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("212")).
+			BorderForeground(lipgloss.Color("114")).
 			Padding(1, 2)
 
 	confirmTitle = lipgloss.NewStyle().Bold(true)
@@ -51,7 +51,7 @@ var (
 	btnFocused = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("230")).
-			Background(lipgloss.Color("212")).
+			Background(lipgloss.Color("114")).
 			Padding(0, 2)
 
 	btnUnfocused = lipgloss.NewStyle().

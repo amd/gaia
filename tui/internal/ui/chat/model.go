@@ -31,7 +31,7 @@ type ToggleHelpMsg struct{}
 var (
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("212")).
+			Foreground(lipgloss.Color("150")).
 			Padding(0, 1)
 
 	userStyle = lipgloss.NewStyle().
@@ -552,7 +552,7 @@ func (m *ChatModel) updateViewport() {
 func (m ChatModel) renderWelcome() string {
 	title := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("212")).
+		Foreground(lipgloss.Color("150")).
 		Render("Welcome to GAIA")
 
 	agent := lipgloss.NewStyle().
