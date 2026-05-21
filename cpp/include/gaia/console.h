@@ -50,7 +50,8 @@ public:
     virtual void stopProgress() = 0;
 
     // === Completion Methods ===
-    virtual void printFinalAnswer(const std::string& answer) = 0;
+    virtual void printFinalAnswer(const std::string& answer,
+                                  const UsageStats& usage = {}) = 0;
     virtual void printCompletion(int stepsTaken, int stepsLimit) = 0;
 
     // === Optional Methods (default no-op) ===
@@ -92,7 +93,8 @@ public:
     void printInfo(const std::string& message) override;
     void startProgress(const std::string& message) override;
     void stopProgress() override;
-    void printFinalAnswer(const std::string& answer) override;
+    void printFinalAnswer(const std::string& answer,
+                          const UsageStats& usage = {}) override;
     void printCompletion(int stepsTaken, int stepsLimit) override;
     void printHeader(const std::string& text) override;
     void printSeparator(int length = 50) override;
@@ -136,7 +138,8 @@ public:
     void printInfo(const std::string&) override {}
     void startProgress(const std::string&) override {}
     void stopProgress() override {}
-    void printFinalAnswer(const std::string& answer) override;
+    void printFinalAnswer(const std::string& answer,
+                          const UsageStats& usage = {}) override;
     void printCompletion(int, int) override {}
 
 private:

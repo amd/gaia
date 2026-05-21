@@ -53,7 +53,8 @@ public:
     void stopProgress() override;
 
     // === Completion ===
-    void printFinalAnswer(const std::string& answer) override;
+    void printFinalAnswer(const std::string& answer,
+                          const UsageStats& usage = {}) override;
     void printCompletion(int stepsTaken, int stepsLimit) override;
 
     // === Streaming ===

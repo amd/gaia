@@ -63,7 +63,8 @@ public:
     void printInfo(const std::string& message) override;
     void startProgress(const std::string& message) override;
     void stopProgress() override;
-    void printFinalAnswer(const std::string& answer) override;
+    void printFinalAnswer(const std::string& answer,
+                          const UsageStats& usage = {}) override;
     void printCompletion(int stepsTaken, int stepsLimit) override;
     void printDecisionMenu(const std::vector<Decision>& decisions) override;
     void printStreamToken(const std::string& token) override;

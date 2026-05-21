@@ -254,8 +254,21 @@ std::string Agent::composeSystemPrompt() const {
 
 // ---- LLM Communication ----
 
-std::string Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt,
-                           const AgentConfig& cfg) {
+namespace {
+UsageStats extractUsage(const json& responseJson) {
+    UsageStats usage;
+    if (responseJson.contains("usage") && responseJson["usage"].is_object()) {
+        const auto& u = responseJson["usage"];
+        usage.promptTokens = u.value("prompt_tokens", 0);
+        usage.completionTokens = u.value("completion_tokens", 0);
+        usage.totalTokens = u.value("total_tokens", 0);
+    }
+    return usage;
+}
+} // namespace
+
+Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt,
+                                const AgentConfig& cfg) {
     // Build OpenAI-compatible request.
     // NOTE: n_ctx is intentionally omitted — context size is set at model load
     // time via LemonadeClient::loadModel() / ensureModelLoaded(), not per-request.
@@ -295,7 +308,14 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
 
         if (!accumulated.empty()) {
             console_->printStreamEnd();
-            return accumulated;
+            // Streaming responses may include usage in the final chunk;
+            // attempt to extract from the raw bytes.
+            UsageStats usage;
+            try {
+                const json responseJson = json::parse(rawResponse);
+                usage = extractUsage(responseJson);
+            } catch (...) {}
+            return {accumulated, usage};
         }
 
         // Fallback: server returned a non-streaming response despite "stream":true.
@@ -307,7 +327,8 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
                     const auto& choice = responseJson["choices"][0];
                     if (choice.contains("message") && choice["message"].contains("content")
                         && choice["message"]["content"].is_string()) {
-                        return choice["message"]["content"].get<std::string>();
+                        return {choice["message"]["content"].get<std::string>(),
+                                extractUsage(responseJson)};
                     }
                 }
             } catch (...) {}
@@ -316,7 +337,7 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
         throw std::runtime_error("Streaming response contained no tokens");
     }
 
-    // ---- Non-streaming path (unchanged) ----
+    // ---- Non-streaming path ----
     std::string responseBody = lemonade_.chatCompletions(requestBody);
 
     // Parse response
@@ -327,7 +348,8 @@ std::string Agent::callLlm(const std::vector<Message>& messages, const std::stri
             auto& choice = responseJson["choices"][0];
             if (choice.contains("message") && choice["message"].contains("content")
                 && choice["message"]["content"].is_string()) {
-                return choice["message"]["content"].get<std::string>();
+                return {choice["message"]["content"].get<std::string>(),
+                        extractUsage(responseJson)};
             }
         }
         // Include truncated response body in error for debugging
@@ -696,6 +718,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     std::string lastError;
     std::vector<json> stepResults;
     std::vector<std::pair<std::string, json>> toolCallHistory; // (name, args) for loop detection
+    UsageStats totalUsage;
 
     while (stepsTaken < stepsLimit && finalAnswer.empty()) {
         // ---- Cancel check ----
@@ -729,9 +752,9 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // Call LLM (retry once on failure).
         // Skip progress spinner when streaming — tokens serve as live progress.
         if (!config_.streaming) console_->startProgress("Thinking");
-        std::string response;
+        LlmResult llmResult;
         try {
-            response = callLlm(messages, systemPrompt(), cfg);
+            llmResult = callLlm(messages, systemPrompt(), cfg);
         } catch (const std::exception& e) {
             if (!config_.streaming) console_->stopProgress();
             console_->printWarning(std::string("LLM call failed, retrying: ") + e.what());
@@ -739,7 +762,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             // Retry once
             if (!config_.streaming) console_->startProgress("Retrying");
             try {
-                response = callLlm(messages, systemPrompt(), cfg);
+                llmResult = callLlm(messages, systemPrompt(), cfg);
             } catch (const std::exception& e2) {
                 if (!config_.streaming) console_->stopProgress();
                 console_->printError(std::string("LLM error: ") + e2.what());
@@ -748,6 +771,9 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             }
         }
         if (!config_.streaming) console_->stopProgress();
+
+        const std::string& response = llmResult.content;
+        totalUsage += llmResult.usage;
 
         // Debug: show response
         if (cfg.showPrompts) {
@@ -775,7 +801,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // ---- Handle final answer ----
         if (parsed.answer.has_value()) {
             finalAnswer = parsed.answer.value();
-            if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer);
+            if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
 
@@ -860,7 +886,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // No tool call and no answer — treat response as conversational
         if (!parsed.toolName.has_value() && !parsed.answer.has_value()) {
             finalAnswer = response;
-            if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer);
+            if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
     }
@@ -899,11 +925,15 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
     conversationHistory_ = messages;
 
-    return json{
+    json result = {
         {"result", finalAnswer},
         {"steps_taken", stepsTaken},
         {"steps_limit", stepsLimit}
     };
+    if (totalUsage.totalTokens > 0) {
+        result["usage"] = totalUsage.toJson();
+    }
+    return result;
 }
 
 } // namespace gaia
