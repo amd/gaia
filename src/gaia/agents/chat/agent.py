@@ -20,6 +20,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
@@ -99,6 +100,15 @@ class ChatAgentConfig:
 
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Stable Diffusion image generation
+
+    # MCP settings.
+    # 50 default is the validated middle ground: covers the 49-tool MCP
+    # server tested on Gemma-4-E4B at 100% pass rate in PR #718 with one
+    # tool of headroom, and is 5× the previous 10 limit (which silently
+    # skipped any tool past index 10). Workflows with >50 tools should
+    # override explicitly; for larger sets the prompt bloat can hurt
+    # small-model accuracy and warrants its own validation run.
+    mcp_tool_limit: int = 50  # Max MCP tools to register (prevents context bloat)
 
     # Prompt profile controls which tools and prompt sections are included.
     # Profiles keep the system prompt lean for task-specific agents:
@@ -376,12 +386,17 @@ class ChatAgent(
             self._start_watching()
 
     def _post_process_tool_result(
-        self, tool_name: str, _tool_args: Dict[str, Any], tool_result: Dict[str, Any]
-    ) -> None:
+        self,
+        tool_name: str,
+        _tool_args: Dict[str, Any],
+        tool_result: Dict[str, Any],
+    ) -> Optional[List[Dict[str, Any]]]:
         """
         Post-process tool results for Chat Agent.
 
-        Handles RAG-specific debug information display.
+        Handles RAG-specific debug information display, then delegates
+        to ``super()`` so the base class can set ``_single_tool_done``
+        for ``single_tool_per_turn=True`` agents on the success path.
 
         Args:
             tool_name: Name of the tool that was executed
@@ -408,6 +423,7 @@ class ChatAgent(
             print(
                 f"  - Final chunks returned: {debug_info.get('final_chunks_returned', 0)}"
             )
+        return super()._post_process_tool_result(tool_name, _tool_args, tool_result)
 
     def _get_mixin_prompts(self) -> list[str]:
         """Auto-discover mixin prompts, but exclude SD unless actually initialized."""
@@ -1526,10 +1542,9 @@ No documents are currently indexed.
 
         # MCP tools — load from ~/.gaia/mcp_servers.json if configured.
         # Must run last so MCP tools don't bloat context before we know the base count.
-        # Hard limit: skip if MCP would add >10 tools (context bloat guard).
-        from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: F811
-
-        _MCP_TOOL_LIMIT = 10
+        # Hard limit: skip if MCP would add too many tools (context bloat guard).
+        # Configurable via ChatAgentConfig.mcp_tool_limit (default 50).
+        _MCP_TOOL_LIMIT = self.config.mcp_tool_limit
         _mcp_config_path = Path.home() / ".gaia" / "mcp_servers.json"
         if _mcp_config_path.exists() and self._mcp_manager is not None:
             try:

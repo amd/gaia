@@ -455,6 +455,23 @@ def get_cached_mcp_status() -> list[dict]:
         return copy.deepcopy(_mcp_status_cache)
 
 
+def _disconnect_cached_agent(entry) -> None:
+    """Best-effort disconnect of MCP subprocesses held by a cache entry."""
+    if not isinstance(entry, dict):
+        return
+    agent = entry.get("agent")
+    mcp_manager = getattr(agent, "_mcp_manager", None)
+    if mcp_manager is not None:
+        try:
+            mcp_manager.disconnect_all()
+        except Exception as exc:
+            # Best-effort on cache eviction — a failed disconnect on a
+            # previously-cached agent shouldn't block the new agent slot.
+            # WARNING because a leaked MCP subprocess is observable
+            # (orphaned process, stuck port) and worth surfacing.
+            logger.warning("MCP disconnect failed during cache eviction: %s", exc)
+
+
 def _canonical_agent_type(agent_type: str) -> str:
     """Resolve legacy agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``).
 
@@ -488,13 +505,15 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
         if entry is None:
             return None
         if entry["model_id"] != model_id:
-            del _agent_cache[session_id]
+            old_entry = _agent_cache.pop(session_id)
+            _disconnect_cached_agent(old_entry)
             logger.debug(
                 "Agent cache miss (model change) for session %s", session_id[:8]
             )
             return None
         if _canonical_agent_type(entry.get("agent_type", "chat")) != canonical:
-            del _agent_cache[session_id]
+            old_entry = _agent_cache.pop(session_id)
+            _disconnect_cached_agent(old_entry)
             logger.debug(
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
             )
@@ -518,7 +537,8 @@ def _store_agent(
     with _agent_cache_lock:
         if session_id not in _agent_cache and len(_agent_cache) >= _MAX_CACHED_AGENTS:
             oldest = next(iter(_agent_cache))
-            del _agent_cache[oldest]
+            old_entry = _agent_cache.pop(oldest)
+            _disconnect_cached_agent(old_entry)
             logger.debug("Agent cache full; evicted session %s", oldest[:8])
         _agent_cache[session_id] = {
             "model_id": model_id,
@@ -669,8 +689,10 @@ def _index_rag_with_progress(
 def evict_session_agent(session_id: str) -> None:
     """Remove a session's cached agent (call on session deletion or clear)."""
     with _agent_cache_lock:
-        if _agent_cache.pop(session_id, None) is not None:
+        entry = _agent_cache.pop(session_id, None)
+        if entry is not None:
             logger.debug("Evicted cached agent for session %s", session_id[:8])
+            _disconnect_cached_agent(entry)
 
 
 # ── Chat Helpers ─────────────────────────────────────────────────────────────

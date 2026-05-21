@@ -1,0 +1,30 @@
+id: mcp_simple_tool_call
+name: "Simple Tool Call -- No Parameters"
+category: mcp_reliability
+severity: critical
+description: |
+  Agent is asked to list available files in the current working directory,
+  which requires calling a file/listing tool with no parameters. Tests basic
+  tool invocation reliability against tools that exist in a default GAIA
+  install (no extra MCP setup required).
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to list files in the current directory"
+    user_message: "List the files in the current directory."
+    ground_truth:
+      expected_behavior: "Agent calls a directory-listing or file-search tool and returns the result"
+    success_criteria: |
+      Agent calls a tool whose name suggests listing or searching files
+      (e.g., list_files, file_search, browse_files, ls, or similar) and
+      returns a coherent response naming at least one file.
+      FAIL if agent says it cannot use tools or ignores the request.
+      FAIL if agent hallucinates a response without calling any tool.
+
+expected_outcome: |
+  Agent identifies and calls a default file-listing tool, returns result.

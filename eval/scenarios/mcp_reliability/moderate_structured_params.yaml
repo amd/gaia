@@ -1,0 +1,30 @@
+id: mcp_structured_params
+name: "Structured Parameters -- Multi-field Tool Call"
+category: mcp_reliability
+severity: critical
+description: |
+  Agent is asked to perform an action requiring an MCP tool call with multiple
+  structured parameters. Tests whether the agent correctly extracts and formats
+  multiple parameters from a natural language request.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to search for files matching criteria"
+    user_message: "Search for files containing the word 'revenue' in the eval/corpus/documents directory."
+    ground_truth:
+      expected_behavior: "Agent calls a search or file-browsing tool with both a query/pattern parameter and a directory path parameter"
+    success_criteria: |
+      Agent calls a tool with at least two parameters: a search term (containing
+      "revenue" or similar) and a path/directory parameter pointing to the corpus.
+      PASS if the tool call includes both parameters correctly.
+      FAIL if the agent calls a tool with only one parameter or wrong parameters.
+      FAIL if agent does not call any tool.
+
+expected_outcome: |
+  Agent correctly extracts multiple parameters from the natural language request
+  and passes them as structured arguments to the MCP tool.

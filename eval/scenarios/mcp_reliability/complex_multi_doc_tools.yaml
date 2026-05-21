@@ -1,0 +1,58 @@
+id: mcp_multi_doc_tools
+name: "Multi-Document Tool Orchestration"
+category: mcp_reliability
+severity: high
+description: |
+  Agent must retrieve facts from two different indexed documents and synthesize
+  them. Tests the agent's ability to make multiple tool calls across different
+  data sources and combine the results coherently.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+    - corpus_doc: acme_q3_report
+      path: "eval/corpus/documents/acme_q3_report.md"
+
+turns:
+  - turn: 1
+    objective: "Ask for PTO policy from the employee handbook"
+    user_message: "How many PTO days do first-year employees get?"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: pto_days
+      expected_answer: "15 days"
+    success_criteria: |
+      Agent queries the employee handbook and returns "15 days".
+      FAIL if agent returns wrong number or does not use tools.
+
+  - turn: 2
+    objective: "Ask for financial data from a different document"
+    user_message: "Now tell me what Acme Corp's Q3 revenue was."
+    ground_truth:
+      doc_id: acme_q3_report
+      fact_id: q3_revenue
+      expected_answer: "$14.2 million"
+    success_criteria: |
+      Agent queries the Q3 report (a different document than turn 1) and returns
+      the correct revenue figure. Must use a tool to retrieve this.
+      FAIL if agent confuses data between the two documents.
+      FAIL if agent returns wrong revenue figure.
+
+  - turn: 3
+    objective: "Ask agent to combine information from both documents"
+    user_message: "Give me a one-sentence summary combining the PTO policy and the Q3 revenue figure."
+    ground_truth:
+      expected_behavior: "Agent combines facts from both prior turns into a coherent sentence"
+    success_criteria: |
+      Agent produces a sentence mentioning both 15 PTO days and $14.2 million revenue.
+      PASS if both facts are present and correctly attributed.
+      FAIL if either fact is wrong or missing.
+      Agent may or may not use tools for this turn (both are acceptable since
+      the information was already retrieved).
+
+expected_outcome: |
+  Agent makes tool calls across two different documents, correctly retrieves
+  facts from each, and synthesizes them in a final response.

@@ -58,6 +58,42 @@ class MCPClientMixin:
         if config_file is not None or auto_load_config:
             self.load_mcp_servers_from_config()
 
+    def get_mcp_client_system_prompt(self) -> str:
+        """System-prompt fragment teaching MCP tool-name discipline.
+
+        Auto-discovered by ``Agent._compose_system_prompt`` via the
+        ``get_*_system_prompt`` mixin pattern. Returns empty string when
+        the mixin isn't carrying ≥2 MCP tools — keeps prompt mass off
+        non-MCP agents and single-MCP-tool setups that don't exhibit
+        the bare-prefix truncation failure mode.
+
+        Uses a concrete few-shot example pulled from the registry
+        instead of an abstract "VERBATIM" rule — small local models
+        empirically follow examples more reliably than imperatives.
+        """
+        manager = getattr(self, "_mcp_manager", None)
+        if manager is None or not manager.list_servers():
+            return ""
+        mcp_tools = sorted(n for n in _TOOL_REGISTRY if n.startswith("mcp_"))
+        if len(mcp_tools) < 2:
+            return ""
+        example = mcp_tools[0]
+        fragment = (
+            "==== MCP TOOL NAMES ====\n"
+            "Use the complete tool name when calling MCP tools. The shape is\n"
+            f"  mcp_<server>_<tool>   — for example: {example}\n"
+            "A name with only two segments is incomplete and will fail."
+        )
+        # Suppress the plain-text escape for action-only agents
+        # (single_tool_per_turn=True) — for them a plain-text refusal is
+        # always wrong on a verbatim-eval scenario.
+        if not getattr(self, "single_tool_per_turn", False):
+            fragment += (
+                "\nIf no listed tool fits the request, answer in plain "
+                "text without calling a tool."
+            )
+        return fragment
+
     def _console_print(self, method_name: str, message: str) -> None:
         """Print via self.console if available, else fall back to logger."""
         console = getattr(self, "console", None)
@@ -287,8 +323,12 @@ class MCPClientMixin:
         tools = client.list_tools()
 
         for tool in tools:
-            # Convert to GAIA format
-            gaia_tool = tool.to_gaia_format(client.name)
+            # Convert to GAIA format. Use the sanitised ``prefix`` so the
+            # registered name matches what every other consumer
+            # (unregister, prompt fragments, error suggestions) will
+            # see. ``client.name`` (raw) is passed alongside so the
+            # ``_mcp_server`` metadata still round-trips to the config.
+            gaia_tool = tool.to_gaia_format(client.prefix, client.name)
 
             # Create base wrapper function
             base_wrapper = client.create_tool_wrapper(tool)
@@ -339,7 +379,11 @@ class MCPClientMixin:
         tools = client.list_tools()
 
         for tool in tools:
-            gaia_name = f"mcp_{client.name}_{tool.name}"
+            # Must use ``client.prefix`` (sanitised) — the SAME value used
+            # by ``_register_mcp_tools`` when it stored the entry. Using
+            # ``client.name`` (raw) here would leak every tool whose
+            # server name needed sanitisation.
+            gaia_name = f"mcp_{client.prefix}_{tool.name}"
             if gaia_name in _TOOL_REGISTRY:
                 del _TOOL_REGISTRY[gaia_name]
                 logger.debug(f"Unregistered MCP tool: {gaia_name}")
@@ -351,5 +395,14 @@ class MCPClientMixin:
 
     def __del__(self):
         """Cleanup: disconnect from all MCP servers."""
-        if hasattr(self, "_mcp_manager"):
-            self._mcp_manager.disconnect_all()
+        manager = getattr(self, "_mcp_manager", None)
+        if manager is not None:
+            try:
+                manager.disconnect_all()
+            except Exception as exc:
+                # __del__ must not raise; surface at DEBUG so the failure
+                # is observable without forcing a noisy log on every GC.
+                try:
+                    logger.debug("MCP disconnect failed in __del__: %s", exc)
+                except Exception:
+                    pass

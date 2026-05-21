@@ -1,0 +1,29 @@
+id: mcp_introspection
+name: "Tool Introspection -- List Available Tools"
+category: mcp_reliability
+severity: critical
+description: |
+  Agent is asked what tools it has available. Tests whether the agent can
+  introspect its own capabilities and report them accurately.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask the agent what MCP tools it has available"
+    user_message: "What tools do you have access to? List them for me."
+    ground_truth:
+      expected_behavior: "Agent lists its available tools, including any MCP-provided tools"
+    success_criteria: |
+      Agent provides a list of tools it can use. The list should include at least
+      some tool names that are real and available in the system.
+      FAIL if agent claims to have no tools at all.
+      FAIL if agent lists only generic capabilities without naming specific tools.
+      PASS if agent mentions MCP tools or specific tool names from its registry.
+
+expected_outcome: |
+  Agent accurately reports its available tools, demonstrating awareness of its
+  MCP tool capabilities.
