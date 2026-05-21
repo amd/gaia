@@ -415,7 +415,7 @@ class TestEntryPointDiscovery:
             description="Standalone hub agent",
             source="installed",
             conversation_starters=["Hello"],
-            factory=lambda **kw: "created",
+            factory=lambda **kw: SimpleNamespace(kind="created"),
             agent_dir=None,
             models=["Qwen3.5-35B-A3B-GGUF"],
             category="conversation",
@@ -438,7 +438,9 @@ class TestEntryPointDiscovery:
         assert reg.name == "Hub Chat"
         assert reg.source == "installed"
         assert reg.namespaced_agent_id == "installed:hub-chat"
-        assert registry.create_agent("hub-chat") == "created"
+        agent = registry.create_agent("hub-chat")
+        assert agent.kind == "created"
+        assert agent._gaia_namespaced_agent_id == "installed:hub-chat"
 
     def test_entry_point_does_not_override_existing_agent(self, monkeypatch):
         existing = AgentRegistration(

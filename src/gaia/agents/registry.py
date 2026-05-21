@@ -896,6 +896,12 @@ class AgentRegistry:
             )
         if registration.source != "installed":
             registration = dataclasses.replace(registration, source="installed")
+        registration = dataclasses.replace(
+            registration,
+            factory=_wrap_factory_with_namespaced_id(
+                registration.factory, registration.namespaced_agent_id
+            ),
+        )
         return registration
 
     # ------------------------------------------------------------------
