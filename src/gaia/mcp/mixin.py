@@ -20,16 +20,31 @@ class MCPClientMixin:
     This mixin allows any agent to connect to MCP servers and use their tools.
     MCP tools are automatically registered in the agent's _TOOL_REGISTRY.
 
-    Usage:
-        class MyAgent(Agent, MCPClientMixin):
-            def __init__(self, ...):
-                super().__init__(...)
-                self.connect_mcp_server("github", {
-                    "command": "npx",
-                    "args": ["-y", "@modelcontextprotocol/server-github"],
-                    "env": {"GITHUB_TOKEN": "ghp_xxx"}
-                })
+    Usage (MCP-enabled agent):
+        ``Agent.__init__`` does not chain ``super().__init__()``, so this
+        mixin's ``__init__`` is unreachable through the MRO. Set
+        ``self._mcp_manager`` before calling ``super().__init__(...)`` —
+        ``Agent.__init__`` runs ``_register_tools()`` which loads MCP tools.
+        See ``ChatAgent.__init__`` (``src/gaia/agents/chat/agent.py``) for
+        the canonical pattern.
+
+            class MyAgent(Agent, MCPClientMixin):
+                def __init__(self, ...):
+                    self._mcp_manager = MCPClientManager(config=MCPConfig())
+                    super().__init__(...)
+
+    Usage (MCP-disabled agent):
+        Inherit ``MCPClientMixin`` but rely on the class-level default below;
+        ``get_mcp_status_report()`` will return ``[]`` and other accessors
+        that hit ``_mcp_manager`` are not invoked.
     """
+
+    # Class-level default so ``self._mcp_manager`` always resolves to ``None``
+    # when ``MCPClientMixin.__init__`` is bypassed by a broken cooperative-MI
+    # chain (``Agent.__init__`` does not call ``super().__init__()``).
+    # Instance-level assignment in ``__init__`` below — or in subclasses that
+    # follow the MCP-enabled pattern above — overrides this default.
+    _mcp_manager: Optional[MCPClientManager] = None
 
     def __init__(
         self,
