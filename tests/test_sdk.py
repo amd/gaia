@@ -636,7 +636,7 @@ class TestToolMixins:
 
     def test_file_search_mixin_exists(self):
         """Verify FileSearchToolsMixin can be imported."""
-        from gaia.agents.tools.file_search import FileSearchToolsMixin
+        from gaia.agents.tools.file_tools import FileSearchToolsMixin
 
         assert FileSearchToolsMixin is not None
 
@@ -890,7 +890,7 @@ class TestSDKDocumentation:
             from gaia.agents.chat.tools.file_tools import FileToolsMixin  # noqa: F401
             from gaia.agents.chat.tools.rag_tools import RAGToolsMixin  # noqa: F401
             from gaia.agents.chat.tools.shell_tools import ShellToolsMixin  # noqa: F401
-            from gaia.agents.tools.file_search import FileSearchToolsMixin  # noqa: F401
+            from gaia.agents.tools.file_tools import FileSearchToolsMixin  # noqa: F401
         except ImportError as e:
             pytest.fail(f"Tool mixin import failed: {e}")
 
@@ -1162,27 +1162,14 @@ class TestDatabaseMixin:
         assert hasattr(DatabaseMixin, "transaction")
 
 
-@pytest.mark.xfail(reason="FileChangeHandler not yet extracted - Issue #2")
 class TestFileChangeHandler:
-    """Test FileChangeHandler interface (when implemented)."""
+    """Test FileChangeHandler interface."""
 
     def test_file_change_handler_will_exist(self):
         """Verify FileChangeHandler will be importable."""
         from gaia.utils.file_watcher import FileChangeHandler
 
         assert FileChangeHandler is not None
-
-
-@pytest.mark.xfail(reason="Plugin registry not yet implemented - Issue #4")
-class TestPluginRegistry:
-    """Test plugin registry (when implemented)."""
-
-    def test_agent_registry_will_exist(self):
-        """Verify AgentRegistry will exist."""
-        from gaia.plugins.registry import AgentRegistry, get_registry
-
-        assert AgentRegistry is not None
-        assert get_registry is not None
 
 
 # ============================================================================
@@ -1253,32 +1240,16 @@ class TestTalkSDK:
 
 
 class TestRoutingAgent:
-    """Test routing capabilities."""
+    """Smoke coverage for RoutingAgent. Behavioural tests are #880's scope."""
 
-    def test_routing_agent_can_be_imported(self):
-        """Verify RoutingAgent can be imported."""
-        try:
-            from gaia.agents.routing.routing_agent import RoutingAgent
+    def test_routing_agent_exposes_process_query(self):
+        """Verify RoutingAgent imports cleanly and exposes process_query.
 
-            assert RoutingAgent is not None
-        except ImportError:
-            # If routing agent doesn't exist as standalone, check for routing capabilities in base agent
-            from gaia.agents.base.agent import Agent
+        We don't instantiate — RoutingAgent.__init__ constructs a LemonadeClient.
+        """
+        from gaia.agents.routing.agent import RoutingAgent
 
-            assert hasattr(Agent, "route_query") or hasattr(Agent, "select_agent")
-
-    def test_routing_agent_interface_methods(self):
-        """Verify routing agent has required methods."""
-        try:
-            from gaia.agents.routing.routing_agent import RoutingAgent
-
-            # Check methods exist
-            assert hasattr(RoutingAgent, "register_agent")
-            assert hasattr(RoutingAgent, "route_query")
-            assert hasattr(RoutingAgent, "list_available_agents")
-        except ImportError:
-            # Expected if routing is not yet implemented as standalone
-            pytest.skip("RoutingAgent not yet implemented")
+        assert hasattr(RoutingAgent, "process_query")
 
 
 # ============================================================================
