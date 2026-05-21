@@ -76,7 +76,13 @@ class TestRunCheckPassingCases:
         """No open-pull-requests-limit key → Dependabot default → should pass."""
         p = _write_config(
             tmp_path,
-            [{"package-ecosystem": "pip", "directory": "/", "schedule": {"interval": "weekly"}}],
+            [
+                {
+                    "package-ecosystem": "pip",
+                    "directory": "/",
+                    "schedule": {"interval": "weekly"},
+                }
+            ],
         )
         monkeypatch.setattr(check_dependabot, "CONFIG", p)
         assert check_dependabot.run_check() == 0
@@ -139,7 +145,9 @@ class TestLimitZeroRejected:
         monkeypatch.setattr(check_dependabot, "CONFIG", p)
         assert check_dependabot.run_check() == 1
 
-    def test_error_message_names_ecosystem_and_directory(self, tmp_path, monkeypatch, capsys):
+    def test_error_message_names_ecosystem_and_directory(
+        self, tmp_path, monkeypatch, capsys
+    ):
         p = _write_config(
             tmp_path,
             [
