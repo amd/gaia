@@ -128,6 +128,14 @@ class TestToolRegistry:
         "remove_star",
         "label_message",
         "move_to_label",
+        # Batch organize
+        "mark_read_batch",
+        "mark_unread_batch",
+        "add_star_batch",
+        "remove_star_batch",
+        "archive_message_batch",
+        "label_message_batch",
+        "move_to_label_batch",
         # Reply / send / forward
         "draft_reply",
         "draft_forward",
