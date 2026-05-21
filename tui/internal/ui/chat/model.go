@@ -110,6 +110,8 @@ type ChatModel struct {
 	initialQuery string
 	err          error
 	queryStart   time.Time // tracks when the current query started
+	firstEvent   bool      // whether we've received the first event this turn
+	ttft         time.Duration
 }
 
 func NewChatModel(c client.AgentClient, agentName string, initialQuery string, debug bool) ChatModel {
@@ -211,6 +213,8 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			cmds = append(cmds, cmd)
+			// Re-render viewport to update elapsed time display
+			m.updateViewport()
 		}
 		return m, tea.Batch(cmds...)
 	}
@@ -334,6 +338,8 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 	m.activity = nil
 	m.buffer.Reset()
 	m.queryStart = time.Now()
+	m.firstEvent = false
+	m.ttft = 0
 	m.updateViewport()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -366,6 +372,11 @@ func waitForEvent(ch <-chan interface{}) tea.Cmd {
 }
 
 func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
+	if !m.firstEvent {
+		m.firstEvent = true
+		m.ttft = time.Since(m.queryStart)
+	}
+
 	switch e := evt.(type) {
 	case event.ThinkingEvent:
 		m.activity = append(m.activity, ActivityItem{
@@ -457,6 +468,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 			Content:   e.Content,
 			Rendered:  rendered,
 			Duration:  duration,
+			TTFT:      m.ttft,
 			Steps:     e.Steps,
 			ToolsUsed: e.ToolsUsed,
 		})
@@ -603,6 +615,20 @@ func (m ChatModel) renderMessage(msg Message) string {
 		if msg.Duration > 0 {
 			var stats []string
 			stats = append(stats, fmt.Sprintf("%.1fs", msg.Duration.Seconds()))
+			if msg.TTFT > 0 {
+				stats = append(stats, fmt.Sprintf("ttft %.1fs", msg.TTFT.Seconds()))
+			}
+			// Approximate output tokens (~4 chars per token for English)
+			outputTokens := len(msg.Content) / 4
+			if outputTokens > 0 {
+				stats = append(stats, fmt.Sprintf("~%d tokens", outputTokens))
+				// Tokens per second (output only)
+				inferTime := msg.Duration - msg.TTFT
+				if inferTime > 0 {
+					tps := float64(outputTokens) / inferTime.Seconds()
+					stats = append(stats, fmt.Sprintf("%.1f tok/s", tps))
+				}
+			}
 			if msg.Steps > 0 {
 				stats = append(stats, fmt.Sprintf("%d steps", msg.Steps))
 			}
@@ -687,7 +713,7 @@ func (m ChatModel) renderActivityItem(item ActivityItem) string {
 		return "  " + toolNameStyle.Render("🔧 "+item.Content)
 
 	case "status":
-		return "  " + activityStyle.Render("  "+item.Content)
+		return "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("🎯 "+item.Content)
 
 	default:
 		return "  " + activityStyle.Render(item.Content)
@@ -705,7 +731,10 @@ func (m ChatModel) View() string {
 
 	inputView := m.input.View()
 	if m.streaming {
-		label := "Thinking..."
+		elapsed := time.Since(m.queryStart)
+		elapsedStr := fmt.Sprintf("%.0fs", elapsed.Seconds())
+
+		label := "Waiting for agent..."
 		if len(m.activity) > 0 {
 			last := m.activity[len(m.activity)-1]
 			switch last.Kind {
@@ -715,10 +744,12 @@ func (m ChatModel) View() string {
 			case "thinking":
 				label = "Thinking..."
 			case "step":
-				label = last.Content + "..."
+				label = last.Content
+			case "status":
+				label = last.Content
 			}
 		}
-		inputView = m.spinner.View() + " ◆ " + label
+		inputView = m.spinner.View() + " ◆ " + label + "  " + activityStyle.Render(elapsedStr)
 	}
 
 	hint := "Ctrl+C quit"

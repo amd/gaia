@@ -1,5 +1,11 @@
 package catalog
 
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+)
+
 // Section represents a tab/section in the hub UI.
 type Section string
 
@@ -40,6 +46,50 @@ func (c *Catalog) Get(id string) *Agent {
 		}
 	}
 	return nil
+}
+
+// DiscoverBinaries searches common locations for agent executables and updates binary paths.
+func (c *Catalog) DiscoverBinaries() {
+	for i := range c.agents {
+		if c.agents[i].BinaryPath == "" {
+			continue
+		}
+		// Check if the binary is already on PATH
+		if _, err := exec.LookPath(c.agents[i].BinaryPath); err == nil {
+			continue
+		}
+		// Also try with .exe suffix on Windows
+		if _, err := exec.LookPath(c.agents[i].BinaryPath + ".exe"); err == nil {
+			c.agents[i].BinaryPath = c.agents[i].BinaryPath + ".exe"
+			continue
+		}
+		// Search common locations relative to the executable and working directory
+		exePath, _ := os.Executable()
+		exeDir := filepath.Dir(exePath)
+		cwd, _ := os.Getwd()
+		name := c.agents[i].BinaryPath
+		searchPaths := []string{
+			filepath.Join(exeDir, name),
+			filepath.Join(exeDir, name+".exe"),
+			// Relative to tui/bin/ — go up to repo root
+			filepath.Join(exeDir, "..", "..", "cpp", "build", "Debug", name+".exe"),
+			filepath.Join(exeDir, "..", "..", "cpp", "build", "Release", name+".exe"),
+			filepath.Join(exeDir, "..", "cpp", "build", "Debug", name+".exe"),
+			filepath.Join(exeDir, "..", "cpp", "build", "Release", name+".exe"),
+			// Relative to cwd
+			filepath.Join(cwd, "cpp", "build", "Debug", name+".exe"),
+			filepath.Join(cwd, "cpp", "build", "Release", name+".exe"),
+			filepath.Join(cwd, "..", "cpp", "build", "Debug", name+".exe"),
+			filepath.Join(cwd, "..", "cpp", "build", "Release", name+".exe"),
+		}
+		for _, p := range searchPaths {
+			if _, err := os.Stat(p); err == nil {
+				abs, _ := filepath.Abs(p)
+				c.agents[i].BinaryPath = abs
+				break
+			}
+		}
+	}
 }
 
 // SetMockBinary overrides all installed agent binary paths with a mock binary for testing.

@@ -19,6 +19,8 @@ func RunHub(debug bool, mockAgent string) error {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
+	} else {
+		cat.DiscoverBinaries()
 	}
 	model := root.NewRootModel(cat, debug)
 
