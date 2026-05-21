@@ -1082,12 +1082,7 @@ def _print_reliability_summary(scorecards, pass_threshold=0.90):
 
 
 def build_parser():
-    """Build the root argparse parser for the gaia CLI.
-
-    Exposed so tests can introspect the subparser tree without executing
-    main(). Adding a new subcommand here automatically gets --help smoke
-    coverage via tests/unit/cli/test_cli_smoke.py.
-    """
+    """Build the root argparse parser; exposed so tests can introspect the subparser tree."""
     import argparse
 
     # Create the main parser
@@ -2626,8 +2621,6 @@ Examples:
 
 def main():
     parser = build_parser()
-
-    # Get logger instance
     log = get_logger(__name__)
 
     args = parser.parse_args()

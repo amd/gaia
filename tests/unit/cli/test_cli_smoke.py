@@ -102,6 +102,17 @@ _CONSOLE_SCRIPTS = _discover_console_scripts()
 _GAIA_BINARIES = _all_gaia_binaries()
 
 
+# ---- Shared fixture ----
+
+
+@pytest.fixture(scope="module")
+def root_parser():
+    """Module-scoped argparse parser — built once, shared across all subcommand tests."""
+    from gaia.cli import build_parser
+
+    return build_parser()
+
+
 # ---- Subcommand smoke tests (in-process) ----
 
 
@@ -110,12 +121,12 @@ _GAIA_BINARIES = _all_gaia_binaries()
     _SUBCOMMANDS,
     ids=["-".join(c) for c in _SUBCOMMANDS],
 )
-def test_subcommand_help(cmd: tuple[str, ...], capsys: pytest.CaptureFixture) -> None:
+def test_subcommand_help(
+    cmd: tuple[str, ...], capsys: pytest.CaptureFixture, root_parser
+) -> None:
     """`gaia <cmd> --help` exits 0 and prints a usage line."""
-    from gaia.cli import build_parser
-
     with pytest.raises(SystemExit) as excinfo:
-        build_parser().parse_args([*cmd, "--help"])
+        root_parser.parse_args([*cmd, "--help"])
 
     assert (
         excinfo.value.code == 0
@@ -126,12 +137,10 @@ def test_subcommand_help(cmd: tuple[str, ...], capsys: pytest.CaptureFixture) ->
     ), f"gaia {' '.join(cmd)} --help stdout missing 'usage:':\n{captured.out[:2000]}"
 
 
-def test_root_help(capsys: pytest.CaptureFixture) -> None:
+def test_root_help(capsys: pytest.CaptureFixture, root_parser) -> None:
     """`gaia --help` exits 0 and prints a usage line."""
-    from gaia.cli import build_parser
-
     with pytest.raises(SystemExit) as excinfo:
-        build_parser().parse_args(["--help"])
+        root_parser.parse_args(["--help"])
     assert excinfo.value.code == 0
     captured = capsys.readouterr()
     assert "usage:" in captured.out.lower()
