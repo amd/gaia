@@ -1,4 +1,3 @@
-
-tui/bin/
-tui/gaia.exe
+bin/
+*.exe
 *.exe~
