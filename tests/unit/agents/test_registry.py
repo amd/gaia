@@ -493,9 +493,7 @@ class TestEntryPointDiscovery:
         assert registry.get("broken-agent") is None
         assert "Failed to load agent entry point broken-agent" in caplog.text
 
-    def test_entry_point_namespaced_agent_id_is_coerced_to_installed(
-        self, monkeypatch
-    ):
+    def test_entry_point_namespaced_agent_id_is_coerced_to_installed(self, monkeypatch):
         registration = AgentRegistration(
             id="hub-chat",
             name="Hub Chat",
