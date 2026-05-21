@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse
 
 from gaia.logger import get_logger
 
-from ..models import AgentInfo, AgentListResponse
+from ..models import AgentInfo, AgentListResponse, DiskAgentInfo, DiskAgentListResponse
 
 logger = get_logger(__name__)
 
@@ -80,6 +80,24 @@ def _require_tunnel_inactive(request: Request) -> None:
 
 
 def _reg_to_info(reg) -> AgentInfo:
+    # required_connections may contain ConnectorRequirement objects (with
+    # .connector_id/.scopes/.reason) or plain strings (legacy shorthand
+    # used by connectors-demo). Normalise both into dicts for the API
+    # response, keyed as "connector_id" to match the TypeScript
+    # ConnectorRequirement interface.
+    connections = []
+    for cr in reg.required_connections:
+        if isinstance(cr, str):
+            connections.append({"connector_id": cr, "scopes": [], "reason": ""})
+        else:
+            connections.append(
+                {
+                    "connector_id": cr.connector_id,
+                    "scopes": list(cr.scopes),
+                    "reason": cr.reason,
+                }
+            )
+
     return AgentInfo(
         id=reg.id,
         name=reg.name,
@@ -88,17 +106,13 @@ def _reg_to_info(reg) -> AgentInfo:
         conversation_starters=reg.conversation_starters,
         models=reg.models,
         min_memory_gb=reg.min_memory_gb,
-        # T-X2 (issue #915): surface declared connection requirements so the
-        # AgentUI consent dialog can render the prompt at agent-selection time.
-        required_connections=[
-            {
-                "connector_id": cr.connector_id,
-                "scopes": list(cr.scopes),
-                "reason": cr.reason,
-            }
-            for cr in reg.required_connections
-        ],
+        required_connections=connections,
         namespaced_agent_id=reg.namespaced_agent_id,
+        category=reg.category,
+        tags=reg.tags,
+        icon=reg.icon,
+        tools_count=reg.tools_count,
+        language=reg.language,
     )
 
 
@@ -111,6 +125,39 @@ async def list_agents(request: Request):
         agents=[_reg_to_info(r) for r in registrations],
         total=len(registrations),
     )
+
+
+@router.get(
+    "/api/agents/disk",
+    response_model=DiskAgentListResponse,
+    dependencies=[Depends(_require_localhost), Depends(_require_ui_header)],
+)
+async def list_disk_agents(request: Request):
+    """List custom agents present on disk using the export scanner."""
+    from gaia.installer.export_import import list_exportable_custom_agent_dirs
+
+    registry = _registry(request)
+    registered_by_dir = {}
+    for reg in registry.list():
+        agent_dir = getattr(reg, "agent_dir", None)
+        if agent_dir is not None:
+            registered_by_dir[Path(agent_dir).resolve()] = reg
+
+    agents: list[DiskAgentInfo] = []
+    for agent_dir in list_exportable_custom_agent_dirs():
+        resolved_dir = agent_dir.resolve()
+        reg = registered_by_dir.get(resolved_dir)
+        agents.append(
+            DiskAgentInfo(
+                id=agent_dir.name,
+                name=reg.name if reg else agent_dir.name,
+                registered=reg is not None,
+                registered_agent_id=reg.id if reg else None,
+                source=reg.source if reg else None,
+            )
+        )
+
+    return DiskAgentListResponse(agents=agents, total=len(agents))
 
 
 @router.get("/api/agents/{agent_id:path}", response_model=AgentInfo)

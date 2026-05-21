@@ -24,7 +24,7 @@ import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
-import type { AgentInfo } from '../types';
+import type { DiskAgentInfo } from '../types';
 
 // Export/import hit the REST backend directly (not the apiFetch wrapper)
 // because they deal with binary zip payloads, not JSON.
@@ -37,9 +37,10 @@ type Status =
     | { kind: 'error'; message: string };
 
 export function CustomAgentsSection() {
-    const { agents, setAgents } = useChatStore();
+    const { setAgents } = useChatStore();
 
     const [status, setStatus] = useState<Status>({ kind: 'idle' });
+    const [diskAgents, setDiskAgents] = useState<DiskAgentInfo[]>([]);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const statusClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const errorBannerRef = useRef<HTMLDivElement>(null);
@@ -66,17 +67,23 @@ export function CustomAgentsSection() {
 
     const refreshAgents = useCallback(async () => {
         try {
-            const data = await api.listAgents();
-            setAgents(data.agents || []);
+            const [registered, disk] = await Promise.all([
+                api.listAgents(),
+                api.listDiskAgents(),
+            ]);
+            setAgents(registered.agents || []);
+            setDiskAgents(disk.agents || []);
         } catch (err) {
-            log.api.warn('Failed to refresh agents after import', err);
+            log.api.warn('Failed to refresh custom agents', err);
         }
     }, [setAgents]);
 
-    // Custom agents = anything not built-in. The backend marks built-in
-    // agents with source === "builtin"; anything else (user-created,
-    // imported bundles) belongs in this list.
-    const customAgents: AgentInfo[] = agents.filter((a) => a.source !== 'builtin');
+    useEffect(() => {
+        void refreshAgents();
+    }, [refreshAgents]);
+
+    const customAgents = diskAgents;
+    const hasExportableAgents = customAgents.length > 0;
 
     // ── Export ───────────────────────────────────────────────────────
     const handleExport = useCallback(async () => {
@@ -222,9 +229,11 @@ export function CustomAgentsSection() {
                         <div key={agent.id} className="status-row">
                             <span className="status-label">{agent.name}</span>
                             <div className="status-value-wrap">
-                                <span className="status-value ok">{agent.id}</span>
-                                {agent.source && agent.source !== 'builtin' && (
+                                <span className={`status-value ${agent.registered ? 'ok' : 'warn'}`}>{agent.id}</span>
+                                {agent.registered ? agent.source && (
                                     <span className="status-hint"><code>{agent.source}</code></span>
+                                ) : (
+                                    <span className="status-hint">Not loaded</span>
                                 )}
                             </div>
                         </div>
@@ -236,8 +245,8 @@ export function CustomAgentsSection() {
                 <button
                     className="btn-model-save"
                     onClick={handleExport}
-                    disabled={isWorking || customAgents.length === 0}
-                    title={customAgents.length === 0 ? 'No custom agents to export' : undefined}
+                    disabled={isWorking || !hasExportableAgents}
+                    title={!hasExportableAgents ? 'No custom agents to export' : undefined}
                 >
                     {isWorking && status.message.startsWith('Export') ? (
                         <><Loader2 size={13} className="btn-spinner" /> Exporting…</>

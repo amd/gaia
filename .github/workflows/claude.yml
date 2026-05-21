@@ -70,16 +70,11 @@ permissions:
 jobs:
   # Auto-review new PRs (including forks)
   pr-review:
-    # Temporarily disabled 2026-05 — Anthropic credit balance exhausted
-    # (see commit a013e384). Tracked for re-enable in
-    # https://github.com/amd/gaia/issues/970. To re-enable, replace the
-    # `if: false` line below with this commented gate:
-    # if: |
-    #   github.repository == 'amd/gaia' &&
-    #   github.event_name == 'pull_request_target' &&
-    #   (github.event.pull_request.draft == false ||
-    #    contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
-    if: false
+    if: |
+      github.repository == 'amd/gaia' &&
+      github.event_name == 'pull_request_target' &&
+      (github.event.pull_request.draft == false ||
+       contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
     runs-on: ubuntu-latest
     concurrency:
       group: claude-pr-review-${{ github.event.pull_request.number }}
@@ -109,15 +104,17 @@ jobs:
 
       - name: Run Claude Code Review
         # Pinned to v1.0.99 by SHA: supports `pull_request_target` (added in PR #579,
-        # merged 2025-09-22) and Opus 4.7 (fixed in v1.0.98). The `@beta` floating tag
-        # is stuck on a 2025-08-22 SHA that rejects `pull_request_target` — removing
-        # `continue-on-error` below means that class of silent failure surfaces on the
-        # next drift.
+        # merged 2025-09-22) and Opus 4.7 (fixed in v1.0.98).
         #
         # v1.0 API migration: `direct_prompt` + `custom_instructions` → single `prompt`.
         # `model` + `max_turns` → `claude_args`. See upstream migration guide:
         # https://github.com/anthropics/claude-code-action/blob/main/docs/migration-guide.md
+        #
+        # continue-on-error: tolerate credit exhaustion, API outages, and rate
+        # limits without failing the workflow. The review is best-effort — when
+        # credits are replenished, reviews resume automatically with no manual toggle.
         uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3  # v1.0.99
+        continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -327,8 +324,8 @@ jobs:
             - Make it easy for maintainers to accept suggestions with one click
 
           claude_args: |
-            --max-turns 50
-            --model claude-opus-4-7
+            --max-turns 75
+            --model claude-sonnet-4-6
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
@@ -369,10 +366,11 @@ jobs:
       - name: Respond to PR comment
         # Automation mode (passes `prompt`) avoids the tag-mode `--model` bug
         # (https://github.com/anthropics/claude-code-action/issues/1223). Tag mode
-        # would silently fall back to Sonnet 4.6 regardless of --model. We also drop
-        # `continue-on-error`: the event is gated to same-repo PRs, so permission
-        # errors shouldn't occur — and if they do we want to see them, not hide them.
+        # would silently fall back to Sonnet 4.6 regardless of --model.
+        #
+        # continue-on-error: tolerate credit exhaustion / API outages gracefully.
         uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3  # v1.0.99
+        continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -542,8 +540,11 @@ jobs:
         # sidesteps the previous "Claude posts an unchecked TODO list and never
         # updates it" behavior — in automation mode Claude runs to completion and
         # posts one final comment. `--max-turns 50` (up from 30) gives enough
-        # budget for large repos. `continue-on-error` removed: we want failures visible.
+        # budget for large repos.
+        #
+        # continue-on-error: tolerate credit exhaustion / API outages gracefully.
         uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3  # v1.0.99
+        continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -1036,7 +1037,10 @@ jobs:
       - name: Generate release notes with Claude
         if: steps.tag.outputs.SKIP != 'true'
         id: generate-notes
+        # continue-on-error: tolerate credit exhaustion / API outages gracefully.
+        # The post-step "Verify and validate release notes" will catch missing output.
         uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3  # v1.0.99
+        continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}

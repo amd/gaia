@@ -186,7 +186,7 @@ class AgentRegistration:
     id: str
     name: str
     description: str
-    source: Literal["builtin", "custom_python"]
+    source: Literal["builtin", "custom_python", "native"]
     conversation_starters: List[str]
     factory: Callable[..., Any]  # returns Agent instance
     agent_dir: Optional[Path]
@@ -210,6 +210,14 @@ class AgentRegistration:
     # malicious custom agent from claiming a built-in's AGENT_ID to inherit
     # a previously-granted scope. Always non-empty.
     namespaced_agent_id: str = ""
+    # Agent Hub metadata — used by the Agent UI to render rich discovery cards.
+    # Hardcoded for builtins (lazy-import factories must not instantiate agents);
+    # custom agents declare via class attributes (AGENT_CATEGORY, etc.).
+    category: str = "general"
+    tags: List[str] = field(default_factory=list)
+    icon: str = ""  # lucide icon name (e.g. "message-circle", "zap")
+    tools_count: int = 0
+    language: str = "python"  # "python" | "cpp"
 
 
 class AgentRegistry:
@@ -277,6 +285,9 @@ class AgentRegistry:
         else:
             logger.info("registry: No custom agent directory found at %s", agents_dir)
 
+        # 3. Discover native (C++/binary) agents from agent-manifest.json
+        self._discover_native_agents()
+
         agent_ids = list(self._agents.keys())
         logger.info(
             "registry: Agent discovery complete. %d agents registered: %s",
@@ -317,6 +328,10 @@ class AgentRegistry:
                 models=[],
                 required_connections=[],
                 namespaced_agent_id="builtin:chat",
+                category="conversation",
+                tags=["chat", "general", "personality"],
+                icon="message-circle",
+                tools_count=0,
             )
         )
         logger.info(
@@ -349,6 +364,10 @@ class AgentRegistry:
                 models=[],
                 required_connections=[],
                 namespaced_agent_id="builtin:doc",
+                category="documents",
+                tags=["rag", "files", "search", "mcp"],
+                icon="file-text",
+                tools_count=15,
             )
         )
         logger.info("registry: Registered built-in agent: doc (ChatAgent, profile=doc)")
@@ -380,6 +399,10 @@ class AgentRegistry:
                 models=[],
                 required_connections=[],
                 namespaced_agent_id="builtin:file",
+                category="productivity",
+                tags=["files", "search", "filesystem", "shell"],
+                icon="folder-search",
+                tools_count=10,
             )
         )
         logger.info(
@@ -411,6 +434,10 @@ class AgentRegistry:
                 models=[],
                 required_connections=[],
                 namespaced_agent_id="builtin:data",
+                category="productivity",
+                tags=["data", "csv", "excel", "analysis"],
+                icon="table",
+                tools_count=10,
             )
         )
         logger.info("registry: Registered built-in agent: data (AnalystAgent)")
@@ -440,6 +467,10 @@ class AgentRegistry:
                 models=[],
                 required_connections=[],
                 namespaced_agent_id="builtin:web",
+                category="research",
+                tags=["web", "search", "browser", "download"],
+                icon="globe",
+                tools_count=10,
             )
         )
         logger.info("registry: Registered built-in agent: web (BrowserAgent)")
@@ -514,6 +545,40 @@ class AgentRegistry:
             },
         ]
 
+        # Hub metadata for lite variants — mirrors their full-size counterparts.
+        _LITE_HUB_META = {
+            "chat-lite": {
+                "category": "conversation",
+                "tags": ["chat", "general", "lightweight"],
+                "icon": "message-circle",
+                "tools_count": 0,
+            },
+            "doc-lite": {
+                "category": "documents",
+                "tags": ["rag", "files", "lightweight"],
+                "icon": "file-text",
+                "tools_count": 15,
+            },
+            "file-lite": {
+                "category": "productivity",
+                "tags": ["files", "search", "lightweight"],
+                "icon": "folder-search",
+                "tools_count": 10,
+            },
+            "data-lite": {
+                "category": "productivity",
+                "tags": ["data", "csv", "lightweight"],
+                "icon": "table",
+                "tools_count": 10,
+            },
+            "web-lite": {
+                "category": "research",
+                "tags": ["web", "search", "lightweight"],
+                "icon": "globe",
+                "tools_count": 10,
+            },
+        }
+
         for agent_def in _LITE_AGENTS:
             aid = agent_def["id"]
             profile = agent_def["profile"]
@@ -566,6 +631,7 @@ class AgentRegistry:
 
                 return factory
 
+            hub = _LITE_HUB_META.get(aid, {})
             self._register(
                 AgentRegistration(
                     id=aid,
@@ -581,6 +647,10 @@ class AgentRegistry:
                     min_memory_gb=_LITE_MIN_MEMORY_GB,
                     required_connections=[],
                     namespaced_agent_id=f"builtin:{aid}",
+                    category=hub.get("category", "general"),
+                    tags=hub.get("tags", []),
+                    icon=hub.get("icon", ""),
+                    tools_count=hub.get("tools_count", 0),
                 )
             )
             logger.info(
@@ -611,6 +681,10 @@ class AgentRegistry:
                 min_memory_gb=_LITE_MIN_MEMORY_GB,
                 required_connections=[],
                 namespaced_agent_id="builtin:gaia-lite",
+                category="documents",
+                tags=["lightweight", "fast", "rag"],
+                icon="zap",
+                tools_count=15,
             )
         )
         logger.info(
@@ -668,6 +742,10 @@ class AgentRegistry:
                     # canonical objects so the registry stays consistent.
                     required_connections=list(ConnectorsDemoAgent.REQUIRED_CONNECTORS),
                     namespaced_agent_id="builtin:connectors-demo",
+                    category="productivity",
+                    tags=["google", "gmail", "github", "calendar"],
+                    icon="plug",
+                    tools_count=4,
                 )
             )
             logger.info(
@@ -707,6 +785,10 @@ class AgentRegistry:
                     models=[],
                     required_connections=list(EmailTriageAgent.REQUIRED_CONNECTORS),
                     namespaced_agent_id="builtin:email",
+                    category="productivity",
+                    tags=["email", "gmail", "calendar", "triage"],
+                    icon="mail",
+                    tools_count=6,
                 )
             )
             logger.info("registry: Registered built-in agent: email (EmailTriageAgent)")
@@ -742,12 +824,119 @@ class AgentRegistry:
                     hidden=True,
                     required_connections=[],
                     namespaced_agent_id="builtin:builder",
+                    category="infrastructure",
+                    tags=["scaffold", "create"],
+                    icon="wrench",
+                    tools_count=1,
                 )
             )
             logger.info("registry: Registered built-in agent: builder (BuilderAgent)")
         except ImportError:
             logger.debug(
                 "registry: BuilderAgent not available, skipping built-in registration"
+            )
+
+    # ------------------------------------------------------------------
+    # Native (C++/binary) agent discovery
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _noop_factory(**_kwargs):
+        """Placeholder factory for native agents that cannot be created in-process."""
+        raise RuntimeError(
+            "Native agents require the Electron Agent Process Manager "
+            "(JSON-RPC over stdio). They cannot be started from the web backend."
+        )
+
+    def _discover_native_agents(self) -> None:
+        """Register native agents from ``agent-manifest.json``.
+
+        The Electron desktop app seeds ``~/.gaia/agent-manifest.json`` with
+        metadata for C++/.NET/native binary agents managed by the Agent
+        Process Manager.  We read this manifest so ``GET /api/agents``
+        returns a unified list of all agents — Python and native alike.
+        Native agents cannot be instantiated in-process; their factory
+        raises at call time.
+        """
+        manifest_locations = [
+            Path.home() / ".gaia" / "agent-manifest.json",
+            Path.home() / ".gaia" / "agents" / "agent-manifest.json",
+        ]
+        manifest_path = None
+        for candidate in manifest_locations:
+            if candidate.exists():
+                manifest_path = candidate
+                break
+
+        if manifest_path is None:
+            logger.debug(
+                "registry: No agent-manifest.json found, skipping native agents"
+            )
+            return
+
+        import json
+
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest = json.load(f)
+        except Exception as e:
+            logger.warning(
+                "registry: Failed to read agent-manifest.json at %s: %s",
+                manifest_path,
+                e,
+            )
+            return
+
+        if not isinstance(manifest, dict):
+            logger.warning("registry: agent-manifest.json is not an object, skipping")
+            return
+
+        agents_list = manifest.get("agents", [])
+        if not isinstance(agents_list, list):
+            logger.warning(
+                "registry: agent-manifest.json 'agents' is not a list, skipping"
+            )
+            return
+
+        registered = 0
+        for entry in agents_list:
+            if not isinstance(entry, dict) or "id" not in entry or "name" not in entry:
+                continue
+            agent_id = entry["id"]
+            # Skip if a Python agent already claimed this ID.
+            if agent_id in self._agents:
+                logger.debug(
+                    "registry: native agent %s skipped — ID already registered",
+                    agent_id,
+                )
+                continue
+            categories = entry.get("categories", [])
+            self._register(
+                AgentRegistration(
+                    id=agent_id,
+                    name=entry["name"],
+                    description=entry.get("description", ""),
+                    source="native",
+                    conversation_starters=[],
+                    factory=self._noop_factory,
+                    agent_dir=Path.home() / ".gaia" / "agents" / agent_id,
+                    models=[],
+                    hidden=False,
+                    namespaced_agent_id=f"native:{agent_id}",
+                    category=categories[0] if categories else "general",
+                    tags=list(categories),
+                    icon=entry.get("icon", ""),
+                    tools_count=entry.get("toolsCount", 0),
+                    language=entry.get("language", "cpp"),
+                )
+            )
+            registered += 1
+
+        if registered:
+            logger.info(
+                "registry: Registered %d native agent(s) from %s",
+                registered,
+                manifest_path,
             )
 
     # ------------------------------------------------------------------
@@ -831,6 +1020,12 @@ class AgentRegistry:
         agent_name = agent_class.AGENT_NAME
         agent_desc = getattr(agent_class, "AGENT_DESCRIPTION", "")
         starters = getattr(agent_class, "CONVERSATION_STARTERS", [])
+
+        # Agent Hub metadata — optional class attributes for rich card display.
+        agent_category = getattr(agent_class, "AGENT_CATEGORY", "custom")
+        agent_icon = getattr(agent_class, "AGENT_ICON", "")
+        agent_tags = list(getattr(agent_class, "AGENT_TAGS", []) or [])
+        agent_tools_count = getattr(agent_class, "AGENT_TOOLS_COUNT", 0)
 
         # T-X2 (issue #915, plan amendment A9): block custom agents from
         # claiming a built-in's reserved AGENT_ID. Without this, a custom
@@ -942,6 +1137,10 @@ class AgentRegistry:
                 models=models,
                 required_connections=required_connections,
                 namespaced_agent_id=namespaced_id,
+                category=agent_category,
+                tags=agent_tags,
+                icon=agent_icon,
+                tools_count=agent_tools_count,
             )
         )
         logger.info(
