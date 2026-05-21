@@ -48,7 +48,7 @@ def run_check() -> int:
         # Absent key means Dependabot uses its own positive default — only an explicit 0 soft-disables.
         limit = entry.get("open-pull-requests-limit", 5)
 
-        if limit == 0:
+        if int(limit) == 0:
             errors.append(
                 f"{ecosystem} {directory}: open-pull-requests-limit is 0 "
                 f"(soft-disabled). Per #1157, all entries must be live."
