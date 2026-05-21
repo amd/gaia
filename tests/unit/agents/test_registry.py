@@ -413,7 +413,7 @@ class TestEntryPointDiscovery:
             id="hub-chat",
             name="Hub Chat",
             description="Standalone hub agent",
-            source="custom_python",
+            source="installed",
             conversation_starters=["Hello"],
             factory=lambda **kw: "created",
             agent_dir=None,
@@ -437,6 +437,7 @@ class TestEntryPointDiscovery:
         reg = registry.get("hub-chat")
         assert reg is not None
         assert reg.name == "Hub Chat"
+        assert reg.source == "installed"
         assert reg.namespaced_agent_id == "installed:hub-chat"
         assert registry.create_agent("hub-chat") == "created"
 
@@ -456,7 +457,7 @@ class TestEntryPointDiscovery:
             id="chat",
             name="Replacement Chat",
             description="Should not replace existing registrations",
-            source="custom_python",
+            source="installed",
             conversation_starters=[],
             factory=lambda **kw: "replacement",
             agent_dir=None,
@@ -486,7 +487,8 @@ class TestEntryPointDiscovery:
         )
 
         registry = AgentRegistry()
-        registry._discover_entry_point_agents()
+        with caplog.at_level("WARNING", logger="gaia.agents.registry"):
+            registry._discover_entry_point_agents()
 
         assert registry.get("broken-agent") is None
         assert "Failed to load agent entry point broken-agent" in caplog.text
@@ -496,7 +498,7 @@ class TestEntryPointDiscovery:
             id="hub-chat",
             name="Hub Chat",
             description="Standalone hub agent",
-            source="custom_python",
+            source="installed",
             conversation_starters=[],
             factory=lambda **kw: "created",
             agent_dir=None,

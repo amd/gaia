@@ -189,7 +189,7 @@ class AgentRegistration:
     id: str
     name: str
     description: str
-    source: Literal["builtin", "custom_python", "native"]
+    source: Literal["builtin", "custom_python", "native", "installed"]
     conversation_starters: List[str]
     factory: Callable[..., Any]  # returns Agent instance
     agent_dir: Optional[Path]
@@ -894,6 +894,8 @@ class AgentRegistry:
                 registration,
                 namespaced_agent_id=f"installed:{registration.id}",
             )
+        if registration.source != "installed":
+            registration = dataclasses.replace(registration, source="installed")
         return registration
 
     # ------------------------------------------------------------------
