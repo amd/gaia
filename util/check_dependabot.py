@@ -18,7 +18,10 @@ from pathlib import Path
 
 import yaml
 
-CONFIG = Path(".github/dependabot.yml")
+# Anchor to the repo root so the script works regardless of CWD — matches the
+# convention in util/check_doc_versions.py and util/check_agent_conventions.py.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CONFIG = REPO_ROOT / ".github" / "dependabot.yml"
 
 
 def run_check() -> int:

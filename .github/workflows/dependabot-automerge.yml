@@ -10,9 +10,8 @@
 # review. CI gating is delegated to GitHub's native auto-merge queue — if the
 # required status checks fail, GitHub cancels the merge and the PR stays open.
 #
-# See .claude/plans/issue-1157.md and PR closing issue #1157 for the design notes
-# (concurrency group, `>-` scalar, contains() for grouped PRs, idempotent merge
-# call, dual actor+author gate, diagnostic log step).
+# Design notes (concurrency group, `>-` scalar, contains() for grouped PRs,
+# idempotent merge call, dual actor+author gate, diagnostic log step): see #1157.
 
 name: Dependabot Auto-merge
 
