@@ -140,8 +140,13 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			evt, err := event.ParseEvent(line)
 			if err != nil {
 				if debug {
-					fmt.Printf("[DEBUG] parse error: %v (line: %s)\n", err, string(line))
+					fmt.Fprintf(os.Stderr, "[DEBUG] parse error: %v (line: %s)\n", err, string(line))
 				}
+				continue
+			}
+
+			// Skip stale "complete" status from a previous turn's trailing event
+			if se, ok := evt.(event.StatusEvent); ok && se.Status == "complete" {
 				continue
 			}
 
@@ -152,13 +157,9 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			}
 
 			// Turn boundary — stop reading after terminal events.
-			switch e := evt.(type) {
+			switch evt.(type) {
 			case event.AnswerEvent:
 				return
-			case event.StatusEvent:
-				if e.Status == "complete" {
-					return
-				}
 			case event.AgentErrorEvent:
 				return
 			case event.DoneEvent:

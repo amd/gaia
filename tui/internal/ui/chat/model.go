@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -116,7 +117,7 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 	ti.Placeholder = "Ask anything... (Enter to send, Ctrl+C to quit)"
 	ti.Focus()
 	ti.CharLimit = 4096
-	ti.SetHeight(3)
+	ti.SetHeight(1)
 	ti.ShowLineNumbers = false
 
 	sp := spinner.New()
@@ -382,11 +383,11 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		if len(m.activity) > 0 {
 			last := &m.activity[len(m.activity)-1]
 			if last.Kind == "tool" {
-				args := string(e.Args)
-				if len(args) > 80 {
-					args = args[:80] + "..."
+				// Try to extract a clean command from the args JSON
+				argStr := extractCommandFromArgs(e.Args)
+				if argStr != "" {
+					last.Content = e.Tool + ": " + argStr
 				}
-				last.Content = e.Tool + ": " + args
 			}
 		}
 
@@ -395,6 +396,12 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		if summary == "" {
 			summary = e.Title
 		}
+		// Truncate long summaries (stdout can be very long)
+		if len(summary) > 60 {
+			summary = summary[:60] + "..."
+		}
+		// Clean up newlines in summary
+		summary = strings.ReplaceAll(summary, "\n", " ")
 		if len(m.activity) > 0 {
 			last := &m.activity[len(m.activity)-1]
 			if last.Kind == "tool" {
@@ -430,10 +437,16 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 		}
-		m.activity = append(m.activity, ActivityItem{
-			Kind:    "status",
-			Content: e.Message,
-		})
+		// Filter out redundant status messages that duplicate thinking/tool events
+		msg := e.Message
+		if msg == "Thinking" || strings.HasPrefix(msg, "Executing ") {
+			// Already shown by ThinkingEvent/ToolStartEvent — skip
+		} else if msg != "" {
+			m.activity = append(m.activity, ActivityItem{
+				Kind:    "status",
+				Content: msg,
+			})
+		}
 
 	case event.AnswerEvent:
 		m.flushBuffer()
@@ -505,7 +518,7 @@ func (m *ChatModel) flushBuffer() {
 func (m *ChatModel) resize() {
 	headerH := 1
 	statusH := 1
-	inputH := 5
+	inputH := 3
 	padding := 2
 
 	vpHeight := m.height - headerH - statusH - inputH - padding
@@ -731,6 +744,37 @@ func (m ChatModel) View() string {
 		inputView,
 		statusBar,
 	)
+}
+
+// extractCommandFromArgs tries to extract a clean command string from tool args JSON.
+func extractCommandFromArgs(raw json.RawMessage) string {
+	var args map[string]interface{}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		s := string(raw)
+		if len(s) > 60 {
+			s = s[:60] + "..."
+		}
+		return s
+	}
+	// Look for common command fields
+	for _, key := range []string{"command", "cmd", "query", "path", "file"} {
+		if v, ok := args[key]; ok {
+			s := fmt.Sprintf("%v", v)
+			if len(s) > 60 {
+				s = s[:60] + "..."
+			}
+			return s
+		}
+	}
+	// Fallback: show first value
+	for _, v := range args {
+		s := fmt.Sprintf("%v", v)
+		if len(s) > 60 {
+			s = s[:60] + "..."
+		}
+		return s
+	}
+	return ""
 }
 
 func (m ChatModel) renderHeader() string {
