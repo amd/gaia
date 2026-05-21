@@ -45,6 +45,7 @@ def run_check() -> int:
     for entry in cfg["updates"]:
         directory = entry.get("directory", "<unknown>")
         ecosystem = entry.get("package-ecosystem", "<unknown>")
+        # Absent key means Dependabot uses its own positive default — only an explicit 0 soft-disables.
         limit = entry.get("open-pull-requests-limit", 5)
 
         if limit == 0:

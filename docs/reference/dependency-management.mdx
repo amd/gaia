@@ -65,7 +65,7 @@ To track a new `package.json` root (e.g., a new app under `src/gaia/apps/`):
        labels:
          - "dependencies"
          - "javascript"
-         - "electron"
+         # Add "electron" only if the app ships an Electron shell.
        open-pull-requests-limit: 5
        groups:
          your-app-dependencies:
@@ -94,7 +94,7 @@ See the [official Dependabot docs](https://docs.github.com/en/code-security/depe
 
 - **First Monday after re-enablement may be busy.** The soft-disabled era accumulated months of skipped updates; the first batch will be larger than steady state (~6–8 grouped PRs across all ecosystems).
 - **Grouped PRs that mix prod + dev deps don't auto-merge.** This is by design — bundling a production patch with a dev minor is exactly the case a human should look at. Manually merge with `gh pr merge --auto --squash <PR>` after review if you want it enrolled in the queue.
-- **Pre-merge maintainer setting:** "Allow auto-merge" must be enabled in repo Settings → General → Pull Requests. Without it, the workflow runs successfully but `gh pr merge --auto` errors. Verify with `gh api repos/amd/gaia --jq '.allow_auto_merge'`.
+- **Pre-merge maintainer setting:** "Allow auto-merge" AND "Allow squash merging" must both be enabled in repo Settings → General → Pull Requests. Without either, `gh pr merge --auto --squash` queues successfully but GitHub cancels the merge. Verify: `gh api repos/amd/gaia --jq '{allow_auto_merge: .allow_auto_merge, allow_squash_merge: .allow_squash_merge}'`.
 - **Diagnosing "why didn't this PR auto-merge?":** the workflow logs `dependency-names`, `dependency-type`, and `update-type` for every run. Check the workflow run's "Log metadata for debugging" step.
 
 ## See also
