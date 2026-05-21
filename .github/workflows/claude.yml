@@ -113,7 +113,7 @@ jobs:
         # continue-on-error: tolerate credit exhaustion, API outages, and rate
         # limits without failing the workflow. The review is best-effort — when
         # credits are replenished, reviews resume automatically with no manual toggle.
-        uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3  # v1.0.99
+        uses: anthropics/claude-code-action@20c8abf165d5f85ab3fc970db9498436377dc9d1  # v1.0.128
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -369,7 +369,7 @@ jobs:
         # would silently fall back to Sonnet 4.6 regardless of --model.
         #
         # continue-on-error: tolerate credit exhaustion / API outages gracefully.
-        uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3  # v1.0.99
+        uses: anthropics/claude-code-action@20c8abf165d5f85ab3fc970db9498436377dc9d1  # v1.0.128
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -543,7 +543,7 @@ jobs:
         # budget for large repos.
         #
         # continue-on-error: tolerate credit exhaustion / API outages gracefully.
-        uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3  # v1.0.99
+        uses: anthropics/claude-code-action@20c8abf165d5f85ab3fc970db9498436377dc9d1  # v1.0.128
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -704,7 +704,7 @@ jobs:
           uv pip install --system -e ".[api]"
 
       - name: Attempt auto-fix
-        uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3  # v1.0.99
+        uses: anthropics/claude-code-action@20c8abf165d5f85ab3fc970db9498436377dc9d1  # v1.0.128
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -1039,7 +1039,7 @@ jobs:
         id: generate-notes
         # continue-on-error: tolerate credit exhaustion / API outages gracefully.
         # The post-step "Verify and validate release notes" will catch missing output.
-        uses: anthropics/claude-code-action@c3d45e8e941e1b2ad7b278c57482d9c5bf1f35b3  # v1.0.99
+        uses: anthropics/claude-code-action@20c8abf165d5f85ab3fc970db9498436377dc9d1  # v1.0.128
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
