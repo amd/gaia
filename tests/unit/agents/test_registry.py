@@ -408,6 +408,11 @@ class TestEntryPointDiscovery:
     def _entry_point(self, name, loaded):
         return SimpleNamespace(name=name, load=lambda: loaded)
 
+    def _entry_points(self, entry_point):
+        return lambda group: (
+            [entry_point] if group == registry_module.AGENT_ENTRY_POINT_GROUP else []
+        )
+
     def test_discovers_agent_registration_entry_point(self, monkeypatch):
         registration = AgentRegistration(
             id="hub-chat",
@@ -427,7 +432,7 @@ class TestEntryPointDiscovery:
         monkeypatch.setattr(
             registry_module.importlib.metadata,
             "entry_points",
-            lambda group: [entry_point],
+            self._entry_points(entry_point),
         )
 
         registry = AgentRegistry()
@@ -468,7 +473,7 @@ class TestEntryPointDiscovery:
         monkeypatch.setattr(
             registry_module.importlib.metadata,
             "entry_points",
-            lambda group: [entry_point],
+            self._entry_points(entry_point),
         )
 
         registry = AgentRegistry()
@@ -483,7 +488,7 @@ class TestEntryPointDiscovery:
         monkeypatch.setattr(
             registry_module.importlib.metadata,
             "entry_points",
-            lambda group: [entry_point],
+            self._entry_points(entry_point),
         )
 
         registry = AgentRegistry()
@@ -509,7 +514,7 @@ class TestEntryPointDiscovery:
         monkeypatch.setattr(
             registry_module.importlib.metadata,
             "entry_points",
-            lambda group: [entry_point],
+            self._entry_points(entry_point),
         )
 
         registry = AgentRegistry()
@@ -532,7 +537,7 @@ class TestEntryPointDiscovery:
         monkeypatch.setattr(
             registry_module.importlib.metadata,
             "entry_points",
-            lambda group: [entry_point],
+            self._entry_points(entry_point),
         )
 
         registry = AgentRegistry()
@@ -555,7 +560,7 @@ class TestEntryPointDiscovery:
         monkeypatch.setattr(
             registry_module.importlib.metadata,
             "entry_points",
-            lambda group: [entry_point],
+            self._entry_points(entry_point),
         )
 
         registry = AgentRegistry()

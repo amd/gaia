@@ -890,19 +890,13 @@ class AgentRegistry:
                 "must load an AgentRegistration or a zero-argument callable "
                 "returning one"
             )
-        if (
-            registration.namespaced_agent_id != f"installed:{registration.id}"
-            or registration.source != "installed"
-        ):
-            registration = dataclasses.replace(
-                registration,
-                namespaced_agent_id=f"installed:{registration.id}",
-                source="installed",
-            )
+        namespaced_id = f"installed:{registration.id}"
         registration = dataclasses.replace(
             registration,
+            namespaced_agent_id=namespaced_id,
+            source="installed",
             factory=_wrap_factory_with_namespaced_id(
-                registration.factory, registration.namespaced_agent_id
+                registration.factory, namespaced_id
             ),
         )
         return registration

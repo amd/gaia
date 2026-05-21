@@ -54,6 +54,7 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                             {agent.source === 'builtin' && <span className="agent-badge agent-badge-builtin">Built-in</span>}
                             {agent.source === 'native' && <span className="agent-badge agent-badge-native">Native</span>}
                             {agent.source === 'custom_python' && <span className="agent-badge agent-badge-custom">Custom</span>}
+                            {agent.source === 'installed' && <span className="agent-badge agent-badge-installed">Installed</span>}
                             {agent.language && agent.language !== 'python' && (
                                 <span className="agent-badge agent-badge-native">{agent.language.toUpperCase()}</span>
                             )}
