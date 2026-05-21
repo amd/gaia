@@ -2026,28 +2026,36 @@ Examples:
         metavar="N",
         help="Run each scenario N times for reliability measurement (default: 1)",
     )
+    # NOTE: --reset-between-scenarios / --lemonade-model / --lemonade-ctx-size
+    # are NOT YET IMPLEMENTED. They are accepted by the parser so a future
+    # commit can wire them into AgentEvalRunner without changing the user-
+    # facing surface, but passing a non-None value today raises
+    # NotImplementedError (see the eval-agent handler). Driver scripts that
+    # want clean-state reliability runs should restart Lemonade/Agent UI
+    # externally between iterations until this lands.
     agent_eval_parser.add_argument(
         "--reset-between-scenarios",
         choices=["fast", "full"],
         default=None,
         metavar="MODE",
-        help="Reset services between scenarios for clean-state reliability testing. "
-        "'fast' restarts Agent UI only (~10s). "
-        "'full' restarts both Lemonade and Agent UI (~45s). "
-        "Use with --lemonade-model and --lemonade-ctx-size for full mode.",
+        help="[NOT YET IMPLEMENTED] Will reset services between scenarios "
+        "for clean-state reliability testing. Passing this flag today "
+        "raises NotImplementedError; restart Lemonade / Agent UI from a "
+        "driver script in the meantime.",
     )
     agent_eval_parser.add_argument(
         "--lemonade-model",
         metavar="MODEL",
-        help="Lemonade model to reload between scenarios (e.g., Qwen3-4B-GGUF). "
-        "Required when --reset-between-scenarios=full.",
+        help="[NOT YET IMPLEMENTED] Will pair with --reset-between-scenarios "
+        "to reload a specific Lemonade model between scenarios. Today the "
+        "Lemonade model is whatever the running server has loaded.",
     )
     agent_eval_parser.add_argument(
         "--lemonade-ctx-size",
         type=int,
         metavar="SIZE",
-        help="Context size for the Lemonade model (e.g., 32768). "
-        "Used when --reset-between-scenarios=full.",
+        help="[NOT YET IMPLEMENTED] Will pair with --lemonade-model to "
+        "reload the model at this ctx size between scenarios.",
     )
     agent_eval_parser.add_argument(
         "--corpus-dir",
@@ -3598,14 +3606,24 @@ Let me know your answer!
                     sys.exit(1)
                 # compare handled; no further action
 
+            # --reset-between-scenarios / --lemonade-model / --lemonade-ctx-size
+            # are accepted by the parser but not yet wired into
+            # AgentEvalRunner. Fail loudly rather than silently no-op.
             reset = getattr(args, "reset_between_scenarios", None)
-            if reset == "full" and not getattr(args, "lemonade_model", None):
-                print(
-                    "Error: --reset-between-scenarios full requires --lemonade-model "
-                    "(e.g., --lemonade-model Qwen3-4B-GGUF --lemonade-ctx-size 32768)",
-                    file=sys.stderr,
+            lemonade_model = getattr(args, "lemonade_model", None)
+            lemonade_ctx = getattr(args, "lemonade_ctx_size", None)
+            if (
+                reset is not None
+                or lemonade_model is not None
+                or lemonade_ctx is not None
+            ):
+                raise NotImplementedError(
+                    "--reset-between-scenarios / --lemonade-model / "
+                    "--lemonade-ctx-size are reserved for a future commit "
+                    "and are not yet wired into AgentEvalRunner. Restart "
+                    "Lemonade and the Agent UI from your driver script "
+                    "between iterations to get the same effect."
                 )
-                return
 
             iterations = getattr(args, "iterations", 1)
             fix_mode = getattr(args, "fix", False)

@@ -107,6 +107,17 @@ def _repair_invalid_json_escapes(s: str) -> str:
 _SD_CAPABILITY_TOOLS = ("generate_image",)
 
 
+# Suffix appended to the last tool-result message when ``single_tool_per_turn``
+# agents have completed their one tool call. The model sees this and emits a
+# short final reply instead of calling another tool. Greppable for fixtures
+# that need to strip it from recorded role history.
+_SINGLE_TOOL_DONE_SUFFIX = (
+    "\n\n[SYSTEM: Tool call complete. "
+    "Write your one-sentence response to the user now. "
+    "Do not call any more tools.]"
+)
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -2002,11 +2013,7 @@ Do NOT wrap conversational replies in JSON.
         if getattr(self, "_single_tool_done", False):
             for block in msg["content"]:
                 if block.get("type") == "text":
-                    block["text"] += (
-                        "\n\n[SYSTEM: Tool call complete. "
-                        "Write your one-sentence response to the user now. "
-                        "Do not call any more tools.]"
-                    )
+                    block["text"] += _SINGLE_TOOL_DONE_SUFFIX
                     break
         return msg
 

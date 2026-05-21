@@ -461,9 +461,9 @@ def _disconnect_cached_agent(entry) -> None:
         except Exception as exc:
             # Best-effort on cache eviction — a failed disconnect on a
             # previously-cached agent shouldn't block the new agent slot.
-            # Log at DEBUG so the failure is observable without spamming
-            # production logs on every eviction.
-            logger.debug("MCP disconnect failed during cache eviction: %s", exc)
+            # WARNING because a leaked MCP subprocess is observable
+            # (orphaned process, stuck port) and worth surfacing.
+            logger.warning("MCP disconnect failed during cache eviction: %s", exc)
 
 
 def _canonical_agent_type(agent_type: str) -> str:

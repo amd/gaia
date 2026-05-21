@@ -164,10 +164,18 @@ def test_helper_handles_native_path_unwrapped_results(agent):
     assert "Unknown tool name" in summary
 
 
-def test_caller_must_unwrap_previous_outputs_before_passing():
-    """Wrapped ``previous_outputs`` entries (no ``status`` key at the
-    top level) fall through to the success branch — the unwrap MUST
-    happen at the call site, not inside the helper."""
+def test_wrapped_dicts_fall_through_to_success_illustrating_required_unwrap():
+    """**Trap test — documents the WRONG behaviour to pin the contract.**
+
+    When wrapped ``previous_outputs`` entries (``{"tool", "args",
+    "result"}``) are passed straight in, the top-level dict has no
+    ``status`` key, so the helper takes the success branch and emits a
+    "Task completed" lie. That's exactly the bug the native call site
+    used to ship. The fix lives at the CALLER (unwrap via
+    ``o["result"]`` before passing); this assertion exists to make
+    that contract observable and to fail loudly if a future refactor
+    moves the unwrap into the helper without updating callers.
+    """
     with patch("gaia.agents.base.agent.AgentSDK"):
         a = _DummyAgent(silent_mode=True, skip_lemonade=True)
     wrapped = [
@@ -176,4 +184,5 @@ def test_caller_must_unwrap_previous_outputs_before_passing():
     summary = a._build_loop_break_summary(
         tool_name="x", consecutive_count=4, step_results=wrapped
     )
+    # Documents the trap: wrapped input → false-success message.
     assert "Task completed" in summary
