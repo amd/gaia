@@ -2393,7 +2393,10 @@ Do NOT wrap conversational replies in JSON.
                     # Handle domain-specific post-processing.
                     # A returned plan switches the agent into
                     # STATE_EXECUTING_PLAN for declarative multi-step
-                    # recovery (e.g., prereq-enable + retry).
+                    # recovery (e.g., prereq-enable + retry). The base
+                    # impl returns None, but the hook's annotation is
+                    # Optional[List[...]], so pylint's None-inference
+                    # is wrong here — silence it explicitly.
                     # pylint: disable-next=assignment-from-none
                     _next_plan = self._post_process_tool_result(
                         tool_name, tool_args, tool_result
@@ -3391,7 +3394,9 @@ Do NOT wrap conversational replies in JSON.
                             messages.append({"role": "user", "content": dedup_msg})
 
                     # Domain hooks. A returned plan switches the agent into
-                    # STATE_EXECUTING_PLAN for prereq-style recovery.
+                    # STATE_EXECUTING_PLAN for prereq-style recovery. The
+                    # base impl returns None but the hook's annotation is
+                    # Optional[List[...]] — silence pylint's None-inference.
                     # pylint: disable-next=assignment-from-none
                     _next_plan = self._post_process_tool_result(
                         tool_name, tool_args, tool_result
@@ -3609,7 +3614,9 @@ Do NOT wrap conversational replies in JSON.
                         messages.append({"role": "user", "content": dedup_msg})
 
                 # Handle domain-specific post-processing.
-                # A returned plan switches into STATE_EXECUTING_PLAN.
+                # A returned plan switches into STATE_EXECUTING_PLAN. The
+                # base impl returns None but the hook's annotation is
+                # Optional[List[...]] — silence pylint's None-inference.
                 # pylint: disable-next=assignment-from-none
                 _next_plan = self._post_process_tool_result(
                     tool_name, tool_args, tool_result
@@ -4255,7 +4262,24 @@ Do NOT wrap conversational replies in JSON.
         ``execution_state``) — which would violate the invariant that plan
         state transitions go through ``STATE_PLANNING``.
         Each ``step`` must be ``{"tool": <name>, "tool_args": <dict>}``.
+
+        **Caller constraint:** safe to call from
+        ``_post_process_tool_result`` when invoked from the sequential
+        tool-execution path. Calling from inside an already-running
+        ``STATE_EXECUTING_PLAN`` is supported but emits a WARNING because
+        the new plan replaces the in-flight one, which is usually a bug
+        in the subclass hook rather than intent. Fanout/native-batch
+        paths haven't been exercised here — until they're tested, return
+        ``None`` from those contexts.
         """
+        if getattr(self, "execution_state", None) == getattr(
+            self, "STATE_EXECUTING_PLAN", None
+        ):
+            logger.warning(
+                "_inject_recovery_plan called while already in "
+                "STATE_EXECUTING_PLAN — the in-flight plan will be replaced. "
+                "Verify this is intentional in your subclass hook."
+            )
         if not isinstance(steps, list) or not steps:
             return
         validated: List[Dict[str, Any]] = []

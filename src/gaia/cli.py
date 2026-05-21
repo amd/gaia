@@ -612,7 +612,7 @@ async def async_main(action, **kwargs):
                 chunk_size=kwargs.get("chunk_size", 500),
                 max_chunks=kwargs.get("max_chunks", 3),
                 allowed_paths=kwargs.get("allowed_paths", None),
-                mcp_tool_limit=kwargs.get("mcp_tool_limit", 100),
+                mcp_tool_limit=kwargs.get("mcp_tool_limit", 50),
             )
 
             # Create Chat Agent with configuration
@@ -1208,10 +1208,11 @@ def main():
     chat_parser.add_argument(
         "--mcp-tool-limit",
         type=int,
-        default=100,
-        help="Maximum MCP tools to register (default: 100). "
+        default=50,
+        help="Maximum MCP tools to register (default: 50). "
         "Larger tool sets bloat the system prompt and degrade small-model "
-        "tool-calling accuracy — keep this as low as your workflow allows.",
+        "tool-calling accuracy — keep this as low as your workflow allows. "
+        "Workflows with >50 tools warrant a fresh eval run on the target model.",
     )
 
     # Agent UI
