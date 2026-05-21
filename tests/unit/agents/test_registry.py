@@ -465,11 +465,10 @@ class TestEntryPointDiscovery:
             models=[],
         )
         entry_point = self._entry_point("chat", lambda: replacement)
-        entry_points = SimpleNamespace(select=lambda group: [entry_point])
         monkeypatch.setattr(
             registry_module.importlib.metadata,
             "entry_points",
-            lambda group: entry_points.select(group=group),
+            lambda group: [entry_point],
         )
 
         registry = AgentRegistry()
@@ -494,7 +493,9 @@ class TestEntryPointDiscovery:
         assert registry.get("broken-agent") is None
         assert "Failed to load agent entry point broken-agent" in caplog.text
 
-    def test_preserves_existing_namespaced_agent_id(self, monkeypatch):
+    def test_entry_point_namespaced_agent_id_is_coerced_to_installed(
+        self, monkeypatch
+    ):
         registration = AgentRegistration(
             id="hub-chat",
             name="Hub Chat",
@@ -504,7 +505,7 @@ class TestEntryPointDiscovery:
             factory=lambda **kw: "created",
             agent_dir=None,
             models=[],
-            namespaced_agent_id="wheel:hub-chat",
+            namespaced_agent_id="builtin:chat",
         )
         entry_point = self._entry_point("hub-chat", lambda: registration)
         monkeypatch.setattr(
@@ -516,7 +517,7 @@ class TestEntryPointDiscovery:
         registry = AgentRegistry()
         registry._discover_entry_point_agents()
 
-        assert registry.get("hub-chat").namespaced_agent_id == "wheel:hub-chat"
+        assert registry.get("hub-chat").namespaced_agent_id == "installed:hub-chat"
 
     def test_entry_point_source_is_coerced_to_installed(self, monkeypatch):
         registration = AgentRegistration(
@@ -540,6 +541,29 @@ class TestEntryPointDiscovery:
         registry._discover_entry_point_agents()
 
         assert registry.get("hub-chat").source == "installed"
+
+    def test_discovers_direct_agent_registration_entry_point(self, monkeypatch):
+        registration = AgentRegistration(
+            id="direct-agent",
+            name="Direct",
+            description="Loaded directly, not via callable",
+            source="installed",
+            conversation_starters=[],
+            factory=lambda **kw: SimpleNamespace(kind="direct"),
+            agent_dir=None,
+            models=[],
+        )
+        entry_point = self._entry_point("direct-agent", registration)
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            lambda group: [entry_point],
+        )
+
+        registry = AgentRegistry()
+        registry._discover_entry_point_agents()
+
+        assert registry.get("direct-agent") is not None
 
 
 # ---------------------------------------------------------------------------

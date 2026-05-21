@@ -209,9 +209,10 @@ class AgentRegistration:
     # T-X2 (issue #915, plan amendment A9):
     # ``namespaced_agent_id`` is the grant-ledger key for this agent. Built-in
     # agents use ``builtin:<id>``; custom agents under ``~/.gaia/agents/``
-    # use ``custom:<sha256-of-agent.py>:<id>``. This namespacing prevents a
-    # malicious custom agent from claiming a built-in's AGENT_ID to inherit
-    # a previously-granted scope. Always non-empty.
+    # use ``custom:<sha256-of-agent.py>:<id>``; installed wheel agents use
+    # ``installed:<id>``. This namespacing prevents a malicious custom or
+    # installed agent from claiming a built-in's AGENT_ID to inherit a
+    # previously-granted scope. Always non-empty.
     namespaced_agent_id: str = ""
     # Agent Hub metadata — used by the Agent UI to render rich discovery cards.
     # Hardcoded for builtins (lazy-import factories must not instantiate agents);
@@ -889,13 +890,15 @@ class AgentRegistry:
                 "must load an AgentRegistration or a zero-argument callable "
                 "returning one"
             )
-        if not registration.namespaced_agent_id:
+        if (
+            registration.namespaced_agent_id != f"installed:{registration.id}"
+            or registration.source != "installed"
+        ):
             registration = dataclasses.replace(
                 registration,
                 namespaced_agent_id=f"installed:{registration.id}",
+                source="installed",
             )
-        if registration.source != "installed":
-            registration = dataclasses.replace(registration, source="installed")
         registration = dataclasses.replace(
             registration,
             factory=_wrap_factory_with_namespaced_id(
