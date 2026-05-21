@@ -399,6 +399,10 @@ class MCPClientMixin:
         if manager is not None:
             try:
                 manager.disconnect_all()
-            except Exception:
-                # __del__ must not raise; best-effort cleanup at GC time.
-                pass
+            except Exception as exc:
+                # __del__ must not raise; surface at DEBUG so the failure
+                # is observable without forcing a noisy log on every GC.
+                try:
+                    logger.debug("MCP disconnect failed in __del__: %s", exc)
+                except Exception:
+                    pass

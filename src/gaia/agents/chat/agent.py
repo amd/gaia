@@ -101,7 +101,12 @@ class ChatAgentConfig:
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Stable Diffusion image generation
 
-    # MCP settings
+    # MCP settings.
+    # The 100 default was validated against a real 49-tool MCP server on
+    # Gemma-4-E4B (tool-selection pass rate held at 100% across the
+    # smoke scenarios in PR #718). For larger tool sets the prompt bloat
+    # can hurt small-model accuracy — keep this as low as the workflow
+    # allows.
     mcp_tool_limit: int = 100  # Max MCP tools to register (prevents context bloat)
 
     # Prompt profile controls which tools and prompt sections are included.

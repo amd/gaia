@@ -797,13 +797,21 @@ def _self_check(
     per_tool_rows: List[Dict[str, Any]],
     records: List[FailureRecord],
     scorecards: List[Dict[str, Any]],
+    expected_tool_count: Optional[int] = None,
 ) -> List[str]:
-    """Return a list of warnings. Warn rather than fail."""
+    """Return a list of warnings. Warn rather than fail.
+
+    When ``expected_tool_count`` is set, warn if the per-tool rollup
+    doesn't have that many unique tools — useful when you're running
+    against a vendor-coupled scenario set with a known fixed tool count.
+    Pass ``None`` (the default) for generic public scenario sets.
+    """
     warnings: List[str] = []
 
-    if len(per_tool_rows) != 41:
+    if expected_tool_count is not None and len(per_tool_rows) != expected_tool_count:
         warnings.append(
-            f"Expected 41 unique tools in per_tool_report, got {len(per_tool_rows)}"
+            f"Expected {expected_tool_count} unique tools in per_tool_report, "
+            f"got {len(per_tool_rows)}"
         )
 
     sc_failed = sum(sc.get("summary", {}).get("failed", 0) for sc in scorecards)
@@ -886,6 +894,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Per-tool reliability gate (default: 0.90)",
     )
     parser.add_argument(
+        "--expected-tool-count",
+        type=int,
+        default=None,
+        help="If set, warn when the per-tool report doesn't have this many "
+        "unique tools. Use when the scenario set has a known fixed tool "
+        "count; omit for generic/public scenarios.",
+    )
+    parser.add_argument(
         "--out-dir",
         type=Path,
         default=None,
@@ -957,7 +973,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"{sum(1 for r in per_tool_rows if r['meets_gate'])} meet the gate."
     )
 
-    warnings = _self_check(per_tool_rows, records, scorecards)
+    warnings = _self_check(
+        per_tool_rows,
+        records,
+        scorecards,
+        expected_tool_count=args.expected_tool_count,
+    )
     for w in warnings:
         log.warning(w)
 

@@ -123,20 +123,8 @@ def test_loop_break_with_empty_step_results_returns_task_completed(agent):
     assert "Task completed" in summary
 
 
-# ---------------------------------------------------------------------------
-# Native-path call-site regression: the helper must be called with the
-# UNWRAPPED tool-result list, not a wrapper list.
-#
-# Phase 4 originally passed ``step_results`` at both call sites. The legacy
-# single-tool path was right — it appends to ``step_results``. But the
-# NATIVE path appends to ``previous_outputs`` (each entry is
-# ``{"tool": ..., "args": ..., "result": ...}``). Passing ``step_results``
-# at the native site got the helper an empty list, the error branch
-# never fired, and the agent emitted ``"Task completed with <bad-name>"``
-# after a loop of failures. The fix unwraps ``previous_outputs`` at the
-# call site. This test asserts the helper works correctly when fed
-# unwrapped results — which is what the call site must produce.
-# ---------------------------------------------------------------------------
+# Native-path call-site contract: callers must pass UNWRAPPED result dicts
+# (not the ``{"tool", "args", "result"}`` wrappers from ``previous_outputs``).
 
 
 def test_helper_handles_native_path_unwrapped_results(agent):
@@ -176,10 +164,10 @@ def test_helper_handles_native_path_unwrapped_results(agent):
     assert "Unknown tool name" in summary
 
 
-def test_helper_rejects_wrapper_dicts_silently():
-    """Defensive: WRAPPED ``previous_outputs`` shape (no ``status`` key)
-    falls through to the success path. Documents the native-call-site
-    bug shape — the unwrap must happen at the caller."""
+def test_caller_must_unwrap_previous_outputs_before_passing():
+    """Wrapped ``previous_outputs`` entries (no ``status`` key at the
+    top level) fall through to the success branch — the unwrap MUST
+    happen at the call site, not inside the helper."""
     with patch("gaia.agents.base.agent.AgentSDK"):
         a = _DummyAgent(silent_mode=True, skip_lemonade=True)
     wrapped = [
