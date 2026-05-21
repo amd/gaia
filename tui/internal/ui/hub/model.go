@@ -236,13 +236,7 @@ func (m HubModel) View() string {
 }
 
 func (m HubModel) renderHeader() string {
-	// Robot head inspired by the GAIA mascot (green robot with cyan eyes)
-	robotLine1 := lipgloss.NewStyle().Foreground(lipgloss.Color("107")).Render("       ╭───────╮")
-	robotLine2 := lipgloss.NewStyle().Foreground(lipgloss.Color("107")).Render("    ◠  │") +
-		lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true).Render(" ◉   ◉ ") +
-		lipgloss.NewStyle().Foreground(lipgloss.Color("107")).Render("│")
-	robotLine3 := lipgloss.NewStyle().Foreground(lipgloss.Color("107")).Render("       │  ═══  │")
-	robotLine4 := lipgloss.NewStyle().Foreground(lipgloss.Color("107")).Render("       ╰───────╯")
+	logo := colorizeRobotLogo()
 
 	gaiaText := lipgloss.NewStyle().
 		Bold(true).
@@ -252,12 +246,70 @@ func (m HubModel) renderHeader() string {
 	subtitle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("243")).
 		Italic(true).
-		Render("  Local AI Agent Hub")
+		Render("  Local AI Agent Hub — by AMD")
 
-	return "\n" + robotLine1 + gaiaText + "\n" +
-		robotLine2 + "\n" +
-		robotLine3 + subtitle + "\n" +
-		robotLine4 + "\n"
+	return logo + "\n" + gaiaText + "  " + subtitle + "\n"
+}
+
+// colorizeRobotLogo renders the GAIA robot ASCII art with colors matching the mascot PNG.
+func colorizeRobotLogo() string {
+	// Colors from the GAIA mascot: green body, cyan eyes, dark background
+	bright := lipgloss.NewStyle().Foreground(lipgloss.Color("150")) // brightest green (body highlights)
+	body := lipgloss.NewStyle().Foreground(lipgloss.Color("114"))   // solid green (body)
+	mid := lipgloss.NewStyle().Foreground(lipgloss.Color("107"))    // muted green (mid-tone)
+	detail := lipgloss.NewStyle().Foreground(lipgloss.Color("65"))  // dark green (detail)
+	shadow := lipgloss.NewStyle().Foreground(lipgloss.Color("238")) // dark shadow
+	eye := lipgloss.NewStyle().Foreground(lipgloss.Color("51"))     // cyan (eyes)
+
+	lines := []string{
+		"               +=-------                 ",
+		"           =====++======-----            ",
+		"        ++======+*=========-----         ",
+		"      +++++++++++===========------       ",
+		"    ++++*#*++++++++============-=--      ",
+		"  +***+++==#+++++++++==============--    ",
+		" +#####*++=*%+++++##+++==============    ",
+		" *##%#%##++*%*++*%%%%%%%%%#########+=-   ",
+		" +#%#%%*#+*#%++#%%%#######%########%%%+  ",
+		"  *+**#####%++*%%%##*--+##%%%%%##++##%++ ",
+		"   +#####%%*+*#%%%##+--+*##%%%##*--*##** ",
+		"    +##%##++*#%%%%###++###%%%%%#*==##*#   ",
+		"    +**##+*++#%%%%%%####%%%%%%%%####*    ",
+		"     +*%%%**#+*%##%%%%%%%%%%%%%%%%%#+    ",
+		"       *##*###**+*####%%%%%%%%%%###=     ",
+		"         ==+*#######+*##########+=       ",
+		"               +#############*=          ",
+		"             +=***%%%%#**                 ",
+		"           %%%##*##**##***==              ",
+		"              #*+++++++**+=              ",
+	}
+
+	var result strings.Builder
+	for _, line := range lines {
+		for _, ch := range line {
+			switch ch {
+			case '%':
+				result.WriteString(bright.Render(string(ch)))
+			case '#':
+				result.WriteString(body.Render(string(ch)))
+			case '*':
+				result.WriteString(mid.Render(string(ch)))
+			case '+':
+				result.WriteString(detail.Render(string(ch)))
+			case '=':
+				result.WriteString(shadow.Render(string(ch)))
+			case '-':
+				// Eye sockets — use cyan for the dash markers inside the face area
+				result.WriteString(eye.Render(string(ch)))
+			case ' ':
+				result.WriteByte(' ')
+			default:
+				result.WriteString(shadow.Render(string(ch)))
+			}
+		}
+		result.WriteByte('\n')
+	}
+	return result.String()
 }
 
 func (m HubModel) renderDashboard() string {
@@ -302,7 +354,7 @@ func (m *HubModel) refreshList() {
 }
 
 func (m *HubModel) resizeList() {
-	overhead := 11 // logo(3) + subtitle(1) + blanks(2) + dashboard(1) + tabs(1) + divider(1) + footer(1) + padding(1)
+	overhead := 26 // logo(20) + gaia+subtitle(1) + dashboard(1) + tabs(1) + divider(1) + footer(1) + padding(1)
 	h := m.height - overhead
 	if h < 5 {
 		h = 5
