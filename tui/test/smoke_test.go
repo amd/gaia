@@ -120,8 +120,8 @@ func TestChatModelFromHub(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := updated.(chat.ChatModel).View()
 
-	if !contains(view, "Esc to return") {
-		t.Error("hub-launched chat missing 'Esc to return' hint")
+	if !contains(view, "Esc back") {
+		t.Error("hub-launched chat missing 'Esc back' hint")
 	}
 }
 

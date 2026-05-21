@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -107,6 +108,7 @@ type ChatModel struct {
 	totalSteps   int
 	initialQuery string
 	err          error
+	queryStart   time.Time // tracks when the current query started
 }
 
 func NewChatModel(c client.AgentClient, agentName string, initialQuery string, debug bool) ChatModel {
@@ -330,6 +332,7 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 	m.streaming = true
 	m.activity = nil
 	m.buffer.Reset()
+	m.queryStart = time.Now()
 	m.updateViewport()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -434,11 +437,15 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 
 	case event.AnswerEvent:
 		m.flushBuffer()
+		duration := time.Since(m.queryStart)
 		rendered := components.RenderMarkdown(e.Content)
 		m.messages = append(m.messages, Message{
-			Role:     RoleAssistant,
-			Content:  e.Content,
-			Rendered: rendered,
+			Role:      RoleAssistant,
+			Content:   e.Content,
+			Rendered:  rendered,
+			Duration:  duration,
+			Steps:     e.Steps,
+			ToolsUsed: e.ToolsUsed,
 		})
 		m.streaming = false
 		m.activity = nil
@@ -532,10 +539,9 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	// Live region: only the latest activity item is rendered (overwriting pattern)
+	// Live region: show a compact summary of current streaming state
 	if m.streaming && len(m.activity) > 0 {
-		last := m.activity[len(m.activity)-1]
-		sb.WriteString(m.renderLiveActivity(last))
+		sb.WriteString(m.renderLiveRegion())
 		sb.WriteString("\n")
 	}
 
@@ -578,7 +584,22 @@ func (m ChatModel) renderMessage(msg Message) string {
 		if panelWidth < 20 {
 			panelWidth = 20
 		}
-		return answerPanelStyle.Width(panelWidth).Render(content)
+		panel := answerPanelStyle.Width(panelWidth).Render(content)
+
+		// Perf stats line below the panel
+		if msg.Duration > 0 {
+			var stats []string
+			stats = append(stats, fmt.Sprintf("%.1fs", msg.Duration.Seconds()))
+			if msg.Steps > 0 {
+				stats = append(stats, fmt.Sprintf("%d steps", msg.Steps))
+			}
+			if msg.ToolsUsed > 0 {
+				stats = append(stats, fmt.Sprintf("%d tools", msg.ToolsUsed))
+			}
+			statsLine := activityStyle.Render("  " + strings.Join(stats, " · "))
+			panel += "\n" + statsLine
+		}
+		return panel
 
 	case RoleError:
 		panelWidth := m.width - 4
@@ -595,15 +616,52 @@ func (m ChatModel) renderMessage(msg Message) string {
 	}
 }
 
-// renderLiveActivity renders the current live activity indicator (overwriting previous).
-func (m ChatModel) renderLiveActivity(item ActivityItem) string {
+// renderLiveRegion renders a compact multi-line summary of current streaming state.
+// Shows step progress + latest activity with spinner.
+func (m ChatModel) renderLiveRegion() string {
+	var lines []string
+
+	// Find the latest step and latest non-step activity
+	var latestStep *ActivityItem
+	var latestAction *ActivityItem
+	for i := len(m.activity) - 1; i >= 0; i-- {
+		item := &m.activity[i]
+		if item.Kind == "step" && latestStep == nil {
+			latestStep = item
+		} else if item.Kind != "step" && latestAction == nil {
+			latestAction = item
+		}
+		if latestStep != nil && latestAction != nil {
+			break
+		}
+	}
+
+	// Step progress line
+	if latestStep != nil {
+		lines = append(lines, "  "+stepStyle.Render(m.spinner.View()+" "+latestStep.Content))
+	}
+
+	// Current action line
+	if latestAction != nil {
+		line := m.renderActivityItem(*latestAction)
+		lines = append(lines, line)
+	} else if latestStep == nil {
+		// No activity yet — show generic spinner
+		lines = append(lines, "  "+activityStyle.Render(m.spinner.View()+" Connecting..."))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// renderActivityItem renders a single activity item with appropriate styling.
+func (m ChatModel) renderActivityItem(item ActivityItem) string {
 	switch item.Kind {
 	case "thinking":
 		content := item.Content
-		if len(content) > 60 {
-			content = content[:60] + "..."
+		if len(content) > 80 {
+			content = content[:80] + "..."
 		}
-		return "  " + thinkingStyle.Render("🧠 ") + activityStyle.Render(content)
+		return "  " + thinkingStyle.Render("🧠 "+content)
 
 	case "tool":
 		if item.Done {
@@ -615,11 +673,8 @@ func (m ChatModel) renderLiveActivity(item ActivityItem) string {
 		}
 		return "  " + toolNameStyle.Render("🔧 "+item.Content)
 
-	case "step":
-		return "  " + stepStyle.Render("📝 "+item.Content)
-
 	case "status":
-		return "  " + activityStyle.Render("— "+item.Content)
+		return "  " + activityStyle.Render("  "+item.Content)
 
 	default:
 		return "  " + activityStyle.Render(item.Content)
@@ -653,11 +708,11 @@ func (m ChatModel) View() string {
 		inputView = m.spinner.View() + " ◆ " + label
 	}
 
-	hint := "Ctrl+C to quit"
+	hint := "Ctrl+C quit"
 	if m.streaming {
-		hint = "Esc to cancel"
+		hint = "Esc cancel"
 	} else if m.fromHub {
-		hint = "Esc to return · Ctrl+C to quit"
+		hint = "Esc back · Ctrl+C quit"
 	}
 
 	statusBar := components.RenderStatusBar(components.StatusBarState{

@@ -1,5 +1,7 @@
 package chat
 
+import "time"
+
 type MessageRole string
 
 const (
@@ -11,11 +13,14 @@ const (
 )
 
 type Message struct {
-	Role     MessageRole
-	Content  string
-	Rendered string
-	ToolName string
-	Success  *bool
+	Role      MessageRole
+	Content   string
+	Rendered  string
+	ToolName  string
+	Success   *bool
+	Duration  time.Duration // time from query to answer
+	Steps     int           // agent steps taken
+	ToolsUsed int           // tools invoked
 }
 
 type ActivityItem struct {
