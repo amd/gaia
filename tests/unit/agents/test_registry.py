@@ -428,7 +428,7 @@ class TestEntryPointDiscovery:
         monkeypatch.setattr(
             registry_module.importlib.metadata,
             "entry_points",
-            lambda: entry_points,
+            lambda group: entry_points.select(group=group),
         )
 
         registry = AgentRegistry()
@@ -439,32 +439,6 @@ class TestEntryPointDiscovery:
         assert reg.name == "Hub Chat"
         assert reg.namespaced_agent_id == "installed:hub-chat"
         assert registry.create_agent("hub-chat") == "created"
-
-    def test_discovers_legacy_dict_entry_points(self, monkeypatch):
-        registration = AgentRegistration(
-            id="legacy-hub-chat",
-            name="Legacy Hub Chat",
-            description="Standalone hub agent from legacy metadata",
-            source="custom_python",
-            conversation_starters=[],
-            factory=lambda **kw: "legacy-created",
-            agent_dir=None,
-            models=[],
-        )
-        entry_point = self._entry_point("legacy-hub-chat", lambda: registration)
-        monkeypatch.setattr(
-            registry_module.importlib.metadata,
-            "entry_points",
-            lambda: {registry_module.AGENT_ENTRY_POINT_GROUP: [entry_point]},
-        )
-
-        registry = AgentRegistry()
-        registry._discover_entry_point_agents()
-
-        reg = registry.get("legacy-hub-chat")
-        assert reg is not None
-        assert reg.namespaced_agent_id == "installed:legacy-hub-chat"
-        assert registry.create_agent("legacy-hub-chat") == "legacy-created"
 
     def test_entry_point_does_not_override_existing_agent(self, monkeypatch):
         existing = AgentRegistration(
@@ -493,7 +467,7 @@ class TestEntryPointDiscovery:
         monkeypatch.setattr(
             registry_module.importlib.metadata,
             "entry_points",
-            lambda: entry_points,
+            lambda group: entry_points.select(group=group),
         )
 
         registry = AgentRegistry()
@@ -502,6 +476,44 @@ class TestEntryPointDiscovery:
 
         assert registry.get("chat").name == "Existing Chat"
         assert registry.create_agent("chat") == "existing"
+
+    def test_bad_entry_point_is_skipped_with_warning(self, monkeypatch, caplog):
+        entry_point = self._entry_point("broken-agent", object())
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            lambda group: [entry_point],
+        )
+
+        registry = AgentRegistry()
+        registry._discover_entry_point_agents()
+
+        assert registry.get("broken-agent") is None
+        assert "Failed to load agent entry point broken-agent" in caplog.text
+
+    def test_preserves_existing_namespaced_agent_id(self, monkeypatch):
+        registration = AgentRegistration(
+            id="hub-chat",
+            name="Hub Chat",
+            description="Standalone hub agent",
+            source="custom_python",
+            conversation_starters=[],
+            factory=lambda **kw: "created",
+            agent_dir=None,
+            models=[],
+            namespaced_agent_id="wheel:hub-chat",
+        )
+        entry_point = self._entry_point("hub-chat", lambda: registration)
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            lambda group: [entry_point],
+        )
+
+        registry = AgentRegistry()
+        registry._discover_entry_point_agents()
+
+        assert registry.get("hub-chat").namespaced_agent_id == "wheel:hub-chat"
 
 
 # ---------------------------------------------------------------------------

@@ -848,13 +848,9 @@ class AgentRegistry:
 
     def _discover_entry_point_agents(self) -> None:
         """Register installed Python agents from the ``gaia.agents`` group."""
-        entry_points = importlib.metadata.entry_points()
-        select_entry_points = getattr(entry_points, "select", None)
-        if callable(select_entry_points):
-            agent_entry_points = select_entry_points(group=AGENT_ENTRY_POINT_GROUP)
-        else:
-            entry_points_for_group = getattr(entry_points, "get")
-            agent_entry_points = entry_points_for_group(AGENT_ENTRY_POINT_GROUP, [])
+        agent_entry_points = importlib.metadata.entry_points(
+            group=AGENT_ENTRY_POINT_GROUP
+        )
 
         registered = 0
         for entry_point in agent_entry_points:
@@ -865,6 +861,7 @@ class AgentRegistry:
                     "registry: Failed to load agent entry point %s: %s",
                     entry_point.name,
                     exc,
+                    exc_info=True,
                 )
                 continue
 
@@ -881,7 +878,9 @@ class AgentRegistry:
         if registered:
             logger.info("registry: Registered %d entry point agent(s)", registered)
 
-    def _load_entry_point_registration(self, entry_point) -> AgentRegistration:
+    def _load_entry_point_registration(
+        self, entry_point: importlib.metadata.EntryPoint
+    ) -> AgentRegistration:
         loaded = entry_point.load()
         registration = loaded() if callable(loaded) else loaded
         if not isinstance(registration, AgentRegistration):
