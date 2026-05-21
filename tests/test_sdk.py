@@ -1165,8 +1165,8 @@ class TestDatabaseMixin:
 class TestFileChangeHandler:
     """Test FileChangeHandler interface."""
 
-    def test_file_change_handler_will_exist(self):
-        """Verify FileChangeHandler will be importable."""
+    def test_file_change_handler_exists(self):
+        """Verify FileChangeHandler is importable."""
         from gaia.utils.file_watcher import FileChangeHandler
 
         assert FileChangeHandler is not None
@@ -1240,7 +1240,7 @@ class TestTalkSDK:
 
 
 class TestRoutingAgent:
-    """Smoke coverage for RoutingAgent. Behavioural tests are #880's scope."""
+    """Smoke coverage for RoutingAgent — behavioural routing tests live in a dedicated suite."""
 
     def test_routing_agent_exposes_process_query(self):
         """Verify RoutingAgent imports cleanly and exposes process_query.
