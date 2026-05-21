@@ -28,8 +28,8 @@ func TestHubModelRenders(t *testing.T) {
 	}
 
 	// Check for key content in rendered view
-	// The GAIA logo uses Unicode box-drawing chars, so check for "Agent Hub" subtitle
-	checks := []string{"Agent Hub", "Chat", "Bash", "Doc"}
+	// Only Bash is installed — it should appear in the default Installed tab
+	checks := []string{"Agent Hub", "Bash"}
 	for _, check := range checks {
 		if !contains(view, check) {
 			t.Errorf("hub view missing expected content: %q", check)
@@ -146,8 +146,8 @@ func TestDashboardStats(t *testing.T) {
 	cat := catalog.NewCatalog()
 
 	installed, active, idle := cat.DashboardStats()
-	if installed != 5 {
-		t.Errorf("expected 5 installed, got %d", installed)
+	if installed != 1 {
+		t.Errorf("expected 1 installed (bash only), got %d", installed)
 	}
 	if active != 0 {
 		t.Errorf("expected 0 active, got %d", active)
@@ -162,8 +162,8 @@ func TestDashboardStats(t *testing.T) {
 	if active != 1 {
 		t.Errorf("expected 1 active after SetStatus, got %d", active)
 	}
-	if installed != 4 {
-		t.Errorf("expected 4 installed after SetStatus, got %d", installed)
+	if installed != 0 {
+		t.Errorf("expected 0 installed after SetStatus (bash now active), got %d", installed)
 	}
 }
 

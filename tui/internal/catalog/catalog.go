@@ -180,37 +180,33 @@ func seedAgents() []Agent {
 	return []Agent{
 		// --- Installed ---
 		{
-			ID: "chat", Name: "Chat", Description: "General conversation and Q&A",
-			Category: "Conversation", Tags: []string{"chat", "general", "qa"},
-			Icon: "💬", Version: "0.1.0", Status: StatusInstalled,
-			BinaryPath: "gaia-chat", BinaryArgs: []string{"--json-events"},
-		},
-		{
-			ID: "doc", Name: "Doc", Description: "Document analysis with RAG",
-			Category: "Documents", Tags: []string{"documents", "rag", "pdf", "search"},
-			Icon: "📄", Version: "0.1.0", Status: StatusInstalled,
-			BinaryPath: "gaia-doc", BinaryArgs: []string{"--json-events"},
-		},
-		{
-			ID: "file", Name: "File", Description: "File system navigation and operations",
-			Category: "Productivity", Tags: []string{"files", "filesystem", "io"},
-			Icon: "📁", Version: "0.1.0", Status: StatusInstalled,
-			BinaryPath: "gaia-file", BinaryArgs: []string{"--json-events"},
-		},
-		{
-			ID: "code", Name: "Code", Description: "Code generation and editing",
-			Category: "Code", Tags: []string{"code", "programming", "developer"},
-			Icon: "🔧", Version: "0.1.0", Status: StatusInstalled,
-			BinaryPath: "gaia-code", BinaryArgs: []string{"--json-events"},
-		},
-		{
 			ID: "bash", Name: "Bash", Description: "Shell command execution and automation",
 			Category: "DevOps", Tags: []string{"shell", "bash", "terminal", "cli"},
 			Icon: "🖥️", Version: "0.1.0", Status: StatusInstalled,
 			BinaryPath: "gaia-bash", BinaryArgs: []string{"--json-events", "--model", "Gemma-4-E4B-it-GGUF"},
 		},
 
-		// --- Available (not yet downloaded) ---
+		// --- Available (Python agents — need API client mode) ---
+		{
+			ID: "chat", Name: "Chat", Description: "General conversation and Q&A",
+			Category: "Conversation", Tags: []string{"chat", "general", "qa"},
+			Icon: "💬", Version: "0.1.0", Status: StatusAvailable,
+		},
+		{
+			ID: "doc", Name: "Doc", Description: "Document analysis with RAG",
+			Category: "Documents", Tags: []string{"documents", "rag", "pdf", "search"},
+			Icon: "📄", Version: "0.1.0", Status: StatusAvailable,
+		},
+		{
+			ID: "file", Name: "File", Description: "File system navigation and operations",
+			Category: "Productivity", Tags: []string{"files", "filesystem", "io"},
+			Icon: "📁", Version: "0.1.0", Status: StatusAvailable,
+		},
+		{
+			ID: "code", Name: "Code", Description: "Code generation and editing",
+			Category: "Code", Tags: []string{"code", "programming", "developer"},
+			Icon: "🔧", Version: "0.1.0", Status: StatusAvailable,
+		},
 		{
 			ID: "blender", Name: "Blender", Description: "3D scene automation and modeling",
 			Category: "Creative", Tags: []string{"3d", "blender", "modeling", "animation"},

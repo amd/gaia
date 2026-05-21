@@ -104,8 +104,8 @@ func TestBySectionCoverage(t *testing.T) {
 func TestDashboardStats(t *testing.T) {
 	c := NewCatalog()
 	installed, active, idle := c.DashboardStats()
-	if installed != 5 {
-		t.Fatalf("DashboardStats() installed = %d, want 5", installed)
+	if installed != 1 {
+		t.Fatalf("DashboardStats() installed = %d, want 1 (bash only)", installed)
 	}
 	if active != 0 {
 		t.Fatalf("DashboardStats() active = %d, want 0", active)
@@ -117,8 +117,8 @@ func TestDashboardStats(t *testing.T) {
 
 func TestSetStatus(t *testing.T) {
 	c := NewCatalog()
-	c.SetStatus("chat", StatusActive)
-	agent := c.Get("chat")
+	c.SetStatus("bash", StatusActive)
+	agent := c.Get("bash")
 	if agent.Status != StatusActive {
 		t.Fatalf("after SetStatus, status = %s, want active", agent.Status)
 	}
@@ -128,8 +128,8 @@ func TestSetStatus(t *testing.T) {
 	if active != 1 {
 		t.Fatalf("after SetStatus(active), active = %d, want 1", active)
 	}
-	if installed != 4 {
-		t.Fatalf("after SetStatus(active), installed = %d, want 4", installed)
+	if installed != 0 {
+		t.Fatalf("after SetStatus(active), installed = %d, want 0", installed)
 	}
 }
 
