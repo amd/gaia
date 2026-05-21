@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -20,7 +21,7 @@ var (
 			Foreground(lipgloss.Color("252")).
 			Padding(0, 1)
 
-	connectedDot   = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●")
+	connectedDot    = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●")
 	disconnectedDot = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("●")
 )
 
@@ -35,24 +36,30 @@ func RenderStatusBar(state StatusBarState, width int) string {
 		status = "streaming"
 	}
 
-	left := fmt.Sprintf(" %s %s %s", dot, state.AgentName, status)
-
-	right := ""
+	// Build left and right content
+	leftText := fmt.Sprintf("%s %s", state.AgentName, status)
+	rightText := ""
 	if state.Hint != "" {
-		right = state.Hint + " "
+		rightText = state.Hint
 	} else if state.Steps > 0 {
-		right = fmt.Sprintf("steps: %d ", state.Steps)
+		rightText = fmt.Sprintf("steps: %d", state.Steps)
 	}
 
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 0 {
-		gap = 0
+	// Calculate padding (accounting for dot + spaces + padding(0,1) = 2 chars)
+	// left: " ● agentname status" — dot is 1 visible char
+	// right: "hint "
+	leftVisibleLen := 3 + len(leftText) // " ● " + text
+	rightVisibleLen := len(rightText)
+	if rightVisibleLen > 0 {
+		rightVisibleLen++ // trailing space
 	}
 
-	padding := ""
-	for i := 0; i < gap; i++ {
-		padding += " "
+	innerWidth := width - 2 // padding(0,1) adds 1 on each side
+	gap := innerWidth - leftVisibleLen - rightVisibleLen
+	if gap < 1 {
+		gap = 1
 	}
 
-	return statusBarStyle.Width(width).Render(left + padding + right)
+	content := " " + dot + " " + leftText + strings.Repeat(" ", gap) + rightText
+	return statusBarStyle.Width(width).Render(content)
 }

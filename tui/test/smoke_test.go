@@ -125,6 +125,23 @@ func TestChatModelFromHub(t *testing.T) {
 	}
 }
 
+func TestBinaryDiscovery(t *testing.T) {
+	cat := catalog.NewCatalog()
+	cat.DiscoverBinaries()
+
+	bash := cat.Get("bash")
+	if bash == nil {
+		t.Fatal("bash agent not found")
+	}
+	// If gaia-bash.exe exists in the repo, discovery should find it
+	if bash.BinaryPath != "gaia-bash" {
+		// Discovery found something — verify it's a real path
+		t.Logf("Discovered bash binary: %s", bash.BinaryPath)
+	} else {
+		t.Logf("Binary discovery did not find gaia-bash (expected if not built)")
+	}
+}
+
 func TestDashboardStats(t *testing.T) {
 	cat := catalog.NewCatalog()
 

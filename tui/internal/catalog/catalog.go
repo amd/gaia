@@ -48,48 +48,53 @@ func (c *Catalog) Get(id string) *Agent {
 	return nil
 }
 
-// DiscoverBinaries searches common locations for agent executables and updates binary paths.
+// DiscoverBinaries searches for agent executables on PATH and in common build locations.
 func (c *Catalog) DiscoverBinaries() {
 	for i := range c.agents {
 		if c.agents[i].BinaryPath == "" {
 			continue
 		}
-		// Check if the binary is already on PATH
-		if _, err := exec.LookPath(c.agents[i].BinaryPath); err == nil {
-			continue
-		}
-		// Also try with .exe suffix on Windows
-		if _, err := exec.LookPath(c.agents[i].BinaryPath + ".exe"); err == nil {
-			c.agents[i].BinaryPath = c.agents[i].BinaryPath + ".exe"
-			continue
-		}
-		// Search common locations relative to the executable and working directory
-		exePath, _ := os.Executable()
-		exeDir := filepath.Dir(exePath)
-		cwd, _ := os.Getwd()
 		name := c.agents[i].BinaryPath
-		searchPaths := []string{
-			filepath.Join(exeDir, name),
-			filepath.Join(exeDir, name+".exe"),
-			// Relative to tui/bin/ — go up to repo root
-			filepath.Join(exeDir, "..", "..", "cpp", "build", "Debug", name+".exe"),
-			filepath.Join(exeDir, "..", "..", "cpp", "build", "Release", name+".exe"),
-			filepath.Join(exeDir, "..", "cpp", "build", "Debug", name+".exe"),
-			filepath.Join(exeDir, "..", "cpp", "build", "Release", name+".exe"),
-			// Relative to cwd
-			filepath.Join(cwd, "cpp", "build", "Debug", name+".exe"),
-			filepath.Join(cwd, "cpp", "build", "Release", name+".exe"),
-			filepath.Join(cwd, "..", "cpp", "build", "Debug", name+".exe"),
-			filepath.Join(cwd, "..", "cpp", "build", "Release", name+".exe"),
+		// Check if already on PATH
+		if p, err := exec.LookPath(name); err == nil {
+			c.agents[i].BinaryPath = p
+			continue
 		}
-		for _, p := range searchPaths {
-			if _, err := os.Stat(p); err == nil {
-				abs, _ := filepath.Abs(p)
-				c.agents[i].BinaryPath = abs
-				break
-			}
+		if p, err := exec.LookPath(name + ".exe"); err == nil {
+			c.agents[i].BinaryPath = p
+			continue
+		}
+		// Walk up from cwd looking for cpp/build/{Debug,Release}/<name>.exe
+		if found := findBinaryInRepo(name); found != "" {
+			c.agents[i].BinaryPath = found
 		}
 	}
+}
+
+// findBinaryInRepo walks up the directory tree from cwd looking for the agent binary
+// in common build output locations (cpp/build/Debug/, cpp/build/Release/).
+func findBinaryInRepo(name string) string {
+	dir, _ := os.Getwd()
+	for i := 0; i < 8; i++ {
+		for _, buildDir := range []string{"Debug", "Release", ""} {
+			var candidate string
+			if buildDir != "" {
+				candidate = filepath.Join(dir, "cpp", "build", buildDir, name+".exe")
+			} else {
+				candidate = filepath.Join(dir, "cpp", "build", name+".exe")
+			}
+			if _, err := os.Stat(candidate); err == nil {
+				abs, _ := filepath.Abs(candidate)
+				return abs
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
 }
 
 // SetMockBinary overrides all installed agent binary paths with a mock binary for testing.
