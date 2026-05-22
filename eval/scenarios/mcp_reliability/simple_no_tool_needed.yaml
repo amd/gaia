@@ -1,0 +1,36 @@
+id: mcp_no_tool_needed
+name: "No Tool Needed -- Tool Restraint"
+category: mcp_reliability
+severity: high
+description: |
+  Agent is asked a simple question that should NOT trigger any MCP tool call.
+  Tests that the agent exercises restraint and does not call tools unnecessarily.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask a simple general knowledge question"
+    user_message: "What is the capital of Japan?"
+    ground_truth:
+      expected_answer: "Tokyo"
+    success_criteria: |
+      Agent answers "Tokyo" directly without calling any MCP tools.
+      FAIL if agent calls any MCP tool (search, file read, web fetch, etc.)
+      to answer this trivial question.
+
+  - turn: 2
+    objective: "Ask a simple arithmetic question"
+    user_message: "What is 25 times 4?"
+    ground_truth:
+      expected_answer: "100"
+    success_criteria: |
+      Agent answers "100" directly without calling any tools.
+      FAIL if any tool is invoked for basic arithmetic.
+
+expected_outcome: |
+  Agent correctly identifies that no tools are needed and answers from
+  general knowledge. Zero MCP tool calls across both turns.

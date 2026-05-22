@@ -5,7 +5,7 @@ Blender-specific agent for creating and modifying 3D scenes.
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
@@ -433,10 +433,17 @@ Examples of colored requests:
                 return {"status": "error", "error": str(e)}
 
     def _post_process_tool_result(
-        self, tool_name: str, tool_args: Dict[str, Any], tool_result: Dict[str, Any]
-    ) -> None:
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        tool_result: Dict[str, Any],
+    ) -> Optional[List[Dict[str, Any]]]:
         """
         Post-process the tool result for Blender-specific handling.
+
+        Delegates to ``super()`` so the base class can set
+        ``_single_tool_done`` for ``single_tool_per_turn=True`` agents
+        on the success path.
 
         Args:
             tool_name: Name of the tool that was executed
@@ -473,6 +480,7 @@ Examples of colored requests:
                                     f"Updating name in future step {i+1} from {args['name']} to {actual_name}"
                                 )
                                 self.current_plan[i]["tool_args"]["name"] = actual_name
+        return super()._post_process_tool_result(tool_name, tool_args, tool_result)
 
     def _track_object_name(self, result):
         """

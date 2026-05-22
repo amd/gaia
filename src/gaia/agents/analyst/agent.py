@@ -47,6 +47,11 @@ class AnalystAgent(
         self._path_validator = self.path_validator
         self._scratchpad = ScratchpadService(db_path=config.scratchpad_db_path)
 
+        # Agent has no MCP servers; the UI auto-calls get_mcp_status_report()
+        # on every chat send and MCPClientMixin.__init__ never runs because
+        # Agent.__init__ doesn't chain super().
+        self._mcp_manager = None
+
         super().__init__(
             use_claude=config.use_claude,
             use_chatgpt=config.use_chatgpt,

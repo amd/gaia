@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: MIT
 
 import asyncio
+import json
 import logging
 import os
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -616,6 +618,7 @@ async def async_main(action, **kwargs):
                 chunk_size=kwargs.get("chunk_size", 500),
                 max_chunks=kwargs.get("max_chunks", 3),
                 allowed_paths=kwargs.get("allowed_paths", None),
+                mcp_tool_limit=kwargs.get("mcp_tool_limit", 50),
             )
 
             # Create Chat Agent with configuration
@@ -982,7 +985,104 @@ def _show_interactive_menu(log=None):
         print("  Run 'gaia --help' for all commands.")
 
 
-def main():
+def _print_reliability_summary(scorecards, pass_threshold=0.90):
+    """Print a reliability summary table from multiple eval iteration scorecards.
+
+    Groups scenario results across iterations and computes per-scenario pass rates.
+    Prints a colorized table and a GO/NO_GO readiness signal.
+    """
+    # Collect per-scenario results across all iterations
+    by_scenario = defaultdict(list)
+    for sc in scorecards:
+        if not sc:
+            continue
+        for result in sc.get("scenarios", []):
+            sid = result.get("scenario_id", "unknown")
+            by_scenario[sid].append(result.get("status", "ERRORED"))
+
+    if not by_scenario:
+        print("\n[RELIABILITY] No scenario results to aggregate.")
+        return
+
+    n_iterations = sum(1 for sc in scorecards if sc)
+
+    # Compute pass rates
+    rows = []
+    all_pass = True
+    for sid in sorted(by_scenario.keys()):
+        statuses = by_scenario[sid]
+        pass_count = sum(1 for s in statuses if s == "PASS")
+        total = len(statuses)
+        rate = pass_count / total if total > 0 else 0.0
+        passed = rate >= pass_threshold
+        if not passed:
+            all_pass = False
+        rows.append((sid, pass_count, total, rate, passed))
+
+    # Print table — guard colour codes so piped output (CI, log files,
+    # non-ANSI Windows shells) stays clean.
+    use_color = sys.stdout.isatty()
+    green = "\033[32m" if use_color else ""
+    red = "\033[31m" if use_color else ""
+    reset = "\033[0m" if use_color else ""
+
+    print(f"\n{'=' * 72}")
+    print(f"  MCP RELIABILITY SUMMARY  ({n_iterations} iterations)")
+    print(f"{'=' * 72}")
+    print(f"  {'Scenario':<40} {'Pass Rate':>12} {'Result':>8}")
+    print(f"  {'-' * 40} {'-' * 12} {'-' * 8}")
+
+    for sid, pass_count, total, rate, passed in rows:
+        rate_str = f"{pass_count}/{total} ({rate:.0%})"
+        colour = green if passed else red
+        label = "PASS" if passed else "FAIL"
+        result_str = f"{colour}{label:>8}{reset}"
+        print(f"  {sid:<40} {rate_str:>12} {result_str}")
+
+    print(f"  {'-' * 40} {'-' * 12} {'-' * 8}")
+
+    # Readiness signal
+    if all_pass:
+        print(
+            f"\n  Readiness: {green}GO{reset} (all scenarios >= {pass_threshold:.0%})"
+        )
+    else:
+        failing = sum(1 for _, _, _, _, p in rows if not p)
+        print(
+            f"\n  Readiness: {red}NO_GO{reset} ({failing} scenario(s) below {pass_threshold:.0%})"
+        )
+    print(f"{'=' * 72}\n")
+
+    # Write reliability_report.json alongside the last run's results
+    last_sc = next((sc for sc in reversed(scorecards) if sc), None)
+    if last_sc:
+        from gaia.eval.runner import RESULTS_DIR
+
+        report = {
+            "iterations": n_iterations,
+            "pass_threshold": pass_threshold,
+            "readiness": "GO" if all_pass else "NO_GO",
+            "scenarios": [
+                {
+                    "scenario_id": sid,
+                    "pass_count": pc,
+                    "total": t,
+                    "iteration_pass_rate": r,
+                    "status": "PASS" if p else "FAIL",
+                }
+                for sid, pc, t, r, p in rows
+            ],
+        }
+        report_path = RESULTS_DIR / "reliability_report.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(f"[RELIABILITY] Report saved → {report_path}")
+
+
+def build_parser():
+    """Build and return the root argparse parser."""
     import argparse
 
     # Create the main parser
@@ -990,9 +1090,6 @@ def main():
         description=f"Gaia CLI - Interact with Gaia AI agents. \n{version}",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-
-    # Get logger instance
-    log = get_logger(__name__)
 
     # Add version argument
     parser.add_argument(
@@ -1178,6 +1275,15 @@ def main():
         type=int,
         default=10000,
         help="Maximum total chunks across all indexed files (default: 10000)",
+    )
+    chat_parser.add_argument(
+        "--mcp-tool-limit",
+        type=int,
+        default=50,
+        help="Maximum MCP tools to register (default: 50). "
+        "Larger tool sets bloat the system prompt and degrade small-model "
+        "tool-calling accuracy — keep this as low as your workflow allows. "
+        "Workflows with >50 tools warrant a fresh eval run on the target model.",
     )
 
     # Agent UI
@@ -2011,23 +2117,43 @@ Examples:
         "User scenarios override built-in scenarios with the same ID.",
     )
 
-    # Add new subparser for generating summary reports from evaluation directories
-    subparsers.add_parser(
-        "report",
-        help="Generate summary report from evaluation results directory",
-        parents=[parent_parser],
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Generate report from evaluation directory
-  gaia report -d ./output/eval
-
-  # Generate report with custom output filename
-  gaia report -d ./output/eval -o Model_Comparison_Report.md
-
-  # Generate report and display summary only
-  gaia report -d ./output/eval --summary-only
-        """,
+    agent_eval_parser.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Run each scenario N times for reliability measurement (default: 1)",
+    )
+    # NOTE: --reset-between-scenarios / --lemonade-model / --lemonade-ctx-size
+    # are NOT YET IMPLEMENTED. They are accepted by the parser so a future
+    # commit can wire them into AgentEvalRunner without changing the user-
+    # facing surface, but passing a non-None value today raises
+    # NotImplementedError (see the eval-agent handler). Driver scripts that
+    # want clean-state reliability runs should restart Lemonade/Agent UI
+    # externally between iterations until this lands.
+    agent_eval_parser.add_argument(
+        "--reset-between-scenarios",
+        choices=["fast", "full"],
+        default=None,
+        metavar="MODE",
+        help="[NOT YET IMPLEMENTED] Will reset services between scenarios "
+        "for clean-state reliability testing. Passing this flag today "
+        "raises NotImplementedError; restart Lemonade / Agent UI from a "
+        "driver script in the meantime.",
+    )
+    agent_eval_parser.add_argument(
+        "--lemonade-model",
+        metavar="MODEL",
+        help="[NOT YET IMPLEMENTED] Will pair with --reset-between-scenarios "
+        "to reload a specific Lemonade model between scenarios. Today the "
+        "Lemonade model is whatever the running server has loaded.",
+    )
+    agent_eval_parser.add_argument(
+        "--lemonade-ctx-size",
+        type=int,
+        metavar="SIZE",
+        help="[NOT YET IMPLEMENTED] Will pair with --lemonade-model to "
+        "reload the model at this ctx size between scenarios.",
     )
     agent_eval_parser.add_argument(
         "--corpus-dir",
@@ -2048,6 +2174,45 @@ Examples:
         default=None,
         help="Output format for results (default: json+markdown as today). "
         "'junit' writes a JUnit XML file for CI integration.",
+    )
+
+    # Add new subparser for generating summary reports from evaluation directories
+    report_parser = subparsers.add_parser(
+        "report",
+        help="Generate summary report from evaluation results directory",
+        parents=[parent_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Generate report from evaluation directory
+  gaia report -d ./output/eval
+
+  # Generate report with custom output filename
+  gaia report -d ./output/eval -o Model_Comparison_Report.md
+
+  # Generate report and display summary only
+  gaia report -d ./output/eval --summary-only
+        """,
+    )
+
+    report_parser.add_argument(
+        "-d",
+        "--eval-dir",
+        type=str,
+        default="./output/evaluations",
+        help="Directory containing .eval.json files to analyze (default: ./output/evaluations)",
+    )
+    report_parser.add_argument(
+        "-o",
+        "--output-file",
+        type=str,
+        default="LLM_Evaluation_Report.md",
+        help="Output filename for the markdown report (default: LLM_Evaluation_Report.md)",
+    )
+    report_parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Only display summary to console, don't save report file",
     )
 
     perf_vis_parser = subparsers.add_parser(
@@ -2451,6 +2616,12 @@ Examples:
     )
 
     _register_uninstall_subparser(subparsers, parent_parser)
+    return parser
+
+
+def main():
+    parser = build_parser()
+    log = get_logger(__name__)
 
     args = parser.parse_args()
 
@@ -2615,7 +2786,6 @@ Examples:
 
     # Handle summarize command
     if args.action == "summarize":
-        import json
 
         from gaia.apps.summarize.app import SummarizerApp, SummaryConfig
         from gaia.apps.summarize.html_viewer import HTMLViewer
@@ -3540,37 +3710,87 @@ Let me know your answer!
                     sys.exit(1)
                 # compare handled; no further action
 
+            # --reset-between-scenarios / --lemonade-model / --lemonade-ctx-size
+            # are accepted by the parser but not yet wired into
+            # AgentEvalRunner. Fail loudly rather than silently no-op.
+            reset = getattr(args, "reset_between_scenarios", None)
+            lemonade_model = getattr(args, "lemonade_model", None)
+            lemonade_ctx = getattr(args, "lemonade_ctx_size", None)
+            if (
+                reset is not None
+                or lemonade_model is not None
+                or lemonade_ctx is not None
+            ):
+                raise NotImplementedError(
+                    "--reset-between-scenarios / --lemonade-model / "
+                    "--lemonade-ctx-size are reserved for a future commit "
+                    "and are not yet wired into AgentEvalRunner. Restart "
+                    "Lemonade and the Agent UI from your driver script "
+                    "between iterations to get the same effect."
+                )
+
+            iterations = getattr(args, "iterations", 1)
+            fix_mode = getattr(args, "fix", False)
+
+            if iterations < 1:
+                print("Error: --iterations must be >= 1", file=sys.stderr)
+                return
+
+            if iterations > 1 and fix_mode:
+                print(
+                    "Error: --fix is incompatible with --iterations > 1. "
+                    "Fix mode operates on a single run's failures.",
+                    file=sys.stderr,
+                )
+                return
+
             from gaia.eval.runner import AgentEvalRunner
 
-            runner = AgentEvalRunner(
-                backend_url=args.backend,
-                model=args.model,
-                budget_per_scenario=args.budget,
-                timeout_per_scenario=args.timeout,
-                extra_scenario_dirs=getattr(args, "scenario_dir", None),
-                extra_corpus_dirs=getattr(args, "corpus_dir", None),
-                tags=getattr(args, "tag", None),
-                output_format=getattr(args, "output_format", None),
-                agent_type=getattr(args, "agent_type", None),
-            )
-            scorecard = runner.run(
-                scenario_id=getattr(args, "scenario", None),
-                category=getattr(args, "category", None),
-                audit_only=getattr(args, "audit_only", False),
-                fix_mode=getattr(args, "fix", False),
-                max_fix_iterations=getattr(args, "max_fix_iterations", 3),
-                target_pass_rate=getattr(args, "target_pass_rate", 0.90),
-                keep_sessions=getattr(args, "keep_sessions", False),
-            )
+            all_scorecards = []
+            for iter_idx in range(iterations):
+                if iterations > 1:
+                    print(f"\n{'=' * 60}")
+                    print(f"[ITER] Iteration {iter_idx + 1}/{iterations}")
+                    print(f"{'=' * 60}")
+
+                runner = AgentEvalRunner(
+                    backend_url=args.backend,
+                    model=args.model,
+                    budget_per_scenario=args.budget,
+                    timeout_per_scenario=args.timeout,
+                    agent_type=getattr(args, "agent_type", None),
+                    extra_scenario_dirs=getattr(args, "scenario_dir", None),
+                    extra_corpus_dirs=getattr(args, "corpus_dir", None),
+                    tags=getattr(args, "tag", None),
+                    output_format=getattr(args, "output_format", None),
+                )
+                scorecard = runner.run(
+                    scenario_id=getattr(args, "scenario", None),
+                    category=getattr(args, "category", None),
+                    audit_only=getattr(args, "audit_only", False),
+                    fix_mode=fix_mode,
+                    max_fix_iterations=getattr(args, "max_fix_iterations", 3),
+                    target_pass_rate=getattr(args, "target_pass_rate", 0.90),
+                    keep_sessions=getattr(args, "keep_sessions", False),
+                )
+                all_scorecards.append(scorecard)
+
+            if iterations > 1 and all_scorecards:
+                _print_reliability_summary(
+                    all_scorecards,
+                    pass_threshold=getattr(args, "target_pass_rate", 0.90),
+                )
+
             # --save-baseline: copy scorecard to eval/results/baseline.json
-            if getattr(args, "save_baseline", False) and scorecard:
-                import json
+            # (saves the last iteration's scorecard)
+            last_scorecard = all_scorecards[-1] if all_scorecards else None
+            if getattr(args, "save_baseline", False) and last_scorecard:
 
                 from gaia.eval.runner import RESULTS_DIR
 
                 baseline_path = RESULTS_DIR / "baseline.json"
                 baseline_path.write_text(
-                    json.dumps(scorecard, indent=2, ensure_ascii=False),
+                    json.dumps(last_scorecard, indent=2, ensure_ascii=False),
                     encoding="utf-8",
                 )
                 print(f"[BASELINE] Saved baseline → {baseline_path}")
@@ -4847,8 +5067,6 @@ def _bootstrap_infer():
     review.  All browser data is sensitive — explicit consent is requested before
     reading it.
     """
-    import json as _json
-
     from gaia.agents.base.discovery import SystemDiscovery
     from gaia.agents.base.memory_store import MemoryStore
 
@@ -5043,7 +5261,7 @@ def _bootstrap_infer():
             if cleaned.endswith("```"):
                 cleaned = cleaned[: cleaned.rfind("```")]
 
-        insights = _json.loads(cleaned.strip())
+        insights = json.loads(cleaned.strip())
         if not isinstance(insights, list):
             raise ValueError("Expected a JSON array")
         # Validate each item
@@ -5659,7 +5877,6 @@ def handle_agent_export(args):
 
 def handle_agent_import(args):
     """Import a custom agent .zip bundle into ~/.gaia/agents/."""
-    import json
     import zipfile
 
     # Lazy import to keep CLI startup fast.
@@ -6029,7 +6246,6 @@ def handle_mcp_status(args):
 
             # Try the new /status endpoint for comprehensive details
             try:
-                import json
                 import urllib.request
 
                 # First try the new /status endpoint
@@ -6117,7 +6333,6 @@ def handle_mcp_test(args):
     log = get_logger(__name__)
 
     try:
-        import json
         import urllib.parse
         import urllib.request
 
@@ -6200,7 +6415,6 @@ def handle_mcp_agent(args):
     log = get_logger(__name__)
 
     try:
-        import json
         import urllib.parse
         import urllib.request
 

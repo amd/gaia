@@ -1,0 +1,90 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Auto-merge Dependabot PRs that are safe to land without human review:
+#   - patch updates to any direct dep (production or development), OR
+#   - minor updates to development-only direct deps.
+#
+# Major bumps, indirect bumps, mixed production+dev grouped PRs, and updates to
+# the auto-merge action itself (`dependabot/fetch-metadata`) are left for human
+# review. CI gating is delegated to GitHub's native auto-merge queue — if the
+# required status checks fail, GitHub cancels the merge and the PR stays open.
+#
+# Design notes (concurrency group, `>-` scalar, contains() for grouped PRs,
+# idempotent merge call, dual actor+author gate, diagnostic log step): see #1157.
+
+name: Dependabot Auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+# One run per PR; the most recent synchronize wins. Without this, a rapid push
+# sequence can race two `gh pr merge --auto` calls against the same PR.
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Enable auto-merge for low-risk updates
+    runs-on: ubuntu-latest
+    # Defense in depth: both the trigger actor AND the PR author must be the
+    # Dependabot bot. A force-push to a Dependabot branch from a compromised
+    # maintainer account would change `github.actor` but not `pull_request.user.login`.
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]'
+
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98  # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log metadata for debugging
+        # Surfaces the gate inputs in the workflow log so a maintainer asking
+        # "why didn't this auto-merge?" can answer it from the run log.
+        env:
+          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          DEPENDENCY_TYPE: ${{ steps.metadata.outputs.dependency-type }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          echo "dependency-names: $DEPENDENCY_NAMES"
+          echo "dependency-type:  $DEPENDENCY_TYPE"
+          echo "update-type:      $UPDATE_TYPE"
+
+      - name: Enable auto-merge for patch and dev-only minor updates
+        # `contains()` (not `==`) is required: grouped PRs produce comma-separated
+        # strings like "direct:production, direct:development". For the minor
+        # branch we additionally require NO production dep is in the group.
+        # The fetch-metadata action itself is excluded — a compromised version
+        # would auto-merge itself with `contents: write`.
+        if: >-
+          !contains(steps.metadata.outputs.dependency-type, 'indirect') &&
+          !contains(steps.metadata.outputs.dependency-names, 'dependabot/fetch-metadata') &&
+          (
+            steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+            (
+              steps.metadata.outputs.update-type == 'version-update:semver-minor' &&
+              contains(steps.metadata.outputs.dependency-type, 'direct:development') &&
+              !contains(steps.metadata.outputs.dependency-type, 'direct:production')
+            )
+          )
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          # Idempotent: skip if auto-merge is already enabled (synchronize re-trigger).
+          # Without this guard, the second call returns non-zero ("already enabled")
+          # and marks the workflow run failed for no reason.
+          if [ "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest')" != "null" ]; then
+            echo "Auto-merge already enabled — no-op."
+            exit 0
+          fi
+          gh pr merge --auto --squash "$PR_URL"

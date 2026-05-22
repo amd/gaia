@@ -81,7 +81,7 @@ def check_black(fix: bool = False) -> CheckResult:
     if fix:
         print("\n[1/2] Fixing code formatting with Black...")
     else:
-        print("\n[1/9] Checking code formatting with Black...")
+        print("\n[1/10] Checking code formatting with Black...")
     print("-" * 40)
 
     if fix:
@@ -155,7 +155,7 @@ def check_isort(fix: bool = False) -> CheckResult:
     if fix:
         print("\n[2/2] Fixing import sorting with isort...")
     else:
-        print("\n[2/9] Checking import sorting with isort...")
+        print("\n[2/10] Checking import sorting with isort...")
     print("-" * 40)
 
     if fix:
@@ -200,7 +200,7 @@ def check_isort(fix: bool = False) -> CheckResult:
 
 def check_pylint() -> CheckResult:
     """Run Pylint (errors only)."""
-    print("\n[3/9] Running Pylint (errors only)...")
+    print("\n[3/10] Running Pylint (errors only)...")
     print("-" * 40)
 
     cmd = uvx(
@@ -225,7 +225,7 @@ def check_pylint() -> CheckResult:
 
 def check_flake8() -> CheckResult:
     """Run Flake8."""
-    print("\n[4/9] Running Flake8...")
+    print("\n[4/10] Running Flake8...")
     print("-" * 40)
 
     cmd = uvx(
@@ -258,7 +258,7 @@ def check_flake8() -> CheckResult:
 
 def check_mypy() -> CheckResult:
     """Run MyPy type checking (warning only)."""
-    print("\n[5/9] Running MyPy type checking (warning only)...")
+    print("\n[5/10] Running MyPy type checking (warning only)...")
     print("-" * 40)
 
     cmd = uvx("mypy", SRC_DIR, "--ignore-missing-imports")
@@ -285,7 +285,7 @@ def check_mypy() -> CheckResult:
 
 def check_bandit() -> CheckResult:
     """Run Bandit security check (warning only)."""
-    print("\n[6/9] Running security check with Bandit (warning only)...")
+    print("\n[6/10] Running security check with Bandit (warning only)...")
     print("-" * 40)
 
     cmd = uvx("bandit", "-r", SRC_DIR, "-ll", "--exclude", EXCLUDE_DIRS)
@@ -311,7 +311,7 @@ def check_bandit() -> CheckResult:
 
 def check_imports() -> CheckResult:
     """Test comprehensive SDK imports."""
-    print("\n[7/9] Testing comprehensive SDK imports...")
+    print("\n[7/10] Testing comprehensive SDK imports...")
     print("-" * 40)
 
     # Pre-check: verify gaia is installed
@@ -429,7 +429,7 @@ def check_imports() -> CheckResult:
 
 def check_agents() -> CheckResult:
     """Check GAIA agent conventions — inheritance, tests, docs, registry wiring."""
-    print("\n[8/9] Checking agent conventions...")
+    print("\n[8/10] Checking agent conventions...")
     print("-" * 40)
 
     # Import lazily so the check is self-contained and testable standalone.
@@ -449,7 +449,9 @@ def check_agents() -> CheckResult:
 
     if errors:
         print(output)
-        print(f"\n[!] Agent convention check failed ({errors} error(s), {warnings} warning(s)).")
+        print(
+            f"\n[!] Agent convention check failed ({errors} error(s), {warnings} warning(s))."
+        )
         return CheckResult("Agent Conventions", False, False, errors, output)
 
     if warnings:
@@ -461,9 +463,40 @@ def check_agents() -> CheckResult:
     return CheckResult("Agent Conventions", True, False, 0, output)
 
 
+def check_dependabot() -> CheckResult:
+    """Validate .github/dependabot.yml (no soft-disabled entries, npm groups present)."""
+    print("\n[9/10] Validating .github/dependabot.yml...")
+    print("-" * 40)
+
+    try:
+        from check_dependabot import run_check
+    except ImportError:
+        util_dir = str(Path(__file__).parent)
+        if util_dir not in sys.path:
+            sys.path.insert(0, util_dir)
+        try:
+            from check_dependabot import run_check
+        except ImportError as exc:
+            print(f"[!] Could not import check_dependabot.py: {exc}")
+            return CheckResult("Dependabot Config", False, False, 1, str(exc))
+
+    exit_code = run_check()
+
+    if exit_code != 0:
+        return CheckResult(
+            "Dependabot Config",
+            False,
+            False,
+            1,
+            "See output above; fix .github/dependabot.yml per #1157.",
+        )
+
+    return CheckResult("Dependabot Config", True, False, 0, "")
+
+
 def check_doc_versions() -> CheckResult:
     """Check documentation version consistency."""
-    print("\n[9/9] Checking documentation version consistency...")
+    print("\n[10/10] Checking documentation version consistency...")
     print("-" * 40)
 
     # Import and run the check
@@ -632,6 +665,11 @@ def main():
         help="Check agent conventions (inheritance, tests, docs)",
     )
     parser.add_argument(
+        "--dependabot",
+        action="store_true",
+        help="Validate .github/dependabot.yml (no soft-disabled entries, npm groups present)",
+    )
+    parser.add_argument(
         "--doc-versions",
         action="store_true",
         help="Check doc version consistency",
@@ -653,6 +691,7 @@ def main():
             args.bandit,
             args.imports,
             args.agents,
+            args.dependabot,
             args.doc_versions,
             args.all,
         ]
@@ -701,6 +740,9 @@ def main():
 
     if args.agents or run_all:
         results.append(check_agents())
+
+    if args.dependabot or run_all:
+        results.append(check_dependabot())
 
     if args.doc_versions or run_all:
         results.append(check_doc_versions())
