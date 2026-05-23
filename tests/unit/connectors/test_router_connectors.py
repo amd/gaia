@@ -50,6 +50,7 @@ def isolated_registry(monkeypatch, tmp_path):
     monkeypatch.setattr("gaia.ui.routers.connectors.REGISTRY", fresh)
     monkeypatch.setattr("gaia.connectors.handler.REGISTRY", fresh)
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gaia.connectors.activations.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
     yield fresh
 
@@ -540,3 +541,131 @@ class TestEnabledFieldInSummary:
     def test_oauth_summary_always_reports_enabled_true(self, ui_api_client):
         resp = ui_api_client.get("/api/connectors/google")
         assert resp.json()["enabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# Activations endpoints (issue #1005)
+# ---------------------------------------------------------------------------
+
+
+class TestActivationsCsrf:
+    def test_put_without_header_is_403(self, ui_api_client):
+        resp = ui_api_client.put(
+            "/api/connectors/google/activations/builtin:chat",
+            json={"scopes": ["openid"]},
+        )
+        assert resp.status_code == 403
+
+    def test_delete_without_header_is_403(self, ui_api_client):
+        resp = ui_api_client.delete(
+            "/api/connectors/google/activations/builtin:chat",
+        )
+        assert resp.status_code == 403
+
+
+class TestActivationsEndpoints:
+    def test_get_activations_returns_activations_key(self, ui_api_client):
+        resp = ui_api_client.get("/api/connectors/google/activations")
+        assert resp.status_code == 200
+        assert resp.json() == {"activations": {}}
+
+    def test_put_activation_with_existing_grant_succeeds(self, ui_api_client):
+        # Grant first, then activate (the explicit two-step path).
+        ui_api_client.put(
+            "/api/connectors/google/grants/builtin:chat",
+            json={"scopes": ["openid"]},
+            headers=UI_HEADER,
+        )
+        resp = ui_api_client.put(
+            "/api/connectors/google/activations/builtin:chat",
+            json={},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {
+            "connector_id": "google",
+            "agent_id": "builtin:chat",
+            "active": True,
+            "auto_granted": False,
+        }
+        # GET reflects the new active state.
+        listing = ui_api_client.get("/api/connectors/google/activations").json()
+        assert listing == {"activations": {"builtin:chat": True}}
+
+    def test_put_activation_with_no_grant_and_scopes_auto_grants(self, ui_api_client):
+        resp = ui_api_client.put(
+            "/api/connectors/google/activations/builtin:chat",
+            json={"scopes": ["openid", "email"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["auto_granted"] is True
+        assert body["active"] is True
+        # Grant landed too.
+        grants = ui_api_client.get("/api/connectors/google/grants").json()
+        assert grants == {"grants": {"builtin:chat": ["openid", "email"]}}
+
+    def test_put_activation_with_no_grant_and_no_scopes_is_400(self, ui_api_client):
+        resp = ui_api_client.put(
+            "/api/connectors/google/activations/builtin:chat",
+            json={},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 400
+        detail = resp.json().get("detail", "")
+        assert "google" in detail
+        assert "builtin:chat" in detail
+
+    def test_delete_activation_succeeds_idempotently(self, ui_api_client):
+        # No prior activation — delete is still 204 (idempotent).
+        resp = ui_api_client.delete(
+            "/api/connectors/google/activations/builtin:chat",
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 204
+
+    def test_delete_activation_preserves_grant(self, ui_api_client):
+        ui_api_client.put(
+            "/api/connectors/google/grants/builtin:chat",
+            json={"scopes": ["openid"]},
+            headers=UI_HEADER,
+        )
+        ui_api_client.put(
+            "/api/connectors/google/activations/builtin:chat",
+            json={},
+            headers=UI_HEADER,
+        )
+        resp = ui_api_client.delete(
+            "/api/connectors/google/activations/builtin:chat",
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 204
+        # Activation cleared, grant survives — re-activate must be one click.
+        grants = ui_api_client.get("/api/connectors/google/grants").json()
+        assert grants == {"grants": {"builtin:chat": ["openid"]}}
+        listing = ui_api_client.get("/api/connectors/google/activations").json()
+        assert listing == {"activations": {}}
+
+    def test_connector_summary_exposes_activations(self, ui_api_client):
+        ui_api_client.put(
+            "/api/connectors/google/activations/builtin:chat",
+            json={"scopes": ["openid"]},
+            headers=UI_HEADER,
+        )
+        resp = ui_api_client.get("/api/connectors/google")
+        assert resp.status_code == 200
+        assert resp.json()["activations"] == {"builtin:chat": True}
+
+    def test_namespaced_agent_id_with_colon_is_routed_correctly(self, ui_api_client):
+        # The agent_id path parameter uses ``:path`` so colons in namespaced
+        # ids (``builtin:chat``, ``custom:abc:chat``) survive routing.
+        resp = ui_api_client.put(
+            "/api/connectors/google/activations/custom:deadbeef:chat",
+            json={"scopes": ["openid"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["agent_id"] == "custom:deadbeef:chat"

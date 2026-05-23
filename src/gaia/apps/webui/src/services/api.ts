@@ -224,6 +224,56 @@ export async function revokeConnectorAgentGrant(
     );
 }
 
+/**
+ * List per-agent activations for a connector (issue #1005).
+ *
+ * Activations gate tool visibility — an agent must be both granted (credential
+ * access) AND activated (tool visibility) for the connector's tools to appear
+ * in its system prompt.
+ */
+export async function listConnectorActivations(connectorId: string): Promise<{
+    activations: Record<string, boolean>;
+}> {
+    return apiFetch('GET', `/connectors/${connectorId}/activations`);
+}
+
+interface ActivateConnectorResponse {
+    connector_id: string;
+    agent_id: string;
+    active: boolean;
+    auto_granted: boolean;
+}
+
+/**
+ * Activate a connector for an agent. If no grant exists yet, ``scopes`` is
+ * used to auto-create one (one-click convenience). Without ``scopes`` the
+ * request returns 400 when no prior grant exists.
+ */
+export async function activateConnectorAgent(
+    connectorId: string,
+    agentId: string,
+    scopes?: string[],
+): Promise<ActivateConnectorResponse> {
+    return apiFetch<ActivateConnectorResponse>(
+        'PUT',
+        `/connectors/${connectorId}/activations/${encodeURIComponent(agentId)}`,
+        scopes ? { scopes } : {},
+        UI_HEADER,
+    );
+}
+
+export async function deactivateConnectorAgent(
+    connectorId: string,
+    agentId: string,
+): Promise<void> {
+    await apiFetch<unknown>(
+        'DELETE',
+        `/connectors/${connectorId}/activations/${encodeURIComponent(agentId)}`,
+        undefined,
+        UI_HEADER,
+    );
+}
+
 export async function listConnections(): Promise<{ connections: ConnectorInfo[] }> {
     return apiFetch('GET', '/connections');
 }

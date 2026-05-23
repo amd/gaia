@@ -48,6 +48,7 @@ def _run(*argv) -> tuple[int, str, str]:
 def isolated_env(tmp_path, monkeypatch):
     """Isolate filesystem and env for every smoke test."""
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gaia.connectors.activations.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
     monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
     # Clear the OAuth provider cache (not the catalog registry).
@@ -237,3 +238,127 @@ class TestRouterSyncSmoke:
         assert (
             "https://www.googleapis.com/auth/gmail.readonly" in grants["builtin:chat"]
         )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Smoke: activations multi-caller equivalence (issue #1005)
+# ─────────────────────────────────────────────────────────────────
+
+
+class TestActivationsMultiCallerSmoke:
+    """Activations written by one surface must be visible to every other.
+
+    Mirrors the grants multi-caller test — issue #1005 promises the same
+    SDK / CLI / HTTP equivalence that PR #926 established for grants.
+    """
+
+    def test_cli_activate_visible_via_sdk_and_router(self, ui_api_client):
+        from gaia.connectors.activations import (
+            is_agent_active,
+            list_agent_activations,
+        )
+
+        # 1. CLI activate (auto-grants because no prior grant).
+        rc, _out, _err = _run(
+            "connectors",
+            "activations",
+            "activate",
+            "google",
+            "builtin:chat",
+            "--scopes",
+            "openid",
+        )
+        assert rc == 0
+
+        # 2. SDK sees the activation.
+        assert is_agent_active("google", "builtin:chat") is True
+        assert list_agent_activations("google") == {"builtin:chat": True}
+
+        # 3. HTTP router sees it too — both via the dedicated endpoint
+        # and as part of the connector summary (no-cache catalog read).
+        r = ui_api_client.get("/api/connectors/google/activations")
+        assert r.status_code == 200
+        assert r.json() == {"activations": {"builtin:chat": True}}
+
+        summary = ui_api_client.get("/api/connectors/google").json()
+        assert summary["activations"] == {"builtin:chat": True}
+
+    def test_router_activate_visible_via_sdk_and_cli(self, ui_api_client):
+        from gaia.connectors.activations import is_agent_active
+
+        # 1. HTTP PUT activates (auto-grant via the body's scopes).
+        r = ui_api_client.put(
+            "/api/connectors/google/activations/builtin:chat",
+            json={"scopes": ["openid"]},
+            headers={"x-gaia-ui": "1"},
+        )
+        assert r.status_code == 200
+
+        # 2. SDK sees it.
+        assert is_agent_active("google", "builtin:chat") is True
+
+        # 3. CLI sees it.
+        rc, out, _err = _run("connectors", "activations", "list", "google")
+        assert rc == 0
+        assert "builtin:chat: active" in out
+
+    def test_deactivate_clears_visibility_but_preserves_grant(self, ui_api_client):
+        from gaia.connectors.activations import is_agent_active
+        from gaia.connectors.grants import list_agent_grants
+
+        # Activate via CLI (auto-grants openid).
+        _run(
+            "connectors",
+            "activations",
+            "activate",
+            "google",
+            "builtin:chat",
+            "--scopes",
+            "openid",
+        )
+        assert is_agent_active("google", "builtin:chat") is True
+
+        # Deactivate via the router.
+        r = ui_api_client.delete(
+            "/api/connectors/google/activations/builtin:chat",
+            headers={"x-gaia-ui": "1"},
+        )
+        assert r.status_code == 204
+
+        # SDK + CLI both see the activation cleared, grant preserved.
+        assert is_agent_active("google", "builtin:chat") is False
+        assert list_agent_grants("google") == {"builtin:chat": ["openid"]}
+
+    def test_tools_for_agent_reflects_activation_state(self, ui_api_client):
+        """The MCP manager filter honours activations across all writers."""
+        from unittest.mock import MagicMock
+
+        from gaia.mcp.client.mcp_client_manager import MCPClientManager
+
+        manager = MCPClientManager()
+        manager._clients["google"] = MagicMock()
+        manager._clients["filesystem"] = MagicMock()
+        manager._clients["google"].list_tools.return_value = [MagicMock()]
+        manager._clients["filesystem"].list_tools.return_value = [MagicMock()]
+
+        # No activations yet — agent sees nothing.
+        assert manager.servers_for_agent("builtin:chat") == []
+
+        # Activate via CLI.
+        _run(
+            "connectors",
+            "activations",
+            "activate",
+            "google",
+            "builtin:chat",
+            "--scopes",
+            "openid",
+        )
+        assert manager.servers_for_agent("builtin:chat") == ["google"]
+
+        # Deactivate via router → manager filter updates.
+        ui_api_client.delete(
+            "/api/connectors/google/activations/builtin:chat",
+            headers={"x-gaia-ui": "1"},
+        )
+        assert manager.servers_for_agent("builtin:chat") == []

@@ -130,6 +130,13 @@ export interface ConnectorRow {
     enabled: boolean;
     account_id: string | null;
     scopes: string[];
+    /**
+     * Per-agent activation snapshot (issue #1005). Keys are namespaced
+     * agent ids (``builtin:chat``, ``custom:<hash>:<id>``, …), values are
+     * ``true`` when the agent is explicitly activated. Absence means
+     * inactive — activations are opt-in.
+     */
+    activations: Record<string, boolean>;
     last_tested_at: string | null;
     mcp_env_keys: string[];
     default_scopes: string[];

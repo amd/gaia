@@ -127,6 +127,12 @@ gaia connectors grants grant google builtin:chat \
 gaia connectors grants list google
 gaia connectors grants revoke google builtin:chat
 
+# Per-agent activations — gate which agents see this connector's tools
+gaia connectors activations activate github builtin:chat \
+    --scopes repo:read   # --scopes is only consulted when no prior grant exists
+gaia connectors activations list github
+gaia connectors activations deactivate github builtin:chat
+
 # Disconnect
 gaia connectors disconnect google
 ```
@@ -180,12 +186,71 @@ The Agent UI consent dialog renders `reason` in plain language. After
 the user grants the scopes, subsequent `get_access_token_sync` calls
 return fresh tokens transparently.
 
+## Per-agent activation
+
+Activations are the second axis of the per-agent authorization model
+(issue #1005):
+
+- **Grant** (`grants.json`) — agent X is *allowed* to use connector Y's
+  credentials with scopes S. Gates **credential access**
+  (`get_access_token`).
+- **Activation** (`activations.json`) — agent X *currently has* connector
+  Y's tools surfaced in its toolset. Gates **tool visibility** (system
+  prompt / tool registry).
+
+A tool from an MCP connector is visible to an agent if and only if:
+
+```text
+grant exists for (connector_id, agent_id)  AND  is_agent_active(...)
+```
+
+Activations default to **inactive** when absent — least-privilege opt-in.
+The ledger stores explicit `true`/`false` entries; an unknown pair returns
+`is_agent_active == False`.
+
+**One-click activation:** activating an agent with no prior grant
+auto-creates a grant using the agent's declared `REQUIRED_CONNECTORS`
+scopes. This is the path Settings → Connectors → "Active for" takes when
+the user ticks an agent that has never been granted access:
+
+```python
+from gaia.connectors import activate, deactivate
+
+# Activate (auto-grants if no prior grant exists)
+activate("github", "builtin:chat", scopes_for_grant=["repo:read"])
+
+# Deactivate (preserves grant — re-activate is one click)
+deactivate("github", "builtin:chat")
+```
+
+```bash
+gaia connectors activations activate github builtin:chat \
+    --scopes repo:read
+gaia connectors activations list github
+gaia connectors activations deactivate github builtin:chat
+```
+
+The HTTP router exposes:
+
+```text
+GET    /api/connectors/{id}/activations
+PUT    /api/connectors/{id}/activations/{agent_id}     # body: {"scopes": [...]}?
+DELETE /api/connectors/{id}/activations/{agent_id}
+```
+
+SSE event `connector.activation.changed` is emitted on every PUT / DELETE
+so the Agent UI tile refreshes within ~1 s when another caller (CLI,
+SDK) changes the state. Disconnecting a connector wipes both grants
+**and** activations for that connector — re-adding the same `connector_id`
+must not silently inherit the previous user's tool-visibility decisions.
+
 ## Where things live
 
 | Path | Contents |
 |------|----------|
 | `~/.gaia/connectors/state.json` | Non-secret connector metadata (configured, account_id, scopes). Mode 0600. |
 | `~/.gaia/connectors/grants.json` | Per-agent scope grants. Mode 0600. |
+| `~/.gaia/connectors/activations.json` | Per-agent tool-visibility activations. Mode 0600. |
 | OS keychain `gaia.connections` | Encrypted refresh tokens + MCP API keys. |
 
 ## Adding a new OAuth provider

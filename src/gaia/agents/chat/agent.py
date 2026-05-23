@@ -1550,10 +1550,15 @@ No documents are currently indexed.
             try:
                 self._mcp_manager.load_from_config()
                 self._print_mcp_load_summary()
+                # Filter to servers explicitly activated for this agent
+                # (issue #1005). Falls back to the unfiltered list when the
+                # agent has no registry identity, preserving prior behaviour
+                # for ad-hoc test agents.
+                _active_servers = self._active_mcp_servers(self._mcp_manager)
                 # Preview total tool count before registering
                 _mcp_tool_count = sum(
                     len(_c.list_tools())
-                    for _srv in self._mcp_manager.list_servers()
+                    for _srv in _active_servers
                     if (_c := self._mcp_manager.get_client(_srv)) is not None
                 )
                 if _mcp_tool_count > _MCP_TOOL_LIMIT:
@@ -1565,7 +1570,7 @@ No documents are currently indexed.
                     )
                 else:
                     _before = len(_TOOL_REGISTRY)
-                    for _srv in self._mcp_manager.list_servers():
+                    for _srv in _active_servers:
                         _client = self._mcp_manager.get_client(_srv)
                         if _client:
                             self._register_mcp_tools(_client)
