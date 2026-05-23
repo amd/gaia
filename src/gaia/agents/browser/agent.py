@@ -41,7 +41,10 @@ class BrowserAgent(Agent, BrowserToolsMixin, MCPClientMixin):
         if config is None:
             config = BrowserAgentConfig()
         self.config = config
-        self.path_validator = PathValidator(config.allowed_paths)
+        self.path_validator = PathValidator(
+            config.allowed_paths,
+            on_prompt_start=lambda: self.console.stop_progress(),
+        )
         self._path_validator = self.path_validator
         self._web_client = WebClient(
             timeout=config.browser_timeout,

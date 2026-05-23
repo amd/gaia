@@ -155,7 +155,10 @@ class ChatAgent(
             config = ChatAgentConfig()
 
         # Initialize path validator
-        self.path_validator = PathValidator(config.allowed_paths)
+        self.path_validator = PathValidator(
+            config.allowed_paths,
+            on_prompt_start=lambda: self.console.stop_progress(),
+        )
 
         # Store config for access in other methods
         self.config = config

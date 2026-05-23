@@ -548,5 +548,64 @@ class TestFormatSizeBoundaries:
         assert _format_size(0) == "0 B"
 
 
+class TestPromptGuardCallbacks:
+    """Tests for on_prompt_start / on_prompt_end callback support (#1089)."""
+
+    def test_callbacks_invoked_on_access_prompt(self, tmp_path):
+        """on_prompt_start and on_prompt_end are called around _prompt_user_for_access."""
+        calls = []
+        validator = PathValidator(
+            allowed_paths=[str(tmp_path)],
+            on_prompt_start=lambda: calls.append("start"),
+            on_prompt_end=lambda: calls.append("end"),
+        )
+        outside = tmp_path / "nonexistent_dir" / "file.txt"
+        with patch("builtins.input", return_value="n"), \
+             patch("gaia.security._is_interactive", return_value=True):
+            result = validator._prompt_user_for_access(outside)
+        assert result is False
+        assert calls == ["start", "end"]
+
+    def test_callbacks_invoked_on_overwrite_prompt(self, tmp_path):
+        """on_prompt_start and on_prompt_end are called around _prompt_overwrite."""
+        calls = []
+        validator = PathValidator(
+            allowed_paths=[str(tmp_path)],
+            on_prompt_start=lambda: calls.append("start"),
+            on_prompt_end=lambda: calls.append("end"),
+        )
+        existing = tmp_path / "file.txt"
+        existing.write_text("content")
+        with patch("builtins.input", return_value="y"), \
+             patch("gaia.security._is_interactive", return_value=True):
+            result = validator._prompt_overwrite(existing, 7)
+        assert result is True
+        assert calls == ["start", "end"]
+
+    def test_no_callbacks_when_none(self, tmp_path):
+        """Default PathValidator (no callbacks) prompts without error."""
+        validator = PathValidator(allowed_paths=[str(tmp_path)])
+        outside = tmp_path / "nonexistent_dir" / "file.txt"
+        with patch("builtins.input", return_value="y"), \
+             patch("gaia.security._is_interactive", return_value=True):
+            result = validator._prompt_user_for_access(outside)
+        assert result is True
+
+    def test_callback_exception_does_not_break_prompt(self, tmp_path):
+        """A failing on_prompt_start callback must not prevent the prompt."""
+        def bad_callback():
+            raise RuntimeError("spinner exploded")
+
+        validator = PathValidator(
+            allowed_paths=[str(tmp_path)],
+            on_prompt_start=bad_callback,
+        )
+        outside = tmp_path / "nonexistent_dir" / "file.txt"
+        with patch("builtins.input", return_value="n"), \
+             patch("gaia.security._is_interactive", return_value=True):
+            result = validator._prompt_user_for_access(outside)
+        assert result is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
