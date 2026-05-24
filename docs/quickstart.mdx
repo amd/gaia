@@ -206,7 +206,7 @@ Choose your platform and installation type:
     ```
 
     <Tip>
-      **Optional extras:** `uv pip install "amd-gaia[talk,rag]"` for voice and document Q&A features.
+      **Optional extras:** `uv pip install "amd-gaia[talk,rag,ui]"` for voice, document Q&A, and Agent UI features.
     </Tip>
 
     ### Step 5: Verify Installation
@@ -269,9 +269,9 @@ Choose your platform and installation type:
     ```
 
     <Tip>
-      **Optional extras:** Add `[talk,rag]` for voice and document Q&A features:
+      **Optional extras:** Add `[talk,rag,ui]` for voice, document Q&A, and Agent UI features:
       ```bash
-      uv pip install "amd-gaia[talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu
+      uv pip install "amd-gaia[talk,rag,ui]" --extra-index-url https://download.pytorch.org/whl/cpu
       ```
     </Tip>
 
@@ -342,11 +342,11 @@ Choose your platform and installation type:
     ### Step 4: Install in Editable Mode
 
     ```powershell
-    uv pip install -e ".[dev]"
+    uv pip install -e ".[dev,rag,ui]"
     ```
 
     <Tip>
-      **With all extras:** `uv pip install -e ".[dev,talk,rag]"` for voice and document Q&A features.
+      **With voice extras:** `uv pip install -e ".[dev,talk,rag,ui]"` for voice in addition to document Q&A and Agent UI features.
     </Tip>
 
     ### Step 5: Verify Installation
@@ -413,13 +413,13 @@ Choose your platform and installation type:
     </Warning>
 
     ```bash
-    uv pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cpu
+    uv pip install -e ".[dev,rag,ui]" --extra-index-url https://download.pytorch.org/whl/cpu
     ```
 
     <Tip>
-      **With all extras:** Add `[talk,rag]` for voice and document Q&A features:
+      **With voice extras:** Add `talk` for voice in addition to document Q&A and Agent UI features:
       ```bash
-      uv pip install -e ".[dev,talk,rag]" --extra-index-url https://download.pytorch.org/whl/cpu
+      uv pip install -e ".[dev,talk,rag,ui]" --extra-index-url https://download.pytorch.org/whl/cpu
       ```
     </Tip>
 
