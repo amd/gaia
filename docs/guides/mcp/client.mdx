@@ -79,11 +79,7 @@ MCP server connected, tools auto-discovered, and the agent uses them naturally.
   </Step>
 
   <Step title="Add an MCP server">
-    Add the official [MCP Time Server](https://github.com/modelcontextprotocol/servers/tree/main/src/time):
-    ```bash
-    gaia mcp add time "uvx mcp-server-time"
-    ```
-    Or edit `~/.gaia/mcp_servers.json` directly:
+    Add the official [MCP Time Server](https://github.com/modelcontextprotocol/servers/tree/main/src/time) to `~/.gaia/mcp_servers.json`:
     ```json
     {
       "mcpServers": {
@@ -239,13 +235,11 @@ flowchart TB
     ```
   </Tab>
 
-  <Tab title="Via CLI">
+  <Tab title="Via config file">
+    Add the server to `~/.gaia/mcp_servers.json`, then use the CLI to inspect it:
     ```bash
-    # Add server to config
-    gaia mcp add filesystem "npx -y @modelcontextprotocol/server-filesystem /tmp"
-
-    # List configured servers
     gaia mcp list
+    gaia mcp tools filesystem
     ```
   </Tab>
 </Tabs>
@@ -337,12 +331,16 @@ This format is compatible with Claude Desktop and other Anthropic tools. The `mc
   </Step>
 
   <Step title="Add to config">
-    ```bash
-    gaia mcp add <name> "<command>"
-    ```
-    For example, to add the Memory server:
-    ```bash
-    gaia mcp add memory "npx -y @modelcontextprotocol/server-memory"
+    Add a new entry to `~/.gaia/mcp_servers.json` (or `./mcp_servers.json` for a project-specific config). For example, to add the Memory server:
+    ```json
+    {
+      "mcpServers": {
+        "memory": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-memory"]
+        }
+      }
+    }
     ```
   </Step>
 
@@ -400,20 +398,20 @@ For detailed API usage and patterns, see the [SDK Reference](/sdk/sdks/mcp).
 
 <AccordionGroup>
   <Accordion title="CLI Commands">
-    GAIA provides CLI commands for managing MCP server configurations without writing code.
+    GAIA provides CLI commands for inspecting configured MCP servers and testing connections.
 
     <Card title="MCP CLI Reference" icon="terminal" href="/reference/cli#mcp-client">
-      Complete documentation of all MCP CLI commands: `add`, `list`, `tools`, `test-client`, `remove`
+      Complete documentation of all MCP CLI commands: `list`, `tools`, `test-client`
     </Card>
 
     **Quick reference:**
     ```bash
-    gaia mcp add <name> "<command>"     # Add server to config
     gaia mcp list                        # List configured servers
     gaia mcp tools <name>                # List tools from server
     gaia mcp test-client <name>          # Test connection
-    gaia mcp remove <name>               # Remove server
     ```
+
+    To add or remove custom servers, edit the `mcpServers` entries in `~/.gaia/mcp_servers.json` or a project-local `./mcp_servers.json`.
 
     For detailed usage, parameters, and output examples, see the [CLI Reference](/reference/cli#mcp-client).
   </Accordion>
