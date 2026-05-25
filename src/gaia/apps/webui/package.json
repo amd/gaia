@@ -1,6 +1,6 @@
 {
   "name": "@amd-gaia/agent-ui",
-  "version": "0.17.6",
+  "version": "0.19.0",
   "type": "module",
   "productName": "GAIA Agent UI",
   "description": "Privacy-first agentic AI interface with document Q&A - runs 100% locally on AMD Ryzen AI",
@@ -11,7 +11,7 @@
     "url": "https://github.com/amd/gaia.git",
     "directory": "src/gaia/apps/webui"
   },
-  "homepage": "https://amd-gaia.ai/guides/agent-ui",
+  "homepage": "https://amd-gaia.ai/docs/guides/agent-ui",
   "bugs": {
     "url": "https://github.com/amd/gaia/issues"
   },

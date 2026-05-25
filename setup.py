@@ -48,7 +48,9 @@ setup(
         "gaia.mcp.client.transports",
         "gaia.mcp.servers",
         "gaia.agents",
+        "gaia.agents.analyst",
         "gaia.agents.base",
+        "gaia.agents.browser",
         "gaia.agents.tools",
         "gaia.agents.blender",
         "gaia.agents.blender.core",
@@ -162,8 +164,8 @@ setup(
             "torch>=2.0.0",
         ],
         "audio": [
-            "torch>=2.0.0,<2.4",
-            "torchvision<0.19.0",
+            "torch>=2.0.0,<2.13",
+            "torchvision<0.28.0",
             "torchaudio",
         ],
         "blender": [
@@ -200,7 +202,7 @@ setup(
             # `pip install -e ".[dev]"` is sufficient to run the unit suite
             # without pulling in the much heavier [ui] extra (faiss, torch).
             "httpx>=0.27.0,<0.29.0",
-            "respx>=0.21.0,<0.23.0",
+            "respx>=0.21.0,<0.24.0",
             "keyring>=24.0.0,<26.0.0",
         ],
         "eval": [

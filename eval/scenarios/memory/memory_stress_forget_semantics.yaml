@@ -1,0 +1,102 @@
+id: memory_stress_forget_semantics
+name: "Memory Stress — Forget Semantics"
+category: memory
+severity: high
+description: |
+  Stress test: validates the `forget` operation as a first-class memory
+  primitive. The user stores several facts, asks the agent to forget a
+  specific one, then probes whether (a) the forgotten fact is actually
+  gone (no longer recalled), (b) sibling facts are unaffected, (c) the
+  fact stays gone after intervening turns (no revival), and (d) targeted
+  recall by name returns 'not found' rather than the deleted entry.
+
+  This catches a subtle but high-impact bug: 'forget' that only suppresses
+  the next response but leaves the underlying record retrievable later.
+  For privacy use cases this distinction is critical.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Store three sibling facts of the same kind"
+    user_message: |
+      Please remember these three personal facts as separate entries:
+      - My doctor is Dr. Liu at Cedar Family Medicine
+      - My dentist is Dr. Brennan at Smile Dental
+      - My therapist is Dr. Okafor at Wellpath Counseling
+    ground_truth:
+      expected_answer: "Three healthcare providers stored"
+    success_criteria: "Agent stores all three providers as separate entries. Should be retrievable individually by category (doctor / dentist / therapist) or provider name."
+
+  - turn: 2
+    objective: "Verify all three are recallable"
+    user_message: "Quick check — who are my three healthcare providers?"
+    ground_truth:
+      expected_answer: "Dr. Liu (doctor), Dr. Brennan (dentist), Dr. Okafor (therapist)"
+    success_criteria: "Agent returns all three providers with their roles. Confirms baseline recall before the forget test."
+
+  - turn: 3
+    objective: "Issue a targeted forget"
+    user_message: "Please forget my therapist info. I'm switching providers and don't want the old one on file."
+    ground_truth:
+      expected_answer: "Therapist (Dr. Okafor at Wellpath Counseling) removed from memory"
+    success_criteria: "Agent confirms the therapist entry has been removed. Should call a forget / delete tool, NOT just acknowledge verbally without actually removing the record."
+
+  - turn: 4
+    objective: "Direct recall of forgotten entry — must miss"
+    user_message: "Who's my therapist?"
+    ground_truth:
+      expected_answer: "Not in memory — the user previously asked to forget this"
+    success_criteria: |
+      Agent must respond that the therapist info is no longer in memory.
+      Acceptable: 'You asked me to forget that', 'I don't have a therapist
+      on file', 'That was removed at your request'. FAIL if agent returns
+      'Dr. Okafor' (the supposedly forgotten entry) or any therapist name
+      from the original storage.
+
+  - turn: 5
+    objective: "Sibling facts must be untouched"
+    user_message: "Who's my doctor and dentist?"
+    ground_truth:
+      expected_answer: "Dr. Liu (doctor), Dr. Brennan (dentist)"
+    success_criteria: "Agent correctly returns BOTH the doctor and dentist. FAIL if either has gone missing — that would indicate forget over-deleted, hitting siblings."
+
+  - turn: 6
+    objective: "Intervening unrelated turn (durability check)"
+    user_message: "Random aside — what's the boiling point of water at sea level?"
+    ground_truth:
+      expected_answer: "100°C / 212°F"
+    success_criteria: "Agent answers correctly. This turn just inserts distance between the forget and the next probe."
+
+  - turn: 7
+    objective: "Forget durability — forgotten entry stays gone"
+    user_message: "Tell me everything you know about my healthcare providers."
+    ground_truth:
+      expected_answer: "Dr. Liu (doctor), Dr. Brennan (dentist) — therapist intentionally not on file"
+    success_criteria: |
+      Agent must list ONLY the doctor and dentist. The therapist (Dr. Okafor)
+      MUST NOT appear in the response. FAIL if the therapist resurfaces —
+      that means the forget operation didn't actually remove the underlying
+      record, just suppressed it for one turn.
+
+  - turn: 8
+    objective: "Negative match — agent should not fabricate"
+    user_message: "What was the name of the therapist you used to have on file?"
+    ground_truth:
+      expected_answer: "Cannot recall — that data was forgotten / removed"
+    success_criteria: |
+      Agent must NOT return 'Dr. Okafor' or 'Wellpath Counseling' from the
+      forgotten record. Acceptable: 'That info was removed and I no longer
+      have it', 'I don't retain forgotten data even on follow-up'. FAIL if
+      agent retrieves the deleted name (means forget was a soft-delete that
+      can be reversed by phrasing).
+
+expected_outcome: |
+  After a targeted forget, the agent (1) confirms removal, (2) cannot
+  recall the entry directly, (3) leaves sibling entries intact,
+  (4) keeps the entry gone across intervening turns, and (5) cannot
+  resurrect the entry via different phrasing. This is the contract a
+  privacy-conscious user expects from a "forget that" command.

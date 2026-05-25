@@ -28,29 +28,72 @@
     }
 }
 
-/* User messages -- right-aligned, clean separation via bottom border only.
- * No left border: avoids clashing with the right-aligned text direction
- * and keeps a clear visual distinction from the assistant's red accent. */
+/* User messages — right-anchored bubble (chat-app convention).
+ * Mirrors the assistant card treatment but smaller and pinned to the
+ * right side of the column, so the conversation reads as a back-and-
+ * forth between two visual columns rather than "floating right-aligned
+ * text" vs. "card". The outer .msg keeps its 900px column; flex
+ * justify-content pushes .msg-inner (the actual bubble) to the right. */
 .msg-user {
     background: transparent;
-    border-left: none;
-    border-bottom: 1px solid var(--border-light);
-}
-.msg-user .msg-inner {
-    text-align: right;
-}
-.msg-user .msg-header {
+    border: none;
+    /* Right-anchor the inner bubble within the 900px column. */
+    display: flex;
     justify-content: flex-end;
 }
-.msg-user .msg-header-left {
-    order: 1;
+.msg-user .msg-inner {
+    /* Cap bubble width so short messages stay compact; long messages
+       wrap inside the bubble instead of spanning the whole column. */
+    max-width: 70%;
+    background: var(--bg-user-msg);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-xl);
+    padding: 12px 18px;
+    /* Subtle elevation — slightly lighter than the assistant card so
+       the assistant's reply visually anchors the conversation. */
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        0 1px 1px rgba(0, 0, 0, 0.04),
+        0 4px 10px -2px rgba(0, 0, 0, 0.10),
+        0 8px 20px -8px rgba(0, 0, 0, 0.08);
+    transition: box-shadow var(--duration) var(--ease),
+                transform var(--duration) var(--ease);
 }
-.msg-user .msg-actions {
-    order: 0;
+.msg-user .msg-inner:hover {
+    transform: translateY(-1px);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        0 2px 2px rgba(0, 0, 0, 0.05),
+        0 6px 14px -2px rgba(0, 0, 0, 0.12),
+        0 12px 28px -10px rgba(0, 0, 0, 0.10);
 }
+[data-theme="dark"] .msg-user .msg-inner {
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 1px 2px rgba(0, 0, 0, 0.30),
+        0 6px 16px -2px rgba(0, 0, 0, 0.45),
+        0 12px 28px -10px rgba(0, 0, 0, 0.30);
+}
+[data-theme="dark"] .msg-user .msg-inner:hover {
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.08),
+        0 2px 3px rgba(0, 0, 0, 0.35),
+        0 8px 22px -2px rgba(0, 0, 0, 0.55),
+        0 16px 36px -12px rgba(0, 0, 0, 0.40);
+}
+/* Header inside user bubble: empty .msg-header-left on the left,
+   .msg-actions on the right (default flex layout — no order swap). */
+.msg-user .msg-header {
+    justify-content: space-between;
+    /* When the left side is empty (user has no avatar/name), collapse
+       the header height so the bubble doesn't gain phantom top padding.
+       Actions still appear on hover via a small absolute overlay. */
+    min-height: 0;
+    margin-bottom: 0;
+}
+/* Body: no avatar gutter, left-aligned text inside the bubble. */
 .msg-user .msg-body {
     padding-left: 0;
-    text-align: right;
 }
 
 [data-theme="dark"] .msg-user {
@@ -281,20 +324,15 @@
     font-family: var(--font-sans);
 }
 
-/* User message body: clean, right-aligned, muted color */
+/* User message body: same readable type as the assistant, just inside
+   the bubble. Text is left-aligned (the bubble itself is on the right). */
 .msg-user .msg-body {
     font-family: var(--font-sans);
-    font-size: 14px;
-    color: var(--text-secondary);
+    font-size: 14.5px;
+    color: var(--text-primary);
 }
 .msg-user .md-content {
-    color: var(--text-secondary);
-}
-/* Right-align markdown elements in user messages */
-.msg-user .md-p,
-.msg-user .md-ul,
-.msg-user .md-ol {
-    text-align: right;
+    color: var(--text-primary);
 }
 
 /* ── Error message styling ────────────────────────────────────── */

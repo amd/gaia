@@ -128,6 +128,10 @@ class SettingsResponse(BaseModel):
 
     custom_model: Optional[str] = None
     model_status: Optional[ModelStatus] = None
+    context_size: Optional[int] = (
+        None  # Persisted ctx_size override; None = use default
+    )
+    agent_mode: str = "autonomous"  # "manual" | "goal_driven" | "autonomous"
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -141,6 +145,24 @@ class SettingsUpdateRequest(BaseModel):
             "Set to empty string or null to clear the override."
         ),
     )
+    context_size: Optional[int] = Field(
+        None,
+        description=(
+            "Context window size in tokens for model loading. "
+            "Must be >= 32768 (the minimum required by GAIA Chat). "
+            "Set to null to reset to the default (32768)."
+        ),
+        ge=32768,
+    )
+    agent_mode: Optional[str] = Field(
+        None,
+        description=(
+            "Agent operating mode. One of: 'manual' (request/response only), "
+            "'goal_driven' (execute approved goals), "
+            "'autonomous' (observe, infer, and execute own goals). "
+            "Default: 'autonomous'."
+        ),
+    )
 
 
 # ── Agents ──────────────────────────────────────────────────────────────────
@@ -152,7 +174,7 @@ class AgentInfo(BaseModel):
     id: str
     name: str
     description: str
-    source: Literal["builtin", "custom_python"]
+    source: Literal["builtin", "custom_python", "native", "installed"]
     conversation_starters: List[str] = Field(default_factory=list)
     models: List[str] = Field(default_factory=list)
     # Minimum free system memory (GB) the agent recommends before loading its
@@ -170,12 +192,35 @@ class AgentInfo(BaseModel):
     # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
     # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.
     namespaced_agent_id: str = ""
+    # Agent Hub metadata — used by the frontend to render rich discovery cards.
+    category: str = "general"
+    tags: List[str] = Field(default_factory=list)
+    icon: str = ""  # lucide icon name
+    tools_count: int = 0
+    language: str = "python"  # "python" | "cpp"
 
 
 class AgentListResponse(BaseModel):
     """List of registered agents."""
 
     agents: List[AgentInfo]
+    total: int
+
+
+class DiskAgentInfo(BaseModel):
+    """Information about an agent present under ~/.gaia/agents."""
+
+    id: str
+    name: str
+    registered: bool
+    registered_agent_id: Optional[str] = None
+    source: Optional[str] = None
+
+
+class DiskAgentListResponse(BaseModel):
+    """List of custom agents found on disk."""
+
+    agents: List[DiskAgentInfo]
     total: int
 
 
@@ -189,6 +234,7 @@ class CreateSessionRequest(BaseModel):
     model: Optional[str] = None
     system_prompt: Optional[str] = None
     document_ids: List[str] = Field(default_factory=list)
+    private: bool = False
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
@@ -198,6 +244,7 @@ class UpdateSessionRequest(BaseModel):
     title: Optional[str] = None
     system_prompt: Optional[str] = None
     document_ids: Optional[List[str]] = None
+    private: Optional[bool] = None
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
@@ -212,6 +259,7 @@ class SessionResponse(BaseModel):
     system_prompt: Optional[str] = None
     message_count: int = 0
     document_ids: List[str] = Field(default_factory=list)
+    private: bool = False
     agent_type: str = "chat"
 
 

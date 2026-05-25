@@ -2148,6 +2148,32 @@ These positions indicate where to split the text."""
 
                     self.indexed_files.add(file_path)
 
+                    # Build per-file FAISS index NOW so retrieval-time queries
+                    # don't have to rebuild it on every call. Pre-#1030
+                    # follow-up: this block was only present on the
+                    # fresh-index path (~line 2289 below), so any document
+                    # loaded from cache hit ``cached_file_index is None`` in
+                    # _retrieve_chunks_from_file and rebuilt the FAISS index
+                    # from scratch on every query — adding ~3 s × N queries
+                    # of avoidable work. One-time cost on cache load instead.
+                    try:
+                        self._load_embedder()
+                        _file_embeddings = self._encode_texts(
+                            list(cached_chunks), show_progress=False
+                        )
+                        _file_dim = _file_embeddings.shape[1]
+                        _file_index = faiss.IndexFlatL2(_file_dim)
+                        # pylint: disable=no-value-for-parameter
+                        _file_index.add(_file_embeddings.astype("float32"))
+                        self.file_indices[file_path] = _file_index
+                        self.file_embeddings[file_path] = _file_embeddings
+                    except Exception as _e:  # pylint: disable=broad-except
+                        self.log.debug(
+                            "Couldn't pre-build per-file index for %s: %s",
+                            file_path,
+                            _e,
+                        )
+
                     # Track access time for LRU (was missing — pre-existing bug)
                     current_time = time.time()
                     self.file_index_times[file_path] = current_time

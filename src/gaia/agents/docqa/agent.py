@@ -46,6 +46,11 @@ class DocumentQAAgent(
             # Optional dependency not installed in test environments
             self.rag = None
 
+        # Agent has no MCP servers; the UI auto-calls get_mcp_status_report()
+        # on every chat send and MCPClientMixin.__init__ never runs because
+        # Agent.__init__ doesn't chain super().
+        self._mcp_manager = None
+
         super().__init__(
             use_claude=config.use_claude,
             use_chatgpt=config.use_chatgpt,

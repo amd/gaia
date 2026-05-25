@@ -12,10 +12,26 @@ from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
 
 def _mock_home(monkeypatch, home_dir: Path):
-    """Monkeypatch Path.home() and HOME/USERPROFILE to use a custom directory."""
+    """Monkeypatch Path.home() and HOME/USERPROFILE to use a custom directory.
+
+    Also patches os.path.expanduser so that any code reaching through to the
+    OS-level home resolution (e.g. Path("~").expanduser()) is redirected.
+    """
+    import os as _os
+
+    _real_expanduser = _os.path.expanduser
+
+    def _fake_expanduser(path: str) -> str:
+        if path == "~":
+            return str(home_dir)
+        if path.startswith("~/") or path.startswith("~\\"):
+            return str(home_dir) + path[1:]
+        return _real_expanduser(path)
+
     monkeypatch.setenv("HOME", str(home_dir))
     monkeypatch.setenv("USERPROFILE", str(home_dir))
     monkeypatch.setattr(Path, "home", staticmethod(lambda: home_dir))
+    monkeypatch.setattr(_os.path, "expanduser", _fake_expanduser)
 
 
 class TestMCPClientManager:
@@ -226,6 +242,11 @@ class TestMCPClientManager:
 
 class TestMCPConfig:
     """Test MCPConfig functionality."""
+
+    @pytest.fixture(autouse=True)
+    def isolate_home(self, monkeypatch, tmp_path):
+        """Redirect Path.home() to tmp_path so tests never touch ~/.gaia/."""
+        _mock_home(monkeypatch, tmp_path)
 
     def test_config_creates_default_file_path(self, tmp_path, monkeypatch):
         """Test that config uses global path when no local mcp_servers.json exists."""

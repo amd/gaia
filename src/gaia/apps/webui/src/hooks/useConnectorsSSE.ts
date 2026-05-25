@@ -11,6 +11,8 @@
  *   - ``connector.configured``        ({connector_id, account_id})
  *   - ``connector.disconnected``      ({connector_id})
  *   - ``connector.tested``            ({connector_id, ok, detail})
+ *   - ``connector.enabled``           ({connector_id})
+ *   - ``connector.disabled``          ({connector_id})
  *   - ``connector.oauth.completed``   ({connector_id, account_email})
  *   - ``connector.oauth.error``       ({connector_id, error})
  *   - ``connector.grant.changed``     ({connector_id, agent_id, scopes})
@@ -40,6 +42,8 @@ interface SseEnvelope {
 export type ConnectorChangeReason =
     | 'configured'
     | 'disconnected'
+    | 'enabled'
+    | 'disabled'
     | 'oauth_completed'
     | 'oauth_error'
     | 'tested'
@@ -77,6 +81,10 @@ function reasonFor(eventType: string): ConnectorChangeReason | null {
             return 'oauth_error';
         case 'connector.tested':
             return 'tested';
+        case 'connector.enabled':
+            return 'enabled';
+        case 'connector.disabled':
+            return 'disabled';
         case 'connector.grant.changed':
             return 'grant_changed';
         default:

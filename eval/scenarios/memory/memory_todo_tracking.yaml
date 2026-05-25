@@ -1,0 +1,49 @@
+id: memory_todo_tracking
+name: "Memory Todo List Tracking"
+category: memory
+severity: high
+description: |
+  One of the most valuable memory use cases: using the agent as a persistent
+  todo/task tracker. The user adds tasks over multiple turns, marks one done,
+  then asks for the remaining open items across a session boundary.
+
+  This tests the agent's ability to accumulate a structured task list and
+  keep it current — a practical daily-driver use case for any user.
+
+persona: home_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Add two tasks to the todo list"
+    user_message: "can you add these to my todo list: 1) pay the internet bill by friday, 2) schedule dentist appointment"
+    ground_truth:
+      expected_answer: "Todo stored: pay internet bill by Friday; schedule dentist appointment"
+    success_criteria: "Agent stores both tasks using remember tool. Must acknowledge both tasks. Should use category=reminder or category=note with clear content."
+
+  - turn: 2
+    objective: "Add a third task"
+    user_message: "also add: pick up dry cleaning this weekend"
+    ground_truth:
+      expected_answer: "Todo stored: pick up dry cleaning"
+    success_criteria: "Agent stores the dry cleaning task. Should accumulate with the existing todos."
+
+  - turn: 3
+    objective: "Mark one task as done"
+    user_message: "i paid the internet bill, you can remove that one"
+    ground_truth:
+      expected_answer: "Internet bill task removed"
+    success_criteria: "Agent calls forget or update_memory to remove/mark-done the internet bill task. Must confirm it was removed or marked complete."
+
+  - turn: 4
+    objective: "Ask for remaining todos"
+    user_message: "what do i still need to do?"
+    ground_truth:
+      expected_answer: "Dentist appointment, pick up dry cleaning"
+    success_criteria: "Agent recalls the two remaining open tasks: schedule dentist AND pick up dry cleaning. The internet bill must NOT appear (it was removed). FAIL if internet bill is listed or if fewer than 2 tasks are shown."
+
+expected_outcome: |
+  Agent maintains a persistent todo list: adds tasks, removes completed ones,
+  and shows only open items — demonstrating practical task management memory.

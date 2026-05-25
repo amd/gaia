@@ -17,7 +17,8 @@ import os
 import re
 import subprocess
 import uuid
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Literal, Optional, Tuple
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
@@ -64,6 +65,63 @@ TOOLS_REQUIRING_CONFIRMATION = {
 }
 
 
+@dataclass(frozen=True)
+class HardwareRequirement:
+    """Declarative hardware requirement for Agents.
+
+    Fields:
+        min_device: one of 'cpu', 'amd_igpu', 'amd_npu'
+        reason: optional human-friendly reason displayed on error
+    """
+
+    min_device: Literal["cpu", "amd_igpu", "amd_npu", "amd_dgpu"]
+    reason: str = ""
+
+
+# Prefixes for tools that represent SD (Stable Diffusion) capability.
+# Used to detect whether the agent has attempted image-generation tools.
+_SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
+
+
+def _repair_invalid_json_escapes(s: str) -> str:
+    """Repair invalid JSON backslash escapes using pair-consumption.
+
+    This implementation repeatedly replaces a backslash followed by a
+    non-JSON-escape character with a doubled backslash and the character,
+    using a regex-based pair-consumption approach. The operation is
+    idempotent: applying it multiple times will not further change a
+    previously-repaired string.
+    """
+    # Valid JSON escape characters after a backslash
+    valid = '"\\/bfnrtu'
+
+    # Single-pass consumption: replace a backslash followed by a single
+    # character; if that character is not a valid JSON escape (and is not
+    # itself a backslash), double the backslash. This keeps the operation
+    # idempotent on already-repaired inputs and avoids non-terminating
+    # repeated-replacement loops.
+    def _fix(m: re.Match) -> str:
+        ch = m.group(1)
+        # Preserve already-double-backslashes and valid JSON escapes
+        if ch == "\\" or ch in valid:
+            return "\\" + ch
+        # Otherwise double the backslash so the JSON parser accepts it
+        return "\\\\" + ch
+
+    return re.sub(r"\\(.)", _fix, s)
+
+
+# Suffix appended to the last tool-result message when ``single_tool_per_turn``
+# agents have completed their one tool call. The model sees this and emits a
+# short final reply instead of calling another tool. Greppable for fixtures
+# that need to strip it from recorded role history.
+_SINGLE_TOOL_DONE_SUFFIX = (
+    "\n\n[SYSTEM: Tool call complete. "
+    "Write your one-sentence response to the user now. "
+    "Do not call any more tools.]"
+)
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -97,6 +155,11 @@ class Agent(abc.ABC):
     STATE_ERROR_RECOVERY = "ERROR_RECOVERY"
     STATE_COMPLETION = "COMPLETION"
 
+    # When True, the agent stops after the first tool call per turn and treats
+    # the model's next response as the final answer.  Designed for action-only
+    # agents (e.g. the OEM MCP) that execute exactly one tool per user request.
+    single_tool_per_turn: bool = False
+
     # T-X2 (issue #915): declarative external-OAuth scope requirement.
     # Subclasses override this to declare which provider+scopes their tool
     # bodies need. The registry surfaces these to AgentUI's consent dialog and
@@ -105,6 +168,11 @@ class Agent(abc.ABC):
     # Empty list = no external connections required (the default for built-ins).
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = []
 
+    # Declarative per-agent hardware requirement.  Agents that need a
+    # minimum tier (e.g., NPU) should set this ClassVar to a
+    # `HardwareRequirement` instance. Example:
+    #   REQUIRED_HARDWARE: ClassVar[Optional[HardwareRequirement]] = HardwareRequirement(min_device="amd_npu")
+    REQUIRED_HARDWARE: ClassVar[Optional["HardwareRequirement"]] = None
     # Response format templates — agents select via response_mode attribute.
     # "planning" (default): JSON-only responses with thought/goal/plan/tool structure.
     # "conversational": plain text for conversation, JSON only for tool calls.
@@ -138,6 +206,7 @@ You must respond ONLY in valid JSON. No text before { or after }.
 1. ALWAYS use tools for real data - NEVER hallucinate
 2. Plan steps MUST be objects like {"tool": "x", "tool_args": {}}, NOT strings
 3. After tool results, provide an "answer" summarizing them
+4. Use the full tool name exactly as registered. A name with only the server prefix (e.g. ending in `_mcp`) is incomplete.
 """
 
     _CONVERSATIONAL_FORMAT = """
@@ -146,6 +215,9 @@ Respond in plain text for normal conversation.
 
 When you need to call a tool, output ONLY a JSON object on a single line:
 {"tool": "tool_name", "tool_args": {"arg1": "value1"}}
+
+Use the full tool name exactly as registered. A name with only the
+server prefix (e.g. ending in `_mcp`) is incomplete.
 
 When responding conversationally (no tool call needed), just write plain text.
 Do NOT wrap conversational replies in JSON.
@@ -231,10 +303,15 @@ Do NOT wrap conversational replies in JSON.
         if not (use_claude or use_chatgpt or skip_lemonade):
             from gaia.llm.lemonade_manager import LemonadeManager
 
+            # Resolve declarative per-agent hardware requirement (if any)
+            req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
+            required_min_device = req.min_device if req is not None else None
+
             LemonadeManager.ensure_ready(
                 min_context_size=min_context_size,
                 quiet=silent_mode,
                 base_url=base_url,
+                required_min_device=required_min_device,
             )
 
         # Initialize state management
@@ -266,6 +343,20 @@ Do NOT wrap conversational replies in JSON.
             self.response_mode, self._PLANNING_FORMAT
         )
 
+        # Store model_id BEFORE _register_tools() so that the system-prompt
+        # cache populated during MCP tool registration sees the correct
+        # ``is_tool_calling_model(self.model_id)`` result. Without this the
+        # check at ``_compose_system_prompt`` runs with model_id=None, returns
+        # False, and the JSON envelope template gets baked into the prompt
+        # for tool-calling models — exactly what the suppression was meant
+        # to prevent.
+        self.model_id = model_id
+
+        # Initialised here (not lazy via getattr) so subclass tests that drive
+        # the parsing helpers outside the standard query lifecycle don't see
+        # the silent False fallback.
+        self._single_tool_done: bool = False
+
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
         self._register_tools()
@@ -294,7 +385,9 @@ Do NOT wrap conversational replies in JSON.
             max_tokens=8192,
         )
         self.chat = AgentSDK(chat_config)
-        self.model_id = model_id
+        # ``self.model_id`` was set earlier (before ``_register_tools``) so the
+        # system-prompt cache built during MCP registration sees the correct
+        # tool-calling-capability gate.
 
         # Print system prompt if show_prompts is enabled
         # Debug: Check the actual value of show_prompts
@@ -310,8 +403,13 @@ Do NOT wrap conversational replies in JSON.
         """
         Auto-collect system prompt fragments from inherited mixins.
 
-        Checks for mixin methods following the pattern: get_*_system_prompt()
+        Discovers all methods matching the pattern get_*_system_prompt() on
+        the instance and calls each one. This means any mixin that defines
+        a method like get_foo_system_prompt() will automatically have its
+        prompt fragment included — no manual registration needed.
+
         Override this method to modify, reorder, or filter mixin prompts.
+        Always call super()._get_mixin_prompts() to preserve auto-discovery.
 
         Returns:
             List of prompt fragments from mixins (empty list if no mixins provide prompts)
@@ -319,26 +417,26 @@ Do NOT wrap conversational replies in JSON.
         Example:
             def _get_mixin_prompts(self) -> list[str]:
                 prompts = super()._get_mixin_prompts()
-                # Modify SD prompt
-                if prompts:
-                    prompts[0] = prompts[0].replace("whimsical", "serious")
-                return prompts
+                # Filter out SD prompt if not needed
+                return [p for p in prompts if "Stable Diffusion" not in p]
         """
         prompts = []
 
-        # Check for SD mixin prompts
-        if hasattr(self, "get_sd_system_prompt"):
-            fragment = self.get_sd_system_prompt()
-            if fragment:
-                prompts.append(fragment)
-
-        # Check for VLM mixin prompts
-        if hasattr(self, "get_vlm_system_prompt"):
-            fragment = self.get_vlm_system_prompt()
-            if fragment:
-                prompts.append(fragment)
-
-        # Add more mixin checks here as new prompt-providing mixins are created
+        # Auto-discover all get_*_system_prompt() methods on this instance.
+        # This eliminates the need to hardcode each mixin's prompt method.
+        for attr_name in dir(self):
+            if (
+                attr_name.startswith("get_")
+                and attr_name.endswith("_system_prompt")
+                and attr_name != "_get_system_prompt"
+                and callable(getattr(self, attr_name, None))
+            ):
+                try:
+                    fragment = getattr(self, attr_name)()
+                    if fragment:
+                        prompts.append(fragment)
+                except Exception:
+                    pass
 
         return prompts
 
@@ -990,12 +1088,33 @@ Do NOT wrap conversational replies in JSON.
         - Plain JSON string `{"thought": ..., "tool": ..., "tool_args": ...}` — embedded format
         - Plain text — conversational answer
 
+        Native tool_calls return shape (issue #944):
+            {
+                "thought": "", "goal": "",
+                "tool_calls": [
+                    {"id": str, "name": str, "tool_args": dict},
+                    ...  # 1 or more — N>1 is the "parallel tool calls" case
+                ],
+                "content": str | None,  # assistant text emitted alongside calls
+                # Backwards-compat: when N==1 the legacy single-call fields
+                # ("tool", "tool_args") are also populated so older consumers
+                # keep working unchanged. Newer code paths SHOULD prefer
+                # ``tool_calls`` since it's the only field set when N>1.
+                "tool": <name when N==1>,
+                "tool_args": <args when N==1>,
+            }
+
         Args:
             response: Raw string from LLM (or sentinel-encoded tool_calls)
 
         Returns:
             Parsed response as a dictionary
         """
+        # In single_tool_per_turn mode, once a tool has run the next LLM turn
+        # should be the final user-facing answer — never another tool call.
+        if getattr(self, "_single_tool_done", False):
+            return {"thought": "", "answer": (response or "").strip() or "Done."}
+
         # --- Native tool_calls branch ---
         # The Lemonade provider encodes native tool_calls as a sentinel JSON string
         # when the model uses OpenAI function calling. Detect it here so the rest
@@ -1004,10 +1123,61 @@ Do NOT wrap conversational replies in JSON.
             try:
                 envelope = json.loads(response)
             except json.JSONDecodeError as exc:
+                # Issue #1023: smaller LLMs occasionally emit envelopes with
+                # (a) single-backslash Windows paths -> ``Invalid \escape``,
+                # or (b) trailing commentary after the closing brace ->
+                # ``Extra data``.  Mirror the inner-arguments recovery
+                # (``json.loads`` on ``arguments`` below): retry once via
+                # ``_repair_invalid_json_escapes``, then fall back to
+                # ``raw_decode`` for the trailing-garbage case.  Only
+                # surface the original parse error if both attempts fail.
+                envelope = None
+                repaired = _repair_invalid_json_escapes(response)
+                if repaired != response:
+                    try:
+                        envelope = json.loads(repaired)
+                        logger.debug(
+                            "[PARSE] repaired invalid backslash escape(s) "
+                            "in native tool_calls envelope"
+                        )
+                    except json.JSONDecodeError:
+                        envelope = None
+                if envelope is None and exc.msg.startswith("Extra data"):
+                    # ``raw_decode`` parses one JSON value and returns
+                    # (obj, end_idx); the suffix is whatever the model
+                    # appended after the structured payload (commentary,
+                    # whitespace, a stray brace).  Logged at info so a
+                    # steady stream surfaces in production telemetry --
+                    # if it's persistent, the prompt needs tightening,
+                    # not the parser.
+                    try:
+                        decoder = json.JSONDecoder()
+                        envelope, end_idx = decoder.raw_decode(response)
+                        logger.info(
+                            "[PARSE] tolerated trailing data after native "
+                            "tool_calls envelope (%d chars discarded)",
+                            len(response) - end_idx,
+                        )
+                    except json.JSONDecodeError:
+                        envelope = None
+                if envelope is None:
+                    raise ValueError(
+                        f"Malformed native tool_calls envelope: {exc}"
+                    ) from exc
+            # Issue #1023: after the recovery path (repair or ``raw_decode``)
+            # an envelope can be syntactically valid JSON without the
+            # ``__tool_calls__`` key -- e.g. ``raw_decode`` of
+            # ``{"foo":1}<trailing>`` returns ``{"foo":1}``.  Convert the
+            # bare ``envelope["__tool_calls__"]`` lookup into a checked one
+            # so the recovery branch at L2820 (which only catches
+            # ``ValueError``/``NotImplementedError``) handles it -- a bare
+            # ``KeyError`` would escape and crash the session.
+            raw_tool_calls = envelope.get("__tool_calls__")
+            if raw_tool_calls is None:
                 raise ValueError(
-                    f"Malformed native tool_calls envelope: {exc}"
-                ) from exc
-            tool_calls = envelope["__tool_calls__"]
+                    "Malformed native tool_calls envelope: parsed prefix "
+                    "lacks __tool_calls__ key."
+                )
             finish_reason = envelope.get("finish_reason", "")
             if finish_reason == "length":
                 # ``finish_reason="length"`` from the OpenAI completions API
@@ -1024,42 +1194,94 @@ Do NOT wrap conversational replies in JSON.
                     f"Model {self.model_id} ran out of output tokens before "
                     f"finishing the call — increase AgentConfig.max_tokens."
                 )
-            if len(tool_calls) > 1:
-                raise NotImplementedError(
-                    "Parallel tool calls (multiple tool_calls in one response) are not yet supported. "
-                    f"Received {len(tool_calls)} tool calls."
-                )
-            tc = tool_calls[0]
-            name = tc["function"]["name"]
-            arguments_raw = tc["function"].get("arguments")
-            # ``arguments`` is canonically a JSON string per OpenAI spec, but
-            # llama.cpp 4B-class models occasionally emit it pre-parsed as a
-            # dict. Accept both shapes — only call ``json.loads`` when it's
-            # actually a string.
-            if arguments_raw is None or arguments_raw == "":
-                tool_args = {}
-            elif isinstance(arguments_raw, dict):
-                tool_args = arguments_raw
-            elif isinstance(arguments_raw, (str, bytes, bytearray)):
-                try:
-                    tool_args = json.loads(arguments_raw)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(
-                        f"Malformed tool_call arguments for '{name}': {exc}. "
-                        f"Raw arguments: {str(arguments_raw)[:200]}"
-                    ) from exc
-            else:
-                # Unexpected shape (list / int / None-ish) — treat as malformed
-                # so the recovery layer in process_query nudges the model to
-                # retry with valid arguments.
+            if not raw_tool_calls:
                 raise ValueError(
-                    f"Malformed tool_call arguments for '{name}': expected "
-                    f"str or dict, got {type(arguments_raw).__name__}"
+                    "Native tool_calls envelope contained an empty tool_calls list."
                 )
+            # Normalise every entry. Tool-calling-trained models routinely
+            # emit multiple tool_calls per response when a user utterance
+            # contains multiple distinct intents (issue #944). Each call gets
+            # parsed independently so a single bad-arguments entry only
+            # poisons that one call's parse, not the others.
+            normalised: list[Dict[str, Any]] = []
+            for idx, tc in enumerate(raw_tool_calls):
+                name = tc["function"]["name"]
+                arguments_raw = tc["function"].get("arguments")
+                # ``arguments`` is canonically a JSON string per OpenAI spec,
+                # but llama.cpp 4B-class models occasionally emit it
+                # pre-parsed as a dict. Accept both shapes — only call
+                # ``json.loads`` when it's actually a string.
+                if arguments_raw is None or arguments_raw == "":
+                    tool_args: Dict[str, Any] = {}
+                elif isinstance(arguments_raw, dict):
+                    tool_args = arguments_raw
+                elif isinstance(arguments_raw, (str, bytes, bytearray)):
+                    args_str = (
+                        arguments_raw.decode("utf-8")
+                        if isinstance(arguments_raw, (bytes, bytearray))
+                        else arguments_raw
+                    )
+                    try:
+                        tool_args = json.loads(args_str)
+                    except json.JSONDecodeError as exc:
+                        # Issue #1023: Windows paths emitted with single
+                        # backslashes (``C:\Users\Klaus``) -> ``\U`` is
+                        # invalid JSON.  Repair invalid escapes and retry
+                        # once before surfacing the error to the recovery
+                        # layer.
+                        repaired = _repair_invalid_json_escapes(args_str)
+                        if repaired == args_str:
+                            raise ValueError(
+                                f"Malformed tool_call arguments for '{name}': {exc}. "
+                                f"Raw arguments: {args_str[:200]}"
+                            ) from exc
+                        try:
+                            tool_args = json.loads(repaired)
+                        except json.JSONDecodeError as exc2:
+                            raise ValueError(
+                                f"Malformed tool_call arguments for '{name}': {exc2}. "
+                                f"Raw arguments: {args_str[:200]}"
+                            ) from exc2
+                        logger.debug(
+                            "[PARSE] repaired invalid backslash escape(s) in "
+                            "tool_call args for '%s'",
+                            name,
+                        )
+                else:
+                    # Unexpected shape (list / int / None-ish) — treat as
+                    # malformed so the recovery layer in process_query nudges
+                    # the model to retry with valid arguments.
+                    raise ValueError(
+                        f"Malformed tool_call arguments for '{name}': expected "
+                        f"str or dict, got {type(arguments_raw).__name__}"
+                    )
+                # Use the model-supplied id when present so tool result
+                # messages can be correlated back to their originating call;
+                # synthesise one when absent (some llama.cpp builds omit it).
+                tc_id = tc.get("id") or f"call_{idx}_{uuid.uuid4().hex[:8]}"
+                normalised.append({"id": tc_id, "name": name, "tool_args": tool_args})
+            content = envelope.get("content")
             logger.debug(
-                "[PARSE] tool_call_path=native model_id=%s tool=%s", self.model_id, name
+                "[PARSE] tool_call_path=native model_id=%s n_calls=%d tools=%s",
+                self.model_id,
+                len(normalised),
+                [tc["name"] for tc in normalised],
             )
-            return {"thought": "", "goal": "", "tool": name, "tool_args": tool_args}
+            parsed: Dict[str, Any] = {
+                "thought": "",
+                "goal": "",
+                "tool_calls": normalised,
+                "content": content,
+            }
+            # Backwards-compat: populate the legacy single-call fields when
+            # there's exactly one call so existing consumers (and the
+            # embedded-JSON code path in process_query) keep working without
+            # change. The legacy fields are intentionally absent for N>1 to
+            # force callers into the fan-out path.
+            if len(normalised) == 1:
+                parsed["tool"] = normalised[0]["name"]
+                parsed["tool_args"] = normalised[0]["tool_args"]
+            return parsed
 
         # Check for empty responses
         if not response or not response.strip():
@@ -1377,6 +1599,11 @@ Do NOT wrap conversational replies in JSON.
                 "error_displayed": True,
             }
 
+        # Normalize common model name-construction errors before registry lookup:
+        # strip trailing "()" some models append, and convert hyphens to underscores
+        # (tool names are always snake_case; hyphens are never valid).
+        tool_name = tool_name.removesuffix("()").replace("-", "_")
+
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
         if not tool_name:
@@ -1391,8 +1618,36 @@ Do NOT wrap conversational replies in JSON.
                 logger.debug(f"Resolved tool '{tool_name}' -> '{resolved}'")
                 tool_name = resolved
             else:
-                logger.error(f"Tool '{tool_name}' not found in registry")
-                return {"status": "error", "error": f"Tool '{tool_name}' not found"}
+                # When the name is a strict prefix of one or more registered
+                # tools, hand the model the candidate list so it can retry
+                # with the full name. Covers truncated-name emission like
+                # the bare server prefix some local models produce.
+                lower = tool_name.lower()
+                candidates = sorted(
+                    n for n in self._tools_registry if n.lower().startswith(lower + "_")
+                )[:10]
+                # Bare-prefix detection: EVERY candidate begins with the
+                # requested name + "_". Tells us the model emitted a strict
+                # prefix, not a typo. Don't re-quote the bad name in the
+                # error — re-emitting it puts the bad token back in the
+                # model's context and reinforces the failure loop.
+                is_bare_prefix = len(candidates) >= 2 and all(
+                    c.startswith(tool_name + "_") for c in candidates
+                )
+                if is_bare_prefix:
+                    err = (
+                        "Incomplete tool name. Choose ONE of these complete "
+                        f"names and copy it exactly: {', '.join(candidates)}."
+                    )
+                elif candidates:
+                    err = "Unknown tool name. Use one of: " f"{', '.join(candidates)}."
+                else:
+                    err = (
+                        "Unknown tool name. Use only tools listed in your "
+                        "AVAILABLE TOOLS section."
+                    )
+                logger.error(err)
+                return {"status": "error", "error": err}
 
         # Guardrail: require explicit user confirmation for high-risk tools.
         # The SSEOutputHandler overrides this to block until the frontend
@@ -1603,6 +1858,10 @@ Do NOT wrap conversational replies in JSON.
         try:
             import httpx
 
+            from gaia.llm.lemonade_client import (
+                lemonade_auth_headers,
+                resolve_lemonade_api_key,
+            )
             from gaia.llm.lemonade_manager import LemonadeManager
 
             base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
@@ -1610,18 +1869,72 @@ Do NOT wrap conversational replies in JSON.
             # The base_url already ends in /api/v1; strip the v1 suffix to
             # reach the v0 health endpoint.
             health_url = base_url.replace("/api/v1", "/api/v0/health")
-            resp = httpx.get(health_url, timeout=3.0)
+            resp = httpx.get(
+                health_url,
+                timeout=3.0,
+                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+            )
             if resp.status_code != 200:
                 return False
             data = resp.json()
             for m in data.get("all_models_loaded", []):
                 if m.get("type") in ("llm", "vlm"):
                     ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    if 0 < ctx < 32768:
+                    # Threshold tracks the chat / rag profile default
+                    # (65536); any loaded ctx below that is "too small"
+                    # for doc-Q&A flows and should trigger a reload.
+                    if 0 < ctx < 65536:
                         return True
             return False
         except Exception:  # pylint: disable=broad-except
             return False
+
+    def _extract_lemonade_user_message(self, exc: BaseException) -> Optional[str]:
+        """Return a typed Lemonade error's ``user_message`` if present in *exc*.
+
+        AgentSDK wraps backend exceptions in generic ``RuntimeError`` /
+        ``Exception`` with ``str(original)`` as the message; the typed-class
+        info is preserved on ``__cause__`` / ``__context__``. We walk both
+        chains and also fall back to substring-matching the stringified
+        exception, so callers get a typed actionable message regardless
+        of which layer raised.
+
+        Specifically prevents the generic "Sorry, I ran into an unexpected
+        problem. This might be a temporary issue — try again in a moment."
+        wrapper from clobbering the precise remediation messages on typed
+        errors like :class:`LemonadeUpstreamTimeoutError` (#1030) — that
+        wrapper actively misleads users on non-retryable failures.
+
+        Returns ``None`` for unrelated exceptions so the caller falls
+        through to its normal generic copy.
+        """
+        try:
+            from gaia.llm.providers.lemonade import LemonadeError
+            from gaia.ui._chat_helpers import _classify_chat_exception
+        except Exception:  # pylint: disable=broad-except
+            return None
+
+        # 1. Direct match anywhere in the cause chain.
+        cur: Optional[BaseException] = exc
+        seen: set = set()
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            if isinstance(cur, LemonadeError):
+                msg = getattr(cur, "user_message", None)
+                if msg:
+                    return str(msg)
+            cur = cur.__cause__ or cur.__context__
+
+        # 2. String-based reclassification — covers the case where the typed
+        # exception was stringified into a generic ``Exception`` by AgentSDK.
+        # ``_classify_chat_exception`` already does the timeout-vs-network
+        # split we need for #1030.
+        classified = _classify_chat_exception(exc)
+        if classified is not None:
+            msg = getattr(classified, "user_message", None)
+            if msg:
+                return str(msg)
+        return None
 
     def _shrink_messages_for_overflow(
         self, messages: List[Dict[str, Any]]
@@ -1682,9 +1995,26 @@ Do NOT wrap conversational replies in JSON.
                 shrunk_rest.append(m)
         return [first] + shrunk_rest
 
-    def _create_tool_message(self, tool_name: str, tool_output: Any) -> Dict[str, Any]:
+    def _create_tool_message(
+        self,
+        tool_name: str,
+        tool_output: Any,
+        tool_call_id: str | None = None,
+    ) -> Dict[str, Any]:
         """
         Build a message structure representing a tool output for downstream LLM calls.
+
+        Args:
+            tool_name: The name of the tool that produced the output.
+            tool_output: The raw tool output (str / dict / list / etc).
+            tool_call_id: Optional id from the originating ``tool_calls`` array.
+                When provided, the tool message references the model's
+                actual call id so OpenAI-spec consumers can correlate
+                results to calls — this matters for parallel tool_calls
+                (issue #944) where multiple results need to be matched to
+                multiple calls in the prior assistant turn. When omitted,
+                a fresh uuid is synthesised for backward compatibility
+                with embedded-JSON paths that don't carry an id.
         """
         if isinstance(tool_output, str):
             text_content = tool_output
@@ -1696,11 +2026,57 @@ Do NOT wrap conversational replies in JSON.
                 tool_output, default=self._json_serialize_fallback
             )
 
-        return {
+        msg = {
             "role": "tool",
             "name": tool_name,
-            "tool_call_id": uuid.uuid4().hex,
+            "tool_call_id": tool_call_id or uuid.uuid4().hex,
             "content": [{"type": "text", "text": text_content}],
+        }
+        if getattr(self, "_single_tool_done", False):
+            for block in msg["content"]:
+                if block.get("type") == "text":
+                    block["text"] += _SINGLE_TOOL_DONE_SUFFIX
+                    break
+        return msg
+
+    def _build_assistant_message(
+        self, raw_response: str, parsed: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Construct the assistant message to append to the LLM context.
+
+        For native ``tool_calls`` responses (issue #944) we MUST emit a
+        proper OpenAI-shape assistant turn — ``content`` (string or
+        null) plus ``tool_calls`` carrying the original ids — so that
+        the subsequent ``role=tool`` messages can correlate by
+        ``tool_call_id``. Stuffing the raw ``{"__tool_calls__": ...}``
+        sentinel envelope into ``content`` (the pre-fix behaviour) is
+        rejected by spec-strict providers and breaks parallel-call
+        result-to-call matching.
+
+        For embedded-JSON / plain-text responses we keep passing the raw
+        response text through unchanged.
+        """
+        tc_list = parsed.get("tool_calls")
+        if not tc_list:
+            return {"role": "assistant", "content": raw_response}
+        return {
+            "role": "assistant",
+            "content": parsed.get("content"),
+            "tool_calls": [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(
+                            tc["tool_args"],
+                            default=self._json_serialize_fallback,
+                        ),
+                    },
+                }
+                for tc in tc_list
+            ],
         }
 
     def _json_serialize_fallback(self, obj: Any) -> Any:
@@ -1883,6 +2259,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
+        self._single_tool_done = False
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []
@@ -1903,6 +2280,12 @@ Do NOT wrap conversational replies in JSON.
         tool_call_log = (
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
+        # Issue #1023: track the latest outcome of any capability tool
+        # (currently ``generate_image``) so the verbose-failure override
+        # downstream fires only when the tool actually errored.  ``None``
+        # = not called yet, ``True`` = last call succeeded, ``False`` =
+        # last call returned an error.
+        capability_tool_last_succeeded: Optional[bool] = None
         query_result_cache: dict[str, int] = (
             {}
         )  # result_hash → call count (result-based dedup)
@@ -2015,8 +2398,33 @@ Do NOT wrap conversational replies in JSON.
                     # Stop progress indicator
                     self.console.stop_progress()
 
-                    # Handle domain-specific post-processing
-                    self._post_process_tool_result(tool_name, tool_args, tool_result)
+                    # Issue #1023: record success/failure of capability tools
+                    # so the verbose-failure override downstream can fire
+                    # only when the tool actually errored.  ``.lower()``
+                    # mirrors the defensive check at
+                    # ``has_tried_capability_tool`` so a model that emits
+                    # ``Generate_Image`` doesn't slip past the tracker.
+                    if any(
+                        tool_name.lower().startswith(_s) for _s in _SD_CAPABILITY_TOOLS
+                    ):
+                        capability_tool_last_succeeded = not (
+                            isinstance(tool_result, dict)
+                            and tool_result.get("status") in ("error", "denied")
+                        )
+
+                    # Handle domain-specific post-processing.
+                    # A returned plan switches the agent into
+                    # STATE_EXECUTING_PLAN for declarative multi-step
+                    # recovery (e.g., prereq-enable + retry). The base
+                    # impl returns None, but the hook's annotation is
+                    # Optional[List[...]], so pylint's None-inference
+                    # is wrong here — silence it explicitly.
+                    # pylint: disable-next=assignment-from-none
+                    _next_plan = self._post_process_tool_result(
+                        tool_name, tool_args, tool_result
+                    )
+                    if _next_plan is not None:
+                        self._inject_recovery_plan(_next_plan)
 
                     # Handle large tool results
                     truncated_result = self._handle_large_tool_result(
@@ -2544,18 +2952,38 @@ Do NOT wrap conversational replies in JSON.
                                 "the essentials?"
                             )
                         else:
-                            final_answer = (
-                                f"Sorry, I ran into an unexpected problem. "
-                                f"This might be a temporary issue — try "
-                                f"again in a moment.\n\n"
-                                f"*Technical details: {str(e)}*"
-                            )
+                            # If we have a typed Lemonade error in the
+                            # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``
+                            # from #1030), surface its actionable
+                            # ``user_message`` verbatim instead of wrapping it
+                            # with the generic "try again in a moment" copy —
+                            # that wrapper actively misleads users on
+                            # non-retryable failures.
+                            typed_msg = self._extract_lemonade_user_message(e)
+                            if typed_msg is not None:
+                                final_answer = typed_msg
+                            else:
+                                final_answer = (
+                                    f"Sorry, I ran into an unexpected problem. "
+                                    f"This might be a temporary issue — try "
+                                    f"again in a moment.\n\n"
+                                    f"*Technical details: {str(e)}*"
+                                )
                         break
                 if final_answer is not None:
                     break
 
                 # Stop the progress indicator
                 self.console.stop_progress()
+
+            # Strip <think>...</think> blocks emitted by reasoning models
+            # (e.g. Qwen3.5).  Must happen before parsing so the JSON extractor
+            # finds clean input, and before the response is stored in
+            # conversation_history so the thinking text never bleeds into the
+            # next turn and confuses the model about the current user message.
+            response = re.sub(
+                r"<think>.*?</think>", "", response, flags=re.DOTALL
+            ).strip()
 
             # Print the LLM response to the console
             logger.debug(f"LLM response: {response[:200]}...")
@@ -2582,13 +3010,38 @@ Do NOT wrap conversational replies in JSON.
                     }
                 )
                 error_count += 1
+                # Issue #1023: pull the most recent successful image path
+                # out of step_results so both the recovery prompt and the
+                # give-up fallback can surface it.  When the SD two-step
+                # flow's step-1 succeeded and step-2 parse-failed, the
+                # canonical path is the breadcrumb the model needs to
+                # retry verbatim, and the breadcrumb the user needs in the
+                # final answer so the successful generation isn't lost.
+                # No-op for agents that don't emit ``image_path``.
+                _last_image_path = next(
+                    (
+                        r["image_path"]
+                        for r in reversed(step_results)
+                        if isinstance(r, dict)
+                        and r.get("status") == "success"
+                        and r.get("image_path")
+                    ),
+                    None,
+                )
                 # If we've already retried several times, give up gracefully and
                 # answer in plain text rather than spamming the user.
                 if error_count >= 3:
-                    final_answer = (
-                        "I had trouble formatting my tool call. Could you "
-                        "rephrase or break the request into smaller pieces?"
-                    )
+                    if _last_image_path:
+                        final_answer = (
+                            f"I generated your image at `{_last_image_path}`, "
+                            "but I couldn't finish the follow-up step. "
+                            "Try asking for the next step in a fresh message."
+                        )
+                    else:
+                        final_answer = (
+                            "I had trouble formatting my tool call. Could you "
+                            "rephrase or break the request into smaller pieces?"
+                        )
                     break
                 # Push a synthetic assistant turn + recovery user message so the
                 # next LLM call has context. Don't include the raw envelope to
@@ -2602,16 +3055,32 @@ Do NOT wrap conversational replies in JSON.
                         ),
                     }
                 )
+                _recovery_content = (
+                    "Your last tool call had malformed arguments. "
+                    "Please try again. Use ONLY the documented enum "
+                    "values for each argument (e.g. 'brief', "
+                    "'detailed', 'bullets' — never a long sentence). "
+                    "If you don't need a tool, answer in plain text."
+                )
+                if _last_image_path:
+                    _recovery_content += (
+                        f"\n\nYour previous step generated an image at "
+                        f"`{_last_image_path}`. If your next tool call "
+                        "needs this path, copy that string VERBATIM — do "
+                        "not retype it."
+                    )
+                    # Marker so production-log triage can tell "model
+                    # received the canonical path and still mangled it"
+                    # from "model never saw the hint."  Pre-mortem note
+                    # in the plan flagged this gap.
+                    logger.info(
+                        "[PARSE-RECOVERY] injected canonical image_path=%s",
+                        _last_image_path,
+                    )
                 messages.append(
                     {
                         "role": "user",
-                        "content": (
-                            "Your last tool call had malformed arguments. "
-                            "Please try again. Use ONLY the documented enum "
-                            "values for each argument (e.g. 'brief', "
-                            "'detailed', 'bullets' — never a long sentence). "
-                            "If you don't need a tool, answer in plain text."
-                        ),
+                        "content": _recovery_content,
                     }
                 )
                 steps_taken += 1
@@ -2619,8 +3088,10 @@ Do NOT wrap conversational replies in JSON.
             logger.debug(f"Parsed response: {parsed}")
             conversation.append({"role": "assistant", "content": parsed})
 
-            # Add assistant response to messages for chat history
-            messages.append({"role": "assistant", "content": response})
+            # Add assistant response to messages for chat history (OpenAI
+            # shape for native tool_calls, raw text otherwise — see
+            # ``_build_assistant_message`` for the why).
+            messages.append(self._build_assistant_message(response, parsed))
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -2725,13 +3196,26 @@ Do NOT wrap conversational replies in JSON.
                     plan_response = chat_response.text
                     self.console.stop_progress()
 
+                # Strip <think> blocks before parsing (same reason as main path)
+                plan_response = re.sub(
+                    r"<think>.*?</think>", "", plan_response, flags=re.DOTALL
+                ).strip()
+
                 # Parse the plan response
                 parsed_plan = self._parse_llm_response(plan_response)
                 logger.debug(f"Parsed plan response: {parsed_plan}")
                 conversation.append({"role": "assistant", "content": parsed_plan})
 
-                # Add plan response to messages for chat history
-                messages.append({"role": "assistant", "content": plan_response})
+                # Add plan response to messages for chat history. Same
+                # OpenAI-shape rule as the main-response append (issue
+                # #944): a tool-calling-trained planner can emit native
+                # ``tool_calls`` instead of (or alongside) the expected
+                # plan JSON — those must be preserved as a structured
+                # assistant turn so the fan-out below can correlate
+                # results back via ``tool_call_id``.
+                messages.append(
+                    self._build_assistant_message(plan_response, parsed_plan)
+                )
 
                 # Display the agent's reasoning for the plan
                 self.console.print_thought(parsed_plan.get("thought", "Creating plan"))
@@ -2829,8 +3313,206 @@ Do NOT wrap conversational replies in JSON.
                     f"New plan created with {self.total_plan_steps} steps: {self.current_plan}"
                 )
 
-            # If the response contains a tool call, execute it
-            if parsed.get("tool") and "tool_args" in parsed:
+            # === Native parallel tool_calls fan-out (issue #944) ===
+            #
+            # Tool-calling-trained models (Gemma-4-E4B-it-GGUF — GAIA's
+            # default per #865 — and the Qwen3-Instruct line) routinely emit
+            # multiple ``tool_calls`` in a single response when the user
+            # utterance contains multiple distinct intents. We drain them
+            # sequentially within the same loop iteration, appending one
+            # ``role=tool`` message per call (with its real ``tool_call_id``)
+            # before re-prompting the LLM. This matches the OpenAI Chat
+            # Completions tools API contract and makes parallel calls
+            # behave like N independent sequential calls without the
+            # overhead of N LLM round-trips.
+            #
+            # The legacy single-tool path below ONLY fires for embedded
+            # JSON responses (no ``tool_calls`` field set) so that for
+            # native single calls we still get proper ``tool_call_id``
+            # linkage on the result message.
+            if parsed.get("tool_calls"):
+                tc_list = parsed["tool_calls"]
+                any_error = False
+                last_error = None
+                fanout_repeat_break = False
+
+                for fan_idx, tc in enumerate(tc_list):
+                    tool_name = tc["name"]
+                    tool_args = tc["tool_args"]
+                    tool_call_id = tc["id"]
+                    logger.debug(
+                        "Tool call %d/%d: %s with args %s",
+                        fan_idx + 1,
+                        len(tc_list),
+                        tool_name,
+                        tool_args,
+                    )
+
+                    # Display the tool call in real-time
+                    self.console.print_tool_usage(tool_name)
+                    if tool_args:
+                        self.console.pretty_print_json(tool_args, "Arguments")
+                    self.console.start_progress(f"Executing {tool_name}")
+
+                    # Loop detection — same shape as legacy path so
+                    # repeated calls across iterations are still caught.
+                    current_call = (tool_name, str(tool_args))
+                    tool_call_history.append(current_call)
+                    tool_call_log.append(current_call)
+                    if len(tool_call_history) > 5:
+                        tool_call_history.pop(0)
+                    consecutive_count = 0
+                    for prior in reversed(tool_call_history):
+                        if prior == current_call:
+                            consecutive_count += 1
+                        else:
+                            break
+                    if consecutive_count >= self.max_consecutive_repeats:
+                        self.console.stop_progress()
+                        # NATIVE path appends results to ``previous_outputs``
+                        # (line 3387), not ``step_results``. Unwrap the
+                        # ``result`` field so the helper sees actual tool
+                        # results, not the wrapper dicts.
+                        recent_results = [o.get("result") for o in previous_outputs]
+                        final_answer = self._build_loop_break_summary(
+                            tool_name, consecutive_count, recent_results
+                        )
+                        self.console.print_repeated_tool_warning()
+                        fanout_repeat_break = True
+                        break
+
+                    # Execute
+                    tool_result = self._execute_tool(tool_name, tool_args)
+                    self.console.stop_progress()
+
+                    # Result-based dedup for query family tools
+                    _QUERY_TOOLS = (
+                        "query_documents",
+                        "query_specific_file",
+                        "query_indexed_documents",
+                    )
+                    if tool_name in _QUERY_TOOLS:
+                        result_key = f"{tool_name}:{hash(str(tool_result))}"
+                        query_result_cache[result_key] = (
+                            query_result_cache.get(result_key, 0) + 1
+                        )
+                        if query_result_cache[result_key] >= 2:
+                            logger.debug(
+                                "[DEDUP] Same query result returned %d times "
+                                "— injecting stop signal",
+                                query_result_cache[result_key],
+                            )
+                            dedup_msg = (
+                                f"[SYSTEM] You have received this same result "
+                                f"from {tool_name} "
+                                f"{query_result_cache[result_key]} times. "
+                                "Querying again will not yield new "
+                                "information. STOP querying and answer "
+                                "directly from what you have retrieved, "
+                                "OR check your prior turn responses for "
+                                "relevant data, OR state that the "
+                                "information was not found in the document."
+                            )
+                            messages.append({"role": "user", "content": dedup_msg})
+
+                    # Domain hooks. A returned plan switches the agent into
+                    # STATE_EXECUTING_PLAN for prereq-style recovery. The
+                    # base impl returns None but the hook's annotation is
+                    # Optional[List[...]] — silence pylint's None-inference.
+                    # pylint: disable-next=assignment-from-none
+                    _next_plan = self._post_process_tool_result(
+                        tool_name, tool_args, tool_result
+                    )
+                    if _next_plan is not None:
+                        self._inject_recovery_plan(_next_plan)
+
+                    # Truncate large results before logging
+                    truncated_result = self._handle_large_tool_result(
+                        tool_name, tool_result, conversation, tool_args
+                    )
+
+                    self.console.pretty_print_json(tool_result, "Result")
+                    self.console.print_tool_complete()
+
+                    previous_outputs.append(
+                        {
+                            "tool": tool_name,
+                            "args": tool_args,
+                            "result": truncated_result,
+                        }
+                    )
+
+                    # Append the tool result message with the *real*
+                    # tool_call_id from the originating call so the next
+                    # LLM round can correlate this result with the right
+                    # call in the prior assistant turn (issue #944).
+                    messages.append(
+                        self._create_tool_message(
+                            tool_name,
+                            truncated_result,
+                            tool_call_id=tool_call_id,
+                        )
+                    )
+
+                    # Track errors but DON'T break early — drain all N
+                    # tool calls first so conversation history reflects
+                    # the full set, per #944 acceptance criterion (b).
+                    is_error = isinstance(tool_result, dict) and (
+                        tool_result.get("status") == "error"
+                        or tool_result.get("success") is False
+                        or tool_result.get("has_errors") is True
+                        or tool_result.get("return_code", 0) != 0
+                    )
+                    if is_error:
+                        error_count += 1
+                        last_error = (
+                            tool_result.get("error_brief")
+                            or tool_result.get("error")
+                            or tool_result.get("stderr")
+                            or tool_result.get("hint")
+                            or tool_result.get("suggested_fix")
+                            or (
+                                "Command failed with return code "
+                                f"{tool_result.get('return_code')}"
+                            )
+                        )
+                        logger.warning(
+                            "Tool execution error in parallel call "
+                            "%d/%d (count: %d): %s",
+                            fan_idx + 1,
+                            len(tc_list),
+                            error_count,
+                            last_error,
+                        )
+                        if not tool_result.get("error_displayed"):
+                            self.console.print_error(last_error)
+                        any_error = True
+
+                if fanout_repeat_break:
+                    break  # break outer while
+
+                if any_error:
+                    # All N results have been appended. Now transition to
+                    # error recovery so the next LLM round can react.
+                    self.execution_state = self.STATE_ERROR_RECOVERY
+                    self.console.print_state_info(
+                        "ERROR RECOVERY: Handling tool execution failure"
+                    )
+                    continue
+
+                # Otherwise fall through to stats / answer / next iter.
+                # The legacy ``if parsed.get("tool")`` branch below is
+                # gated to skip when ``tool_calls`` is set so it won't
+                # double-execute the first call.
+
+            # If the response contains a tool call, execute it (legacy
+            # embedded-JSON path). Skipped when ``tool_calls`` is set —
+            # those have already been dispatched by the fan-out above.
+            if (
+                parsed.get("tool")
+                and "tool_args" in parsed
+                and not parsed.get("tool_calls")
+            ):
 
                 # Display the current plan with the current step highlighted
                 if self.current_plan:
@@ -2890,9 +3572,11 @@ Do NOT wrap conversational replies in JSON.
                     # Stop progress indicator
                     self.console.stop_progress()
 
-                    # Force a final answer if the same tool is called repeatedly
-                    final_answer = (
-                        f"Task completed with {tool_name}. No further action needed."
+                    # Force a final answer if the same tool is called repeatedly.
+                    # Branches on whether the recent calls were errors so we
+                    # never claim success on a loop of failures.
+                    final_answer = self._build_loop_break_summary(
+                        tool_name, consecutive_count, step_results
                     )
 
                     self.console.print_repeated_tool_warning()
@@ -2903,6 +3587,26 @@ Do NOT wrap conversational replies in JSON.
 
                 # Stop progress indicator
                 self.console.stop_progress()
+
+                # Issue #1023: record success/failure of capability tools so
+                # the verbose-failure override downstream fires only when the
+                # tool actually errored.  ``.lower()`` mirrors the defensive
+                # check at ``has_tried_capability_tool`` so a model that emits
+                # ``Generate_Image`` doesn't slip past the tracker.
+                if any(tool_name.lower().startswith(_s) for _s in _SD_CAPABILITY_TOOLS):
+                    capability_tool_last_succeeded = not (
+                        isinstance(tool_result, dict)
+                        and tool_result.get("status") in ("error", "denied")
+                    )
+
+                # Issue #1023: mirror the plan-execution branch (L2330) so
+                # ``step_results`` is consistent regardless of whether the
+                # LLM emitted a multi-step plan or a series of single-tool
+                # responses.  Downstream consumers (parse-error recovery
+                # prompt, give-up fallback) read ``step_results`` for the
+                # canonical ``image_path`` — without this append, the
+                # legacy single-tool path leaves them empty-handed.
+                step_results.append(tool_result)
 
                 # Result-based dedup: if this tool (query family) returns the same result
                 # it returned in a prior call, inject a correction so the agent stops looping.
@@ -2931,8 +3635,16 @@ Do NOT wrap conversational replies in JSON.
                         )
                         messages.append({"role": "user", "content": dedup_msg})
 
-                # Handle domain-specific post-processing
-                self._post_process_tool_result(tool_name, tool_args, tool_result)
+                # Handle domain-specific post-processing.
+                # A returned plan switches into STATE_EXECUTING_PLAN. The
+                # base impl returns None but the hook's annotation is
+                # Optional[List[...]] — silence pylint's None-inference.
+                # pylint: disable-next=assignment-from-none
+                _next_plan = self._post_process_tool_result(
+                    tool_name, tool_args, tool_result
+                )
+                if _next_plan is not None:
+                    self._inject_recovery_plan(_next_plan)
 
                 # Handle large tool results
                 truncated_result = self._handle_large_tool_result(
@@ -3271,9 +3983,8 @@ Do NOT wrap conversational replies in JSON.
                     r"i can.*create.*image",
                     r"when.*--sd",
                 ]
-                _SD_TOOLS = ("generate_image",)
                 has_tried_capability_tool = any(
-                    any(_tname.lower().startswith(_s) for _s in _SD_TOOLS)
+                    any(_tname.lower().startswith(_s) for _s in _SD_CAPABILITY_TOOLS)
                     for _tname, _ in tool_call_log
                 )
                 is_capability_claim = any(
@@ -3360,7 +4071,18 @@ Do NOT wrap conversational replies in JSON.
                 # Post-failure verbosity guard: when generate_image was called and
                 # failed, the LLM often apologises and explains "what it would have done"
                 # with prompt-engineering tips. Intercept and replace with a clean response.
-                if has_tried_capability_tool:
+                #
+                # Issue #1023: gate on the LATEST outcome of the capability tool.
+                # When generate_image succeeded and a *different* tool's parse
+                # error provoked a verbose apology, the override used to clobber
+                # the model's reply with a misleading "Image generation is not
+                # available" message even though the image was generated.  Now
+                # the override fires only when the most recent capability call
+                # actually returned an error.
+                if (
+                    has_tried_capability_tool
+                    and capability_tool_last_succeeded is False
+                ):
                     _SD_POST_FAILURE_VERBOSE = [
                         r"would have done",
                         r"what i would",
@@ -3482,11 +4204,52 @@ Do NOT wrap conversational replies in JSON.
         # Store the result internally
         self.last_result = result
 
+        # Post-query hook for mixins (e.g., MemoryMixin conversation storage)
+        if hasattr(self, "_after_process_query"):
+            try:
+                self._after_process_query(user_input, result.get("result", ""))
+            except Exception as e:
+                logger.warning(f"Post-query hook failed: {e}")
+
         return result
+
+    @staticmethod
+    def _is_error_result(result: Any) -> bool:
+        """Canonical predicate for 'tool returned an error result'.
+
+        Mirrors the error-recovery check used elsewhere in
+        ``_process_query_impl`` (around lines 2319-2325 / 3471-3477) so
+        subclass hooks and the framework's own error-recovery state
+        transition agree on what counts as an error.
+        """
+        return isinstance(result, dict) and (
+            result.get("status") == "error"
+            or result.get("success") is False
+            or result.get("has_errors") is True
+            or result.get("return_code", 0) != 0
+        )
+
+    def _build_loop_break_summary(
+        self,
+        tool_name: str,
+        consecutive_count: int,
+        step_results: list,
+    ) -> str:
+        """Final-answer text when the loop breaks on repeats; honest on errors."""
+        last = step_results[-1] if step_results else None
+        if Agent._is_error_result(last):
+            err = (last or {}).get("error") or "the tool returned an error"
+            return (
+                f"I tried calling `{tool_name}` {consecutive_count} times "
+                f"and it kept failing: {err}\n\n"
+                "I couldn't recover from this — please rephrase the request "
+                "or check that the underlying service is running."
+            )
+        return f"Task completed with {tool_name}. No further action needed."
 
     def _post_process_tool_result(
         self, _tool_name: str, _tool_args: Dict[str, Any], _tool_result: Dict[str, Any]
-    ) -> None:
+    ) -> Optional[List[Dict[str, Any]]]:
         """
         Post-process the tool result for domain-specific handling.
         Override this in subclasses to provide domain-specific behavior.
@@ -3495,8 +4258,77 @@ Do NOT wrap conversational replies in JSON.
             _tool_name: Name of the tool that was executed
             _tool_args: Arguments that were passed to the tool
             _tool_result: Result returned by the tool
+
+        Returns:
+            ``None`` (default) — use the framework's current behaviour. In
+            ``single_tool_per_turn=True`` mode the framework will mark the
+            turn as done **only when the tool succeeded**. On error, the
+            framework's own error-recovery prompt runs and the model gets
+            a fresh planning turn.
+
+            ``list[dict]`` — a multi-step plan the framework should execute
+            via STATE_EXECUTING_PLAN (e.g., on a known prereq error: prepend
+            an enable step and retry). Each step must have ``"tool"`` and
+            ``"tool_args"`` keys.
         """
-        ...
+        if self.single_tool_per_turn and not self._is_error_result(_tool_result):
+            self._single_tool_done = True
+        return None
+
+    def _inject_recovery_plan(self, steps: List[Dict[str, Any]]) -> None:
+        """Switch the agent into ``STATE_EXECUTING_PLAN`` with the given steps.
+
+        Controlled entry point so subclass hooks can request multi-step
+        recovery without mutating four private attributes
+        (``current_plan``/``current_step``/``total_plan_steps``/
+        ``execution_state``) — which would violate the invariant that plan
+        state transitions go through ``STATE_PLANNING``.
+        Each ``step`` must be ``{"tool": <name>, "tool_args": <dict>}``.
+
+        **Caller constraint:** safe to call from
+        ``_post_process_tool_result`` when invoked from the sequential
+        tool-execution path. Calling from inside an already-running
+        ``STATE_EXECUTING_PLAN`` is supported but emits a WARNING because
+        the new plan replaces the in-flight one, which is usually a bug
+        in the subclass hook rather than intent. Fanout/native-batch
+        paths haven't been exercised here — until they're tested, return
+        ``None`` from those contexts.
+        """
+        if getattr(self, "execution_state", None) == getattr(
+            self, "STATE_EXECUTING_PLAN", None
+        ):
+            logger.warning(
+                "_inject_recovery_plan called while already in "
+                "STATE_EXECUTING_PLAN — the in-flight plan will be replaced. "
+                "Verify this is intentional in your subclass hook."
+            )
+        if not isinstance(steps, list) or not steps:
+            return
+        validated: List[Dict[str, Any]] = []
+        for step in steps:
+            if (
+                isinstance(step, dict)
+                and isinstance(step.get("tool"), str)
+                and isinstance(step.get("tool_args", {}), dict)
+            ):
+                validated.append(
+                    {
+                        "tool": step["tool"],
+                        "tool_args": step.get("tool_args", {}) or {},
+                    }
+                )
+        if not validated:
+            return
+        self.current_plan = validated
+        self.current_step = 0
+        self.total_plan_steps = len(validated)
+        self.execution_state = self.STATE_EXECUTING_PLAN
+        self._single_tool_done = False
+        logger.debug(
+            "[_inject_recovery_plan] STATE_EXECUTING_PLAN with %d steps: %s",
+            len(validated),
+            [s["tool"] for s in validated],
+        )
 
     def display_result(
         self,

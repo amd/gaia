@@ -57,12 +57,15 @@
               "quickstart",
               "guides/install",
               "guides/agent-ui",
+              "guides/memory",
               {
                 "group": "User Guides",
                 "pages": [
                   "guides/index",
                   "guides/hardware-advisor",
                   "guides/chat",
+                  "guides/browse",
+                  "guides/analyze",
                   "guides/talk",
                   "guides/code",
                   "guides/telegram-adapter",
@@ -162,6 +165,7 @@
                     "group": "SDKs",
                     "pages": [
                       "sdk/sdks/chat",
+                      "sdk/sdks/memory",
                       "sdk/sdks/agent-ui",
                       "sdk/sdks/rag",
                       "sdk/sdks/code-index",
@@ -428,6 +432,9 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.19.0",
+              "releases/v0.18.1",
+              "releases/v0.18.0",
               "releases/v0.17.6",
               "releases/v0.17.5",
               "releases/v0.17.4",
@@ -478,7 +485,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.17.6 \u00b7 Lemonade 10.2.0",
+        "label": "v0.19.0 \u00b7 Lemonade 10.2.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

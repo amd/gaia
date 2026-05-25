@@ -1,0 +1,58 @@
+name: Eval RAG Quality
+
+on:
+  pull_request:
+    paths:
+      - 'src/gaia/agents/**'
+      - 'src/gaia/llm/**'
+      - 'src/gaia/rag/**'
+      - 'src/gaia/eval/**'
+      - 'eval/scenarios/**'
+
+concurrency:
+  group: lemonade-eval
+  cancel-in-progress: false
+
+jobs:
+  skip-warning:
+    name: Skip RAG Eval (fork PR or external contributor)
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Notify skipped
+        run: |
+          echo "[SKIP] ANTHROPIC_API_KEY not available in this run (fork PR or missing secret). Skipping RAG eval job."
+
+  run-eval:
+    name: Run RAG Quality Eval
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, lemonade-eval]
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies in isolated venv
+        run: |
+          python -m venv .venv-eval
+          source .venv-eval/bin/activate
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+          # Make venv bin available to subsequent workflow steps
+          echo "$PWD/.venv-eval/bin" >> "$GITHUB_PATH"
+
+      - name: Run eval rag_quality compare
+        # This runner must have a running Lemonade Server with the Gemma model loaded
+        # and ANTHROPIC_API_KEY set in the job environment so the Anthropic judge can be used.
+        run: |
+          set -e
+          gaia eval agent --category rag_quality --compare tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json
+        timeout-minutes: 90

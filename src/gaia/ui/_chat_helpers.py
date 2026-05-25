@@ -17,7 +17,6 @@ import asyncio
 import copy
 import json
 import logging
-import os
 import re as _re
 import threading
 import time as _time
@@ -36,6 +35,28 @@ from .sse_handler import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _register_agent_memory_ops(agent) -> None:
+    """Register LLM-powered memory operations from a ChatAgent with the memory router.
+
+    Consolidation and reconciliation require a live LLM + FAISS index, so they
+    cannot run from the router's standalone MemoryStore.  This function wires
+    the agent's methods into module-level callables that the router can invoke.
+
+    Safe to call on every agent construction — the router just overwrites the
+    previous reference (all agents share the same DB, so any active agent works).
+    """
+    try:
+        from gaia.ui.routers import memory as _mem_router
+
+        if hasattr(agent, "consolidate_old_sessions"):
+            _mem_router._consolidate_fn = agent.consolidate_old_sessions
+        if hasattr(agent, "reconcile_memory"):
+            _mem_router._reconcile_fn = agent.reconcile_memory
+    except Exception:
+        pass  # Non-fatal: dashboard ops degrade gracefully when not registered
+
 
 # Active SSE handlers keyed by session_id.  The /api/chat/confirm-tool
 # endpoint looks up the handler here to resolve a pending confirmation.
@@ -111,6 +132,7 @@ def _classify_chat_exception(exc: BaseException):
         LemonadeError,
         LemonadeModelNotLoadedError,
         LemonadeNetworkError,
+        LemonadeUpstreamTimeoutError,
     )
 
     # 1. Direct typed match anywhere in the cause chain.
@@ -118,8 +140,14 @@ def _classify_chat_exception(exc: BaseException):
     # (implicit ``raise ...`` inside an ``except`` block) so we don't lose the
     # typed-class metadata (e.g. ``LemonadeContextOverflowError.retryable``)
     # for handlers that re-raise without ``from``.
+    #
+    # Cycle protection: tracking visited ids defends against pathological
+    # exception graphs where ``a.__cause__ = b`` and ``b.__cause__ = a``.
+    # Without it the walker would loop forever and freeze the chat handler.
     cur: Optional[BaseException] = exc
-    while cur is not None:
+    _seen: set = set()
+    while cur is not None and id(cur) not in _seen:
+        _seen.add(id(cur))
         if isinstance(cur, LemonadeError):
             return cur
         cur = cur.__cause__ or cur.__context__
@@ -141,12 +169,50 @@ def _classify_chat_exception(exc: BaseException):
         if m:
             try:
                 n_ctx = int(m.group(1))
-                if 0 < n_ctx < 32768:
+                # Threshold tracks the chat / rag profile default
+                # (65536) — see lemonade.py:_classify_lemonade_response.
+                if 0 < n_ctx < 65536:
                     err.retryable = True
             except ValueError:
                 pass
         return err
-    if "network_error" in text or "curl error" in text or "timeout was reached" in text:
+    # Distinguish upstream model-call timeouts (Lemonade reachable, llama-server
+    # hung) from real connectivity failures (#1030). The user-facing remediation
+    # is very different.
+    is_timeout = (
+        "timeout was reached" in text
+        or "timed out" in text
+        or "operation_timeout" in text
+    )
+    is_unreachable = (
+        "connection refused" in text
+        or "could not resolve host" in text
+        or "no route to host" in text
+        or "couldn't connect" in text
+    )
+    # Lemonade HTTP 5xx — typical when llama-server is mid-swap between
+    # models or hit an internal recovery state. ``LemonadeClient._send_request``
+    # raises ``LemonadeClientError("Request failed with status 503: ...")`` /
+    # 500/502/504 for these. Pre-iter2 these fell through to the generic
+    # "trouble connecting" UI fallback and the chat layer never retried —
+    # so a transient model-swap stall surfaced as a hard FAIL. Treat them
+    # as the network-flavour transient: retryable=True kicks the chat
+    # layer's auto-reload + one-retry path, which usually recovers.
+    is_backend_5xx = bool(
+        _re.search(r"failed with status 5\d\d", text)
+        or "internal server error" in text
+        or "service unavailable" in text
+        or "bad gateway" in text
+        or "gateway timeout" in text
+    )
+    if is_timeout and not is_unreachable:
+        return LemonadeUpstreamTimeoutError()
+    if (
+        "network_error" in text
+        or "curl error" in text
+        or is_unreachable
+        or is_backend_5xx
+    ):
         return LemonadeNetworkError()
     return None
 
@@ -227,6 +293,11 @@ async def _generate_session_title(
     """
     import httpx  # pylint: disable=import-outside-toplevel
 
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
     prompt = (
         "Summarise the user's task in 3 to 6 plain words for a tab/window "
         "title.  Reply with ONLY the title, no quotes, no trailing "
@@ -247,6 +318,7 @@ async def _generate_session_title(
                     # for the same conversation.
                     "temperature": 0.3,
                 },
+                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
             )
             if resp.status_code != 200:
                 logger.debug(
@@ -383,6 +455,23 @@ def get_cached_mcp_status() -> list[dict]:
         return copy.deepcopy(_mcp_status_cache)
 
 
+def _disconnect_cached_agent(entry) -> None:
+    """Best-effort disconnect of MCP subprocesses held by a cache entry."""
+    if not isinstance(entry, dict):
+        return
+    agent = entry.get("agent")
+    mcp_manager = getattr(agent, "_mcp_manager", None)
+    if mcp_manager is not None:
+        try:
+            mcp_manager.disconnect_all()
+        except Exception as exc:
+            # Best-effort on cache eviction — a failed disconnect on a
+            # previously-cached agent shouldn't block the new agent slot.
+            # WARNING because a leaked MCP subprocess is observable
+            # (orphaned process, stuck port) and worth surfacing.
+            logger.warning("MCP disconnect failed during cache eviction: %s", exc)
+
+
 def _canonical_agent_type(agent_type: str) -> str:
     """Resolve legacy agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``).
 
@@ -416,13 +505,15 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
         if entry is None:
             return None
         if entry["model_id"] != model_id:
-            del _agent_cache[session_id]
+            old_entry = _agent_cache.pop(session_id)
+            _disconnect_cached_agent(old_entry)
             logger.debug(
                 "Agent cache miss (model change) for session %s", session_id[:8]
             )
             return None
         if _canonical_agent_type(entry.get("agent_type", "chat")) != canonical:
-            del _agent_cache[session_id]
+            old_entry = _agent_cache.pop(session_id)
+            _disconnect_cached_agent(old_entry)
             logger.debug(
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
             )
@@ -446,7 +537,8 @@ def _store_agent(
     with _agent_cache_lock:
         if session_id not in _agent_cache and len(_agent_cache) >= _MAX_CACHED_AGENTS:
             oldest = next(iter(_agent_cache))
-            del _agent_cache[oldest]
+            old_entry = _agent_cache.pop(oldest)
+            _disconnect_cached_agent(old_entry)
             logger.debug("Agent cache full; evicted session %s", oldest[:8])
         _agent_cache[session_id] = {
             "model_id": model_id,
@@ -460,6 +552,51 @@ def _store_agent(
             canonical,
             len(_agent_cache),
         )
+
+
+def reload_all_session_agents_mcp() -> int:
+    """
+    Call ``reload()`` on every cached agent's ``MCPClientManager`` (#1004).
+
+    Each `ChatAgent` instance owns its own per-instance `MCPClientManager`
+    (see `MCPClientMixin.__init__`); there is no process-wide singleton.
+    When a user toggles a connector via Settings → Connectors, the active
+    chat sessions need to pick up the new ``mcp_servers.json`` state on
+    their next turn — otherwise tools materialize/disappear only after
+    GAIA restart.
+
+    Wired as the ``McpServerHandler.reload_callback`` from the FastAPI
+    lifespan. Returns the count of managers reloaded for diagnostics.
+    """
+    count = 0
+    failed = 0
+    with _agent_cache_lock:
+        entries = list(_agent_cache.items())
+
+    for session_id, entry in entries:
+        agent = entry.get("agent")
+        manager = getattr(agent, "_mcp_manager", None)
+        if manager is None:
+            continue
+        try:
+            manager.reload()
+            count += 1
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 — defensive: one bad session must not break others
+            failed += 1
+            logger.warning(
+                "reload_all_session_agents_mcp: reload() failed for session %s (%s)",
+                session_id[:8],
+                e,
+            )
+
+    logger.info(
+        "reload_all_session_agents_mcp: reloaded %d session manager(s), %d failed",
+        count,
+        failed,
+    )
+    return count
 
 
 def _index_rag_with_progress(
@@ -552,8 +689,10 @@ def _index_rag_with_progress(
 def evict_session_agent(session_id: str) -> None:
     """Remove a session's cached agent (call on session deletion or clear)."""
     with _agent_cache_lock:
-        if _agent_cache.pop(session_id, None) is not None:
+        entry = _agent_cache.pop(session_id, None)
+        if entry is not None:
             logger.debug("Evicted cached agent for session %s", session_id[:8])
+            _disconnect_cached_agent(entry)
 
 
 # ── Chat Helpers ─────────────────────────────────────────────────────────────
@@ -719,10 +858,15 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
     try:
         import httpx
 
+        from gaia.llm.lemonade_client import (
+            lemonade_auth_headers,
+            resolve_lemonade_api_key,
+        )
         from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
 
         base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
-        resp = httpx.get(f"{base_url}/health", timeout=5.0)
+        _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+        resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
             return
         data = resp.json()
@@ -773,7 +917,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         with model_load_lock:
             # Re-check after acquiring the lock: another thread may have
             # already loaded the expected model with sufficient context.
-            resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
+            resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
             if resp2.status_code == 200:
                 models2 = [
                     m
@@ -933,6 +1077,7 @@ async def _get_chat_response(
             )
             agent = ChatAgent(config)
             _store_agent(session_id, model_id, document_ids, agent, agent_type)
+            _register_agent_memory_ops(agent)
         else:
             # Non-chat agent: create via registry
             registry = _agent_registry
@@ -968,6 +1113,7 @@ async def _get_chat_response(
                 )
                 agent = ChatAgent(config)
                 _store_agent(session_id, model_id, document_ids, agent, agent_type)
+                _register_agent_memory_ops(agent)
             else:
                 logger.info(
                     "chat: Creating new %s agent for session %s",
@@ -1013,6 +1159,11 @@ async def _get_chat_response(
                     agent,
                     agent_type,
                 )
+
+        # Suppress memory writes when private session OR global memory is disabled.
+        if hasattr(agent, "_incognito"):
+            memory_globally_off = db.get_setting("memory_enabled", "false") == "false"
+            agent._incognito = memory_globally_off or bool(session.get("private", 0))
 
         # Restore conversation history (limited to prevent context overflow).
         # Always re-inject from DB so the history is consistent with what was
@@ -1318,6 +1469,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         model_id,
                         _time.monotonic() - t_construct,
                     )
+                    _register_agent_memory_ops(agent)
                     agent.console = sse_handler  # Assign early so tool events flow
 
                     # Early-exit if consumer disconnected
@@ -1416,6 +1568,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         )
                         agent = ChatAgent(config)
                         agent.console = sse_handler
+                        _register_agent_memory_ops(agent)
                         if rag_file_paths and agent.rag:
                             _index_rag_with_progress(agent, rag_file_paths, sse_handler)
                         _store_agent(
@@ -1493,6 +1646,15 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         _mcp_status_cache[:] = mcp_report
                     if mcp_report:
                         sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
+
+                # Suppress memory writes when private session OR global memory is disabled.
+                if hasattr(agent, "_incognito"):
+                    memory_globally_off = (
+                        db.get_setting("memory_enabled", "false") == "false"
+                    )
+                    agent._incognito = memory_globally_off or bool(
+                        session.get("private", 0)
+                    )
 
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
@@ -1935,16 +2097,30 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
 
         # Save complete response to DB (including captured agent steps)
         if full_response:
-            # Fetch last inference stats from Lemonade (non-blocking)
+            # Fetch last inference stats from Lemonade (non-blocking).
+            # Resolve the Lemonade URL via LemonadeManager so we follow the
+            # actually-running instance (matches the resolver used at
+            # _chat_helpers.py:331 and :747); raw os.environ lookup misses
+            # cases where Lemonade is on a non-default port and the env var
+            # isn't set, leaving stats silently empty in eval traces.
             inference_stats = None
             try:
                 import httpx
 
-                base_url = os.environ.get(
-                    "LEMONADE_BASE_URL", "http://localhost:13305/api/v1"
+                from gaia.llm.lemonade_client import (
+                    lemonade_auth_headers,
+                    resolve_lemonade_api_key,
                 )
+                from gaia.llm.lemonade_manager import LemonadeManager
+
+                base_url = (
+                    LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+                )
+                _auth = lemonade_auth_headers(resolve_lemonade_api_key())
                 async with httpx.AsyncClient(timeout=3.0) as stats_client:
-                    stats_resp = await stats_client.get(f"{base_url}/stats")
+                    stats_resp = await stats_client.get(
+                        f"{base_url}/stats", headers=_auth
+                    )
                     if stats_resp.status_code == 200:
                         stats_data = stats_resp.json()
                         inference_stats = {
@@ -1957,8 +2133,22 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             "input_tokens": stats_data.get("input_tokens", 0),
                             "output_tokens": stats_data.get("output_tokens", 0),
                         }
-            except Exception:
-                pass
+                    else:
+                        logger.debug(
+                            "Lemonade /stats returned %d at %s — perf telemetry "
+                            "missing for this turn",
+                            stats_resp.status_code,
+                            base_url,
+                        )
+            except Exception as exc:  # pylint: disable=broad-except
+                # Don't fail the user's response if stats fetching breaks; log
+                # at debug so eval-time gaps are diagnosable without spamming
+                # production logs.
+                logger.debug(
+                    "Failed to fetch Lemonade /stats: %s — perf telemetry "
+                    "missing for this turn",
+                    exc,
+                )
 
             if (
                 persisted_policy_block_msg_id is not None

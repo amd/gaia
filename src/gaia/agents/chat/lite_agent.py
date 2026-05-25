@@ -32,6 +32,11 @@ class ChatAgentLite(
             config = ChatAgentLiteConfig()
         self.config = config
 
+        # Agent has no MCP servers; the UI auto-calls get_mcp_status_report()
+        # on every chat send and MCPClientMixin.__init__ never runs because
+        # Agent.__init__ doesn't chain super().
+        self._mcp_manager = None
+
         # Avoid initializing local Lemonade during unit tests
         super().__init__(
             use_claude=config.use_claude,

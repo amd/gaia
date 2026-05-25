@@ -44,6 +44,7 @@ from ._chat_helpers import _get_chat_response  # noqa: F401
 from ._chat_helpers import _index_document  # noqa: F401
 from ._chat_helpers import _resolve_rag_paths  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
+from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
 from .database import ChatDatabase
@@ -53,7 +54,9 @@ from .routers import chat as chat_router_mod
 from .routers import connectors as connectors_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
+from .routers import goals as goals_router_mod
 from .routers import mcp as mcp_router_mod
+from .routers import memory as memory_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
@@ -252,15 +255,20 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             """
             import httpx
 
+            from gaia.llm.lemonade_client import (
+                lemonade_auth_headers,
+                resolve_lemonade_api_key,
+            )
             from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
             from gaia.ui._chat_helpers import model_load_lock
 
             base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key())
 
             # Check if a chat model is already loaded.
             # Let exceptions propagate so the DispatchQueue marks the job as
             # FAILED (not DONE) — the frontend will show "degraded" state.
-            resp = httpx.get(f"{base_url}/health", timeout=5.0)
+            resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
             if resp.status_code == 200:
                 all_models = resp.json().get("all_models_loaded", [])
                 if any(m.get("type") in ("llm", "vlm") for m in all_models):
@@ -272,7 +280,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 # Double-check after acquiring the lock: another thread may have
                 # loaded the model while we were waiting.
                 try:
-                    resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
+                    resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
                     if resp2.status_code == 200:
                         all_models2 = resp2.json().get("all_models_loaded", [])
                         if any(m.get("type") in ("llm", "vlm") for m in all_models2):
@@ -299,6 +307,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             visible=True,
             depends_on=lemonade_id,
         )
+
+        # Start autonomous agent loop
+        await agent_loop.start(db=db, app_state=app.state)
+        logger.info("AgentLoop started")
 
         # Start document file monitor for auto re-indexing
         monitor = DocumentMonitor(
@@ -332,14 +344,51 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 e,
             )
 
+        # ── Connectors live-reload (issue #1004) ────────────────────────
+        # Wire the McpServerHandler.reload_callback so a Settings →
+        # Connectors enable/disable/configure/disconnect from the UI
+        # broadcasts a reload to every cached chat-session agent's
+        # per-instance MCPClientManager. Without this, toggling an MCP
+        # only takes effect after GAIA restart.
+        try:
+            from gaia.connectors.handler import _HANDLER_REGISTRY
+            from gaia.ui._chat_helpers import reload_all_session_agents_mcp
+
+            mcp_handler = _HANDLER_REGISTRY.get("mcp_server")
+            if mcp_handler is not None:
+                mcp_handler.set_reload_callback(reload_all_session_agents_mcp)
+                logger.info(
+                    "connectors: McpServerHandler reload_callback wired to "
+                    "reload_all_session_agents_mcp"
+                )
+            else:
+                logger.warning(
+                    "connectors: McpServerHandler not registered; live "
+                    "reload of toggled connectors will be deferred until "
+                    "GAIA restart"
+                )
+        except Exception as e:  # noqa: BLE001 — defense in depth
+            logger.warning(
+                "connectors: failed to wire McpServerHandler reload_callback "
+                "(%s); live reload of toggled connectors will be deferred "
+                "until GAIA restart",
+                e,
+            )
+
         yield
 
         # Shutdown
+        await agent_loop.stop()
+        logger.info("AgentLoop stopped")
         await queue.shutdown()
         await monitor.stop()
         logger.info("Document file monitor stopped")
         db.close()
         logger.info("Database connection closed")
+        memory_router_mod.close_store()
+        logger.info("Memory store connection closed")
+        goals_router_mod.close_store()
+        logger.info("Goal store connection closed")
 
     app = FastAPI(
         title="GAIA Agent UI API",
@@ -416,6 +465,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(documents_router_mod.router)
     app.include_router(files_router_mod.router)
     app.include_router(tunnel_router_mod.router)
+    app.include_router(goals_router_mod.router)
+    app.include_router(memory_router_mod.router)
     app.include_router(mcp_router_mod.router)
     # Issue #915 — OAuth connections (Settings page + agent grants).
     app.include_router(connectors_router_mod.router)
@@ -615,7 +666,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     (download at
     <a href="https://github.com/amd/gaia/releases">github.com/amd/gaia/releases</a>).
     For browser-mode setup and troubleshooting, see
-    <a href="https://amd-gaia.ai/guides/agent-ui">amd-gaia.ai/guides/agent-ui</a>.
+    <a href="https://amd-gaia.ai/docs/guides/agent-ui">amd-gaia.ai/docs/guides/agent-ui</a>.
   </p>
   <ul>
     <li><a href="/docs">API documentation</a> (<code>/docs</code>)</li>

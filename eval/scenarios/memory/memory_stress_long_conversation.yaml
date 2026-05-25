@@ -1,0 +1,145 @@
+id: memory_stress_long_conversation
+name: "Memory Stress — Long Conversation Coherence (15 turns)"
+category: memory
+severity: high
+description: |
+  Stress test: 15 conversational turns of incremental fact-sharing,
+  followed by a coherence probe that asks for everything the agent
+  has accumulated. Validates that memory does not silently drop early
+  facts as the conversation grows long enough to start pressuring the
+  context window.
+
+  This complements the capacity test: capacity stresses the store; this
+  stresses the agent's ability to keep memory coherent during a sustained
+  natural conversation.
+
+persona: home_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Share early identity fact"
+    user_message: "hey, so i'm Jamie. just wanted to introduce myself"
+    ground_truth:
+      expected_answer: "Acknowledged: Jamie"
+    success_criteria: "Agent stores the name Jamie and greets warmly. Should call remember to save the name."
+
+  - turn: 2
+    objective: "Add a household fact"
+    user_message: "i live in a townhouse in Portland, OR with my partner Mo"
+    ground_truth:
+      expected_answer: "Stored: Portland OR townhouse, partner Mo"
+    success_criteria: "Agent stores the location (Portland OR), housing type (townhouse), and partner name (Mo)."
+
+  - turn: 3
+    objective: "Add a pet fact"
+    user_message: "we have two cats — Pickle and Olive — both rescues"
+    ground_truth:
+      expected_answer: "Stored: cats Pickle and Olive (rescues)"
+    success_criteria: "Agent stores both cat names AND the rescue detail."
+
+  - turn: 4
+    objective: "Add a job fact"
+    user_message: "i work as a translator, mostly Korean to English literary fiction"
+    ground_truth:
+      expected_answer: "Stored: translator, Korean→English literary fiction"
+    success_criteria: "Agent stores the profession (translator) and specialty (Korean→English literary fiction)."
+
+  - turn: 5
+    objective: "Quick chit-chat — no new fact"
+    user_message: "what kind of stuff can you help me with day-to-day?"
+    ground_truth:
+      expected_answer: "Brief, warm capability description (no fact storage needed)"
+    success_criteria: "Agent answers briefly. Does not need to store anything new this turn."
+
+  - turn: 6
+    objective: "Add hobby fact"
+    user_message: "i've been getting into bouldering recently — once or twice a week at a gym near work"
+    ground_truth:
+      expected_answer: "Stored: bouldering hobby, 1-2x/week"
+    success_criteria: "Agent stores the bouldering hobby and frequency."
+
+  - turn: 7
+    objective: "Add a routine fact"
+    user_message: "i'm trying to wake up at 6:30 every weekday — been working on it for a month, mostly succeeding"
+    ground_truth:
+      expected_answer: "Stored: 6:30am wake-up routine"
+    success_criteria: "Agent stores the wake-up time goal and roughly the duration / progress."
+
+  - turn: 8
+    objective: "Add a project fact"
+    user_message: "right now i'm translating a novella by an author named Han Kyu-Sun. deadline is mid-July"
+    ground_truth:
+      expected_answer: "Stored: translating Han Kyu-Sun novella, deadline mid-July"
+    success_criteria: "Agent stores the author name (Han Kyu-Sun), the work type (novella), and the deadline (mid-July)."
+
+  - turn: 9
+    objective: "Add a preference fact"
+    user_message: "btw i prefer text over voice notes, esp. for anything with names or addresses"
+    ground_truth:
+      expected_answer: "Stored: text preferred over voice (esp. for names/addresses)"
+    success_criteria: "Agent stores the text-over-voice preference."
+
+  - turn: 10
+    objective: "Casual exchange — recall earlier fact"
+    user_message: "remind me, did i tell you Mo is my partner or my roommate?"
+    ground_truth:
+      expected_answer: "Partner"
+    success_criteria: "Agent answers 'partner' from earlier turn 2 storage. FAIL if agent says it doesn't know or claims roommate."
+
+  - turn: 11
+    objective: "Add a health fact"
+    user_message: "small thing — i've been cutting back on caffeine, max one cup before noon now"
+    ground_truth:
+      expected_answer: "Stored: caffeine cut, max one cup before noon"
+    success_criteria: "Agent stores the caffeine constraint."
+
+  - turn: 12
+    objective: "Add a contact fact"
+    user_message: "my editor's name is Lily Ramirez at Bridgewater Press, she always emails me on Thursdays"
+    ground_truth:
+      expected_answer: "Stored: editor Lily Ramirez @ Bridgewater Press, emails Thursdays"
+    success_criteria: "Agent stores Lily's name, the press, AND the Thursday-email pattern."
+
+  - turn: 13
+    objective: "Update an earlier fact (supersede)"
+    user_message: "actually update this — we got a third cat last week, his name is Beans"
+    ground_truth:
+      expected_answer: "Updated cat list: Pickle, Olive, Beans (3 cats)"
+    success_criteria: "Agent updates the stored cats from 2 to 3, adding Beans without losing Pickle or Olive. Uses update_memory or remember-with-supersede semantics."
+
+  - turn: 14
+    objective: "Casual unrelated turn"
+    user_message: "what's a good word for the feeling of finishing a long task?"
+    ground_truth:
+      expected_answer: "Any of: accomplishment, catharsis, relief, satisfaction, denouement, etc."
+    success_criteria: "Agent answers conversationally. No new memory writes needed."
+
+  - turn: 15
+    objective: "Coherence probe — recall everything"
+    user_message: "ok last thing for now — give me a quick summary of everything you know about me. just bullet points."
+    ground_truth:
+      expected_answer: |
+        Should include: name Jamie; lives in Portland OR townhouse with partner Mo;
+        three rescue cats (Pickle, Olive, Beans); translator (Korean→English literary
+        fiction); bouldering 1-2x/week; 6:30am wake-up routine; current project
+        Han Kyu-Sun novella due mid-July; prefers text over voice; cut caffeine to
+        one cup before noon; editor Lily Ramirez at Bridgewater Press emails Thursdays.
+    success_criteria: |
+      Agent's summary must include AT LEAST 9 of these 11 distinct facts:
+      (1) name Jamie, (2) Portland OR / townhouse, (3) partner Mo,
+      (4) three cats including Beans (the updated count, not the original two),
+      (5) translator profession, (6) Korean→English literary specialty,
+      (7) bouldering hobby, (8) 6:30am wake-up, (9) Han Kyu-Sun novella project,
+      (10) text-over-voice preference, (11) editor Lily Ramirez at Bridgewater Press.
+      FAIL if the cat count is wrong (still 2), if the early facts (Jamie, Portland,
+      Mo) are missing, or if the summary fabricates facts not actually stored.
+
+expected_outcome: |
+  Across 15 turns of conversation interleaving fact-sharing with chit-chat,
+  the agent retains every meaningful fact, applies updates correctly
+  (cat count went from 2 → 3 with the addition of Beans), and produces a
+  faithful summary on demand. Failures here indicate memory degradation
+  in long-running sessions — a critical risk for daily-driver users.

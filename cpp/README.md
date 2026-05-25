@@ -37,14 +37,14 @@ curl -L -o lemonade-server-minimal.msi https://github.com/lemonade-sdk/lemonade/
 msiexec /i lemonade-server-minimal.msi
 ```
 
-**Linux:**
+**Linux (Ubuntu 24.04+):**
 ```bash
-# Download and install the .deb package
-curl -L -o lemonade-server_10.2.0_amd64.deb https://github.com/lemonade-sdk/lemonade/releases/download/v10.2.0/lemonade-server_10.2.0_amd64.deb
-sudo dpkg -i lemonade-server_10.2.0_amd64.deb
+# Install via Launchpad PPA
+sudo add-apt-repository ppa:lemonade-team/stable
+sudo apt install lemonade-server
 ```
 
-Or download directly from the [Lemonade v10.2.0 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v10.2.0).
+Or browse all platform options on the [Lemonade v10.2.0 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v10.2.0).
 
 After installation, start the server:
 ```bash

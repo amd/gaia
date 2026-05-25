@@ -8,6 +8,7 @@ import { ChatView } from './components/ChatView';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { FileBrowser } from './components/FileBrowser';
+import { MemoryDashboard } from './components/MemoryDashboard';
 import { SettingsPage } from './components/SettingsPage';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
@@ -65,6 +66,9 @@ function App() {
         showDocLibrary,
         showFileBrowser,
         showSettings,
+        setShowSettings,
+        showMemoryDashboard,
+        setShowMemoryDashboard,
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
@@ -512,6 +516,7 @@ function App() {
 
             <Sidebar
                 onNewTask={handleNewTask}
+                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); window.history.replaceState(null, '', window.location.pathname); }}
                 tunnelActive={tunnelActive}
                 tunnelLoading={tunnelLoading}
                 onMobileToggle={handleMobileToggle}
@@ -520,6 +525,8 @@ function App() {
             <div className="main-content">
                 {showSettings ? (
                     <SettingsPage />
+                ) : showMemoryDashboard ? (
+                    <MemoryDashboard />
                 ) : (
                     <>
                         {/* Connection / LLM status banner */}

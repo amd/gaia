@@ -275,7 +275,7 @@ class TestCreateAgentImpl:
         _create_agent_impl("Mcp Agent")
         py_path = tmp_path / ".gaia" / "agents" / "mcp" / "agent.py"
         content = py_path.read_text(encoding="utf-8")
-        assert "amd-gaia.ai/sdk/infrastructure/mcp" in content
+        assert "amd-gaia.ai/docs/sdk/infrastructure/mcp" in content
         # The MCP code should NOT be in the non-MCP template
         assert "MCPClientMixin" not in content
 
@@ -531,7 +531,7 @@ class TestCreateAgentImplMCP:
         source = (tmp_path / ".gaia" / "agents" / "widget" / "agent.py").read_text(
             encoding="utf-8"
         )
-        assert "amd-gaia.ai/sdk/infrastructure/mcp" in source
+        assert "amd-gaia.ai/docs/sdk/infrastructure/mcp" in source
         # The verbose 40-line comment block should NOT be present
         assert "Add MCP server support" not in source
 

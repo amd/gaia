@@ -18,6 +18,8 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - 'util/lint.py'
+      - 'util/check_*.py'
+      - '.github/dependabot.yml'
       - '.github/workflows/lint.yml'
   pull_request:
     branches: [ main ]
@@ -28,6 +30,8 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - 'util/lint.py'
+      - 'util/check_*.py'
+      - '.github/dependabot.yml'
       - '.github/workflows/lint.yml'
   merge_group:
   workflow_dispatch:

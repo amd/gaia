@@ -2094,3 +2094,72 @@ class TestCustomAgentModelChoice:
             f"Issue #841: agent.model_id must reflect kwargs.setdefault value; "
             f"got {captured['agent_model_id']!r}"
         )
+
+
+# ── PR #1201 regression: get_mcp_status_report must not AttributeError ────────
+
+
+class TestSplitAgentsMcpStatusReport:
+    """Regression for the PR #1201 release blocker.
+
+    BrowserAgent and AnalystAgent (PR #1070) inherit MCPClientMixin after
+    Agent in MRO and do not pre-set ``_mcp_manager``. ``Agent.__init__`` does
+    not chain ``super().__init__()``, so ``MCPClientMixin.__init__`` never
+    runs and ``_mcp_manager`` is undefined. The UI auto-calls
+    ``agent.get_mcp_status_report()`` on every chat send
+    (``src/gaia/ui/_chat_helpers.py:1644``) → ``AttributeError``.
+
+    These tests prove the fix: ``/api/chat/send`` for the ``web`` and ``data``
+    agent_types completes without surfacing the ``_mcp_manager`` AttributeError.
+    """
+
+    def _run_send(self, tmp_path, monkeypatch, agent_type: str):
+        # Redirect HOME so AnalystAgent's default ~/.gaia/scratchpad.db lands
+        # under tmp_path instead of polluting the developer's real home.
+        # Both patches are needed: Path.home() in registry.discover() reads
+        # the cached value while ScratchpadService's os.path.expanduser
+        # reads $HOME from the environment.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        with patch("gaia.agents.registry.Path.home", return_value=tmp_path):
+            app = create_app(db_path=":memory:")
+
+            with TestClient(app) as client:
+                # Create a session typed to the split agent.
+                sess_resp = client.post(
+                    "/api/sessions",
+                    json={"title": "1201-test", "agent_type": agent_type},
+                )
+                assert sess_resp.status_code == 200, sess_resp.text
+                sid = sess_resp.json()["id"]
+
+                with (
+                    patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+                    patch(
+                        "gaia.ui._chat_helpers._agent_registry",
+                        app.state.agent_registry,
+                    ),
+                ):
+                    return client.post(
+                        "/api/chat/send",
+                        json={
+                            "session_id": sid,
+                            "message": "hi",
+                            "stream": False,
+                        },
+                    )
+
+    def test_web_agent_does_not_raise_mcp_attribute_error(self, tmp_path, monkeypatch):
+        chat_resp = self._run_send(tmp_path, monkeypatch, "web")
+        assert chat_resp.status_code == 200, chat_resp.text
+        assert "_mcp_manager" not in chat_resp.text, (
+            f"PR #1201: BrowserAgent surfaced _mcp_manager AttributeError "
+            f"through /api/chat/send:\n{chat_resp.text}"
+        )
+
+    def test_data_agent_does_not_raise_mcp_attribute_error(self, tmp_path, monkeypatch):
+        chat_resp = self._run_send(tmp_path, monkeypatch, "data")
+        assert chat_resp.status_code == 200, chat_resp.text
+        assert "_mcp_manager" not in chat_resp.text, (
+            f"PR #1201: AnalystAgent surfaced _mcp_manager AttributeError "
+            f"through /api/chat/send:\n{chat_resp.text}"
+        )

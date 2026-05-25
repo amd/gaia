@@ -15,11 +15,12 @@ import re
 import threading
 import time
 import uuid
+from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
-from gaia.agents.base.tools import get_tool_metadata
+from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,7 @@ class SSEOutputHandler(OutputHandler):
 
     blocking_confirmation = True
 
-    def __init__(self):
+    def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
         self._start_time: Optional[float] = None
@@ -113,6 +114,25 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_result: bool = False
         self._confirm_id: Optional[str] = None
         self._tool_start_time: Optional[float] = None
+        # Autonomous loop support
+        # background_mode=True: skip blocking user confirmation; immediately deny.
+        self.background_mode: bool = background_mode
+        # Directive written by set_loop_state tool; read by AgentLoop after the run.
+        self.loop_state_directive: Optional[Dict[str, Any]] = None
+        # User input request queue (ordered, multi-slot keyed by request_id).
+        self._user_input_queue: deque = deque()
+        self._user_input_events: Dict[str, threading.Event] = {}
+        self._user_input_results: Dict[str, str] = {}
+        # HACK — see issue #1000 for the proper fix.
+        # Buffer of structured tool-result payloads we want to inject as fenced
+        # code blocks into the assistant's final answer, keyed by language tag.
+        # Today this is populated only for ``pre_scan_inbox`` → ``email_pre_scan``
+        # because Gemma-4-E4B paraphrases the JSON envelope into prose instead of
+        # echoing it verbatim, so the frontend's structured-payload renderer never
+        # mounts. Removing this buffer cleanly requires multi-model support so a
+        # tool-use-tuned model handles the structured emission while a chat model
+        # handles the prose summary — tracked in #1000.
+        self._pending_render_payloads: list[tuple[str, dict]] = []
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -205,10 +225,13 @@ class SSEOutputHandler(OutputHandler):
         self._tool_count += 1
         self._last_tool_name = tool_name
         self._tool_start_time = time.monotonic()
+        # Prefer an explicit display label from the tool registry; fall back
+        # to the legacy description map in this module when none is provided.
+        detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
         event = {
             "type": "tool_start",
             "tool": tool_name,
-            "detail": _tool_description(tool_name),
+            "detail": detail_label,
         }
         # Attach MCP server name if this is an MCP tool.
         # _mcp_server is set by MCPTool.to_gaia_format() during registration
@@ -243,6 +266,18 @@ class SSEOutputHandler(OutputHandler):
                 }
             )
             return
+
+        # HACK — see issue #1000 for the proper fix.
+        # Capture structured payloads that the frontend wants to render as
+        # typed cards. Today only ``pre_scan_inbox`` → ``email_pre_scan`` is
+        # supported. The system prompt instructs the LLM to echo this
+        # envelope verbatim inside fenced code blocks, but small chat-tuned
+        # models (Gemma-4-E4B observed) paraphrase the JSON into prose, and
+        # the card never mounts. Detect the envelope here, hold it on
+        # ``self._pending_render_payloads``, and inject a fenced block into
+        # the final answer below — deterministic, model-independent.
+        # Removing this hack requires the multi-model split tracked in #1000.
+        self._capture_render_payload(data)
 
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
@@ -382,6 +417,73 @@ class SSEOutputHandler(OutputHandler):
     def stop_progress(self):
         pass  # No-op for SSE - frontend manages its own spinners
 
+    # === Structured-render injection (HACK — see issue #1000) ===
+
+    # Mapping from tool name to the language-tag the frontend's ``pre``
+    # override matches (``MessageBubble.tsx`` ``KNOWN_CODE_LANGS`` set).
+    # Keep this in sync with the frontend's structured-payload renderers.
+    _RENDER_TOOL_TO_LANG: ClassVar[Dict[str, str]] = {
+        "pre_scan_inbox": "email_pre_scan",
+    }
+
+    def _capture_render_payload(self, data: Any) -> None:
+        """Detect a structured tool-result envelope and buffer it for fence injection.
+
+        Today this is the workaround for small chat-tuned models that
+        paraphrase the ``pre_scan_inbox`` envelope into prose instead of
+        echoing it as a fenced code block. When the LLM-relay path is
+        replaced with a tool-use-tuned model under multi-model parallelism
+        (#1000), this method becomes a no-op and the buffer can be removed
+        with the rest of the hack.
+        """
+        tool = self._last_tool_name or ""
+        lang = self._RENDER_TOOL_TO_LANG.get(tool)
+        if not lang:
+            return
+        # ``@tool``-decorated functions return JSON strings (the dispatch
+        # in ``Agent._execute_tool`` returns them verbatim), so accept
+        # both string and dict shapes here. Parse-on-demand and silently
+        # drop malformed payloads — the LLM-relay fallback path will
+        # still surface tool failure to the user via prose.
+        envelope: Dict[str, Any]
+        if isinstance(data, dict):
+            envelope = data
+        elif isinstance(data, str):
+            try:
+                parsed = json.loads(data)
+            except (ValueError, TypeError):
+                return
+            if not isinstance(parsed, dict):
+                return
+            envelope = parsed
+        else:
+            return
+        if not envelope.get("ok"):
+            return
+        inner = envelope.get("data")
+        if not isinstance(inner, dict):
+            return
+        if inner.get("kind") != lang:
+            return
+        self._pending_render_payloads.append((lang, inner))
+
+    def _drain_render_payloads(self) -> str:
+        """Return pending payloads as fenced code blocks and clear the buffer.
+
+        Output format matches the frontend's ``pre`` markdown override —
+        each block is ` ```<lang>\\n<json>\\n``` `, blocks separated by a
+        blank line. Empty buffer returns an empty string so callers can
+        unconditionally prepend.
+        """
+        if not self._pending_render_payloads:
+            return ""
+        blocks = [
+            f"```{lang}\n{json.dumps(payload)}\n```"
+            for lang, payload in self._pending_render_payloads
+        ]
+        self._pending_render_payloads = []
+        return "\n\n".join(blocks)
+
     # === Completion Methods ===
 
     def print_final_answer(
@@ -400,6 +502,15 @@ class SSEOutputHandler(OutputHandler):
             answer = _TOOL_CALL_JSON_SUB_RE.sub("", answer)
             answer = _THOUGHT_JSON_SUB_RE.sub("", answer)
             answer = answer.strip()
+        # HACK — see issue #1000 for the proper fix.
+        # Prepend any pending structured-render payloads as fenced code
+        # blocks. Drains the buffer so each pre-scan turn renders exactly
+        # one card. The cleaned LLM prose follows underneath so the user
+        # gets the structured view first, then the natural-language
+        # framing the LLM produced.
+        rendered_fences = self._drain_render_payloads()
+        if rendered_fences:
+            answer = (rendered_fences + ("\n\n" + answer if answer else "")).strip()
         self._emit(
             {
                 "type": "answer",
@@ -693,6 +804,25 @@ class SSEOutputHandler(OutputHandler):
         to be called by the HTTP endpoint.  Returns ``True`` if the user allows,
         ``False`` otherwise.
         """
+        # Background mode: immediately deny — no semaphore hold, no waiting.
+        if self.background_mode:
+            self._emit(
+                {
+                    "type": "tool_confirm_denied",
+                    "tool": tool_name,
+                    "reason": "unattended",
+                    "message": (
+                        f"'{tool_name}' requires live user approval and cannot run "
+                        "unattended. Use request_user_input() to notify the user, "
+                        "then retry in a subsequent turn."
+                    ),
+                }
+            )
+            logger.info(
+                "Background mode: immediately denied confirmation for '%s'", tool_name
+            )
+            return False
+
         confirm_id = str(uuid.uuid4())
         with self._confirm_lock:
             self._confirm_event = threading.Event()
@@ -772,6 +902,95 @@ class SSEOutputHandler(OutputHandler):
                 self._confirm_event = threading.Event()
             self._confirm_result = approved
             self._confirm_event.set()
+        return True
+
+    def request_user_input_blocking(
+        self,
+        message: str,
+        choices: Optional[List[str]] = None,
+        default_if_no_response: Optional[str] = None,
+        timeout_seconds: int = 300,
+        continue_if_no_response: bool = True,
+    ) -> str:
+        """Ask the user a question and block until a response arrives or timeout.
+
+        Emits a ``user_input_request`` SSE event.  In background mode the request
+        is still emitted (so it appears in the Goals dashboard), but returns
+        ``"__NO_RESPONSE__"`` immediately instead of blocking.
+
+        Returns:
+            User's response string, the chosen option, the default value on
+            timeout, or ``"__NO_RESPONSE__"`` when no default is provided and
+            the timeout expires.  Never returns empty string.
+        """
+        request_id = str(uuid.uuid4())
+        timeout_seconds = max(10, timeout_seconds)  # floor: 10 seconds
+
+        self._emit(
+            {
+                "type": "user_input_request",
+                "request_id": request_id,
+                "message": message,
+                "choices": choices or [],
+                "timeout_seconds": timeout_seconds,
+                "continue_if_no_response": continue_if_no_response,
+            }
+        )
+
+        if self.background_mode:
+            # Can't block — no active SSE consumer.  Return the sentinel so the
+            # caller can decide whether to proceed or schedule a retry.
+            return (
+                default_if_no_response
+                if default_if_no_response is not None
+                else "__NO_RESPONSE__"
+            )
+
+        # Register the pending request
+        evt = threading.Event()
+        self._user_input_events[request_id] = evt
+        self._user_input_queue.append(request_id)
+
+        # Block until resolved or timeout
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if self.cancelled.is_set():
+                break
+            if evt.wait(timeout=0.5):
+                break
+
+        # Clean up
+        self._user_input_queue = deque(
+            rid for rid in self._user_input_queue if rid != request_id
+        )
+        self._user_input_events.pop(request_id, None)
+        response = self._user_input_results.pop(request_id, None)
+
+        if response is not None:
+            return response
+        if default_if_no_response is not None:
+            return default_if_no_response
+        if not continue_if_no_response:
+            # Signal loop to pause
+            if self.loop_state_directive is None:
+                self.loop_state_directive = {
+                    "directive": "paused",
+                    "reason": "User input timed out and continue_if_no_response=False",
+                    "wake_in_seconds": 0,
+                }
+        return "__NO_RESPONSE__"
+
+    def resolve_user_input(self, request_id: str, response: str) -> bool:
+        """Unblock a pending ``request_user_input_blocking()`` call.
+
+        Called by ``POST /api/chat/user-input``.  Returns ``False`` if no
+        request with that ID is pending.
+        """
+        evt = self._user_input_events.get(request_id)
+        if evt is None:
+            return False
+        self._user_input_results[request_id] = response
+        evt.set()
         return True
 
     def signal_done(self):

@@ -194,7 +194,7 @@ jobs:
       # platform. Cross-runner cache paths are listed together — actions/cache
       # silently skips paths that don't exist on the current runner.
       - name: Cache electron + electron-builder
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/electron
@@ -495,7 +495,7 @@ jobs:
       # signing.
       - name: Upload artifacts to workflow run
         id: upload-artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.platform }}-installer
           path: ${{ matrix.artifacts }}
@@ -527,7 +527,7 @@ jobs:
         # evaluated AFTER `if:`, which is why we can't inline the secret
         # forwarding here.
         if: matrix.platform == 'windows' && env.SIGNPATH_API_TOKEN != '' && env.SIGNPATH_ORG_ID != ''
-        uses: signpath/github-action-submit-signing-request@v1
+        uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: ${{ env.SIGNPATH_API_TOKEN }}
           organization-id: ${{ env.SIGNPATH_ORG_ID }}
@@ -557,7 +557,7 @@ jobs:
 
       - name: Upload Python wheel artifact
         if: matrix.platform == 'linux' && steps.build-wheel.outputs.path != ''
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: gaia-wheel
           path: /tmp/gaia-wheel/*.whl
@@ -584,10 +584,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download Linux installer artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: linux-installer
           path: ${{ runner.temp }}/linux-installer
@@ -625,10 +625,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download macOS installer artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: macos-installer  # ${{ matrix.platform }}-installer with platform=macos
           path: ${{ runner.temp }}/macos-installer
@@ -654,10 +654,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download Linux installer artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: linux-installer
           path: ${{ runner.temp }}/linux-installer
@@ -669,7 +669,7 @@ jobs:
       - name: Download Python wheel
         id: download-wheel
         continue-on-error: true
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: gaia-wheel
           path: ${{ runner.temp }}/gaia-wheel
@@ -913,10 +913,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download Linux installer artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: linux-installer
           path: ${{ runner.temp }}/linux-installer
@@ -924,7 +924,7 @@ jobs:
       - name: Download Python wheel
         id: download-wheel
         continue-on-error: true
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: gaia-wheel
           path: ${{ runner.temp }}/gaia-wheel
@@ -1008,6 +1008,45 @@ jobs:
           wait "$APP_PID" 2>/dev/null || true
           echo "userns-restricted PASS (--no-sandbox fallback + /api/health 200)"
 
+  custom-agent-mcp-harness:
+    name: Custom agent MCP harness (${{ matrix.os }})
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install GAIA with MCP test dependencies
+        run: python -m pip install -e ".[dev,mcp]"
+
+      - name: Run custom-agent MCP harness
+        env:
+          GAIA_INSTALLER_HARNESS_ARTIFACT_DIR: ${{ runner.temp }}/gaia-installer-agent-harness
+        run: >
+          python -m pytest
+          tests/fixtures/mcp/dummy_server/test_dummy_server.py
+          tests/installer/test_custom_agent_mcp_harness.py
+          -v --tb=short
+
+      - name: Upload custom-agent MCP harness logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: custom-agent-mcp-harness-${{ matrix.os }}
+          path: ${{ runner.temp }}/gaia-installer-agent-harness
+          if-no-files-found: ignore
+
   # ─── Wayland visibility (DEFERRED — issue #782 follow-up) ───────────
   # The plan calls for a headless Wayland compositor (cage -s or weston
   # --backend=headless-backend.so) plus pixel-diff via grim, to verify
@@ -1022,7 +1061,7 @@ jobs:
   #     needs: build
   #     runs-on: ubuntu-24.04
   #     steps:
-  #       - uses: actions/checkout@v4
+  #       - uses: actions/checkout@v6
   #       - run: sudo apt-get install --yes cage grim imagemagick libfuse2
   #       - run: cage -s -- xvfb-run "${APPIMAGE}" &
   #       - run: sleep 20 && grim -t png /tmp/shot.png
@@ -1057,12 +1096,12 @@ jobs:
         platform: [windows, macos, linux]
     steps:
       - name: Download installer artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.platform }}-installer
           path: release-assets
       - name: Upload to GitHub Release (draft)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.tag }}
           files: release-assets/*
@@ -1076,7 +1115,8 @@ jobs:
   # publish.yml (or any caller) should wait on.
   #
   # The smoke jobs (appimage-structural-smoke, appimage-distro-matrix,
-  # appimage-userns-restricted) are issue #782 regression guards — a
+  # appimage-userns-restricted) are issue #782 regression guards. The
+  # custom-agent MCP harness is issue #993's installed-runtime guard. A
   # broken AppImage that still builds but does not launch would slip past
   # if we gated only on `build`.
   build-complete:
@@ -1087,6 +1127,7 @@ jobs:
       - appimage-structural-smoke
       - appimage-distro-matrix
       - appimage-userns-restricted
+      - custom-agent-mcp-harness
       - dmg-structural-smoke
     if: always()
     steps:
@@ -1097,18 +1138,20 @@ jobs:
           structural_result="${{ needs.appimage-structural-smoke.result }}"
           distro_result="${{ needs.appimage-distro-matrix.result }}"
           userns_result="${{ needs.appimage-userns-restricted.result }}"
+          mcp_harness_result="${{ needs.custom-agent-mcp-harness.result }}"
           dmg_result="${{ needs.dmg-structural-smoke.result }}"
           echo "build:                       $build_result"
           echo "appimage-structural-smoke:   $structural_result"
           echo "appimage-distro-matrix:      $distro_result"
           echo "appimage-userns-restricted:  $userns_result"
+          echo "custom-agent-mcp-harness:    $mcp_harness_result"
           echo "dmg-structural-smoke:        $dmg_result"
           fail=0
           if [ "$build_result" != "success" ]; then
             echo "::error::One or more platform installer builds failed"
             fail=1
           fi
-          for r in "$structural_result" "$distro_result" "$userns_result" "$dmg_result"; do
+          for r in "$structural_result" "$distro_result" "$userns_result" "$mcp_harness_result" "$dmg_result"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
               echo "::error::Installer smoke job failed (status: $r)"
               fail=1

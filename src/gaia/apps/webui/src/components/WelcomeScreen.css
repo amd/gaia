@@ -4,7 +4,7 @@
 .welcome {
     flex: 1;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
     padding: 40px 40px 24px;
     overflow-y: auto;
@@ -34,7 +34,8 @@
 }
 
 .welcome-inner {
-    max-width: 680px;
+    max-width: 1200px;
+    width: 100%;
     text-align: center;
     position: relative;
     z-index: 1;
@@ -340,55 +341,6 @@
     color: var(--text-secondary);
     font-size: 11px;
     line-height: 1.6;
-}
-
-/* ── Agent pills ─────────────────────────────────────────────── */
-.agent-pills {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 8px;
-    margin-bottom: 24px;
-    opacity: 0;
-}
-
-.content-revealed .agent-pills {
-    animation: fadeInUp 500ms var(--ease) 420ms forwards;
-}
-
-.agent-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 14px;
-    font-size: 12px;
-    font-family: var(--font-sans);
-    font-weight: 500;
-    color: var(--text-secondary);
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-full);
-    cursor: pointer;
-    transition: all 0.2s var(--ease);
-    white-space: nowrap;
-}
-
-.agent-pill:hover {
-    border-color: var(--text-muted);
-    color: var(--text-primary);
-}
-
-.agent-pill.active {
-    background: #ed1c24;
-    border-color: #ed1c24;
-    color: #fff;
-}
-
-.agent-pill.active:hover {
-    background: #d41920;
-    border-color: #d41920;
-    color: #fff;
 }
 
 /* ── First-run setup hint ─────────────────────────────────────── */

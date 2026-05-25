@@ -3,6 +3,7 @@
 """MCP Client for interacting with MCP servers."""
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
@@ -12,6 +13,34 @@ from .transports.base import MCPTransport
 from .transports.stdio import StdioTransport
 
 logger = get_logger(__name__)
+
+
+_MCP_TOKEN_RE = re.compile(r"(?:^mcp_|_mcp_|_mcp$|^mcp$)", re.IGNORECASE)
+_logged_sanitisations: set = set()
+
+
+def sanitise_server_name(raw: str) -> str:
+    """Strip redundant ``mcp`` tokens + normalise to snake_case (idempotent)."""
+    baseline = (raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    n = baseline
+    while True:
+        new = _MCP_TOKEN_RE.sub("_", n).strip("_")
+        if new == n:
+            break
+        n = new
+    if not n:
+        n = "server"
+    # Only warn when a real ``mcp``-token was stripped — pure case/separator
+    # normalisation (``Filesystem`` -> ``filesystem``) shouldn't nag the user.
+    if n != baseline and raw not in _logged_sanitisations:
+        logger.warning(
+            "MCP server name %r normalised to %r for tool-name prefix. "
+            "Consider renaming the server in mcp_servers.json.",
+            raw,
+            n,
+        )
+        _logged_sanitisations.add(raw)
+    return n
 
 
 def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -37,15 +66,29 @@ def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
     """
     if not env:
         return {}
-    import keyring  # pylint: disable=import-outside-toplevel
 
-    from gaia.connectors.errors import ConnectorsError
-    from gaia.connectors.store import SERVICE_NAME
+    # Imports (keyring + connectors) are deferred to the branch that
+    # actually needs them. ``keyring`` is an optional dependency — if
+    # the env contains no ``$keyring`` references, plain values must
+    # pass through without forcing a keyring install.
+    keyring = None  # populated on first $keyring reference
+    SERVICE_NAME = None
+    ConnectorsError: type = Exception  # type: ignore[assignment]
 
     resolved: Dict[str, str] = {}
     missing: list[str] = []
     for key, value in env.items():
         if isinstance(value, dict) and "$keyring" in value:
+            if keyring is None:
+                # pylint: disable=import-outside-toplevel
+                import keyring as _keyring  # noqa: I001
+
+                from gaia.connectors.errors import ConnectorsError as _ConnectorsError
+                from gaia.connectors.store import SERVICE_NAME as _SERVICE_NAME
+
+                keyring = _keyring
+                ConnectorsError = _ConnectorsError
+                SERVICE_NAME = _SERVICE_NAME
             ref = value["$keyring"]
             service, _, username = ref.partition(":")
             if service != SERVICE_NAME:
@@ -108,17 +151,26 @@ class MCPTool:
     description: str
     input_schema: Dict[str, Any]
 
-    def to_gaia_format(self, server_name: str) -> Dict[str, Any]:
+    def to_gaia_format(
+        self, prefix: str, raw_server_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Convert MCP tool schema to GAIA _TOOL_REGISTRY format.
 
         Args:
-            server_name: Name of the MCP server providing this tool
+            prefix: Sanitised server-name prefix (from ``MCPClient.prefix``).
+                Used to build the registry name and description tag.
+            raw_server_name: Original server name from ``mcp_servers.json``,
+                stored in ``_mcp_server`` for routing/lookup. Defaults to
+                ``prefix`` for backwards compatibility with tests that pass
+                a single sanitised value.
 
         Returns:
             dict: GAIA tool registry entry (without function field)
         """
         properties = self.input_schema.get("properties", {})
         required_list = self.input_schema.get("required", [])
+        if raw_server_name is None:
+            raw_server_name = prefix
 
         # Convert MCP parameters to GAIA format
         gaia_params = {}
@@ -130,13 +182,15 @@ class MCPTool:
             }
 
         return {
-            "name": f"mcp_{server_name}_{self.name}",
-            "display_name": f"{self.name} ({server_name})",
-            "description": f"[MCP:{server_name}] {self.description}",
+            "name": f"mcp_{prefix}_{self.name}",
+            "display_name": f"{self.name} ({prefix})",
+            "description": f"[MCP:{prefix}] {self.description}",
             "parameters": gaia_params,
             "atomic": True,
-            # Metadata for debugging/routing
-            "_mcp_server": server_name,
+            # Metadata for debugging/routing — raw name preserves the
+            # mcp_servers.json key so routing back to a client still
+            # works after sanitisation changes the prefix.
+            "_mcp_server": raw_server_name,
         }
 
 
@@ -151,6 +205,11 @@ class MCPClient:
 
     def __init__(self, name: str, transport: MCPTransport, debug: bool = False):
         self.name = name
+        # Sanitised prefix used for tool-name namespacing. Computed once
+        # here so every consumer (registration, unregistration, prompt
+        # fragments) sees the same value. See ``sanitise_server_name``
+        # docstring for the rationale.
+        self.prefix = sanitise_server_name(name)
         self.transport = transport
         self.debug = debug
         self.server_info: Dict[str, Any] = {}

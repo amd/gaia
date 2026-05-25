@@ -61,6 +61,10 @@ jobs:
         run: uv pip install --system -e .[dev,rag]
 
       - name: Run Path Validator Security Tests
+        env:
+          # Skip memory init — security tests instantiate ChatAgent but
+          # don't exercise memory; Lemonade isn't available in this job.
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           echo "================================================================"
           echo "              PATH VALIDATOR SECURITY TESTS"
@@ -81,6 +85,8 @@ jobs:
           fi
 
       - name: Run Shell Security Tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           echo ""
           echo "================================================================"
@@ -153,6 +159,10 @@ jobs:
 
       - name: Run Path Validator Security Tests
         shell: pwsh
+        env:
+          # Skip memory init — Lemonade isn't available in this CI job; the
+          # security tests instantiate ChatAgent but don't exercise memory.
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           Write-Host "================================================================"
           Write-Host "              PATH VALIDATOR SECURITY TESTS"
@@ -173,6 +183,8 @@ jobs:
 
       - name: Run Shell Security Tests
         shell: pwsh
+        env:
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           Write-Host ""
           Write-Host "================================================================"

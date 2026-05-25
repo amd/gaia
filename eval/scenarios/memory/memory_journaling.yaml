@@ -1,0 +1,41 @@
+id: memory_journaling
+name: "Memory Journaling"
+category: memory
+severity: medium
+description: |
+  Tests the agent's ability to store a dated journal entry and later retrieve it
+  accurately. The user asks the agent to log an accomplishment as a journal entry,
+  then asks the agent to recall recent journal entries.
+  This validates the `note` category with `domain=journal` behaviour from the
+  memory architecture spec.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask agent to record a dated journal entry"
+    user_message: "Please log this in your journal for today (April 1 2026): I completed the FAISS vector search integration, resolved 3 critical memory store bugs, and merged PR #247 to main."
+    ground_truth:
+      expected_answer: "Journal entry stored for April 1 2026"
+    success_criteria: "Agent confirms the journal entry is stored. Should call the remember tool with category=note and domain=journal. Must acknowledge FAISS integration, 3 bugs, and PR #247."
+
+  - turn: 2
+    objective: "Ask agent to recall the journal entry"
+    user_message: "What did I accomplish on April 1st according to my journal?"
+    ground_truth:
+      expected_answer: "FAISS vector search integration, 3 critical memory store bugs resolved, PR #247 merged"
+    success_criteria: "Agent accurately recalls all three accomplishments: FAISS integration, bug fixes (3), and PR #247. FAIL if any accomplishment is missing or fabricated."
+
+  - turn: 3
+    objective: "Ask for a summary of recent journal activity"
+    user_message: "Give me a quick summary of what I've been working on recently."
+    ground_truth:
+      expected_answer: "FAISS, memory store, PR #247"
+    success_criteria: "Agent surfaces the journal entry content in the summary. FAIL if agent claims to have no journal data or gives a generic non-specific response."
+
+expected_outcome: |
+  Agent stores a structured journal entry and accurately retrieves it across
+  multiple turns, demonstrating the second-brain note-keeping capability.

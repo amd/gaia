@@ -87,9 +87,29 @@ class TestConstruction:
     def test_response_mode_is_conversational(self, agent):
         assert agent.response_mode == "conversational"
 
+    def test_system_prompt_pre_scan_canary(self, agent):
+        """Canary against silent prompt drift.
+
+        ``pre_scan_inbox`` is the tool the LLM must call when the user
+        asks for a triage view. The structured render-card contract is
+        now handled by the backend SSE hook (``SSEOutputHandler``
+        intercepts ``pre_scan_inbox`` results and injects the
+        ``email_pre_scan`` fenced block deterministically — see
+        sse_handler.py and issue #1000 for the planned multi-model fix
+        that replaces the hook), so the prompt only needs to name the
+        tool. Assert that name is present so a future prompt edit
+        doesn't silently drop the routing instruction.
+        """
+        prompt = agent._get_system_prompt()
+        assert "pre_scan_inbox" in prompt, (
+            "system prompt must mention ``pre_scan_inbox`` so the LLM "
+            "calls it on triage requests; the frontend card mount path "
+            "depends on this tool firing"
+        )
+
 
 class TestToolRegistry:
-    """The agent must register all 30+ tools from the five mixins."""
+    """The agent must register all tools from the six mixins."""
 
     EXPECTED_TOOLS = {
         # Read
@@ -99,6 +119,7 @@ class TestToolRegistry:
         "search_messages",
         "list_labels",
         "triage_inbox",
+        "pre_scan_inbox",
         # Organize
         "archive_message",
         "mark_read",
@@ -122,6 +143,11 @@ class TestToolRegistry:
         "accept_invite",
         "decline_invite",
         "create_event_from_email",
+        # Session preferences (in-memory; wiped on agent restart)
+        "set_priority_sender",
+        "set_low_priority_sender",
+        "set_category_default",
+        "clear_session_preferences",
     }
 
     def test_every_expected_tool_is_registered(self, agent):

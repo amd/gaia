@@ -1,0 +1,41 @@
+---
+title: "Browser Agent"
+description: "Search the web, fetch pages, and download files with a focused GAIA agent."
+---
+
+# Browser Agent
+
+The Browser Agent is a focused web-research agent for users who want GAIA's browser tools without the full Chat Agent tool surface. It can search the web, fetch readable page text, and download files through the same path validation and web-client limits used by the broader agent stack.
+
+## Quick start
+
+```bash
+gaia browse -q "Find recent AMD Ryzen AI SDK docs and summarize the relevant links"
+```
+
+Use interactive mode when you want to refine a web-research task over multiple turns:
+
+```bash
+gaia browse
+```
+
+## Tool surface
+
+`gaia browse --list-tools` shows the exact tools available in your installed version. The focused Browser Agent exposes:
+
+- `search_web` for web search.
+- `fetch_page` for extracting readable page text.
+- `download_file` for saving a user-requested URL locally.
+
+The Browser Agent does not register scratchpad or file-system analysis tools. Use `gaia analyze` for structured data work, or `gaia chat` when you need the broader mixed tool set.
+
+## Local model options
+
+By default, `gaia browse` uses the local Lemonade backend configured for GAIA. You can override the model or backend with the common agent flags:
+
+```bash
+gaia browse --model Qwen3-4B-Instruct-2507-GGUF -q "Fetch this page and list citations"
+gaia browse --use-claude -q "Compare these two URLs"
+```
+
+The Agent UI registry also exposes `web` and `web-lite`; `web-lite` uses GAIA's lightweight local model profile for shorter browser tasks.

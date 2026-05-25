@@ -314,9 +314,12 @@ class TestChatAgent:
     def test_tier2_rag_rules_absent_without_indexed_docs(self, agent):
         """Tier 2 query rules must NOT appear when no documents are indexed.
 
-        RAG tools are always registered, so Tier 1 discovery rules are always
-        present. Tier 2 rules (FACTUAL ACCURACY, DOCUMENT SILENCE, etc.) should
-        only appear once documents are actually indexed.
+        RAG tools are always registered.  Tier 1 discovery guidance is always
+        present in some form — when no files are loaded the agent shows a
+        *compact* hint (search_file → index_document → query_*); when docs
+        or a library are present it expands to the full SMART DISCOVERY /
+        FILE SEARCH workflow.  Tier 2 rules (FACTUAL ACCURACY, DOCUMENT
+        SILENCE, etc.) only appear once documents are actually indexed.
 
         NOTE: POST-INDEX QUERY RULE is intentionally always present (in tool_rules)
         because Smart Discovery can trigger indexing mid-conversation even when no

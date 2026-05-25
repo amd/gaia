@@ -1,0 +1,65 @@
+id: memory_email_sender_priorities
+name: "Memory Email Sender Priority Learning"
+category: memory
+severity: high
+description: |
+  Tests whether the agent learns user-specific email sender priorities (VIP /
+  triage / ignore) from explicit instructions across turns, then applies the
+  learned classification when asked to triage. This is the "email habit learning"
+  consumer use case from the v0.20.0 milestone — the agent learns which senders
+  matter to you, how you categorize them, and surfaces the right ones first.
+
+  The agent must store sender → priority mappings durably and resolve a triage
+  request against the stored mappings rather than a generic urgency heuristic.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Establish a VIP sender"
+    user_message: "Important: emails from my CEO 'maria@acmeco.com' are always VIP — surface them first, even if subject lines look mundane. Please remember this."
+    ground_truth:
+      expected_answer: "VIP sender stored: maria@acmeco.com (CEO)"
+    success_criteria: "Agent stores maria@acmeco.com as VIP. Should use remember tool with category=preference or rule. Must include the email address and the VIP designation."
+
+  - turn: 2
+    objective: "Establish an auto-ignore sender pattern"
+    user_message: "Also: anything from 'noreply@', 'newsletter@', or domains ending in '.marketing' I want auto-ignored — never flag those for me."
+    ground_truth:
+      expected_answer: "Ignore patterns stored: noreply@*, newsletter@*, *.marketing"
+    success_criteria: "Agent stores all three ignore patterns. Confirms the patterns explicitly and acknowledges they should never be flagged."
+
+  - turn: 3
+    objective: "Establish a context-dependent triage rule"
+    user_message: "And one more rule: emails from anyone at '@bigclient.com' are high priority during business hours (9-5 weekdays), but normal priority outside those hours. Remember that."
+    ground_truth:
+      expected_answer: "Conditional rule stored: @bigclient.com → high priority 9-5 weekdays, normal otherwise"
+    success_criteria: "Agent stores the time-conditional rule including the domain (@bigclient.com), the high-priority window (9-5 weekdays), and normal priority outside. Should not collapse into a simple always-high rule."
+
+  - turn: 4
+    objective: "Apply the learned priorities to a mock inbox"
+    user_message: |
+      Triage these 5 emails I just got — tell me which to look at first:
+      1. From maria@acmeco.com — subject: "quick question"
+      2. From newsletter@techdaily.com — subject: "10 AI trends this week"
+      3. From dan@bigclient.com (sent at 2pm Tuesday) — subject: "contract Q3"
+      4. From dan@bigclient.com (sent at 11pm Saturday) — subject: "thoughts?"
+      5. From hr@acmeco.com — subject: "benefits enrollment"
+    ground_truth:
+      expected_answer: "Order: 1 (CEO/VIP) > 3 (bigclient business hours) > 5 (internal HR) > 4 (bigclient off-hours, normal) ; 2 IGNORED (newsletter)"
+    success_criteria: "Agent must (1) put email #1 (Maria/CEO) first as VIP, (2) put email #3 (bigclient at 2pm Tuesday) before #4 (bigclient Saturday 11pm) because of the time-of-day rule, (3) explicitly skip or de-prioritize email #2 (newsletter@) per the ignore rule. FAIL if newsletter is surfaced as actionable, if Maria is not first, or if both bigclient emails are treated identically (which would mean the time rule was ignored)."
+
+  - turn: 5
+    objective: "Verify rule explanation"
+    user_message: "Why did you put dan's Tuesday email above his Saturday one?"
+    ground_truth:
+      expected_answer: "Because of the stored rule: @bigclient.com is high priority during 9-5 weekdays only"
+    success_criteria: "Agent explicitly references the stored time-conditional rule for @bigclient.com (business-hours weekdays = high). FAIL if it gives a generic urgency answer or cannot explain the ordering."
+
+expected_outcome: |
+  Agent accumulates explicit sender-priority rules (including conditional ones),
+  applies them faithfully when triaging a mock inbox, and can articulate why an
+  ordering was chosen — demonstrating learned, user-specific email classification.

@@ -61,7 +61,7 @@ def _get_lemonade_config() -> tuple:
     Get Lemonade host, port, and base_url from environment or defaults.
 
     Parses LEMONADE_BASE_URL env var if set, otherwise uses defaults.
-    The base_url is expected to include /api/v1 suffix per documentation.
+    Normalizes the URL to include /api/v1 suffix if omitted.
 
     Returns:
         Tuple of (host, port, base_url)
@@ -69,6 +69,9 @@ def _get_lemonade_config() -> tuple:
     from urllib.parse import urlparse
 
     base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+    # Normalize: ensure base_url includes /api/v1 suffix (users often omit it)
+    if not base_url.rstrip("/").endswith(f"/api/{LEMONADE_API_VERSION}"):
+        base_url = f"{base_url.rstrip('/')}/api/{LEMONADE_API_VERSION}"
     # Parse the URL to extract host and port for backwards compatibility
     parsed = urlparse(base_url)
     host = parsed.hostname or DEFAULT_HOST
@@ -81,6 +84,29 @@ def _get_lemonade_config() -> tuple:
     else:
         port = DEFAULT_PORT
     return (host, port, base_url)
+
+
+def resolve_lemonade_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    """Resolve the Lemonade API key from argument, env var, or None.
+
+    Empty or whitespace-only env values are treated as unset to avoid
+    sending a malformed ``Bearer `` header to authenticated Lemonade
+    servers (which would reject it).
+    """
+    if api_key is not None:
+        return api_key
+    env_value = os.getenv("LEMONADE_API_KEY")
+    if env_value is None:
+        return None
+    stripped = env_value.strip()
+    return stripped or None
+
+
+def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
+    """Return ``Authorization`` headers for Lemonade, or empty when unauthenticated."""
+    if not api_key:
+        return {}
+    return {"Authorization": f"Bearer {api_key}"}
 
 
 # =========================================================================
@@ -174,11 +200,18 @@ class LemonadeStatus:
 # Define available models
 MODELS = {
     # --- Primary model: Gemma 4 E4B (default for all roles) ---
+    # ctx_size = 65536 (64K): doubles the prior 32K default. Doc-Q&A flows
+    # (RAG retrieval results + history + tool result + system prompt)
+    # routinely cross 32K — `summarize_document` was hitting context
+    # overflow on 1–2 MB PDFs (#1030 follow-up). Gemma 4 E4B supports up
+    # to 128K natively; 64K is the compromise that fits comfortably on
+    # 16 GB shared-memory iGPUs while still removing the doc-Q&A ceiling.
+    # Low-memory users can dial down via the ``GAIA_CTX_SIZE`` env var.
     "gemma-4-e4b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="Gemma-4-E4B-it-GGUF",
         display_name="Gemma 4 E4B (Multimodal)",
-        min_ctx_size=32768,
+        min_ctx_size=65536,
         tool_calling=True,
     ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
@@ -233,7 +266,9 @@ AGENT_PROFILES = {
         name="chat",
         display_name="Chat Agent",
         models=["gemma-4-e4b", "nomic-embed"],
-        min_ctx_size=32768,
+        # 64K so doc-Q&A (RAG retrieval + history) doesn't crush the
+        # window. See ``gemma-4-e4b`` ModelRequirement note.
+        min_ctx_size=65536,
         description="Interactive chat with RAG and vision support",
     ),
     "code": AgentProfile(
@@ -254,7 +289,9 @@ AGENT_PROFILES = {
         name="rag",
         display_name="RAG System",
         models=["gemma-4-e4b", "nomic-embed"],
-        min_ctx_size=32768,
+        # 64K — doc Q&A is the headline use case here; smaller windows
+        # break summarize_document and large multi-chunk retrievals.
+        min_ctx_size=65536,
         description="Document Q&A with retrieval and vision",
     ),
     "blender": AgentProfile(
@@ -346,6 +383,10 @@ _validate_profile_model_registry()
 
 class LemonadeClientError(Exception):
     """Base exception for Lemonade client errors."""
+
+
+class LemonadeAuthError(LemonadeClientError):
+    """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
 
 
 class ModelDownloadCancelledError(LemonadeClientError):
@@ -691,6 +732,7 @@ class LemonadeClient:
         base_url: Optional[str] = None,
         verbose: bool = True,
         keep_alive: bool = False,
+        api_key: Optional[str] = None,
     ):
         """
         Initialize the Lemonade client.
@@ -702,6 +744,8 @@ class LemonadeClient:
             base_url: Base URL for the Lemonade server (defaults to LEMONADE_BASE_URL env var)
             verbose: If False, reduce logging verbosity during initialization
             keep_alive: If True, don't terminate server in __del__
+            api_key: API key for an authenticated Lemonade server (defaults to
+                LEMONADE_API_KEY env var; ``None`` for unauthenticated)
         """
         from urllib.parse import urlparse
 
@@ -733,6 +777,7 @@ class LemonadeClient:
         self.log = get_logger(__name__)
         self.keep_alive = keep_alive
         self._log_file = None
+        self.api_key = resolve_lemonade_api_key(api_key)
 
         # Track active downloads for cancellation support
         self.active_downloads: Dict[str, DownloadTask] = {}
@@ -745,6 +790,9 @@ class LemonadeClient:
         self.log.debug(f"Initialized Lemonade client for {host}:{port}")
         if model:
             self.log.debug(f"Initial model set to: {model}")
+        if self.api_key:
+            # Never log the key value itself — only its presence.
+            self.log.debug("Lemonade API key configured")
 
     def launch_server(self, log_level="info", background="none", ctx_size=None):
         """
@@ -1320,6 +1368,17 @@ class LemonadeClient:
                 **kwargs,
             )
 
+        # Pre-flight: ensure the model is loaded at the GAIA-expected ctx.
+        # The streaming path already does this via
+        # ``_stream_chat_completions_with_openai`` -> ``_ensure_model_loaded``.
+        # Pre-#1030 follow-up the non-streaming path skipped the check, so
+        # when something (e.g. the RAG SDK's embedder warm-up) unloaded the
+        # LLM, the next non-streaming chat_completion let Lemonade auto-load
+        # Gemma at its own default ctx (32K) — bypassing
+        # MODELS[…].min_ctx_size and silently capping doc-Q&A at 32K.
+        if auto_download:
+            self._ensure_model_loaded(model, auto_download=True)
+
         # Note: self.base_url already includes /api/v1
         url = f"{self.base_url}/chat/completions"
         data = {
@@ -1346,9 +1405,16 @@ class LemonadeClient:
             response = requests.post(
                 url,
                 json=data,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **self._auth_headers()},
                 timeout=timeout,
             )
+
+            if response.status_code == 401:
+                raise LemonadeAuthError(
+                    "Lemonade returned 401 Unauthorized for /chat/completions. "
+                    "Verify LEMONADE_API_KEY is correct (currently "
+                    f"{'set' if self.api_key else 'unset'})."
+                )
 
             if response.status_code != 200:
                 error_msg = (
@@ -1412,10 +1478,13 @@ class LemonadeClient:
         # Proactively ensure model is loaded before making request
         self._ensure_model_loaded(model, auto_download)
 
-        # Create a client just for this request
+        # Create a client just for this request.
+        # ``api_key`` is required by the OpenAI SDK (rejects None/"" with
+        # OpenAIError); when no real key is configured the placeholder is
+        # ignored by Lemonade itself on unauthenticated servers.
         client = OpenAI(
             base_url=self.base_url,
-            api_key="lemonade",  # required, but unused
+            api_key=self.api_key or "lemonade",
             timeout=timeout,
         )
 
@@ -1508,6 +1577,14 @@ class LemonadeClient:
                 f"Completed streaming chat completion. Generated {tokens_generated} tokens."
             )
 
+        except openai.AuthenticationError:
+            # Fixed-string error: do NOT include str(e), as the OpenAI SDK's
+            # exception may stringify the failing request including its
+            # Authorization header.
+            raise LemonadeAuthError(
+                "Lemonade rejected the API key (401 Unauthorized) on "
+                "streaming chat completions. Verify LEMONADE_API_KEY is correct."
+            )
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             error_type = e.__class__.__name__
             error_msg = str(e)
@@ -1605,9 +1682,16 @@ class LemonadeClient:
             response = requests.post(
                 url,
                 json=data,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **self._auth_headers()},
                 timeout=timeout,
             )
+
+            if response.status_code == 401:
+                raise LemonadeAuthError(
+                    "Lemonade returned 401 Unauthorized for /completions. "
+                    "Verify LEMONADE_API_KEY is correct (currently "
+                    f"{'set' if self.api_key else 'unset'})."
+                )
 
             if response.status_code != 200:
                 error_msg = f"Error in completions (status {response.status_code}): {response.text}"
@@ -1665,7 +1749,7 @@ class LemonadeClient:
 
         client = OpenAI(
             base_url=self.base_url,
-            api_key="lemonade",  # required, but unused
+            api_key=self.api_key or "lemonade",
             timeout=timeout,
         )
 
@@ -1697,6 +1781,11 @@ class LemonadeClient:
                 f"Completed streaming text completion. Generated {tokens_generated} tokens."
             )
 
+        except openai.AuthenticationError:
+            raise LemonadeAuthError(
+                "Lemonade rejected the API key (401 Unauthorized) on "
+                "streaming text completions. Verify LEMONADE_API_KEY is correct."
+            )
         except (openai.APIError, openai.APIConnectionError, openai.RateLimitError) as e:
             error_type = e.__class__.__name__
             self.log.error(f"OpenAI {error_type}: {str(e)}")
@@ -2064,10 +2153,17 @@ class LemonadeClient:
             response = requests.post(
                 url,
                 json=request_data,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **self._auth_headers()},
                 timeout=(connect_timeout, read_timeout),
                 stream=True,
             )
+
+            if response.status_code == 401:
+                raise LemonadeAuthError(
+                    "Lemonade returned 401 Unauthorized for /pull. "
+                    "Verify LEMONADE_API_KEY is correct (currently "
+                    f"{'set' if self.api_key else 'unset'})."
+                )
 
             if response.status_code != 200:
                 error_msg = f"Error pulling model (status {response.status_code}): {response.text}"
@@ -2269,9 +2365,16 @@ class LemonadeClient:
             response = requests.post(
                 url,
                 json=data,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **self._auth_headers()},
                 timeout=timeout,
             )
+
+            if response.status_code == 401:
+                raise LemonadeAuthError(
+                    "Lemonade returned 401 Unauthorized for /responses. "
+                    "Verify LEMONADE_API_KEY is correct (currently "
+                    f"{'set' if self.api_key else 'unset'})."
+                )
 
             if response.status_code != 200:
                 error_msg = f"Error in responses (status {response.status_code}): {response.text}"
@@ -2410,48 +2513,107 @@ class LemonadeClient:
             return  # Skip if auto_download disabled
 
         try:
+            # Determine the ctx_size GAIA expects for this model. This lookup
+            # happens BEFORE the "already loaded" check so we can detect a
+            # model that's loaded at the wrong window and reload it — pre-#1030
+            # follow-up the function returned early on any match, leaving
+            # Gemma 4 loaded at Lemonade's default 32K even after GAIA
+            # bumped MODELS[…].min_ctx_size to 65536. That's why
+            # ``summarize_document`` kept hitting LemonadeContextOverflowError
+            # at 35K-token sections.
+            expected_ctx: Optional[int] = None
+            for _key, _req in MODELS.items():
+                if _req.model_id == model:
+                    expected_ctx = _req.min_ctx_size
+                    break
+            if expected_ctx is None:
+                expected_ctx = DEFAULT_CONTEXT_SIZE
+
             # Check current server state
             status = self.get_status()
-            loaded_models = [m.get("id", "") for m in status.loaded_models]
 
-            # If model already loaded, nothing to do
-            if model in loaded_models:
-                self.log.debug(f"Model '{model}' already loaded")
-                return
+            # Look the model up in the actually-loaded set (health-format).
+            # ``status.loaded_models`` now carries health entries enriched
+            # with ``id`` + ``recipe_options`` so we can read ctx_size.
+            loaded_entry: Optional[dict] = None
+            for _m in status.loaded_models:
+                if _m.get("id") == model or _m.get("model_name") == model:
+                    loaded_entry = _m
+                    break
 
-            # Model not loaded - load it (will download if needed without prompting)
-            self.log.debug(f"Model '{model}' not loaded, loading...")
+            if loaded_entry is not None:
+                loaded_ctx = (
+                    loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
+                )
+                if loaded_ctx >= expected_ctx:
+                    self.log.debug(
+                        f"Model '{model}' already loaded at ctx={loaded_ctx} "
+                        f"(expected >= {expected_ctx})"
+                    )
+                    return
+                # Loaded but under-sized — fall through to the reload path
+                # which calls /load with explicit ctx_size.
+                self.log.info(
+                    f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
+                    f"expects ctx={expected_ctx}; reloading."
+                )
+            else:
+                self.log.debug(f"Model '{model}' not loaded, loading...")
+
+            # Distinguish "needs download" from "needs memory-map" so the user
+            # sees an honest expectation. ``list_models`` returns per-model
+            # ``downloaded: bool`` flags. If we can't tell, fall through to
+            # the generic loading message — the load_model call below still
+            # auto-downloads when needed.
+            is_downloaded: Optional[bool] = None
+            try:
+                models_data = self.list_models()
+                for _m in models_data.get("data", []):
+                    if _m.get("id") == model:
+                        is_downloaded = bool(_m.get("downloaded", False))
+                        break
+            except Exception as _e:  # pylint: disable=broad-except
+                self.log.debug(f"Could not probe model download state: {_e}")
 
             try:
                 from rich.console import Console
 
                 console = Console()
-                console.print(
-                    f"[bold blue]🔄 Loading model:[/bold blue] [cyan]{model}[/cyan]..."
-                )
+                if is_downloaded is False:
+                    console.print(
+                        f"[bold yellow]📥 Downloading model:[/bold yellow] "
+                        f"[cyan]{model}[/cyan] (first run — this can take "
+                        f"several minutes on a typical connection)..."
+                    )
+                else:
+                    console.print(
+                        f"[bold blue]🔄 Loading model:[/bold blue] [cyan]{model}[/cyan]..."
+                    )
             except ImportError:
                 console = None
-                print(f"🔄 Loading model: {model}...")
+                if is_downloaded is False:
+                    print(
+                        f"📥 Downloading model: {model} (first run — this can "
+                        f"take several minutes)..."
+                    )
+                else:
+                    print(f"🔄 Loading model: {model}...")
 
-            ctx_size = None
-            for _key, req in MODELS.items():
-                if req.model_id == model:
-                    ctx_size = req.min_ctx_size
-                    break
-
-            if ctx_size is None:
-                # Model not in the built-in registry (e.g. a custom or
-                # community model surfaced via an agent's ``models`` list).
-                # Loading with Lemonade's 4096-token default would silently
-                # truncate GAIA's large system prompts and yield empty
-                # responses. Fall back to the GAIA-wide default.
-                ctx_size = DEFAULT_CONTEXT_SIZE
+            # ``expected_ctx`` was resolved above (either from MODELS or the
+            # GAIA-wide default). Pass it explicitly to /load so Lemonade
+            # doesn't fall back to its own 4096-token default and silently
+            # truncate GAIA's larger prompts.
+            if expected_ctx == DEFAULT_CONTEXT_SIZE and not any(
+                req.model_id == model for req in MODELS.values()
+            ):
                 self.log.info(
                     f"Model '{model}' not in MODELS registry; "
-                    f"defaulting to ctx_size={ctx_size} to fit agent prompts"
+                    f"defaulting to ctx_size={expected_ctx} to fit agent prompts"
                 )
 
-            self.load_model(model, auto_download=True, prompt=False, ctx_size=ctx_size)
+            self.load_model(
+                model, auto_download=True, prompt=False, ctx_size=expected_ctx
+            )
 
             # Print model ready message
             try:
@@ -2961,9 +3123,45 @@ class LemonadeClient:
                 # Fallback for older Lemonade versions
                 status.context_size = health.get("context_size", 0)
 
-            # Get loaded models
-            models_response = self.list_models()
-            status.loaded_models = models_response.get("data", [])
+            # Loaded models — source of truth is ``/health.all_models_loaded``,
+            # NOT ``/models`` (which returns the full catalog, not the subset
+            # currently in memory). The pre-#1030 code joined ``status.loaded_models
+            # = list_models().data`` which made downstream "what is loaded?"
+            # checks see every model on disk and pick the alphabetically-first
+            # one (``Gemma-3-4b-it-GGUF``) regardless of whether it was loaded
+            # — which is why ``_try_reload_with_ctx`` kept reloading the wrong
+            # model on every chat invocation.
+            #
+            # We enrich each health entry with the matching catalog entry's
+            # ``labels`` so the existing label-based filters (``"image" not in
+            # labels``) keep working, and expose both ``id`` (catalog-style)
+            # and ``model_name`` (health-style) so all known consumers parse
+            # correctly.
+            try:
+                catalog_by_id = {
+                    m.get("id"): m for m in self.list_models().get("data", [])
+                }
+            except Exception:  # pylint: disable=broad-except
+                catalog_by_id = {}
+
+            loaded_enriched = []
+            for hm in all_models:
+                name = hm.get("model_name") or hm.get("checkpoint", "")
+                catalog = catalog_by_id.get(name, {})
+                loaded_enriched.append(
+                    {
+                        "id": name,  # catalog-style key for backward compat
+                        "model_name": name,
+                        "type": hm.get("type"),
+                        "labels": catalog.get("labels", []),
+                        "recipe_options": hm.get("recipe_options", {}),
+                        "checkpoint": hm.get("checkpoint", ""),
+                        "_health": hm,
+                    }
+                )
+            status.loaded_models = loaded_enriched
+        except LemonadeAuthError:
+            raise  # propagate auth errors; don't misreport as "server not running"
         except Exception as e:
             self.log.debug(f"Failed to get status: {e}")
             status.running = False
@@ -3425,6 +3623,10 @@ class LemonadeClient:
 
         return status
 
+    def _auth_headers(self) -> Dict[str, str]:
+        """Authorization headers for this client's configured API key."""
+        return lemonade_auth_headers(self.api_key)
+
     def _send_request(
         self,
         method: str,
@@ -3448,7 +3650,7 @@ class LemonadeClient:
             LemonadeClientError: If the request fails
         """
         try:
-            headers = {"Content-Type": "application/json"}
+            headers = {"Content-Type": "application/json", **self._auth_headers()}
 
             if method.lower() == "get":
                 response = requests.get(url, headers=headers, timeout=timeout)
@@ -3458,6 +3660,20 @@ class LemonadeClient:
                 )
             else:
                 raise LemonadeClientError(f"Unsupported HTTP method: {method}")
+
+            # 401 must be caught BEFORE the generic 4xx branch so the wrong-key
+            # error never includes ``response.text`` — some misconfigured
+            # reverse proxies reflect the request Authorization header in the
+            # 401 body, which would leak the key into our user-visible error.
+            # Also keeps ``_execute_with_auto_download._is_model_error`` from
+            # substring-matching an auth message into a model-not-found retry.
+            if response.status_code == 401:
+                raise LemonadeAuthError(
+                    "Lemonade returned 401 Unauthorized. Verify LEMONADE_API_KEY "
+                    f"is correct (currently {'set' if self.api_key else 'unset'}). "
+                    "See https://lemonade-server.ai/docs/guide/configuration/"
+                    "#api-key-and-security"
+                )
 
             if response.status_code >= 400:
                 raise LemonadeClientError(
@@ -3484,6 +3700,7 @@ def create_lemonade_client(
     verbose: bool = True,
     background: str = "terminal",
     keep_alive: bool = False,
+    api_key: Optional[str] = None,
 ) -> LemonadeClient:
     """
     Factory function to create and configure a LemonadeClient instance.
@@ -3508,6 +3725,8 @@ def create_lemonade_client(
                    - "silent": Run in background with output to log file
                    - "none": Run in foreground
         keep_alive: If True, don't terminate server when client is deleted
+        api_key: API key for an authenticated Lemonade server
+                 (defaults to env var LEMONADE_API_KEY; ``None`` for unauthenticated)
 
     Returns:
         A configured LemonadeClient instance
@@ -3529,6 +3748,7 @@ def create_lemonade_client(
         port=server_port,
         verbose=verbose,
         keep_alive=keep_alive,
+        api_key=api_key,
     )
 
     # Auto-start server if requested

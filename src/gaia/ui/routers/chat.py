@@ -35,6 +35,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 
+def _notify_loop(session_id: str) -> None:
+    """Notify the AgentLoop that a user message was processed.
+
+    Imported lazily to avoid a circular import at module level.
+    Non-fatal: if the loop is not running, this is a no-op.
+    """
+    try:
+        from gaia.ui.agent_loop import agent_loop
+
+        agent_loop.notify_user_message(session_id)
+    except Exception:
+        pass
+
+
 def _server_mod():
     """Lazily resolve the ``gaia.ui.server`` module.
 
@@ -130,6 +144,8 @@ async def send_message(
                 db.add_message(request.session_id, "user", request.message)
                 async for chunk in srv._stream_chat_response(db, session, request):
                     yield chunk
+                # Notify AgentLoop after the streaming response completes
+                _notify_loop(request.session_id)
 
             sem_released = True
             return StreamingResponse(
@@ -155,6 +171,9 @@ async def send_message(
                     response_text = _fix_double_escaped(response_text)
                     response_text = response_text.strip()
                 msg_id = db.add_message(request.session_id, "assistant", response_text)
+                # Notify AgentLoop after the non-streaming response completes
+                _notify_loop(request.session_id)
+
                 # Fire-and-forget auto-titling — same hook the streaming
                 # path uses. GAIA renames its own session after the first
                 # answer (and on topic shifts thereafter); see
@@ -218,3 +237,25 @@ async def confirm_tool(request: ToolConfirmRequest):
         )
     handler.resolve_tool_confirmation(request.approved)
     return {"status": "ok", "approved": request.approved}
+
+
+class CancelStreamRequest(BaseModel):
+    session_id: str
+
+
+@router.post("/api/chat/cancel")
+async def cancel_stream(request: CancelStreamRequest):
+    """Cancel an active streaming chat session by setting its SSE handler cancelled flag.
+
+    This allows the frontend's Cancel button to gracefully request cancellation
+    without tearing down the HTTP connection.
+    """
+    from .._chat_helpers import _active_sse_handlers
+
+    handler = _active_sse_handlers.get(request.session_id)
+    if not handler:
+        raise HTTPException(
+            status_code=404, detail="No active chat session found for this session ID"
+        )
+    handler.cancelled.set()
+    return {"status": "ok", "cancelled": True}

@@ -74,29 +74,12 @@ jobs:
           pytest tests/unit/test_packaging.py -v --tb=short
           echo "✅ Packaging integrity checks passed"
 
-      - name: Validate CLI commands (dry-run)
-        run: |
-          echo "=== Validating CLI Commands ==="
-          echo "Testing CLI help and argument parsing (no server required)"
-          echo ""
-          # Validate gaia init command parses correctly
-          gaia init --help
-          echo "✅ gaia init --help passed"
-
-          # Validate other core commands
-          gaia --help
-          echo "✅ gaia --help passed"
-
-          gaia chat --help
-          echo "✅ gaia chat --help passed"
-
-          gaia prompt --help
-          echo "✅ gaia prompt --help passed"
-
-          gaia sd --help
-          echo "✅ gaia sd --help passed"
-
       - name: Run unit tests
+        env:
+          # Skip memory init — Lemonade isn't available in this CI job; the
+          # unit tests don't exercise memory functionality (memory has its
+          # own dedicated tests with mocked embeddings).
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           echo "=== Running Unit Tests ==="
           echo "These are fast tests for core SDK components"
@@ -104,6 +87,8 @@ jobs:
           pytest tests/unit/ -v --tb=short --cov=src/gaia --cov-report=term-missing
 
       - name: Run DatabaseMixin integration tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           echo "=== Running DatabaseMixin Integration Tests ==="
           echo "Testing DatabaseMixin with Agent class"
@@ -111,6 +96,8 @@ jobs:
           pytest tests/integration/test_database_mixin_integration.py -v --tb=short
 
       - name: Run DatabaseAgent integration tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
         run: |
           echo "=== Running DatabaseAgent Integration Tests ==="
           echo "Testing DatabaseAgent with auto-registered tools"
@@ -122,12 +109,8 @@ jobs:
         run: |
           echo ""
           echo "=== Test Coverage ==="
-          echo "CLI Validation (Dry-Run):"
-          echo "  - gaia init --help: Command parsing and argument validation"
-          echo "  - gaia --help: Main CLI entry point"
-          echo "  - gaia chat --help: Chat command validation"
-          echo "  - gaia prompt --help: Prompt command validation"
-          echo "  - gaia sd --help: Image generation command validation"
+          echo "CLI Smoke Tests (pytest, auto-discovered):"
+          echo "  - tests/unit/cli/test_cli_smoke.py: --help for every subcommand + console script"
           echo ""
           echo "Unit Tests:"
           echo "  - SDToolsMixin: Stable Diffusion image generation for agents"

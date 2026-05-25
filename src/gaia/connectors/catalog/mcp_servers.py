@@ -7,10 +7,14 @@ Curated, tested MCP servers exposed as ``ConnectorSpec`` objects in the global
 ``REGISTRY``. Importing this module also imports ``gaia.connectors.mcp_server``
 so the handler is registered before any dispatch call.
 
-Scope: this catalog ships only entries that have explicit test coverage or are
-trivial enough (no API key required) to verify on the fly. Untested entries
-that previously shipped have been removed in favor of the user-supplied custom
-MCP path (see ``gaia connectors mcp add``).
+Scope: the catalog lists only MCP servers that are consumed by the built-in
+agents through the connectors framework (i.e. at least one built-in agent
+declares ``REQUIRED_CONNECTORS`` pointing at the entry). Servers with no
+built-in consumers were removed: ``mcp-filesystem`` and ``mcp-fetch`` are
+gone because the File Agent and Web Agent use Python-native tool mixins rather
+than the MCP protocol. Custom agents that want file/web MCP access supply
+their own ``mcp_servers.json`` — discoverable via the Settings "Custom agent
+servers" section (#1020, #1021).
 """
 
 import gaia.connectors.mcp_server  # noqa: F401  # pylint: disable=unused-import
@@ -21,27 +25,6 @@ from gaia.connectors.spec import ConfigField, ConnectorSpec
 # Curated catalog
 # ---------------------------------------------------------------------------
 
-_FILESYSTEM = ConnectorSpec(
-    id="mcp-filesystem",
-    display_name="File System",
-    icon="📁",
-    category="system",
-    tier=1,
-    type="mcp_server",
-    description="Secure file read/write/search with configurable access controls.",
-    mcp_command="npx",
-    mcp_args=("-y", "@modelcontextprotocol/server-filesystem", "~"),
-    config_schema=(
-        ConfigField(
-            key="allowed_directories",
-            label="Allowed directories",
-            kind="text",
-            placeholder="~/Documents,~/Downloads",
-            help_md="Comma-separated list of paths the server may access.",
-        ),
-    ),
-)
-
 _GITHUB = ConnectorSpec(
     id="mcp-github",
     display_name="GitHub",
@@ -50,7 +33,7 @@ _GITHUB = ConnectorSpec(
     tier=1,
     type="mcp_server",
     description="Repos, PRs, issues, workflows — full GitHub access.",
-    docs_url="https://amd-gaia.ai/connectors/github",
+    docs_url="https://amd-gaia.ai/docs/connectors/github",
     mcp_command="npx",
     mcp_args=("-y", "@modelcontextprotocol/server-github"),
     mcp_env_keys=("GITHUB_TOKEN",),
@@ -64,18 +47,6 @@ _GITHUB = ConnectorSpec(
             secret=True,
         ),
     ),
-)
-
-_FETCH = ConnectorSpec(
-    id="mcp-fetch",
-    display_name="Web Fetch",
-    icon="🌐",
-    category="web",
-    tier=1,
-    type="mcp_server",
-    description="Fetch web content and convert it to Markdown.",
-    mcp_command="npx",
-    mcp_args=("-y", "@modelcontextprotocol/server-fetch"),
 )
 
 _MEMORY = ConnectorSpec(
@@ -107,9 +78,7 @@ _GIT = ConnectorSpec(
 # ---------------------------------------------------------------------------
 
 _ALL_SPECS = (
-    _FILESYSTEM,
     _GITHUB,
-    _FETCH,
     _MEMORY,
     _GIT,
 )
