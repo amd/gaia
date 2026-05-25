@@ -571,7 +571,10 @@ class InitCommand:
         # when running from an AppImage that strips PATH). If a healthy
         # server responds we treat it as present and skip installation.
         try:
-            from gaia.llm.lemonade_client import LemonadeClient
+            from gaia.llm.lemonade_client import (
+                DEFAULT_LEMONADE_URL,
+                LemonadeClient,
+            )
 
             prev_env = os.environ.get("LEMONADE_BASE_URL")
             try:
@@ -580,8 +583,10 @@ class InitCommand:
                 if self._lemonade_base_url:
                     probe_urls.append(self._lemonade_base_url)
 
-                # Also probe the well-known local port used by Lemonade
-                probe_urls.append("http://127.0.0.1:13305/api/v1")
+                # Also probe the well-known local URL used by Lemonade (use
+                # client constant so tests and future port changes remain in
+                # sync with Lemonade defaults).
+                probe_urls.append(DEFAULT_LEMONADE_URL)
 
                 for url in probe_urls:
                     try:
@@ -593,8 +598,9 @@ class InitCommand:
                             self._print_success(f"Using Lemonade Server at {url}")
                             # Restore prior env and continue (server is reachable)
                             return True
-                    except Exception:
-                        # Ignore probe failures and try next URL
+                    except Exception as e:
+                        # Log probe failure for diagnostics and continue
+                        log.debug("Probe failed for %s: %s", url, e)
                         continue
             finally:
                 # Restore original environment variable if present
@@ -602,9 +608,10 @@ class InitCommand:
                     os.environ.pop("LEMONADE_BASE_URL", None)
                 else:
                     os.environ["LEMONADE_BASE_URL"] = prev_env
-        except Exception:
-            # Import errors or client failures should not block install flow
-            log.debug("Could not probe LEMONADE_BASE_URL for existing server")
+        except Exception as e:
+            # Import errors or client failures should not block install flow,
+            # but include exception text to aid debugging per 'fail loud' rule.
+            log.debug("Could not probe LEMONADE_BASE_URL for existing server: %s", e)
 
         info = self.installer.check_installation()
 
