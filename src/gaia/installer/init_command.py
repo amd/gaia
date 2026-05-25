@@ -585,8 +585,9 @@ class InitCommand:
 
                 # Also probe the well-known local URL used by Lemonade (use
                 # client constant so tests and future port changes remain in
-                # sync with Lemonade defaults).
-                probe_urls.append(DEFAULT_LEMONADE_URL)
+                # sync with Lemonade defaults). Avoid duplicate probes.
+                if DEFAULT_LEMONADE_URL not in probe_urls:
+                    probe_urls.append(DEFAULT_LEMONADE_URL)
 
                 for url in probe_urls:
                     try:
@@ -598,8 +599,8 @@ class InitCommand:
                             self._print_success(f"Using Lemonade Server at {url}")
                             # Restore prior env and continue (server is reachable)
                             return True
-                    except Exception as e:
-                        # Log probe failure for diagnostics and continue
+                    except (OSError, ConnectionError, TimeoutError) as e:
+                        # Network-level probe failures are expected; log and continue
                         log.debug("Probe failed for %s: %s", url, e)
                         continue
             finally:

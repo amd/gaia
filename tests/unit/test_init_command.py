@@ -661,6 +661,23 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
         mock_installer.check_installation.assert_not_called()
         mock_installer.download_installer.assert_not_called()
 
+    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://127.0.0.1:13305/api/v1"})
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_skip_install_when_env_var_set_and_probe_succeeds(self, mock_client_cls):
+        """If LEMONADE_BASE_URL is set to a reachable server, probe short-circuits."""
+        mock_client = MagicMock()
+        mock_client.health_check.return_value = {"status": "ok"}
+        mock_client_cls.return_value = mock_client
+
+        cmd, mock_installer = self._make_cmd(
+            LemonadeInfo(installed=False, version=None, path=None)
+        )
+        result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
+        mock_installer.check_installation.assert_not_called()
+        mock_installer.download_installer.assert_not_called()
+
     @patch("gaia.llm.lemonade_client.LemonadeClient")
     def test_falls_through_to_binary_check_when_probe_fails(self, mock_client_cls):
         """No running server → probe raises, falls through to check_installation."""
