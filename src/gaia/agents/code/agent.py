@@ -137,7 +137,7 @@ class CodeAgent(
         self.allowed_paths = kwargs.pop("allowed_paths", None)
         self.path_validator = PathValidator(
             self.allowed_paths,
-            on_prompt_start=lambda: self.console.stop_progress(),
+            on_prompt_start=lambda: self.console.pause_progress(),
             on_prompt_end=lambda: self.console.resume_progress(),
         )
 

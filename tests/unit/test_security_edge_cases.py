@@ -632,6 +632,30 @@ class TestPromptGuardCallbacks:
         assert "end" in calls
         assert calls.index("start") < calls.index("end")
 
+    def test_spinner_resumes_after_prompt_via_pause_resume(self, tmp_path):
+        """Simulates the real agent pattern: pause_progress on start, resume_progress on end."""
+        from gaia.agents.base.console import AgentConsole
+
+        console = AgentConsole()
+        console.start_progress("Thinking...")
+        assert console.progress.is_running
+
+        validator = PathValidator(
+            allowed_paths=[str(tmp_path)],
+            on_prompt_start=lambda: console.pause_progress(),
+            on_prompt_end=lambda: console.resume_progress(),
+        )
+
+        outside = tmp_path / "nonexistent_dir" / "file.txt"
+        with (
+            patch("builtins.input", return_value="y"),
+            patch("gaia.security._is_interactive", return_value=True),
+        ):
+            validator._prompt_user_for_access(outside)
+
+        assert console.progress.is_running
+        console.stop_progress()
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

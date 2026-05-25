@@ -148,6 +148,10 @@ class OutputHandler(ABC):
         """Stop progress indicator."""
         ...
 
+    def pause_progress(self):
+        """Pause progress indicator, remembering state for later resume. Optional — default no-op."""
+        ...
+
     def resume_progress(self):
         """Resume progress indicator with the last message. Optional — default no-op."""
         ...
@@ -1235,6 +1239,13 @@ class AgentConsole(OutputHandler):
         # Print the table in a panel
         self.console.print(Panel(table, border_style="blue"))
 
+    def pause_progress(self) -> None:
+        """Stop the spinner but keep _last_progress_message so resume_progress can restart it."""
+        self.progress.stop()
+        if self.rich_available:
+            time.sleep(0.15)
+            print()
+
     def resume_progress(self) -> None:
         """Resume the progress indicator with the last message used by start_progress."""
         if hasattr(self, "_last_progress_message") and self._last_progress_message:
@@ -2183,6 +2194,9 @@ class SilentConsole(OutputHandler):
         """No-op implementation."""
 
     def stop_progress(self):
+        """No-op implementation."""
+
+    def pause_progress(self):
         """No-op implementation."""
 
     def resume_progress(self):

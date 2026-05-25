@@ -43,7 +43,7 @@ class BrowserAgent(Agent, BrowserToolsMixin, MCPClientMixin):
         self.config = config
         self.path_validator = PathValidator(
             config.allowed_paths,
-            on_prompt_start=lambda: self.console.stop_progress(),
+            on_prompt_start=lambda: self.console.pause_progress(),
             on_prompt_end=lambda: self.console.resume_progress(),
         )
         self._path_validator = self.path_validator
