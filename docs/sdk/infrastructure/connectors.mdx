@@ -121,17 +121,19 @@ gaia connectors status
 # Test health of a configured connector
 gaia connectors test github
 
-# Per-agent grants (OAuth only)
+# Per-agent grants (every connector type)
 gaia connectors grants grant google builtin:chat \
     --scopes https://www.googleapis.com/auth/gmail.readonly
 gaia connectors grants list google
 gaia connectors grants revoke google builtin:chat
 
-# Per-agent activations — gate which agents see this connector's tools
-gaia connectors activations activate github builtin:chat \
-    --scopes repo:read   # --scopes is only consulted when no prior grant exists
-gaia connectors activations list github
-gaia connectors activations deactivate github builtin:chat
+# Per-agent activations — gate which agents see this MCP server's tools.
+# Activations apply to mcp_server connectors only; OAuth connectors are
+# rejected with exit 3 (use per-scope grants above instead).
+gaia connectors activations activate mcp-github builtin:chat \
+    --scopes use   # --scopes is only consulted when no prior grant exists
+gaia connectors activations list mcp-github
+gaia connectors activations deactivate mcp-github builtin:chat
 
 # Disconnect
 gaia connectors disconnect google
@@ -186,17 +188,17 @@ The Agent UI consent dialog renders `reason` in plain language. After
 the user grants the scopes, subsequent `get_access_token_sync` calls
 return fresh tokens transparently.
 
-## Per-agent activation
+## Per-agent activation (MCP servers only)
 
 Activations are the second axis of the per-agent authorization model
-(issue #1005):
+(issue #1005) and apply to **`mcp_server` connectors only**:
 
 - **Grant** (`grants.json`) — agent X is *allowed* to use connector Y's
   credentials with scopes S. Gates **credential access**
-  (`get_access_token`).
-- **Activation** (`activations.json`) — agent X *currently has* connector
-  Y's tools surfaced in its toolset. Gates **tool visibility** (system
-  prompt / tool registry).
+  (`get_access_token`). Applies to every connector type.
+- **Activation** (`activations.json`) — agent X *currently has* MCP
+  connector Y's tools surfaced in its toolset. Gates **MCP tool
+  visibility** (`MCPClientManager.tools_for_agent`).
 
 A tool from an MCP connector is visible to an agent if and only if:
 
@@ -208,6 +210,19 @@ Activations default to **inactive** when absent — least-privilege opt-in.
 The ledger stores explicit `true`/`false` entries; an unknown pair returns
 `is_agent_active == False`.
 
+<Warning>
+**OAuth connectors do not accept activations.** Agents reach OAuth providers
+(Google, etc.) through native Python `@tool` functions that call
+`get_credential_sync` directly — there is no MCP tool surface to gate.
+Per-agent access for OAuth connectors is controlled entirely by the
+per-scope grant toggles above.
+
+Calling `activate()` / `deactivate()` for an OAuth connector raises
+`ConfigurationError`; the HTTP `PUT` / `DELETE` returns `400 Bad Request`;
+the CLI exits with code 3. The Agent UI hides the "Active for" section
+for OAuth tiles for the same reason.
+</Warning>
+
 **One-click activation:** activating an agent with no prior grant
 auto-creates a grant using the agent's declared `REQUIRED_CONNECTORS`
 scopes. This is the path Settings → Connectors → "Active for" takes when
@@ -216,18 +231,19 @@ the user ticks an agent that has never been granted access:
 ```python
 from gaia.connectors import activate, deactivate
 
-# Activate (auto-grants if no prior grant exists)
-activate("github", "builtin:chat", scopes_for_grant=["repo:read"])
+# Activate (auto-grants if no prior grant exists). mcp-github is the
+# catalog id for the GitHub MCP server; activations only accept
+# mcp_server connectors.
+activate("mcp-github", "builtin:chat", scopes_for_grant=["use"])
 
 # Deactivate (preserves grant — re-activate is one click)
-deactivate("github", "builtin:chat")
+deactivate("mcp-github", "builtin:chat")
 ```
 
 ```bash
-gaia connectors activations activate github builtin:chat \
-    --scopes repo:read
-gaia connectors activations list github
-gaia connectors activations deactivate github builtin:chat
+gaia connectors activations activate mcp-github builtin:chat --scopes use
+gaia connectors activations list mcp-github
+gaia connectors activations deactivate mcp-github builtin:chat
 ```
 
 The HTTP router exposes:
@@ -238,11 +254,14 @@ PUT    /api/connectors/{id}/activations/{agent_id}     # body: {"scopes": [...]}
 DELETE /api/connectors/{id}/activations/{agent_id}
 ```
 
-SSE event `connector.activation.changed` is emitted on every PUT / DELETE
-so the Agent UI tile refreshes within ~1 s when another caller (CLI,
-SDK) changes the state. Disconnecting a connector wipes both grants
-**and** activations for that connector — re-adding the same `connector_id`
-must not silently inherit the previous user's tool-visibility decisions.
+Both mutating routes reject non-`mcp_server` connectors with `400 Bad
+Request` (after the standard `X-Gaia-UI` CSRF check). SSE event
+`connector.activation.changed` is emitted on every successful PUT /
+DELETE so the Agent UI tile refreshes within ~1 s when another caller
+(CLI, SDK) changes the state. Disconnecting a connector wipes both
+grants **and** activations for that connector — re-adding the same
+`connector_id` must not silently inherit the previous user's
+tool-visibility decisions.
 
 ## Where things live
 

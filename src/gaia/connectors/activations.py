@@ -3,14 +3,24 @@
 """
 Per-agent activations ledger at ``~/.gaia/connectors/activations.json``.
 
-Activations are the second axis of the connectors authorization model. The
-first axis is :mod:`gaia.connectors.grants` — "agent X is *allowed* to use
-connector Y's credentials." Activations answer a separate question: "agent X
-*currently has* connector Y's tools surfaced in its toolset."
+Activations are the second axis of the connectors authorization model, and
+they apply to **MCP-server connectors only**. The first axis is
+:mod:`gaia.connectors.grants` — "agent X is *allowed* to use connector Y's
+credentials" — and it applies to every connector type. Activations answer
+a narrower question: "agent X *currently has* MCP connector Y's tools
+surfaced in its toolset."
 
 A tool from an MCP connector is visible to an agent if and only if::
 
     grant exists for (connector_id, agent_id)  AND  is_agent_active(...)
+
+OAuth connectors (e.g. Google) have no MCP tool surface — agents reach them
+through native Python ``@tool`` functions that call ``get_credential_sync``
+directly — so this ledger does not apply to them. The orchestration layer
+(:func:`gaia.connectors.api.activate` / :func:`gaia.connectors.api.deactivate`)
+enforces that invariant by rejecting non-``mcp_server`` connector ids with
+``ConfigurationError``; this module itself stays type-agnostic so the ledger
+remains a pure key/value store.
 
 Activations default to **False** when absent — least-privilege opt-in. The
 ledger only stores explicit True/False entries; an unknown ``(connector_id,

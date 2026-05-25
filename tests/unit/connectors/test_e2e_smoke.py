@@ -258,29 +258,32 @@ class TestActivationsMultiCallerSmoke:
             list_agent_activations,
         )
 
-        # 1. CLI activate (auto-grants because no prior grant).
+        # 1. CLI activate (auto-grants because no prior grant). Uses
+        # ``mcp-github`` because activations are valid for MCP-server
+        # connectors only (#1005) — OAuth connectors like ``google`` are
+        # rejected by the activation API.
         rc, _out, _err = _run(
             "connectors",
             "activations",
             "activate",
-            "google",
+            "mcp-github",
             "builtin:chat",
             "--scopes",
-            "openid",
+            "use",
         )
         assert rc == 0
 
         # 2. SDK sees the activation.
-        assert is_agent_active("google", "builtin:chat") is True
-        assert list_agent_activations("google") == {"builtin:chat": True}
+        assert is_agent_active("mcp-github", "builtin:chat") is True
+        assert list_agent_activations("mcp-github") == {"builtin:chat": True}
 
         # 3. HTTP router sees it too — both via the dedicated endpoint
         # and as part of the connector summary (no-cache catalog read).
-        r = ui_api_client.get("/api/connectors/google/activations")
+        r = ui_api_client.get("/api/connectors/mcp-github/activations")
         assert r.status_code == 200
         assert r.json() == {"activations": {"builtin:chat": True}}
 
-        summary = ui_api_client.get("/api/connectors/google").json()
+        summary = ui_api_client.get("/api/connectors/mcp-github").json()
         assert summary["activations"] == {"builtin:chat": True}
 
     def test_router_activate_visible_via_sdk_and_cli(self, ui_api_client):
@@ -288,17 +291,17 @@ class TestActivationsMultiCallerSmoke:
 
         # 1. HTTP PUT activates (auto-grant via the body's scopes).
         r = ui_api_client.put(
-            "/api/connectors/google/activations/builtin:chat",
-            json={"scopes": ["openid"]},
+            "/api/connectors/mcp-github/activations/builtin:chat",
+            json={"scopes": ["use"]},
             headers={"x-gaia-ui": "1"},
         )
         assert r.status_code == 200
 
         # 2. SDK sees it.
-        assert is_agent_active("google", "builtin:chat") is True
+        assert is_agent_active("mcp-github", "builtin:chat") is True
 
         # 3. CLI sees it.
-        rc, out, _err = _run("connectors", "activations", "list", "google")
+        rc, out, _err = _run("connectors", "activations", "list", "mcp-github")
         assert rc == 0
         assert "builtin:chat: active" in out
 
@@ -306,28 +309,28 @@ class TestActivationsMultiCallerSmoke:
         from gaia.connectors.activations import is_agent_active
         from gaia.connectors.grants import list_agent_grants
 
-        # Activate via CLI (auto-grants openid).
+        # Activate via CLI (auto-grants ``use``).
         _run(
             "connectors",
             "activations",
             "activate",
-            "google",
+            "mcp-github",
             "builtin:chat",
             "--scopes",
-            "openid",
+            "use",
         )
-        assert is_agent_active("google", "builtin:chat") is True
+        assert is_agent_active("mcp-github", "builtin:chat") is True
 
         # Deactivate via the router.
         r = ui_api_client.delete(
-            "/api/connectors/google/activations/builtin:chat",
+            "/api/connectors/mcp-github/activations/builtin:chat",
             headers={"x-gaia-ui": "1"},
         )
         assert r.status_code == 204
 
         # SDK + CLI both see the activation cleared, grant preserved.
-        assert is_agent_active("google", "builtin:chat") is False
-        assert list_agent_grants("google") == {"builtin:chat": ["openid"]}
+        assert is_agent_active("mcp-github", "builtin:chat") is False
+        assert list_agent_grants("mcp-github") == {"builtin:chat": ["use"]}
 
     def test_tools_for_agent_reflects_activation_state(self, ui_api_client):
         """The MCP manager filter honours activations across all writers."""
@@ -336,9 +339,9 @@ class TestActivationsMultiCallerSmoke:
         from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
         manager = MCPClientManager()
-        manager._clients["google"] = MagicMock()
+        manager._clients["mcp-github"] = MagicMock()
         manager._clients["filesystem"] = MagicMock()
-        manager._clients["google"].list_tools.return_value = [MagicMock()]
+        manager._clients["mcp-github"].list_tools.return_value = [MagicMock()]
         manager._clients["filesystem"].list_tools.return_value = [MagicMock()]
 
         # No activations yet — agent sees nothing.
@@ -349,16 +352,16 @@ class TestActivationsMultiCallerSmoke:
             "connectors",
             "activations",
             "activate",
-            "google",
+            "mcp-github",
             "builtin:chat",
             "--scopes",
-            "openid",
+            "use",
         )
-        assert manager.servers_for_agent("builtin:chat") == ["google"]
+        assert manager.servers_for_agent("builtin:chat") == ["mcp-github"]
 
         # Deactivate via router → manager filter updates.
         ui_api_client.delete(
-            "/api/connectors/google/activations/builtin:chat",
+            "/api/connectors/mcp-github/activations/builtin:chat",
             headers={"x-gaia-ui": "1"},
         )
         assert manager.servers_for_agent("builtin:chat") == []

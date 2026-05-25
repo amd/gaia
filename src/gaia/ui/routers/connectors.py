@@ -102,6 +102,31 @@ def _require_ui_header(request: Request) -> None:
         raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
+def _require_mcp_server(connector_id: str) -> None:
+    """Reject activation writes for non-MCP-server connectors.
+
+    Activations gate MCP tool visibility via ``MCPClientManager.tools_for_agent``
+    (see issue #1005). OAuth-only connectors have no MCP tool surface — their
+    agent access is gated by per-scope grants, not by this ledger — so allowing
+    a write here would create a switch that does nothing.
+    """
+    try:
+        spec = REGISTRY.get(connector_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
+    if spec.type != "mcp_server":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Activations apply to MCP-server connectors only; "
+                f"{connector_id!r} is type {spec.type!r}. Use per-agent grants "
+                "to control access for OAuth connectors."
+            ),
+        )
+
+
 # ─────────────────────────────────────────────────────────────────
 # Request / response models
 # ─────────────────────────────────────────────────────────────────
@@ -117,6 +142,8 @@ class GrantRequest(BaseModel):
 
 class ActivationRequest(BaseModel):
     """Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
+
+    Valid only for ``mcp_server`` connectors — see ``_require_mcp_server``.
 
     ``scopes`` is optional: when present and no grant exists for the pair,
     it is used to auto-create the grant (one-click convenience). When the
@@ -323,7 +350,10 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
 
     # Activations ledger snapshot (issue #1005). Read-only here; the
     # frontend toggles each entry via PUT/DELETE
-    # /api/connectors/{id}/activations/{agent_id}.
+    # /api/connectors/{id}/activations/{agent_id} — mutating routes
+    # accept ``mcp_server`` connectors only (see ``_require_mcp_server``).
+    # The dict is always returned (empty ``{}`` for OAuth) so the response
+    # shape stays uniform across connector types.
     activations = list_agent_activations(spec.id)
 
     return {
@@ -728,6 +758,12 @@ async def delete_grant(connector_id: str, agent_id: str) -> Response:
 
 # ─────────────────────────────────────────────────────────────────
 # Activations endpoints (issue #1005)
+#
+# Activations gate MCP tool visibility (``MCPClientManager.tools_for_agent``).
+# The PUT/DELETE routes accept ``mcp_server`` connectors only — OAuth
+# connectors have no MCP tool surface and are rejected with HTTP 400 via
+# ``_require_mcp_server``. The GET route is type-agnostic so frontends
+# that fetch indiscriminately keep working (returns ``{}`` for OAuth).
 # ─────────────────────────────────────────────────────────────────
 
 
@@ -745,6 +781,7 @@ async def put_activation(
     frontend must look up REQUIRED_CONNECTORS scopes for the agent and
     pass them in.
     """
+    _require_mcp_server(connector_id)
     try:
         auto_granted = activate_connector_for_agent(
             connector_id, agent_id, scopes_for_grant=body.scopes
@@ -789,6 +826,7 @@ async def delete_activation(connector_id: str, agent_id: str) -> Response:
     one click. To wipe the grant call ``DELETE
     /api/connectors/{id}/grants/{agent_id}`` instead.
     """
+    _require_mcp_server(connector_id)
     deactivate_agent(connector_id, agent_id)
     await _emitter.emit(
         "connector.activation.changed",

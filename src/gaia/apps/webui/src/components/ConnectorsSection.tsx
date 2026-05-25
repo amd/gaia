@@ -206,7 +206,10 @@ function ConnectorTile({
                         <MCPServerConfigureBody connector={connector} onChanged={onChanged} />
                     )}
                     {connector.configured && (
-                        <ConnectorAgentGrants connectorId={connector.id} />
+                        <ConnectorAgentGrants
+                            connectorId={connector.id}
+                            connectorType={connector.type}
+                        />
                     )}
                 </div>
             )}
@@ -760,7 +763,13 @@ function AgentMcpTile({
 
 // ── ConnectorAgentGrants ─────────────────────────────────────────────────────
 
-function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
+function ConnectorAgentGrants({
+    connectorId,
+    connectorType,
+}: {
+    connectorId: string;
+    connectorType: string;
+}) {
     const { agents } = useChatStore();
     const [grants, setGrants] = useState<Record<string, string[]>>({});
     const [activations, setActivations] = useState<Record<string, boolean>>({});
@@ -826,7 +835,11 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
                 ))
             )}
 
-            {relevantAgents.length > 0 && (
+            {/* Activations gate MCP tool visibility. OAuth connectors have no
+                MCP tool surface — their per-agent access is governed by the
+                per-scope grant toggles above — so showing this block for them
+                would be a switch that does nothing. (issue #1005) */}
+            {connectorType === 'mcp_server' && relevantAgents.length > 0 && (
                 <>
                     <div className="grants-header grants-header--activations">
                         Active for
@@ -856,10 +869,14 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
 /**
  * One-row activation toggle for a single agent (issue #1005).
  *
- * Activation gates tool visibility: when ON, the connector's tools appear
- * in the agent's prompt; when OFF (or absent), the tools are hidden even
- * if the agent holds a grant. Activating without a prior grant auto-creates
- * one using the agent's declared REQUIRED_CONNECTORS scopes.
+ * Activation gates MCP tool visibility: when ON, the MCP server's tools
+ * appear in the agent's prompt; when OFF (or absent), the tools are hidden
+ * even if the agent holds a grant. Activating without a prior grant
+ * auto-creates one using the agent's declared REQUIRED_CONNECTORS scopes.
+ *
+ * Rendered only for ``type === 'mcp_server'`` connectors — the parent
+ * (``ConnectorAgentGrants``) gates the entire ``Active for`` block on
+ * connector type because activations apply to MCP servers only.
  */
 function AgentActivationCard({
     agent,

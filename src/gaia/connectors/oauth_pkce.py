@@ -141,15 +141,18 @@ class OAuthPkceHandler:
         account_email = account_id or DEFAULT_ACCOUNT
         delete_connection(provider_id, account_email=account_email)
 
-        # Wipe per-agent grants AND activations for this connector_id. Local
-        # imports keep the module-level dependency graph identical to before.
-        # Activations are wiped alongside grants so that re-adding the same
-        # connector_id does NOT silently inherit prior tool visibility either
-        # (symmetric to the grant-inheritance security concern).
+        # Wipe per-agent grants for this connector_id. Local import keeps
+        # the module-level dependency graph identical to before.
         from gaia.connectors.activations import revoke_all_activations_for
         from gaia.connectors.grants import revoke_all_grants_for
 
         revoke_all_grants_for(spec.id)
+        # Defensive sweep: OAuth connectors never accept activation writes
+        # (rejected at the api layer — see ``_require_mcp_server_for_activation``),
+        # so this is a no-op today. Kept as a belt-and-braces guard against
+        # ledger entries that pre-date the type check or are written via
+        # future migration paths — re-adding the same connector_id must
+        # never silently inherit prior state.
         revoke_all_activations_for(spec.id)
 
         logger.info("oauth_pkce: disconnected connector_id=%s", spec.id)

@@ -9,8 +9,8 @@ Subcommands:
 - ``configure``   → configure via the handler dispatcher (KEY=VALUE or --json)
 - ``test``        → health check for a configured connector
 - ``disconnect``  → remove credentials and reset connector state
-- ``grants list|grant|revoke`` → per-agent scope grants ledger
-- ``activations list|activate|deactivate`` → per-agent tool-visibility ledger
+- ``grants list|grant|revoke`` → per-agent scope grants ledger (every connector type)
+- ``activations list|activate|deactivate`` → per-agent MCP tool-visibility ledger (mcp_server only)
 """
 
 from __future__ import annotations
@@ -139,12 +139,15 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     # activations (issue #1005)
     p_acts = sub.add_parser(
         "activations",
-        help="Manage per-agent tool-visibility activations",
+        help="Manage per-agent MCP tool-visibility activations (mcp_server only)",
         description=(
-            "Activations gate which agents see a connector's tools in their "
-            "prompt. A tool is visible to an agent only if the agent both has "
-            "a grant (credential access) and an activation (tool visibility) "
-            "for the connector."
+            "Activations gate which agents see an MCP server's tools in "
+            "their prompt. A tool is visible to an agent only if the agent "
+            "both has a grant (credential access) and an activation (tool "
+            "visibility) for the connector. Activations apply to "
+            "mcp_server connectors only — OAuth connectors have no MCP "
+            "tool surface and are rejected with exit code 3 (use "
+            "'gaia connectors grants' to control OAuth access per agent)."
         ),
     )
     a = p_acts.add_subparsers(dest="activations_action", metavar="<subcommand>")
@@ -418,11 +421,10 @@ def _handle_grants(args: argparse.Namespace) -> int:
 def _handle_activations(args: argparse.Namespace) -> int:
     """Handle ``gaia connectors activations {list|activate|deactivate}``."""
     from gaia.connectors.activations import (
-        deactivate_agent,
         list_agent_activations,
         load_activations,
     )
-    from gaia.connectors.api import activate
+    from gaia.connectors.api import activate, deactivate
 
     sub = getattr(args, "activations_action", None)
     if sub == "list":
@@ -460,7 +462,10 @@ def _handle_activations(args: argparse.Namespace) -> int:
         return 0
 
     if sub == "deactivate":
-        deactivate_agent(args.connector_id, args.agent_id)
+        # Use the api wrapper so the MCP-only type guard fires uniformly
+        # across CLI/SDK/HTTP. The bare ``deactivate_agent`` ledger call
+        # would bypass it.
+        deactivate(args.connector_id, args.agent_id)
         sys.stdout.write(f"Deactivated {args.connector_id} for {args.agent_id}.\n")
         return 0
 

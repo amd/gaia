@@ -20,21 +20,23 @@ OAuth refresh tokens and MCP server API keys are AES-256 encrypted by the OS key
 
 ## Per-agent grant + activation model
 
-Connecting a service (e.g. Google) does **not** give every agent access to it. Access is gated at three levels:
+Connecting a service does **not** give every agent access to it. Access is gated at up to three levels depending on connector type:
 
 1. **Connection** — you store a credential once in the keyring (OAuth refresh token or PAT).
-2. **Grant** — you explicitly allow a specific agent to use that credential for a specific scope. Gates **credential access** (`get_access_token`).
-3. **Activation** — you explicitly enable a specific agent to *see* the connector's tools in its system prompt. Gates **tool visibility**. Defaults to OFF — least-privilege opt-in.
+2. **Grant** — you explicitly allow a specific agent to use that credential for a specific scope. Gates **credential access** (`get_access_token`). Applies to every connector type.
+3. **Activation** — you explicitly enable a specific agent to *see* an MCP server's tools in its system prompt. Gates **MCP tool visibility**. Defaults to OFF — least-privilege opt-in. **Applies to `mcp_server` connectors only.**
 
 ```
-User → connects Google once
-User → grants chat-agent gmail.readonly         (credential access)
-User → activates chat-agent for google MCP      (tool visibility)
+User → connects mcp-github once                   (credential)
+User → grants chat-agent the GitHub PAT scope     (credential access)
+User → activates chat-agent for mcp-github        (MCP tool visibility)
 ```
 
-An agent that calls `get_credential_sync("google", agent_id=..., required_scopes=["gmail.readonly"])` without a matching grant receives `AuthRequiredError(reason=AGENT_NOT_GRANTED)` and cannot proceed. No token is ever returned to an ungrantedn agent.
+OAuth connectors (e.g. Google) reach the provider through native Python `@tool` functions that call `get_credential_sync` directly — there is no MCP tool surface for activations to gate. Per-agent control for OAuth is handled entirely by the per-scope grant toggles. Calling `activate()` / `deactivate()` for an OAuth connector raises `ConfigurationError`; the HTTP route returns `400 Bad Request`; the CLI exits with code 3.
 
-Without an activation, the connector's MCP tools never enter the agent's tool list — they don't bloat the system prompt, and the agent cannot select them even if it has a grant.
+An agent that calls `get_credential_sync("google", agent_id=..., required_scopes=["gmail.readonly"])` without a matching grant receives `AuthRequiredError(reason=AGENT_NOT_GRANTED)` and cannot proceed. No token is ever returned to an ungranted agent.
+
+Without an activation, an MCP connector's tools never enter the agent's tool list — they don't bloat the system prompt, and the agent cannot select them even if it has a grant.
 
 Grants are stored in `~/.gaia/connectors/grants.json` and activations in `~/.gaia/connectors/activations.json` — both flat files that are **not** secret stores. They contain agent IDs and scope/boolean values, never credentials.
 
@@ -46,7 +48,7 @@ You can revoke access at any level:
 |---|---|
 | Settings → Connectors → \<connector\> → **Disconnect** | Removes token from keyring AND clears all grants AND all activations for that connector; all agent calls fail with `NOT_CONNECTED` |
 | `gaia connectors grants revoke <connector> <agent>` | Removes the per-agent grant; that agent's calls fail with `AGENT_NOT_GRANTED` |
-| `gaia connectors activations deactivate <connector> <agent>` | Removes the per-agent activation; that agent stops seeing the connector's tools but the grant survives so re-activation is one click |
+| `gaia connectors activations deactivate <mcp-server-connector> <agent>` | Removes the per-agent activation; that agent stops seeing the MCP server's tools but the grant survives so re-activation is one click. Only valid for `mcp_server` connectors |
 | Revoke the PAT/OAuth client at the provider | Invalidates the token at the source; GAIA's next API call surfaces the provider's error |
 
 ## Threat model
