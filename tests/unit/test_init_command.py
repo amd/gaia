@@ -649,6 +649,9 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
     def test_skip_install_when_probe_succeeds(self, mock_client_cls):
         """Lemonade running (AUR/systemd) but binary not in PATH → probe short-circuits."""
         mock_client = MagicMock()
+        # Probe uses _send_request with a short timeout; mock that to return
+        # a healthy response so the probe short-circuits installation.
+        mock_client._send_request.return_value = {"status": "ok"}
         mock_client.health_check.return_value = {"status": "ok"}
         mock_client_cls.return_value = mock_client
 
@@ -666,6 +669,7 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
     def test_skip_install_when_env_var_set_and_probe_succeeds(self, mock_client_cls):
         """If LEMONADE_BASE_URL is set to a reachable server, probe short-circuits."""
         mock_client = MagicMock()
+        mock_client._send_request.return_value = {"status": "ok"}
         mock_client.health_check.return_value = {"status": "ok"}
         mock_client_cls.return_value = mock_client
 
@@ -682,7 +686,34 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
     def test_falls_through_to_binary_check_when_probe_fails(self, mock_client_cls):
         """No running server → probe raises, falls through to check_installation."""
         mock_client = MagicMock()
-        mock_client.health_check.side_effect = ConnectionRefusedError()
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        # Simulate _send_request raising the client's error (real-world path)
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
+        mock_client.health_check.side_effect = LemonadeClientError("connection refused")
+        mock_client_cls.return_value = mock_client
+
+        info = LemonadeInfo(
+            installed=True, version=LEMONADE_VERSION, path="/usr/bin/lemonade-server"
+        )
+        cmd, mock_installer = self._make_cmd(info)
+        result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
+        mock_installer.check_installation.assert_called_once()
+
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_falls_through_when_health_check_raises_client_error(self, mock_client_cls):
+        """LemonadeClientError (real-world path) also falls through to binary check."""
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        mock_client = MagicMock()
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
+        mock_client.health_check.side_effect = LemonadeClientError("connection refused")
         mock_client_cls.return_value = mock_client
 
         info = LemonadeInfo(

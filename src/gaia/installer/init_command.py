@@ -574,6 +574,7 @@ class InitCommand:
             from gaia.llm.lemonade_client import (
                 DEFAULT_LEMONADE_URL,
                 LemonadeClient,
+                LemonadeClientError,
             )
 
             prev_env = os.environ.get("LEMONADE_BASE_URL")
@@ -593,13 +594,28 @@ class InitCommand:
                     try:
                         os.environ["LEMONADE_BASE_URL"] = url
                         client = LemonadeClient(verbose=self.verbose)
-                        health = client.health_check()
+                        # Use a short timeout for probes to avoid hanging the init
+                        # process on poorly responsive networks or captive portals.
+                        try:
+                            health = client._send_request(
+                                "get", f"{client.base_url}/health", timeout=5
+                            )
+                        except TypeError:
+                            # Fall back to health_check() if _send_request signature
+                            # differs; keep health_check as a last resort.
+                            health = client.health_check()
+
                         if health:
                             # Good enough to consider Lemonade present
                             self._print_success(f"Using Lemonade Server at {url}")
                             # Restore prior env and continue (server is reachable)
                             return True
-                    except (OSError, ConnectionError, TimeoutError) as e:
+                    except (
+                        OSError,
+                        ConnectionError,
+                        TimeoutError,
+                        LemonadeClientError,
+                    ) as e:
                         # Network-level probe failures are expected; log and continue
                         log.debug("Probe failed for %s: %s", url, e)
                         continue
@@ -645,6 +661,7 @@ class InitCommand:
             if not self._prompt_yes_no(
                 f"Install/update Lemonade v{LEMONADE_VERSION}?", default=True
             ):
+                self._print("")
                 self._print("   Skipping update. Will verify server connectivity.")
                 # Continue to next step - server health check will verify connectivity
                 return True
