@@ -80,6 +80,13 @@ if (process.platform === "linux") {
   app.commandLine.appendSwitch("no-sandbox");
 }
 
+// Workaround: disable Chromium's Wayland color management which crashes on
+// some Wayland compositors that implement the wp_color_manager protocol
+// partially. See issue reports about wayland_wp_color_manager.cc SIGTRAP.
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("disable-features", "WaylandColorManagement");
+}
+
 // ── F7: Log tee to ~/.gaia/electron-main.log (issue #782) ───────────────────
 // Users often launch AppImages by double-click, not from a terminal, so
 // console output vanishes. Mirror console.log/error to a file so the

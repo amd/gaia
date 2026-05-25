@@ -565,6 +565,47 @@ class InitCommand:
             )
             return False
 
+        # First, try probing any configured LEMONADE_BASE_URL (or localhost
+        # at the default port) to detect a running server even when the
+        # lemonade-server binary isn't visible to this process (for example
+        # when running from an AppImage that strips PATH). If a healthy
+        # server responds we treat it as present and skip installation.
+        try:
+            from gaia.llm.lemonade_client import LemonadeClient
+
+            prev_env = os.environ.get("LEMONADE_BASE_URL")
+            try:
+                # Prefer explicit env var provided by the user/session
+                probe_urls = []
+                if self._lemonade_base_url:
+                    probe_urls.append(self._lemonade_base_url)
+
+                # Also probe the well-known local port used by Lemonade
+                probe_urls.append("http://127.0.0.1:13305/api/v1")
+
+                for url in probe_urls:
+                    try:
+                        os.environ["LEMONADE_BASE_URL"] = url
+                        client = LemonadeClient(verbose=self.verbose)
+                        health = client.health_check()
+                        if health:
+                            # Good enough to consider Lemonade present
+                            self._print_success(f"Using Lemonade Server at {url}")
+                            # Restore prior env and continue (server is reachable)
+                            return True
+                    except Exception:
+                        # Ignore probe failures and try next URL
+                        continue
+            finally:
+                # Restore original environment variable if present
+                if prev_env is None:
+                    os.environ.pop("LEMONADE_BASE_URL", None)
+                else:
+                    os.environ["LEMONADE_BASE_URL"] = prev_env
+        except Exception:
+            # Import errors or client failures should not block install flow
+            log.debug("Could not probe LEMONADE_BASE_URL for existing server")
+
         info = self.installer.check_installation()
 
         if info.installed and info.version:
