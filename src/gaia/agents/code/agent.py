@@ -138,6 +138,7 @@ class CodeAgent(
         self.path_validator = PathValidator(
             self.allowed_paths,
             on_prompt_start=lambda: self.console.stop_progress(),
+            on_prompt_end=lambda: self.console.resume_progress(),
         )
 
         # Workspace root for API mode (passed from VSCode)

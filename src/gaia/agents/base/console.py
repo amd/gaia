@@ -148,6 +148,10 @@ class OutputHandler(ABC):
         """Stop progress indicator."""
         ...
 
+    def resume_progress(self):
+        """Resume progress indicator with the last message. Optional — default no-op."""
+        ...
+
     # === Completion Methods (Required) ===
 
     @abstractmethod
@@ -1231,6 +1235,11 @@ class AgentConsole(OutputHandler):
         # Print the table in a panel
         self.console.print(Panel(table, border_style="blue"))
 
+    def resume_progress(self) -> None:
+        """Resume the progress indicator with the last message used by start_progress."""
+        if hasattr(self, "_last_progress_message") and self._last_progress_message:
+            self.start_progress(self._last_progress_message)
+
     def start_progress(self, message: str, show_timer: bool = False) -> None:
         """
         Start the progress indicator.
@@ -1239,6 +1248,7 @@ class AgentConsole(OutputHandler):
             message: Message to display with the indicator
             show_timer: If True, show elapsed time in progress message
         """
+        self._last_progress_message = message
         # If file preview is active, pause it temporarily
         self._paused_preview = False
         if self.file_preview_live is not None:
@@ -2173,6 +2183,9 @@ class SilentConsole(OutputHandler):
         """No-op implementation."""
 
     def stop_progress(self):
+        """No-op implementation."""
+
+    def resume_progress(self):
         """No-op implementation."""
 
     def print_repeated_tool_warning(self):
