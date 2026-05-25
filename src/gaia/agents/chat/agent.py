@@ -120,6 +120,17 @@ class ChatAgentConfig:
     #   "full"  — all tools and prompt sections (backward-compatible default)
     prompt_profile: str = "full"
 
+    # Per-agent identity for the connectors activation filter (#1005).
+    # Must be set BEFORE ``Agent.__init__`` runs ``_register_tools``, because
+    # that's where ``_active_mcp_servers`` consults ``is_agent_active`` to
+    # decide which MCP servers' tools to surface. The registry's
+    # ``_wrap_factory_with_namespaced_id`` injects this via kwargs, and the
+    # UI's direct construction paths in ``_chat_helpers`` pass it explicitly.
+    # Leaving this ``None`` reproduces the pre-#1005 behaviour where the
+    # agent sees every connected MCP server unfiltered — keep it set for
+    # any built-in or registered Chat instance.
+    namespaced_agent_id: Optional[str] = None
+
 
 class ChatAgent(
     MemoryMixin,
@@ -163,6 +174,15 @@ class ChatAgent(
         # Use provided config or create default
         if config is None:
             config = ChatAgentConfig()
+
+        # Stamp the per-agent identity for the connectors activation filter
+        # (#1005) BEFORE ``super().__init__`` runs ``_register_tools``. The
+        # MCP-tool registration step in ``_register_tools`` consults
+        # ``_active_mcp_servers`` which reads this attribute; setting it
+        # after super().__init__ would be too late and the filter would
+        # silently fall back to "ad-hoc agent — show every MCP server".
+        if config.namespaced_agent_id:
+            self._gaia_namespaced_agent_id = config.namespaced_agent_id
 
         # Initialize path validator
         self.path_validator = PathValidator(config.allowed_paths)

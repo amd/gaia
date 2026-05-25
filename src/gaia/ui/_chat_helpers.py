@@ -37,6 +37,33 @@ from .sse_handler import (
 logger = logging.getLogger(__name__)
 
 
+def _stamp_builtin_chat_identity(config) -> None:
+    """Inject ``namespaced_agent_id="builtin:chat"`` into a ``ChatAgentConfig``
+    BEFORE ``ChatAgent(config)`` is constructed.
+
+    Must be applied to the *config*, not to the instance after construction.
+    The connectors activation filter (``Agent._active_mcp_servers`` →
+    ``MCPClientManager.servers_for_agent``) is consulted inside
+    ``ChatAgent.__init__`` → ``super().__init__`` → ``_register_tools``,
+    so the agent must already know its namespaced id by the time
+    ``_register_tools`` runs. A post-construction stamp on the instance
+    is too late — ``_register_tools`` has already loaded the unfiltered
+    MCP-tool set.
+
+    ``ChatAgent.__init__`` reads ``config.namespaced_agent_id`` at its top
+    and sets ``self._gaia_namespaced_agent_id`` from it before invoking
+    ``super().__init__``. This helper just centralises the
+    ``"builtin:chat"`` literal so every direct-construction site in this
+    module uses the same value and a fifth caller can't forget.
+
+    Idempotent — only sets the field if it is still its default ``None``,
+    so callers that already set a custom namespaced id (e.g. a future
+    custom-Chat wrapper) are not clobbered.
+    """
+    if getattr(config, "namespaced_agent_id", None) is None:
+        config.namespaced_agent_id = "builtin:chat"
+
+
 def _register_agent_memory_ops(agent) -> None:
     """Register LLM-powered memory operations from a ChatAgent with the memory router.
 
@@ -1075,6 +1102,7 @@ async def _get_chat_response(
                 debug=False,
                 **_session_kwargs,
             )
+            _stamp_builtin_chat_identity(config)
             agent = ChatAgent(config)
             _store_agent(session_id, model_id, document_ids, agent, agent_type)
             _register_agent_memory_ops(agent)
@@ -1111,6 +1139,7 @@ async def _get_chat_response(
                     debug=False,
                     **_session_kwargs,
                 )
+                _stamp_builtin_chat_identity(config)
                 agent = ChatAgent(config)
                 _store_agent(session_id, model_id, document_ids, agent, agent_type)
                 _register_agent_memory_ops(agent)
@@ -1461,6 +1490,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         **_session_kwargs,
                     )
 
+                    _stamp_builtin_chat_identity(config)
                     t_construct = _time.monotonic()
                     agent = ChatAgent(config)
                     logger.info(
@@ -1566,6 +1596,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                 session_id=session_id,
                             ),
                         )
+                        _stamp_builtin_chat_identity(config)
                         agent = ChatAgent(config)
                         agent.console = sse_handler
                         _register_agent_memory_ops(agent)

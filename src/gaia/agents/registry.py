@@ -144,26 +144,37 @@ def _wrap_factory_with_namespaced_id(
 ) -> Callable[..., Any]:
     """
     Wrap a registration factory so the resulting Agent instance carries its
-    namespaced ID for ``Agent.process_query`` to read at runtime.
+    namespaced ID.
 
-    The base ``Agent.process_query`` reads ``_gaia_namespaced_agent_id`` (and
-    falls back to ``AGENT_ID``) when wrapping the call in the agent context
-    contextvar. Setting this attribute on the instance is what lets a
-    custom-installed agent get its proper ``custom:<sha256>:<id>`` namespace
-    instead of the bare ``AGENT_ID``.
+    Two things have to happen for the per-agent connectors activation filter
+    (#1005) to work correctly:
+
+    1. The agent class must see the namespaced id BEFORE its ``__init__``
+       calls ``_register_tools`` — that's where MCP tools get registered and
+       where ``_active_mcp_servers`` reads the id to decide which servers'
+       tools to surface. We pass it as a ``namespaced_agent_id`` kwarg so
+       config classes that declare the field (e.g. ``ChatAgentConfig``) can
+       stamp ``self._gaia_namespaced_agent_id`` at the top of ``__init__``.
+       Factories that filter kwargs by their config fields will pick this up
+       automatically; factories whose config does NOT declare the field
+       drop it harmlessly.
+    2. The instance attribute is also stamped after the factory returns as
+       belt-and-braces — covers agents whose config doesn't (yet) declare
+       the field, and ensures ``Agent.process_query`` sees the id at
+       runtime even if step 1 didn't apply.
     """
 
     def _factory(**kwargs):
+        # Inject for kwarg-aware factories (step 1).
+        kwargs.setdefault("namespaced_agent_id", namespaced_id)
         instance = factory(**kwargs)
-        # Attribute access — use setattr because subclasses may override
-        # __setattr__ to validate fields. We set on the instance, not the
-        # class, so two different registrations of the same class don't
-        # collide.
+        # Belt-and-braces post-init stamp (step 2). Use setattr so subclasses
+        # with custom ``__setattr__`` validation see a well-formed write,
+        # and tolerate __slots__-defined agents that can't accept the
+        # attribute (process_query will fall back to AGENT_ID).
         try:
             instance._gaia_namespaced_agent_id = namespaced_id
         except (AttributeError, TypeError):
-            # If the agent uses __slots__ without an entry for this field,
-            # we still proceed — process_query will fall back to AGENT_ID.
             pass
         return instance
 
