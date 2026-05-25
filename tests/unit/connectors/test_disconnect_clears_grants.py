@@ -14,6 +14,7 @@ share the ``revoke_all_grants_for`` helper.
 """
 
 from __future__ import annotations
+
 from typing import Any, Dict
 from unittest.mock import patch
 
