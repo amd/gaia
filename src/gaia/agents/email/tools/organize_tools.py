@@ -218,7 +218,7 @@ def _coerce_ids(message_ids):
 
 
 def _run_batch(
-    gmail,
+    _gmail,
     db,
     message_ids: list[str],
     *,
@@ -604,7 +604,7 @@ class OrganizeToolsMixin:
                     return list(msg.get("labelIds", []))
 
                 def _archive_payload_fn(
-                    msg: Dict[str, Any], prior_labels: List[str]
+                    _msg: Dict[str, Any], prior_labels: List[str]
                 ) -> Dict[str, Any]:
                     return {"prior_labels": prior_labels}
 
@@ -696,7 +696,7 @@ class OrganizeToolsMixin:
                     return list(msg.get("labelIds", []))
 
                 def _move_payload_fn(
-                    msg: Dict[str, Any], prior_labels: List[str]
+                    _msg: Dict[str, Any], prior_labels: List[str]
                 ) -> Dict[str, Any]:
                     return {
                         "label_id": label_id_local,

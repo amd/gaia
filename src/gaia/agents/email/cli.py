@@ -79,7 +79,9 @@ def _extract_answer(result: Any) -> str:
 async def _one_shot(agent: EmailTriageAgent, query: str, args: Any = None) -> int:
     """Run a single query and print the result."""
     try:
-        result = await agent.process_query(query, trace=getattr(args, "trace", False) if args else False)
+        result = await agent.process_query(
+            query, trace=getattr(args, "trace", False) if args else False
+        )
         print(_extract_answer(result))
         return 0
     except Exception as exc:
@@ -102,7 +104,9 @@ async def _interactive(agent: EmailTriageAgent, args: Any = None) -> int:
         if query in ("/quit", "/exit", "/q"):
             return 0
         try:
-            result = await agent.process_query(query, trace=getattr(args, "trace", False) if args else False)
+            result = await agent.process_query(
+                query, trace=getattr(args, "trace", False) if args else False
+            )
             print(_extract_answer(result))
         except Exception as exc:
             log.exception("email-agent interactive query failed")
