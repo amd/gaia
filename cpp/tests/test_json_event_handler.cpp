@@ -257,6 +257,44 @@ TEST(JsonEventHandlerTest, FinalAnswer) {
     EXPECT_EQ(ev["content"], "Your WiFi is working correctly.");
     EXPECT_EQ(ev["steps"], 2);
     EXPECT_EQ(ev["tools_used"], 1);
+    // No usage object when UsageStats is default (zero)
+    EXPECT_FALSE(ev.contains("usage"));
+}
+
+TEST(JsonEventHandlerTest, FinalAnswerWithUsage) {
+    JsonEventOutputHandler handler;
+
+    {
+        CoutCapture cap;
+        handler.printProcessingStart("test query", 10, "model");
+        handler.printStepHeader(1, 10);
+    }
+
+    UsageStats usage;
+    usage.promptTokens = 150;
+    usage.completionTokens = 45;
+    usage.totalTokens = 195;
+
+    CoutCapture cap;
+    handler.printFinalAnswer("The answer is 42.", usage);
+    auto ev = cap.first();
+    EXPECT_EQ(ev["type"], "answer");
+    EXPECT_EQ(ev["content"], "The answer is 42.");
+    EXPECT_EQ(ev["steps"], 1);
+    ASSERT_TRUE(ev.contains("usage"));
+    EXPECT_EQ(ev["usage"]["prompt_tokens"], 150);
+    EXPECT_EQ(ev["usage"]["completion_tokens"], 45);
+    EXPECT_EQ(ev["usage"]["total_tokens"], 195);
+}
+
+TEST(JsonEventHandlerTest, FinalAnswerZeroUsageOmitted) {
+    JsonEventOutputHandler handler;
+
+    CoutCapture cap;
+    handler.printFinalAnswer("Result", UsageStats{});
+    auto ev = cap.first();
+    EXPECT_EQ(ev["type"], "answer");
+    EXPECT_FALSE(ev.contains("usage"));
 }
 
 TEST(JsonEventHandlerTest, Completion) {

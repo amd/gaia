@@ -187,11 +187,16 @@ private:
 
     // ---- LLM Communication ----
 
-    /// Send messages to the LLM and get a response.
+    struct LlmResult {
+        std::string content;
+        UsageStats usage;
+    };
+
+    /// Send messages to the LLM and get a response with usage stats.
     /// Uses OpenAI-compatible chat completions API.
     /// @param cfg  Config snapshot from the current processQuery() call.
-    std::string callLlm(const std::vector<Message>& messages, const std::string& systemPrompt,
-                        const AgentConfig& cfg);
+    LlmResult callLlm(const std::vector<Message>& messages, const std::string& systemPrompt,
+                      const AgentConfig& cfg);
 
     // ---- Execution Helpers ----
 

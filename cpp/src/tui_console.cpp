@@ -148,7 +148,8 @@ void TuiConsole::stopProgress() {
 // OutputHandler: completion
 // ---------------------------------------------------------------------------
 
-void TuiConsole::printFinalAnswer(const std::string& answer) {
+void TuiConsole::printFinalAnswer(const std::string& answer,
+                                  const UsageStats& /*usage*/) {
     if (answer.empty()) return;
     addEntry(ChatEntry::Type::ASSISTANT, answer);
 }

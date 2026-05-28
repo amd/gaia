@@ -106,7 +106,8 @@ void TerminalConsole::stopProgress() {
     std::cout << "\n";
 }
 
-void TerminalConsole::printFinalAnswer(const std::string& answer) {
+void TerminalConsole::printFinalAnswer(const std::string& answer,
+                                       const UsageStats& /*usage*/) {
     std::cout << "\n" << BOLD << GREEN << "Answer:" << RESET << "\n" << answer << "\n";
 }
 
@@ -139,7 +140,8 @@ void TerminalConsole::printStreamEnd() {
 
 // ---- SilentConsole ----
 
-void SilentConsole::printFinalAnswer(const std::string& answer) {
+void SilentConsole::printFinalAnswer(const std::string& answer,
+                                     const UsageStats& /*usage*/) {
     if (!silenceFinalAnswer_) {
         std::cout << answer << "\n";
     }

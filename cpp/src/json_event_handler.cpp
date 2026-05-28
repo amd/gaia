@@ -165,11 +165,16 @@ void JsonEventOutputHandler::stopProgress() {
 // Completion
 // ---------------------------------------------------------------------------
 
-void JsonEventOutputHandler::printFinalAnswer(const std::string& answer) {
-    emit({{"type", "answer"},
-          {"content", answer},
-          {"steps", stepsTaken_},
-          {"tools_used", toolsUsed_}});
+void JsonEventOutputHandler::printFinalAnswer(const std::string& answer,
+                                               const UsageStats& usage) {
+    json event = {{"type", "answer"},
+                  {"content", answer},
+                  {"steps", stepsTaken_},
+                  {"tools_used", toolsUsed_}};
+    if (usage.totalTokens > 0) {
+        event["usage"] = usage.toJson();
+    }
+    emit(event);
 }
 
 void JsonEventOutputHandler::printCompletion(int stepsTaken, int stepsLimit) {

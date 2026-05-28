@@ -248,6 +248,26 @@ struct ToolInfo {
     std::optional<std::string> mcpToolName;
 };
 
+// ---- LLM Usage Statistics ----
+
+struct UsageStats {
+    int promptTokens = 0;
+    int completionTokens = 0;
+    int totalTokens = 0;
+
+    void operator+=(const UsageStats& other) {
+        promptTokens += other.promptTokens;
+        completionTokens += other.completionTokens;
+        totalTokens += other.totalTokens;
+    }
+
+    json toJson() const {
+        return {{"prompt_tokens", promptTokens},
+                {"completion_tokens", completionTokens},
+                {"total_tokens", totalTokens}};
+    }
+};
+
 // ---- Parsed LLM Response ----
 
 struct ParsedResponse {
