@@ -1,1 +1,40 @@
-../../../../.claude/launch.json
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Agent UI (backend + frontend, combined)",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "gaia", "chat", "--ui"],
+      "port": 4200,
+      "autoPort": false
+    },
+    {
+      "name": "Agent UI backend only (FastAPI, no frontend)",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "python", "-m", "gaia.ui.server", "--port", "4200", "--host", "127.0.0.1"],
+      "port": 4200,
+      "autoPort": false
+    },
+    {
+      "name": "Agent UI frontend hot-reload (Vite dev)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "--prefix", "src/gaia/apps/webui", "dev"],
+      "port": 5174,
+      "autoPort": true
+    },
+    {
+      "name": "GAIA API server (OpenAI-compatible)",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "gaia", "api", "start", "--port", "8080"],
+      "port": 8080,
+      "autoPort": false
+    },
+    {
+      "name": "Agent UI MCP server",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "gaia", "mcp", "serve", "--port", "8766"],
+      "port": 8766,
+      "autoPort": false
+    }
+  ]
+}
