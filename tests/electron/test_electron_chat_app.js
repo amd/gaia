@@ -1083,8 +1083,8 @@ describe('Chat App Integration', () => {
       expect(chatContent).toContain('aria-label="Message input"');
       expect(chatContent).toContain('aria-label="Send message"');
       expect(chatContent).toContain('aria-label="Upload document"');
-      expect(chatContent).toContain('aria-label="Rename chat"');
-      expect(chatContent).toContain('aria-label="Export chat"');
+      expect(chatContent).toContain('aria-label="Rename task"');
+      expect(chatContent).toContain('aria-label="Export task"');
       expect(chatContent).toContain('aria-label="Attach documents"');
     });
 
