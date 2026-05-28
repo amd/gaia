@@ -505,7 +505,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 
 **Servers & infrastructure:**
 - `gaia api` - OpenAI-compatible API server
-- `gaia mcp {start|stop|status|test|agent|docker|add|list|remove|tools|test-client}` - MCP bridge
+- `gaia mcp {start|stop|status|test|agent|docker|serve|add|list|remove|tools|test-client}` - MCP bridge
 - `gaia cache {status|clear}` - Cache management
 
 **Setup & utilities:**
