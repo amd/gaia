@@ -446,7 +446,7 @@ jobs:
 
           claude_args: |
             --max-turns 50
-            --model claude-opus-4-7
+            --model claude-opus-4-8
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Respond to new issues or @claude mentions in PR conversations (including forks)
@@ -654,7 +654,7 @@ jobs:
 
           claude_args: |
             --max-turns 50
-            --model claude-opus-4-7
+            --model claude-opus-4-8
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Auto-fix: attempt to implement a fix for bulletproof, easy bug reports
@@ -875,7 +875,7 @@ jobs:
 
           claude_args: |
             --max-turns 30
-            --model claude-opus-4-7
+            --model claude-opus-4-8
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Generate release notes when PyPi workflow completes successfully on a tag
@@ -1163,7 +1163,7 @@ jobs:
 
           claude_args: |
             --max-turns 30
-            --model claude-opus-4-7
+            --model claude-opus-4-8
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
       - name: Verify and validate release notes
