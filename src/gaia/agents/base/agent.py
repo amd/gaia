@@ -2207,6 +2207,36 @@ Do NOT wrap conversational replies in JSON.
         half = max_chars // 2 - 20
         return f"{content_str[:half]}\n...[truncated]...\n{content_str[-half:]}"
 
+    def _namespaced_agent_id(self) -> Optional[str]:
+        """Return the registry-assigned namespaced agent id, or None.
+
+        The registry wraps each factory with ``_wrap_factory_with_namespaced_id``
+        so production agent instances always carry ``_gaia_namespaced_agent_id``.
+        Tests that construct agents directly (without going through the registry)
+        fall back to bare ``AGENT_ID``; both keys may legitimately resolve to
+        ``None`` for ad-hoc agents that opt out of the activation/grant layer
+        entirely.
+        """
+        return getattr(self, "_gaia_namespaced_agent_id", None) or getattr(
+            self, "AGENT_ID", None
+        )
+
+    def _active_mcp_servers(self, manager) -> List[str]:
+        """Return MCP server names whose tools should be visible to this agent.
+
+        Per issue #1005, MCP tools are gated by the activations ledger
+        (``~/.gaia/connectors/activations.json``). When no namespaced agent
+        id is available (e.g. test agents constructed directly), every
+        connected server is returned — the activation filter only applies
+        to agents that participate in the registry's identity scheme.
+        """
+        if manager is None:
+            return []
+        ns_id = self._namespaced_agent_id()
+        if ns_id is None:
+            return list(manager.list_servers())
+        return list(manager.servers_for_agent(ns_id))
+
     def process_query(
         self,
         user_input: str,

@@ -130,6 +130,16 @@ export interface ConnectorRow {
     enabled: boolean;
     account_id: string | null;
     scopes: string[];
+    /**
+     * Per-agent MCP-tool-visibility activation snapshot (issue #1005).
+     * Keys are namespaced agent ids (``builtin:chat``,
+     * ``custom:<hash>:<id>``, …), values are ``true`` when the agent is
+     * explicitly activated. Absence means inactive — activations are
+     * opt-in. Populated only for ``type === 'mcp_server'`` connectors;
+     * OAuth connectors always return ``{}`` because activation writes
+     * are rejected for them at the API layer.
+     */
+    activations: Record<string, boolean>;
     last_tested_at: string | null;
     mcp_env_keys: string[];
     default_scopes: string[];

@@ -120,6 +120,17 @@ class ChatAgentConfig:
     #   "full"  — all tools and prompt sections (backward-compatible default)
     prompt_profile: str = "full"
 
+    # Per-agent identity for the connectors activation filter (#1005).
+    # Must be set BEFORE ``Agent.__init__`` runs ``_register_tools``, because
+    # that's where ``_active_mcp_servers`` consults ``is_agent_active`` to
+    # decide which MCP servers' tools to surface. The registry's
+    # ``_wrap_factory_with_namespaced_id`` injects this via kwargs, and the
+    # UI's direct construction paths in ``_chat_helpers`` pass it explicitly.
+    # Leaving this ``None`` reproduces the pre-#1005 behaviour where the
+    # agent sees every connected MCP server unfiltered — keep it set for
+    # any built-in or registered Chat instance.
+    namespaced_agent_id: Optional[str] = None
+
 
 class ChatAgent(
     MemoryMixin,
@@ -163,6 +174,15 @@ class ChatAgent(
         # Use provided config or create default
         if config is None:
             config = ChatAgentConfig()
+
+        # Stamp the per-agent identity for the connectors activation filter
+        # (#1005) BEFORE ``super().__init__`` runs ``_register_tools``. The
+        # MCP-tool registration step in ``_register_tools`` consults
+        # ``_active_mcp_servers`` which reads this attribute; setting it
+        # after super().__init__ would be too late and the filter would
+        # silently fall back to "ad-hoc agent — show every MCP server".
+        if config.namespaced_agent_id:
+            self._gaia_namespaced_agent_id = config.namespaced_agent_id
 
         # Initialize path validator
         self.path_validator = PathValidator(config.allowed_paths)
@@ -1550,10 +1570,15 @@ No documents are currently indexed.
             try:
                 self._mcp_manager.load_from_config()
                 self._print_mcp_load_summary()
+                # Filter to servers explicitly activated for this agent
+                # (issue #1005). Falls back to the unfiltered list when the
+                # agent has no registry identity, preserving prior behaviour
+                # for ad-hoc test agents.
+                _active_servers = self._active_mcp_servers(self._mcp_manager)
                 # Preview total tool count before registering
                 _mcp_tool_count = sum(
                     len(_c.list_tools())
-                    for _srv in self._mcp_manager.list_servers()
+                    for _srv in _active_servers
                     if (_c := self._mcp_manager.get_client(_srv)) is not None
                 )
                 if _mcp_tool_count > _MCP_TOOL_LIMIT:
@@ -1565,7 +1590,7 @@ No documents are currently indexed.
                     )
                 else:
                     _before = len(_TOOL_REGISTRY)
-                    for _srv in self._mcp_manager.list_servers():
+                    for _srv in _active_servers:
                         _client = self._mcp_manager.get_client(_srv)
                         if _client:
                             self._register_mcp_tools(_client)

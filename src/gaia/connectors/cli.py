@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-CLI for ``gaia connectors {list|connect|configure|test|disconnect|grants ...}``.
+CLI for ``gaia connectors {list|connect|configure|test|disconnect|grants|activations ...}``.
 
 Subcommands:
 - ``list``        → catalog entries with configured/not status
@@ -9,7 +9,8 @@ Subcommands:
 - ``configure``   → configure via the handler dispatcher (KEY=VALUE or --json)
 - ``test``        → health check for a configured connector
 - ``disconnect``  → remove credentials and reset connector state
-- ``grants list|grant|revoke`` → per-agent scope grants ledger
+- ``grants list|grant|revoke`` → per-agent scope grants ledger (every connector type)
+- ``activations list|activate|deactivate`` → per-agent MCP tool-visibility ledger (mcp_server only)
 """
 
 from __future__ import annotations
@@ -135,6 +136,54 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_gr.add_argument("connector_id")
     p_gr.add_argument("agent_id")
 
+    # activations (issue #1005)
+    p_acts = sub.add_parser(
+        "activations",
+        help="Manage per-agent MCP tool-visibility activations (mcp_server only)",
+        description=(
+            "Activations gate which agents see an MCP server's tools in "
+            "their prompt. A tool is visible to an agent only if the agent "
+            "both has a grant (credential access) and an activation (tool "
+            "visibility) for the connector. Activations apply to "
+            "mcp_server connectors only — OAuth connectors have no MCP "
+            "tool surface and are rejected with exit code 3 (use "
+            "'gaia connectors grants' to control OAuth access per agent)."
+        ),
+    )
+    a = p_acts.add_subparsers(dest="activations_action", metavar="<subcommand>")
+
+    p_al = a.add_parser("list", help="List agent activations for a connector")
+    p_al.add_argument(
+        "connector_id",
+        nargs="?",
+        help="Connector id (lists every connector when omitted)",
+    )
+    p_al.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit machine-readable JSON",
+    )
+
+    p_aa = a.add_parser("activate", help="Activate a connector for an agent")
+    p_aa.add_argument("connector_id")
+    p_aa.add_argument(
+        "agent_id",
+        help="Namespaced agent id, e.g. 'builtin:chat' or 'custom:abc:inbox'",
+    )
+    p_aa.add_argument(
+        "--scopes",
+        nargs="+",
+        help=(
+            "Scopes to auto-grant if no grant exists yet. Required when "
+            "the agent has no prior grant for this connector."
+        ),
+    )
+
+    p_ad = a.add_parser("deactivate", help="Deactivate a connector for an agent")
+    p_ad.add_argument("connector_id")
+    p_ad.add_argument("agent_id")
+
 
 def handle(args: argparse.Namespace) -> int:
     """Dispatch a parsed ``gaia connectors ...`` command. Returns exit code."""
@@ -158,6 +207,8 @@ def handle(args: argparse.Namespace) -> int:
             return _handle_disconnect(args)
         if action == "grants":
             return _handle_grants(args)
+        if action == "activations":
+            return _handle_activations(args)
     except ConfigurationError as e:
         sys.stderr.write(f"Configuration error: {e}\n")
         return 3
@@ -363,6 +414,64 @@ def _handle_grants(args: argparse.Namespace) -> int:
     sys.stderr.write(
         "gaia connectors grants: missing subcommand. "
         "Try 'gaia connectors grants --help'.\n"
+    )
+    return 2
+
+
+def _handle_activations(args: argparse.Namespace) -> int:
+    """Handle ``gaia connectors activations {list|activate|deactivate}``."""
+    from gaia.connectors.activations import (
+        list_agent_activations,
+        load_activations,
+    )
+    from gaia.connectors.api import activate, deactivate
+
+    sub = getattr(args, "activations_action", None)
+    if sub == "list":
+        connector_id = getattr(args, "connector_id", None)
+        if connector_id:
+            listing = {connector_id: list_agent_activations(connector_id)}
+        else:
+            listing = load_activations()
+
+        if getattr(args, "as_json", False):
+            sys.stdout.write(json.dumps(listing, indent=2, sort_keys=True) + "\n")
+            return 0
+
+        any_rows = False
+        for cid, agents in sorted(listing.items()):
+            for agent_id, active in sorted(agents.items()):
+                state = "active" if active else "inactive"
+                sys.stdout.write(f"{cid} {agent_id}: {state}\n")
+                any_rows = True
+        if not any_rows:
+            sys.stdout.write("No activations.\n")
+        return 0
+
+    if sub == "activate":
+        scopes = getattr(args, "scopes", None) or None
+        auto_granted = activate(
+            args.connector_id, args.agent_id, scopes_for_grant=scopes
+        )
+        if auto_granted:
+            sys.stdout.write(
+                f"Auto-granted scopes {', '.join(scopes or [])} "
+                f"to {args.agent_id} for {args.connector_id}.\n"
+            )
+        sys.stdout.write(f"Activated {args.connector_id} for {args.agent_id}.\n")
+        return 0
+
+    if sub == "deactivate":
+        # Use the api wrapper so the MCP-only type guard fires uniformly
+        # across CLI/SDK/HTTP. The bare ``deactivate_agent`` ledger call
+        # would bypass it.
+        deactivate(args.connector_id, args.agent_id)
+        sys.stdout.write(f"Deactivated {args.connector_id} for {args.agent_id}.\n")
+        return 0
+
+    sys.stderr.write(
+        "gaia connectors activations: missing subcommand. "
+        "Try 'gaia connectors activations --help'.\n"
     )
     return 2
 
