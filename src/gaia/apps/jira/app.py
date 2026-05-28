@@ -68,6 +68,7 @@ class JiraApp:
             show_stats=self.debug or self.verbose,
             silent_mode=False,  # Always show agent steps for compelling demos
             debug=self.debug,
+            verbose=self.verbose,
         )
 
         # Configure logging based on debug flag

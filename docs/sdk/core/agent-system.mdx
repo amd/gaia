@@ -365,6 +365,7 @@ agent = MyAgent(
     max_steps=20,                  # Max reasoning loop iterations
     streaming=True,                # Stream responses token-by-token
     silent_mode=False,             # Suppress console output
+    verbose=False,                 # Use full AgentConsole output (default: MinimalConsole)
 
     # === Debugging ===
     debug_prompts=False,           # Print raw prompts to console
@@ -464,7 +465,8 @@ agent = MyAgent(
 |-----------|-----------|------------|-----------|
 | `max_steps` | `3` - Quick tasks | `20` - Complex workflows | Speed vs. thoroughness |
 | `streaming` | `False` - Wait for complete response | `True` - See tokens as generated | Latency vs. responsiveness |
-| `silent_mode` | `False` - See all output | `True` - Only get results | Visibility vs. clean output |
+| `verbose` | `False` - Clean, minimal output (default) | `True` - Full step-by-step agent output | Clarity vs. visibility |
+| `silent_mode` | `False` - See output | `True` - Only get results | Visibility vs. programmatic use |
 
 ---
 

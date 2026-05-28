@@ -171,11 +171,18 @@ your-app/
 ## Debug and Trace Options
 
 <CardGroup cols={2}>
+  <Card title="Verbose Output" icon="terminal">
+    ```bash
+    gaia-code "Create a todo tracking app in nextjs" --verbose
+    ```
+    Show detailed agent output (thoughts, goals, plans, tool results)
+  </Card>
+
   <Card title="Debug Logging" icon="bug">
     ```bash
     gaia-code "Create a todo tracking app in nextjs" --debug
     ```
-    See internal decision logs
+    See internal decision logs (implies --verbose)
   </Card>
 
   <Card title="JSON Trace" icon="file-code">

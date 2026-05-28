@@ -567,6 +567,9 @@ async def async_main(action, **kwargs):
             "stream",
             "no_lemonade_check",
             "list_tools",
+            "verbose",
+            "trace",
+            "max_steps",
         }
         excluded_params = cli_params | audio_params | llm_provider_params
         client_params = {k: v for k, v in kwargs.items() if k not in excluded_params}
@@ -591,11 +594,9 @@ async def async_main(action, **kwargs):
         from gaia.agents.chat.app import interactive_mode
 
         try:
-            # Use silent mode when debug is off to hide intermediate processing
-            # SilentConsole will still stream the final answer
             query = kwargs.get("query")
             debug_mode = kwargs.get("debug", False)
-            use_silent_mode = not debug_mode  # Hide processing steps unless debugging
+            verbose_mode = kwargs.get("verbose", False) or debug_mode
 
             # Create configuration with CLI values
             config = ChatAgentConfig(
@@ -611,7 +612,7 @@ async def async_main(action, **kwargs):
                 streaming=kwargs.get("stream", False),
                 show_prompts=kwargs.get("show_prompts", False),
                 show_stats=kwargs.get("show_stats", False),
-                silent_mode=use_silent_mode,
+                verbose=verbose_mode,
                 debug=debug_mode,
                 rag_documents=kwargs.get("index", []),
                 watch_directories=kwargs.get("watch", []),
@@ -1199,6 +1200,11 @@ def build_parser():
         action="store_true",
         help="Skip Lemonade server check (for CI/testing without Lemonade)",
     )
+    parent_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show detailed agent output (thoughts, goals, plans, tool results). Default is minimal output.",
+    )
 
     # Create subparsers for different commands
     subparsers = parser.add_subparsers(dest="action", help="Action to perform")
@@ -1447,9 +1453,6 @@ def build_parser():
         help="Minimal output, suppress progress indicators",
     )
     summarize_parser.add_argument(
-        "--verbose", action="store_true", help="Detailed output with debug information"
-    )
-    summarize_parser.add_argument(
         "--combined-prompt",
         action="store_true",
         help="Combine multiple styles into single LLM call (experimental - may reduce quality)",
@@ -1593,12 +1596,6 @@ def build_parser():
         help="MCP bridge port (default: 8765)",
     )
     jira_parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose output",
-    )
-    jira_parser.add_argument(
         "-d",
         "--debug",
         action="store_true",
@@ -1662,12 +1659,6 @@ def build_parser():
         "--directory",
         default=".",
         help="Directory to analyze/containerize (default: current directory)",
-    )
-    docker_parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose output",
     )
     docker_parser.add_argument(
         "--debug",
@@ -2268,11 +2259,6 @@ Examples:
         "--log-file",
         default="gaia.mcp.log",
         help="Log file path for background mode (default: gaia.mcp.log)",
-    )
-    mcp_start_parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging for all HTTP requests",
     )
     mcp_start_parser.add_argument(
         "--ctx-size",
@@ -4204,8 +4190,6 @@ def handle_jira_command(args):
 
         # Pass the arguments directly to the Jira app
         # The app expects certain arguments, so we need to ensure they're set
-        if not hasattr(args, "verbose"):
-            args.verbose = False
         if not hasattr(args, "debug"):
             args.debug = False
         if not hasattr(args, "model"):
@@ -4310,8 +4294,6 @@ def handle_docker_command(args):
 
         # Pass the arguments directly to the Docker app
         # The app expects certain arguments, so we need to ensure they're set
-        if not hasattr(args, "verbose"):
-            args.verbose = False
         if not hasattr(args, "debug"):
             args.debug = False
         if not hasattr(args, "model"):
@@ -4681,6 +4663,8 @@ def handle_blender_command(args):
         base_url = getattr(args, "base_url", None)
 
         # Create the BlenderAgent
+        debug_mode = getattr(args, "debug", False)
+        verbose_mode = getattr(args, "verbose", False) or debug_mode
         agent = BlenderAgent(
             mcp=mcp_client,
             model_id=args.model,
@@ -4690,6 +4674,8 @@ def handle_blender_command(args):
             streaming=args.stream,
             show_stats=args.show_stats,
             debug_prompts=args.debug_prompts,
+            verbose=verbose_mode,
+            debug=debug_mode,
         )
 
         # Run in interactive mode if specified
