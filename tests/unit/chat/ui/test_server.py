@@ -1447,11 +1447,12 @@ class TestValidateFilePath:
     def test_rejects_legacy_office_extensions(self):
         """Office formats without extractors must be rejected, not silently
         indexed as binary garbage. Regression test for the allowlist cleanup
-        that removed .doc/.docx/.ppt/.pptx/.xls — GAIA does not currently
-        ship python-docx/python-pptx/xlrd so these would produce garbage."""
+        that removed .doc/.docx/.ppt/.xls — GAIA does not currently
+        ship python-docx/xlrd so these would produce garbage.
+        NOTE: .pptx IS supported (python-pptx ships with GAIA)."""
         from pathlib import Path
 
-        for ext in [".doc", ".docx", ".ppt", ".pptx", ".xls"]:
+        for ext in [".doc", ".docx", ".ppt", ".xls"]:
             with pytest.raises(Exception) as exc_info:
                 _validate_file_path(Path(f"/home/user/file{ext}").resolve())
             assert exc_info.value.status_code == 400
