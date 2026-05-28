@@ -18,7 +18,7 @@
     {
       "name": "Agent UI frontend hot-reload (Vite dev)",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "src/gaia/apps/webui"],
+      "runtimeArgs": ["run", "--prefix", "src/gaia/apps/webui", "dev"],
       "port": 5174,
       "autoPort": true
     },
