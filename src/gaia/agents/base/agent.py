@@ -2996,7 +2996,7 @@ Do NOT wrap conversational replies in JSON.
             # nudge the model to retry with simpler args, and continue the loop.
             try:
                 parsed = self._parse_llm_response(response)
-            except (ValueError, NotImplementedError) as parse_exc:
+            except ValueError as parse_exc:
                 logger.warning(
                     "Tool-call parse failed (step %d): %s — recovering with retry prompt",
                     steps_taken,
@@ -3043,19 +3043,10 @@ Do NOT wrap conversational replies in JSON.
                             "rephrase or break the request into smaller pieces?"
                         )
                     break
-                # Push a synthetic assistant turn + recovery user message so the
-                # next LLM call has context. Don't include the raw envelope to
-                # keep noise out of the conversation history.
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": (
-                            "[I tried to call a tool but my arguments were "
-                            "malformed.]"
-                        ),
-                    }
+                assistant_msg = (
+                    "[I tried to call a tool but my arguments were malformed.]"
                 )
-                _recovery_content = (
+                user_msg = (
                     "Your last tool call had malformed arguments. "
                     "Please try again. Use ONLY the documented enum "
                     "values for each argument (e.g. 'brief', "
@@ -3063,24 +3054,29 @@ Do NOT wrap conversational replies in JSON.
                     "If you don't need a tool, answer in plain text."
                 )
                 if _last_image_path:
-                    _recovery_content += (
+                    user_msg += (
                         f"\n\nYour previous step generated an image at "
                         f"`{_last_image_path}`. If your next tool call "
                         "needs this path, copy that string VERBATIM — do "
                         "not retype it."
                     )
-                    # Marker so production-log triage can tell "model
-                    # received the canonical path and still mangled it"
-                    # from "model never saw the hint."  Pre-mortem note
-                    # in the plan flagged this gap.
                     logger.info(
                         "[PARSE-RECOVERY] injected canonical image_path=%s",
                         _last_image_path,
                     )
+                # Push a synthetic assistant turn + recovery user message so the
+                # next LLM call has context. Don't include the raw envelope to
+                # keep noise out of the conversation history.
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": assistant_msg,
+                    }
+                )
                 messages.append(
                     {
                         "role": "user",
-                        "content": _recovery_content,
+                        "content": user_msg,
                     }
                 )
                 steps_taken += 1
