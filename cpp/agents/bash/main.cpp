@@ -338,7 +338,42 @@ int main(int argc, char* argv[]) {
         repl.addCommand("/env", "Show environment info (shell, OS, tools)",
             [](const std::string& /*args*/, gaia::Agent& a) {
                 auto result = a.toolRegistry().executeTool("env_inspect", gaia::json::object());
-                a.console().prettyPrintJson(result, "Environment");
+                if (result.contains("error")) {
+                    a.console().printError(result["error"].get<std::string>());
+                } else {
+                    // Print formatted environment info directly to stdout
+                    // (printInfo is a no-op in CleanConsole, so use cout)
+                    if (result.contains("shell")) {
+                        std::cout << gaia::color::CYAN << "  Shell: "
+                                  << gaia::color::RESET << result["shell"].get<std::string>() << std::endl;
+                    }
+                    if (result.contains("os")) {
+                        std::string os = result["os"].get<std::string>();
+                        auto cr = os.find('\r');
+                        if (cr != std::string::npos) os = os.substr(0, cr);
+                        std::cout << gaia::color::CYAN << "  OS:    "
+                                  << gaia::color::RESET << os << std::endl;
+                    }
+                    if (result.contains("tools") && result["tools"].is_object()) {
+                        std::string installed, missing;
+                        for (auto& [name, avail] : result["tools"].items()) {
+                            if (avail.get<bool>()) {
+                                if (!installed.empty()) installed += ", ";
+                                installed += name;
+                            } else {
+                                if (!missing.empty()) missing += ", ";
+                                missing += name;
+                            }
+                        }
+                        if (!installed.empty()) {
+                            std::cout << gaia::color::GREEN << "  Tools: "
+                                      << gaia::color::RESET << installed << std::endl;
+                        }
+                        if (!missing.empty()) {
+                            a.console().printWarning("Not found: " + missing);
+                        }
+                    }
+                }
             });
 
         // Single query mode
