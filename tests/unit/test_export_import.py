@@ -21,6 +21,7 @@ from gaia.installer.export_import import (
     ImportResult,
     export_custom_agents,
     import_agent_bundle,
+    list_exportable_custom_agent_dirs,
 )
 
 # ---------------------------------------------------------------------------
@@ -117,6 +118,23 @@ def test_export_import_round_trip(tmp_path, fake_home, agents_root):
     assert (restored / "agent.py").is_file()
     assert (restored / "notes.txt").read_text() == "hello"
     assert (restored / "sub" / "helper.py").read_text() == "x = 1\n"
+
+
+def test_exportable_agent_dirs_skip_unreadable_entries(agents_root, monkeypatch):
+    valid_agent = _make_agent(agents_root, "valid-agent")
+    locked_agent = agents_root / "locked-agent"
+    locked_agent.mkdir()
+
+    original_is_file = Path.is_file
+
+    def flaky_is_file(self):
+        if self == locked_agent / "agent.py":
+            raise PermissionError("access denied")
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", flaky_is_file)
+
+    assert list_exportable_custom_agent_dirs() == [valid_agent]
 
 
 # ---------------------------------------------------------------------------
