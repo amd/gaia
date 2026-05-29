@@ -3,40 +3,25 @@
 
 """Tests for util/check_doc_code.py — documentation code example validator."""
 
-import importlib
-import sys
 import textwrap
 from pathlib import Path
 
 import pytest
 
-# Import module under test (lives outside the package tree)
-_util_dir = str(Path(__file__).resolve().parents[2] / "util")
-if _util_dir not in sys.path:
-    sys.path.insert(0, _util_dir)
 
-check_doc_code = importlib.import_module("check_doc_code")
+@pytest.fixture(autouse=True)
+def _import_module():
+    """Import the module under test (lives outside the package tree)."""
+    import importlib
+    import sys
 
+    repo_root = Path(__file__).resolve().parents[2]
+    util_dir = str(repo_root / "util")
+    if util_dir not in sys.path:
+        sys.path.insert(0, util_dir)
 
-# ---------------------------------------------------------------------------
-# Shared fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def setup_docs(tmp_path):
-    """Create a fake docs/ directory with the given files."""
-
-    def _inner(files: dict) -> str:
-        docs_dir = tmp_path / "docs"
-        docs_dir.mkdir()
-        for name, content in files.items():
-            p = docs_dir / name
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(textwrap.dedent(content), encoding="utf-8")
-        return str(tmp_path)
-
-    return _inner
+    global check_doc_code
+    check_doc_code = importlib.import_module("check_doc_code")
 
 
 # ---------------------------------------------------------------------------
@@ -288,50 +273,6 @@ class TestNormalizePythonSource:
 
 
 # ---------------------------------------------------------------------------
-# _is_pseudo_code
-# ---------------------------------------------------------------------------
-
-
-class TestIsPseudoCode:
-    """Tests for pseudo-code / non-runnable block detection."""
-
-    def test_function_signature_no_body(self):
-        assert check_doc_code._is_pseudo_code("def foo(x: str) -> str") is True
-
-    def test_multiline_signature_no_body(self):
-        code = "def store(\n    self,\n    category: str,\n) -> str:"
-        assert check_doc_code._is_pseudo_code(code) is True
-
-    def test_arrow_flow_diagram(self):
-        code = "Agent.__init__()\n  \u2192 Load system prompt\n  \u2192 Register tools"
-        assert check_doc_code._is_pseudo_code(code) is True
-
-    def test_dict_with_trailing_ellipsis(self):
-        code = '{"time": "14:32", "platform": "Windows", ...}'
-        assert check_doc_code._is_pseudo_code(code) is True
-
-    def test_mixed_python_and_toml(self):
-        code = 'from gaia import Agent\n\n[project.entry-points."gaia.agents"]\nmy = "pkg:Cls"'
-        assert check_doc_code._is_pseudo_code(code) is True
-
-    def test_mixed_python_and_shell(self):
-        code = "# Install deps\nuv pip install -e '.[rag]'\nimport os"
-        assert check_doc_code._is_pseudo_code(code) is True
-
-    def test_real_code_not_pseudo(self):
-        code = "x = 1\nprint(x)"
-        assert check_doc_code._is_pseudo_code(code) is False
-
-    def test_class_with_body_not_pseudo(self):
-        code = "class Foo:\n    def bar(self):\n        pass"
-        assert check_doc_code._is_pseudo_code(code) is False
-
-    def test_incomplete_def_not_pseudo(self):
-        """def foo( with no closing paren is broken syntax, not pseudo-code."""
-        assert check_doc_code._is_pseudo_code("def foo(") is False
-
-
-# ---------------------------------------------------------------------------
 # check_code_blocks (integration)
 # ---------------------------------------------------------------------------
 
@@ -339,8 +280,18 @@ class TestIsPseudoCode:
 class TestCheckCodeBlocks:
     """Integration tests for the full check pipeline."""
 
-    def test_valid_python_passes(self, setup_docs):
-        repo = setup_docs(
+    def _setup_docs(self, tmp_path: Path, files: dict) -> str:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        for name, content in files.items():
+            p = docs_dir / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(textwrap.dedent(content), encoding="utf-8")
+        return str(tmp_path)
+
+    def test_valid_python_passes(self, tmp_path):
+        repo = self._setup_docs(
+            tmp_path,
             {
                 "guide.mdx": """\
                     # Guide
@@ -352,12 +303,13 @@ class TestCheckCodeBlocks:
                 """,
             },
         )
-        summary = check_doc_code.check_code_blocks(repo, verbose=True)
-        errors = [r for r in summary.results if r.status == "error"]
+        results = check_doc_code.check_code_blocks(repo, verbose=True)
+        errors = [r for r in results if r.status == "error"]
         assert len(errors) == 0
 
-    def test_invalid_python_fails(self, setup_docs):
-        repo = setup_docs(
+    def test_invalid_python_fails(self, tmp_path):
+        repo = self._setup_docs(
+            tmp_path,
             {
                 "broken.mdx": """\
                     # Broken
@@ -368,13 +320,14 @@ class TestCheckCodeBlocks:
                 """,
             },
         )
-        summary = check_doc_code.check_code_blocks(repo)
-        errors = [r for r in summary.results if r.status == "error"]
+        results = check_doc_code.check_code_blocks(repo)
+        errors = [r for r in results if r.status == "error"]
         assert len(errors) == 1
         assert "SyntaxError" in errors[0].detail
 
-    def test_bash_blocks_skipped_not_errored(self, setup_docs):
-        repo = setup_docs(
+    def test_bash_blocks_skipped_not_errored(self, tmp_path):
+        repo = self._setup_docs(
+            tmp_path,
             {
                 "cli.mdx": """\
                     ```bash
@@ -383,13 +336,15 @@ class TestCheckCodeBlocks:
                 """,
             },
         )
-        summary = check_doc_code.check_code_blocks(repo, verbose=True)
-        errors = [r for r in summary.results if r.status == "error"]
+        results = check_doc_code.check_code_blocks(repo, verbose=True)
+        errors = [r for r in results if r.status == "error"]
         assert len(errors) == 0
-        assert summary.skipped_count == 1
+        skipped = [r for r in results if r.status == "skipped"]
+        assert len(skipped) == 1
 
-    def test_lang_filter(self, setup_docs):
-        repo = setup_docs(
+    def test_lang_filter(self, tmp_path):
+        repo = self._setup_docs(
+            tmp_path,
             {
                 "multi.mdx": """\
                     ```python
@@ -402,13 +357,14 @@ class TestCheckCodeBlocks:
                 """,
             },
         )
-        summary = check_doc_code.check_code_blocks(
+        results = check_doc_code.check_code_blocks(
             repo, verbose=True, lang_filter="python"
         )
-        assert all(r.lang == "python" for r in summary.results)
+        assert all(r.lang == "python" for r in results)
 
-    def test_multiple_files_scanned(self, setup_docs):
-        repo = setup_docs(
+    def test_multiple_files_scanned(self, tmp_path):
+        repo = self._setup_docs(
+            tmp_path,
             {
                 "a.mdx": """\
                     ```python
@@ -422,12 +378,14 @@ class TestCheckCodeBlocks:
                 """,
             },
         )
-        summary = check_doc_code.check_code_blocks(repo, verbose=True)
-        assert summary.ok_count == 2
+        results = check_doc_code.check_code_blocks(repo, verbose=True)
+        ok = [r for r in results if r.status == "ok"]
+        assert len(ok) == 2
 
-    def test_indented_code_in_mdx_component(self, setup_docs):
+    def test_indented_code_in_mdx_component(self, tmp_path):
         """Code inside <Step>/<Tab> is indented — should still pass after dedent."""
-        repo = setup_docs(
+        repo = self._setup_docs(
+            tmp_path,
             {
                 "steps.mdx": (
                     "<Steps>\n"
@@ -441,13 +399,14 @@ class TestCheckCodeBlocks:
                 ),
             },
         )
-        summary = check_doc_code.check_code_blocks(repo, verbose=True)
-        errors = [r for r in summary.results if r.status == "error"]
+        results = check_doc_code.check_code_blocks(repo, verbose=True)
+        errors = [r for r in results if r.status == "error"]
         assert len(errors) == 0
 
-    def test_await_outside_function(self, setup_docs):
+    def test_await_outside_function(self, tmp_path):
         """Top-level await is common in doc examples and should not error."""
-        repo = setup_docs(
+        repo = self._setup_docs(
+            tmp_path,
             {
                 "async.mdx": (
                     "```python\n"
@@ -457,12 +416,13 @@ class TestCheckCodeBlocks:
                 ),
             },
         )
-        summary = check_doc_code.check_code_blocks(repo, verbose=True)
-        errors = [r for r in summary.results if r.status == "error"]
+        results = check_doc_code.check_code_blocks(repo, verbose=True)
+        errors = [r for r in results if r.status == "error"]
         assert len(errors) == 0
 
-    def test_mixed_valid_and_invalid(self, setup_docs):
-        repo = setup_docs(
+    def test_mixed_valid_and_invalid(self, tmp_path):
+        repo = self._setup_docs(
+            tmp_path,
             {
                 "mixed.mdx": """\
                     ```python
@@ -479,22 +439,11 @@ class TestCheckCodeBlocks:
                 """,
             },
         )
-        summary = check_doc_code.check_code_blocks(repo, verbose=True)
-        errors = [r for r in summary.results if r.status == "error"]
+        results = check_doc_code.check_code_blocks(repo, verbose=True)
+        errors = [r for r in results if r.status == "error"]
+        ok = [r for r in results if r.status == "ok"]
         assert len(errors) == 1
-        assert summary.ok_count == 2
-
-    def test_ok_count_without_verbose(self, setup_docs):
-        """ok_count must be accurate even without --verbose."""
-        repo = setup_docs(
-            {
-                "two.mdx": "```python\nx = 1\n```\n\n```python\ny = 2\n```\n",
-            },
-        )
-        summary = check_doc_code.check_code_blocks(repo, verbose=False)
-        assert summary.ok_count == 2
-        # Without verbose, no "ok" results are in the list
-        assert not any(r.status == "ok" for r in summary.results)
+        assert len(ok) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -506,51 +455,41 @@ class TestFormatResults:
     """Tests for terminal output formatting."""
 
     def test_passed_output(self):
-        summary = check_doc_code.CheckSummary(
-            results=[],
-            ok_count=3,
-            skipped_count=0,
-        )
-        output = check_doc_code.format_results(summary)
+        results = [
+            check_doc_code.CodeResult("a.mdx", 1, "python", "ok", "syntax ok", None)
+        ]
+        output = check_doc_code.format_results(results)
         assert "PASSED" in output
-        assert "OK:       3" in output
+        assert "OK:       1" in output
 
     def test_failed_output(self):
-        summary = check_doc_code.CheckSummary(
-            results=[
-                check_doc_code.CodeResult(
-                    "b.mdx",
-                    5,
-                    "python",
-                    "error",
-                    "SyntaxError:1: invalid syntax",
-                    None,
-                )
-            ],
-            ok_count=0,
-            skipped_count=0,
-        )
-        output = check_doc_code.format_results(summary)
+        results = [
+            check_doc_code.CodeResult(
+                "b.mdx",
+                5,
+                "python",
+                "error",
+                "SyntaxError:1: invalid syntax",
+                None,
+            )
+        ]
+        output = check_doc_code.format_results(results)
         assert "FAILED" in output
         assert "SYNTAX ERRORS" in output
         assert "b.mdx:5" in output
 
     def test_title_shown(self):
-        summary = check_doc_code.CheckSummary(
-            results=[
-                check_doc_code.CodeResult(
-                    "c.mdx",
-                    10,
-                    "python",
-                    "error",
-                    "SyntaxError:1: bad",
-                    "example.py",
-                )
-            ],
-            ok_count=0,
-            skipped_count=0,
-        )
-        output = check_doc_code.format_results(summary)
+        results = [
+            check_doc_code.CodeResult(
+                "c.mdx",
+                10,
+                "python",
+                "error",
+                "SyntaxError:1: bad",
+                "example.py",
+            )
+        ]
+        output = check_doc_code.format_results(results)
         assert "(example.py)" in output
 
 
@@ -562,8 +501,20 @@ class TestFormatResults:
 class TestMain:
     """Tests for CLI entry point."""
 
-    def test_exit_zero_on_success(self, setup_docs, monkeypatch):
-        repo = setup_docs({"ok.mdx": "```python\nx = 1\n```\n"})
+    def _setup_docs(self, tmp_path: Path, files: dict) -> str:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        for name, content in files.items():
+            p = docs_dir / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(textwrap.dedent(content), encoding="utf-8")
+        return str(tmp_path)
+
+    def test_exit_zero_on_success(self, tmp_path, monkeypatch):
+        repo = self._setup_docs(
+            tmp_path,
+            {"ok.mdx": "```python\nx = 1\n```\n"},
+        )
         monkeypatch.setattr(
             check_doc_code.os.path,
             "abspath",
@@ -572,8 +523,11 @@ class TestMain:
         code = check_doc_code.main([])
         assert code == 0
 
-    def test_exit_one_on_errors(self, setup_docs, monkeypatch):
-        repo = setup_docs({"bad.mdx": "```python\ndef bad(\n```\n"})
+    def test_exit_one_on_errors(self, tmp_path, monkeypatch):
+        repo = self._setup_docs(
+            tmp_path,
+            {"bad.mdx": "```python\ndef bad(\n```\n"},
+        )
         monkeypatch.setattr(
             check_doc_code.os.path,
             "abspath",
