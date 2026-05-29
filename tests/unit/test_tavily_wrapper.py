@@ -56,6 +56,25 @@ class FakeAsyncSDK:
         self.closed = True
 
 
+class FakeAsyncSDKClass:
+    """Stand-in for tavily.AsyncTavilyClient as the ``_SDK_CLASS``.
+
+    Unlike ``FakeAsyncSDK`` (injected ready-made), this is instantiated by the
+    wrapper itself via ``_SDK_CLASS(api_key=...)``, so it must accept the key.
+    """
+
+    def __init__(self, api_key=None):
+        self.api_key = api_key
+        self.search_calls = 0
+
+    async def search(self, **kwargs):
+        self.search_calls += 1
+        return {"results": [], "query": kwargs.get("query")}
+
+    async def aclose(self):
+        pass
+
+
 class FakeWeb:
     """Stand-in for WebClient providing the DuckDuckGo fallback."""
 
@@ -248,13 +267,46 @@ async def test_async_search_caches():
 
 
 async def test_async_unconfigured_falls_back_to_ddg(monkeypatch):
-    monkeypatch.setattr(tav, "_load_api_key", lambda: None)
+    async def no_key():
+        return None
+
+    monkeypatch.setattr(tav, "_load_api_key_async", no_key)
     web = FakeWeb()
     client = AsyncTavilyClient(db_path=":memory:", web_client=web)
     result = await client.search("anything")
     assert result["source"] == "duckduckgo"
     assert web.calls == 1
     client.close()
+
+
+async def test_async_configured_construction_in_loop_does_not_raise(monkeypatch):
+    """Regression: constructing the async client inside a running event loop with
+    a configured connector must not raise.
+
+    Pre-fix, ``__init__`` resolved the key synchronously via
+    ``get_credential_sync()``, which raises ``RuntimeError`` inside a running
+    loop. Resolution is now deferred to the async path on first use.
+    """
+    import gaia.connectors.handler as handler_mod
+    import gaia.connectors.mcp_server as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "is_mcp_server_configured", lambda _cid: True)
+
+    async def fake_get_credential(_connector_id, **_kwargs):
+        return {"env": {"TAVILY_API_KEY": "tvly-test"}}
+
+    monkeypatch.setattr(handler_mod, "get_credential", fake_get_credential)
+    monkeypatch.setattr(AsyncTavilyClient, "_SDK_CLASS", FakeAsyncSDKClass)
+
+    # Construction must not raise inside the loop...
+    client = AsyncTavilyClient(db_path=":memory:")
+    # ...and the key resolves on first use via the async path.
+    result = await client.search("q")
+    assert client.configured is True
+    assert result["query"] == "q"
+    assert isinstance(client._sdk, FakeAsyncSDKClass)
+    assert client._sdk.api_key == "tvly-test"
+    await client.aclose()
 
 
 def test_sync_context_manager_closes(fake_sdk):

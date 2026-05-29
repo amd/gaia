@@ -126,6 +126,26 @@ def _load_api_key() -> Optional[str]:
     return cred["env"][_API_KEY_ENV]
 
 
+async def _load_api_key_async() -> Optional[str]:
+    """Async counterpart to :func:`_load_api_key`.
+
+    Awaits ``get_credential`` instead of the sync wrapper, so it is safe to call
+    from inside a running event loop — where ``get_credential_sync`` raises. The
+    async client uses this so its constructor never blocks the loop.
+    """
+    try:
+        from gaia.connectors.handler import get_credential
+        from gaia.connectors.mcp_server import is_mcp_server_configured
+    except ImportError as e:
+        log.info("Connector subsystem unavailable (%s); using DuckDuckGo.", e)
+        return None
+
+    if not is_mcp_server_configured(_CONNECTOR_ID):
+        return None
+    cred = await get_credential(_CONNECTOR_ID)
+    return cred["env"][_API_KEY_ENV]
+
+
 class _TavilyBase(DatabaseMixin):
     """Shared cache, ledger, budget, and fallback logic for both clients.
 
@@ -151,15 +171,37 @@ class _TavilyBase(DatabaseMixin):
         self._budget = budget or BudgetConfig()
         self._cache_ttl = cache_ttl
         self._web_client = web_client
+        self._explicit_api_key = api_key
 
         # Resolution order: injected client (tests) → explicit key → connector
         # keyring. No key at all = unconfigured = DuckDuckGo fallback mode.
         if sdk_client is not None:
             self._sdk = sdk_client
             self._configured = True
+            self._key_resolved = True
             return
 
-        key = api_key if api_key is not None else _load_api_key()
+        self._sdk = None
+        self._configured = False
+        self._key_resolved = False
+        self._resolve_key_eagerly()
+
+    def _resolve_key_eagerly(self) -> None:
+        """Resolve the API key during construction.
+
+        The sync client does this safely. ``AsyncTavilyClient`` overrides it to
+        defer resolution to first use, because synchronous resolution calls
+        ``get_credential_sync()``, which raises inside a running event loop.
+        """
+        key = (
+            self._explicit_api_key
+            if self._explicit_api_key is not None
+            else _load_api_key()
+        )
+        self._apply_key(key)
+
+    def _apply_key(self, key: Optional[str]) -> None:
+        """Wire up the SDK client from a resolved key, or enter fallback mode."""
         if key is None:
             self._sdk = None
             self._configured = False
@@ -172,6 +214,7 @@ class _TavilyBase(DatabaseMixin):
         else:
             self._sdk = self._SDK_CLASS(api_key=key)
             self._configured = True
+        self._key_resolved = True
 
     @property
     def configured(self) -> bool:
@@ -228,7 +271,11 @@ class _TavilyBase(DatabaseMixin):
         if row is None:
             return None
         if time.time() - row["created_at"] > self._cache_ttl:
-            return None  # stale; treated as a miss and overwritten on re-fetch
+            # Stale: a miss, overwritten only on re-fetch of THIS key. Rows for
+            # queries never searched again are never pruned, so the cache file
+            # grows unbounded over time (disk creep only — results stay correct).
+            # Add a periodic ``DELETE ... WHERE created_at < cutoff`` sweep if it bites.
+            return None
         return json.loads(row["response"])
 
     def _record(
@@ -469,6 +516,25 @@ class AsyncTavilyClient(_TavilyBase):
 
     _SDK_CLASS = _SdkAsyncTavilyClient
 
+    def _resolve_key_eagerly(self) -> None:
+        # Defer: synchronous key resolution (get_credential_sync) raises inside a
+        # running event loop. Resolve lazily in _ensure_resolved() via await.
+        self._resolve_lock = asyncio.Lock()
+
+    async def _ensure_resolved(self) -> None:
+        """Resolve the API key on first use (idempotent, concurrency-safe)."""
+        if self._key_resolved:
+            return
+        async with self._resolve_lock:
+            if self._key_resolved:
+                return
+            key = (
+                self._explicit_api_key
+                if self._explicit_api_key is not None
+                else await _load_api_key_async()
+            )
+            self._apply_key(key)
+
     async def search(
         self,
         query: str,
@@ -477,6 +543,7 @@ class AsyncTavilyClient(_TavilyBase):
         max_results: int = 5,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        await self._ensure_resolved()
         if not self._configured:
             log.info(
                 "Tavily connector not configured; using DuckDuckGo for query=%r",
@@ -512,6 +579,7 @@ class AsyncTavilyClient(_TavilyBase):
         extract_depth: str = "basic",
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        await self._ensure_resolved()
         urls = [urls] if isinstance(urls, str) else list(urls)
         if not self._configured:
             raise TavilyConfigError(
@@ -549,6 +617,7 @@ class AsyncTavilyClient(_TavilyBase):
         self.close()
 
     async def __aenter__(self) -> "AsyncTavilyClient":
+        await self._ensure_resolved()
         return self
 
     async def __aexit__(self, *_: object) -> None:
