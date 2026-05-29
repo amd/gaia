@@ -67,4 +67,4 @@ def create_client(
     module = importlib.import_module(module_path)
     provider_class = getattr(module, class_name)
 
-    return provider_class(**kwargs)
+    return provider_class(**kwargs)  # type: ignore[no-any-return]
