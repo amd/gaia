@@ -936,6 +936,11 @@ class RAGSDK:
             total_slides = len(prs.slides)
             self.log.info(f"📊 Extracting text from {total_slides} slides...")
 
+            from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
+                extract_notes_from_slide,
+                extract_text_from_slide,
+            )
+
             # Initialize VLM client (auto-enabled if available)
             vlm = None
             vlm_available = False
@@ -946,8 +951,6 @@ class RAGSDK:
                 from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
                     count_images_in_slide,
                     extract_images_from_slide,
-                    extract_notes_from_slide,
-                    extract_text_from_slide,
                 )
 
                 vlm = VLMClient(
@@ -1007,8 +1010,8 @@ class RAGSDK:
                 if vlm_available:
                     try:
                         has_imgs, num_imgs = count_images_in_slide(slide)
-                    except Exception:  # pylint: disable=broad-except
-                        pass
+                    except Exception as e:  # pylint: disable=broad-except
+                        self.log.debug("count_images_in_slide failed on slide %d: %s", i, e)
 
                 # Step 4: Extract from images if present
                 image_texts = []
@@ -1060,8 +1063,8 @@ class RAGSDK:
             if vlm_available and vlm:
                 try:
                     vlm.cleanup()
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                except Exception as e:  # pylint: disable=broad-except
+                    self.log.debug("VLM cleanup failed: %s", e)
 
             extract_duration = time_module.time() - extract_start
 
