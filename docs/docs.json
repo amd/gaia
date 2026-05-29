@@ -63,6 +63,7 @@
                 "pages": [
                   "guides/index",
                   "guides/hardware-advisor",
+                  "guides/npu",
                   "guides/chat",
                   "guides/browse",
                   "guides/analyze",

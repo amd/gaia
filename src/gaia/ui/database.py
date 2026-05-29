@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
-    system_prompt TEXT
+    system_prompt TEXT,
+    device TEXT DEFAULT 'gpu'
 );
 
 -- Many-to-many: which docs are attached to which session
@@ -205,6 +206,24 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for sessions columns: %s", e)
 
+        # Add device column for multi-device support (issue #1220)
+        try:
+            sess_cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+            ]
+            if "device" not in sess_cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN device TEXT DEFAULT 'gpu'"
+                )
+                self._conn.execute(
+                    "UPDATE sessions SET device = 'gpu' WHERE device IS NULL"
+                )
+                self._conn.commit()
+                logger.info("Migrated sessions table: added device column")
+        except Exception as e:
+            logger.debug("Migration check for device column: %s", e)
+
     def close(self):
         """Close database connection."""
         if self._conn:
@@ -238,6 +257,7 @@ class ChatDatabase:
         document_ids: List[str] = None,
         private: bool = False,
         agent_type: str = None,
+        device: str = None,
     ) -> Dict[str, Any]:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
@@ -245,11 +265,12 @@ class ChatDatabase:
         model = model or SESSION_DEFAULT_MODEL
         title = title or "New Chat"
         agent_type = agent_type or "chat"
+        device = device or "gpu"
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private, agent_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private, agent_type, device)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     title,
@@ -259,6 +280,7 @@ class ChatDatabase:
                     system_prompt,
                     1 if private else 0,
                     agent_type,
+                    device,
                 ),
             )
 
@@ -336,8 +358,9 @@ class ChatDatabase:
         document_ids: list = None,
         private: bool = None,
         agent_type: str = None,
+        device: str = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title, system prompt, agent_type, private flag, and/or document_ids."""
+        """Update session title, system prompt, agent_type, device, private flag, and/or document_ids."""
         updates = []
         params = []
 
@@ -353,6 +376,9 @@ class ChatDatabase:
         if agent_type is not None:
             updates.append("agent_type = ?")
             params.append(agent_type)
+        if device is not None:
+            updates.append("device = ?")
+            params.append(device)
 
         updates.append("updated_at = ?")
         params.append(self._now())

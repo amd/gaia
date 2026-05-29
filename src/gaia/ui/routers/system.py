@@ -603,18 +603,26 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 except Exception:
                     pass
 
-                # Fetch GPU info (short timeout — supplementary info)
+                # Fetch GPU/NPU/device info (short timeout — supplementary info)
                 try:
                     sysinfo_resp = await client.get(
                         f"{base_url}/system-info", timeout=3.0, headers=_auth
                     )
                     if sysinfo_resp.status_code == 200:
                         devices = sysinfo_resp.json().get("devices", {})
+                        # Build detected_devices list for multi-device support
+                        # (#1220). CPU and GPU are always available — llamacpp
+                        # works on both via cpu/vulkan backends. NPU requires
+                        # explicit hardware detection.
+                        detected = ["cpu", "gpu"]
                         for key, dev in devices.items():
                             if "gpu" in key.lower() and isinstance(dev, dict):
                                 status.gpu_name = dev.get("name")
                                 status.gpu_vram_gb = dev.get("vram_gb")
-                                break
+                            if "npu" in key.lower() and isinstance(dev, dict):
+                                if dev.get("available"):
+                                    detected.append("npu")
+                        status.detected_devices = detected
                 except Exception:
                     pass
             else:
@@ -632,6 +640,15 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             break
     except Exception:
         status.lemonade_running = False
+
+    # Active profile from persistent config (#1220)
+    try:
+        from gaia.config import GaiaConfig
+
+        gaia_cfg = GaiaConfig.load()
+        status.active_profile = gaia_cfg.profile
+    except Exception:
+        pass  # Keep default "chat"
 
     # Disk space
     # Access shutil through gaia.ui.server so test patches on

@@ -13,6 +13,12 @@ interface ChatState {
     setAgents: (agents: AgentInfo[]) => void;
     setActiveAgentId: (id: string) => void;
 
+    // Device selection (CPU / GPU / NPU)
+    activeDevice: string;
+    setActiveDevice: (device: string) => void;
+    detectedDevices: string[];
+    setDetectedDevices: (devices: string[]) => void;
+
     // Sessions
     sessions: Session[];
     currentSessionId: string | null;
@@ -100,6 +106,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
         try { localStorage.setItem('gaia-active-agent-id', id); } catch { /* noop */ }
         set({ activeAgentId: id });
     },
+
+    // Device selection
+    activeDevice: (() => {
+        try { return localStorage.getItem('gaia-active-device') || 'gpu'; }
+        catch { return 'gpu'; }
+    })(),
+    setActiveDevice: (device) => {
+        try { localStorage.setItem('gaia-active-device', device); } catch { /* noop */ }
+        set({ activeDevice: device });
+    },
+    detectedDevices: ['gpu'],
+    setDetectedDevices: (devices) => set({ detectedDevices: devices }),
 
     // Sessions
     sessions: [],
