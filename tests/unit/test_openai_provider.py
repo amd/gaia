@@ -66,11 +66,12 @@ class TestOpenAIProviderInit:
         p = OpenAIProvider(api_key="sk-test", system_prompt="You are helpful.")
         assert p._system_prompt == "You are helpful."
 
-    def test_extra_kwargs_ignored(self, mock_openai_module):
+    def test_extra_kwargs_not_passed_to_openai_client(self, mock_openai_module):
         from gaia.llm.providers.openai_provider import OpenAIProvider
 
-        p = OpenAIProvider(api_key="sk-test", base_url="http://x", unknown_arg=True)
-        assert p._model == "gpt-4o"
+        mock_mod, _ = mock_openai_module
+        OpenAIProvider(api_key="sk-test", base_url="http://x", unknown_arg=True)
+        mock_mod.OpenAI.assert_called_once_with(api_key="sk-test")
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +154,11 @@ class TestChat:
         call_kwargs = client.chat.completions.create.call_args
         assert call_kwargs.kwargs["temperature"] == 0.5
         assert call_kwargs.kwargs["max_tokens"] == 100
+
+    def test_sdk_exception_propagates(self, provider, client):
+        client.chat.completions.create.side_effect = Exception("rate limited")
+        with pytest.raises(Exception, match="rate limited"):
+            provider.chat([{"role": "user", "content": "Hi"}])
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +250,15 @@ class TestGenerate:
         call_kwargs = client.chat.completions.create.call_args
         assert call_kwargs.kwargs["model"] == "gpt-3.5-turbo"
 
+    def test_generate_streaming(self, provider, client):
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = "streamed"
+        client.chat.completions.create.return_value = iter([chunk])
+
+        result = provider.generate("test", stream=True)
+        assert list(result) == ["streamed"]
+
 
 # ---------------------------------------------------------------------------
 # embed()
@@ -264,6 +279,8 @@ class TestEmbed:
 
         result = provider.embed(["hello", "world"])
         assert result == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+        call_kwargs = client.embeddings.create.call_args
+        assert call_kwargs.kwargs["input"] == ["hello", "world"]
 
     def test_embed_uses_default_model(self, provider, client):
         mock_response = MagicMock()

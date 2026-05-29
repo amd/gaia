@@ -176,12 +176,19 @@ class TestHasUnknowns:
         }
         assert router._has_unknowns(analysis) is True
 
-    def test_boundary_confidence_0_9(self, router):
+    def test_boundary_confidence_0_9_not_unknown(self, router):
         analysis = {
             "parameters": {"language": "python", "project_type": "api"},
             "confidence": 0.9,
         }
         assert router._has_unknowns(analysis) is False
+
+    def test_boundary_confidence_0_89_is_unknown(self, router):
+        analysis = {
+            "parameters": {"language": "python", "project_type": "api"},
+            "confidence": 0.89,
+        }
+        assert router._has_unknowns(analysis) is True
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +312,18 @@ class TestDefaultUnknownLanguage:
         assert result["parameters"]["language"] == "python"
         assert result["confidence"] == 0.9
 
+    def test_prints_info_when_defaulting(self, router):
+        with patch.object(router, "_get_console") as mock_get:
+            mock_console = MagicMock()
+            mock_get.return_value = mock_console
+            analysis = {
+                "parameters": {"language": "unknown", "project_type": "unknown"},
+                "confidence": 0.5,
+                "reasoning": "",
+            }
+            router._default_unknown_language_to_typescript(analysis)
+            mock_console.print_info.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # enforce_typescript_only
@@ -410,3 +429,75 @@ class TestProcessQueryAPIMode:
         mock_agent.process_query.return_value = "ok"
         result = router.process_query("Build something")
         assert result == "ok"
+
+
+# ---------------------------------------------------------------------------
+# process_query — CLI (interactive) mode
+# ---------------------------------------------------------------------------
+
+
+class TestProcessQueryCLIMode:
+    """process_query in CLI mode asks for clarification via input()."""
+
+    def test_cli_mode_asks_clarification_then_resolves(
+        self, _patch_create_client, mock_llm_client, _patch_code_agent
+    ):
+        from gaia.agents.routing.agent import RoutingAgent
+
+        router = RoutingAgent(api_mode=False)
+
+        # First call: low confidence → triggers clarification
+        # Second call (recursive): high confidence → resolves
+        mock_llm_client.generate.side_effect = [
+            json.dumps(
+                {
+                    "agent": "code",
+                    "parameters": {
+                        "language": "unknown",
+                        "project_type": "unknown",
+                    },
+                    "confidence": 0.3,
+                    "reasoning": "ambiguous",
+                }
+            ),
+            json.dumps(
+                {
+                    "agent": "code",
+                    "parameters": {
+                        "language": "typescript",
+                        "project_type": "fullstack",
+                    },
+                    "confidence": 0.95,
+                    "reasoning": "user clarified",
+                }
+            ),
+        ]
+
+        with patch("builtins.input", return_value="Next.js blog"):
+            agent = router.process_query("Build something", execute=False)
+
+        assert agent is _patch_code_agent.return_value
+
+    def test_cli_mode_empty_response_uses_defaults(
+        self, _patch_create_client, mock_llm_client, _patch_code_agent
+    ):
+        from gaia.agents.routing.agent import RoutingAgent
+
+        router = RoutingAgent(api_mode=False)
+
+        mock_llm_client.generate.return_value = json.dumps(
+            {
+                "agent": "code",
+                "parameters": {
+                    "language": "typescript",
+                    "project_type": "unknown",
+                },
+                "confidence": 0.4,
+                "reasoning": "unclear",
+            }
+        )
+
+        with patch("builtins.input", return_value=""):
+            agent = router.process_query("Build something", execute=False)
+
+        assert agent is _patch_code_agent.return_value
