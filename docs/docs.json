@@ -89,6 +89,7 @@
                   "connectors/index",
                   "connectors/google",
                   "connectors/github",
+                  "connectors/tavily",
                   "security/connections"
                 ]
               },
