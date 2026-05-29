@@ -13,11 +13,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Tool registry to store registered tools
-_TOOL_REGISTRY = {}
+_TOOL_REGISTRY: dict[str, dict] = {}
 
 
 def tool(
-    func: Callable = None,
+    func: Callable | None = None,
     *,
     atomic: bool = False,
     display_label: str | None = None,
