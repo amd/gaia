@@ -46,7 +46,7 @@ def get_processor_name() -> str:
                 r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
             ) as key:
                 name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
-            return name.strip()
+            return str(name).strip()
         except Exception:
             pass
 

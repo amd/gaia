@@ -667,9 +667,7 @@ class TestCodeAgentIntegration(unittest.TestCase):
             backup=True,
         )
         self.assertEqual(edit_result["status"], "success")
-        backup_files = [
-            f for f in os.listdir(self.test_dir) if ".bak" in f
-        ]
+        backup_files = [f for f in os.listdir(self.test_dir) if ".bak" in f]
         self.assertTrue(len(backup_files) > 0, "No backup file created")
 
         # Step 5: Validate the edited file

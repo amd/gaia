@@ -733,7 +733,7 @@ class ChatDatabase:
     # ── Document Status ────────────────────────────────────────────
 
     def update_document_status(
-        self, doc_id: str, status: str, chunk_count: int = None
+        self, doc_id: str, status: str, chunk_count: int | None = None
     ) -> bool:
         """Update a document's indexing status and optionally its chunk count.
 
@@ -824,7 +824,7 @@ class ChatDatabase:
 
     # ── Settings ──────────────────────────────────────────────────────
 
-    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+    def get_setting(self, key: str, default: str | None = None) -> Optional[str]:
         """Get a setting value by key."""
         with self._lock:
             row = self._conn.execute(
