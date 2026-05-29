@@ -147,6 +147,14 @@ Bash-specific commands:
 | Command | Description |
 |---|---|
 | `/run <cmd>` | Execute a bash command directly (bypass LLM) |
+| `/env` | Show shell environment info |
+
+<Warning>
+The following slash commands are planned but not yet available.
+</Warning>
+
+| Command | Description |
+|---|---|
 | `/lint [file]` | Run ShellCheck on a script |
 | `/test [file]` | Generate and run BATS tests |
 | `/review [file]` | Multi-pass code review |
@@ -172,6 +180,13 @@ Bash-specific commands:
 |---|---|---|
 | `bash_execute` | CONFIRM | Run bash commands with timeout and output capture |
 | `env_inspect` | ALLOW | Shell version, PATH, installed tools |
+
+<Warning>
+The following tools are planned but not yet available in this release.
+</Warning>
+
+| Tool | Policy | Description |
+|---|---|---|
 | `script_lint` | ALLOW | ShellCheck integration with structured diagnostics |
 | `script_test` | CONFIRM | BATS test runner in sandboxed temp directory |
 | `man_lookup` | ALLOW | Query man pages or `--help` output |

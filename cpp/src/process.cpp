@@ -109,12 +109,10 @@ std::map<std::string, std::string> setEnvVars(
     std::map<std::string, std::string> previous;
     for (const auto& kv : env) {
 #ifdef _WIN32
-        // Save previous value
-        char* oldVal = nullptr;
-        size_t oldLen = 0;
-        if (_dupenv_s(&oldVal, &oldLen, kv.first.c_str()) == 0 && oldVal) {
+        // Save previous value (use getenv — _dupenv_s is MSVC-only, unavailable in MinGW)
+        const char* oldVal = std::getenv(kv.first.c_str());
+        if (oldVal) {
             previous[kv.first] = std::string(oldVal);
-            free(oldVal);
         } else {
             previous[kv.first] = "";  // mark as absent
         }

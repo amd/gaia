@@ -55,10 +55,10 @@ private:
     static bool isToolAvailable(const std::string& toolName);
 
     /// Maximum output size before truncation (32 KB).
-    static constexpr size_t MAX_OUTPUT_BYTES = 32768;
+    static inline constexpr size_t MAX_OUTPUT_BYTES = 32768;
 
     /// Default command timeout in milliseconds.
-    static constexpr int DEFAULT_TIMEOUT_MS = 30000;
+    static inline constexpr int DEFAULT_TIMEOUT_MS = 30000;
 };
 
 } // namespace gaia

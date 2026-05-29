@@ -29,6 +29,7 @@ namespace gaia {
 class GAIA_API BashAgent : public Agent {
 public:
     explicit BashAgent(const AgentConfig& config = {});
+    ~BashAgent() override;
 
 protected:
     void registerTools() override;

@@ -11,6 +11,8 @@ BashAgent::BashAgent(const AgentConfig& config)
     init();
 }
 
+BashAgent::~BashAgent() = default;
+
 void BashAgent::registerTools() {
     FileIOTools::registerAll(toolRegistry());
     GitTools::registerAll(toolRegistry());
