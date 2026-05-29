@@ -191,7 +191,8 @@ int main(int argc, char* argv[]) {
 
             gaia::AgentConfig apiConfig;
             apiConfig.debug = debug;
-            apiConfig.contextSize = 32768;  // bash agent needs 32K for system prompt + tools
+            apiConfig.contextSize = 32768;
+            apiConfig.modelId = "Gemma-4-E4B-it-GGUF";
             if (!modelOverride.empty()) apiConfig.modelId = modelOverride;
 
             gaia::BashAgent apiAgent(apiConfig);
@@ -211,6 +212,7 @@ int main(int argc, char* argv[]) {
             mcpConfig.debug = debug;
             mcpConfig.silentMode = true;  // no console output on stdout
             mcpConfig.contextSize = 32768;
+            mcpConfig.modelId = "Gemma-4-E4B-it-GGUF";
             if (!modelOverride.empty()) mcpConfig.modelId = modelOverride;
 
             gaia::BashAgent mcpAgent(mcpConfig);
@@ -263,7 +265,7 @@ int main(int argc, char* argv[]) {
         gaia::AgentConfig config;
         config.debug = debug;
         config.contextSize = 32768;  // bash agent needs 32K for system prompt + tools
-        config.modelId = "gemma-4-e4b";
+        config.modelId = "Gemma-4-E4B-it-GGUF";
 
         if (!modelOverride.empty()) {
             config.modelId = modelOverride;
