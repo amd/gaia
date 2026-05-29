@@ -12,7 +12,7 @@ Requires ATLASSIAN_SITE_URL, ATLASSIAN_API_KEY, ATLASSIAN_USER_EMAIL env vars.
 
 Usage:
     python scripts/jira_smoke.py                          # all tests
-    python scripts/jira_smoke.py --test test_basic_fetch   # one test
+    python scripts/jira_smoke.py --test test_basic_fetch_queries  # one test
     python scripts/jira_smoke.py --debug                   # debug logging
     python scripts/jira_smoke.py --show-prompts            # show LLM prompts
     python scripts/jira_smoke.py --interactive             # menu selection
@@ -2986,7 +2986,7 @@ class JiraIntegrationTests:
                             break
 
             for method in sorted(failed_methods):
-                print(f"  python tests/test_jira.py --test {method}")
+                print(f"  python scripts/jira_smoke.py --test {method}")
 
         # Detailed results
         print(f"\n📋 DETAILED RESULTS:")
