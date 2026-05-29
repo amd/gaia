@@ -13,8 +13,8 @@ import os
 import platform
 import shutil
 import sys
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Callable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
@@ -408,7 +408,9 @@ class PathValidator:
 
             while True:
                 response = (
-                    input("Allow this access? [y]es / [n]o / [a]lways: ").lower().strip()
+                    input("Allow this access? [y]es / [n]o / [a]lways: ")
+                    .lower()
+                    .strip()
                 )
 
                 if response in ["y", "yes"]:

@@ -406,6 +406,7 @@ class AgentConsole(OutputHandler):
         self.file_preview_filename = ""
         self.file_preview_max_lines = 15
         self._paused_preview = False  # Track if preview was paused for progress
+        self._last_progress_message = ""  # Last message passed to start_progress
         self._last_preview_update_time = 0  # Throttle preview updates
         self._preview_update_interval = 0.25  # Minimum seconds between updates
 
