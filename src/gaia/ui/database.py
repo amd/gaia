@@ -361,8 +361,8 @@ class ChatDatabase:
         device: str | None = None,
     ) -> Optional[Dict[str, Any]]:
         """Update session title, system prompt, agent_type, device, private flag, and/or document_ids."""
-        updates = []
-        params = []
+        updates: list[str] = []
+        params: list[Any] = []
 
         if title is not None:
             updates.append("title = ?")
@@ -432,11 +432,11 @@ class ChatDatabase:
         session_id: str,
         role: str,
         content: str,
-        rag_sources: List[Dict] = None,
-        agent_steps: List[Dict] = None,
-        tokens_prompt: int = None,
-        tokens_completion: int = None,
-        inference_stats: Dict = None,
+        rag_sources: List[Dict] | None = None,
+        agent_steps: List[Dict] | None = None,
+        tokens_prompt: int | None = None,
+        tokens_completion: int | None = None,
+        inference_stats: Dict | None = None,
     ) -> int:
         """Add a message to a session. Returns message ID."""
         sources_json = json.dumps(rag_sources) if rag_sources else None
@@ -469,7 +469,7 @@ class ChatDatabase:
             )
             msg_id = cursor.lastrowid
 
-        return msg_id
+        return msg_id or 0
 
     def get_messages(
         self, session_id: str, limit: int = 100, offset: int = 0
@@ -566,7 +566,7 @@ class ChatDatabase:
                 "SELECT COUNT(*) as cnt FROM messages WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
-            return row["cnt"]
+            return int(row["cnt"])
 
     # ── Documents ───────────────────────────────────────────────────────
 
@@ -578,7 +578,7 @@ class ChatDatabase:
         file_size: int = 0,
         chunk_count: int = 0,
         file_mtime: Optional[float] = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Add a document to the library. Returns existing doc if hash matches.
 
         Uses a single lock acquisition for the check-then-insert pattern
