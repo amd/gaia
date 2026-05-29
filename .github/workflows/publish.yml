@@ -9,6 +9,7 @@
 #   validate → build (pypi + npm + desktop installers, parallel)
 #     → approve (single manual gate)
 #       → publish (pypi + npm, parallel)
+#         → post-publish smoke test (PyPI install verification)
 #         → github release (sigstore + desktop installers)
 #
 # Environment setup (one-time, in GitHub repo settings):
@@ -396,14 +397,74 @@ jobs:
           echo "Install with:"
           echo "  npm install -g @amd-gaia/agent-ui@$TAG_VERSION"
 
+  # ── Post-publish: smoke-test the PyPI package ───────────────────────
+
+  post-publish-smoke:
+    name: Post-Publish Smoke Test
+    needs: [validate, publish-pypi]
+    if: needs.publish-pypi.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install from PyPI (with retry for propagation delay)
+        env:
+          TAG_VERSION: ${{ needs.validate.outputs.tag_version }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            echo "Attempt $attempt: pip install amd-gaia==$TAG_VERSION"
+            if pip install --no-cache-dir "amd-gaia==$TAG_VERSION"; then
+              echo "Installed amd-gaia==$TAG_VERSION successfully"
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "PyPI package not available yet, waiting 30s..."
+              sleep 30
+            fi
+          done
+          echo "ERROR: Failed to install amd-gaia==$TAG_VERSION after 5 attempts"
+          exit 1
+
+      - name: Verify gaia --version
+        env:
+          TAG_VERSION: ${{ needs.validate.outputs.tag_version }}
+        run: |
+          VERSION_OUTPUT=$(gaia --version)
+          echo "gaia --version: $VERSION_OUTPUT"
+          if ! echo "$VERSION_OUTPUT" | grep -qF "$TAG_VERSION"; then
+            echo "ERROR: version output does not contain $TAG_VERSION"
+            exit 1
+          fi
+
+      - name: Verify CLI entry points
+        run: |
+          gaia --help
+          gaia-code --help
+          gaia-mcp --help
+          gaia-emr --help
+
+      - name: Verify Python import
+        env:
+          TAG_VERSION: ${{ needs.validate.outputs.tag_version }}
+        run: |
+          IMPORT_VERSION=$(python -c "from importlib.metadata import version; print(version('amd-gaia'))")
+          echo "amd-gaia version: $IMPORT_VERSION"
+          if [ "$IMPORT_VERSION" != "$TAG_VERSION" ]; then
+            echo "ERROR: installed version ($IMPORT_VERSION) != tag ($TAG_VERSION)"
+            exit 1
+          fi
+
   # ── Stage 5: GitHub Release ─────────────────────────────────────────
 
   github-release:
     name: GitHub Release
-    needs: [validate, publish-pypi, publish-npm, build-desktop-installers]
+    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers]
     if: >-
       !cancelled() &&
-      needs.publish-pypi.result == 'success' &&
+      needs.post-publish-smoke.result == 'success' &&
       needs.publish-npm.result == 'success' &&
       needs.build-desktop-installers.result == 'success'
     runs-on: ubuntu-latest

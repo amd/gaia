@@ -597,6 +597,65 @@ async def async_main(action, **kwargs):
             debug_mode = kwargs.get("debug", False)
             use_silent_mode = not debug_mode  # Hide processing steps unless debugging
 
+            # Resolve device to model_id when --device is set and --model is not.
+            # GPU is the default when no --device is specified.
+            # Fallback policy:
+            #   - Explicit --device: fail loudly if unavailable (no fallback)
+            #   - Default (no --device): GPU default, fallback to CPU with warning
+            explicit_model = kwargs.get("model", None)
+            device = kwargs.get("device", None)
+            device_was_explicit = device is not None
+            effective_device = device or "gpu"
+
+            # Check device availability when Lemonade is reachable
+            if not explicit_model:
+                from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+                try:
+                    _dev_client = LemonadeClient(verbose=False)
+                    _sysinfo = _dev_client.get_system_info()
+                    _devices = _sysinfo.get("devices", {})
+
+                    if effective_device == "npu":
+                        npu_info = _devices.get("amd_npu", {})
+                        if not npu_info.get("available"):
+                            if device_was_explicit:
+                                print(
+                                    "❌ NPU not available on this system. "
+                                    "Requires Ryzen AI 300/400/Max (XDNA2).",
+                                    file=sys.stderr,
+                                )
+                                sys.exit(1)
+                            effective_device = "gpu"
+                    elif effective_device == "gpu":
+                        has_gpu = any(
+                            "gpu" in k.lower()
+                            and isinstance(v, dict)
+                            and v.get("available")
+                            for k, v in _devices.items()
+                        )
+                        if not has_gpu and not device_was_explicit:
+                            effective_device = "cpu"
+                except Exception:
+                    pass  # Lemonade not running yet; proceed with requested device
+
+                for dc in DEFAULT_DEVICE_CONFIGS:
+                    if dc.device == effective_device:
+                        explicit_model = dc.model
+                        break
+
+            # Always announce which device the agent will run on.
+            device_labels = {"cpu": "CPU", "gpu": "GPU", "npu": "NPU (Ryzen AI)"}
+            device_label = device_labels.get(effective_device, effective_device.upper())
+            print(f"🖥️  Device: {device_label}  |  Model: {explicit_model or 'auto'}")
+            if effective_device == "cpu":
+                print(
+                    "   ⚠️  Running on CPU — expect significantly slower response "
+                    "times. Use 'gaia init' to set up GPU acceleration."
+                )
+            if effective_device == "npu":
+                print("   ℹ️  NPU mode requires: gaia init --profile npu")
+
             # Create configuration with CLI values
             config = ChatAgentConfig(
                 use_claude=kwargs.get("use_claude", False),
@@ -606,7 +665,7 @@ async def async_main(action, **kwargs):
                     "base_url",
                     os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
                 ),
-                model_id=kwargs.get("model", None),
+                model_id=explicit_model,
                 max_steps=kwargs.get("max_steps", 100),
                 streaming=kwargs.get("stream", False),
                 show_prompts=kwargs.get("show_prompts", False),
@@ -1220,6 +1279,12 @@ def build_parser():
         default=512,
         help="Maximum number of tokens to generate (default: 512)",
     )
+    prompt_parser.add_argument(
+        "--device",
+        choices=["cpu", "gpu", "npu"],
+        default=None,
+        help="Inference device: cpu, gpu (default), or npu (Ryzen AI)",
+    )
 
     chat_parser = subparsers.add_parser(
         "chat",
@@ -1238,6 +1303,13 @@ def build_parser():
         "--show-prompts", action="store_true", help="Display prompts sent to LLM"
     )
     chat_parser.add_argument("--debug", action="store_true", help="Enable debug output")
+    chat_parser.add_argument(
+        "--device",
+        choices=["cpu", "gpu", "npu"],
+        default=None,
+        help="Inference device: cpu, gpu (default), or npu (Ryzen AI). "
+        "Selects the model and backend for this agent session.",
+    )
 
     # RAG configuration
     chat_parser.add_argument(
@@ -2175,6 +2247,14 @@ Examples:
         help="Output format for results (default: json+markdown as today). "
         "'junit' writes a JUnit XML file for CI integration.",
     )
+    agent_eval_parser.add_argument(
+        "--device",
+        choices=["cpu", "gpu", "npu"],
+        default=None,
+        help="Inference device for eval scenarios: cpu, gpu (default), or npu. "
+        "Selects the model and backend from the agent's device_configs. "
+        "Results are tagged with the device for cross-device comparison.",
+    )
 
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
@@ -2539,8 +2619,8 @@ Examples:
         "--profile",
         "-p",
         default="chat",
-        choices=["minimal", "sd", "chat", "code", "rag", "mcp", "vlm", "all"],
-        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, mcp, vlm (vision), all (default: chat)",
+        choices=["minimal", "sd", "chat", "code", "rag", "mcp", "vlm", "npu", "all"],
+        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, mcp, vlm (vision), npu (Ryzen AI NPU), all (default: chat)",
     )
     init_parser.add_argument(
         "--minimal",
@@ -3753,9 +3833,25 @@ Let me know your answer!
                     print(f"[ITER] Iteration {iter_idx + 1}/{iterations}")
                     print(f"{'=' * 60}")
 
+                # Resolve --device to model when --model not explicit
+                eval_model = args.model
+                eval_device = getattr(args, "device", None)
+                if eval_device and not eval_model:
+                    from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+                    for dc in DEFAULT_DEVICE_CONFIGS:
+                        if dc.device == eval_device:
+                            eval_model = dc.model
+                            break
+                    device_labels = {"cpu": "CPU", "gpu": "GPU", "npu": "NPU"}
+                    print(
+                        f"🖥️  Eval device: {device_labels.get(eval_device, eval_device)}  |  "
+                        f"Model: {eval_model}"
+                    )
+
                 runner = AgentEvalRunner(
                     backend_url=args.backend,
-                    model=args.model,
+                    model=eval_model,
                     budget_per_scenario=args.budget,
                     timeout_per_scenario=args.timeout,
                     agent_type=getattr(args, "agent_type", None),

@@ -410,8 +410,11 @@ class PathValidator:
             Tuple of (is_blocked, reason). If blocked, reason explains why.
         """
         try:
-            real_path = Path(os.path.realpath(path)).resolve()
-            real_path_str = str(real_path)
+            # Use os.path.realpath exclusively for symlink resolution — do NOT
+            # chain Path.resolve(), which re-resolves on Python <3.12 via a
+            # separate code path and can disagree with realpath.
+            real_path_str = os.path.realpath(path)
+            real_path = Path(real_path_str)
             # Apply macOS /private normalization so /etc, /var/run, etc. match
             # the BLOCKED_DIRECTORIES entries (they're stored unprefixed).
             norm_path = os.path.normpath(_normalize_macos_symlinks(real_path_str))

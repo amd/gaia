@@ -9,6 +9,7 @@ Deterministic checks — no LLM calls needed.
 import ast
 import json
 from pathlib import Path
+from typing import Optional
 
 GAIA_ROOT = Path(__file__).parent.parent.parent.parent  # src/gaia/eval/ -> repo root
 
@@ -41,7 +42,7 @@ def audit_chat_helpers() -> dict:
     return constants
 
 
-def audit_agent_persistence(chat_helpers_path: Path = None) -> str:
+def audit_agent_persistence(chat_helpers_path: Optional[Path] = None) -> str:
     """Check if ChatAgent is recreated per-request or persisted.
 
     ChatAgent is instantiated in _chat_helpers.py (inside async request handlers),
@@ -59,7 +60,7 @@ def audit_agent_persistence(chat_helpers_path: Path = None) -> str:
     return "unknown"
 
 
-def audit_tool_results_in_history(chat_helpers_path: Path = None) -> bool:
+def audit_tool_results_in_history(chat_helpers_path: Optional[Path] = None) -> bool:
     """Check if tool results are included in conversation history.
 
     Looks for agent_steps being merged into the messages list passed to the LLM,

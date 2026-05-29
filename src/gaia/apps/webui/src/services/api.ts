@@ -410,6 +410,7 @@ export function sendMessageStream(
     onDone?: (event: StreamEvent) => void,
     onError?: (error: Error) => void,
     agentType?: string,
+    device?: string,
 ): AbortController {
     // Support both old 3-arg style and new callbacks style
     let callbacks: StreamCallbacks;
@@ -440,6 +441,7 @@ export function sendMessageStream(
             message,
             stream: true,
             ...(agentType ? { agent_type: agentType } : {}),
+            ...(device ? { device } : {}),
         }),
         signal: controller.signal,
     })

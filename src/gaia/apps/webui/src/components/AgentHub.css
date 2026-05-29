@@ -218,6 +218,62 @@
     opacity: 0.7;
 }
 
+/* ── Device selector row ────────────────────────────────────────────────── */
+
+.agent-hub-card-device {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 12px;
+}
+
+.agent-hub-device-select {
+    padding: 3px 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 200ms ease;
+}
+
+.agent-hub-device-select:hover {
+    border-color: var(--text-secondary);
+}
+
+.agent-hub-device-select:focus {
+    outline: none;
+    border-color: var(--amd-red);
+}
+
+.agent-hub-device-label {
+    padding: 3px 8px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 11px;
+    letter-spacing: 0.03em;
+}
+
+.agent-hub-device-verified {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+}
+
+.agent-hub-device-verified.verified {
+    color: var(--accent-green, #22c55e);
+}
+
+.agent-hub-device-verified.unverified {
+    color: var(--accent-gold);
+}
+
 /* Conversation starter preview */
 .agent-hub-card-starter {
     font-size: 12px;

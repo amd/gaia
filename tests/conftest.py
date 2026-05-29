@@ -18,6 +18,7 @@ Current fixtures:
 - in_memory_keyring: Session-scoped fixture installing an in-memory keyring backend
   (used by tests/unit/connectors/ to avoid SecretService prerequisite on Linux CI)
 - ui_api_client: Function-scoped TestClient against gaia.ui.server.create_app()
+- mock_lemonade_client: Shared mock for LemonadeClient (requires pytest-mock)
 
 Current options:
 - --hybrid: Run tests with hybrid configuration (cloud + local models)
@@ -79,6 +80,12 @@ def require_lemonade(lemonade_available):
     """
     if not lemonade_available:
         pytest.skip("Lemonade server not available - skipping integration test")
+
+
+@pytest.fixture
+def mock_lemonade_client(mocker):
+    """Shared mock for LemonadeClient — avoids duplicating patch targets across test files."""
+    return mocker.patch("gaia.llm.lemonade_client.LemonadeClient")
 
 
 @pytest.fixture(scope="function")

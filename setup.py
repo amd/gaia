@@ -184,6 +184,8 @@ setup(
             "pytest-benchmark",
             "pytest-mock",
             "pytest-asyncio",
+            "pytest-xdist",
+            "pytest-rerunfailures",
             "pyfakefs",
             "memory_profiler",
             "matplotlib",

@@ -94,17 +94,7 @@ jobs:
 
           # Run with pytest for better output formatting
           python -m pytest tests/test_code_agent.py::TestCodeAgent -v --tb=short \
-            -k "not workflow and not integration and not process_query" \
-            || true
-
-          # Store the result
-          UNIT_TEST_EXIT=$?
-
-          if [ $UNIT_TEST_EXIT -eq 0 ]; then
-            echo "[SUCCESS] Unit tests passed"
-          else
-            echo "[WARNING] Some unit tests failed (non-blocking for now)"
-          fi
+            -k "not workflow and not integration and not process_query"
 
       - name: Run Code Agent Integration Tests
         run: |
@@ -116,19 +106,13 @@ jobs:
           echo ""
 
           # Run integration tests
-          python -m pytest tests/test_code_agent.py::TestCodeAgentIntegration -v --tb=short \
-            || true
-
-          # Store the result
-          INTEGRATION_TEST_EXIT=$?
-
-          if [ $INTEGRATION_TEST_EXIT -eq 0 ]; then
-            echo "[SUCCESS] Integration tests passed"
-          else
-            echo "[WARNING] Some integration tests failed (non-blocking for now)"
-          fi
+          python -m pytest tests/test_code_agent.py::TestCodeAgentIntegration -v --tb=short
 
       - name: Run Code Agent Workflow Tests
+        # Workflow tests invoke process_query which requires a running LLM.
+        # No Lemonade server in this CI job — failures are expected and surfaced
+        # as a warning annotation rather than blocking the job.
+        continue-on-error: true
         run: |
           echo ""
           echo "================================================================"
@@ -139,19 +123,7 @@ jobs:
 
           # Run workflow tests with timeout
           timeout 300 python -m pytest tests/test_code_agent.py -v --tb=short \
-            -k "workflow or process_query or complete_workflow" \
-            || true
-
-          # Store the result
-          WORKFLOW_TEST_EXIT=$?
-
-          if [ $WORKFLOW_TEST_EXIT -eq 0 ]; then
-            echo "[SUCCESS] Workflow tests passed"
-          elif [ $WORKFLOW_TEST_EXIT -eq 124 ]; then
-            echo "[WARNING] Workflow tests timed out (5 min limit)"
-          else
-            echo "[WARNING] Some workflow tests failed (non-blocking for now)"
-          fi
+            -k "workflow or process_query or complete_workflow"
 
       - name: Test Summary
         if: always()
@@ -174,7 +146,4 @@ jobs:
           echo "  - Pylint and Black integration"
           echo "  - Error recovery mechanisms"
           echo "  - Complete workflow simulations"
-          echo "================================================================"
-          echo ""
-          echo "Note: Tests are currently non-blocking to allow for gradual fixes"
           echo "================================================================"

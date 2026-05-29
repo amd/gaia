@@ -2,55 +2,24 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Integration Test Suite for GAIA Jira Agent.
+Manual smoke-test script for the GAIA Jira Agent.
 
-This test suite validates all Jira agent functionality with REAL API calls:
-- Natural language query processing
-- JQL generation and execution
-- Issue creation, search, and updates
-- Multi-criteria queries
-- Error handling and recovery
-- Base agent framework integration
+NOT a pytest test suite — this file uses its own argparse CLI and makes REAL
+Jira API calls (no mocks). It was moved out of tests/ so that ``pytest
+--collect-only`` no longer picks it up with 0 items (see issue #877 Part B).
 
-NO MOCKS - All tests use real Jira API calls.
-Requires ATLASSIAN_SITE_URL, ATLASSIAN_API_KEY, ATLASSIAN_USER_EMAIL environment variables.
+Requires ATLASSIAN_SITE_URL, ATLASSIAN_API_KEY, ATLASSIAN_USER_EMAIL env vars.
 
 Usage:
-    # Run all tests
-    python tests/test_jira.py
-
-    # Run specific test
-    python tests/test_jira.py --test test_basic_fetch_queries
-
-    # Enable debug mode (debug logging, does NOT include prompt display)
-    python tests/test_jira.py --debug
-
-    # Show prompts sent to LLM (separate from debug mode)
-    python tests/test_jira.py --show-prompts
-
-    # Both debug and prompts
-    python tests/test_jira.py --debug --show-prompts
-
-    # Interactive mode - select tests from menu
-    python tests/test_jira.py --interactive
-
-    # Step mode - pause after each test
-    python tests/test_jira.py --step
-
-    # Export results to CSV
-    python tests/test_jira.py --csv results.csv
-
-    # Use Claude API instead of local LLM
-    python tests/test_jira.py --use-claude
-
-    # Use ChatGPT/OpenAI API
-    python tests/test_jira.py --use-chatgpt
-
-    # Use local LLM (default behavior - no flag needed)
-    python tests/test_jira.py
-
-    # Combine flags
-    python tests/test_jira.py --show-prompts --step --csv --use-claude
+    python scripts/jira_smoke.py                          # all tests
+    python scripts/jira_smoke.py --test test_basic_fetch_queries  # one test
+    python scripts/jira_smoke.py --debug                   # debug logging
+    python scripts/jira_smoke.py --show-prompts            # show LLM prompts
+    python scripts/jira_smoke.py --interactive             # menu selection
+    python scripts/jira_smoke.py --step                    # pause between tests
+    python scripts/jira_smoke.py --csv results.csv         # export CSV
+    python scripts/jira_smoke.py --use-claude              # Claude API backend
+    python scripts/jira_smoke.py --use-chatgpt             # OpenAI API backend
 """
 
 import asyncio
@@ -3017,7 +2986,7 @@ class JiraIntegrationTests:
                             break
 
             for method in sorted(failed_methods):
-                print(f"  python tests/test_jira.py --test {method}")
+                print(f"  python scripts/jira_smoke.py --test {method}")
 
         # Detailed results
         print(f"\n📋 DETAILED RESULTS:")

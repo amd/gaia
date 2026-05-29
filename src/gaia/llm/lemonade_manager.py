@@ -201,6 +201,7 @@ class LemonadeManager:
         host: Optional[str] = None,
         port: Optional[int] = None,
         required_min_device: Optional[str] = None,
+        device: Optional[str] = None,
     ) -> bool:
         """Ensure Lemonade server is running with sufficient context size.
 
@@ -222,6 +223,9 @@ class LemonadeManager:
                 does NOT read or write a local `~/.gaia/` hardware config.
                 The resolved `recipe` is computed and logged for debugging,
                 but is NOT applied to the Lemonade server by this method.
+            device: High-level device selector ('cpu', 'gpu', 'npu').
+                When set, maps to the appropriate ``required_min_device``
+                value.  Explicit ``required_min_device`` takes precedence.
 
         Returns:
             True if Lemonade server is ready, False otherwise.
@@ -231,6 +235,14 @@ class LemonadeManager:
             The Lemonade server must be running before calling this method.
             Start it with: lemonade-server serve --ctx-size 32768
         """
+        # Map high-level device selector to required_min_device when the
+        # caller didn't pass an explicit required_min_device.
+        if device and not required_min_device:
+            _DEVICE_TO_MIN = {
+                "npu": "amd_npu",
+                "gpu": "amd_igpu",
+            }
+            required_min_device = _DEVICE_TO_MIN.get(device)
         # Parse host and port from base_url if provided
         if base_url and (host is None or port is None):
             from urllib.parse import urlparse
