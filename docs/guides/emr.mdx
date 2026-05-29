@@ -41,7 +41,7 @@ flowchart TD
     linkStyle 0,1,2,3 stroke:#ED1C24,stroke-width:2px
 ```
 
-1. **Vision Language Model (VLM)** - The Qwen3-VL-4B model "sees" the intake form image and extracts text using a carefully crafted prompt that guides it to identify specific fields (name, DOB, allergies, medications, etc.). Unlike traditional OCR, the VLM understands context—it knows that "DOB" means date of birth and can handle handwritten entries, checkboxes, and varied form layouts.
+1. **Vision Language Model (VLM)** - The Gemma-4-E4B-it model "sees" the intake form image and extracts text using a carefully crafted prompt that guides it to identify specific fields (name, DOB, allergies, medications, etc.). Unlike traditional OCR, the VLM understands context—it knows that "DOB" means date of birth and can handle handwritten entries, checkboxes, and varied form layouts.
 
 2. **LLM Validation & Querying** - The Qwen3.5-35B model (a Mixture-of-Experts architecture that activates only 3B parameters per inference) validates extracted data, handles natural language queries, and generates SQL to search the patient database. When you ask "Which patients have penicillin allergies?", the LLM translates this to proper SQL.
 
@@ -55,7 +55,7 @@ flowchart TD
 
 - **Automatic file watching** - Monitors a directory for new intake forms
 - **Drag-and-drop upload** - Drop files directly into the Watch Folder panel
-- **VLM-powered extraction** - Uses Qwen3-VL-4B-Instruct for OCR and data extraction
+- **VLM-powered extraction** - Uses Gemma-4-E4B-it for OCR and data extraction
 - **Local database storage** - SQLite with full patient record schema
 - **New/returning detection** - Identifies returning patients and flags changes
 - **Critical alerts** - Automatic alerts for allergies and missing fields
@@ -69,7 +69,7 @@ The EMR agent uses three models, downloaded automatically on first run via `gaia
 | Model | Size | Purpose |
 |-------|------|---------|
 | Qwen3.5-35B-A3B-GGUF | 18.6 GB | LLM for chat queries and patient search |
-| Qwen3-VL-4B-Instruct-GGUF | 3.3 GB | Vision language model for form extraction |
+| Gemma-4-E4B-it-GGUF | ~3 GB | Vision language model for form extraction |
 | nomic-embed-text-v2-moe-GGUF | 522 MB | Embedding model for similarity search |
 
 <Note>
@@ -303,7 +303,7 @@ gaia-emr init
 This command:
 - Checks Lemonade server is running and context size is configured
 - Downloads and loads all required models:
-  - **VLM**: Qwen3-VL-4B-Instruct-GGUF (form extraction)
+  - **VLM**: Gemma-4-E4B-it-GGUF (form extraction)
   - **LLM**: Qwen3.5-35B-A3B-GGUF (chat/query processing)
   - **Embedding**: nomic-embed-text-v2-moe-GGUF (similarity search)
 - Verifies all models are loaded and ready
@@ -421,7 +421,7 @@ This command:
 
     | Command | Description |
     |---------|-------------|
-    | `init` | Download required models (VLM, optional LLM/embedding) |
+    | `init` | Download all required models (VLM, LLM, embedding) |
     | `watch` | Watch folder and process forms |
     | `process` | Process a single form file and exit |
     | `dashboard` | Launch web dashboard (Electron or browser) |
@@ -660,7 +660,7 @@ If `gaia-emr init` fails repeatedly or the agent won't start due to model errors
 2. Navigate to the model cache directory:
    - Windows: `%LOCALAPPDATA%\AMD\LemonadeModels\`
    - Linux: `~/.local/share/lemonade/models/`
-3. Delete the corrupted model folder (e.g., `Qwen3-VL-4B-Instruct-GGUF/`)
+3. Delete the corrupted model folder (e.g., `Gemma-4-E4B-it-GGUF/`)
 4. Restart Lemonade Server
 5. Run `gaia-emr init` again to re-download
 

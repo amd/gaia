@@ -386,14 +386,20 @@ gaia/
 │   │   └── _shared/    # Shared assets for apps
 │   ├── audio/          # Audio processing (Whisper ASR, Kokoro TTS)
 │   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
+│   ├── code_index/     # Semantic code search (CodeIndexSDK)
+│   ├── connectors/     # OAuth-bound external API access (OAuth2 PKCE, keychain token storage, per-agent grants)
 │   ├── database/       # DatabaseMixin and DatabaseAgent
 │   ├── electron/       # Electron app integration
 │   ├── eval/           # Evaluation framework
+│   ├── filesystem/     # Filesystem indexing/categorization (FileSystemIndexService)
+│   ├── governance/     # Optional action-level governance layer (GovernedAgentMixin)
 │   ├── img/            # Shared image assets
 │   ├── installer/      # Install/init commands (gaia init, lemonade installer)
 │   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI) + providers/
 │   ├── mcp/            # Model Context Protocol servers/clients
+│   ├── messaging/      # Messaging adapters (Telegram) + media→VLM/RAG ingest
 │   ├── rag/            # Document retrieval (RAG)
+│   ├── scratchpad/     # SQLite scratchpad service for structured data analysis
 │   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
 │   ├── shell/          # Shell integration
 │   ├── talk/           # Voice interaction SDK
@@ -401,6 +407,10 @@ gaia/
 │   ├── ui/             # Agent UI backend (FastAPI server, routers, SSE, database)
 │   ├── utils/          # Utility modules (FileWatcher, parsing)
 │   ├── vlm/            # Vision LLM tool mixin (VLMToolsMixin, structured extraction)
+│   ├── web/            # Web client utilities (WebClient, SSRF-guarded fetch)
+│   ├── device.py       # Device compatibility detection (Strix Halo / Radeon VRAM)
+│   ├── perf_analysis.py # Perf-log parsing/plotting
+│   ├── security.py     # Path validation, allow-lists, write guardrails, audit logging
 │   └── cli.py          # Main CLI entry point (all `gaia <command>` subparsers)
 ├── tests/              # Test suite
 │   ├── unit/           # Unit tests
@@ -454,15 +464,20 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 
 | Agent | Location | Description | Default Model |
 |-------|----------|-------------|---------------|
-| **ChatAgent** | `agents/chat/agent.py` | Document Q&A with RAG | Qwen3.5-35B |
-| **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3.5-35B |
-| **BuilderAgent** | `agents/builder/agent.py` | Scaffolds new agents from templates | Qwen3.5-35B |
-| **SummarizeAgent** | `agents/summarize/agent.py` | Document/text summarization | Qwen3.5-35B |
-| **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B |
-| **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B |
-| **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B |
-| **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing | Qwen3-VL-4B (VLM) |
-| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B |
+| **ChatAgent** | `agents/chat/agent.py` | Chat with RAG, file search, shell | Gemma-4-E4B-it-GGUF (global default) |
+| **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3.5-35B-A3B-GGUF |
+| **DocumentQAAgent** | `agents/docqa/agent.py` | Document Q&A with RAG | Qwen3.5-35B-A3B-GGUF |
+| **BuilderAgent** | `agents/builder/agent.py` | Scaffolds new agents from templates | Qwen3.5-35B-A3B-GGUF |
+| **SummarizeAgent** | `agents/summarize/agent.py` | Document/text summarization | Qwen3-4B-Instruct-2507-GGUF |
+| **AnalystAgent** | `agents/analyst/agent.py` | Structured data analysis (scratchpad tables) | Qwen3.5-35B-A3B-GGUF (base default) |
+| **BrowserAgent** | `agents/browser/agent.py` | Web research (search, fetch, download) | Qwen3.5-35B-A3B-GGUF (base default) |
+| **EmailTriageAgent** | `agents/email/agent.py` | Gmail triage, organize, reply | Gemma-4-E4B-it-GGUF (global default) |
+| **FileIOAgent** | `agents/fileio/agent.py` | File read/write/edit operations | Qwen3.5-35B-A3B-GGUF (base default) |
+| **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B-A3B-GGUF |
+| **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B-A3B-GGUF (base default) |
+| **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B-A3B-GGUF |
+| **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing (VLM) | Gemma-4-E4B-it-GGUF |
+| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B-A3B-GGUF |
 | **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
 
 ### Agent Registry & Tool Mixins
@@ -472,58 +487,68 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | Tool name | Mixin | Purpose |
 |-----------|-------|---------|
 | `rag` | `gaia.agents.chat.tools.rag_tools.RAGToolsMixin` | Document retrieval |
+| `code_index` | `gaia.agents.code_index.tools.mixin.CodeIndexToolsMixin` | Semantic code search |
 | `file_search` | `gaia.agents.tools.file_tools.FileSearchToolsMixin` | Fuzzy/glob file search |
 | `file_io` | `gaia.agents.code.tools.file_io.FileIOToolsMixin` | Read/write/edit files |
 | `shell` | `gaia.agents.chat.tools.shell_tools.ShellToolsMixin` | Sandboxed shell commands |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | Screen capture |
+| `filesystem` | `gaia.agents.tools.filesystem_tools.FileSystemToolsMixin` | Filesystem indexing/categorization |
+| `scratchpad` | `gaia.agents.tools.scratchpad_tools.ScratchpadToolsMixin` | SQLite scratchpad for data analysis |
+| `browser` | `gaia.agents.tools.browser_tools.BrowserToolsMixin` | Web search/fetch/download |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
 ### Default Models
-- General tasks: `Qwen3-0.6B-GGUF`
-- Code/Agents: `Qwen3.5-35B-A3B-GGUF`
-- Vision tasks: `Qwen3-VL-4B-Instruct-GGUF`
+- Global default: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py))
+- Code/Agents: `Qwen3.5-35B-A3B-GGUF` (CodeAgent, DocumentQAAgent, Jira, Docker, and the base-Agent fallback when `model_id` is unset)
+- Vision tasks: `Qwen3-VL-4B-Instruct-GGUF` is a supported vision model, but the EMR/MedicalIntakeAgent's default VLM is currently `Gemma-4-E4B-it-GGUF`
 
 ## CLI Commands
 
 All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -h` for the authoritative list.
 
 **Agents & chat:**
-- `gaia chat` - Interactive chat with RAG
+- `gaia chat` - Interactive chat with RAG, file search, and shell execution
 - `gaia chat --ui` - Launch Agent UI (browser-based, requires `[ui]` extras)
 - `gaia chat --ui --ui-port 8080` - Agent UI on custom port
+- `gaia browse` - Web research with search, page fetch, and download tools
+- `gaia analyze` - Structured data analysis with scratchpad tables
 - `gaia talk` - Voice interaction
 - `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
 - `gaia llm "<text>"` - Simple LLM queries
-- `gaia summarize` - Document summarization
+- `gaia summarize` - Document/transcript/email summarization
 - `gaia blender` - Blender 3D agent
 - `gaia sd` - Stable Diffusion image generation
-- `gaia jira` - Jira integration
+- `gaia jira` - Jira / Atlassian integration
+- `gaia email` - Email Triage Agent (Gmail, requires Google connector)
 - `gaia docker` - Docker management
 
 **Servers & infrastructure:**
 - `gaia api` - OpenAI-compatible API server
 - `gaia mcp {start|stop|status|test|agent|docker|serve|add|list|remove|tools|test-client}` - MCP bridge
+- `gaia telegram {start|stop|status}` - Telegram messaging adapter
+- `gaia connectors` - Manage external connectors (OAuth, MCP servers) and per-agent grants
 - `gaia cache {status|clear}` - Cache management
+- `gaia memory` - Manage agent memory (bootstrap onboarding, view status)
 
 **Setup & utilities:**
 - `gaia init` - Setup Lemonade Server and download models
-- `gaia install` - Install helper (e.g. Lemonade on first run)
-- `gaia download` - Download a model
+- `gaia install` - Install GAIA components (e.g. Lemonade on first run)
+- `gaia uninstall` - Uninstall GAIA components (tiered cleanup of `~/.gaia` and caches)
+- `gaia download` - Download all models required for GAIA agents
+- `gaia agent` - Manage custom agents (export/import bundles)
 - `gaia kill` - Kill stray GAIA / Lemonade processes
+- `gaia diagnostics` - Bundle logs and system info into a tarball for bug reports
+- `gaia stats` - Show GAIA statistics from the most recent run
 - `gaia test` - Smoke tests
-- `gaia yt` - YouTube transcript ingest
-- `gaia template` - Scaffold agent templates
+- `gaia youtube` - YouTube transcript utilities
 
 **Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
-- `gaia eval {fix-code|agent}` - Run evaluation harness
-- `gaia gt` - Generate ground truth
-- `gaia generate` - Dataset/response generation
-- `gaia batch-exp` - Batch experiments
-- `gaia report` - Render eval reports
-- `gaia visualize` / `gaia perf-vis` - Visualize results
+- `gaia eval agent` - Run agent eval benchmark scenarios
+- `gaia report` - Generate summary report from an evaluation results directory
+- `gaia perf-vis` - Visualize llama.cpp performance metrics from log files
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):
 - `gaia-code` - CodeAgent entry (`src/gaia/agents/code/cli.py`)
@@ -593,7 +618,7 @@ The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://am
 - [`docs/plans/docker-containers.mdx`](docs/plans/docker-containers.mdx) - Docker deployment
 
 **Key architectural decisions (April 2026):**
-- ChatAgent renamed to **GaiaAgent** in v0.20.0 (#696)
+- ChatAgent → **GaiaAgent** rename **planned** for v0.20.0 (#696) — not yet in code (class is still `ChatAgent`)
 - Voice-first is P0 enabling technology (#702)
 - No context compaction — memory + RAG handles long conversations
 - Configuration dashboard + Observability dashboard as separate Agent UI panels
@@ -835,3 +860,5 @@ When a task fits a Superpowers skill (e.g. `superpowers:brainstorming`, `superpo
 **Read these before starting related tasks:**
 
 - `.claude/skills/lemonade-client-patterns.md` - Patterns, gotchas, and conventions for modifying LemonadeClient and threading changes through its callers (providers, VLM, UI routers, agent base). Covers: deferred import patch targets, assertLogs child logger levels, SSE test hang prevention, 401 error safety, openai.AuthenticationError ordering. (tags: lemonade, authentication, env-vars, testing, httpx, openai-sdk, tdd)
+
+Directory-based skills also live under `.claude/skills/` (e.g. `.claude/skills/gaia-release/` — invoked via the `gaia-release` Skill).

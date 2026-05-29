@@ -52,8 +52,6 @@ Before starting implementation on a `consumer-critical` issue, confirm it has th
 ### Stop-the-line (foundational PRs in flight)
 When a foundational PR (large, cross-cutting, with many downstream dependencies) is in flight, it carries the `stop-the-line` label and pins a comment listing **frozen file paths**. No PRs may merge changes to those paths until the stop-the-line PR lands.
 
-**Currently active:** PR #606 (memory v2). See pinned comment for frozen paths.
-
 ### Parallel agent work
 - **Parallelize when** file trees are disjoint, no architectural decision is shared, no sequential dependency exists
 - **Serialize when** the same file tree is touched, when a design-system pattern needs to be pinned first, when one PR's output is the next PR's input
