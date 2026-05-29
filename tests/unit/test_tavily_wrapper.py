@@ -46,10 +46,14 @@ class FakeAsyncSDK:
     def __init__(self, response=None):
         self.response = response or {"results": [{"title": "t", "url": "u"}]}
         self.search_calls = 0
+        self.closed = False
 
     async def search(self, **kwargs):
         self.search_calls += 1
         return {**self.response, "query": kwargs.get("query")}
+
+    async def aclose(self):
+        self.closed = True
 
 
 class FakeWeb:
@@ -251,3 +255,17 @@ async def test_async_unconfigured_falls_back_to_ddg(monkeypatch):
     assert result["source"] == "duckduckgo"
     assert web.calls == 1
     client.close()
+
+
+def test_sync_context_manager_closes(fake_sdk):
+    with make_client(fake_sdk) as client:
+        client.search("q")
+    assert client.db_ready is False  # __exit__ closed the cache DB
+
+
+async def test_async_context_manager_awaits_sdk_aclose():
+    sdk = FakeAsyncSDK()
+    async with AsyncTavilyClient(db_path=":memory:", sdk_client=sdk) as client:
+        await client.search("q")
+    assert sdk.closed is True  # __aexit__ -> aclose() awaited the SDK
+    assert client.db_ready is False
