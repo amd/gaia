@@ -244,8 +244,30 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             trigger a model switch.
             """
             # pylint: disable=unused-import
+            import sys
+
             import faiss  # noqa: F401
             import sentence_transformers  # noqa: F401
+
+            # Log which SWIG backend faiss actually loaded.
+            # Order matters: check most-optimized first.
+            _swig_variants = [
+                ("faiss.swigfaiss_avx512_spr", "AVX-512 SPR"),
+                ("faiss.swigfaiss_avx512", "AVX-512"),
+                ("faiss.swigfaiss_sve", "SVE"),
+                ("faiss.swigfaiss_avx2", "AVX2"),
+            ]
+            opt = next(
+                (label for mod, label in _swig_variants if mod in sys.modules),
+                None,
+            )
+            if opt:
+                logger.info("faiss: loaded with %s support", opt)
+            else:
+                logger.info(
+                    "faiss: loaded (generic — no AVX2/AVX-512 SWIG module "
+                    "in this wheel; vector search still works, just slower)"
+                )
 
         def _load_model():
             """Pre-load the expected LLM model so the first prompt skips model loading.
