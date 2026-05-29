@@ -435,8 +435,14 @@ Do NOT wrap conversational replies in JSON.
                     fragment = getattr(self, attr_name)()
                     if fragment:
                         prompts.append(fragment)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # A raising fragment is dropped from the composed prompt; surface it
+                    # so a silently degraded system prompt is diagnosable.
+                    logger.warning(
+                        "system-prompt fragment %s() raised, skipping it: %s",
+                        attr_name,
+                        e,
+                    )
 
         return prompts
 

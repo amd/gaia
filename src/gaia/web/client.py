@@ -40,6 +40,42 @@ except ImportError:
 ALLOWED_SCHEMES = {"http", "https"}
 BLOCKED_PORTS = {22, 23, 25, 445, 3306, 5432, 6379, 27017}
 
+
+def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
+    """Return True if ``ip`` points at a private/internal range we must not fetch."""
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+    )
+
+
+def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
+    """Raise ValueError if ``ip_str`` is a private/reserved address.
+
+    The single authority for "is this IP safe to connect to". Both
+    ``WebClient.validate_url`` (pre-flight DNS check) and
+    ``PinnedIPAdapter`` (the IP it actually connects to) route through this,
+    so a DNS rebind that slips a private IP past the pre-flight lookup is
+    still caught at connect time on the *exact* address being dialed.
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        # Not parseable as an IP — treat as unsafe rather than letting an
+        # unvalidated value reach the socket layer (fail loudly).
+        raise ValueError(
+            f"Blocked: {hostname} resolved to unparseable address {ip_str!r}."
+        )
+    if _is_blocked_ip(ip):
+        raise ValueError(
+            f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
+            "Cannot fetch internal network addresses."
+        )
+
+
 # Tags to remove during text extraction
 REMOVE_TAGS = [
     "script",
@@ -72,12 +108,35 @@ class PinnedIPAdapter(HTTPAdapter):
     DNS-rebind attacks between ``WebClient.validate_url`` and the actual
     TCP connect.
 
+    Crucially, the pinned IP is itself validated (``_assert_ip_allowed``)
+    before it is cached or connected to. ``validate_url`` runs a *separate*
+    pre-flight ``getaddrinfo``; an attacker controlling DNS could answer that
+    lookup with a public IP and answer the adapter's lookup with a private
+    one. Validating the exact address the adapter is about to dial closes
+    that residual rebind window for BOTH http and https.
+
     For HTTPS, the original hostname is encoded in the URL's userinfo
     section (``originalhostname@pinnedip:port``) so that urllib3 creates
     separate connection-pool keys per original hostname.  This avoids a
     race where two threads requesting different hostnames that resolve to
     the same IP would overwrite each other's ``assert_hostname`` on a
     shared pool.
+
+    Residual HTTPS limitation (documented, not silently ignored):
+    Because ``requests`` derives the urllib3 pool host — and therefore the
+    TLS SNI ``server_hostname`` — from the request URL's hostname (which we
+    rewrote to the pinned IP), the ClientHello SNI is sent as the IP, not the
+    original hostname. ``assert_hostname`` still forces certificate-name
+    verification against the real hostname (so verification is NOT disabled
+    and we never trust a cert for the bare IP), but servers that rely on SNI
+    for virtual hosting (most CDNs / shared hosts) may return the wrong
+    certificate or reject the handshake, surfacing as a TLS error rather than
+    a silent downgrade. This affects whether legitimate HTTPS *succeeds* — it
+    does not weaken the SSRF block, which fires on the validated IP before any
+    bytes are sent. Fixing SNI cleanly requires a custom urllib3
+    ``PoolManager``/``HTTPSConnection`` that decouples ``server_hostname``
+    from the connect address; that is intentionally out of scope here in
+    favour of a correct, narrower guarantee.
     """
 
     def __init__(self, *args, **kwargs):
@@ -94,6 +153,12 @@ class PinnedIPAdapter(HTTPAdapter):
             raise OSError(f"getaddrinfo returned no addresses for {host}:{port}")
 
         ip = infos[0][4][0]  # sockaddr[0] of the first result
+        # Validate the EXACT IP we are about to pin & connect to. validate_url
+        # did a pre-flight getaddrinfo, but that was a separate lookup — a DNS
+        # rebind could hand validate_url a public IP and hand us a private one.
+        # Re-check here so the address actually dialed is always safe; cache
+        # only after it passes so a poisoned answer is never reused.
+        _assert_ip_allowed(ip, host)
         self._pinned_cache[key] = ip
         return ip
 
@@ -134,7 +199,22 @@ class PinnedIPAdapter(HTTPAdapter):
             pinned_ip = self._resolve_first_ip(host, port)
 
             if parsed.scheme == "https":
-                # Encode original hostname in userinfo for unique pool keys
+                # Encode original hostname in userinfo for unique pool keys.
+                # See class docstring: SNI is sent as the pinned IP, so
+                # SNI-vhosted servers may fail the handshake. Cert-name
+                # verification still binds to the real hostname.
+                if not getattr(self, "_warned_https_sni", False):
+                    log.warning(
+                        "PinnedIPAdapter: HTTPS request to %s is pinned to %s; "
+                        "TLS SNI will be sent as the IP. Servers using "
+                        "SNI-based virtual hosting may return the wrong "
+                        "certificate or reject the handshake. Certificate-name "
+                        "verification still validates against %s.",
+                        host,
+                        pinned_ip,
+                        host,
+                    )
+                    self._warned_https_sni = True
                 new_netloc = f"{host}@{pinned_ip}:{port}"
             else:
                 new_netloc = f"{pinned_ip}:{port}"
@@ -270,13 +350,7 @@ class WebClient:
             except ValueError:
                 continue
 
-            if (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_reserved
-                or ip.is_multicast
-            ):
+            if _is_blocked_ip(ip):
                 raise ValueError(
                     f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
                     "Cannot fetch internal network addresses."

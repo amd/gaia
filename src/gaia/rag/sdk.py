@@ -449,8 +449,8 @@ class RAGSDK:
             # Force fresh load - must unload first
             try:
                 self.llm_client.unload_model()
-            except Exception:
-                pass  # Ignore if nothing to unload
+            except Exception as e:
+                self.log.warning("unload_model failed (continuing): %s", e)
 
             try:
                 self.llm_client.load_model(

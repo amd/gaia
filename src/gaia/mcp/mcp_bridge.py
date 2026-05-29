@@ -60,8 +60,8 @@ class MultipartCollector:
                     name = p.split("=", 1)[1].strip().strip('"')
                 elif pl.startswith("filename="):
                     filename = p.split("=", 1)[1].strip().strip('"')
-        except Exception:
-            pass
+        except (AttributeError, IndexError, ValueError) as e:
+            logger.debug("Failed to parse Content-Disposition %r: %s", value, e)
         return name, filename
 
     def on_part_begin(self):
