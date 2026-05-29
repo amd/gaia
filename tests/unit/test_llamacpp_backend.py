@@ -29,6 +29,7 @@ from gaia.llm.providers.lemonade import (
     LemonadeError,
     LemonadeModelNotLoadedError,
     LemonadeNetworkError,
+    LemonadeProvider,
     LemonadeUpstreamTimeoutError,
     _classify_lemonade_response,
 )
@@ -161,6 +162,11 @@ class TestEnsureModelLoadedCtxResolution:
     """Verify _ensure_model_loaded resolves ctx_size correctly from the
     MODELS registry and falls back to DEFAULT_CONTEXT_SIZE for unknowns.
     """
+
+    @pytest.fixture(autouse=True)
+    def _stub_list_models(self):
+        with patch.object(LemonadeClient, "list_models", return_value={"data": []}):
+            yield
 
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
@@ -303,7 +309,9 @@ class TestEnsureModelLoadedCtxResolution:
         client._ensure_model_loaded("Qwen3-0.6B-GGUF", auto_download=True)
 
         # ctx=0 < 4096 expected, so reload fires.
-        mock_load.assert_called_once()
+        mock_load.assert_called_once_with(
+            "Qwen3-0.6B-GGUF", auto_download=True, prompt=False, ctx_size=4096
+        )
 
 
 # ── launch_server: ctx_size CLI flag ──────────────────────────────────
@@ -312,6 +320,7 @@ class TestEnsureModelLoadedCtxResolution:
 class TestLaunchServerCtxSize:
     """Verify launch_server passes --ctx-size to the lemonade-server command."""
 
+    @patch("builtins.open", MagicMock())
     @patch("gaia.llm.lemonade_client.kill_process_on_port")
     @patch("subprocess.Popen")
     @patch("socket.create_connection")
@@ -323,12 +332,13 @@ class TestLaunchServerCtxSize:
         mock_popen.return_value = MagicMock(pid=12345)
         client = LemonadeClient(host="localhost", port=13305)
 
-        client.launch_server(ctx_size=65536, background="none")
+        client.launch_server(ctx_size=65536, background="silent")
 
         cmd = mock_popen.call_args[0][0]
         assert "--ctx-size" in cmd
         assert "65536" in cmd
 
+    @patch("builtins.open", MagicMock())
     @patch("gaia.llm.lemonade_client.kill_process_on_port")
     @patch("subprocess.Popen")
     @patch("socket.create_connection")
@@ -338,7 +348,7 @@ class TestLaunchServerCtxSize:
         mock_popen.return_value = MagicMock(pid=12345)
         client = LemonadeClient(host="localhost", port=13305)
 
-        client.launch_server(background="none")
+        client.launch_server(background="silent")
 
         cmd = mock_popen.call_args[0][0]
         assert "--ctx-size" not in cmd
@@ -681,62 +691,56 @@ class TestLemonadeProviderRepetitionDefaults:
 
     def test_chat_sets_repeat_penalty_defaults(self):
         """chat() should inject repeat_penalty and repeat_last_n defaults."""
-        from gaia.llm.providers.lemonade import LemonadeProvider
+        provider = LemonadeProvider.__new__(LemonadeProvider)
+        provider._backend = MagicMock(spec=LemonadeClient)
+        provider._model = "Gemma-4-E4B-it-GGUF"
+        provider._system_prompt = None
 
-        with patch.object(LemonadeClient, "__init__", return_value=None):
-            provider = LemonadeProvider.__new__(LemonadeProvider)
-            provider._backend = MagicMock(spec=LemonadeClient)
-            provider._model = "Gemma-4-E4B-it-GGUF"
-            provider._system_prompt = None
+        # Return a valid non-streaming response
+        provider._backend.chat_completions.return_value = {
+            "choices": [
+                {
+                    "message": {"content": "Hello!"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
 
-            # Return a valid non-streaming response
-            provider._backend.chat_completions.return_value = {
-                "choices": [
-                    {
-                        "message": {"content": "Hello!"},
-                        "finish_reason": "stop",
-                    }
-                ]
-            }
+        provider.chat(
+            [{"role": "user", "content": "hi"}],
+            stream=False,
+        )
 
-            provider.chat(
-                [{"role": "user", "content": "hi"}],
-                stream=False,
-            )
-
-            call_kwargs = provider._backend.chat_completions.call_args[1]
-            assert call_kwargs["repeat_penalty"] == 1.1
-            assert call_kwargs["repeat_last_n"] == 256
-            assert call_kwargs["frequency_penalty"] == 0.3
-            assert call_kwargs["presence_penalty"] == 0.1
+        call_kwargs = provider._backend.chat_completions.call_args[1]
+        assert call_kwargs["repeat_penalty"] == 1.1
+        assert call_kwargs["repeat_last_n"] == 256
+        assert call_kwargs["frequency_penalty"] == 0.3
+        assert call_kwargs["presence_penalty"] == 0.1
 
     def test_chat_allows_override_of_repeat_penalty(self):
         """Caller-specified repeat_penalty overrides the default."""
-        from gaia.llm.providers.lemonade import LemonadeProvider
+        provider = LemonadeProvider.__new__(LemonadeProvider)
+        provider._backend = MagicMock(spec=LemonadeClient)
+        provider._model = "Gemma-4-E4B-it-GGUF"
+        provider._system_prompt = None
 
-        with patch.object(LemonadeClient, "__init__", return_value=None):
-            provider = LemonadeProvider.__new__(LemonadeProvider)
-            provider._backend = MagicMock(spec=LemonadeClient)
-            provider._model = "Gemma-4-E4B-it-GGUF"
-            provider._system_prompt = None
+        provider._backend.chat_completions.return_value = {
+            "choices": [
+                {
+                    "message": {"content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
 
-            provider._backend.chat_completions.return_value = {
-                "choices": [
-                    {
-                        "message": {"content": "ok"},
-                        "finish_reason": "stop",
-                    }
-                ]
-            }
+        provider.chat(
+            [{"role": "user", "content": "hi"}],
+            stream=False,
+            repeat_penalty=1.5,
+        )
 
-            provider.chat(
-                [{"role": "user", "content": "hi"}],
-                stream=False,
-                repeat_penalty=1.5,
-            )
-
-            call_kwargs = provider._backend.chat_completions.call_args[1]
-            assert call_kwargs["repeat_penalty"] == 1.5
+        call_kwargs = provider._backend.chat_completions.call_args[1]
+        assert call_kwargs["repeat_penalty"] == 1.5
 
 
 # ── LemonadeProvider: error classification integration ────────────────
@@ -747,66 +751,57 @@ class TestLemonadeProviderErrorRaising:
 
     def test_context_overflow_raises_typed_error(self):
         """Non-streaming chat that returns ctx-overflow raises LemonadeContextOverflowError."""
-        from gaia.llm.providers.lemonade import LemonadeProvider
+        provider = LemonadeProvider.__new__(LemonadeProvider)
+        provider._backend = MagicMock(spec=LemonadeClient)
+        provider._model = "Gemma-4-E4B-it-GGUF"
+        provider._system_prompt = None
 
-        with patch.object(LemonadeClient, "__init__", return_value=None):
-            provider = LemonadeProvider.__new__(LemonadeProvider)
-            provider._backend = MagicMock(spec=LemonadeClient)
-            provider._model = "Gemma-4-E4B-it-GGUF"
-            provider._system_prompt = None
-
-            provider._backend.chat_completions.return_value = {
-                "error": {
-                    "type": "exceed_context_size",
-                    "message": "request (50000) exceeds the available context size (4096)",
-                    "n_ctx": 4096,
-                }
+        provider._backend.chat_completions.return_value = {
+            "error": {
+                "type": "exceed_context_size",
+                "message": "request (50000) exceeds the available context size (4096)",
+                "n_ctx": 4096,
             }
+        }
 
-            with pytest.raises(LemonadeContextOverflowError) as exc_info:
-                provider.chat(
-                    [{"role": "user", "content": "hi"}],
-                    stream=False,
-                )
+        with pytest.raises(LemonadeContextOverflowError) as exc_info:
+            provider.chat(
+                [{"role": "user", "content": "hi"}],
+                stream=False,
+            )
 
-            assert exc_info.value.retryable is True
+        assert exc_info.value.retryable is True
 
     def test_model_not_loaded_raises_typed_error(self):
-        from gaia.llm.providers.lemonade import LemonadeProvider
+        provider = LemonadeProvider.__new__(LemonadeProvider)
+        provider._backend = MagicMock(spec=LemonadeClient)
+        provider._model = "Gemma-4-E4B-it-GGUF"
+        provider._system_prompt = None
 
-        with patch.object(LemonadeClient, "__init__", return_value=None):
-            provider = LemonadeProvider.__new__(LemonadeProvider)
-            provider._backend = MagicMock(spec=LemonadeClient)
-            provider._model = "Gemma-4-E4B-it-GGUF"
-            provider._system_prompt = None
-
-            provider._backend.chat_completions.return_value = {
-                "error": {
-                    "type": "model_not_loaded",
-                    "message": "No model is currently loaded",
-                }
+        provider._backend.chat_completions.return_value = {
+            "error": {
+                "type": "model_not_loaded",
+                "message": "No model is currently loaded",
             }
+        }
 
-            with pytest.raises(LemonadeModelNotLoadedError):
-                provider.chat(
-                    [{"role": "user", "content": "hi"}],
-                    stream=False,
-                )
+        with pytest.raises(LemonadeModelNotLoadedError):
+            provider.chat(
+                [{"role": "user", "content": "hi"}],
+                stream=False,
+            )
 
     def test_unexpected_response_shape_raises_generic(self):
         """A response with no 'choices' and no 'error' raises LemonadeError."""
-        from gaia.llm.providers.lemonade import LemonadeProvider
+        provider = LemonadeProvider.__new__(LemonadeProvider)
+        provider._backend = MagicMock(spec=LemonadeClient)
+        provider._model = "test"
+        provider._system_prompt = None
 
-        with patch.object(LemonadeClient, "__init__", return_value=None):
-            provider = LemonadeProvider.__new__(LemonadeProvider)
-            provider._backend = MagicMock(spec=LemonadeClient)
-            provider._model = "test"
-            provider._system_prompt = None
+        provider._backend.chat_completions.return_value = {"garbage": True}
 
-            provider._backend.chat_completions.return_value = {"garbage": True}
-
-            with pytest.raises(LemonadeError):
-                provider.chat(
-                    [{"role": "user", "content": "hi"}],
-                    stream=False,
-                )
+        with pytest.raises(LemonadeError):
+            provider.chat(
+                [{"role": "user", "content": "hi"}],
+                stream=False,
+            )
