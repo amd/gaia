@@ -20,6 +20,7 @@ from .schemas import (
     CheckpointStatus,
     GovernanceDecision,
     TransitionOutcome,
+    TransitionStatus,
     WorkflowTransition,
     new_id,
     utc_now_iso,
@@ -103,7 +104,7 @@ class InMemoryCheckpointBridge:
                 },
             )
             return TransitionOutcome(
-                status=outcome_status,
+                status=cast(TransitionStatus, outcome_status),
                 reason=reason,
                 checkpoint_id=checkpoint_id,
                 metadata={"resolution": resolution.resolution},
