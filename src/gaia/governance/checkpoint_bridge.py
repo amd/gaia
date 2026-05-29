@@ -11,10 +11,13 @@ from __future__ import annotations
 
 from threading import Lock
 
+from typing import cast
+
 from .exceptions import CheckpointNotFoundError, InvalidResolutionError
 from .schemas import (
     CheckpointRecord,
     CheckpointResolution,
+    CheckpointStatus,
     GovernanceDecision,
     TransitionOutcome,
     WorkflowTransition,
@@ -90,7 +93,7 @@ class InMemoryCheckpointBridge:
                 checkpoint_id=current.checkpoint_id,
                 workflow_id=current.workflow_id,
                 transition_id=current.transition_id,
-                status=status,
+                status=cast(CheckpointStatus, status),
                 created_at=current.created_at,
                 decision_context={
                     **current.decision_context,
