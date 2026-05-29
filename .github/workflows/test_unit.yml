@@ -168,6 +168,14 @@ jobs:
                                   pyfakefs keyring httpx respx
           uv pip install --system -e ".[api]"
 
+      - name: Validate packaging integrity
+        run: |
+          echo "=== Validating Packaging Integrity ==="
+          echo "Checking setup.py packages, __init__.py files, and entry points"
+          echo ""
+          pytest tests/unit/test_packaging.py -v --tb=short
+          echo "✅ Packaging integrity checks passed"
+
       - name: Run unit tests (macOS smoke)
         env:
           GAIA_MEMORY_DISABLED: "1"
@@ -175,4 +183,4 @@ jobs:
           echo "=== macOS Smoke Test ==="
           echo "Running unit tests on macOS to catch platform-specific issues"
           echo ""
-          python -m pytest tests/unit/ -x --timeout=60 -v --tb=short
+          pytest tests/unit/ -x --timeout=60 -v --tb=short
