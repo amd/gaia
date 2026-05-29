@@ -442,15 +442,16 @@ jobs:
           gaia --help
           gaia-code --help
           gaia-mcp --help
+          gaia-emr --help
 
       - name: Verify Python import
         env:
           TAG_VERSION: ${{ needs.validate.outputs.tag_version }}
         run: |
-          IMPORT_VERSION=$(python -c "import gaia; print(gaia.__version__)")
-          echo "gaia.__version__: $IMPORT_VERSION"
+          IMPORT_VERSION=$(python -c "from importlib.metadata import version; print(version('amd-gaia'))")
+          echo "amd-gaia version: $IMPORT_VERSION"
           if [ "$IMPORT_VERSION" != "$TAG_VERSION" ]; then
-            echo "ERROR: gaia.__version__ ($IMPORT_VERSION) != tag ($TAG_VERSION)"
+            echo "ERROR: installed version ($IMPORT_VERSION) != tag ($TAG_VERSION)"
             exit 1
           fi
 
