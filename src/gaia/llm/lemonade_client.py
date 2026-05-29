@@ -1222,9 +1222,23 @@ class LemonadeClient:
             ]
         )
 
+    # Phrases Lemonade uses ONLY for genuinely corrupt/incomplete downloads.
+    _CORRUPT_DOWNLOAD_PHRASES = (
+        "download validation failed",
+        "files are incomplete",
+        "files are missing",
+        "incomplete or missing",
+        "corrupted download",
+    )
+
     def _is_corrupt_download_error(self, error: Union[str, Dict, Exception]) -> bool:
         """
         Check if an error indicates a corrupt or incomplete model download.
+
+        ``llama-server failed to start`` is deliberately NOT a signal here:
+        Lemonade emits it for many non-corruption failures (resource limits,
+        ctx_size, backend startup, port conflicts), so matching it routed
+        ordinary load failures into the destructive delete + re-download path.
 
         Args:
             error: Error as string, dict, or exception
@@ -1235,17 +1249,7 @@ class LemonadeClient:
         error_info = self._extract_error_info(error)
         error_message = (error_info.get("message") or "").lower()
 
-        return any(
-            phrase in error_message
-            for phrase in [
-                "download validation failed",
-                "files are incomplete",
-                "files are missing",
-                "incomplete or missing",
-                "corrupted download",
-                "llama-server failed to start",  # Often indicates corrupt model files
-            ]
-        )
+        return any(phrase in error_message for phrase in self._CORRUPT_DOWNLOAD_PHRASES)
 
     def _execute_with_auto_download(
         self, api_call: Callable, model: str, auto_download: bool = True
