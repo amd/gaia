@@ -81,7 +81,6 @@ class TestFaissLoaderFilter:
     def test_filter_installed_on_logger(self, gaia_logger):
         """GaiaLogger.__init__ installs the filter on the faiss.loader logger."""
         faiss_logger = logging.getLogger("faiss.loader")
-        filter_fns = [f for f in faiss_logger.filters if hasattr(f, "__func__")]
         # The filter is installed as a bound method; check it's present by
         # verifying at least one filter on faiss.loader matches ours.
         assert any(
