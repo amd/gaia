@@ -72,7 +72,9 @@ json BashTools::doBashExecute(const json& args) {
         std::string safeCmd;
         safeCmd.reserve(escaped.size() + 16);
         for (char c : escaped) {
-            if (c == '"') {
+            if (c == '\\') {
+                safeCmd += "\\\\";
+            } else if (c == '"') {
                 safeCmd += "\\\"";
             } else {
                 safeCmd += c;

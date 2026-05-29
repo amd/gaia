@@ -263,7 +263,7 @@ int main(int argc, char* argv[]) {
         gaia::AgentConfig config;
         config.debug = debug;
         config.contextSize = 32768;  // bash agent needs 32K for system prompt + tools
-        config.modelId = "Qwen3-4B-GGUF";
+        config.modelId = "gemma-4-e4b";
 
         if (!modelOverride.empty()) {
             config.modelId = modelOverride;

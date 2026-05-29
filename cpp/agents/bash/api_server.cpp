@@ -525,7 +525,7 @@ void ApiServer::run() {
     std::cerr << "  GET  /sessions             -- list sessions" << std::endl;
     std::cerr << "  DELETE /sessions/:id       -- delete session" << std::endl;
 
-    if (!impl_->server.listen("0.0.0.0", impl_->port)) {
+    if (!impl_->server.listen("127.0.0.1", impl_->port)) {
         throw std::runtime_error(
             "ApiServer failed to bind on port " + std::to_string(impl_->port) +
             ". Check that the port is not already in use.");

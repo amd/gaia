@@ -49,6 +49,8 @@ ToolInfo FileIOTools::fileRead() {
 }
 
 json FileIOTools::doFileRead(const json& args) {
+    static constexpr size_t kMaxReadBytes = 32 * 1024;
+
     try {
         std::string path = args.value("path", "");
         if (path.empty()) {
@@ -67,6 +69,8 @@ json FileIOTools::doFileRead(const json& args) {
         std::ostringstream content;
         int lineNumber = 0;
         int linesIncluded = 0;
+        size_t bytesRead = 0;
+        bool truncated = false;
 
         while (std::getline(file, line)) {
             ++lineNumber;
@@ -76,8 +80,14 @@ json FileIOTools::doFileRead(const json& args) {
             if (endLine > 0 && lineNumber > endLine) inRange = false;
 
             if (inRange) {
+                size_t lineBytes = line.size() + (linesIncluded > 0 ? 1 : 0);
+                if (bytesRead + lineBytes > kMaxReadBytes) {
+                    truncated = true;
+                    break;
+                }
                 if (linesIncluded > 0) content << '\n';
                 content << line;
+                bytesRead += lineBytes;
                 ++linesIncluded;
             }
 
@@ -91,10 +101,23 @@ json FileIOTools::doFileRead(const json& args) {
             }
         }
 
+        // Count remaining lines if we truncated early
+        if (truncated) {
+            while (std::getline(file, line)) {
+                ++lineNumber;
+            }
+        }
+
+        std::string result = content.str();
+        if (truncated) {
+            result += "\n... [output truncated at 32 KB]";
+        }
+
         return json{
-            {"content", content.str()},
+            {"content", result},
             {"lines", lineNumber},
             {"path", path},
+            {"truncated", truncated},
         };
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_read failed: ") + e.what()}};
