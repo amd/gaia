@@ -19,7 +19,6 @@ import pytest
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
     MODELS,
-    AgentProfile,
     LemonadeClient,
     LemonadeStatus,
     ModelRequirement,
