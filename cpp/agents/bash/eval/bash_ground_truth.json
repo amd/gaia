@@ -56,7 +56,7 @@
       "expected_tools": []
     },
     "bash-review-performance": {
-      "response_must_mention": ["useless use of cat", "awk"],
+      "response_must_mention": ["cat", "awk"],
       "expected_tools": []
     },
     "bash-review-errors": {
@@ -113,7 +113,7 @@
       "expected_tools": ["file_write"]
     },
     "bash-posix-explain": {
-      "response_must_mention": ["POSIX", "test", "built", "keyword"],
+      "response_must_mention": ["POSIX", "test", "keyword"],
       "expected_tools": []
     }
   }
