@@ -37,7 +37,7 @@ class SessionStore;
 ///   ApiServer server(agent, 8200);
 ///   server.setSessionStore(store);
 ///   server.run();  // blocking
-class GAIA_API ApiServer {
+class ApiServer {
 public:
     ApiServer(Agent& agent, int port = 8200);
     ~ApiServer();

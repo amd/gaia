@@ -26,7 +26,7 @@ namespace gaia {
 ///   - set -euo pipefail in non-trivial scripts
 ///   - Proper variable quoting
 ///   - Confirmation for destructive operations
-class GAIA_API BashAgent : public Agent {
+class BashAgent : public Agent {
 public:
     explicit BashAgent(const AgentConfig& config = {});
     ~BashAgent() override;

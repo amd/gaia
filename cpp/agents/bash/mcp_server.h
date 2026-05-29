@@ -37,7 +37,7 @@ class Agent;
 /// @code
 ///   {"mcpServers": {"gaia-bash": {"command": "gaia-bash", "args": ["--mcp"]}}}
 /// @endcode
-class GAIA_API McpServer {
+class McpServer {
 public:
     explicit McpServer(Agent& agent);
 

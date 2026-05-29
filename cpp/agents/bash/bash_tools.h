@@ -22,7 +22,7 @@ namespace gaia {
 ///
 /// Usage:
 ///   BashTools::registerAll(agent.toolRegistry());
-class GAIA_API BashTools {
+class BashTools {
 public:
     /// Register all bash tools with the given registry.
     static void registerAll(ToolRegistry& registry);
