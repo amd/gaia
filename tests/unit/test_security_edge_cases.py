@@ -344,12 +344,10 @@ class TestIsWriteBlockedException:
         assert is_blocked is True
         assert "unable to validate" in reason.lower()
 
-    def test_exception_from_path_resolve_returns_blocked(self, validator):
-        """When Path.resolve() raises, is_write_blocked returns (True, reason)."""
+    def test_exception_from_path_construction_returns_blocked(self, validator):
+        """When path construction raises, is_write_blocked returns (True, reason)."""
         with patch("os.path.realpath", return_value="/tmp/test.txt"):
-            with patch.object(
-                Path, "resolve", side_effect=RuntimeError("Resolve failed")
-            ):
+            with patch("os.path.normpath", side_effect=RuntimeError("Normpath failed")):
                 is_blocked, reason = validator.is_write_blocked("/tmp/test.txt")
 
         assert is_blocked is True
