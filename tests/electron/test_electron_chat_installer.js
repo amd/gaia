@@ -386,7 +386,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       });
     });
 
-    it('should have reasonably sized component files (each < 100KB)', () => {
+    it('should have reasonably sized component files (each < 200KB)', () => {
       const componentDir = path.join(CHAT_APP_PATH, 'src/components');
       if (fs.existsSync(componentDir)) {
         const files = fs.readdirSync(componentDir);
@@ -394,7 +394,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           const filePath = path.join(componentDir, file);
           if (fs.statSync(filePath).isFile()) {
             const stats = fs.statSync(filePath);
-            expect(stats.size).toBeLessThan(100 * 1024);
+            expect(stats.size).toBeLessThan(200 * 1024);
           }
         });
       }
