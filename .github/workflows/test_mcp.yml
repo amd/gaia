@@ -198,25 +198,24 @@ jobs:
         run: |
           # Run MCP tests using gaia CLI (expected to fail without Lemonade)
           echo "Testing MCP bridge functionality..."
-          gaia mcp test || true
-          echo "Note: LLM queries return errors without Lemonade (expected in CI)"
-          
+          gaia mcp test
+
           # Run basic validation tests
           echo "Running basic validation..."
           python tests/mcp/test_mcp_simple.py
-          
+
           # Run integration tests
           echo "Running MCP integration tests..."
           python tests/mcp/test_mcp_integration.py
-          
+
           # Run comprehensive HTTP validation tests
           echo "Running comprehensive HTTP validation..."
           python tests/mcp/test_mcp_http_validation.py
-          
+
           # Run MCP summarize tests
           echo "Running MCP summarize tests..."
           python tests/mcp/test_mcp_summarize.py
-          
+
           echo "✅ All MCP tests passed"
 
       - name: Stop MCP Bridge
