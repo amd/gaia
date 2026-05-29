@@ -1,0 +1,29 @@
+id: mcp_single_param
+name: "Single Parameter Tool Call"
+category: mcp_reliability
+severity: critical
+description: |
+  Agent is asked to perform an action that requires calling an MCP tool with
+  a single parameter. Tests parameter extraction and formatting.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to read a specific file using a tool"
+    user_message: "Can you read the file at eval/corpus/documents/employee_handbook.md?"
+    ground_truth:
+      expected_behavior: "Agent calls a file reading or browsing tool with the specified path as parameter"
+    success_criteria: |
+      Agent calls a tool (e.g., read_file, browse_files, or similar) with the
+      file path parameter correctly set to the requested path.
+      PASS if the tool is called with the correct path and returns file content.
+      FAIL if agent hallucinates file content without calling a tool.
+      FAIL if agent calls a tool but with a wrong or missing path parameter.
+
+expected_outcome: |
+  Agent correctly formats a single parameter and passes it to the appropriate
+  file-reading MCP tool.

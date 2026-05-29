@@ -5,6 +5,7 @@
 import dataclasses
 import hashlib
 import importlib
+import importlib.metadata
 import importlib.util
 import inspect
 import os
@@ -23,6 +24,8 @@ from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+AGENT_ENTRY_POINT_GROUP = "gaia.agents"
 
 # KNOWN_TOOLS maps tool name -> (module_path, class_name) for lazy import.
 # Consumed by BuilderAgent's template (src/gaia/agents/builder/template.py) to
@@ -141,26 +144,37 @@ def _wrap_factory_with_namespaced_id(
 ) -> Callable[..., Any]:
     """
     Wrap a registration factory so the resulting Agent instance carries its
-    namespaced ID for ``Agent.process_query`` to read at runtime.
+    namespaced ID.
 
-    The base ``Agent.process_query`` reads ``_gaia_namespaced_agent_id`` (and
-    falls back to ``AGENT_ID``) when wrapping the call in the agent context
-    contextvar. Setting this attribute on the instance is what lets a
-    custom-installed agent get its proper ``custom:<sha256>:<id>`` namespace
-    instead of the bare ``AGENT_ID``.
+    Two things have to happen for the per-agent connectors activation filter
+    (#1005) to work correctly:
+
+    1. The agent class must see the namespaced id BEFORE its ``__init__``
+       calls ``_register_tools`` — that's where MCP tools get registered and
+       where ``_active_mcp_servers`` reads the id to decide which servers'
+       tools to surface. We pass it as a ``namespaced_agent_id`` kwarg so
+       config classes that declare the field (e.g. ``ChatAgentConfig``) can
+       stamp ``self._gaia_namespaced_agent_id`` at the top of ``__init__``.
+       Factories that filter kwargs by their config fields will pick this up
+       automatically; factories whose config does NOT declare the field
+       drop it harmlessly.
+    2. The instance attribute is also stamped after the factory returns as
+       belt-and-braces — covers agents whose config doesn't (yet) declare
+       the field, and ensures ``Agent.process_query`` sees the id at
+       runtime even if step 1 didn't apply.
     """
 
     def _factory(**kwargs):
+        # Inject for kwarg-aware factories (step 1).
+        kwargs.setdefault("namespaced_agent_id", namespaced_id)
         instance = factory(**kwargs)
-        # Attribute access — use setattr because subclasses may override
-        # __setattr__ to validate fields. We set on the instance, not the
-        # class, so two different registrations of the same class don't
-        # collide.
+        # Belt-and-braces post-init stamp (step 2). Use setattr so subclasses
+        # with custom ``__setattr__`` validation see a well-formed write,
+        # and tolerate __slots__-defined agents that can't accept the
+        # attribute (process_query will fall back to AGENT_ID).
         try:
             instance._gaia_namespaced_agent_id = namespaced_id
         except (AttributeError, TypeError):
-            # If the agent uses __slots__ without an entry for this field,
-            # we still proceed — process_query will fall back to AGENT_ID.
             pass
         return instance
 
@@ -186,7 +200,7 @@ class AgentRegistration:
     id: str
     name: str
     description: str
-    source: Literal["builtin", "custom_python"]
+    source: Literal["builtin", "custom_python", "native", "installed"]
     conversation_starters: List[str]
     factory: Callable[..., Any]  # returns Agent instance
     agent_dir: Optional[Path]
@@ -206,10 +220,19 @@ class AgentRegistration:
     # T-X2 (issue #915, plan amendment A9):
     # ``namespaced_agent_id`` is the grant-ledger key for this agent. Built-in
     # agents use ``builtin:<id>``; custom agents under ``~/.gaia/agents/``
-    # use ``custom:<sha256-of-agent.py>:<id>``. This namespacing prevents a
-    # malicious custom agent from claiming a built-in's AGENT_ID to inherit
-    # a previously-granted scope. Always non-empty.
+    # use ``custom:<sha256-of-agent.py>:<id>``; installed wheel agents use
+    # ``installed:<id>``. This namespacing prevents a malicious custom or
+    # installed agent from claiming a built-in's AGENT_ID to inherit a
+    # previously-granted scope. Always non-empty.
     namespaced_agent_id: str = ""
+    # Agent Hub metadata — used by the Agent UI to render rich discovery cards.
+    # Hardcoded for builtins (lazy-import factories must not instantiate agents);
+    # custom agents declare via class attributes (AGENT_CATEGORY, etc.).
+    category: str = "general"
+    tags: List[str] = field(default_factory=list)
+    icon: str = ""  # lucide icon name (e.g. "message-circle", "zap")
+    tools_count: int = 0
+    language: str = "python"  # "python" | "cpp"
 
 
 class AgentRegistry:
@@ -277,6 +300,12 @@ class AgentRegistry:
         else:
             logger.info("registry: No custom agent directory found at %s", agents_dir)
 
+        # 3. Discover installed Python agents exposed by standalone wheels
+        self._discover_entry_point_agents()
+
+        # 4. Discover native (C++/binary) agents from agent-manifest.json
+        self._discover_native_agents()
+
         agent_ids = list(self._agents.keys())
         logger.info(
             "registry: Agent discovery complete. %d agents registered: %s",
@@ -317,6 +346,10 @@ class AgentRegistry:
                 models=[],
                 required_connections=[],
                 namespaced_agent_id="builtin:chat",
+                category="conversation",
+                tags=["chat", "general", "personality"],
+                icon="message-circle",
+                tools_count=0,
             )
         )
         logger.info(
@@ -349,6 +382,10 @@ class AgentRegistry:
                 models=[],
                 required_connections=[],
                 namespaced_agent_id="builtin:doc",
+                category="documents",
+                tags=["rag", "files", "search", "mcp"],
+                icon="file-text",
+                tools_count=15,
             )
         )
         logger.info("registry: Registered built-in agent: doc (ChatAgent, profile=doc)")
@@ -380,6 +417,10 @@ class AgentRegistry:
                 models=[],
                 required_connections=[],
                 namespaced_agent_id="builtin:file",
+                category="productivity",
+                tags=["files", "search", "filesystem", "shell"],
+                icon="folder-search",
+                tools_count=10,
             )
         )
         logger.info(
@@ -388,19 +429,17 @@ class AgentRegistry:
 
         # --- Data Agent (data analysis with scratchpad) ---
         def data_factory(**kwargs):
-            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+            from gaia.agents.analyst.agent import AnalystAgent, AnalystAgentConfig
 
-            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+            valid_fields = {f.name for f in dataclasses.fields(AnalystAgentConfig)}
             filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-            filtered.setdefault("prompt_profile", "data")
-            filtered.setdefault("enable_scratchpad", True)
-            config = ChatAgentConfig(**filtered)
-            return ChatAgent(config=config)
+            config = AnalystAgentConfig(**filtered)
+            return AnalystAgent(config=config)
 
         self._register(
             AgentRegistration(
                 id="data",
-                name="Data Agent",
+                name="Analyst Agent",
                 description="Data analysis — CSV, Excel, structured queries and tables",
                 source="builtin",
                 conversation_starters=[
@@ -413,27 +452,27 @@ class AgentRegistry:
                 models=[],
                 required_connections=[],
                 namespaced_agent_id="builtin:data",
+                category="productivity",
+                tags=["data", "csv", "excel", "analysis"],
+                icon="table",
+                tools_count=10,
             )
         )
-        logger.info(
-            "registry: Registered built-in agent: data (ChatAgent, profile=data)"
-        )
+        logger.info("registry: Registered built-in agent: data (AnalystAgent)")
 
         # --- Web Agent (web research) ---
         def web_factory(**kwargs):
-            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+            from gaia.agents.browser.agent import BrowserAgent, BrowserAgentConfig
 
-            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+            valid_fields = {f.name for f in dataclasses.fields(BrowserAgentConfig)}
             filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-            filtered.setdefault("prompt_profile", "web")
-            filtered.setdefault("enable_browser", True)
-            config = ChatAgentConfig(**filtered)
-            return ChatAgent(config=config)
+            config = BrowserAgentConfig(**filtered)
+            return BrowserAgent(config=config)
 
         self._register(
             AgentRegistration(
                 id="web",
-                name="Web Agent",
+                name="Browser Agent",
                 description="Web research — search, fetch pages, and download files",
                 source="builtin",
                 conversation_starters=[
@@ -446,9 +485,13 @@ class AgentRegistry:
                 models=[],
                 required_connections=[],
                 namespaced_agent_id="builtin:web",
+                category="research",
+                tags=["web", "search", "browser", "download"],
+                icon="globe",
+                tools_count=10,
             )
         )
-        logger.info("registry: Registered built-in agent: web (ChatAgent, profile=web)")
+        logger.info("registry: Registered built-in agent: web (BrowserAgent)")
 
         # --- Lite variants of all 5 agents ---
         # Each agent (chat, doc, file, data, web) has a "-lite" variant that
@@ -520,6 +563,40 @@ class AgentRegistry:
             },
         ]
 
+        # Hub metadata for lite variants — mirrors their full-size counterparts.
+        _LITE_HUB_META = {
+            "chat-lite": {
+                "category": "conversation",
+                "tags": ["chat", "general", "lightweight"],
+                "icon": "message-circle",
+                "tools_count": 0,
+            },
+            "doc-lite": {
+                "category": "documents",
+                "tags": ["rag", "files", "lightweight"],
+                "icon": "file-text",
+                "tools_count": 15,
+            },
+            "file-lite": {
+                "category": "productivity",
+                "tags": ["files", "search", "lightweight"],
+                "icon": "folder-search",
+                "tools_count": 10,
+            },
+            "data-lite": {
+                "category": "productivity",
+                "tags": ["data", "csv", "lightweight"],
+                "icon": "table",
+                "tools_count": 10,
+            },
+            "web-lite": {
+                "category": "research",
+                "tags": ["web", "search", "lightweight"],
+                "icon": "globe",
+                "tools_count": 10,
+            },
+        }
+
         for agent_def in _LITE_AGENTS:
             aid = agent_def["id"]
             profile = agent_def["profile"]
@@ -527,6 +604,38 @@ class AgentRegistry:
 
             def _make_lite_factory(_profile, _extra):
                 def factory(**kwargs):
+                    if _profile == "data":
+                        from gaia.agents.analyst.agent import (
+                            AnalystAgent,
+                            AnalystAgentConfig,
+                        )
+
+                        valid_fields = {
+                            f.name for f in dataclasses.fields(AnalystAgentConfig)
+                        }
+                        filtered = {
+                            k: v for k, v in kwargs.items() if k in valid_fields
+                        }
+                        filtered.setdefault("model_id", _LITE_MODELS[0])
+                        config = AnalystAgentConfig(**filtered)
+                        return AnalystAgent(config=config)
+
+                    if _profile == "web":
+                        from gaia.agents.browser.agent import (
+                            BrowserAgent,
+                            BrowserAgentConfig,
+                        )
+
+                        valid_fields = {
+                            f.name for f in dataclasses.fields(BrowserAgentConfig)
+                        }
+                        filtered = {
+                            k: v for k, v in kwargs.items() if k in valid_fields
+                        }
+                        filtered.setdefault("model_id", _LITE_MODELS[0])
+                        config = BrowserAgentConfig(**filtered)
+                        return BrowserAgent(config=config)
+
                     from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
                     valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
@@ -540,6 +649,7 @@ class AgentRegistry:
 
                 return factory
 
+            hub = _LITE_HUB_META.get(aid, {})
             self._register(
                 AgentRegistration(
                     id=aid,
@@ -555,6 +665,10 @@ class AgentRegistry:
                     min_memory_gb=_LITE_MIN_MEMORY_GB,
                     required_connections=[],
                     namespaced_agent_id=f"builtin:{aid}",
+                    category=hub.get("category", "general"),
+                    tags=hub.get("tags", []),
+                    icon=hub.get("icon", ""),
+                    tools_count=hub.get("tools_count", 0),
                 )
             )
             logger.info(
@@ -585,6 +699,10 @@ class AgentRegistry:
                 min_memory_gb=_LITE_MIN_MEMORY_GB,
                 required_connections=[],
                 namespaced_agent_id="builtin:gaia-lite",
+                category="documents",
+                tags=["lightweight", "fast", "rag"],
+                icon="zap",
+                tools_count=15,
             )
         )
         logger.info(
@@ -642,6 +760,10 @@ class AgentRegistry:
                     # canonical objects so the registry stays consistent.
                     required_connections=list(ConnectorsDemoAgent.REQUIRED_CONNECTORS),
                     namespaced_agent_id="builtin:connectors-demo",
+                    category="productivity",
+                    tags=["google", "gmail", "github", "calendar"],
+                    icon="plug",
+                    tools_count=4,
                 )
             )
             logger.info(
@@ -681,6 +803,10 @@ class AgentRegistry:
                     models=[],
                     required_connections=list(EmailTriageAgent.REQUIRED_CONNECTORS),
                     namespaced_agent_id="builtin:email",
+                    category="productivity",
+                    tags=["email", "gmail", "calendar", "triage"],
+                    icon="mail",
+                    tools_count=6,
                 )
             )
             logger.info("registry: Registered built-in agent: email (EmailTriageAgent)")
@@ -716,12 +842,177 @@ class AgentRegistry:
                     hidden=True,
                     required_connections=[],
                     namespaced_agent_id="builtin:builder",
+                    category="infrastructure",
+                    tags=["scaffold", "create"],
+                    icon="wrench",
+                    tools_count=1,
                 )
             )
             logger.info("registry: Registered built-in agent: builder (BuilderAgent)")
         except ImportError:
             logger.debug(
                 "registry: BuilderAgent not available, skipping built-in registration"
+            )
+
+    # ------------------------------------------------------------------
+    # Installed Python agent discovery
+    # ------------------------------------------------------------------
+
+    def _discover_entry_point_agents(self) -> None:
+        """Register installed Python agents from the ``gaia.agents`` group."""
+        agent_entry_points = importlib.metadata.entry_points(
+            group=AGENT_ENTRY_POINT_GROUP
+        )
+
+        registered = 0
+        for entry_point in agent_entry_points:
+            try:
+                registration = self._load_entry_point_registration(entry_point)
+            except Exception as exc:
+                logger.warning(
+                    "registry: Failed to load agent entry point %s: %s",
+                    entry_point.name,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+
+            if registration.id in self._agents:
+                logger.warning(
+                    "registry: entry point agent %s skipped — ID already registered",
+                    registration.id,
+                )
+                continue
+
+            self._register(registration)
+            registered += 1
+
+        if registered:
+            logger.info("registry: Registered %d entry point agent(s)", registered)
+
+    def _load_entry_point_registration(
+        self, entry_point: importlib.metadata.EntryPoint
+    ) -> AgentRegistration:
+        loaded = entry_point.load()
+        registration = loaded() if callable(loaded) else loaded
+        if not isinstance(registration, AgentRegistration):
+            raise TypeError(
+                f"{AGENT_ENTRY_POINT_GROUP} entry point {entry_point.name!r} "
+                "must load an AgentRegistration or a zero-argument callable "
+                "returning one"
+            )
+        namespaced_id = f"installed:{registration.id}"
+        registration = dataclasses.replace(
+            registration,
+            namespaced_agent_id=namespaced_id,
+            source="installed",
+            factory=_wrap_factory_with_namespaced_id(
+                registration.factory, namespaced_id
+            ),
+        )
+        return registration
+
+    # ------------------------------------------------------------------
+    # Native (C++/binary) agent discovery
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _noop_factory(**_kwargs):
+        """Placeholder factory for native agents that cannot be created in-process."""
+        raise RuntimeError(
+            "Native agents require the Electron Agent Process Manager "
+            "(JSON-RPC over stdio). They cannot be started from the web backend."
+        )
+
+    def _discover_native_agents(self) -> None:
+        """Register native agents from ``agent-manifest.json``.
+
+        The Electron desktop app seeds ``~/.gaia/agent-manifest.json`` with
+        metadata for C++/.NET/native binary agents managed by the Agent
+        Process Manager.  We read this manifest so ``GET /api/agents``
+        returns a unified list of all agents — Python and native alike.
+        Native agents cannot be instantiated in-process; their factory
+        raises at call time.
+        """
+        manifest_locations = [
+            Path.home() / ".gaia" / "agent-manifest.json",
+            Path.home() / ".gaia" / "agents" / "agent-manifest.json",
+        ]
+        manifest_path = None
+        for candidate in manifest_locations:
+            if candidate.exists():
+                manifest_path = candidate
+                break
+
+        if manifest_path is None:
+            logger.debug(
+                "registry: No agent-manifest.json found, skipping native agents"
+            )
+            return
+
+        import json
+
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest = json.load(f)
+        except Exception as e:
+            logger.warning(
+                "registry: Failed to read agent-manifest.json at %s: %s",
+                manifest_path,
+                e,
+            )
+            return
+
+        if not isinstance(manifest, dict):
+            logger.warning("registry: agent-manifest.json is not an object, skipping")
+            return
+
+        agents_list = manifest.get("agents", [])
+        if not isinstance(agents_list, list):
+            logger.warning(
+                "registry: agent-manifest.json 'agents' is not a list, skipping"
+            )
+            return
+
+        registered = 0
+        for entry in agents_list:
+            if not isinstance(entry, dict) or "id" not in entry or "name" not in entry:
+                continue
+            agent_id = entry["id"]
+            # Skip if a Python agent already claimed this ID.
+            if agent_id in self._agents:
+                logger.debug(
+                    "registry: native agent %s skipped — ID already registered",
+                    agent_id,
+                )
+                continue
+            categories = entry.get("categories", [])
+            self._register(
+                AgentRegistration(
+                    id=agent_id,
+                    name=entry["name"],
+                    description=entry.get("description", ""),
+                    source="native",
+                    conversation_starters=[],
+                    factory=self._noop_factory,
+                    agent_dir=Path.home() / ".gaia" / "agents" / agent_id,
+                    models=[],
+                    hidden=False,
+                    namespaced_agent_id=f"native:{agent_id}",
+                    category=categories[0] if categories else "general",
+                    tags=list(categories),
+                    icon=entry.get("icon", ""),
+                    tools_count=entry.get("toolsCount", 0),
+                    language=entry.get("language", "cpp"),
+                )
+            )
+            registered += 1
+
+        if registered:
+            logger.info(
+                "registry: Registered %d native agent(s) from %s",
+                registered,
+                manifest_path,
             )
 
     # ------------------------------------------------------------------
@@ -748,7 +1039,7 @@ class AgentRegistry:
             warnings.warn(
                 f"YAML manifest agents are no longer supported. "
                 f"Convert {agent_dir}/agent.yaml to agent.py "
-                f"(see https://amd-gaia.ai/guides/custom-agent). Skipping.",
+                f"(see https://amd-gaia.ai/docs/guides/custom-agent). Skipping.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -806,6 +1097,12 @@ class AgentRegistry:
         agent_desc = getattr(agent_class, "AGENT_DESCRIPTION", "")
         starters = getattr(agent_class, "CONVERSATION_STARTERS", [])
 
+        # Agent Hub metadata — optional class attributes for rich card display.
+        agent_category = getattr(agent_class, "AGENT_CATEGORY", "custom")
+        agent_icon = getattr(agent_class, "AGENT_ICON", "")
+        agent_tags = list(getattr(agent_class, "AGENT_TAGS", []) or [])
+        agent_tools_count = getattr(agent_class, "AGENT_TOOLS_COUNT", 0)
+
         # T-X2 (issue #915, plan amendment A9): block custom agents from
         # claiming a built-in's reserved AGENT_ID. Without this, a custom
         # agent with `AGENT_ID = "chat"` could inherit a grant the user
@@ -838,7 +1135,7 @@ class AgentRegistry:
                             f"{sorted(leftover)} are ignored; only `models:` is "
                             "read from the companion YAML. Move these into "
                             "agent.py "
-                            "(see https://amd-gaia.ai/guides/custom-agent).",
+                            "(see https://amd-gaia.ai/docs/guides/custom-agent).",
                             DeprecationWarning,
                             stacklevel=2,
                         )
@@ -916,6 +1213,10 @@ class AgentRegistry:
                 models=models,
                 required_connections=required_connections,
                 namespaced_agent_id=namespaced_id,
+                category=agent_category,
+                tags=agent_tags,
+                icon=agent_icon,
+                tools_count=agent_tools_count,
             )
         )
         logger.info(

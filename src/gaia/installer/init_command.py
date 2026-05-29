@@ -565,6 +565,71 @@ class InitCommand:
             )
             return False
 
+        # First, try probing any configured LEMONADE_BASE_URL (or localhost
+        # at the default port) to detect a running server even when the
+        # lemonade-server binary isn't visible to this process (for example
+        # when running from an AppImage that strips PATH). If a healthy
+        # server responds we treat it as present and skip installation.
+        try:
+            from gaia.llm.lemonade_client import (
+                DEFAULT_LEMONADE_URL,
+                LemonadeClient,
+                LemonadeClientError,
+            )
+
+            prev_env = os.environ.get("LEMONADE_BASE_URL")
+            try:
+                # Prefer explicit env var provided by the user/session
+                probe_urls = []
+                if self._lemonade_base_url:
+                    probe_urls.append(self._lemonade_base_url)
+
+                # Also probe the well-known local URL used by Lemonade (use
+                # client constant so tests and future port changes remain in
+                # sync with Lemonade defaults). Avoid duplicate probes.
+                if DEFAULT_LEMONADE_URL not in probe_urls:
+                    probe_urls.append(DEFAULT_LEMONADE_URL)
+
+                for url in probe_urls:
+                    try:
+                        os.environ["LEMONADE_BASE_URL"] = url
+                        client = LemonadeClient(verbose=self.verbose)
+                        # Use a short timeout for probes to avoid hanging the init
+                        # process on poorly responsive networks or captive portals.
+                        try:
+                            health = client._send_request(
+                                "get", f"{client.base_url}/health", timeout=5
+                            )
+                        except TypeError:
+                            # Fall back to health_check() if _send_request signature
+                            # differs; keep health_check as a last resort.
+                            health = client.health_check()
+
+                        if health:
+                            # Good enough to consider Lemonade present
+                            self._print_success(f"Using Lemonade Server at {url}")
+                            # Restore prior env and continue (server is reachable)
+                            return True
+                    except (
+                        OSError,
+                        ConnectionError,
+                        TimeoutError,
+                        LemonadeClientError,
+                    ) as e:
+                        # Network-level probe failures are expected; log and continue
+                        log.debug("Probe failed for %s: %s", url, e)
+                        continue
+            finally:
+                # Restore original environment variable if present
+                if prev_env is None:
+                    os.environ.pop("LEMONADE_BASE_URL", None)
+                else:
+                    os.environ["LEMONADE_BASE_URL"] = prev_env
+        except Exception as e:
+            # Import errors or client failures should not block install flow,
+            # but include exception text to aid debugging per 'fail loud' rule.
+            log.debug("Could not probe LEMONADE_BASE_URL for existing server: %s", e)
+
         info = self.installer.check_installation()
 
         if info.installed and info.version:
@@ -596,6 +661,7 @@ class InitCommand:
             if not self._prompt_yes_no(
                 f"Install/update Lemonade v{LEMONADE_VERSION}?", default=True
             ):
+                self._print("")
                 self._print("   Skipping update. Will verify server connectivity.")
                 # Continue to next step - server health check will verify connectivity
                 return True

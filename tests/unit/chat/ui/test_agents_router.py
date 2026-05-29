@@ -3,7 +3,7 @@
 
 """Unit tests for the /api/agents endpoints."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -159,6 +159,81 @@ class TestAgentsRouterWithoutRegistry:
         client = TestClient(app)
         resp = client.get("/api/agents")
         assert resp.status_code == 503
+
+
+class TestListDiskAgents:
+    def test_lists_exportable_agent_missing_from_registry(
+        self, app_with_registry, tmp_path
+    ):
+        from gaia.ui.routers.agents import _require_localhost
+
+        agent_dir = tmp_path / ".gaia" / "agents" / "test-agent"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.py").write_text("class NotImportedYet: pass\n")
+
+        app_with_registry.dependency_overrides[_require_localhost] = lambda: None
+        try:
+            with patch("gaia.installer.export_import.Path.home", return_value=tmp_path):
+                client = TestClient(app_with_registry)
+                resp = client.get("/api/agents/disk", headers={"X-Gaia-UI": "1"})
+        finally:
+            app_with_registry.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "agents": [
+                {
+                    "id": "test-agent",
+                    "name": "test-agent",
+                    "registered": False,
+                    "registered_agent_id": None,
+                    "source": None,
+                }
+            ],
+            "total": 1,
+        }
+
+    def test_marks_disk_agent_registered_by_directory(self, tmp_path):
+        from gaia.ui.routers.agents import _require_localhost
+
+        agent_dir = tmp_path / ".gaia" / "agents" / "disk-dir"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.py").write_text("class AlreadyLoaded: pass\n")
+
+        app = create_app(db_path=":memory:")
+        registry = MagicMock(spec=AgentRegistry)
+        registry.list.return_value = [
+            AgentRegistration(
+                id="runtime-id",
+                name="Runtime Agent",
+                description="Loaded from disk",
+                source="custom_python",
+                conversation_starters=[],
+                factory=lambda **kw: None,
+                agent_dir=agent_dir,
+                models=[],
+            )
+        ]
+        app.state.agent_registry = registry
+        app.dependency_overrides[_require_localhost] = lambda: None
+
+        try:
+            with patch("gaia.installer.export_import.Path.home", return_value=tmp_path):
+                client = TestClient(app)
+                resp = client.get("/api/agents/disk", headers={"X-Gaia-UI": "1"})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        assert resp.json()["agents"] == [
+            {
+                "id": "disk-dir",
+                "name": "Runtime Agent",
+                "registered": True,
+                "registered_agent_id": "runtime-id",
+                "source": "custom_python",
+            }
+        ]
 
 
 class TestExportImportSecurityGuards:

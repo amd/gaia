@@ -174,7 +174,7 @@ class AgentInfo(BaseModel):
     id: str
     name: str
     description: str
-    source: Literal["builtin", "custom_python"]
+    source: Literal["builtin", "custom_python", "native", "installed"]
     conversation_starters: List[str] = Field(default_factory=list)
     models: List[str] = Field(default_factory=list)
     # Minimum free system memory (GB) the agent recommends before loading its
@@ -192,12 +192,35 @@ class AgentInfo(BaseModel):
     # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
     # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.
     namespaced_agent_id: str = ""
+    # Agent Hub metadata — used by the frontend to render rich discovery cards.
+    category: str = "general"
+    tags: List[str] = Field(default_factory=list)
+    icon: str = ""  # lucide icon name
+    tools_count: int = 0
+    language: str = "python"  # "python" | "cpp"
 
 
 class AgentListResponse(BaseModel):
     """List of registered agents."""
 
     agents: List[AgentInfo]
+    total: int
+
+
+class DiskAgentInfo(BaseModel):
+    """Information about an agent present under ~/.gaia/agents."""
+
+    id: str
+    name: str
+    registered: bool
+    registered_agent_id: Optional[str] = None
+    source: Optional[str] = None
+
+
+class DiskAgentListResponse(BaseModel):
+    """List of custom agents found on disk."""
+
+    agents: List[DiskAgentInfo]
     total: int
 
 

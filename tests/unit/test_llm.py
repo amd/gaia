@@ -298,6 +298,38 @@ class TestVLMMimeTypeDetection(unittest.TestCase):
         self.assertEqual(detect_image_mime_type(riff_not_webp), "image/png")
 
 
+class TestVLMClientApiKeyForwarding(unittest.TestCase):
+    """Issue #1139: VLMClient must forward api_key to its inner LemonadeClient.
+
+    VLMClient does NOT call ``resolve_lemonade_api_key`` itself — it forwards
+    the raw kwarg so the canonical resolution happens once inside
+    LemonadeClient. These tests prove that contract.
+    """
+
+    def test_vlm_client_forwards_explicit_api_key_to_lemonade_client(self):
+        from unittest.mock import patch
+
+        # VLMClient does a deferred ``from gaia.llm.lemonade_client import LemonadeClient``
+        # inside ``__init__``; patch the symbol where it lives.
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lc:
+            from gaia.llm.vlm_client import VLMClient
+
+            VLMClient(api_key="abc-1139", auto_load=False)
+            self.assertEqual(mock_lc.call_args.kwargs.get("api_key"), "abc-1139")
+
+    def test_vlm_client_default_api_key_is_none_so_lemonade_client_resolves_env(self):
+        """VLMClient must NOT pre-resolve the env var; LemonadeClient does that."""
+        from unittest.mock import patch
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lc:
+            from gaia.llm.vlm_client import VLMClient
+
+            VLMClient(auto_load=False)
+            # ``api_key`` is forwarded as None (not a resolved value); the
+            # inner LemonadeClient is responsible for the env-var fallback.
+            self.assertIsNone(mock_lc.call_args.kwargs.get("api_key"))
+
+
 class TestLemonadeManagerContextMessage(unittest.TestCase):
     """Test cases for LemonadeManager context message formatting."""
 
@@ -448,6 +480,46 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
 
                 self.assertTrue(result)
                 mock_print_context.assert_not_called()
+
+
+class TestGetLemonadeConfigNormalization(unittest.TestCase):
+    """Verify _get_lemonade_config normalizes LEMONADE_BASE_URL to include /api/v1."""
+
+    def test_env_url_without_api_suffix_is_normalized(self):
+        """LEMONADE_BASE_URL without /api/v1 should be normalized (issue #1158)."""
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        with patch.dict(os.environ, {"LEMONADE_BASE_URL": "http://remote:13305"}):
+            _host, _port, base_url = _get_lemonade_config()
+            self.assertEqual(base_url, "http://remote:13305/api/v1")
+
+    def test_env_url_with_api_suffix_unchanged(self):
+        """LEMONADE_BASE_URL already containing /api/v1 should not be doubled."""
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        with patch.dict(
+            os.environ, {"LEMONADE_BASE_URL": "http://remote:13305/api/v1"}
+        ):
+            _host, _port, base_url = _get_lemonade_config()
+            self.assertEqual(base_url, "http://remote:13305/api/v1")
+
+    def test_env_url_with_trailing_slash_normalized(self):
+        """Trailing slash should be stripped before appending /api/v1."""
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        with patch.dict(os.environ, {"LEMONADE_BASE_URL": "http://remote:13305/"}):
+            _host, _port, base_url = _get_lemonade_config()
+            self.assertEqual(base_url, "http://remote:13305/api/v1")
+
+    def test_env_url_host_and_port_extracted(self):
+        """Host and port should be correctly parsed from the normalized URL."""
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        with patch.dict(os.environ, {"LEMONADE_BASE_URL": "http://myhost:9000"}):
+            host, port, base_url = _get_lemonade_config()
+            self.assertEqual(host, "myhost")
+            self.assertEqual(port, 9000)
+            self.assertEqual(base_url, "http://myhost:9000/api/v1")
 
 
 if __name__ == "__main__":

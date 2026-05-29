@@ -63,6 +63,14 @@ class TestCreateClientFactory:
             create_client("lemonade", base_url="http://custom:9000", model="test")
             mock.assert_called_with(base_url="http://custom:9000", model="test")
 
+    def test_create_client_forwards_api_key_to_lemonade_client(self):
+        """Issue #1139: ``api_key`` kwarg must reach LemonadeClient."""
+        with patch("gaia.llm.providers.lemonade.LemonadeClient") as mock:
+            from gaia.llm import create_client
+
+            create_client("lemonade", api_key="abc-1139")
+            assert mock.call_args.kwargs.get("api_key") == "abc-1139"
+
 
 # =============================================================================
 # NotSupportedError Tests

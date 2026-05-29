@@ -40,6 +40,13 @@
     overflow: hidden;
     flex-shrink: 1;
     min-width: 0;
+    border: none;
+    background: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+    font: inherit;
 }
 
 .brand-icon {

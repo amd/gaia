@@ -255,15 +255,20 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             """
             import httpx
 
+            from gaia.llm.lemonade_client import (
+                lemonade_auth_headers,
+                resolve_lemonade_api_key,
+            )
             from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
             from gaia.ui._chat_helpers import model_load_lock
 
             base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key())
 
             # Check if a chat model is already loaded.
             # Let exceptions propagate so the DispatchQueue marks the job as
             # FAILED (not DONE) — the frontend will show "degraded" state.
-            resp = httpx.get(f"{base_url}/health", timeout=5.0)
+            resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
             if resp.status_code == 200:
                 all_models = resp.json().get("all_models_loaded", [])
                 if any(m.get("type") in ("llm", "vlm") for m in all_models):
@@ -275,7 +280,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 # Double-check after acquiring the lock: another thread may have
                 # loaded the model while we were waiting.
                 try:
-                    resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
+                    resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
                     if resp2.status_code == 200:
                         all_models2 = resp2.json().get("all_models_loaded", [])
                         if any(m.get("type") in ("llm", "vlm") for m in all_models2):
@@ -661,7 +666,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     (download at
     <a href="https://github.com/amd/gaia/releases">github.com/amd/gaia/releases</a>).
     For browser-mode setup and troubleshooting, see
-    <a href="https://amd-gaia.ai/guides/agent-ui">amd-gaia.ai/guides/agent-ui</a>.
+    <a href="https://amd-gaia.ai/docs/guides/agent-ui">amd-gaia.ai/docs/guides/agent-ui</a>.
   </p>
   <ul>
     <li><a href="/docs">API documentation</a> (<code>/docs</code>)</li>

@@ -102,6 +102,25 @@
         {"id": "engineering_budget", "question": "What is the annual Engineering department budget?", "answer": "$1.3M", "difficulty": "medium"},
         {"id": "cfo_approval_threshold", "question": "What spending threshold requires CFO approval?", "answer": "Expenses over $50K require CFO approval", "difficulty": "medium"}
       ]
+    },
+    {
+      "id": "safety_handbook_cc0",
+      "filename": "safety_handbook_cc0.txt",
+      "format": "text",
+      "domain": "safety",
+      "facts": [
+        {"id": "water_guidance", "question": "What does the document say about water?", "answer": "Ensure proper labeling of water containers; maintain sanitary conditions for potable water; isolate contaminated water and notify safety officer.", "difficulty": "medium"}
+      ]
+    }
+    ,
+    {
+      "id": "safety_handbook_large",
+      "filename": "safety_handbook_large.pdf",
+      "format": "pdf",
+      "domain": "safety",
+      "facts": [
+        {"id": "water_guidance", "question": "What does the document say about water?", "answer": "Ensure proper labeling of water containers; maintain sanitary conditions for potable water; isolate contaminated water and notify safety officer.", "difficulty": "medium"}
+      ]
     }
   ],
   "adversarial_documents": [

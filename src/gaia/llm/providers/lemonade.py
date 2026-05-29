@@ -220,6 +220,7 @@ class LemonadeProvider(LLMClient):
         host: Optional[str] = None,
         port: Optional[int] = None,
         system_prompt: Optional[str] = None,
+        api_key: Optional[str] = None,
         **kwargs,
     ):
         # Build kwargs for LemonadeClient, only including non-None values
@@ -232,6 +233,8 @@ class LemonadeProvider(LLMClient):
             backend_kwargs["host"] = host
         if port is not None:
             backend_kwargs["port"] = port
+        if api_key is not None:
+            backend_kwargs["api_key"] = api_key
         backend_kwargs.update(kwargs)
 
         self._backend = LemonadeClient(**backend_kwargs)

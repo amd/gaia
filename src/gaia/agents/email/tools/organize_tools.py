@@ -15,7 +15,8 @@ class.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+import uuid
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.tools import tool
 from gaia.agents.email import action_store
@@ -197,6 +198,100 @@ _BATCH_THRESHOLD_ERROR = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Batch helpers — execute a single Gmail API mutation per message id,
+# record each action with the shared batch_id, and collect partial results.
+# ---------------------------------------------------------------------------
+
+
+def _coerce_ids(message_ids):
+    """Ensure message_ids is a list of strings. LLMs send comma-separated strings."""
+    if message_ids is None:
+        return []
+    if isinstance(message_ids, list):
+        return message_ids
+    if isinstance(message_ids, str):
+        return [
+            x.strip() for x in message_ids.replace(";", ",").split(",") if x.strip()
+        ]
+    return []
+
+
+def _run_batch(
+    _gmail,
+    db,
+    message_ids: list[str],
+    *,
+    gmail_op,
+    action_type: str,
+    payload: dict | None = None,
+    batch_id: str,
+    debug: bool = False,
+) -> dict:
+    """Execute a Gmail mutation for each message_id, recording each action.
+
+    Returns ``{"succeeded": [...], "failed": [...]}``.
+    """
+    succeeded: list[dict] = []
+    failed: list[dict] = []
+    for mid in message_ids:
+        try:
+            gmail_op(mid)
+            aid = action_store.record_action(
+                db,
+                action_type=action_type,
+                message_id=mid,
+                payload=dict(payload or {}),
+                batch_id=batch_id,
+            )
+            succeeded.append({"message_id": mid, "action_id": aid})
+        except Exception as exc:
+            failed.append({"message_id": mid, "error": f"{type(exc).__name__}: {exc}"})
+            if debug:
+                log.exception("batch op failed for %s", mid)
+    return {"succeeded": succeeded, "failed": failed}
+
+
+def _run_batch_with_prior(
+    gmail,
+    db,
+    message_ids: list[str],
+    *,
+    gmail_op,
+    action_type: str,
+    prior_fn,
+    payload_fn,
+    batch_id: str,
+    debug: bool = False,
+) -> dict:
+    """Same as _run_batch but fetches per-message prior state first.
+
+    ``prior_fn(msg) -> prior`` is called once per message.
+    ``payload_fn(msg, prior) -> dict`` builds the action payload.
+    """
+    succeeded: list[dict] = []
+    failed: list[dict] = []
+    for mid in message_ids:
+        try:
+            msg = gmail.get_message(mid)
+            prior = prior_fn(msg)
+            gmail_op(mid)
+            aid = action_store.record_action(
+                db,
+                action_type=action_type,
+                message_id=mid,
+                thread_id=msg.get("threadId"),
+                payload=payload_fn(msg, prior),
+                batch_id=batch_id,
+            )
+            succeeded.append({"message_id": mid, "action_id": aid})
+        except Exception as exc:
+            failed.append({"message_id": mid, "error": f"{type(exc).__name__}: {exc}"})
+            if debug:
+                log.exception("batch op (with prior) failed for %s", mid)
+    return {"succeeded": succeeded, "failed": failed}
+
+
 class OrganizeToolsMixin:
     def _register_organize_tools(self) -> None:
         gmail = self._gmail
@@ -345,6 +440,289 @@ class OrganizeToolsMixin:
                         prior=prior,
                         debug=debug_flag,
                     )
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        # ---- Batch organize tools (for 3+ messages in one call) ----------
+
+        @tool
+        def mark_read_batch(message_ids: list[str]) -> str:
+            """Mark multiple messages as read in one call. Use for 3+ messages."""
+            if not message_ids:
+                return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
+            message_ids = _coerce_ids(message_ids)
+            if (err := _check_threshold()) is not None:
+                return _envelope_err(err)
+            try:
+                batch_id = uuid.uuid4().hex
+                result = _run_batch(
+                    gmail,
+                    db,
+                    message_ids,
+                    gmail_op=gmail.mark_read,
+                    action_type="mark_read",
+                    batch_id=batch_id,
+                    debug=debug_flag,
+                )
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
+                return _envelope_ok(
+                    {
+                        "batch_id": batch_id,
+                        "total": len(message_ids),
+                        "succeeded": result["succeeded"],
+                        "failed": result["failed"],
+                    }
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def mark_unread_batch(message_ids: list[str]) -> str:
+            """Mark multiple messages as unread in one call. Use for 3+ messages."""
+            if not message_ids:
+                return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
+            message_ids = _coerce_ids(message_ids)
+            if (err := _check_threshold()) is not None:
+                return _envelope_err(err)
+            try:
+                batch_id = uuid.uuid4().hex
+                result = _run_batch(
+                    gmail,
+                    db,
+                    message_ids,
+                    gmail_op=gmail.mark_unread,
+                    action_type="mark_unread",
+                    batch_id=batch_id,
+                    debug=debug_flag,
+                )
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
+                return _envelope_ok(
+                    {
+                        "batch_id": batch_id,
+                        "total": len(message_ids),
+                        "succeeded": result["succeeded"],
+                        "failed": result["failed"],
+                    }
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def add_star_batch(message_ids: list[str]) -> str:
+            """Star multiple messages in one call. Use for 3+ messages."""
+            if not message_ids:
+                return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
+            message_ids = _coerce_ids(message_ids)
+            if (err := _check_threshold()) is not None:
+                return _envelope_err(err)
+            try:
+                batch_id = uuid.uuid4().hex
+                result = _run_batch(
+                    gmail,
+                    db,
+                    message_ids,
+                    gmail_op=gmail.add_star,
+                    action_type="add_star",
+                    batch_id=batch_id,
+                    debug=debug_flag,
+                )
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
+                return _envelope_ok(
+                    {
+                        "batch_id": batch_id,
+                        "total": len(message_ids),
+                        "succeeded": result["succeeded"],
+                        "failed": result["failed"],
+                    }
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def remove_star_batch(message_ids: list[str]) -> str:
+            """Remove star from multiple messages in one call. Use for 3+ messages."""
+            if not message_ids:
+                return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
+            message_ids = _coerce_ids(message_ids)
+            if (err := _check_threshold()) is not None:
+                return _envelope_err(err)
+            try:
+                batch_id = uuid.uuid4().hex
+                result = _run_batch(
+                    gmail,
+                    db,
+                    message_ids,
+                    gmail_op=gmail.remove_star,
+                    action_type="remove_star",
+                    batch_id=batch_id,
+                    debug=debug_flag,
+                )
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
+                return _envelope_ok(
+                    {
+                        "batch_id": batch_id,
+                        "total": len(message_ids),
+                        "succeeded": result["succeeded"],
+                        "failed": result["failed"],
+                    }
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def archive_message_batch(message_ids: list[str]) -> str:
+            """Archive multiple messages (remove from INBOX) in one call. Use for 3+ messages."""
+            if not message_ids:
+                return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
+            message_ids = _coerce_ids(message_ids)
+            if (err := _check_threshold()) is not None:
+                return _envelope_err(err)
+            try:
+                batch_id = uuid.uuid4().hex
+
+                def _archive_prior_fn(msg: Dict[str, Any]) -> List[str]:
+                    return list(msg.get("labelIds", []))
+
+                def _archive_payload_fn(
+                    _msg: Dict[str, Any], prior_labels: List[str]
+                ) -> Dict[str, Any]:
+                    return {"prior_labels": prior_labels}
+
+                result = _run_batch_with_prior(
+                    gmail,
+                    db,
+                    message_ids,
+                    gmail_op=gmail.archive_message,
+                    action_type="archive",
+                    prior_fn=_archive_prior_fn,
+                    payload_fn=_archive_payload_fn,
+                    batch_id=batch_id,
+                    debug=debug_flag,
+                )
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
+                return _envelope_ok(
+                    {
+                        "batch_id": batch_id,
+                        "total": len(message_ids),
+                        "succeeded": result["succeeded"],
+                        "failed": result["failed"],
+                    }
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def label_message_batch(message_ids: list[str], label_id: str) -> str:
+            """Add a label to multiple messages in one call. Use for 3+ messages."""
+            if not message_ids:
+                return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
+            message_ids = _coerce_ids(message_ids)
+            if (err := _check_threshold()) is not None:
+                return _envelope_err(err)
+            try:
+                batch_id = uuid.uuid4().hex
+                label_id_local = label_id  # closure capture
+
+                def _label_op(mid: str) -> None:
+                    gmail.add_label(mid, label_id_local)
+
+                result = _run_batch(
+                    gmail,
+                    db,
+                    message_ids,
+                    gmail_op=_label_op,
+                    action_type="add_label",
+                    payload={"label_id": label_id_local},
+                    batch_id=batch_id,
+                    debug=debug_flag,
+                )
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
+                return _envelope_ok(
+                    {
+                        "batch_id": batch_id,
+                        "total": len(message_ids),
+                        "succeeded": result["succeeded"],
+                        "failed": result["failed"],
+                    }
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def move_to_label_batch(message_ids: list[str], label_id: str) -> str:
+            """Move multiple messages out of INBOX into a label in one call. Use for 3+ messages."""
+            if not message_ids:
+                return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
+            message_ids = _coerce_ids(message_ids)
+            if (err := _check_threshold()) is not None:
+                return _envelope_err(err)
+            try:
+                batch_id = uuid.uuid4().hex
+                label_id_local = label_id
+
+                def _move_op(mid: str) -> None:
+                    gmail.add_label(mid, label_id_local)
+                    gmail.archive_message(mid)
+
+                def _move_prior_fn(msg: Dict[str, Any]) -> List[str]:
+                    return list(msg.get("labelIds", []))
+
+                def _move_payload_fn(
+                    _msg: Dict[str, Any], prior_labels: List[str]
+                ) -> Dict[str, Any]:
+                    return {
+                        "label_id": label_id_local,
+                        "prior_labels": prior_labels,
+                    }
+
+                result = _run_batch_with_prior(
+                    gmail,
+                    db,
+                    message_ids,
+                    gmail_op=_move_op,
+                    action_type="move_to_label",
+                    prior_fn=_move_prior_fn,
+                    payload_fn=_move_payload_fn,
+                    batch_id=batch_id,
+                    debug=debug_flag,
+                )
+                for _mid in message_ids:
+                    agent._record_organize_op(_mid, "")
+                return _envelope_ok(
+                    {
+                        "batch_id": batch_id,
+                        "total": len(message_ids),
+                        "succeeded": result["succeeded"],
+                        "failed": result["failed"],
+                    }
                 )
             except ConnectorsError as exc:
                 return _envelope_err(str(exc))

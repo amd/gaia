@@ -330,6 +330,10 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 
 5. **After approval**, PyPI + npm + GitHub Release jobs run in parallel. Watch to completion.
 
+6. **`refresh-context7` is the terminal job and may legitimately fail — that is not a release failure.** This job runs *after* PyPI, npm, GitHub Release, and the desktop installers are already published. Context7's API rejects refresh requests inside a short cooldown window (observed: ~3–6 days between releases), and the response is HTTP 400. If the job is red, the release is still live. Open the job log, read the `Response body:` block between the `::stop-commands::` markers, and either accept the cooldown reason or file a follow-up about a new rejection cause. Do **not** delete or re-tag — see the recovery guidance in the Notes section below.
+
+7. **Never add `set -x` or `curl -v` to the `refresh-context7` step** to "debug" a failure. GHA only masks the verbatim secret value; `curl -v` prints the `Authorization: Bearer <token>` header, which is a transformed form that GHA's masking does not catch. Read the captured response body instead — it carries the same diagnostic signal without the leak risk.
+
 ---
 
 ## Phase 6 — Post-release verification + announcement

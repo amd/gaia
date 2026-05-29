@@ -1675,3 +1675,92 @@ class TestSpaShellServing:
         joined = " ".join(rec.getMessage() for rec in caplog.records)
         assert "missing-dist" in joined
         assert "gaia.apps.webui" in joined
+
+
+class TestLemonadeApiKeyInjection:
+    """Issue #1139: every Lemonade-bound HTTP call from the UI must carry
+    ``Authorization: Bearer <key>`` when ``LEMONADE_API_KEY`` is set.
+
+    These tests exercise the system_status endpoint which is the broadest
+    surface area for httpx calls; per-site tests for the remaining call
+    sites (_chat_helpers, server.py startup) are covered by the T13 grep
+    sweep + the unit tests of ``lemonade_auth_headers`` in
+    ``tests/test_lemonade_client.py``.
+    """
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_sends_authorization_header_when_key_set(
+        self, mock_httpx_cls, client
+    ):
+        captured_headers = []
+
+        async def mock_get(url, **kwargs):
+            captured_headers.append(kwargs.get("headers"))
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {
+                "status": "ok",
+                "model_loaded": None,
+                "all_models_loaded": [],
+            }
+            return resp
+
+        mock_client = AsyncMock()
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        with patch.dict(
+            os.environ,
+            {"LEMONADE_API_KEY": "abc-1139"},
+            clear=False,
+        ):
+            resp = client.get("/api/system/status")
+        assert resp.status_code == 200
+        # At least one (and ideally all) httpx GETs to Lemonade must carry
+        # the Authorization header.
+        auth_present = [
+            h
+            for h in captured_headers
+            if h and h.get("Authorization") == "Bearer abc-1139"
+        ]
+        assert auth_present, (
+            f"No Lemonade GET carried Authorization: Bearer header. "
+            f"Captured headers: {captured_headers}"
+        )
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_omits_authorization_header_when_no_key(
+        self, mock_httpx_cls, client
+    ):
+        captured_headers = []
+
+        async def mock_get(url, **kwargs):
+            captured_headers.append(kwargs.get("headers"))
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {
+                "status": "ok",
+                "model_loaded": None,
+                "all_models_loaded": [],
+            }
+            return resp
+
+        mock_client = AsyncMock()
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        env_no_key = {k: v for k, v in os.environ.items() if k != "LEMONADE_API_KEY"}
+        with patch.dict(os.environ, env_no_key, clear=True):
+            resp = client.get("/api/system/status")
+        assert resp.status_code == 200
+        # When unset, no captured header should carry an Authorization key.
+        for h in captured_headers:
+            if h is None:
+                continue
+            assert (
+                "Authorization" not in h
+            ), f"Captured Authorization header without LEMONADE_API_KEY set: {h}"

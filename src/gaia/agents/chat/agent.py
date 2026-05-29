@@ -20,6 +20,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.chat.session import SessionManager
 from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
 from gaia.agents.code.tools.file_io import FileIOToolsMixin
@@ -100,6 +101,15 @@ class ChatAgentConfig:
     # Optional capability flags (disabled by default to keep document Q&A focused)
     enable_sd_tools: bool = False  # Stable Diffusion image generation
 
+    # MCP settings.
+    # 50 default is the validated middle ground: covers the 49-tool MCP
+    # server tested on Gemma-4-E4B at 100% pass rate in PR #718 with one
+    # tool of headroom, and is 5× the previous 10 limit (which silently
+    # skipped any tool past index 10). Workflows with >50 tools should
+    # override explicitly; for larger sets the prompt bloat can hurt
+    # small-model accuracy and warrants its own validation run.
+    mcp_tool_limit: int = 50  # Max MCP tools to register (prevents context bloat)
+
     # Prompt profile controls which tools and prompt sections are included.
     # Profiles keep the system prompt lean for task-specific agents:
     #   "chat"  — basic conversation only (personality, greetings, no RAG/file tools)
@@ -109,6 +119,17 @@ class ChatAgentConfig:
     #   "web"   — web research, page fetching
     #   "full"  — all tools and prompt sections (backward-compatible default)
     prompt_profile: str = "full"
+
+    # Per-agent identity for the connectors activation filter (#1005).
+    # Must be set BEFORE ``Agent.__init__`` runs ``_register_tools``, because
+    # that's where ``_active_mcp_servers`` consults ``is_agent_active`` to
+    # decide which MCP servers' tools to surface. The registry's
+    # ``_wrap_factory_with_namespaced_id`` injects this via kwargs, and the
+    # UI's direct construction paths in ``_chat_helpers`` pass it explicitly.
+    # Leaving this ``None`` reproduces the pre-#1005 behaviour where the
+    # agent sees every connected MCP server unfiltered — keep it set for
+    # any built-in or registered Chat instance.
+    namespaced_agent_id: Optional[str] = None
 
 
 class ChatAgent(
@@ -153,6 +174,15 @@ class ChatAgent(
         # Use provided config or create default
         if config is None:
             config = ChatAgentConfig()
+
+        # Stamp the per-agent identity for the connectors activation filter
+        # (#1005) BEFORE ``super().__init__`` runs ``_register_tools``. The
+        # MCP-tool registration step in ``_register_tools`` consults
+        # ``_active_mcp_servers`` which reads this attribute; setting it
+        # after super().__init__ would be too late and the filter would
+        # silently fall back to "ad-hoc agent — show every MCP server".
+        if config.namespaced_agent_id:
+            self._gaia_namespaced_agent_id = config.namespaced_agent_id
 
         # Initialize path validator
         self.path_validator = PathValidator(config.allowed_paths)
@@ -376,12 +406,17 @@ class ChatAgent(
             self._start_watching()
 
     def _post_process_tool_result(
-        self, tool_name: str, _tool_args: Dict[str, Any], tool_result: Dict[str, Any]
-    ) -> None:
+        self,
+        tool_name: str,
+        _tool_args: Dict[str, Any],
+        tool_result: Dict[str, Any],
+    ) -> Optional[List[Dict[str, Any]]]:
         """
         Post-process tool results for Chat Agent.
 
-        Handles RAG-specific debug information display.
+        Handles RAG-specific debug information display, then delegates
+        to ``super()`` so the base class can set ``_single_tool_done``
+        for ``single_tool_per_turn=True`` agents on the success path.
 
         Args:
             tool_name: Name of the tool that was executed
@@ -408,6 +443,7 @@ class ChatAgent(
             print(
                 f"  - Final chunks returned: {debug_info.get('final_chunks_returned', 0)}"
             )
+        return super()._post_process_tool_result(tool_name, _tool_args, tool_result)
 
     def _get_mixin_prompts(self) -> list[str]:
         """Auto-discover mixin prompts, but exclude SD unless actually initialized."""
@@ -1526,19 +1562,23 @@ No documents are currently indexed.
 
         # MCP tools — load from ~/.gaia/mcp_servers.json if configured.
         # Must run last so MCP tools don't bloat context before we know the base count.
-        # Hard limit: skip if MCP would add >10 tools (context bloat guard).
-        from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: F811
-
-        _MCP_TOOL_LIMIT = 10
+        # Hard limit: skip if MCP would add too many tools (context bloat guard).
+        # Configurable via ChatAgentConfig.mcp_tool_limit (default 50).
+        _MCP_TOOL_LIMIT = self.config.mcp_tool_limit
         _mcp_config_path = Path.home() / ".gaia" / "mcp_servers.json"
         if _mcp_config_path.exists() and self._mcp_manager is not None:
             try:
                 self._mcp_manager.load_from_config()
                 self._print_mcp_load_summary()
+                # Filter to servers explicitly activated for this agent
+                # (issue #1005). Falls back to the unfiltered list when the
+                # agent has no registry identity, preserving prior behaviour
+                # for ad-hoc test agents.
+                _active_servers = self._active_mcp_servers(self._mcp_manager)
                 # Preview total tool count before registering
                 _mcp_tool_count = sum(
                     len(_c.list_tools())
-                    for _srv in self._mcp_manager.list_servers()
+                    for _srv in _active_servers
                     if (_c := self._mcp_manager.get_client(_srv)) is not None
                 )
                 if _mcp_tool_count > _MCP_TOOL_LIMIT:
@@ -1550,7 +1590,7 @@ No documents are currently indexed.
                     )
                 else:
                     _before = len(_TOOL_REGISTRY)
-                    for _srv in self._mcp_manager.list_servers():
+                    for _srv in _active_servers:
                         _client = self._mcp_manager.get_client(_srv)
                         if _client:
                             self._register_mcp_tools(_client)
