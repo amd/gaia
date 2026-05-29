@@ -355,6 +355,9 @@ void ReplRunner::run() {
 // ---------------------------------------------------------------------------
 
 int ReplRunner::runOnce(const std::string& query) {
+    // Configure output handler before the query (TuiConsole vs CleanConsole)
+    configureOutputHandler();
+
     try {
         auto result = agent_.processQuery(query);
 
@@ -362,8 +365,13 @@ int ReplRunner::runOnce(const std::string& query) {
             return 1;
         }
 
-        if (result.contains("result") && result["result"].is_string()) {
-            std::cout << result["result"].get<std::string>() << std::endl;
+        // The console handler already prints the final answer via
+        // printFinalAnswer() during processQuery(). Only print here
+        // if the agent is in silent mode (no console output).
+        if (agent_.config().silentMode) {
+            if (result.contains("result") && result["result"].is_string()) {
+                std::cout << result["result"].get<std::string>() << std::endl;
+            }
         }
 
         return 0;
