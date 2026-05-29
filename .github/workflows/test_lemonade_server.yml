@@ -15,6 +15,7 @@ on:
       - '.github/actions/install-lemonade/**'
       - '.github/actions/setup-venv/**'
       - 'installer/**'
+      - 'tests/test_lemonade*.py'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -26,6 +27,7 @@ on:
       - '.github/actions/install-lemonade/**'
       - '.github/actions/setup-venv/**'
       - 'installer/**'
+      - 'tests/test_lemonade*.py'
   merge_group:
   workflow_dispatch:
     inputs:

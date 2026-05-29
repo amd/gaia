@@ -67,8 +67,8 @@ jobs:
           # keyring + httpx + respx are required by tests/unit/connections/
           # (issue #915). The in-memory keyring backend in tests/conftest.py
           # avoids the SecretService daemon prerequisite on Linux runners.
-          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pyfakefs \
-                                  keyring httpx respx
+          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
+                                  pyfakefs keyring httpx respx
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
