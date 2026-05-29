@@ -1677,6 +1677,55 @@ gaia cache clear --all
 
 ---
 
+### Knowledge Command
+
+Web research via [Tavily](https://tavily.com), with SQLite result caching, a per-session
+credit budget, and an automatic keyless DuckDuckGo fallback when the `mcp-tavily`
+connector isn't configured. See the [Tavily connector](/connectors/tavily).
+
+```bash
+gaia knowledge {search,extract,usage} [OPTIONS]
+```
+
+**Actions:**
+
+| Action | Description |
+|--------|-------------|
+| `search` | Web search for a query. Falls back to DuckDuckGo when Tavily isn't configured. |
+| `extract` | Extract clean content from one or more URLs. Requires the Tavily connector. |
+| `usage` | Print cached credit-usage totals (per operation + session total). |
+
+**Options:**
+
+| Flag | Type | Applies to | Description |
+|------|------|------------|-------------|
+| `--max-results` | integer | `search` | Maximum results to return (default: 5) |
+| `--depth` | `basic` \| `advanced` | `search`, `extract` | Depth; `advanced` costs more credits (default: `basic`) |
+| `--budget` | integer | `search`, `extract` | Credit cap for the session; omit for unlimited |
+| `--no-block` | flag | `search`, `extract` | Warn instead of blocking when the budget cap is exceeded |
+
+**Examples:**
+
+<CodeGroup>
+```bash Search the web
+gaia knowledge search "AMD ROCm latest release" --max-results 5
+```
+
+```bash Extract page content
+gaia knowledge extract https://example.com/post
+```
+
+```bash Show credit usage
+gaia knowledge usage
+```
+</CodeGroup>
+
+`search` automatically degrades to DuckDuckGo when the `mcp-tavily` connector isn't
+configured; `extract` requires Tavily and raises an actionable error otherwise. Configure
+the connector with `gaia connectors configure mcp-tavily --set TAVILY_API_KEY=tvly-...`.
+
+---
+
 ### Kill Command
 
 Terminate processes running on specific ports.

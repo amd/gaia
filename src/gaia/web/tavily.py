@@ -452,6 +452,12 @@ class TavilyClient(_TavilyBase):
         )
         return response
 
+    def __enter__(self) -> "TavilyClient":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
 
 class AsyncTavilyClient(_TavilyBase):
     """Asynchronous Tavily wrapper for concurrent multi-query research.
@@ -531,3 +537,19 @@ class AsyncTavilyClient(_TavilyBase):
             self._actual_credits("extract", extract_depth, response),
         )
         return response
+
+    async def aclose(self) -> None:
+        """Close the async SDK client, then the cache DB and web client.
+
+        The real ``AsyncTavilyClient`` wraps an ``httpx.AsyncClient`` that must
+        be awaited shut; without this, long-lived async callers leak connections.
+        """
+        if self._sdk is not None and hasattr(self._sdk, "aclose"):
+            await self._sdk.aclose()
+        self.close()
+
+    async def __aenter__(self) -> "AsyncTavilyClient":
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        await self.aclose()
