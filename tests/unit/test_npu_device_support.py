@@ -4,8 +4,6 @@
 """Unit tests for multi-device (CPU/GPU/NPU) agent support (#1220)."""
 
 import json
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest

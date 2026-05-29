@@ -612,9 +612,7 @@ async def async_main(action, **kwargs):
                 from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
 
                 try:
-                    from gaia.llm.lemonade_client import LemonadeClient as _DevClient
-
-                    _dev_client = _DevClient(verbose=False)
+                    _dev_client = LemonadeClient(verbose=False)
                     _sysinfo = _dev_client.get_system_info()
                     _devices = _sysinfo.get("devices", {})
 
@@ -656,9 +654,7 @@ async def async_main(action, **kwargs):
                     "times. Use 'gaia init' to set up GPU acceleration."
                 )
             if effective_device == "npu":
-                print(
-                    "   ℹ️  NPU mode requires: gaia init --profile npu"
-                )
+                print("   ℹ️  NPU mode requires: gaia init --profile npu")
 
             # Create configuration with CLI values
             config = ChatAgentConfig(
