@@ -1912,7 +1912,7 @@ def build_parser():
 
     telegram_parser.set_defaults(action="telegram")
 
-    # Knowledge command — web research via the Tavily wrapper 
+    # Knowledge command — web research via the Tavily wrapper
     knowledge_parser = subparsers.add_parser(
         "knowledge",
         help="Web research via Tavily (search|extract|usage), with caching and a credit budget",
