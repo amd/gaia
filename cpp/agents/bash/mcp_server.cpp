@@ -181,8 +181,9 @@ json McpServer::handleToolsCall(const json& params) {
 
     json result = agent_.toolRegistry().executeTool(name, arguments);
 
-    // Check if the tool returned an error
-    bool isError = result.contains("status") && result["status"] == "error";
+    // Check if the tool returned an error (two patterns: {"status":"error"} or {"error":"..."})
+    bool isError = (result.contains("status") && result["status"] == "error")
+                || (result.contains("error") && !result.contains("success"));
 
     std::string resultText = result.dump(2);
 

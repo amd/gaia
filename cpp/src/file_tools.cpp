@@ -350,7 +350,7 @@ json FileIOTools::doFileSearch(const json& args) {
                         ++total;
                         if (static_cast<int>(matches.size()) < maxResults) {
                             json match;
-                            match["path"] = it->path().string();
+                            match["path"] = it->path().generic_string();
                             match["line"] = lineNum;
                             // Trim context to reasonable length
                             std::string context = line;
@@ -367,7 +367,7 @@ json FileIOTools::doFileSearch(const json& args) {
                 ++total;
                 if (static_cast<int>(matches.size()) < maxResults) {
                     json match;
-                    match["path"] = it->path().string();
+                    match["path"] = it->path().generic_string();
                     matches.push_back(std::move(match));
                 }
             }

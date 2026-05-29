@@ -271,13 +271,21 @@ int main(int argc, char* argv[]) {
             config.modelId = modelOverride;
         }
 
-        // --print implies --no-tui
+        // --print implies --no-tui and auto-allows tools (no interactive stdin)
         if (printMode) {
             noTui = true;
         }
 
         // Create agent
         gaia::BashAgent agent(config);
+
+        // In pipe/print mode, auto-allow all tools since there's no stdin for confirmation
+        if (printMode) {
+            agent.setToolConfirmCallback(
+                [](const std::string&, const gaia::json&) {
+                    return gaia::ToolConfirmResult::ALLOW_ONCE;
+                });
+        }
 
         // Set up the REPL
         gaia::ReplRunner repl(agent);
