@@ -1011,7 +1011,9 @@ class RAGSDK:
                     try:
                         has_imgs, num_imgs = count_images_in_slide(slide)
                     except Exception as e:  # pylint: disable=broad-except
-                        self.log.debug("count_images_in_slide failed on slide %d: %s", i, e)
+                        self.log.debug(
+                            "count_images_in_slide failed on slide %d: %s", i, e
+                        )
 
                 # Step 4: Extract from images if present
                 image_texts = []
