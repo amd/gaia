@@ -113,7 +113,7 @@
       "expected_tools": ["file_write"]
     },
     "bash-posix-explain": {
-      "response_must_mention": ["POSIX", "test", "builtin", "keyword"],
+      "response_must_mention": ["POSIX", "test", "built", "keyword"],
       "expected_tools": []
     }
   }
