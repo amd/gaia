@@ -416,12 +416,14 @@ jobs:
         run: |
           for attempt in 1 2 3 4 5; do
             echo "Attempt $attempt: pip install amd-gaia==$TAG_VERSION"
-            if pip install "amd-gaia==$TAG_VERSION"; then
+            if pip install --no-cache-dir "amd-gaia==$TAG_VERSION"; then
               echo "Installed amd-gaia==$TAG_VERSION successfully"
               exit 0
             fi
-            echo "PyPI package not available yet, waiting 30s..."
-            sleep 30
+            if [ "$attempt" -lt 5 ]; then
+              echo "PyPI package not available yet, waiting 30s..."
+              sleep 30
+            fi
           done
           echo "ERROR: Failed to install amd-gaia==$TAG_VERSION after 5 attempts"
           exit 1
@@ -432,7 +434,7 @@ jobs:
         run: |
           VERSION_OUTPUT=$(gaia --version)
           echo "gaia --version: $VERSION_OUTPUT"
-          if ! echo "$VERSION_OUTPUT" | grep -q "$TAG_VERSION"; then
+          if ! echo "$VERSION_OUTPUT" | grep -qF "$TAG_VERSION"; then
             echo "ERROR: version output does not contain $TAG_VERSION"
             exit 1
           fi
@@ -459,10 +461,10 @@ jobs:
 
   github-release:
     name: GitHub Release
-    needs: [validate, publish-pypi, publish-npm, build-desktop-installers]
+    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers]
     if: >-
       !cancelled() &&
-      needs.publish-pypi.result == 'success' &&
+      needs.post-publish-smoke.result == 'success' &&
       needs.publish-npm.result == 'success' &&
       needs.build-desktop-installers.result == 'success'
     runs-on: ubuntu-latest
