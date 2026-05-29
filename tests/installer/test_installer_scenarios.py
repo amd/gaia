@@ -31,6 +31,7 @@ import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -71,7 +72,14 @@ LEMONADE_STATES = ["available", "unavailable"]
     "lemonade_state", LEMONADE_STATES, ids=lambda s: f"lemonade={s}"
 )
 class TestInstallerScenarioMatrix:
-    """Post-install smoke checks across UV x Lemonade scenarios."""
+    """Post-install smoke checks across UV x Lemonade scenarios.
+
+    The ``bundled`` UV cell shadows PATH to route through the vendored UV
+    binary under ``build/vendor/uv/``. Until self-hosted runners with the
+    built vendor tree are provisioned (issue #991), the ``bundled`` cell
+    skips on standard CI runners. When #991 lands the skip disappears and
+    the cell actually exercises the Electron-installer UV path.
+    """
 
     @staticmethod
     def _should_skip_uv(uv_method: str) -> str | None:
@@ -95,22 +103,32 @@ class TestInstallerScenarioMatrix:
             )
         return None
 
-    def _check_skips(self, uv_method: str, lemonade_state: str) -> None:
-        reason = self._should_skip_uv(uv_method)
-        if reason:
-            pytest.skip(reason)
-        reason = self._should_skip_lemonade(lemonade_state)
-        if reason:
-            pytest.skip(reason)
+    @staticmethod
+    def _env_for_uv(uv_method: str) -> dict[str, str] | None:
+        """Return an env overlay that routes through the bundled UV binary."""
+        if uv_method != "bundled":
+            return None
+        vendor = REPO_ROOT / "src/gaia/apps/webui/build/vendor/uv"
+        if not vendor.exists():
+            return None
+        # Prepend the vendor dir so the bundled uv shadows any system uv.
+        env = os.environ.copy()
+        candidates = list(vendor.rglob("uv")) + list(vendor.rglob("uv.exe"))
+        if candidates:
+            env["PATH"] = str(candidates[0].parent) + os.pathsep + env.get("PATH", "")
+        return env
 
     def test_gaia_version(self, uv_method: str, lemonade_state: str):
         """``gaia --version`` exits 0 and prints a version string."""
-        self._check_skips(uv_method, lemonade_state)
+        reason = self._should_skip_uv(uv_method)
+        if reason:
+            pytest.skip(reason)
         result = subprocess.run(
             [*_gaia_cli(), "--version"],
             capture_output=True,
             text=True,
             timeout=30,
+            env=self._env_for_uv(uv_method),
         )
         assert (
             result.returncode == 0
@@ -119,19 +137,27 @@ class TestInstallerScenarioMatrix:
 
     def test_gaia_importable(self, uv_method: str, lemonade_state: str):
         """The gaia package is importable from the installed environment."""
-        self._check_skips(uv_method, lemonade_state)
+        reason = self._should_skip_uv(uv_method)
+        if reason:
+            pytest.skip(reason)
         result = subprocess.run(
             [sys.executable, "-c", "import gaia; print(gaia.__file__)"],
             capture_output=True,
             text=True,
             timeout=30,
+            env=self._env_for_uv(uv_method),
         )
         assert result.returncode == 0, f"import gaia failed: {result.stderr}"
 
     @pytest.mark.slow
     def test_gaia_init_yes(self, uv_method: str, lemonade_state: str):
         """``gaia init --yes`` completes when Lemonade is up."""
-        self._check_skips(uv_method, lemonade_state)
+        reason = self._should_skip_uv(uv_method)
+        if reason:
+            pytest.skip(reason)
+        reason = self._should_skip_lemonade(lemonade_state)
+        if reason:
+            pytest.skip(reason)
         if lemonade_state == "unavailable":
             pytest.skip(
                 "gaia init requires Lemonade — skipped for "
@@ -142,6 +168,7 @@ class TestInstallerScenarioMatrix:
             capture_output=True,
             text=True,
             timeout=300,
+            env=self._env_for_uv(uv_method),
         )
         assert result.returncode == 0, (
             f"gaia init --yes failed (rc={result.returncode}):\n"
@@ -180,8 +207,6 @@ class TestArtifactValidation:
         if artifact_dir is None:
             pytest.skip("GAIA_INSTALLER_ARTIFACT_DIR not set")
 
-        import zipfile
-
         wheels = list(artifact_dir.glob("*.whl"))
         if not wheels:
             pytest.skip("No .whl files in artifact dir")
@@ -205,8 +230,6 @@ class TestArtifactValidation:
         artifact_dir = self._artifact_dir()
         if artifact_dir is None:
             pytest.skip("GAIA_INSTALLER_ARTIFACT_DIR not set")
-
-        import zipfile
 
         wheels = list(artifact_dir.glob("*.whl"))
         if not wheels:
