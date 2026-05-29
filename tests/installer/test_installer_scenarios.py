@@ -68,9 +68,6 @@ LEMONADE_STATES = ["available", "unavailable"]
 
 
 @pytest.mark.parametrize("uv_method", UV_METHODS, ids=lambda m: f"uv={m}")
-@pytest.mark.parametrize(
-    "lemonade_state", LEMONADE_STATES, ids=lambda s: f"lemonade={s}"
-)
 class TestInstallerScenarioMatrix:
     """Post-install smoke checks across UV x Lemonade scenarios.
 
@@ -118,7 +115,7 @@ class TestInstallerScenarioMatrix:
             env["PATH"] = str(candidates[0].parent) + os.pathsep + env.get("PATH", "")
         return env
 
-    def test_gaia_version(self, uv_method: str, lemonade_state: str):
+    def test_gaia_version(self, uv_method: str):
         """``gaia --version`` exits 0 and prints a version string."""
         reason = self._should_skip_uv(uv_method)
         if reason:
@@ -135,7 +132,7 @@ class TestInstallerScenarioMatrix:
         ), f"gaia --version failed (rc={result.returncode}): {result.stderr}"
         assert result.stdout.strip(), "gaia --version produced no output"
 
-    def test_gaia_importable(self, uv_method: str, lemonade_state: str):
+    def test_gaia_importable(self, uv_method: str):
         """The gaia package is importable from the installed environment."""
         reason = self._should_skip_uv(uv_method)
         if reason:
@@ -150,6 +147,9 @@ class TestInstallerScenarioMatrix:
         assert result.returncode == 0, f"import gaia failed: {result.stderr}"
 
     @pytest.mark.slow
+    @pytest.mark.parametrize(
+        "lemonade_state", LEMONADE_STATES, ids=lambda s: f"lemonade={s}"
+    )
     def test_gaia_init_yes(self, uv_method: str, lemonade_state: str):
         """``gaia init --yes`` completes when Lemonade is up."""
         reason = self._should_skip_uv(uv_method)

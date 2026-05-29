@@ -621,7 +621,7 @@ jobs:
             else
               # Sanity: latest.yml must contain the installer filename
               EXE_NAME=$(basename "${EXE}" 2>/dev/null || true)
-              if [ -n "${EXE_NAME}" ] && ! grep -q "${EXE_NAME}" "${WIN_DIR}/latest.yml"; then
+              if [ -n "${EXE_NAME}" ] && ! grep -qF "${EXE_NAME}" "${WIN_DIR}/latest.yml"; then
                 echo "::warning::latest.yml does not reference ${EXE_NAME}"
               fi
             fi
