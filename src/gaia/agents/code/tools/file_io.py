@@ -269,9 +269,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
-                    path_validator.audit_write(
-                        "write", file_path, 0, "error", str(e)
-                    )
+                    path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
         @tool
@@ -302,9 +300,7 @@ class FileIOToolsMixin:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
                     # Check blocklist
-                    is_blocked, reason = path_validator.is_write_blocked(
-                        str(file_path)
-                    )
+                    is_blocked, reason = path_validator.is_write_blocked(str(file_path))
                     if is_blocked:
                         path_validator.audit_write(
                             "edit", str(file_path), 0, "denied", reason
@@ -313,9 +309,7 @@ class FileIOToolsMixin:
 
                     # Check allowlist
                     if not path_validator.is_path_allowed(str(file_path)):
-                        reason = (
-                            f"Access denied: {file_path} is not in allowed paths"
-                        )
+                        reason = f"Access denied: {file_path} is not in allowed paths"
                         path_validator.audit_write(
                             "edit", str(file_path), 0, "denied", reason
                         )
@@ -428,9 +422,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
-                    path_validator.audit_write(
-                        "edit", file_path, 0, "error", str(e)
-                    )
+                    path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
         @tool
@@ -642,9 +634,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
-                    path_validator.audit_write(
-                        "write", file_path, 0, "error", str(e)
-                    )
+                    path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
         @tool
@@ -1000,9 +990,7 @@ class FileIOToolsMixin:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
                     # Check blocklist
-                    is_blocked, reason = path_validator.is_write_blocked(
-                        str(file_path)
-                    )
+                    is_blocked, reason = path_validator.is_write_blocked(str(file_path))
                     if is_blocked:
                         path_validator.audit_write(
                             "edit", str(file_path), 0, "denied", reason
@@ -1011,9 +999,7 @@ class FileIOToolsMixin:
 
                     # Check allowlist
                     if not path_validator.is_path_allowed(str(file_path)):
-                        reason = (
-                            f"Access denied: {file_path} is not in allowed paths"
-                        )
+                        reason = f"Access denied: {file_path} is not in allowed paths"
                         path_validator.audit_write(
                             "edit", str(file_path), 0, "denied", reason
                         )
@@ -1149,9 +1135,7 @@ class FileIOToolsMixin:
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
-                    path_validator.audit_write(
-                        "edit", file_path, 0, "error", str(e)
-                    )
+                    path_validator.audit_write("edit", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
         # Return the list of registered tools for tracking
