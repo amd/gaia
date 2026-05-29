@@ -9,7 +9,7 @@ HTML Viewer for summarizer JSON output
 import json
 import webbrowser
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # Template path - will be loaded from file
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "summary_report.html"
@@ -20,7 +20,7 @@ class HTMLViewer:
 
     @staticmethod
     def create_viewer(
-        json_data: Dict[str, Any], json_path: Path, html_path: Path = None
+        json_data: Dict[str, Any], json_path: Path, html_path: Optional[Path] = None
     ) -> Path:
         """
         Create an HTML viewer for the summary JSON

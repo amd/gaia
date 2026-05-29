@@ -208,11 +208,12 @@ def mark_draft_sent(db, *, draft_id: str) -> None:
 
 
 def fetch_draft(db, *, draft_id: str) -> Optional[Dict[str, Any]]:
-    return db.query(
+    result: Optional[Dict[str, Any]] = db.query(
         "SELECT * FROM email_drafts WHERE draft_id = :id",
         {"id": draft_id},
         one=True,
     )
+    return result
 
 
 __all__ = [
