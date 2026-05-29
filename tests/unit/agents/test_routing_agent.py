@@ -363,10 +363,7 @@ class TestCreateAgent:
         assert agent is not None
         _patch_code_agent.assert_called_once()
         call_kwargs = _patch_code_agent.call_args
-        assert (
-            call_kwargs.kwargs.get("language") == "typescript"
-            or call_kwargs[1].get("language") == "typescript"
-        )
+        assert call_kwargs.kwargs.get("language") == "typescript"
 
     def test_unknown_agent_type_raises(self, router):
         analysis = {
@@ -386,10 +383,7 @@ class TestCreateAgentWithDefaults:
         }
         router._create_agent_with_defaults(analysis)
         call_kwargs = _patch_code_agent.call_args
-        assert (
-            call_kwargs.kwargs.get("project_type") == "fullstack"
-            or call_kwargs[1].get("project_type") == "fullstack"
-        )
+        assert call_kwargs.kwargs.get("project_type") == "fullstack"
 
 
 # ---------------------------------------------------------------------------
@@ -446,17 +440,20 @@ class TestProcessQueryCLIMode:
 
         router = RoutingAgent(api_mode=False)
 
-        # First call: low confidence → triggers clarification
-        # Second call (recursive): high confidence → resolves
+        # First response: known language but unknown project_type + low
+        # confidence.  _default_unknown_language_to_typescript leaves this
+        # unchanged (language != "unknown"), so _has_unknowns fires and the
+        # clarification branch runs.
+        # Second response (after user answers): fully resolved.
         mock_llm_client.generate.side_effect = [
             json.dumps(
                 {
                     "agent": "code",
                     "parameters": {
-                        "language": "unknown",
+                        "language": "typescript",
                         "project_type": "unknown",
                     },
-                    "confidence": 0.3,
+                    "confidence": 0.4,
                     "reasoning": "ambiguous",
                 }
             ),
@@ -473,9 +470,10 @@ class TestProcessQueryCLIMode:
             ),
         ]
 
-        with patch("builtins.input", return_value="Next.js blog"):
+        with patch("builtins.input", return_value="Next.js blog") as mock_input:
             agent = router.process_query("Build something", execute=False)
 
+        mock_input.assert_called_once()
         assert agent is _patch_code_agent.return_value
 
     def test_cli_mode_empty_response_uses_defaults(
