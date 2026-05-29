@@ -42,16 +42,9 @@ class TestAuditChatHelpers:
             _MAX_MSG_CHARS = 2000
             _OTHER = 42
         """
-        p = _write_helpers(tmp_path, src)
         # Monkeypatch GAIA_ROOT so audit_chat_helpers reads our fake file
-        monkeypatch.setattr(
-            "gaia.eval.audit.GAIA_ROOT",
-            # Need a root where <root>/src/gaia/ui/_chat_helpers.py resolves to our file
-            # Easier: just monkeypatch the whole function's file path
-            tmp_path,
-        )
-        # Since audit_chat_helpers hardcodes the path, we need to
-        # create the expected directory structure.
+        monkeypatch.setattr("gaia.eval.audit.GAIA_ROOT", tmp_path)
+        # audit_chat_helpers hardcodes the path — create the expected directory structure.
         target = tmp_path / "src" / "gaia" / "ui"
         target.mkdir(parents=True)
         (target / "_chat_helpers.py").write_text(textwrap.dedent(src), encoding="utf-8")

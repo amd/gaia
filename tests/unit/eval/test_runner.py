@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from gaia.eval.runner import (
     _SCORE_WEIGHTS,
@@ -332,9 +333,9 @@ class TestComputeEffectiveTimeout:
             "turns": [{"turn": 1}, {"turn": 2}],
             "setup": {"index_documents": [{"path": "a.pdf"}, {"path": "b.pdf"}]},
         }
-        result = _compute_effective_timeout(900, scenario)
-        expected = 240 + 2 * 90 + 2 * 200  # startup + docs + turns
-        assert result >= expected
+        expected = 240 + 2 * 90 + 2 * 200  # startup + docs + turns = 820
+        result = _compute_effective_timeout(100, scenario)
+        assert result == expected
 
     def test_capped_at_max(self):
         scenario = {
@@ -352,8 +353,6 @@ class TestComputeEffectiveTimeout:
 
 class TestFindScenarios:
     def _write_scenario(self, d, sid, category="general", tags=None):
-        import yaml
-
         data = {
             "id": sid,
             "category": category,
