@@ -181,6 +181,7 @@ setup(
         ],
         "dev": [
             "pytest",
+            "pytest-cov",
             "pytest-benchmark",
             "pytest-mock",
             "pytest-asyncio",
