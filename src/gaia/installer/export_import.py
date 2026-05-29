@@ -98,7 +98,11 @@ def _is_custom_agent_dir(path: Path) -> bool:
     were removed in v0.17.5; such directories are intentionally excluded
     from export so we don't ship bundles that the importer would reject.
     """
-    return path.is_dir() and (path / "agent.py").is_file()
+    try:
+        return path.is_dir() and (path / "agent.py").is_file()
+    except OSError as exc:
+        log.debug("export: skipping unreadable path %s: %s", path, exc)
+        return False
 
 
 def list_exportable_custom_agent_dirs() -> List[Path]:
