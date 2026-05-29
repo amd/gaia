@@ -17,9 +17,7 @@ All file/network/subprocess calls are mocked — no real LLM or Agent UI needed.
 """
 
 import json
-import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 

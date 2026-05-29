@@ -8,7 +8,7 @@ get_completion_with_usage, and count_tokens.
 """
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,23 +17,10 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def _patch_imports(monkeypatch):
-    """Ensure anthropic and bs4 are available as mocks at module level."""
-    # We don't want real imports — mock the modules if not installed.
-    pass
-
-
 def _make_mock_anthropic():
     """Build a mock anthropic module with an Anthropic client constructor."""
     mock_module = MagicMock()
     mock_module.Anthropic = MagicMock()
-    return mock_module
-
-
-def _make_mock_bs4():
-    mock_module = MagicMock()
-    mock_module.BeautifulSoup = MagicMock()
     return mock_module
 
 

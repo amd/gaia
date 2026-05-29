@@ -8,7 +8,6 @@ Tests the deterministic architecture audit helpers that inspect
 """
 
 import textwrap
-from pathlib import Path
 
 import pytest
 
