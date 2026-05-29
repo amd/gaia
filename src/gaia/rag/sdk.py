@@ -15,6 +15,7 @@ import re
 import secrets
 import threading
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -883,7 +884,6 @@ class RAGSDK:
 
         # Guard against zip bombs: .pptx is a ZIP container. Check that
         # the total uncompressed size is sane before handing it to python-pptx.
-        import zipfile
 
         try:
             with zipfile.ZipFile(pptx_path, "r") as zf:
@@ -2678,6 +2678,8 @@ These positions indicate where to split the text."""
             stats["total_chunks"] = len(self.chunks)
             if file_type == ".pdf":
                 stats["pdf_status"] = "readable"
+            elif file_type == ".pptx":
+                stats["pptx_status"] = "readable"
             return stats
 
         except PDFExtractionError as e:

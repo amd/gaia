@@ -9,9 +9,10 @@ Extracts text, tables, speaker notes, and embedded images from PPTX slides.
 Image processing mirrors ``pdf_utils.py`` (resize, compress, same dict format).
 """
 
+from __future__ import annotations
+
 import io
 import logging
-from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ MAX_ITERATIONS = 5
 MAX_GROUP_DEPTH = 5
 
 
-def extract_images_from_slide(slide, slide_num: int) -> List[dict]:
+def extract_images_from_slide(slide, slide_num: int) -> list[dict]:
     """
     Extract embedded images from a PPTX slide.
 
@@ -39,7 +40,7 @@ def extract_images_from_slide(slide, slide_num: int) -> List[dict]:
             [{"image_bytes": bytes, "width": int, "height": int,
               "format": "png", "size_kb": float}, ...]
     """
-    images: List[dict] = []
+    images: list[dict] = []
 
     try:
         from PIL import Image
@@ -146,7 +147,7 @@ def extract_images_from_slide(slide, slide_num: int) -> List[dict]:
     return images
 
 
-def count_images_in_slide(slide) -> Tuple[bool, int]:
+def count_images_in_slide(slide) -> tuple[bool, int]:
     """
     Fast check for embedded image presence without extraction.
 
@@ -163,9 +164,7 @@ def count_images_in_slide(slide) -> Tuple[bool, int]:
     return (count > 0, count)
 
 
-def extract_text_from_slide(
-    slide, slide_num: int  # pylint: disable=unused-argument
-) -> str:
+def extract_text_from_slide(slide, slide_num: int) -> str:
     """
     Extract all native text from a PPTX slide.
 
@@ -179,7 +178,8 @@ def extract_text_from_slide(
     Returns:
         Concatenated slide text with paragraph boundaries.
     """
-    parts: List[str] = []
+    logger.debug("Extracting text from slide %d", slide_num)
+    parts: list[str] = []
 
     for shape in _iter_shapes(slide.shapes):
         # Table shapes — format as markdown
@@ -236,7 +236,11 @@ def _iter_shapes(shapes, depth: int = 0):
         if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
             if depth < MAX_GROUP_DEPTH:
                 yield from _iter_shapes(shape.shapes, depth + 1)
-            # else: skip the group entirely at the depth limit
+            else:
+                logger.warning(
+                    "Group shape nesting exceeds MAX_GROUP_DEPTH (%d); skipping children",
+                    MAX_GROUP_DEPTH,
+                )
         else:
             yield shape
 

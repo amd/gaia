@@ -305,8 +305,8 @@ class TestPptxVLMIntegration:
         slide = prs.slides.add_slide(prs.slide_layouts[5])
         slide.shapes.add_picture(_io.BytesIO(_make_red_png()), Inches(1), Inches(1))
         # Add a text box so the slide is not considered empty
-        txBox = slide.shapes.add_textbox(Inches(3), Inches(1), Inches(3), Inches(1))
-        txBox.text_frame.text = "Slide with image and text"
+        tx_box = slide.shapes.add_textbox(Inches(3), Inches(1), Inches(3), Inches(1))
+        tx_box.text_frame.text = "Slide with image and text"
         prs.save(str(pptx_path))
 
         text, _, metadata = rag._extract_text_from_pptx(str(pptx_path))
@@ -326,8 +326,8 @@ class TestPptxVLMIntegration:
         prs = Presentation()
         slide = prs.slides.add_slide(prs.slide_layouts[5])
         slide.shapes.add_picture(_io.BytesIO(_make_red_png()), Inches(1), Inches(1))
-        txBox = slide.shapes.add_textbox(Inches(3), Inches(1), Inches(3), Inches(1))
-        txBox.text_frame.text = "Slide with VLM image"
+        tx_box = slide.shapes.add_textbox(Inches(3), Inches(1), Inches(3), Inches(1))
+        tx_box.text_frame.text = "Slide with VLM image"
         prs.save(str(pptx_path))
 
         # Patch VLM to be available and return text
@@ -344,15 +344,16 @@ class TestPptxVLMIntegration:
 
         # Need to re-patch VLM for this specific test
         rag._test_vlm_patch.stop()
-        with patch("gaia.llm.VLMClient", return_value=fake_vlm):
-            text, _, metadata = rag._extract_text_from_pptx(str(pptx_path))
+        try:
+            with patch("gaia.llm.VLMClient", return_value=fake_vlm):
+                text, _, metadata = rag._extract_text_from_pptx(str(pptx_path))
 
-        # Re-start the original patch for fixture cleanup
-        rag._test_vlm_patch.start()
-
-        assert "Extracted text from slide image" in text
-        assert metadata["total_images"] == 1
-        assert metadata["vlm_slides"] == 1
+            assert "Extracted text from slide image" in text
+            assert metadata["total_images"] == 1
+            assert metadata["vlm_slides"] == 1
+        finally:
+            # Re-start the original patch for fixture cleanup
+            rag._test_vlm_patch.start()
 
 
 # ---------------------------------------------------------------------------
