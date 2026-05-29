@@ -273,6 +273,50 @@ class TestNormalizePythonSource:
 
 
 # ---------------------------------------------------------------------------
+# _is_pseudo_code
+# ---------------------------------------------------------------------------
+
+
+class TestIsPseudoCode:
+    """Tests for pseudo-code / non-runnable block detection."""
+
+    def test_function_signature_no_body(self):
+        assert check_doc_code._is_pseudo_code("def foo(x: str) -> str") is True
+
+    def test_multiline_signature_no_body(self):
+        code = "def store(\n    self,\n    category: str,\n) -> str:"
+        assert check_doc_code._is_pseudo_code(code) is True
+
+    def test_arrow_flow_diagram(self):
+        code = "Agent.__init__()\n  \u2192 Load system prompt\n  \u2192 Register tools"
+        assert check_doc_code._is_pseudo_code(code) is True
+
+    def test_dict_with_trailing_ellipsis(self):
+        code = '{"time": "14:32", "platform": "Windows", ...}'
+        assert check_doc_code._is_pseudo_code(code) is True
+
+    def test_mixed_python_and_toml(self):
+        code = 'from gaia import Agent\n\n[project.entry-points."gaia.agents"]\nmy = "pkg:Cls"'
+        assert check_doc_code._is_pseudo_code(code) is True
+
+    def test_mixed_python_and_shell(self):
+        code = "# Install deps\nuv pip install -e '.[rag]'\nimport os"
+        assert check_doc_code._is_pseudo_code(code) is True
+
+    def test_real_code_not_pseudo(self):
+        code = "x = 1\nprint(x)"
+        assert check_doc_code._is_pseudo_code(code) is False
+
+    def test_class_with_body_not_pseudo(self):
+        code = "class Foo:\n    def bar(self):\n        pass"
+        assert check_doc_code._is_pseudo_code(code) is False
+
+    def test_incomplete_def_not_pseudo(self):
+        """def foo( with no closing paren is broken syntax, not pseudo-code."""
+        assert check_doc_code._is_pseudo_code("def foo(") is False
+
+
+# ---------------------------------------------------------------------------
 # check_code_blocks (integration)
 # ---------------------------------------------------------------------------
 
