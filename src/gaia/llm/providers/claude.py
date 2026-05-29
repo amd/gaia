@@ -99,7 +99,8 @@ class ClaudeProvider(LLMClient):
                 ],
             }
         ]
-        return self.chat(messages, **kwargs)
+        result = self.chat(messages, **kwargs)
+        return result if isinstance(result, str) else "".join(result)
 
     # get_performance_stats() inherited from ABC - raises NotSupportedError
     # load_model() inherited from ABC - raises NotSupportedError

@@ -258,7 +258,7 @@ class ChatDatabase:
         private: bool = False,
         agent_type: str | None = None,
         device: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
@@ -348,17 +348,17 @@ class ChatDatabase:
         """Count total sessions."""
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*) as cnt FROM sessions").fetchone()
-            return row["cnt"]
+            return int(row["cnt"])
 
     def update_session(
         self,
         session_id: str,
-        title: str = None,
-        system_prompt: str = None,
-        document_ids: list = None,
-        private: bool = None,
-        agent_type: str = None,
-        device: str = None,
+        title: str | None = None,
+        system_prompt: str | None = None,
+        document_ids: list | None = None,
+        private: bool | None = None,
+        agent_type: str | None = None,
+        device: str | None = None,
     ) -> Optional[Dict[str, Any]]:
         """Update session title, system prompt, agent_type, device, private flag, and/or document_ids."""
         updates = []
