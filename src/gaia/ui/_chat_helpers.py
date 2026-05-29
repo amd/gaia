@@ -37,6 +37,33 @@ from .sse_handler import (
 logger = logging.getLogger(__name__)
 
 
+def _stamp_builtin_chat_identity(config) -> None:
+    """Inject ``namespaced_agent_id="builtin:chat"`` into a ``ChatAgentConfig``
+    BEFORE ``ChatAgent(config)`` is constructed.
+
+    Must be applied to the *config*, not to the instance after construction.
+    The connectors activation filter (``Agent._active_mcp_servers`` →
+    ``MCPClientManager.servers_for_agent``) is consulted inside
+    ``ChatAgent.__init__`` → ``super().__init__`` → ``_register_tools``,
+    so the agent must already know its namespaced id by the time
+    ``_register_tools`` runs. A post-construction stamp on the instance
+    is too late — ``_register_tools`` has already loaded the unfiltered
+    MCP-tool set.
+
+    ``ChatAgent.__init__`` reads ``config.namespaced_agent_id`` at its top
+    and sets ``self._gaia_namespaced_agent_id`` from it before invoking
+    ``super().__init__``. This helper just centralises the
+    ``"builtin:chat"`` literal so every direct-construction site in this
+    module uses the same value and a fifth caller can't forget.
+
+    Idempotent — only sets the field if it is still its default ``None``,
+    so callers that already set a custom namespaced id (e.g. a future
+    custom-Chat wrapper) are not clobbered.
+    """
+    if getattr(config, "namespaced_agent_id", None) is None:
+        config.namespaced_agent_id = "builtin:chat"
+
+
 def _register_agent_memory_ops(agent) -> None:
     """Register LLM-powered memory operations from a ChatAgent with the memory router.
 
@@ -293,6 +320,11 @@ async def _generate_session_title(
     """
     import httpx  # pylint: disable=import-outside-toplevel
 
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
     prompt = (
         "Summarise the user's task in 3 to 6 plain words for a tab/window "
         "title.  Reply with ONLY the title, no quotes, no trailing "
@@ -313,6 +345,7 @@ async def _generate_session_title(
                     # for the same conversation.
                     "temperature": 0.3,
                 },
+                headers=lemonade_auth_headers(resolve_lemonade_api_key()),
             )
             if resp.status_code != 200:
                 logger.debug(
@@ -449,6 +482,23 @@ def get_cached_mcp_status() -> list[dict]:
         return copy.deepcopy(_mcp_status_cache)
 
 
+def _disconnect_cached_agent(entry) -> None:
+    """Best-effort disconnect of MCP subprocesses held by a cache entry."""
+    if not isinstance(entry, dict):
+        return
+    agent = entry.get("agent")
+    mcp_manager = getattr(agent, "_mcp_manager", None)
+    if mcp_manager is not None:
+        try:
+            mcp_manager.disconnect_all()
+        except Exception as exc:
+            # Best-effort on cache eviction — a failed disconnect on a
+            # previously-cached agent shouldn't block the new agent slot.
+            # WARNING because a leaked MCP subprocess is observable
+            # (orphaned process, stuck port) and worth surfacing.
+            logger.warning("MCP disconnect failed during cache eviction: %s", exc)
+
+
 def _canonical_agent_type(agent_type: str) -> str:
     """Resolve legacy agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``).
 
@@ -482,13 +532,15 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
         if entry is None:
             return None
         if entry["model_id"] != model_id:
-            del _agent_cache[session_id]
+            old_entry = _agent_cache.pop(session_id)
+            _disconnect_cached_agent(old_entry)
             logger.debug(
                 "Agent cache miss (model change) for session %s", session_id[:8]
             )
             return None
         if _canonical_agent_type(entry.get("agent_type", "chat")) != canonical:
-            del _agent_cache[session_id]
+            old_entry = _agent_cache.pop(session_id)
+            _disconnect_cached_agent(old_entry)
             logger.debug(
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
             )
@@ -512,7 +564,8 @@ def _store_agent(
     with _agent_cache_lock:
         if session_id not in _agent_cache and len(_agent_cache) >= _MAX_CACHED_AGENTS:
             oldest = next(iter(_agent_cache))
-            del _agent_cache[oldest]
+            old_entry = _agent_cache.pop(oldest)
+            _disconnect_cached_agent(old_entry)
             logger.debug("Agent cache full; evicted session %s", oldest[:8])
         _agent_cache[session_id] = {
             "model_id": model_id,
@@ -663,8 +716,10 @@ def _index_rag_with_progress(
 def evict_session_agent(session_id: str) -> None:
     """Remove a session's cached agent (call on session deletion or clear)."""
     with _agent_cache_lock:
-        if _agent_cache.pop(session_id, None) is not None:
+        entry = _agent_cache.pop(session_id, None)
+        if entry is not None:
             logger.debug("Evicted cached agent for session %s", session_id[:8])
+            _disconnect_cached_agent(entry)
 
 
 # ── Chat Helpers ─────────────────────────────────────────────────────────────
@@ -830,10 +885,15 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
     try:
         import httpx
 
+        from gaia.llm.lemonade_client import (
+            lemonade_auth_headers,
+            resolve_lemonade_api_key,
+        )
         from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
 
         base_url = LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
-        resp = httpx.get(f"{base_url}/health", timeout=5.0)
+        _auth = lemonade_auth_headers(resolve_lemonade_api_key())
+        resp = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
         if resp.status_code != 200:
             return
         data = resp.json()
@@ -884,7 +944,7 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         with model_load_lock:
             # Re-check after acquiring the lock: another thread may have
             # already loaded the expected model with sufficient context.
-            resp2 = httpx.get(f"{base_url}/health", timeout=5.0)
+            resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
             if resp2.status_code == 200:
                 models2 = [
                     m
@@ -1042,6 +1102,7 @@ async def _get_chat_response(
                 debug=False,
                 **_session_kwargs,
             )
+            _stamp_builtin_chat_identity(config)
             agent = ChatAgent(config)
             _store_agent(session_id, model_id, document_ids, agent, agent_type)
             _register_agent_memory_ops(agent)
@@ -1078,6 +1139,7 @@ async def _get_chat_response(
                     debug=False,
                     **_session_kwargs,
                 )
+                _stamp_builtin_chat_identity(config)
                 agent = ChatAgent(config)
                 _store_agent(session_id, model_id, document_ids, agent, agent_type)
                 _register_agent_memory_ops(agent)
@@ -1428,6 +1490,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         **_session_kwargs,
                     )
 
+                    _stamp_builtin_chat_identity(config)
                     t_construct = _time.monotonic()
                     agent = ChatAgent(config)
                     logger.info(
@@ -1533,6 +1596,7 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                 session_id=session_id,
                             ),
                         )
+                        _stamp_builtin_chat_identity(config)
                         agent = ChatAgent(config)
                         agent.console = sse_handler
                         _register_agent_memory_ops(agent)
@@ -2074,13 +2138,20 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             try:
                 import httpx
 
+                from gaia.llm.lemonade_client import (
+                    lemonade_auth_headers,
+                    resolve_lemonade_api_key,
+                )
                 from gaia.llm.lemonade_manager import LemonadeManager
 
                 base_url = (
                     LemonadeManager.get_base_url() or "http://localhost:13305/api/v1"
                 )
+                _auth = lemonade_auth_headers(resolve_lemonade_api_key())
                 async with httpx.AsyncClient(timeout=3.0) as stats_client:
-                    stats_resp = await stats_client.get(f"{base_url}/stats")
+                    stats_resp = await stats_client.get(
+                        f"{base_url}/stats", headers=_auth
+                    )
                     if stats_resp.status_code == 200:
                         stats_data = stats_resp.json()
                         inference_stats = {

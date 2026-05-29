@@ -78,6 +78,11 @@ app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 // all Linux launch paths behave identically.
 if (process.platform === "linux") {
   app.commandLine.appendSwitch("no-sandbox");
+
+  // Workaround: disable Chromium's Wayland color management which crashes on
+  // some Wayland compositors that implement the wp_color_manager protocol
+  // partially. See issue reports about wayland_wp_color_manager.cc SIGTRAP.
+  app.commandLine.appendSwitch("disable-features", "WaylandColorManagement");
 }
 
 // ── F7: Log tee to ~/.gaia/electron-main.log (issue #782) ───────────────────

@@ -115,3 +115,41 @@ def test_browse_and_analyze_cli_list_tools(monkeypatch, tmp_path, capsys):
         assert "fetch_page" not in analyze_output
     finally:
         sys.argv = original_argv
+
+
+def test_get_mcp_status_report_does_not_raise(tmp_path):
+    """Regression: agents that inherit MCPClientMixin must survive
+    ``get_mcp_status_report()`` even when MCP is not initialised.
+
+    The Agent UI auto-calls this on every chat send
+    (src/gaia/ui/_chat_helpers.py:1644). Before the fix, any agent whose MRO
+    had ``MCPClientMixin`` after ``Agent`` raised
+    ``AttributeError: '<Agent>' object has no attribute '_mcp_manager'``
+    because ``Agent.__init__`` doesn't chain ``super().__init__()``.
+    """
+    from gaia.agents.analyst.agent import AnalystAgent, AnalystAgentConfig
+    from gaia.agents.browser.agent import BrowserAgent
+    from gaia.agents.chat.lite_agent import ChatAgentLite
+    from gaia.agents.docqa.agent import DocumentQAAgent
+    from gaia.agents.fileio.agent import FileIOAgent
+
+    agents = [
+        BrowserAgent(),
+        AnalystAgent(AnalystAgentConfig(scratchpad_db_path=str(tmp_path / "s.db"))),
+        DocumentQAAgent(),
+        FileIOAgent(),
+        ChatAgentLite(),
+    ]
+    try:
+        for agent in agents:
+            assert agent.get_mcp_status_report() == [], (
+                f"{type(agent).__name__}.get_mcp_status_report() must return [] "
+                f"when MCP is not initialised"
+            )
+            assert (
+                agent._mcp_manager is None
+            ), f"{type(agent).__name__}._mcp_manager must resolve to None"
+    finally:
+        for agent in agents:
+            if hasattr(agent, "close"):
+                agent.close()

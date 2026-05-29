@@ -1,0 +1,32 @@
+id: mcp_two_step_chain
+name: "Two-Step Tool Chain -- Sequential Dependency"
+category: mcp_reliability
+severity: critical
+description: |
+  Agent is asked to perform a task that requires two sequential tool calls,
+  where the second call depends on the result of the first. Tests multi-step
+  tool orchestration reliability.
+
+persona: power_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Ask agent to find a file and then read its contents"
+    user_message: "Look through the eval/corpus/documents directory, find the file about Q3 financials, and tell me the key revenue figures."
+    ground_truth:
+      expected_behavior: "Agent first calls a directory listing or file search tool, then calls a file reading tool on the discovered file"
+    success_criteria: |
+      Agent performs at least two tool calls in sequence:
+      1. First: a directory listing, file search, or browse tool to find the Q3 report
+      2. Second: a file reading or indexing tool to retrieve content from the found file
+      PASS if both tool calls succeed and the agent reports revenue information.
+      FAIL if agent only makes one tool call and guesses the rest.
+      FAIL if agent makes no tool calls.
+      FAIL if agent hallucinates file names without checking the directory.
+
+expected_outcome: |
+  Agent chains two tool calls: first discovers the file, then reads it.
+  Demonstrates reliable multi-step tool orchestration.

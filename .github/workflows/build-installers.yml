@@ -194,7 +194,7 @@ jobs:
       # platform. Cross-runner cache paths are listed together — actions/cache
       # silently skips paths that don't exist on the current runner.
       - name: Cache electron + electron-builder
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/electron
@@ -495,7 +495,7 @@ jobs:
       # signing.
       - name: Upload artifacts to workflow run
         id: upload-artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.platform }}-installer
           path: ${{ matrix.artifacts }}
@@ -527,7 +527,7 @@ jobs:
         # evaluated AFTER `if:`, which is why we can't inline the secret
         # forwarding here.
         if: matrix.platform == 'windows' && env.SIGNPATH_API_TOKEN != '' && env.SIGNPATH_ORG_ID != ''
-        uses: signpath/github-action-submit-signing-request@v1
+        uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: ${{ env.SIGNPATH_API_TOKEN }}
           organization-id: ${{ env.SIGNPATH_ORG_ID }}
@@ -557,7 +557,7 @@ jobs:
 
       - name: Upload Python wheel artifact
         if: matrix.platform == 'linux' && steps.build-wheel.outputs.path != ''
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: gaia-wheel
           path: /tmp/gaia-wheel/*.whl
@@ -584,10 +584,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download Linux installer artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: linux-installer
           path: ${{ runner.temp }}/linux-installer
@@ -625,10 +625,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download macOS installer artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: macos-installer  # ${{ matrix.platform }}-installer with platform=macos
           path: ${{ runner.temp }}/macos-installer
@@ -654,10 +654,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download Linux installer artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: linux-installer
           path: ${{ runner.temp }}/linux-installer
@@ -669,7 +669,7 @@ jobs:
       - name: Download Python wheel
         id: download-wheel
         continue-on-error: true
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: gaia-wheel
           path: ${{ runner.temp }}/gaia-wheel
@@ -913,10 +913,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download Linux installer artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: linux-installer
           path: ${{ runner.temp }}/linux-installer
@@ -924,7 +924,7 @@ jobs:
       - name: Download Python wheel
         id: download-wheel
         continue-on-error: true
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: gaia-wheel
           path: ${{ runner.temp }}/gaia-wheel
@@ -1020,7 +1020,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -1041,7 +1041,7 @@ jobs:
 
       - name: Upload custom-agent MCP harness logs
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: custom-agent-mcp-harness-${{ matrix.os }}
           path: ${{ runner.temp }}/gaia-installer-agent-harness
@@ -1061,7 +1061,7 @@ jobs:
   #     needs: build
   #     runs-on: ubuntu-24.04
   #     steps:
-  #       - uses: actions/checkout@v4
+  #       - uses: actions/checkout@v6
   #       - run: sudo apt-get install --yes cage grim imagemagick libfuse2
   #       - run: cage -s -- xvfb-run "${APPIMAGE}" &
   #       - run: sleep 20 && grim -t png /tmp/shot.png
@@ -1096,12 +1096,12 @@ jobs:
         platform: [windows, macos, linux]
     steps:
       - name: Download installer artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.platform }}-installer
           path: release-assets
       - name: Upload to GitHub Release (draft)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.tag }}
           files: release-assets/*

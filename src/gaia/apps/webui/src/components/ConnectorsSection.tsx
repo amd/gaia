@@ -206,7 +206,10 @@ function ConnectorTile({
                         <MCPServerConfigureBody connector={connector} onChanged={onChanged} />
                     )}
                     {connector.configured && (
-                        <ConnectorAgentGrants connectorId={connector.id} />
+                        <ConnectorAgentGrants
+                            connectorId={connector.id}
+                            connectorType={connector.type}
+                        />
                     )}
                 </div>
             )}
@@ -760,23 +763,53 @@ function AgentMcpTile({
 
 // ── ConnectorAgentGrants ─────────────────────────────────────────────────────
 
-function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
+function ConnectorAgentGrants({
+    connectorId,
+    connectorType,
+}: {
+    connectorId: string;
+    connectorType: string;
+}) {
     const { agents } = useChatStore();
     const [grants, setGrants] = useState<Record<string, string[]>>({});
+    const [activations, setActivations] = useState<Record<string, boolean>>({});
     const [loading, setLoading] = useState(true);
 
     const load = useCallback(async () => {
         try {
-            const { grants: g } = await api.listConnectorGrants(connectorId);
+            const [{ grants: g }, { activations: acts }] = await Promise.all([
+                api.listConnectorGrants(connectorId),
+                api.listConnectorActivations(connectorId),
+            ]);
             setGrants(g);
+            setActivations(acts);
         } catch {
             setGrants({});
+            setActivations({});
         } finally {
             setLoading(false);
         }
     }, [connectorId]);
 
     useEffect(() => { void load(); }, [load]);
+
+    // Live updates: when grant or activation changes (either through this UI
+    // or another caller — CLI, SDK), pick the fresh state up.
+    useConnectorsSSE(
+        useCallback(
+            (event) => {
+                if (
+                    event.connectorId === connectorId &&
+                    (event.reason === 'grant_changed' ||
+                        event.reason === 'activation_changed' ||
+                        event.reason === 'disconnected')
+                ) {
+                    void load();
+                }
+            },
+            [connectorId, load],
+        ),
+    );
 
     if (loading) return null;
 
@@ -800,6 +833,129 @@ function ConnectorAgentGrants({ connectorId }: { connectorId: string }) {
                         onChanged={() => void load()}
                     />
                 ))
+            )}
+
+            {/* Activations gate MCP tool visibility. OAuth connectors have no
+                MCP tool surface — their per-agent access is governed by the
+                per-scope grant toggles above — so showing this block for them
+                would be a switch that does nothing. (issue #1005) */}
+            {connectorType === 'mcp_server' && relevantAgents.length > 0 && (
+                <>
+                    <div className="grants-header grants-header--activations">
+                        Active for
+                    </div>
+                    <div className="grants-help">
+                        Activations gate which agents see this connector's tools.
+                        Activating without a prior grant auto-creates one.
+                    </div>
+                    {relevantAgents.map((agent) => (
+                        <AgentActivationCard
+                            key={`activation-${agent.namespaced_agent_id}`}
+                            agent={agent}
+                            connectorId={connectorId}
+                            active={Boolean(activations[agent.namespaced_agent_id!])}
+                            grantedScopes={grants[agent.namespaced_agent_id!] ?? []}
+                            onChanged={() => void load()}
+                        />
+                    ))}
+                </>
+            )}
+        </div>
+    );
+}
+
+// ── AgentActivationCard ──────────────────────────────────────────────────────
+
+/**
+ * One-row activation toggle for a single agent (issue #1005).
+ *
+ * Activation gates MCP tool visibility: when ON, the MCP server's tools
+ * appear in the agent's prompt; when OFF (or absent), the tools are hidden
+ * even if the agent holds a grant. Activating without a prior grant
+ * auto-creates one using the agent's declared REQUIRED_CONNECTORS scopes.
+ *
+ * Rendered only for ``type === 'mcp_server'`` connectors — the parent
+ * (``ConnectorAgentGrants``) gates the entire ``Active for`` block on
+ * connector type because activations apply to MCP servers only.
+ */
+function AgentActivationCard({
+    agent,
+    connectorId,
+    active,
+    grantedScopes,
+    onChanged,
+}: {
+    agent: {
+        namespaced_agent_id?: string;
+        name: string;
+        required_connections?: Array<{ connector_id: string; scopes: string[]; reason: string }>;
+    };
+    connectorId: string;
+    active: boolean;
+    grantedScopes: string[];
+    onChanged: () => void;
+}) {
+    const req = agent.required_connections?.find((rc) => rc.connector_id === connectorId);
+    const agentId = agent.namespaced_agent_id;
+    if (!req || !agentId) return null;
+
+    const [localActive, setLocalActive] = useState(active);
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState<string | null>(null);
+
+    useEffect(() => {
+        setLocalActive(active);
+    }, [active]);
+
+    const toggle = async () => {
+        if (busy) return;
+        const next = !localActive;
+        setLocalActive(next); // optimistic
+        setBusy(true);
+        setErr(null);
+        try {
+            if (next) {
+                // Auto-grant uses the agent's declared REQUIRED_CONNECTORS
+                // scopes — but only if no grant is in place yet. The server
+                // ignores the body when a grant already exists.
+                const scopesForGrant =
+                    grantedScopes.length === 0 ? [...req.scopes] : undefined;
+                await api.activateConnectorAgent(connectorId, agentId, scopesForGrant);
+            } else {
+                await api.deactivateConnectorAgent(connectorId, agentId);
+            }
+            onChanged();
+        } catch (e) {
+            setLocalActive(active); // revert
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <div className="grant-agent-card">
+            <div className="grant-agent-card-name">{agent.name}</div>
+            <div className="grant-scope-list">
+                <label className="grant-scope-item">
+                    <span className="grant-scope-label">
+                        {localActive ? 'Tools visible to this agent' : 'Tools hidden from this agent'}
+                    </span>
+                    <span className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            checked={localActive}
+                            onChange={() => void toggle()}
+                            disabled={busy}
+                        />
+                        <span className="toggle-track" />
+                    </span>
+                </label>
+            </div>
+            {err && (
+                <div className="grant-scope-warning grant-scope-warning--error">
+                    <AlertCircle size={11} /> {err}
+                </div>
             )}
         </div>
     );

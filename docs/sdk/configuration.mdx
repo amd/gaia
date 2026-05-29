@@ -12,6 +12,9 @@ icon: "gear"
 ```bash
 # LLM Configuration
 export LEMONADE_BASE_URL="http://localhost:13305/api/v1"
+# Required only when connecting to an authenticated remote Lemonade.
+# See https://lemonade-server.ai/docs/guide/configuration/#api-key-and-security
+export LEMONADE_API_KEY=""
 export GAIA_API_DEBUG="true"
 export GAIA_API_STREAMING="true"
 

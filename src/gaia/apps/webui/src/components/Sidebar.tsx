@@ -27,6 +27,7 @@ function copySessionLink(e: React.MouseEvent, sessionId: string) {
 
 interface SidebarProps {
     onNewTask: () => void;
+    onHome?: () => void;
     tunnelActive?: boolean;
     tunnelLoading?: boolean;
     onMobileToggle?: () => void;
@@ -101,7 +102,7 @@ function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSele
     );
 }
 
-export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
+export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
     const {
         sessions, currentSessionId, setCurrentSession, removeSession, addSession,
         setMessages, theme, toggleTheme, setShowSettings, setShowMemoryDashboard,
@@ -349,7 +350,7 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
             aria-label="Task sidebar"
         >
             <div className="sidebar-top">
-                <div className="sidebar-brand">
+                <button className="sidebar-brand" onClick={onHome} title="Agent Hub" aria-label="Go to Agent Hub">
                     <div className="brand-icon" aria-hidden="true">
                         <img src={gaiaRobot} alt="" width={28} height={28} />
                     </div>
@@ -358,7 +359,7 @@ export function Sidebar({ onNewTask, tunnelActive, tunnelLoading, onMobileToggle
                         <span className="brand-version">v{__APP_VERSION__}</span>
                         <span className="beta-badge">BETA</span>
                     </div>
-                </div>
+                </button>
                 <div className="sidebar-top-actions">
                     <button className="new-task-btn" onClick={onNewTask} title="New Task" aria-label="New Task">
                         <Plus size={18} />

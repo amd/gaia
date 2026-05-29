@@ -25,6 +25,13 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
+from gaia.connectors.activations import (
+    activate_agent,
+    deactivate_agent,
+    is_agent_active,
+    list_agent_activations,
+    load_activations,
+)
 from gaia.connectors.context import current_agent_id
 from gaia.connectors.errors import (
     AuthRequiredError,
@@ -225,6 +232,115 @@ def revoke_connection(provider: str) -> None:
     logger.info("api: revoked connection provider=%s", provider)
 
 
+def _require_mcp_server_for_activation(connector_id: str) -> None:
+    """Reject activation writes for non-MCP-server connectors (#1005).
+
+    Activations gate MCP tool visibility (see
+    ``MCPClientManager.tools_for_agent``). OAuth-only connectors have no
+    MCP tool surface — per-agent access is governed by the per-scope grant
+    ledger instead — so allowing a write here would create state nothing
+    reads. Enforced at the orchestration layer so all callers (HTTP, CLI,
+    SDK, future callers) get the same guarantee without duplicating the
+    spec lookup at every boundary.
+
+    Raises ``ConfigurationError`` with an actionable message. The router
+    catches this and translates to HTTP 400; the CLI surfaces it as a
+    non-zero exit with the message on stderr.
+    """
+    # Importing the catalog populates REGISTRY with the built-in specs.
+    # Other CLI handlers (``_handle_list`` / ``_handle_configure`` / etc.)
+    # do this explicitly; bare ``gaia connectors activations …`` did not
+    # need it before this guard existed. Doing the import here protects
+    # every caller — CLI, SDK, custom embedders — without each entry
+    # point having to remember. Idempotent: Python's module cache makes
+    # repeat imports a no-op, and tests that monkeypatch ``REGISTRY``
+    # with a fresh instance see their substitute (the catalog only ever
+    # mutates the original singleton bound at first-import time).
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    try:
+        spec = REGISTRY.get(connector_id)
+    except KeyError as e:
+        raise ConfigurationError(f"Unknown connector '{connector_id}'.") from e
+    if spec.type != "mcp_server":
+        raise ConfigurationError(
+            f"Activations apply to MCP-server connectors only; "
+            f"'{connector_id}' is type '{spec.type}'. Use per-agent grants "
+            f"to control access for OAuth connectors."
+        )
+
+
+def activate(
+    connector_id: str,
+    agent_id: str,
+    *,
+    scopes_for_grant: Optional[List[str]] = None,
+) -> bool:
+    """
+    Activate ``(connector_id, agent_id)`` and auto-grant if needed.
+
+    The "one-click convenience" path from issue #1005: if no grant exists
+    for the pair, this creates one using ``scopes_for_grant`` and then
+    flips the activation bit. If ``scopes_for_grant`` is not provided AND
+    no grant exists, raises ``ConfigurationError`` so the caller can
+    surface an actionable message to the user.
+
+    Returns True if a grant was auto-created, False otherwise (informative
+    only — both paths complete the activation).
+
+    Activations gate **MCP tool visibility**; grants gate **credential access**.
+    Only ``mcp_server`` connectors accept activations — OAuth connectors
+    have no MCP tool surface and their access is controlled entirely by
+    grants. Calling this for an OAuth connector raises ``ConfigurationError``.
+    See ``docs/sdk/infrastructure/connectors.mdx`` for the two-axis model.
+    """
+    _require_mcp_server_for_activation(connector_id)
+    existing_scopes = list_agent_grants(connector_id).get(agent_id)
+    auto_granted = False
+    if existing_scopes is None:
+        if scopes_for_grant is None:
+            raise ConfigurationError(
+                f"Cannot activate connector '{connector_id}' for agent "
+                f"'{agent_id}': no grant exists and no scopes provided "
+                "for auto-grant. Either pass --scopes explicitly or "
+                "register the agent with a REQUIRED_CONNECTORS entry "
+                "for this connector."
+            )
+        grant_agent(connector_id, agent_id, list(scopes_for_grant))
+        auto_granted = True
+        logger.info(
+            "api: auto-granted scopes for activation connector_id=%s "
+            "agent_id=%s scopes=%d",
+            connector_id,
+            agent_id,
+            len(scopes_for_grant),
+        )
+    activate_agent(connector_id, agent_id)
+    logger.info(
+        "api: activated connector_id=%s agent_id=%s (auto_granted=%s)",
+        connector_id,
+        agent_id,
+        auto_granted,
+    )
+    return auto_granted
+
+
+def deactivate(connector_id: str, agent_id: str) -> None:
+    """
+    Deactivate ``(connector_id, agent_id)``.
+
+    Only valid for ``mcp_server`` connectors — see :func:`activate` for
+    the rationale. OAuth connectors raise ``ConfigurationError``.
+
+    Non-destructive — the grant survives so a later re-activate is one
+    click without re-consent. To wipe both, call
+    :func:`gaia.connectors.grants.revoke_agent_grant` separately.
+    """
+    _require_mcp_server_for_activation(connector_id)
+    deactivate_agent(connector_id, agent_id)
+
+
 def tripwire_check() -> None:
     """
     Iterate every known provider and call ``load_connection`` to fire
@@ -248,14 +364,21 @@ def tripwire_check() -> None:
 
 
 __all__ = [
+    "activate",
+    "activate_agent",
     "cancel_flow",
     "complete_authorization",
+    "deactivate",
+    "deactivate_agent",
     "get_access_token",
     "get_access_token_sync",
     "get_connection",
     "grant_agent",
+    "is_agent_active",
+    "list_agent_activations",
     "list_agent_grants",
     "list_connections",
+    "load_activations",
     "load_grants",
     "revoke_agent_grant",
     "revoke_connection",

@@ -17,7 +17,11 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from gaia.llm.lemonade_client import DEFAULT_CONTEXT_SIZE
+from gaia.llm.lemonade_client import (
+    DEFAULT_CONTEXT_SIZE,
+    lemonade_auth_headers,
+    resolve_lemonade_api_key,
+)
 
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_dispatch_queue
@@ -66,8 +70,11 @@ async def _lemonade_post(
         import httpx  # pylint: disable=import-outside-toplevel
 
         base_url = _get_lemonade_base_url()
+        headers = lemonade_auth_headers(resolve_lemonade_api_key())
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(f"{base_url}/{path}", json=payload)
+            resp = await client.post(
+                f"{base_url}/{path}", json=payload, headers=headers
+            )
             if resp.status_code == 200:
                 logger.info("%s succeeded", log_context)
             else:
@@ -242,9 +249,38 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
     # download itself can take many minutes between progress events on a slow
     # link, and we'd rather hold open than wrongly bail.
     client_timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+    headers = lemonade_auth_headers(resolve_lemonade_api_key())
     try:
         async with httpx.AsyncClient(timeout=client_timeout) as client:
-            async with client.stream("POST", f"{base_url}/pull", json=payload) as resp:
+            async with client.stream(
+                "POST", f"{base_url}/pull", json=payload, headers=headers
+            ) as resp:
+                # 401 must be handled BEFORE the generic non-200 branch —
+                # response body could carry a reflected Authorization header
+                # from a misconfigured reverse proxy, leaking the key into
+                # the SSE progress channel and the server log. Matches the
+                # pattern used at the five LemonadeClient chokepoints.
+                if resp.status_code == 401:
+                    _set_download_progress(
+                        model_name,
+                        {
+                            "state": "error",
+                            "model_name": model_name,
+                            "percent": 0,
+                            "file": None,
+                            "file_index": 0,
+                            "total_files": 0,
+                            "downloaded_bytes": 0,
+                            "total_bytes": 0,
+                            "message": (
+                                "Lemonade /pull returned 401 Unauthorized. "
+                                "Verify LEMONADE_API_KEY is correct."
+                            ),
+                        },
+                    )
+                    logger.error("Pull stream HTTP 401 for %s", model_name)
+                    return
+
                 if resp.status_code != 200:
                     body = await resp.aread()
                     snippet = body.decode("utf-8", errors="replace")[:300]
@@ -412,6 +448,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             base_url = _get_lemonade_base_url()
+            _auth = lemonade_auth_headers(resolve_lemonade_api_key())
 
             # Derive the Lemonade web UI URL (scheme://host:port without /api/v1)
             try:
@@ -422,7 +459,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
             # Use /health endpoint to get the actually loaded model
             # (not /models which returns the full catalog of available models)
-            health_resp = await client.get(f"{base_url}/health")
+            health_resp = await client.get(f"{base_url}/health", headers=_auth)
             if health_resp.status_code == 200:
                 status.lemonade_running = True
                 health_data = health_resp.json()
@@ -464,7 +501,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         status.model_context_size = legacy_ctx
 
                 # Fetch model catalog for size, labels, and fallback context size
-                models_resp = await client.get(f"{base_url}/models")
+                models_resp = await client.get(f"{base_url}/models", headers=_auth)
                 if models_resp.status_code == 200:
                     for m in models_resp.json().get("data", []):
                         if m.get("id") == status.model_loaded:
@@ -515,6 +552,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             f"{base_url}/models",
                             params={"show_all": "true"},
                             timeout=5.0,
+                            headers=_auth,
                         )
                         if catalog_resp.status_code == 200:
                             _custom = db.get_setting("custom_model")
@@ -551,7 +589,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
                 # Fetch last inference stats (short timeout — supplementary info)
                 try:
-                    stats_resp = await client.get(f"{base_url}/stats", timeout=3.0)
+                    stats_resp = await client.get(
+                        f"{base_url}/stats", timeout=3.0, headers=_auth
+                    )
                     if stats_resp.status_code == 200:
                         stats_data = stats_resp.json()
                         tps = stats_data.get("tokens_per_second")
@@ -566,7 +606,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 # Fetch GPU info (short timeout — supplementary info)
                 try:
                     sysinfo_resp = await client.get(
-                        f"{base_url}/system-info", timeout=3.0
+                        f"{base_url}/system-info", timeout=3.0, headers=_auth
                     )
                     if sysinfo_resp.status_code == 200:
                         devices = sysinfo_resp.json().get("devices", {})
@@ -579,7 +619,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     pass
             else:
                 # Fall back to /models if /health isn't available
-                resp = await client.get(f"{base_url}/models")
+                resp = await client.get(f"{base_url}/models", headers=_auth)
                 if resp.status_code == 200:
                     status.lemonade_running = True
                     data = resp.json()
@@ -719,10 +759,13 @@ async def _check_model_status(model_name: str) -> ModelStatus:
         import httpx
 
         base_url = _get_lemonade_base_url()
+        _auth = lemonade_auth_headers(resolve_lemonade_api_key())
         async with httpx.AsyncClient(timeout=5.0) as client:
             # Check catalog: is model known and downloaded?
             models_resp = await client.get(
-                f"{base_url}/models", params={"show_all": "true"}
+                f"{base_url}/models",
+                params={"show_all": "true"},
+                headers=_auth,
             )
             if models_resp.status_code == 200:
                 model_name_lower = model_name.lower()
@@ -735,7 +778,7 @@ async def _check_model_status(model_name: str) -> ModelStatus:
                         break
 
             # Check health: is model currently loaded?
-            health_resp = await client.get(f"{base_url}/health")
+            health_resp = await client.get(f"{base_url}/health", headers=_auth)
             if health_resp.status_code == 200:
                 health_data = health_resp.json()
                 loaded_model = health_data.get("model_loaded", "")

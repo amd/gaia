@@ -45,6 +45,11 @@ from pydantic import BaseModel, Field
 
 import gaia.connectors as connections
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+from gaia.connectors.activations import (
+    deactivate_agent,
+    list_agent_activations,
+)
+from gaia.connectors.api import activate as activate_connector_for_agent
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -97,6 +102,31 @@ def _require_ui_header(request: Request) -> None:
         raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
+def _require_mcp_server(connector_id: str) -> None:
+    """Reject activation writes for non-MCP-server connectors.
+
+    Activations gate MCP tool visibility via ``MCPClientManager.tools_for_agent``
+    (see issue #1005). OAuth-only connectors have no MCP tool surface — their
+    agent access is gated by per-scope grants, not by this ledger — so allowing
+    a write here would create a switch that does nothing.
+    """
+    try:
+        spec = REGISTRY.get(connector_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
+    if spec.type != "mcp_server":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Activations apply to MCP-server connectors only; "
+                f"{connector_id!r} is type {spec.type!r}. Use per-agent grants "
+                "to control access for OAuth connectors."
+            ),
+        )
+
+
 # ─────────────────────────────────────────────────────────────────
 # Request / response models
 # ─────────────────────────────────────────────────────────────────
@@ -108,6 +138,19 @@ class AuthorizeRequest(BaseModel):
 
 class GrantRequest(BaseModel):
     scopes: List[str] = Field(default_factory=list)
+
+
+class ActivationRequest(BaseModel):
+    """Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
+
+    Valid only for ``mcp_server`` connectors — see ``_require_mcp_server``.
+
+    ``scopes`` is optional: when present and no grant exists for the pair,
+    it is used to auto-create the grant (one-click convenience). When the
+    pair already has a grant the body is ignored — see issue #1005.
+    """
+
+    scopes: Optional[List[str]] = None
 
 
 class ConfigureRequest(BaseModel):
@@ -305,6 +348,14 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
                     e,
                 )
 
+    # Activations ledger snapshot (issue #1005). Read-only here; the
+    # frontend toggles each entry via PUT/DELETE
+    # /api/connectors/{id}/activations/{agent_id} — mutating routes
+    # accept ``mcp_server`` connectors only (see ``_require_mcp_server``).
+    # The dict is always returned (empty ``{}`` for OAuth) so the response
+    # shape stays uniform across connector types.
+    activations = list_agent_activations(spec.id)
+
     return {
         "id": spec.id,
         "display_name": spec.display_name,
@@ -321,6 +372,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "account_id": account_id,
         "scopes": scopes,
         "enabled": enabled,
+        "activations": activations,
         "mcp_env_keys": list(spec.mcp_env_keys),
         "default_scopes": list(spec.default_scopes),
         "available_scopes": list(spec.available_scopes),
@@ -375,6 +427,7 @@ async def connector_events() -> StreamingResponse:
       - ``connector.oauth.completed``   ({connector_id, account_email})
       - ``connector.oauth.error``       ({connector_id, error})
       - ``connector.grant.changed``     ({connector_id, agent_id, scopes})
+      - ``connector.activation.changed`` ({connector_id, agent_id, active})
     """
     queue = await _emitter.subscribe()
 
@@ -503,6 +556,11 @@ async def list_agent_mcps(request: Request) -> Dict[str, Any]:
 @router.get("/{connector_id}/grants")
 async def get_grants(connector_id: str) -> Dict[str, Any]:
     return {"grants": list_agent_grants(connector_id)}
+
+
+@router.get("/{connector_id}/activations")
+async def get_activations(connector_id: str) -> Dict[str, Any]:
+    return {"activations": list_agent_activations(connector_id)}
 
 
 @router.get("/{connector_id}")
@@ -694,5 +752,84 @@ async def delete_grant(connector_id: str, agent_id: str) -> Response:
     await _emitter.emit(
         "connector.grant.changed",
         {"connector_id": connector_id, "agent_id": agent_id, "scopes": []},
+    )
+    return Response(status_code=204)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Activations endpoints (issue #1005)
+#
+# Activations gate MCP tool visibility (``MCPClientManager.tools_for_agent``).
+# The PUT/DELETE routes accept ``mcp_server`` connectors only — OAuth
+# connectors have no MCP tool surface and are rejected with HTTP 400 via
+# ``_require_mcp_server``. The GET route is type-agnostic so frontends
+# that fetch indiscriminately keep working (returns ``{}`` for OAuth).
+# ─────────────────────────────────────────────────────────────────
+
+
+@router.put(
+    "/{connector_id}/activations/{agent_id:path}",
+    dependencies=[Depends(_require_ui_header)],
+)
+async def put_activation(
+    connector_id: str, agent_id: str, body: ActivationRequest
+) -> Dict[str, Any]:
+    """Activate ``agent_id`` for ``connector_id``.
+
+    Auto-grants when no grant exists and ``body.scopes`` is provided.
+    Returns 400 if no grant exists and the body omits scopes — the
+    frontend must look up REQUIRED_CONNECTORS scopes for the agent and
+    pass them in.
+    """
+    _require_mcp_server(connector_id)
+    try:
+        auto_granted = activate_connector_for_agent(
+            connector_id, agent_id, scopes_for_grant=body.scopes
+        )
+    except ConfigurationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
+
+    if auto_granted:
+        # Auto-grant fired — also surface the grant change so subscribed
+        # UIs refresh both panels.
+        await _emitter.emit(
+            "connector.grant.changed",
+            {
+                "connector_id": connector_id,
+                "agent_id": agent_id,
+                "scopes": list(body.scopes or []),
+            },
+        )
+    await _emitter.emit(
+        "connector.activation.changed",
+        {"connector_id": connector_id, "agent_id": agent_id, "active": True},
+    )
+    return {
+        "connector_id": connector_id,
+        "agent_id": agent_id,
+        "active": True,
+        "auto_granted": auto_granted,
+    }
+
+
+@router.delete(
+    "/{connector_id}/activations/{agent_id:path}",
+    status_code=204,
+    dependencies=[Depends(_require_ui_header)],
+)
+async def delete_activation(connector_id: str, agent_id: str) -> Response:
+    """Deactivate ``agent_id`` for ``connector_id``. Idempotent.
+
+    Non-destructive — the grant is preserved so a later re-activate is
+    one click. To wipe the grant call ``DELETE
+    /api/connectors/{id}/grants/{agent_id}`` instead.
+    """
+    _require_mcp_server(connector_id)
+    deactivate_agent(connector_id, agent_id)
+    await _emitter.emit(
+        "connector.activation.changed",
+        {"connector_id": connector_id, "agent_id": agent_id, "active": False},
     )
     return Response(status_code=204)

@@ -379,7 +379,10 @@ def _make_email_agent(fake_gmail, fake_calendar, tmp_path):
         db_path=str(tmp_path / "state.db"),
         silent_mode=True,
     )
-    with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+    with (
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("gaia.agents.base.agent.AgentSDK") as mock_sdk,
+    ):
         mock_sdk.return_value = MagicMock()
         agent = EmailTriageAgent(config=cfg)
     return agent
@@ -644,7 +647,10 @@ class TestBatchThresholdEnforcement:
             db_path=str(tmp_path / "state.db"),
             silent_mode=True,
         )
-        with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+        with (
+            patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+            patch("gaia.agents.base.agent.AgentSDK") as mock_sdk,
+        ):
             mock_sdk.return_value = MagicMock()
             agent = EmailTriageAgent(config=cfg)
 
@@ -869,3 +875,332 @@ class TestCalendarTools:
         out = list_calendar_events_impl(fake_calendar, time_min=None, time_max=None)
         events = out["events"]
         assert events[0]["missing_organizer"] is False
+
+
+# ---------------------------------------------------------------------------
+# _coerce_ids helper
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceIds:
+    """``_coerce_ids`` normalises message_ids input from LLM callers
+    which may send comma/semicolon-separated strings, lists, or None.
+    """
+
+    def test_coerce_ids(self):
+        from gaia.agents.email.tools.organize_tools import _coerce_ids
+
+        # None → empty list.
+        assert _coerce_ids(None) == []
+
+        # Comma-separated string → list of stripped tokens.
+        assert _coerce_ids("a,b,c") == ["a", "b", "c"]
+        assert _coerce_ids("a, b , c") == ["a", "b", "c"]
+
+        # Semicolon-separated string → list.
+        assert _coerce_ids("a;b;c") == ["a", "b", "c"]
+        assert _coerce_ids("a; b ; c") == ["a", "b", "c"]
+
+        # Mixed separators.
+        assert _coerce_ids("a, b; c") == ["a", "b", "c"]
+
+        # List → returned as-is.
+        assert _coerce_ids(["a", "b", "c"]) == ["a", "b", "c"]
+
+        # Single string (no separators) → singleton list.
+        assert _coerce_ids("single-id") == ["single-id"]
+
+        # Empty string → empty list.
+        assert _coerce_ids("") == []
+
+        # String with only whitespace/separators → empty list.
+        assert _coerce_ids(" , ; ") == []
+
+        # Unknown type → empty list.
+        assert _coerce_ids(42) == []
+
+
+# ---------------------------------------------------------------------------
+# Batch organize tools
+# ---------------------------------------------------------------------------
+
+
+class TestBatchOrganizeTools:
+    """Phase I3 / S2.M2: batch variants of organize tools must coerce
+    IDs, call Gmail for each message, record per-message actions with a
+    shared batch_id, handle partial failures, and enforce the batch
+    threshold.
+    """
+
+    def _tool(self, name):
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        return _TOOL_REGISTRY[name]["function"]
+
+    def test_mark_read_batch_coerces_string_ids(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        """Comma-separated string of IDs is coerced to a list."""
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            ids = [
+                list(fake_gmail._messages.keys())[0],
+                list(fake_gmail._messages.keys())[1],
+            ]
+            # Pass as a semicolon-separated string (LLM-style).
+            result = json.loads(self._tool("mark_read_batch")(f"{ids[0]}; {ids[1]}"))
+            assert result["ok"] is True
+            assert result["data"]["total"] == 2
+            assert len(result["data"]["succeeded"]) == 2
+            assert result["data"]["failed"] == []
+        finally:
+            agent.close_db()
+
+    def test_mark_read_batch_calls_gmail_for_each_message(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        """UNREAD label is removed from every message."""
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            ids = list(fake_gmail._messages.keys())[:3]
+            result = json.loads(self._tool("mark_read_batch")(ids))
+            assert result["ok"] is True
+            for mid in ids:
+                post = fake_gmail.get_message(mid)
+                assert (
+                    "UNREAD" not in post["labelIds"]
+                ), f"{mid} still has UNREAD after batch mark_read"
+        finally:
+            agent.close_db()
+
+    def test_mark_read_batch_records_per_message_actions(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        """Each message gets its own action row, not a single batch row."""
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            ids = list(fake_gmail._messages.keys())[:3]
+            json.loads(self._tool("mark_read_batch")(ids))
+            # Query the agent's own database (not the in-memory db fixture).
+            rows = agent.query("SELECT COUNT(*) AS n FROM email_actions", one=True)
+            assert rows["n"] == 3, "expected 3 action rows, got {}".format(rows["n"])
+        finally:
+            agent.close_db()
+
+    def test_mark_read_batch_shares_batch_id(self, fake_gmail, fake_calendar, tmp_path):
+        """All action rows from a single batch call share a batch_id."""
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            ids = list(fake_gmail._messages.keys())[:3]
+            result = json.loads(self._tool("mark_read_batch")(ids))
+            assert result["ok"] is True
+            batch_id = result["data"]["batch_id"]
+            assert batch_id is not None
+            # All 3 rows must have the same batch_id.
+            all_rows = agent.query("SELECT batch_id FROM email_actions")
+            batch_ids = {r["batch_id"] for r in all_rows if r["batch_id"]}
+            assert len(batch_ids) == 1, f"expected 1 unique batch_id, got {batch_ids}"
+            assert batch_ids.pop() == batch_id
+        finally:
+            agent.close_db()
+
+    def test_add_star_batch_stars_all_messages(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            ids = list(fake_gmail._messages.keys())[:3]
+            result = json.loads(self._tool("add_star_batch")(ids))
+            assert result["ok"] is True
+            for mid in ids:
+                post = fake_gmail.get_message(mid)
+                assert (
+                    "STARRED" in post["labelIds"]
+                ), f"{mid} missing STARRED after batch add_star"
+        finally:
+            agent.close_db()
+
+    def test_remove_star_batch_unstars_all_messages(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        # First star them, then unstar.
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            ids = list(fake_gmail._messages.keys())[:3]
+            json.loads(self._tool("add_star_batch")(ids))
+            result = json.loads(self._tool("remove_star_batch")(ids))
+            assert result["ok"] is True
+            for mid in ids:
+                post = fake_gmail.get_message(mid)
+                assert (
+                    "STARRED" not in post["labelIds"]
+                ), f"{mid} still has STARRED after batch remove_star"
+        finally:
+            agent.close_db()
+
+    def test_mark_unread_batch_marks_all_unread(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        # First mark them read, then unread.
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            ids = list(fake_gmail._messages.keys())[:3]
+            json.loads(self._tool("mark_read_batch")(ids))
+            result = json.loads(self._tool("mark_unread_batch")(ids))
+            assert result["ok"] is True
+            for mid in ids:
+                post = fake_gmail.get_message(mid)
+                assert (
+                    "UNREAD" in post["labelIds"]
+                ), f"{mid} missing UNREAD after batch mark_unread"
+        finally:
+            agent.close_db()
+
+    def test_archive_message_batch_archives_all(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            ids = list(fake_gmail._messages.keys())[:3]
+            result = json.loads(self._tool("archive_message_batch")(ids))
+            assert result["ok"] is True
+            for mid in ids:
+                post = fake_gmail.get_message(mid)
+                assert (
+                    "INBOX" not in post["labelIds"]
+                ), f"{mid} still in INBOX after batch archive"
+        finally:
+            agent.close_db()
+
+    def test_label_message_batch_adds_label_to_all(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            new_label = fake_gmail.create_label(name="batch-label-test")
+            ids = list(fake_gmail._messages.keys())[:3]
+            result = json.loads(self._tool("label_message_batch")(ids, new_label["id"]))
+            assert result["ok"] is True
+            for mid in ids:
+                post = fake_gmail.get_message(mid)
+                assert (
+                    new_label["id"] in post["labelIds"]
+                ), f"{mid} missing label after batch label"
+        finally:
+            agent.close_db()
+
+    def test_move_to_label_batch_moves_all(self, fake_gmail, fake_calendar, tmp_path):
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            new_label = fake_gmail.create_label(name="move-batch-test")
+            ids = list(fake_gmail._messages.keys())[:3]
+            result = json.loads(self._tool("move_to_label_batch")(ids, new_label["id"]))
+            assert result["ok"] is True
+            for mid in ids:
+                post = fake_gmail.get_message(mid)
+                assert (
+                    new_label["id"] in post["labelIds"]
+                ), f"{mid} missing target label after batch move"
+                assert (
+                    "INBOX" not in post["labelIds"]
+                ), f"{mid} still in INBOX after batch move"
+        finally:
+            agent.close_db()
+
+    def test_batch_empty_input_returns_zero_total(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        """Passing an empty list returns a clean zero-result envelope."""
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            result = json.loads(self._tool("mark_read_batch")([]))
+            assert result["ok"] is True
+            assert result["data"]["total"] == 0
+            assert result["data"]["succeeded"] == []
+            assert result["data"]["failed"] == []
+        finally:
+            agent.close_db()
+
+    def test_batch_partial_failure_handled_gracefully(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        """Mix of valid and nonexistent message IDs — tool must not
+        raise; it returns a partial result with succeeded + failed.
+        """
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            good_ids = list(fake_gmail._messages.keys())[:2]
+            ids = good_ids + ["nonexistent-id-12345"]
+            result = json.loads(self._tool("mark_read_batch")(ids))
+            assert result["ok"] is True
+            assert result["data"]["total"] == 3
+            assert len(result["data"]["succeeded"]) == 2
+            assert len(result["data"]["failed"]) == 1
+            failed_mid = result["data"]["failed"][0]["message_id"]
+            assert failed_mid == "nonexistent-id-12345"
+            # Good messages are actually marked read.
+            for mid in good_ids:
+                post = fake_gmail.get_message(mid)
+                assert "UNREAD" not in post["labelIds"]
+        finally:
+            agent.close_db()
+
+    def test_batch_partial_failure_records_only_succeeded_actions(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        """Only succeeded messages get action rows; failed ones do not."""
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            good_ids = list(fake_gmail._messages.keys())[:2]
+            ids = good_ids + ["nonexistent-id-xyz"]
+            json.loads(self._tool("mark_read_batch")(ids))
+            rows = agent.query("SELECT COUNT(*) AS n FROM email_actions", one=True)
+            assert (
+                rows["n"] == 2
+            ), "expected 2 action rows (only succeeded), got {}".format(rows["n"])
+        finally:
+            agent.close_db()
+
+    def test_batch_threshold_enforced(self, fake_gmail, fake_calendar, tmp_path):
+        """Phase I3: batch tool must refuse to fire past the threshold
+        and return an error envelope WITHOUT touching Gmail.
+        """
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            # Bump the counter past the boundary (>5 ops, >3 senders).
+            for sender in ("a", "b", "c", "d"):
+                agent._record_organize_op(f"m-{sender}-1", sender)
+            agent._record_organize_op("m-x", "a")
+            agent._record_organize_op("m-y", "b")
+            assert agent._organize_batch_threshold_exceeded() is True
+
+            msg_id = list(fake_gmail._messages.keys())[0]
+            prior_labels = list(fake_gmail.get_message(msg_id).get("labelIds", []))
+            result = json.loads(self._tool("mark_read_batch")([msg_id]))
+            assert result["ok"] is False
+            assert "batch threshold" in result["error"].lower()
+            # Message labels unchanged — closure refused before any call.
+            post = fake_gmail.get_message(msg_id)
+            assert post["labelIds"] == prior_labels
+        finally:
+            agent.close_db()
+
+    def test_batch_records_per_message_not_once(
+        self, fake_gmail, fake_calendar, tmp_path
+    ):
+        """Regression: the Phase I3 fix ensures _record_organize_op
+        is called once per message in the batch, not once for the
+        entire batch. Verify by checking action row count.
+        """
+        agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
+        try:
+            ids = list(fake_gmail._messages.keys())[:5]
+            json.loads(self._tool("mark_read_batch")(ids))
+            rows = agent.query("SELECT COUNT(*) AS n FROM email_actions", one=True)
+            # Must be 5 rows — one per message — not 1.
+            assert rows["n"] == 5, (
+                "expected 5 per-message action rows, got {}; "
+                "batch may be recording only once".format(rows["n"])
+            )
+        finally:
+            agent.close_db()

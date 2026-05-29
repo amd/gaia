@@ -105,6 +105,95 @@ class TestMCPToolConversion:
         assert gaia_format["parameters"] == {}
         assert gaia_format["name"] == "mcp_monitor_ping"
 
+    def test_to_gaia_format_uses_prefix_for_name(self):
+        """``to_gaia_format`` builds the name from the sanitised prefix."""
+        mcp_tool = MCPTool(
+            name="ping",
+            description="d",
+            input_schema={"type": "object", "properties": {}, "required": []},
+        )
+
+        # Caller passes sanitised prefix as first arg, raw name as second
+        gaia = mcp_tool.to_gaia_format("tool", "tool_mcp")
+
+        assert gaia["name"] == "mcp_tool_ping"
+        assert gaia["description"].startswith("[MCP:tool]")
+        # Raw name preserved for routing
+        assert gaia["_mcp_server"] == "tool_mcp"
+
+    def test_to_gaia_format_back_compat_single_arg(self):
+        """Single-arg callers (legacy tests) keep working."""
+        mcp_tool = MCPTool(
+            name="ping",
+            description="d",
+            input_schema={"type": "object", "properties": {}, "required": []},
+        )
+
+        gaia = mcp_tool.to_gaia_format("filesystem")
+
+        # When only one arg is passed, ``_mcp_server`` falls back to prefix
+        assert gaia["name"] == "mcp_filesystem_ping"
+        assert gaia["_mcp_server"] == "filesystem"
+
+
+class TestRegisterUnregisterSymmetry:
+    """End-to-end: registered names and unregistered lookups must match.
+
+    Regression test for the bug that the previous Phase 4 draft would
+    have introduced — sanitising at ``to_gaia_format`` but leaving
+    ``client.name`` raw caused ``_unregister_mcp_tools`` to recompute
+    the OLD name and silently leak every tool on disconnect.
+    """
+
+    def test_unregister_uses_same_prefix_as_register(self):
+        from unittest.mock import MagicMock
+
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+        from gaia.mcp.mixin import MCPClientMixin
+
+        mock_transport = Mock()
+        mock_transport.is_connected.return_value = True
+
+        client = MCPClient("tool_mcp", mock_transport)
+        # Force the cached tool list so list_tools() doesn't hit transport
+        client._tools = [
+            MCPTool(
+                "ping",
+                "Ping",
+                {"type": "object", "properties": {}, "required": []},
+            )
+        ]
+
+        # Build a minimal mixin instance to exercise register/unregister.
+        # MagicMock the manager so __del__ at gc time is happy.
+        class _Bare(MCPClientMixin):
+            def __init__(self):
+                self._mcp_manager = MagicMock()
+
+            def _console_print(self, *args, **kwargs):
+                pass
+
+        mixin = _Bare()
+        sanitised_name = f"mcp_{client.prefix}_ping"  # "mcp_tool_ping"
+
+        # Snapshot the registry so we don't permanently pollute it
+        before = dict(_TOOL_REGISTRY)
+        try:
+            # Register
+            mixin._register_mcp_tools(client)
+            assert (
+                sanitised_name in _TOOL_REGISTRY
+            ), "registration must use the sanitised prefix"
+
+            # Unregister — must remove the SAME key
+            mixin._unregister_mcp_tools(client)
+            assert (
+                sanitised_name not in _TOOL_REGISTRY
+            ), "unregistration must look up the same prefix used by register"
+        finally:
+            _TOOL_REGISTRY.clear()
+            _TOOL_REGISTRY.update(before)
+
 
 class TestMCPClient:
     """Test MCPClient functionality."""

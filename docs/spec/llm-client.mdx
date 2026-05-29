@@ -387,10 +387,14 @@ class LemonadeProvider(LLMClient):
             host: Server host (alternative to base_url)
             port: Server port (alternative to base_url)
             system_prompt: Default system prompt for chat
+            api_key: API key for an authenticated Lemonade server
+                     (overrides LEMONADE_API_KEY env var; None for unauthenticated)
             **kwargs: Additional arguments passed to LemonadeClient
 
         Environment:
             LEMONADE_BASE_URL: Default base URL (http://localhost:13305/api/v1)
+            LEMONADE_API_KEY: API key for authenticated remote Lemonade
+                              (sent as Authorization: Bearer header on every request)
             LEMONADE_MODEL: Default model name if not specified
 
         Note:

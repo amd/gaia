@@ -196,7 +196,7 @@ def test_custom_agent_with_mcp_reports_diagnosable_connection_failure(
     ]
     assert agent.process_query("add 7 and 35") == {
         "status": "error",
-        "error": "Tool 'mcp_dummy_add_two_numbers' not found",
+        "error": "Unknown tool name. Use only tools listed in your AVAILABLE TOOLS section.",
     }
 
 

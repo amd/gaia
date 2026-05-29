@@ -29,27 +29,53 @@ UI_HEADER = {"x-gaia-ui": "1"}
 
 @pytest.fixture(autouse=True)
 def isolated_registry(monkeypatch, tmp_path):
-    """Each test gets a fresh REGISTRY and isolated grants/state dirs."""
+    """Each test gets a fresh REGISTRY and isolated grants/state dirs.
+
+    Registers two specs so tests can exercise both the OAuth path
+    (``google``) and the MCP-server path (``mcp-test``) without colliding.
+    Activations endpoints accept only ``mcp_server`` connectors (#1005),
+    so tests targeting that ledger should use ``mcp-test``.
+    """
     from gaia.connectors.registry import ConnectorRegistry
     from gaia.connectors.spec import ConnectorSpec
 
     fresh = ConnectorRegistry()
-    spec = ConnectorSpec(
-        id="google",
-        display_name="Google",
-        icon="G",
-        category="productivity",
-        tier=1,
-        type="oauth_pkce",
-        description="Google OAuth",
-        default_scopes=("openid",),
-        oauth_provider_ref="google",
+    fresh.register(
+        ConnectorSpec(
+            id="google",
+            display_name="Google",
+            icon="G",
+            category="productivity",
+            tier=1,
+            type="oauth_pkce",
+            description="Google OAuth",
+            default_scopes=("openid",),
+            oauth_provider_ref="google",
+        )
     )
-    fresh.register(spec)
+    fresh.register(
+        ConnectorSpec(
+            id="mcp-test",
+            display_name="MCP Test",
+            icon="M",
+            category="dev-tools",
+            tier=1,
+            type="mcp_server",
+            description="Stub MCP server for router tests",
+            mcp_command="true",
+            mcp_args=(),
+        )
+    )
 
     monkeypatch.setattr("gaia.ui.routers.connectors.REGISTRY", fresh)
     monkeypatch.setattr("gaia.connectors.handler.REGISTRY", fresh)
+    # ``connectors.api._require_mcp_server_for_activation`` imports REGISTRY
+    # lazily from its canonical home so the type guard applies to CLI/SDK
+    # callers too — patch the canonical name so all three surfaces share
+    # the same fresh catalog under test.
+    monkeypatch.setattr("gaia.connectors.registry.REGISTRY", fresh)
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gaia.connectors.activations.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
     yield fresh
 
@@ -540,3 +566,189 @@ class TestEnabledFieldInSummary:
     def test_oauth_summary_always_reports_enabled_true(self, ui_api_client):
         resp = ui_api_client.get("/api/connectors/google")
         assert resp.json()["enabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# Activations endpoints (issue #1005)
+# ---------------------------------------------------------------------------
+
+
+class TestActivationsCsrf:
+    def test_put_without_header_is_403(self, ui_api_client):
+        resp = ui_api_client.put(
+            "/api/connectors/mcp-test/activations/builtin:chat",
+            json={"scopes": ["use"]},
+        )
+        assert resp.status_code == 403
+
+    def test_delete_without_header_is_403(self, ui_api_client):
+        resp = ui_api_client.delete(
+            "/api/connectors/mcp-test/activations/builtin:chat",
+        )
+        assert resp.status_code == 403
+
+
+class TestActivationsEndpoints:
+    def test_get_activations_returns_activations_key(self, ui_api_client):
+        resp = ui_api_client.get("/api/connectors/mcp-test/activations")
+        assert resp.status_code == 200
+        assert resp.json() == {"activations": {}}
+
+    def test_put_activation_with_existing_grant_succeeds(self, ui_api_client):
+        # Grant first, then activate (the explicit two-step path).
+        ui_api_client.put(
+            "/api/connectors/mcp-test/grants/builtin:chat",
+            json={"scopes": ["use"]},
+            headers=UI_HEADER,
+        )
+        resp = ui_api_client.put(
+            "/api/connectors/mcp-test/activations/builtin:chat",
+            json={},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {
+            "connector_id": "mcp-test",
+            "agent_id": "builtin:chat",
+            "active": True,
+            "auto_granted": False,
+        }
+        # GET reflects the new active state.
+        listing = ui_api_client.get("/api/connectors/mcp-test/activations").json()
+        assert listing == {"activations": {"builtin:chat": True}}
+
+    def test_put_activation_with_no_grant_and_scopes_auto_grants(self, ui_api_client):
+        resp = ui_api_client.put(
+            "/api/connectors/mcp-test/activations/builtin:chat",
+            json={"scopes": ["use", "read"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["auto_granted"] is True
+        assert body["active"] is True
+        # Grant landed too.
+        grants = ui_api_client.get("/api/connectors/mcp-test/grants").json()
+        assert grants == {"grants": {"builtin:chat": ["use", "read"]}}
+
+    def test_put_activation_with_no_grant_and_no_scopes_is_400(self, ui_api_client):
+        resp = ui_api_client.put(
+            "/api/connectors/mcp-test/activations/builtin:chat",
+            json={},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 400
+        detail = resp.json().get("detail", "")
+        assert "mcp-test" in detail
+        assert "builtin:chat" in detail
+
+    def test_delete_activation_succeeds_idempotently(self, ui_api_client):
+        # No prior activation — delete is still 204 (idempotent).
+        resp = ui_api_client.delete(
+            "/api/connectors/mcp-test/activations/builtin:chat",
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 204
+
+    def test_delete_activation_preserves_grant(self, ui_api_client):
+        ui_api_client.put(
+            "/api/connectors/mcp-test/grants/builtin:chat",
+            json={"scopes": ["use"]},
+            headers=UI_HEADER,
+        )
+        ui_api_client.put(
+            "/api/connectors/mcp-test/activations/builtin:chat",
+            json={},
+            headers=UI_HEADER,
+        )
+        resp = ui_api_client.delete(
+            "/api/connectors/mcp-test/activations/builtin:chat",
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 204
+        # Activation cleared, grant survives — re-activate must be one click.
+        grants = ui_api_client.get("/api/connectors/mcp-test/grants").json()
+        assert grants == {"grants": {"builtin:chat": ["use"]}}
+        listing = ui_api_client.get("/api/connectors/mcp-test/activations").json()
+        assert listing == {"activations": {}}
+
+    def test_connector_summary_exposes_activations(self, ui_api_client):
+        ui_api_client.put(
+            "/api/connectors/mcp-test/activations/builtin:chat",
+            json={"scopes": ["use"]},
+            headers=UI_HEADER,
+        )
+        resp = ui_api_client.get("/api/connectors/mcp-test")
+        assert resp.status_code == 200
+        assert resp.json()["activations"] == {"builtin:chat": True}
+
+
+class TestActivationsRejectNonMcpServer:
+    """#1005 follow-up — activations gate MCP tool visibility only.
+
+    The router must reject PUT/DELETE for OAuth connectors so we don't
+    expose a UI switch that silently does nothing. CSRF still wins over
+    type-check (a 403 before a 400 is the safe ordering — type checks
+    leak catalog membership; CSRF doesn't).
+    """
+
+    def test_put_on_oauth_connector_is_400(self, ui_api_client):
+        resp = ui_api_client.put(
+            "/api/connectors/google/activations/builtin:chat",
+            json={"scopes": ["openid"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 400
+        detail = resp.json().get("detail", "")
+        assert "MCP-server" in detail
+        assert "google" in detail
+        # And nothing was written to the ledger.
+        listing = ui_api_client.get("/api/connectors/google/activations").json()
+        assert listing == {"activations": {}}
+
+    def test_delete_on_oauth_connector_is_400(self, ui_api_client):
+        resp = ui_api_client.delete(
+            "/api/connectors/google/activations/builtin:chat",
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 400
+        assert "MCP-server" in resp.json().get("detail", "")
+
+    def test_put_on_unknown_connector_is_404(self, ui_api_client):
+        resp = ui_api_client.put(
+            "/api/connectors/does-not-exist/activations/builtin:chat",
+            json={"scopes": ["use"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 404
+        assert "does-not-exist" in resp.json().get("detail", "")
+
+    def test_delete_on_unknown_connector_is_404(self, ui_api_client):
+        resp = ui_api_client.delete(
+            "/api/connectors/does-not-exist/activations/builtin:chat",
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 404
+
+    def test_csrf_takes_precedence_over_type_check_put(self, ui_api_client):
+        # Missing X-Gaia-UI header on an OAuth connector still returns 403,
+        # not 400 — never leak catalog membership / spec metadata to an
+        # unauthenticated caller.
+        resp = ui_api_client.put(
+            "/api/connectors/google/activations/builtin:chat",
+            json={"scopes": ["openid"]},
+        )
+        assert resp.status_code == 403
+
+    def test_namespaced_agent_id_with_colon_is_routed_correctly(self, ui_api_client):
+        # The agent_id path parameter uses ``:path`` so colons in namespaced
+        # ids (``builtin:chat``, ``custom:abc:chat``) survive routing.
+        resp = ui_api_client.put(
+            "/api/connectors/mcp-test/activations/custom:deadbeef:chat",
+            json={"scopes": ["use"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["agent_id"] == "custom:deadbeef:chat"

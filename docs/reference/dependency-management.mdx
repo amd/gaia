@@ -6,193 +6,103 @@ title: "Dependency Management"
 
 ## What is Dependabot?
 
-Dependabot automatically monitors dependencies and can create pull requests for security updates and version upgrades. This keeps GAIA's Python and JavaScript dependencies current and secure.
+Dependabot automatically monitors GAIA's dependencies and opens pull requests for security and version updates. PRs that meet a strict low-risk gate (patch updates, or minor updates to development-only deps) auto-merge once CI is green; everything else waits for human review.
 
-## Understanding Dependabot Modes
+## How GAIA uses Dependabot
 
-### Mode 1: Auto-PR Mode (`open-pull-requests-limit: 1` or higher)
-- ✅ **Monitors** dependencies for updates
-- ✅ **Creates pull requests** automatically when updates are available
-- ✅ **Runs CI tests** to validate the update
-- Best for: Critical dependencies where you want automatic updates with testing
+Dependabot is configured in [`.github/dependabot.yml`](https://github.com/amd/gaia/blob/main/.github/dependabot.yml) and runs every Monday across seven entries: one for Python (`pip`), one for GitHub Actions, and five for npm (the root workspace plus four standalone app workspaces). Every entry has `open-pull-requests-limit: 5` — the prior `0` (soft-disabled) state was a "silent fallback" violation that's now retired by design ([#1157](https://github.com/amd/gaia/issues/1157)).
 
-### Mode 2: Monitor-Only Mode (`open-pull-requests-limit: 0`)
-- ✅ **Monitors** dependencies for updates
-- ✅ **Shows alerts** in GitHub Security tab for vulnerabilities
-- ❌ **Does NOT create** pull requests automatically
-- Best for: Dependencies you want to update manually or on your own schedule
+A companion workflow at [`.github/workflows/dependabot-automerge.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/dependabot-automerge.yml) auto-merges low-risk Dependabot PRs once required status checks pass.
 
-## Current Configuration
+## Current configuration
 
-### Root NPM Workspace (Auto-PR Mode)
-The root `package.json` uses npm workspaces and includes:
-- `src/gaia/electron` - Electron framework
-- `src/gaia/apps/*/webui` - All app subdirectories
+| Directory | Ecosystem | Limit | Group | Schedule |
+|---|---|---|---|---|
+| `/` | pip | 5 | `python-dependencies` | weekly / monday |
+| `/` | npm | 5 | `root-npm-dependencies` | weekly / monday |
+| `/src/gaia/apps/webui` | npm | 5 | `agent-ui-dependencies` | weekly / monday |
+| `/src/gaia/apps/example/webui` | npm | 5 | `example-app-dependencies` | weekly / monday |
+| `/src/gaia/apps/jira/webui` | npm | 5 | `jira-app-dependencies` | weekly / monday |
+| `/src/gaia/agents/emr/dashboard/electron` | npm | 5 | `emr-dashboard-dependencies` | weekly / monday |
+| `/` | github-actions | 5 | `github-actions` | weekly / monday |
 
-**Configuration:**
-```yaml
-directory: "/"
-open-pull-requests-limit: 1
-```
+**Why grouping matters.** Each ecosystem uses a wildcard `groups:` stanza so that a week's worth of updates collapse into a single grouped PR per ecosystem. Without grouping, the `limit: 5` would be hit by five individual single-package PRs and the rest would queue — defeating the point of the cap.
 
-**What this means:**
-- ✅ Dependabot **creates PRs** for Electron framework dependencies
-- ✅ Dependabot **creates PRs** for all workspace packages
-- ✅ PRs are grouped together to reduce noise
-- ✅ Automated tests run on these PRs via GitHub Actions
+**Workspace coverage.** The root npm entry follows the workspaces declaration in `package.json` (`src/gaia/electron`, `src/gaia/apps/*/webui`). The flagship Agent UI at `src/gaia/apps/webui` is **not** matched by that glob (it sits directly under `apps/`, not under `apps/<name>/webui`) so it has its own entry above.
 
-**Example:** Dependabot automatically creates PRs for electron framework updates.
+## Auto-merge policy
 
-### Individual Apps (Monitor-Only Mode) - OPTIONAL
+The workflow at `.github/workflows/dependabot-automerge.yml` enrols a Dependabot PR in GitHub's native auto-merge queue (`gh pr merge --auto --squash`) when **all** of the following are true:
 
-**Note:** These individual app configurations are **optional** because the root NPM workspace already scans all apps. They are included to allow fine-grained control if needed in the future.
+- The PR author and the trigger actor are both `dependabot[bot]` (defense in depth).
+- The fetched metadata's `dependency-type` does not include `indirect`.
+- The PR does not update `dependabot/fetch-metadata` itself.
+- AND either:
+  - `update-type == version-update:semver-patch`, OR
+  - `update-type == version-update:semver-minor` AND `dependency-type` includes `direct:development` AND does NOT include `direct:production`.
 
-Each app *can* have its own configuration for specific control:
-- `src/gaia/apps/example/webui`
-- `src/gaia/apps/jira/webui`
+GitHub then merges the PR only after required status checks pass — `Code Quality (Lint)` and `Unit Tests` (the merge-queue gates) plus any required ecosystem checks. If CI fails, GitHub cancels the merge and the PR stays open.
 
-**Configuration:**
-```yaml
-directory: "/src/gaia/apps/[app-name]/webui"
-open-pull-requests-limit: 0
-```
+**What requires human review:**
 
-**What this provides (optional):**
-- Different update schedules per app (monthly vs weekly)
-- Different labels for organization and filtering
-- Ability to enable/disable PRs per app independently
-- Currently all set to `0` (monitoring only) since root workspace handles PRs
+- Any major-version bump.
+- Indirect (transitive) dependency bumps.
+- Grouped PRs that mix production and development dependencies.
+- Updates to `dependabot/fetch-metadata` (would auto-merge itself with `contents: write` — supply-chain risk).
 
-**Recommendation:** The individual app entries can be **removed** if you don't need app-specific schedules or labels, since the root workspace configuration already handles dependency updates for all apps via npm workspaces.
+## Adding a new ecosystem entry
 
-## When to Add Your App
+To track a new `package.json` root (e.g., a new app under `src/gaia/apps/`):
 
-**Important:** If your app is part of the npm workspaces (listed in root `package.json`), it's **already being monitored** by the root NPM configuration. You only need to add a separate configuration if you want:
-- App-specific labels for GitHub organization
-- Different update schedule (e.g., monthly instead of weekly)
-- Ability to enable/disable PRs for this app independently
+1. Add an entry to `.github/dependabot.yml`:
 
-Add your app to `.github/dependabot.yml` if:
+   ```yaml
+     - package-ecosystem: "npm"
+       directory: "/src/gaia/apps/your-app/webui"
+       schedule:
+         interval: "weekly"
+         day: "monday"
+       labels:
+         - "dependencies"
+         - "javascript"
+         # Add "electron" only if the app ships an Electron shell.
+       open-pull-requests-limit: 5
+       groups:
+         your-app-dependencies:
+           patterns:
+             - "*"
+   ```
 
-- ✅ It has a `package.json` file (JavaScript/npm dependencies)
-- ✅ It's located in `src/gaia/apps/`
-- ✅ You want app-specific configuration (otherwise root workspace handles it)
+2. Run `python util/check_dependabot.py` to validate. The script enforces two invariants (per [#1157](https://github.com/amd/gaia/issues/1157)):
+   - No entry has `open-pull-requests-limit: 0`.
+   - Every npm entry has a `groups:` stanza.
 
-**Current Status:** All apps in `src/gaia/apps/*/webui` are already scanned via the root workspace configuration. Individual app entries exist for organizational purposes but can be removed if not needed.
+3. Update this doc's "Current configuration" table.
 
-## How to Add Your App
+## Configuration fields reference
 
-### 1. Edit `.github/dependabot.yml`
+- `package-ecosystem`: package manager type (`npm`, `pip`, `github-actions`).
+- `directory`: path to the folder containing the manifest, relative to the repo root.
+- `schedule.interval` + `schedule.day`: how often to check.
+- `labels`: tags added to PRs for filtering. The repo's `dependencies` and `electron` labels exist in [`.github/labeler.yml`](https://github.com/amd/gaia/blob/main/.github/labeler.yml).
+- `open-pull-requests-limit`: max concurrent open PRs. Use `5`. Setting `0` soft-disables the entry and is rejected by `util/check_dependabot.py`.
+- `groups`: required for npm entries. Combines related updates into a single grouped PR per cycle.
 
-Add this configuration for your app:
+See the [official Dependabot docs](https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file) for the full schema.
 
-```yaml
-  # JavaScript - [Your App Name] (monitor only, no PRs)
-  - package-ecosystem: "npm"
-    directory: "/src/gaia/apps/[your-app-name]/webui"
-    schedule:
-      interval: "monthly"
-    labels:
-      - "dependencies"
-      - "javascript"
-      - "[your-app-name]-app"
-    open-pull-requests-limit: 0
-    groups:
-      [your-app-name]-app-dependencies:
-        patterns:
-          - "*"
-```
+## Operational notes
 
-### 2. Real Example
+- **First Monday after re-enablement may be busy.** The soft-disabled era accumulated months of skipped updates; the first batch will be larger than steady state (~6–8 grouped PRs across all ecosystems).
+- **Grouped PRs that mix prod + dev deps don't auto-merge.** This is by design — bundling a production patch with a dev minor is exactly the case a human should look at. Manually merge with `gh pr merge --auto --squash <PR>` after review if you want it enrolled in the queue.
+- **Pre-merge maintainer setting:** "Allow auto-merge" AND "Allow squash merging" must both be enabled in repo Settings → General → Pull Requests. Without either, `gh pr merge --auto --squash` queues successfully but GitHub cancels the merge. Verify: `gh api repos/amd/gaia --jq '{allow_auto_merge: .allow_auto_merge, allow_squash_merge: .allow_squash_merge}'`.
+- **Diagnosing "why didn't this PR auto-merge?":** the workflow logs `dependency-names`, `dependency-type`, and `update-type` for every run. Check the workflow run's "Log metadata for debugging" step.
 
-Here's how the Jira app is configured:
+## See also
 
-```yaml
-  # JavaScript - Jira app (monitor only, no PRs)
-  - package-ecosystem: "npm"
-    directory: "/src/gaia/apps/jira/webui"
-    schedule:
-      interval: "monthly"
-    labels:
-      - "dependencies"
-      - "javascript"
-      - "jira-app"
-    open-pull-requests-limit: 0
-    groups:
-      jira-app-dependencies:
-        patterns:
-          - "*"
-```
-
-### 3. Important Notes
-
-- **Directory path**: Must exactly match your app's webui folder (e.g., `/src/gaia/apps/example/webui`)
-- **App name**: Use consistent naming in labels and group name
-- **Schedule**: Use `monthly` for most apps
-- **PR Limit**: Apps use `open-pull-requests-limit: 0` (monitoring only). Root Python dependencies use `open-pull-requests-limit: 1` (one PR at a time for core updates)
-
-## Configuration Reference
-
-### Update Schedules
-
-- `weekly` - Python core, GitHub Actions (with `open-pull-requests-limit: 1`)
-- `monthly` - Apps and POC examples (with `open-pull-requests-limit: 0`)
-
-### PR Limits Strategy
-
-| Component | Limit | Behavior | Notes |
-|-----------|-------|----------|-------|
-| Python core dependencies | 1 | Creates PRs automatically | One PR at a time for critical updates |
-| GitHub Actions | 1 | Creates PRs automatically | One PR at a time |
-| Root NPM workspace | 1 | Creates PRs automatically | Includes Electron framework + all apps via workspaces |
-| Individual apps | 0 | Monitor only - alerts without PRs | Fine-grained control per app |
-
-**Important:** The root NPM configuration (`directory: "/"`) uses npm workspaces, which means it automatically includes:
-- Electron framework (`src/gaia/electron`)
-- All apps (`src/gaia/apps/*/webui`)
-
-This is why you see PRs for Electron framework updates - they come from the root workspace configuration.
-
-**Auto-PR Mode (`limit: 1`):** Dependabot creates pull requests automatically, runs tests, and you can review/merge them.
-
-**Monitor-Only Mode (`limit: 0`):** Dependabot only shows security alerts in GitHub's Security tab without creating PRs. This prevents PR noise while maintaining visibility.
-
-**Automated Testing:** When dependencies are updated, automated tests run via GitHub Actions to ensure compatibility. See the [Electron Testing Guide](/deployment/testing-electron) for details.
-
-### Dependency Grouping
-
-The `groups` section combines all dependency updates into a single PR instead of creating dozens of separate PRs. This reduces noise and makes reviews easier.
-
-### Configuration Fields
-
-- `package-ecosystem`: Package manager type (`npm`, `pip`, `github-actions`)
-- `directory`: Path to folder containing `package.json`
-- `schedule.interval`: How often to check (`weekly` or `monthly`)
-- `labels`: Tags added to PRs for filtering
-- `open-pull-requests-limit`: Max concurrent PRs (`0` = monitor only, `1+` = create PRs)
-- `groups`: Combine related updates into single PR
-
-## Automated Testing
-
-All Electron framework and app dependencies are automatically tested when updated. The test suite includes:
-
-- **Unit Tests**: Core Electron modules (AppController, WindowManager, MCPClient)
-- **Integration Tests**: App configuration, structure, and dependencies
-- **Build Tests**: Package and distribution verification
-- **Security Audits**: Dependency vulnerability scanning
-
-Tests run automatically on:
-- Dependabot PRs for dependency updates
-- Pull requests modifying Electron or app code
-- Manual workflow dispatch
-
-See [Electron Testing Guide](/deployment/testing-electron) for details on running tests locally.
-
-## See Also
-
-- [App Development Guide](/sdk/applications) - Building GAIA applications
-- [Development Setup](/reference/dev) - Getting started with development
-- [Dependabot Documentation](https://docs.github.com/en/code-security/dependabot) - Official GitHub docs
+- [`.github/dependabot.yml`](https://github.com/amd/gaia/blob/main/.github/dependabot.yml) — authoritative config
+- [`.github/workflows/dependabot-automerge.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/dependabot-automerge.yml) — the auto-merge workflow
+- [`util/check_dependabot.py`](https://github.com/amd/gaia/blob/main/util/check_dependabot.py) — regression linter wired into `python util/lint.py --all`
+- [Dependabot documentation](https://docs.github.com/en/code-security/dependabot) — official GitHub docs
 
 ---
 

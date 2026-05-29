@@ -1,0 +1,571 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+   SPDX-License-Identifier: MIT */
+
+/* ── Agent Hub Grid ─────────────────────────────────────────────────────── */
+
+.agent-hub {
+    width: 100%;
+    margin: 0 auto;
+}
+
+.agent-hub-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
+.agent-hub-title {
+    font-family: var(--font-sans);
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+/* Search + filter bar — only shown when 6+ agents */
+.agent-hub-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.agent-hub-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 13px;
+    transition: border-color 200ms ease;
+}
+
+.agent-hub-search:focus-within {
+    border-color: var(--amd-red);
+}
+
+.agent-hub-search input {
+    border: none;
+    background: none;
+    outline: none;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    width: 160px;
+}
+
+.agent-hub-search input::placeholder {
+    color: var(--text-muted);
+}
+
+.agent-hub-filter {
+    padding: 6px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color 200ms ease;
+}
+
+.agent-hub-filter:hover {
+    border-color: var(--text-secondary);
+}
+
+/* ── Card Grid ──────────────────────────────────────────────────────────── */
+
+.agent-hub-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 14px;
+}
+
+.agent-hub-empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+/* ── Agent Hub Card ─────────────────────────────────────────────────────── */
+
+.agent-hub-card {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px;
+    cursor: pointer;
+    transition: all 200ms ease;
+    position: relative;
+    opacity: 0;
+    animation: hubCardReveal 400ms ease forwards;
+}
+
+@keyframes hubCardReveal {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.agent-hub-card:nth-child(1) { animation-delay: 0ms; }
+.agent-hub-card:nth-child(2) { animation-delay: 80ms; }
+.agent-hub-card:nth-child(3) { animation-delay: 160ms; }
+.agent-hub-card:nth-child(4) { animation-delay: 240ms; }
+.agent-hub-card:nth-child(5) { animation-delay: 320ms; }
+.agent-hub-card:nth-child(6) { animation-delay: 400ms; }
+.agent-hub-card:nth-child(n+7) { animation-delay: 480ms; }
+
+.agent-hub-card:hover {
+    border-color: var(--text-secondary);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+}
+
+.agent-hub-card.active {
+    border-color: var(--amd-red);
+    box-shadow: inset 3px 0 0 var(--amd-red), 0 0 0 1px var(--amd-red-dim);
+}
+
+.agent-hub-card.disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.agent-hub-card.disabled:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+/* Card header */
+.agent-hub-card-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.agent-hub-card-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-md);
+    background: var(--amd-red-dim);
+    color: var(--amd-red);
+    flex-shrink: 0;
+}
+
+.agent-hub-card-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.agent-hub-card-name {
+    font-family: var(--font-sans);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agent-hub-card-badges {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+/* Card description */
+.agent-hub-card-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+    margin-bottom: 12px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* Card metadata row */
+.agent-hub-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.agent-hub-card-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.agent-hub-card-meta-item svg {
+    opacity: 0.7;
+}
+
+/* Conversation starter preview */
+.agent-hub-card-starter {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+    margin-bottom: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agent-hub-card-starter::before {
+    content: '\201C';
+}
+
+.agent-hub-card-starter::after {
+    content: '\201D';
+}
+
+/* Card actions */
+.agent-hub-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: auto;
+}
+
+.agent-hub-card-actions .btn-start-chat {
+    flex: 1;
+    padding: 7px 14px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--amd-red);
+    color: #fff;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 200ms ease;
+}
+
+.agent-hub-card-actions .btn-start-chat:hover {
+    background: var(--amd-red-dark);
+}
+
+.agent-hub-card-actions .btn-start-chat:disabled {
+    background: var(--text-muted);
+    cursor: not-allowed;
+}
+
+.agent-hub-card-actions .btn-details {
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 200ms ease;
+}
+
+.agent-hub-card-actions .btn-details:hover {
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
+}
+
+/* ── Badges ─────────────────────────────────────────────────────────────── */
+
+.agent-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+.agent-badge-builtin {
+    background: var(--amd-red-dim);
+    color: var(--amd-red);
+}
+
+.agent-badge-custom {
+    background: rgba(59, 158, 255, 0.1);
+    color: var(--accent-blue);
+}
+
+.agent-badge-native {
+    background: rgba(6, 182, 212, 0.1);
+    color: var(--accent-cyan);
+}
+
+.agent-badge-installed {
+    background: rgba(232, 168, 48, 0.1);
+    color: var(--accent-gold);
+}
+
+.agent-badge-category {
+    background: rgba(232, 168, 48, 0.1);
+    color: var(--accent-gold);
+}
+
+/* ── Create Agent CTA Card ──────────────────────────────────────────────── */
+
+.agent-hub-card.create-new {
+    border-style: dashed;
+    border-width: 2px;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    min-height: 200px;
+    background: transparent;
+}
+
+.agent-hub-card.create-new:hover {
+    border-color: var(--amd-red);
+    background: var(--amd-red-dim2);
+}
+
+.agent-hub-card.create-new .create-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: var(--amd-red-dim);
+    color: var(--amd-red);
+    margin-bottom: 12px;
+}
+
+.agent-hub-card.create-new .create-title {
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.agent-hub-card.create-new .create-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* ── Detail Modal ───────────────────────────────────────────────────────── */
+
+.agent-detail-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 200ms ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.agent-detail-modal {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    width: 90%;
+    max-width: 560px;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: var(--shadow-lg);
+    animation: modalSlide 250ms ease;
+}
+
+@keyframes modalSlide {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.agent-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 24px 24px 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.agent-detail-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-md);
+    background: var(--amd-red-dim);
+    color: var(--amd-red);
+    flex-shrink: 0;
+}
+
+.agent-detail-title-area {
+    flex: 1;
+}
+
+.agent-detail-name {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 4px;
+}
+
+.agent-detail-close {
+    padding: 6px;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: all 200ms ease;
+}
+
+.agent-detail-close:hover {
+    color: var(--text-primary);
+    background: var(--bg-card);
+}
+
+.agent-detail-body {
+    padding: 20px 24px 24px;
+}
+
+.agent-detail-section {
+    margin-bottom: 20px;
+}
+
+.agent-detail-section:last-child {
+    margin-bottom: 0;
+}
+
+.agent-detail-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+}
+
+.agent-detail-desc {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+
+.agent-detail-meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.agent-detail-meta-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.agent-detail-meta-item svg {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.agent-detail-meta-label {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.agent-detail-meta-value {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+/* Conversation starter chips */
+.agent-detail-starters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.agent-detail-starter-chip {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--bg-card);
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 200ms ease;
+}
+
+.agent-detail-starter-chip:hover {
+    border-color: var(--amd-red);
+    color: var(--amd-red);
+    background: var(--amd-red-dim2);
+}
+
+/* Tags list */
+.agent-detail-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.agent-detail-tag {
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Permissions list */
+.agent-detail-permissions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.agent-detail-permission {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.agent-detail-no-permissions {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-style: italic;
+}

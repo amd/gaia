@@ -55,6 +55,7 @@ class TestMCPClientMixin:
         mock_client = Mock()
         mock_client.is_connected.return_value = True
         mock_client.name = "testserver"
+        mock_client.prefix = "testserver"
         mock_client.server_info = {"name": "Test Server"}
 
         # Mock tool
@@ -99,6 +100,7 @@ class TestMCPClientMixin:
         mock_client = Mock()
         mock_client.is_connected.return_value = True
         mock_client.name = "oem"
+        mock_client.prefix = "oem"
         mock_client.server_info = {"name": "OEM Experience Zone"}
 
         mock_tool = MCPTool(
@@ -125,6 +127,7 @@ class TestMCPClientMixin:
         mock_client = Mock()
         mock_client.is_connected.return_value = True
         mock_client.name = "testserver"
+        mock_client.prefix = "testserver"
         mock_client.server_info = {"name": "Test Server"}
 
         # Mock tool
@@ -203,6 +206,7 @@ class TestMCPClientMixin:
         mock_client1 = Mock()
         mock_client1.is_connected.return_value = True
         mock_client1.name = "server1"
+        mock_client1.prefix = "server1"
         mock_client1.server_info = {"name": "Server 1"}
         mock_tool1 = MCPTool(
             "read_file", "Read file", {"type": "object", "properties": {}}
@@ -214,6 +218,7 @@ class TestMCPClientMixin:
         mock_client2 = Mock()
         mock_client2.is_connected.return_value = True
         mock_client2.name = "server2"
+        mock_client2.prefix = "server2"
         mock_client2.server_info = {"name": "Server 2"}
         mock_tool2 = MCPTool(
             "read_file", "Read file", {"type": "object", "properties": {}}
@@ -368,6 +373,7 @@ class TestMCPToolResponseWrapper:
         mock_client = Mock()
         mock_client.is_connected.return_value = True
         mock_client.name = "testserver"
+        mock_client.prefix = "testserver"
         mock_client.server_info = {"name": "Test Server"}
 
         # Mock tool
@@ -408,6 +414,7 @@ class TestMCPToolResponseWrapper:
         mock_client = Mock()
         mock_client.is_connected.return_value = True
         mock_client.name = "testserver"
+        mock_client.prefix = "testserver"
         mock_client.server_info = {"name": "Test Server"}
 
         mock_tool = MCPTool(
@@ -444,6 +451,7 @@ class TestMCPToolResponseWrapper:
         mock_client = Mock()
         mock_client.is_connected.return_value = True
         mock_client.name = "testserver"
+        mock_client.prefix = "testserver"
         mock_client.server_info = {"name": "Test Server"}
 
         mock_tool = MCPTool(
@@ -478,6 +486,7 @@ class TestMCPToolResponseWrapper:
         mock_client = Mock()
         mock_client.is_connected.return_value = True
         mock_client.name = "testserver"
+        mock_client.prefix = "testserver"
         mock_client.server_info = {"name": "Test Server"}
 
         mock_tool = MCPTool(
