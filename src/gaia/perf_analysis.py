@@ -177,7 +177,7 @@ def build_prefill_decode_pies(
         return format_pct
 
     fig, axes = plt_mod.subplots(rows, cols, figsize=(4 * cols, 4 * rows))
-    axes_flat: List[plt_mod.Axes] = (
+    axes_flat: List[Any] = (
         [axes]
         if isinstance(axes, plt_mod.Axes)
         else list(axes.ravel() if hasattr(axes, "ravel") else axes)

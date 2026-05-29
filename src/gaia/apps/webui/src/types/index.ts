@@ -14,6 +14,18 @@ export interface Session {
     document_ids: string[];
     private?: boolean;
     agent_type?: string;
+    /** Device used for this session (cpu / gpu / npu). */
+    device?: string;
+}
+
+/** Per-device configuration for an agent (CPU / GPU / NPU). */
+export interface DeviceConfig {
+    device: 'cpu' | 'gpu' | 'npu';
+    model: string;
+    recipe: string;
+    backend: string;
+    verified: boolean;
+    ctx_size: number;
 }
 
 export interface AgentInfo {
@@ -44,6 +56,8 @@ export interface AgentInfo {
     icon?: string;
     tools_count?: number;
     language?: string;
+    /** Per-device model/backend/recipe configurations declared by the agent. */
+    device_configs?: DeviceConfig[];
 }
 
 export interface DiskAgentInfo {
@@ -317,6 +331,8 @@ export interface SystemStatus {
     // Boot-time initialization tracking
     init_state?: 'initializing' | 'ready' | 'degraded';
     init_tasks?: Array<{ name: string; status: string }>;
+    /** Devices detected on this system (e.g. ['cpu', 'gpu', 'npu']). */
+    detected_devices?: string[];
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────

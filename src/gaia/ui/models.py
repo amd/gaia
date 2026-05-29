@@ -85,6 +85,12 @@ class SystemStatus(BaseModel):
     # Boot-time initialization tracking (populated from DispatchQueue)
     init_state: str = "ready"  # "initializing" | "ready" | "degraded"
     init_tasks: List["InitTaskInfo"] = Field(default_factory=list)
+    # Multi-device support (issue #1220): hardware devices detected on this host.
+    # Populated from Lemonade ``/system-info``. The frontend uses this to filter
+    # which device options to show in the per-agent device dropdown.
+    detected_devices: List[str] = Field(default_factory=list)
+    # Active profile from ``~/.gaia/config.json`` (e.g. "chat", "npu").
+    active_profile: str = "chat"
 
 
 # ── Tasks ──────────────────────────────────────────────────────────────────
@@ -198,6 +204,9 @@ class AgentInfo(BaseModel):
     icon: str = ""  # lucide icon name
     tools_count: int = 0
     language: str = "python"  # "python" | "cpp"
+    # Multi-device support (issue #1220): declared device configurations.
+    # Each entry is a serialized ``DeviceConfig`` from the registry.
+    device_configs: List[dict] = Field(default_factory=list)
 
 
 class AgentListResponse(BaseModel):
@@ -236,6 +245,7 @@ class CreateSessionRequest(BaseModel):
     document_ids: List[str] = Field(default_factory=list)
     private: bool = False
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    device: Optional[str] = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -246,6 +256,7 @@ class UpdateSessionRequest(BaseModel):
     document_ids: Optional[List[str]] = None
     private: Optional[bool] = None
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    device: Optional[str] = None
 
 
 class SessionResponse(BaseModel):
@@ -261,6 +272,7 @@ class SessionResponse(BaseModel):
     document_ids: List[str] = Field(default_factory=list)
     private: bool = False
     agent_type: str = "chat"
+    device: str = "gpu"
 
 
 class SessionListResponse(BaseModel):

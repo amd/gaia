@@ -194,6 +194,64 @@ def _compute_custom_origin_hash(py_file: Path) -> str:
 
 
 @dataclass
+class DeviceConfig:
+    """A verified (device, model, recipe, backend) configuration for an agent.
+
+    Each agent declares which device targets it supports.  The Agent UI
+    renders a device dropdown filtered by detected hardware; the CLI
+    exposes ``--device {cpu,gpu,npu}``.
+
+    Attributes:
+        device: Target device — ``"cpu"``, ``"gpu"``, or ``"npu"``.
+        model: Lemonade model ID for this device (e.g. ``"Gemma-4-E4B-it-GGUF"``
+            for llamacpp, ``"gemma-4-E4B-it"`` for FLM).
+        recipe: Lemonade recipe name (``"llamacpp"`` or ``"flm"``).
+        backend: Lemonade backend spec (``"llamacpp:vulkan"``, ``"llamacpp:cpu"``,
+            ``"flm:npu"``).
+        verified: Whether this combination has been tested end-to-end via
+            agent eval.  Unverified configs show a warning badge in the UI.
+        ctx_size: Default context window size for this configuration.
+    """
+
+    device: Literal["cpu", "gpu", "npu"]
+    model: str
+    recipe: str
+    backend: str
+    verified: bool = False
+    ctx_size: int = 32768
+
+
+# Default device configurations for built-in agents using Gemma 4 E4B.
+# GPU is the default device — most broadly available on AMD hardware.
+DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
+    DeviceConfig(
+        device="gpu",
+        model="Gemma-4-E4B-it-GGUF",
+        recipe="llamacpp",
+        backend="llamacpp:vulkan",
+        verified=True,
+        ctx_size=32768,
+    ),
+    DeviceConfig(
+        device="cpu",
+        model="Gemma-4-E4B-it-GGUF",
+        recipe="llamacpp",
+        backend="llamacpp:cpu",
+        verified=False,
+        ctx_size=32768,
+    ),
+    DeviceConfig(
+        device="npu",
+        model="gemma4-it-e2b-FLM",
+        recipe="flm",
+        backend="flm:npu",
+        verified=True,
+        ctx_size=4096,
+    ),
+]
+
+
+@dataclass
 class AgentRegistration:
     """Metadata and factory for a registered agent."""
 
@@ -233,6 +291,16 @@ class AgentRegistration:
     icon: str = ""  # lucide icon name (e.g. "message-circle", "zap")
     tools_count: int = 0
     language: str = "python"  # "python" | "cpp"
+    # Multi-device support (issue #1220): declared (device, model, recipe,
+    # backend) tuples.  GPU is the default.  The Agent UI renders a device
+    # dropdown; the CLI exposes ``--device``.  Built-in agents inherit
+    # ``DEFAULT_DEVICE_CONFIGS`` automatically; custom agents start empty
+    # (GPU-only via the existing ``models`` field).
+    device_configs: List[DeviceConfig] = field(
+        default_factory=lambda: [
+            dataclasses.replace(dc) for dc in DEFAULT_DEVICE_CONFIGS
+        ]
+    )
 
 
 class AgentRegistry:

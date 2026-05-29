@@ -41,6 +41,7 @@ jobs:
   unit-tests:
     name: Run Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
       - uses: actions/checkout@v6

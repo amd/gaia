@@ -169,6 +169,12 @@ class GaiaLogger:
         phonemizer_logger = logging.getLogger("phonemizer")
         phonemizer_logger.addFilter(self.filter_phonemizer)
 
+        # Suppress faiss.loader AVX512/AVX2 fallback noise — faiss tries
+        # optimized SWIG backends in order and logs each failed attempt at
+        # INFO level, which looks like an error to users.
+        faiss_loader_logger = logging.getLogger("faiss.loader")
+        faiss_loader_logger.addFilter(self.filter_faiss_loader)
+
     def add_color_filter(self, record):
         record.color = self.colors.get(record.levelname, "")
         record.reset = self.colors["RESET"]
@@ -193,6 +199,24 @@ class GaiaLogger:
     def filter_phonemizer(self, record):
         message = record.getMessage()
         return "words count mismatch" not in message
+
+    def filter_faiss_loader(self, record):
+        """Suppress faiss loader's AVX512→AVX2→generic fallback messages.
+
+        faiss.loader tries ``swigfaiss_avx512``, then ``swigfaiss_avx2``,
+        then ``swigfaiss`` — logging each failed attempt at INFO.  The
+        fallback is expected on most PyPI wheels; the noise makes users
+        think something is broken.  We keep "Successfully loaded" so our
+        own summary in server.py can cross-check if needed.
+        """
+        msg = record.getMessage()
+        if "Could not load" in msg:
+            return False
+        if msg.startswith("Loading faiss with"):
+            return False
+        if msg == "Loading faiss.":
+            return False
+        return True
 
     def get_logger(self, name):
         if name not in self.loggers:

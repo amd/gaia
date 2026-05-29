@@ -77,9 +77,12 @@ def format_user_error(
         lines.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}')
 
         # Show code context
-        code_context = _get_code_context(frame.filename, frame.lineno, context_lines)
-        if code_context:
-            lines.append(code_context)
+        if frame.lineno is not None:
+            code_context = _get_code_context(
+                frame.filename, frame.lineno, context_lines
+            )
+            if code_context:
+                lines.append(code_context)
 
     return "\n".join(lines)
 
@@ -161,11 +164,12 @@ def format_execution_trace(
             lines.append("")
 
             # Show code context with more lines
-            code_context = _get_code_context(
-                frame.filename, frame.lineno, context_lines
-            )
-            if code_context:
-                lines.append(code_context)
+            if frame.lineno is not None:
+                code_context = _get_code_context(
+                    frame.filename, frame.lineno, context_lines
+                )
+                if code_context:
+                    lines.append(code_context)
 
     lines.append("")
     lines.append(sep)

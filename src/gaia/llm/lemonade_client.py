@@ -2075,6 +2075,90 @@ class LemonadeClient:
             self.log.error(message)
             raise LemonadeClientError(message)
 
+    def install_backend(
+        self, spec: str, force: bool = False, timeout: int = 300
+    ) -> Dict[str, Any]:
+        """Install a Lemonade backend.
+
+        Args:
+            spec: Backend specification in recipe:backend format
+                (e.g. 'flm:npu', 'llamacpp:vulkan')
+            force: Bypass hardware filtering checks
+            timeout: Request timeout in seconds (backend installation can be slow)
+
+        Returns:
+            Dict containing installation status
+
+        Raises:
+            LemonadeClientError: If the installation fails
+
+        Examples:
+            client.install_backend("flm:npu")
+            client.install_backend("llamacpp:vulkan")
+            client.install_backend("llamacpp:rocm", force=True)
+        """
+        self.log.info(f"Installing backend: {spec}")
+        request_data: Dict[str, Any] = {"spec": spec}
+        if force:
+            request_data["force"] = True
+        url = f"{self.base_url}/install"
+        try:
+            response = self._send_request("post", url, request_data, timeout=timeout)
+            self.log.info(f"Installed backend {spec}: {response}")
+            return response
+        except Exception as e:
+            raise LemonadeClientError(f"Failed to install backend {spec}: {e}") from e
+
+    def uninstall_backend(self, spec: str, timeout: int = 120) -> Dict[str, Any]:
+        """Uninstall a Lemonade backend.
+
+        Args:
+            spec: Backend specification (e.g. 'flm:npu', 'llamacpp:vulkan')
+            timeout: Request timeout in seconds
+
+        Returns:
+            Dict containing uninstall status
+
+        Raises:
+            LemonadeClientError: If the uninstall fails
+        """
+        self.log.info(f"Uninstalling backend: {spec}")
+        request_data: Dict[str, Any] = {"spec": spec}
+        url = f"{self.base_url}/uninstall"
+        try:
+            response = self._send_request("post", url, request_data, timeout=timeout)
+            self.log.info(f"Uninstalled backend {spec}: {response}")
+            return response
+        except Exception as e:
+            raise LemonadeClientError(f"Failed to uninstall backend {spec}: {e}") from e
+
+    def get_recipe_status(self, recipe: str) -> Optional[Dict[str, Any]]:
+        """Get the status of a specific recipe from system-info.
+
+        The /v1/system-info endpoint returns a 'recipes' dict with per-recipe
+        backend status including default_backend, backends state
+        (unsupported/installable/update_required/installed), and compatible
+        devices.
+
+        Args:
+            recipe: Recipe name (e.g. 'flm', 'llamacpp', 'whispercpp')
+
+        Returns:
+            Dict with recipe status, or None if recipe not found
+
+        Examples:
+            status = client.get_recipe_status("flm")
+            if status and status.get("backends", {}).get("npu", {}).get("state") == "installed":
+                print("FLM NPU backend is ready")
+        """
+        try:
+            sysinfo = self.get_system_info()
+            recipes = sysinfo.get("recipes", {})
+            return recipes.get(recipe)
+        except Exception as e:
+            self.log.warning(f"Failed to get recipe status for {recipe}: {e}")
+            return None
+
     def pull_model_stream(
         self,
         model_name: str,
