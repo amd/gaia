@@ -407,8 +407,12 @@ def goodbye():
         self.assertIn("Hello, Python!", modified)
         self.assertNotIn("Hello, World!", modified)
 
-        # Verify backup
-        self.assertTrue(os.path.exists(test_file + ".bak"))
+        # Verify backup — PathValidator creates timestamped backups like
+        # edit_test.YYYYMMDD_HHMMSS.bak.py, not edit_test.py.bak
+        backup_files = [
+            f for f in os.listdir(self.test_dir) if ".bak" in f and "edit_test" in f
+        ]
+        self.assertTrue(len(backup_files) > 0, "No backup file created")
 
     def test_edit_dry_run(self):
         """Test dry run mode for editing."""
