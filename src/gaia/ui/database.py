@@ -84,7 +84,7 @@ CREATE INDEX IF NOT EXISTS idx_session_docs ON session_documents(session_id);
 class ChatDatabase:
     """SQLite database for Agent UI sessions, messages, and documents."""
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str | None = None):
         """Initialize database connection.
 
         Args:
@@ -251,13 +251,13 @@ class ChatDatabase:
 
     def create_session(
         self,
-        title: str = None,
-        model: str = None,
-        system_prompt: str = None,
-        document_ids: List[str] = None,
+        title: str | None = None,
+        model: str | None = None,
+        system_prompt: str | None = None,
+        document_ids: List[str] | None = None,
         private: bool = False,
-        agent_type: str = None,
-        device: str = None,
+        agent_type: str | None = None,
+        device: str | None = None,
     ) -> Dict[str, Any]:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())

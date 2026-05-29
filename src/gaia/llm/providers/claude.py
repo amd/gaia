@@ -74,7 +74,7 @@ class ClaudeProvider(LLMClient):
         response = self._client.messages.create(**params)
         if stream:
             return self._handle_stream(response)
-        return response.content[0].text
+        return response.content[0].text  # type: ignore[no-any-return]
 
     # embed() inherited from ABC - raises NotSupportedError
 
