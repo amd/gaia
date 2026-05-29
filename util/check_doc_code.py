@@ -39,6 +39,9 @@ SKIP_LANGS = {
     "diff", "ini", "conf", "cfg", "env", "properties",
 }
 
+# Directories whose code blocks are design-doc pseudo-code, not runnable examples
+PSEUDO_CODE_DIRS = {"docs/spec", "docs/plans", "docs\\spec", "docs\\plans"}
+
 IMPORT_RE = re.compile(r"^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))")
 
 # stdlib + common third-party that may not be in a lint environment
@@ -125,11 +128,125 @@ def extract_code_blocks(filepath: Path, repo_root: Path) -> List[CodeBlock]:
     return blocks
 
 
+def _is_pseudo_code(source: str) -> bool:
+    """Detect blocks that are pseudo-code, signatures, or flow diagrams — not runnable."""
+    stripped = source.strip()
+    if not stripped:
+        return False
+
+    # Arrow notation (→) used in flow diagrams / type mappings
+    if "\u2192" in stripped:
+        return True
+
+    # Non-Python markers: angle-bracket placeholders, TOML headers
+    if re.search(r"<\w+[^>]*>", stripped) and "f'" not in stripped and 'f"' not in stripped:
+        return True
+    if re.search(r"^\[[\w.\-\"' ]+\]", stripped, re.MULTILINE):
+        return True
+
+    # Non-annotation arrow: "str -> string", not "def f() -> str:"
+    if re.search(r"^(?!\s*(def |async def )).*\w\s*->\s*\S", stripped, re.MULTILINE):
+        if "def " not in stripped:
+            return True
+
+    # Bare function signature without `def` — e.g. "generate_image(prompt: str) -> dict"
+    if re.match(r"^\w+\(", stripped) and "->" in stripped and "def " not in stripped:
+        return True
+
+    lines = [ln for ln in stripped.splitlines() if ln.strip()]
+
+    # Function/method signature stubs: only def/async-def/decorator/@/comment/param lines
+    # Must have balanced parens to be a valid signature block
+    if lines and all(_is_signature_or_param_line(ln) for ln in lines):
+        joined = " ".join(ln.strip() for ln in lines)
+        if joined.count("(") == joined.count(")"):
+            return True
+
+    # Multi-line function signature ending with ) -> Type: but no body after
+    if _is_signature_only_block(stripped):
+        return True
+
+    # Class stub with no real body (only comments or # ... placeholders)
+    if re.match(r"^class\s+\w+", stripped):
+        body_lines = [
+            ln for ln in lines[1:]
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        if not body_lines:
+            return True
+
+    # Indented continuation fragment (starts with indented code, no top-level statement)
+    first_non_empty = next((ln for ln in lines if ln.strip()), "")
+    if first_non_empty and first_non_empty[0] in (" ", "\t"):
+        if all(ln[0] in (" ", "\t") for ln in lines if ln.strip()):
+            return True
+
+    # Dict/call with trailing `...` placeholder (e.g. {"key": "val", ...})
+    if re.search(r",\s*\.\.\.[\s})\]]", stripped):
+        return True
+
+    # Mixed-language block: Python + shell commands or TOML
+    if re.search(r"^\s*(pip |uv pip |npm |apt |brew )", stripped, re.MULTILINE):
+        return True
+
+    return False
+
+
+def _is_signature_or_param_line(line: str) -> bool:
+    """Check if a line is a function signature, decorator, comment, or parameter."""
+    s = line.strip()
+    return (
+        s.startswith("def ")
+        or s.startswith("async def ")
+        or s.startswith("@")
+        or s.startswith("#")
+        or s.startswith(")")       # closing paren of multi-line sig
+        or s.endswith(",")         # parameter line
+        or s.endswith(",  \\")     # continuation
+        or re.match(r"^\w+:", s)   # param: type in signature
+        or re.match(r"^\w+\s*=", s)  # param = default
+        or not s
+    )
+
+
+def _is_signature_only_block(source: str) -> bool:
+    """Detect multi-line function signatures with no body.
+
+    Matches patterns like::
+
+        def foo(
+            self,
+            query: str,
+        ) -> List[Dict]:
+    """
+    lines = source.strip().splitlines()
+    if not lines:
+        return False
+
+    joined = " ".join(ln.strip() for ln in lines)
+    if not re.match(r"(async )?def \w+\(", joined):
+        return False
+
+    last = lines[-1].strip()
+    # Ends with ): or ) -> Type: (with colon)
+    if re.match(r"^\)(\s*->.*)?:\s*$", last):
+        return True
+    # Ends with ) -> Type (no colon — common in signature-only docs)
+    if re.match(r"^\)(\s*->.*)?\s*$", last):
+        return True
+    # Single-line "def foo() -> Type" without colon
+    if re.match(r"^(async )?def \w+\(.*\)(\s*->.*)?$", joined) and not joined.endswith(":"):
+        return True
+
+    return False
+
+
 def _normalize_python_source(source: str) -> str:
     """Normalize Python source for syntax checking.
 
     - ``textwrap.dedent`` strips MDX-nesting indentation
     - Standalone ``...`` (common doc placeholder) becomes ``pass``
+    - ``# ... (with tool)``-style comments on class bodies get a ``pass``
     - Top-level ``await`` gets wrapped in ``async def``
     - Top-level ``return``/``yield``/``nonlocal`` gets wrapped in ``def``
     """
@@ -153,11 +270,16 @@ def _normalize_python_source(source: str) -> str:
     elif re.search(r"^\s*(return\b|yield\b|nonlocal\b)", text, re.MULTILINE):
         text = "def _doc_wrapper():\n" + textwrap.indent(text, "    ")
 
+    # Replace "# ... (comment)" placeholder lines with `pass` for empty class/def bodies
+    text = re.sub(r"^(\s*)#\s*\.\.\.\s*\(.*\)\s*$", r"\1pass", text, flags=re.MULTILINE)
+
     return text
 
 
 def check_python_syntax(source: str, filename: str = "<doc>") -> Optional[str]:
     """Return None if *source* compiles, or an error message string."""
+    if _is_pseudo_code(source):
+        return None
     normalized = _normalize_python_source(source)
     if not normalized.strip():
         return None
@@ -200,6 +322,16 @@ def check_code_blocks(
     for filepath in find_doc_files(repo_root):
         for block in extract_code_blocks(filepath, root):
             if lang_filter and block.lang != lang_filter.lower():
+                continue
+
+            # Skip design-doc directories (pseudo-code, not runnable)
+            if any(block.file.startswith(d) for d in PSEUDO_CODE_DIRS):
+                if verbose:
+                    results.append(CodeResult(
+                        block.file, block.line, block.lang,
+                        "skipped", "design-doc directory (pseudo-code)",
+                        block.title,
+                    ))
                 continue
 
             if block.lang in PYTHON_LANGS:
