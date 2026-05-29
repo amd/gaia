@@ -469,3 +469,87 @@ class TestPptxUtils:
         assert "| Name | Age | City |" in md
         assert "| --- | --- | --- |" in md
         assert "| Alice | 30 | Boston |" in md
+
+
+# ---------------------------------------------------------------------------
+# Tests — PowerPoint COM → PDF conversion path
+# ---------------------------------------------------------------------------
+
+
+class TestPptxPdfConversion:
+    """Tests for the PPTX → PDF → existing pipeline fast path."""
+
+    def test_pdf_conversion_used_when_available(self, rag, tmp_path):
+        """When convert_pptx_to_pdf returns a PDF, _extract_text_from_pdf is used."""
+        pptx_path = tmp_path / "conv.pptx"
+        _create_pptx(
+            pptx_path,
+            [
+                {"title": "Converted Slide", "body": "Body text", "notes": "My notes"},
+            ],
+        )
+
+        fake_pdf_text = "[Page 1]\nConverted slide content from PDF"
+        fake_pdf_metadata = {
+            "num_pages": 1,
+            "vlm_pages": 0,
+            "total_images": 0,
+            "vlm_checked": True,
+            "vlm_available": False,
+            "pdf_status": "readable",
+        }
+
+        with (
+            patch(
+                "gaia.rag.pptx_utils.convert_pptx_to_pdf",
+                return_value="/fake/output.pdf",
+            ),
+            patch.object(
+                rag,
+                "_extract_text_from_pdf",
+                return_value=(fake_pdf_text, 1, fake_pdf_metadata),
+            ) as mock_pdf,
+        ):
+            text, num_slides, metadata = rag._extract_text_from_pptx(str(pptx_path))
+
+        mock_pdf.assert_called_once_with("/fake/output.pdf")
+        assert "Converted slide content from PDF" in text
+        assert "My notes" in text  # Notes appended from python-pptx
+        assert metadata["conversion"] == "powerpoint_com"
+
+    def test_pdf_conversion_fallback_on_none(self, rag, tmp_path):
+        """When convert_pptx_to_pdf returns None, python-pptx fallback runs."""
+        pptx_path = tmp_path / "fallback.pptx"
+        _create_pptx(
+            pptx_path, [{"title": "Fallback Slide", "body": "Fallback content"}]
+        )
+
+        with patch("gaia.rag.pptx_utils.convert_pptx_to_pdf", return_value=None):
+            text, num_slides, metadata = rag._extract_text_from_pptx(str(pptx_path))
+
+        assert "Fallback Slide" in text
+        assert "Fallback content" in text
+        assert "conversion" not in metadata  # No conversion key in fallback path
+
+    def test_pdf_conversion_fallback_on_exception(self, rag, tmp_path):
+        """When PDF extraction from converted file fails, python-pptx fallback runs."""
+        pptx_path = tmp_path / "exc.pptx"
+        _create_pptx(pptx_path, [{"title": "Exception Slide", "body": "Safe content"}])
+
+        with (
+            patch(
+                "gaia.rag.pptx_utils.convert_pptx_to_pdf",
+                return_value="/fake/output.pdf",
+            ),
+            patch.object(
+                rag,
+                "_extract_text_from_pdf",
+                side_effect=RuntimeError("PDF parsing exploded"),
+            ),
+        ):
+            text, num_slides, metadata = rag._extract_text_from_pptx(str(pptx_path))
+
+        # Should have fallen back to python-pptx
+        assert "Exception Slide" in text
+        assert "Safe content" in text
+        assert "conversion" not in metadata

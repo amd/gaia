@@ -937,9 +937,79 @@ class RAGSDK:
             self.log.info(f"📊 Extracting text from {total_slides} slides...")
 
             from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
+                convert_pptx_to_pdf,
                 extract_notes_from_slide,
                 extract_text_from_slide,
             )
+
+            # ----------------------------------------------------------
+            # Fast path: PPTX → PDF via PowerPoint COM, then existing
+            # PDF pipeline.  Captures charts, SmartArt, and visual
+            # layout that python-pptx cannot access.
+            # ----------------------------------------------------------
+            pdf_conversion_path = None
+            tmp_dir = None
+            try:
+                import tempfile as _tempfile
+
+                tmp_dir = _tempfile.mkdtemp(prefix="gaia_pptx_")
+                pdf_conversion_path = convert_pptx_to_pdf(
+                    str(Path(pptx_path).resolve()), tmp_dir
+                )
+            except Exception as conv_err:
+                self.log.debug("PPTX→PDF conversion not available: %s", conv_err)
+
+            if pdf_conversion_path:
+                try:
+                    if self.config.show_stats:
+                        print(
+                            "  📊 Using PowerPoint→PDF conversion for full-fidelity extraction"
+                        )
+                    self.log.info("Using PowerPoint→PDF conversion for %s", file_name)
+                    pdf_text, pdf_pages, pdf_metadata = self._extract_text_from_pdf(
+                        pdf_conversion_path
+                    )
+
+                    # Append speaker notes (not in PDF render)
+                    notes_parts = []
+                    for i, slide in enumerate(prs.slides, 1):
+                        notes = extract_notes_from_slide(slide)
+                        if notes:
+                            notes_parts.append(
+                                f"\n[Page {i}] **Speaker Notes:**\n{notes}"
+                            )
+                    if notes_parts:
+                        pdf_text += "\n\n" + "\n".join(notes_parts)
+
+                    metadata = {
+                        "num_slides": pdf_pages,
+                        "vlm_slides": pdf_metadata.get("vlm_pages", 0),
+                        "total_images": pdf_metadata.get("total_images", 0),
+                        "vlm_checked": pdf_metadata.get("vlm_checked", False),
+                        "vlm_available": pdf_metadata.get("vlm_available", False),
+                        "pptx_status": "readable",
+                        "conversion": "powerpoint_com",
+                    }
+
+                    extract_duration = time_module.time() - extract_start
+                    self.log.info(
+                        f"📝 Extracted {len(pdf_text):,} characters via PDF conversion in {extract_duration:.2f}s"
+                    )
+                    return pdf_text, pdf_pages, metadata
+                except Exception as pdf_err:
+                    self.log.warning(
+                        "PDF extraction from converted PPTX failed, falling back: %s",
+                        pdf_err,
+                    )
+                finally:
+                    import shutil
+
+                    if tmp_dir:
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            # ----------------------------------------------------------
+            # Fallback: python-pptx native extraction
+            # ----------------------------------------------------------
 
             # Initialize VLM client (auto-enabled if available)
             vlm = None

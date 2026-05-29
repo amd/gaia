@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import io
 import logging
+import os
+import platform
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -267,3 +270,93 @@ def _table_to_markdown(table) -> str:
     rows.insert(1, separator)
 
     return "\n".join(rows)
+
+
+# ---------------------------------------------------------------------------
+# PPTX → PDF conversion (Windows only, requires PowerPoint)
+# ---------------------------------------------------------------------------
+
+
+def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
+    """Convert a PPTX file to PDF using PowerPoint COM automation.
+
+    Only works on Windows with Microsoft PowerPoint installed.  Returns the
+    path to the generated PDF on success, or ``None`` if conversion is not
+    possible (wrong OS, PowerPoint not installed, timeout, etc.).
+
+    This function never raises — the caller should fall back to python-pptx
+    native extraction when ``None`` is returned.
+
+    Args:
+        pptx_path: Absolute path to the ``.pptx`` file.
+        output_dir: Directory where the PDF will be written.
+
+    Returns:
+        Absolute path to the generated PDF, or ``None``.
+    """
+    if platform.system() != "Windows":
+        logger.debug(
+            "PPTX→PDF conversion requires Windows (current: %s)", platform.system()
+        )
+        return None
+
+    from pathlib import Path  # already available, but keep import local for clarity
+
+    pptx_abs = str(Path(pptx_path).resolve())
+    pdf_name = Path(pptx_path).stem + ".pdf"
+    pdf_abs = str(Path(output_dir).resolve() / pdf_name)
+
+    # PowerShell script using PowerPoint COM.  Single-quoted paths handle
+    # spaces correctly.  MsoTriState values are raw integers to avoid
+    # needing the Office interop assembly.
+    #   msoTrue = -1, msoFalse = 0, ppSaveAsPDF = 32
+    ps_script = (
+        "$ErrorActionPreference = 'Stop'; "
+        "$ppt = New-Object -ComObject PowerPoint.Application; "
+        "try { "
+        f"  $pres = $ppt.Presentations.Open('{pptx_abs}', "
+        "    [int]-1, "  # ReadOnly = msoTrue
+        "    [int]0, "  # Untitled = msoFalse
+        "    [int]0"  # WithWindow = msoFalse
+        "  ); "
+        f"  $pres.SaveAs('{pdf_abs}', 32); "  # 32 = ppSaveAsPDF
+        "  $pres.Close(); "
+        "} finally { "
+        "  $ppt.Quit(); "
+        "}"
+    )
+
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode == 0 and os.path.exists(pdf_abs):
+            logger.info("PPTX→PDF conversion succeeded: %s", pdf_abs)
+            return pdf_abs
+
+        logger.debug(
+            "PPTX→PDF conversion failed (rc=%d): %s",
+            result.returncode,
+            result.stderr.strip()[:200] if result.stderr else "(no stderr)",
+        )
+        return None
+
+    except subprocess.TimeoutExpired:
+        logger.warning("PPTX→PDF conversion timed out after 120s")
+        # Kill any orphaned PowerPoint process spawned by COM
+        subprocess.run(
+            ["taskkill", "/f", "/im", "POWERPNT.EXE"],
+            capture_output=True,
+            timeout=10,
+        )
+        return None
+    except FileNotFoundError:
+        logger.debug("PowerShell not found on PATH")
+        return None
+    except Exception as e:
+        logger.debug("PPTX→PDF conversion failed: %s", e)
+        return None
