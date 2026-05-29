@@ -96,7 +96,8 @@ def extract_code_blocks(filepath: Path, repo_root: Path) -> List[CodeBlock]:
     blocks: List[CodeBlock] = []
     try:
         content = filepath.read_text(encoding="utf-8", errors="replace")
-    except Exception:
+    except OSError as e:
+        print(f"warning: could not read {filepath}: {e}", file=sys.stderr)
         return blocks
 
     lines = content.splitlines()
@@ -293,7 +294,7 @@ def check_python_syntax(source: str, filename: str = "<doc>") -> Optional[str]:
 
 def check_imports(source: str) -> List[str]:
     """Best-effort check that imported top-level modules exist."""
-    warnings: List[str] = []
+    issues: List[str] = []
     for line in source.splitlines():
         m = IMPORT_RE.match(line)
         if not m:
@@ -305,8 +306,14 @@ def check_imports(source: str) -> List[str]:
         try:
             importlib.import_module(top_level)
         except ImportError:
-            warnings.append(f"import {module}: top-level module '{top_level}' not found")
-    return warnings
+            issues.append(f"import {module}: top-level module '{top_level}' not found")
+    return issues
+
+
+class CheckSummary(NamedTuple):
+    results: List[CodeResult]
+    ok_count: int
+    skipped_count: int
 
 
 def check_code_blocks(
@@ -314,10 +321,12 @@ def check_code_blocks(
     check_imports_flag: bool = False,
     verbose: bool = False,
     lang_filter: Optional[str] = None,
-) -> List[CodeResult]:
+) -> CheckSummary:
     """Check all code blocks in documentation files."""
     root = Path(repo_root)
     results: List[CodeResult] = []
+    ok_count = 0
+    skipped_count = 0
 
     for filepath in find_doc_files(repo_root):
         for block in extract_code_blocks(filepath, root):
@@ -326,6 +335,7 @@ def check_code_blocks(
 
             # Skip design-doc directories (pseudo-code, not runnable)
             if any(block.file.startswith(d) for d in PSEUDO_CODE_DIRS):
+                skipped_count += 1
                 if verbose:
                     results.append(CodeResult(
                         block.file, block.line, block.lang,
@@ -342,6 +352,7 @@ def check_code_blocks(
                         "error", err, block.title,
                     ))
                 else:
+                    ok_count += 1
                     if check_imports_flag:
                         for w in check_imports(block.source):
                             results.append(CodeResult(
@@ -355,12 +366,14 @@ def check_code_blocks(
                         ))
 
             elif block.lang in SKIP_LANGS:
+                skipped_count += 1
                 if verbose:
                     results.append(CodeResult(
                         block.file, block.line, block.lang,
                         "skipped", "no validator for this language", block.title,
                     ))
             else:
+                skipped_count += 1
                 if verbose:
                     results.append(CodeResult(
                         block.file, block.line, block.lang,
@@ -368,51 +381,51 @@ def check_code_blocks(
                         block.title,
                     ))
 
-    return sorted(results, key=lambda r: (r.status != "error", r.file, r.line))
+    sorted_results = sorted(results, key=lambda r: (r.status != "error", r.file, r.line))
+    return CheckSummary(sorted_results, ok_count, skipped_count)
 
 
-def format_results(results: List[CodeResult], verbose: bool = False) -> str:
+def format_results(summary: CheckSummary) -> str:
     """Format results for terminal output."""
-    lines: List[str] = []
-    errors = [r for r in results if r.status == "error"]
-    warnings = [r for r in results if r.status == "warning"]
-    ok_count = sum(1 for r in results if r.status == "ok")
-    skipped_count = sum(1 for r in results if r.status == "skipped")
+    out: List[str] = []
+    errors = [r for r in summary.results if r.status == "error"]
+    warn_list = [r for r in summary.results if r.status == "warning"]
 
     if errors:
-        lines.append("SYNTAX ERRORS:")
-        lines.append("=" * 80)
+        out.append("SYNTAX ERRORS:")
+        out.append("=" * 80)
         for r in errors:
             title_suffix = f" ({r.title})" if r.title else ""
-            lines.append(f"  {r.file}:{r.line}{title_suffix}")
-            lines.append(f"    Language: {r.lang}")
-            lines.append(f"    Error: {r.detail}")
-            lines.append("")
+            out.append(f"  {r.file}:{r.line}{title_suffix}")
+            out.append(f"    Language: {r.lang}")
+            out.append(f"    Error: {r.detail}")
+            out.append("")
 
-    if warnings:
-        lines.append("WARNINGS:")
-        lines.append("=" * 80)
-        for r in warnings:
+    if warn_list:
+        out.append("WARNINGS:")
+        out.append("=" * 80)
+        for r in warn_list:
             title_suffix = f" ({r.title})" if r.title else ""
-            lines.append(f"  {r.file}:{r.line}{title_suffix}")
-            lines.append(f"    {r.detail}")
-            lines.append("")
+            out.append(f"  {r.file}:{r.line}{title_suffix}")
+            out.append(f"    {r.detail}")
+            out.append("")
 
-    lines.append("=" * 80)
-    lines.append(f"Code blocks checked: {ok_count + len(errors) + len(warnings)}")
-    lines.append(f"  OK:       {ok_count}")
-    lines.append(f"  Errors:   {len(errors)}")
-    lines.append(f"  Warnings: {len(warnings)}")
-    lines.append(f"  Skipped:  {skipped_count}")
+    checked = summary.ok_count + len(errors) + len(warn_list)
+    out.append("=" * 80)
+    out.append(f"Code blocks checked: {checked}")
+    out.append(f"  OK:       {summary.ok_count}")
+    out.append(f"  Errors:   {len(errors)}")
+    out.append(f"  Warnings: {len(warn_list)}")
+    out.append(f"  Skipped:  {summary.skipped_count}")
 
     if errors:
-        lines.append("")
-        lines.append("FAILED: Found syntax errors in documentation code examples")
+        out.append("")
+        out.append("FAILED: Found syntax errors in documentation code examples")
     else:
-        lines.append("")
-        lines.append("PASSED: All code examples are syntactically valid")
+        out.append("")
+        out.append("PASSED: All code examples are syntactically valid")
 
-    return "\n".join(lines)
+    return "\n".join(out)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -445,16 +458,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"Checking documentation code examples in: {repo_root}")
     print()
 
-    results = check_code_blocks(
+    summary = check_code_blocks(
         repo_root,
         check_imports_flag=args.check_imports,
         verbose=args.verbose,
         lang_filter=args.lang,
     )
 
-    print(format_results(results, verbose=args.verbose))
+    print(format_results(summary))
 
-    errors = [r for r in results if r.status == "error"]
+    errors = [r for r in summary.results if r.status == "error"]
     return 1 if errors else 0
 
 
