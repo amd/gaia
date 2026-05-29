@@ -612,7 +612,9 @@ class TestCodeAgentIntegration(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.test_dir = tempfile.mkdtemp()
-        self.agent = CodeAgent(silent_mode=True, max_steps=5)
+        self.agent = CodeAgent(
+            silent_mode=True, max_steps=5, allowed_paths=[self.test_dir]
+        )
         self.agent._register_tools()
 
     def tearDown(self):
