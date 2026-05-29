@@ -196,6 +196,11 @@ int main(int argc, char* argv[]) {
             if (!modelOverride.empty()) apiConfig.modelId = modelOverride;
 
             gaia::BashAgent apiAgent(apiConfig);
+            // API server has no stdin — auto-allow all tool confirmations
+            apiAgent.setToolConfirmCallback(
+                [](const std::string&, const gaia::json&) {
+                    return gaia::ToolConfirmResult::ALLOW_ONCE;
+                });
             gaia::ApiServer server(apiAgent, serverPort);
             server.setSessionStore(std::make_shared<gaia::SessionStore>());
 
