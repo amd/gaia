@@ -224,6 +224,68 @@ export async function revokeConnectorAgentGrant(
     );
 }
 
+/**
+ * List per-agent activations for a connector (issue #1005).
+ *
+ * Activations gate MCP tool visibility — an agent must be both granted
+ * (credential access) AND activated (tool visibility) for an MCP server's
+ * tools to appear in its system prompt. This endpoint is type-agnostic for
+ * read convenience: OAuth connectors return ``{}`` because the mutating
+ * routes refuse to write to them.
+ */
+export async function listConnectorActivations(connectorId: string): Promise<{
+    activations: Record<string, boolean>;
+}> {
+    return apiFetch('GET', `/connectors/${connectorId}/activations`);
+}
+
+interface ActivateConnectorResponse {
+    connector_id: string;
+    agent_id: string;
+    active: boolean;
+    auto_granted: boolean;
+}
+
+/**
+ * Activate an MCP-server connector for an agent. If no grant exists yet,
+ * ``scopes`` is used to auto-create one (one-click convenience). Without
+ * ``scopes`` the request returns 400 when no prior grant exists.
+ *
+ * Only valid for ``mcp_server`` connectors — calling this for an OAuth
+ * provider returns ``400 Bad Request``. OAuth per-agent access is
+ * controlled by the grants endpoints above. The Agent UI hides the
+ * "Active for" section for OAuth tiles to surface this at the UI layer.
+ */
+export async function activateConnectorAgent(
+    connectorId: string,
+    agentId: string,
+    scopes?: string[],
+): Promise<ActivateConnectorResponse> {
+    return apiFetch<ActivateConnectorResponse>(
+        'PUT',
+        `/connectors/${connectorId}/activations/${encodeURIComponent(agentId)}`,
+        scopes ? { scopes } : {},
+        UI_HEADER,
+    );
+}
+
+/**
+ * Deactivate an MCP-server connector for an agent. Non-destructive — the
+ * grant survives so a later re-activate is one click. Only valid for
+ * ``mcp_server`` connectors (see :func:`activateConnectorAgent`).
+ */
+export async function deactivateConnectorAgent(
+    connectorId: string,
+    agentId: string,
+): Promise<void> {
+    await apiFetch<unknown>(
+        'DELETE',
+        `/connectors/${connectorId}/activations/${encodeURIComponent(agentId)}`,
+        undefined,
+        UI_HEADER,
+    );
+}
+
 export async function listConnections(): Promise<{ connections: ConnectorInfo[] }> {
     return apiFetch('GET', '/connections');
 }

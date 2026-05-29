@@ -8,6 +8,7 @@ import type { AgentInfo } from '../types';
 function sourceBadge(source: string) {
     if (source === 'builtin') return <span className="agent-badge agent-badge-builtin">Built-in</span>;
     if (source === 'native') return <span className="agent-badge agent-badge-native">Native</span>;
+    if (source === 'installed') return <span className="agent-badge agent-badge-installed">Installed</span>;
     return <span className="agent-badge agent-badge-custom">Custom</span>;
 }
 

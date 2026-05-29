@@ -315,6 +315,11 @@
     color: var(--accent-cyan);
 }
 
+.agent-badge-installed {
+    background: rgba(232, 168, 48, 0.1);
+    color: var(--accent-gold);
+}
+
 .agent-badge-category {
     background: rgba(232, 168, 48, 0.1);
     color: var(--accent-gold);

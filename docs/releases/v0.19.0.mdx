@@ -1,0 +1,106 @@
+---
+title: "v0.19.0"
+description: "MCP tool-calling reliability eval harness with four agent-loop framework fixes uncovered along the way, dedicated Browser and Analyst agents, hardware-requirement validation for agents, LEMONADE_API_KEY support for authenticated remote Lemonade Servers, and a CI auto-fix pipeline for bulletproof bug issues."
+---
+
+# GAIA v0.19.0 Release Notes
+
+GAIA v0.19.0 tightens the agent loop against silent-failure regressions and continues the focused-agent split. A new `gaia eval agent` reliability harness exercises tool selection end-to-end against the local Agent UI MCP backend and surfaced four agent-loop bugs that previously produced silently-wrong "Task completed" answers — all four are fixed in this release. Dedicated `BrowserAgent` and `AnalystAgent` replace the ChatAgent-backed web and data profiles. Agents can now declare a `REQUIRED_HARDWARE` capability tier that is validated at startup against the running Lemonade server. GAIA can connect to a remote Lemonade Server protected by an API key. And a new CI job auto-implements PRs for bulletproof bug issues in parallel with the existing triage path.
+
+**Why upgrade:**
+- **MCP tool-calling reliability framework + four framework fixes** — `gaia eval agent` runs a user-simulator + judge against the local MCP backend; the harness uncovered and fixed silent loop-break lies, a ~85-token JSON-envelope leak in tool-calling-model prompts, a missed native-path failure check, and an over-broad eval rubric.
+- **Specialized agents** — `BrowserAgent` and `AnalystAgent` ship as dedicated implementations behind the `gaia browse` and `gaia analyze` CLIs, replacing the monolithic ChatAgent-backed profiles.
+- **Hardware-requirement validation** — agents can declare `REQUIRED_HARDWARE` and fail fast at startup when the host's device tier (CPU/iGPU/dGPU/NPU/hybrid) does not satisfy it, instead of silently degrading.
+- **Remote Lemonade auth** — setting `LEMONADE_API_KEY` threads `Authorization: Bearer <key>` through every Lemonade-bound HTTP path; wrong/missing key surfaces an actionable error naming the variable.
+- **CI auto-fix for bulletproof bug issues** — bug-labelled issues that meet the "1-2 files, < 50 lines, 100% confidence" bar now get an auto-implemented PR in parallel with the standard triage comment.
+
+---
+
+## What's New
+
+### MCP Tool-Calling Reliability Framework
+
+A new end-to-end eval harness lands at `src/gaia/eval/runner.py` (PR [#718](https://github.com/amd/gaia/pull/718)) and is invoked via `gaia eval agent`. The runner spawns a subprocess that acts as user-simulator + LLM judge against the live Agent UI MCP backend, exercises 10 generic scenarios (no-param, single-param, multi-step, conditional, error-handling, "no tool needed"), and produces per-tool failure rollups via `analyze_failures.py`. The judge rubric in `judge_turn.md` grades on tool selection alone for `verbatim`-tagged scenarios — it explicitly does not penalize the agent for underlying-service failures, which had been conflating pipeline correctness with hardware availability.
+
+Running the harness against the agent loop immediately exposed four framework regressions, all fixed in this release:
+
+- **Silent loop-break lie.** When small local models emitted just the server prefix (`mcp_foo_mcp`) instead of the full registered tool name, the agent retried four times and then hard-coded `"Task completed with mcp_foo_mcp. No further action needed"` as the final answer despite zero successful tool calls. Server-name sanitisation now strips redundant `mcp` tokens before namespacing, and a new `Agent._build_loop_break_summary` helper branches on whether the last result was an error so the user sees the actual error wording. A new AST guard in `tests/unit/agents/test_agent_source_invariants.py` prevents the lie-on-loop literal from reappearing.
+- **JSON envelope leak in tool-calling-model prompts.** The `{"tool": ..., "tool_args": ...}` template was supposed to be suppressed for models that support native `tools=[]` calling, but `self.model_id` was assigned *after* `_register_tools()` ran, so the suppression check always returned False and ~85 redundant tokens shipped in every prompt. Moving the `model_id = model_id` assignment ahead of registration closes the gap; a regression test asserts the `==== RESPONSE FORMAT ====` block does not appear in a tool-calling agent's system prompt.
+- **Loop-break helper missed the native path.** The shared helper looked at `step_results[-1]` to detect a failure streak, but the native-tool-call path appends to `previous_outputs` instead (wrapper dicts). On native callers the helper saw an empty list, missed every failure, and returned `"Task completed"`. The fix unwraps `previous_outputs` at the call site; the regression test exercises the helper with a sequence of error results.
+- **Eval rubric conflated pipeline and hardware.** Some MCP services wrap real operation failures in a `status: success` envelope with the failure buried in `data.content[*].text`. On dev hardware where vendor-side features don't all work, the judge graded the agent as failing even when it picked the right tool. The new STEP 0 in `judge_turn.md` overrides the rubric for `verbatim`-tagged scenarios — `correctness = 10` if the right tool was invoked, `0` if the wrong tool was, regardless of underlying op success.
+
+Eight new unit-test files cover the sanitiser matrix, loop-break helper, candidate-list invariant, scenario validation, and `--iterations` flag.
+
+---
+
+### Dedicated Browser and Analyst Agents
+
+The Agent UI's web and data entries previously routed to `ChatAgent` profiles, which meant they carried the full monolithic agent surface instead of the focused tool sets the use cases actually need. PR [#1070](https://github.com/amd/gaia/pull/1070) adds dedicated `BrowserAgent` and `AnalystAgent` implementations and wires the built-in web/data registrations (plus their `lite` variants) to them. Two new CLI subcommands ship alongside: `gaia browse` for the browser flow and `gaia analyze` for the analyst flow. Both compose the relevant tool mixins explicitly rather than inheriting everything from the ChatAgent shim.
+
+---
+
+### Hardware-Requirement Validation for Agents
+
+Agents can now declare a hardware capability tier via `REQUIRED_HARDWARE = HardwareRequirement(min_device=...)` (PR [#1057](https://github.com/amd/gaia/pull/1057)). At agent startup, `LemonadeManager.ensure_ready(required_min_device=...)` queries the running Lemonade server through `LemonadeClient.get_system_info()` and raises `HardwareRequirementError` if the host's reported device tier does not satisfy the declaration. NPU-only or dGPU-only agents fail fast at construction time instead of silently degrading at first inference.
+
+This is Phase 1 — validation only. The resolved `recipe` is computed and logged for debugging but is *not* applied to the Lemonade server startup path; a follow-up will wire the resolved recipe through if the project chooses to.
+
+---
+
+### `LEMONADE_API_KEY` for Authenticated Remote Lemonade
+
+Before this release, GAIA could not connect to a remote Lemonade Server protected by an API key — every request returned `401` regardless of the user's configuration. PR [#1149](https://github.com/amd/gaia/pull/1149) (closes [#1139](https://github.com/amd/gaia/issues/1139)) threads `LEMONADE_API_KEY` (from `.env` or the shell environment) as `Authorization: Bearer <key>` through every Lemonade-bound HTTP path in GAIA: the central `LemonadeClient._send_request`, the four `requests`-bypass sites, both OpenAI-SDK constructor sites, `LemonadeProvider`, `VLMClient`, the Agent UI router (`system.py`), Agent UI chat helpers, the server startup probes, and the base `Agent` health probe.
+
+Behaviour is fully additive — when the env var is unset, every call path behaves identically to v0.18.1. A wrong or missing key produces a fixed-string error naming `LEMONADE_API_KEY` (the response body is intentionally not echoed back, to avoid leaking reflected `Authorization` headers from misconfigured proxies).
+
+---
+
+### CI Auto-Fix for Bulletproof Bug Issues
+
+PR [#1159](https://github.com/amd/gaia/pull/1159) adds a Claude-powered auto-fix job to `.github/workflows/claude.yml` that runs in parallel with the existing `issue-handler` triage. When a new issue lands with the `bug` label, Claude reads the report, and if the fix passes a strict "bulletproof" bar — 1–2 files touched, fewer than 50 lines changed, 100% confidence, no hardware-dependent verification needed — it implements the change, validates with `python util/lint.py` and the relevant unit tests, opens a PR, and posts the PR link plus step-by-step verification instructions back on the originating issue. Bug reports that don't meet the bar still get the standard triage comment from `issue-handler`; the auto-fixer exits silently for the rest.
+
+---
+
+## Bug Fixes
+
+- **BrowserAgent and AnalystAgent crashed instantly in the Agent UI** (PR [#1202](https://github.com/amd/gaia/pull/1202)) — Selecting either of the new split agents and sending any message raised `AttributeError: '<Agent>' object has no attribute '_mcp_manager'`. The MCP client mixin's optional attribute was never initialised on the split agents, and `get_mcp_status_report()` — invoked on every `/api/chat/send` — hit the undefined dereference. The two-layer fix adds a class-level `_mcp_manager: Optional[MCPClientManager] = None` on `MCPClientMixin` (covering every future agent that inherits it) plus explicit per-agent initialisation in the five affected agents (documenting intent at the point of use). CLI paths were unaffected — only the Agent UI's `/api/chat/send` triggered the bug.
+- **`LEMONADE_BASE_URL` env var normalisation** (PR [#1160](https://github.com/amd/gaia/pull/1160)) — Setting `LEMONADE_BASE_URL` to a value without the trailing `/api/v1` suffix produced 404s deep in the request pipeline. The variable is now normalised on load so both `http://host:8000` and `http://host:8000/api/v1` resolve to the same canonical form.
+- **Custom agents on disk now visible to the Agent UI** (PR [#1138](https://github.com/amd/gaia/pull/1138)) — `~/.gaia/agents/` registrations were not surfacing to the Agent UI's agent list because the registry discovery pass skipped the disk source on cold start. The fix lists custom-directory agents alongside the built-ins on every request.
+- **`pr-review` CI re-enabled and credit-resilient** (PR [#1163](https://github.com/amd/gaia/pull/1163)) — The Claude-based `pr-review` job had been disabled after an Anthropic credit window; all Claude-backed jobs now treat 429 quota errors as non-fatal warnings so CI keeps moving when the project hits its quota.
+- **Silent skips in `test_sdk.py` removed** (PR [#1190](https://github.com/amd/gaia/pull/1190)) — Tests that depended on an environment fixture were silently `pytest.skip()`-ing instead of being explicitly conditional. The skips are now gated on the actual fixture and surface as `XFAIL` when intentionally inapplicable. Closes the first slice of [#877](https://github.com/amd/gaia/issues/877).
+- **`refresh-context7` fails loudly on unexpected status** (PR [#1073](https://github.com/amd/gaia/pull/1073)) — The terminal job of the publish workflow previously masked non-cooldown HTTP responses as "OK". It now distinguishes the known HTTP 400 cooldown window from any other status code, so a regression that breaks the Context7 refresh is no longer indistinguishable from the documented cooldown.
+
+---
+
+## Tooling & Docs
+
+- **CLI smoke-test for every subcommand and console script** (PR [#1193](https://github.com/amd/gaia/pull/1193)) — Every `gaia <subcommand>` and every console script declared in `setup.py` is now exercised with `--help` in CI, catching import-time regressions and shadowed entry points before they ship.
+- **Fail-path coverage for `GovernedAgentMixin` and `CheckpointBridge`** (PR [#1161](https://github.com/amd/gaia/pull/1161)) — Adds unit tests for the error/abort branches of the governance layer that were previously only exercised on the happy path.
+- **Custom-agent MCP harness for installer testing** (PR [#1069](https://github.com/amd/gaia/pull/1069)) — A reproducible installer-level MCP harness for custom agents, so installer-affecting changes are tested against the real agent-registration path rather than mocks.
+- **Dependabot revived, agent-ui entry added, patch auto-merge shipped** (PR [#1191](https://github.com/amd/gaia/pull/1191)) — Dependabot PRs are flowing again, the Agent UI npm workspace is now covered, and patch-bump PRs that pass CI auto-merge.
+
+---
+
+## Full Changelog
+
+**17 commits** since v0.18.1:
+
+- `6c6e4c34` — fix(agents): unbreak BrowserAgent/AnalystAgent in Agent UI (#1202)
+- `6379e183` — feat(agent-hub): discover installed agent entry points (#1187)
+- `a79acc88` — test(cli): smoke-test every subcommand and console script with --help (#1193)
+- `f7a75902` — ci(dependabot): revive PRs, add agent-ui entry, ship patch auto-merge (#1191)
+- `70d75b70` — fix(tests): remove silent skips in test_sdk.py (#877 Part A) (#1190)
+- `f8b2c1ab` — feat: MCP tool calling reliability test framework (#718)
+- `f4270687` — feat(agent-hub): Agent Hub UI + platform plan + hub skeleton (#1103)
+- `6ef1feee` — fix(llm): normalize LEMONADE_BASE_URL env var to include /api/v1 suffix (#1160)
+- `72b77167` — fix(ci): re-enable pr-review and make all Claude jobs credit-resilient (#1163)
+- `b46bf654` — fix(agent-ui): list custom agents from disk (#1138)
+- `63aedb47` — test: add fail-path coverage for GovernedAgentMixin and CheckpointBridge (#1161)
+- `7b8f22c0` — feat(llm): support LEMONADE_API_KEY for authenticated remote Lemonade (#1149)
+- `b22fa73d` — feat(ci): auto-fix job for bulletproof bug issues (#1159)
+- `6b7b9e7d` — fix(ci): make refresh-context7 fail loudly on unexpected status (#1073)
+- `e2d4e2d7` — feat(sdk): hardware requirement validation for agents (#1057)
+- `1a73dcc5` — feat(agents): add browser and analyst agents (#1070)
+- `2554424b` — test(installer): add custom agent MCP harness (#1069)
+
+Full Changelog: [v0.18.1...v0.19.0](https://github.com/amd/gaia/compare/v0.18.1...v0.19.0)

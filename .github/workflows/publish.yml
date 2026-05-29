@@ -185,7 +185,7 @@ jobs:
         with:
           python-version: '3.x'
       - name: Download pre-built frontend
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: npm-package-build
           path: src/gaia/apps/webui/dist/
@@ -205,7 +205,7 @@ jobs:
           python -m pip install twine
           twine check dist/*
       - name: Upload distributions
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: python-package-distributions
           path: dist/
@@ -282,7 +282,7 @@ jobs:
           python -m pytest tests/unit/chat/ui/ -x --tb=short 2>/dev/null || echo "Backend tests skipped (dependencies not available)"
 
       - name: Upload built frontend
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: npm-package-build
           path: src/gaia/apps/webui/dist/
@@ -346,7 +346,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Download distributions
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: python-package-distributions
           path: dist/
@@ -372,7 +372,7 @@ jobs:
           # npm@latest` on Node 22 runners corrupts npm's own dependencies.
           node-version: '24'
       - name: Download validated build
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: npm-package-build
           path: src/gaia/apps/webui/dist/
@@ -414,13 +414,13 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download Python distributions
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: python-package-distributions
           path: dist/
 
       - name: Sign with Sigstore
-        uses: sigstore/gh-action-sigstore-python@v3.2.0
+        uses: sigstore/gh-action-sigstore-python@v3.3.0
         with:
           inputs: >-
             ./dist/*.tar.gz
@@ -476,28 +476,28 @@ jobs:
       # them here and add to release-assets/ so the softprops step
       # below includes them in the published release.
       - name: Download Desktop Installer (Windows NSIS)
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: windows-installer
           path: release-assets
         continue-on-error: true
 
       - name: Download Desktop Installer (macOS DMG)
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: macos-installer
           path: release-assets
         continue-on-error: true
 
       - name: Download Desktop Installer (Linux DEB + AppImage)
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: linux-installer
           path: release-assets
         continue-on-error: true
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             release-assets/*

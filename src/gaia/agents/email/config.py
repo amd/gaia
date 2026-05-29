@@ -97,6 +97,7 @@ class EmailAgentConfig:
     db_path: Optional[str] = None
     gmail_backend: Optional[Any] = None
     calendar_backend: Optional[Any] = None
+    force_llm: bool = False
 
     def validate(self) -> None:
         """Run startup-time invariants. Called from the agent's __init__.

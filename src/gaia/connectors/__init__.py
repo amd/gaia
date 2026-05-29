@@ -65,14 +65,21 @@ from gaia.connectors.spec import ConfigField, ConnectorSpec
 # other subcommands to work on environments where keyring is not installed.
 _API_NAMES: frozenset[str] = frozenset(
     {
+        "activate",
+        "activate_agent",
         "cancel_flow",
         "complete_authorization",
+        "deactivate",
+        "deactivate_agent",
         "get_access_token",
         "get_access_token_sync",
         "get_connection",
         "grant_agent",
+        "is_agent_active",
+        "list_agent_activations",
         "list_agent_grants",
         "list_connections",
+        "load_activations",
         "load_grants",
         "revoke_agent_grant",
         "revoke_connection",

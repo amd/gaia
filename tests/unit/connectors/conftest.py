@@ -71,4 +71,5 @@ def _autouse_isolate_home(tmp_path, monkeypatch):
     the explicit per-file ``fake_home`` fixtures.
     """
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("gaia.connectors.activations.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)

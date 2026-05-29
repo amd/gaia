@@ -19,9 +19,9 @@ interface AgentHubGridProps {
 // Detect Electron context once
 const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI;
 
-/** Sort: builtin first, then custom, then native. Alphabetical within groups. */
+/** Sort: builtin first, then custom, installed, and native. Alphabetical within groups. */
 function sortAgents(agents: AgentInfo[]): AgentInfo[] {
-    const order: Record<string, number> = { builtin: 0, custom_python: 1, native: 2 };
+    const order: Record<string, number> = { builtin: 0, custom_python: 1, installed: 2, native: 3 };
     return [...agents].sort((a, b) => {
         const oa = order[a.source] ?? 1;
         const ob = order[b.source] ?? 1;

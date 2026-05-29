@@ -117,7 +117,7 @@ jobs:
 
       - name: Upload Server Logs
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: lemonade-server-logs
           path: |

@@ -75,7 +75,7 @@ jobs:
 
       - name: Upload test coverage
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: electron-framework-coverage
           path: tests/electron/coverage/
@@ -120,7 +120,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: apps-integration-test-results
           path: tests/electron/coverage/
@@ -157,7 +157,7 @@ jobs:
 
       - name: Upload functional test results
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: apps-functional-test-results
           path: tests/electron/coverage/
@@ -292,7 +292,7 @@ jobs:
 
       - name: Upload audit results
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: audit-${{ matrix.package.name }}
           path: ${{ matrix.package.path }}/audit-results.json

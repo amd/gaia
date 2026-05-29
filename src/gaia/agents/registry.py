@@ -5,6 +5,7 @@
 import dataclasses
 import hashlib
 import importlib
+import importlib.metadata
 import importlib.util
 import inspect
 import os
@@ -23,6 +24,8 @@ from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+AGENT_ENTRY_POINT_GROUP = "gaia.agents"
 
 # KNOWN_TOOLS maps tool name -> (module_path, class_name) for lazy import.
 # Consumed by BuilderAgent's template (src/gaia/agents/builder/template.py) to
@@ -141,26 +144,37 @@ def _wrap_factory_with_namespaced_id(
 ) -> Callable[..., Any]:
     """
     Wrap a registration factory so the resulting Agent instance carries its
-    namespaced ID for ``Agent.process_query`` to read at runtime.
+    namespaced ID.
 
-    The base ``Agent.process_query`` reads ``_gaia_namespaced_agent_id`` (and
-    falls back to ``AGENT_ID``) when wrapping the call in the agent context
-    contextvar. Setting this attribute on the instance is what lets a
-    custom-installed agent get its proper ``custom:<sha256>:<id>`` namespace
-    instead of the bare ``AGENT_ID``.
+    Two things have to happen for the per-agent connectors activation filter
+    (#1005) to work correctly:
+
+    1. The agent class must see the namespaced id BEFORE its ``__init__``
+       calls ``_register_tools`` — that's where MCP tools get registered and
+       where ``_active_mcp_servers`` reads the id to decide which servers'
+       tools to surface. We pass it as a ``namespaced_agent_id`` kwarg so
+       config classes that declare the field (e.g. ``ChatAgentConfig``) can
+       stamp ``self._gaia_namespaced_agent_id`` at the top of ``__init__``.
+       Factories that filter kwargs by their config fields will pick this up
+       automatically; factories whose config does NOT declare the field
+       drop it harmlessly.
+    2. The instance attribute is also stamped after the factory returns as
+       belt-and-braces — covers agents whose config doesn't (yet) declare
+       the field, and ensures ``Agent.process_query`` sees the id at
+       runtime even if step 1 didn't apply.
     """
 
     def _factory(**kwargs):
+        # Inject for kwarg-aware factories (step 1).
+        kwargs.setdefault("namespaced_agent_id", namespaced_id)
         instance = factory(**kwargs)
-        # Attribute access — use setattr because subclasses may override
-        # __setattr__ to validate fields. We set on the instance, not the
-        # class, so two different registrations of the same class don't
-        # collide.
+        # Belt-and-braces post-init stamp (step 2). Use setattr so subclasses
+        # with custom ``__setattr__`` validation see a well-formed write,
+        # and tolerate __slots__-defined agents that can't accept the
+        # attribute (process_query will fall back to AGENT_ID).
         try:
             instance._gaia_namespaced_agent_id = namespaced_id
         except (AttributeError, TypeError):
-            # If the agent uses __slots__ without an entry for this field,
-            # we still proceed — process_query will fall back to AGENT_ID.
             pass
         return instance
 
@@ -186,7 +200,7 @@ class AgentRegistration:
     id: str
     name: str
     description: str
-    source: Literal["builtin", "custom_python", "native"]
+    source: Literal["builtin", "custom_python", "native", "installed"]
     conversation_starters: List[str]
     factory: Callable[..., Any]  # returns Agent instance
     agent_dir: Optional[Path]
@@ -206,9 +220,10 @@ class AgentRegistration:
     # T-X2 (issue #915, plan amendment A9):
     # ``namespaced_agent_id`` is the grant-ledger key for this agent. Built-in
     # agents use ``builtin:<id>``; custom agents under ``~/.gaia/agents/``
-    # use ``custom:<sha256-of-agent.py>:<id>``. This namespacing prevents a
-    # malicious custom agent from claiming a built-in's AGENT_ID to inherit
-    # a previously-granted scope. Always non-empty.
+    # use ``custom:<sha256-of-agent.py>:<id>``; installed wheel agents use
+    # ``installed:<id>``. This namespacing prevents a malicious custom or
+    # installed agent from claiming a built-in's AGENT_ID to inherit a
+    # previously-granted scope. Always non-empty.
     namespaced_agent_id: str = ""
     # Agent Hub metadata — used by the Agent UI to render rich discovery cards.
     # Hardcoded for builtins (lazy-import factories must not instantiate agents);
@@ -285,7 +300,10 @@ class AgentRegistry:
         else:
             logger.info("registry: No custom agent directory found at %s", agents_dir)
 
-        # 3. Discover native (C++/binary) agents from agent-manifest.json
+        # 3. Discover installed Python agents exposed by standalone wheels
+        self._discover_entry_point_agents()
+
+        # 4. Discover native (C++/binary) agents from agent-manifest.json
         self._discover_native_agents()
 
         agent_ids = list(self._agents.keys())
@@ -835,6 +853,64 @@ class AgentRegistry:
             logger.debug(
                 "registry: BuilderAgent not available, skipping built-in registration"
             )
+
+    # ------------------------------------------------------------------
+    # Installed Python agent discovery
+    # ------------------------------------------------------------------
+
+    def _discover_entry_point_agents(self) -> None:
+        """Register installed Python agents from the ``gaia.agents`` group."""
+        agent_entry_points = importlib.metadata.entry_points(
+            group=AGENT_ENTRY_POINT_GROUP
+        )
+
+        registered = 0
+        for entry_point in agent_entry_points:
+            try:
+                registration = self._load_entry_point_registration(entry_point)
+            except Exception as exc:
+                logger.warning(
+                    "registry: Failed to load agent entry point %s: %s",
+                    entry_point.name,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+
+            if registration.id in self._agents:
+                logger.warning(
+                    "registry: entry point agent %s skipped — ID already registered",
+                    registration.id,
+                )
+                continue
+
+            self._register(registration)
+            registered += 1
+
+        if registered:
+            logger.info("registry: Registered %d entry point agent(s)", registered)
+
+    def _load_entry_point_registration(
+        self, entry_point: importlib.metadata.EntryPoint
+    ) -> AgentRegistration:
+        loaded = entry_point.load()
+        registration = loaded() if callable(loaded) else loaded
+        if not isinstance(registration, AgentRegistration):
+            raise TypeError(
+                f"{AGENT_ENTRY_POINT_GROUP} entry point {entry_point.name!r} "
+                "must load an AgentRegistration or a zero-argument callable "
+                "returning one"
+            )
+        namespaced_id = f"installed:{registration.id}"
+        registration = dataclasses.replace(
+            registration,
+            namespaced_agent_id=namespaced_id,
+            source="installed",
+            factory=_wrap_factory_with_namespaced_id(
+                registration.factory, namespaced_id
+            ),
+        )
+        return registration
 
     # ------------------------------------------------------------------
     # Native (C++/binary) agent discovery

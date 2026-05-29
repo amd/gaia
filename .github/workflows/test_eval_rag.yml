@@ -20,7 +20,7 @@ jobs:
     if: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Notify skipped
         run: |
           echo "[SKIP] ANTHROPIC_API_KEY not available in this run (fork PR or missing secret). Skipping RAG eval job."
@@ -33,10 +33,10 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: '3.10'
 

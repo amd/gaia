@@ -242,6 +242,7 @@ def triage_inbox_impl(
     *,
     max_messages: int = 25,
     session_preferences: Optional[Mapping[str, Any]] = None,
+    force_llm: bool = False,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Triage the inbox using heuristic fast path + LLM fallback.
@@ -251,6 +252,10 @@ def triage_inbox_impl(
     flag the message for LLM follow-up — the LLM tool call happens in the
     agent's planning loop, not in this tool body (the heuristic alone is
     cheap; LLM round-trips are expensive and are sequenced by the agent).
+
+    When ``force_llm`` is True, every message is flagged for LLM
+    follow-up regardless of heuristic confidence — used for benchmarking
+    to measure true inference cost across all emails.
 
     When ``session_preferences`` is provided, sender-based overrides
     (priority / low-priority) are layered on top of the heuristic before
@@ -291,8 +296,12 @@ def triage_inbox_impl(
                 "category": heuristic.category,
                 "is_spam": heuristic.is_spam,
                 "is_phishing": heuristic.is_phishing,
-                "confident": heuristic.confident,
-                "rationale": heuristic.reason,
+                "confident": heuristic.confident and not force_llm,
+                "rationale": (
+                    f"forced LLM bypass (was: {heuristic.reason})"
+                    if force_llm and heuristic.confident
+                    else heuristic.reason
+                ),
             }
             decision = _apply_session_preferences(decision, prefs)
             log_triage_decision(
@@ -331,6 +340,7 @@ def pre_scan_inbox_impl(
     actionable_cap: int = PRE_SCAN_ACTIONABLE_CAP,
     archive_cap: int = PRE_SCAN_ARCHIVE_CAP,
     session_preferences: Optional[Mapping[str, Any]] = None,
+    force_llm: bool = False,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Pre-scan the inbox for the chat surface.
@@ -366,6 +376,7 @@ def pre_scan_inbox_impl(
             gmail,
             max_messages=max_messages,
             session_preferences=prefs,
+            force_llm=force_llm,
             debug=debug,
         )
         urgent: List[Dict[str, Any]] = []
@@ -590,6 +601,7 @@ class ReadToolsMixin:
                         session_preferences=getattr(
                             agent, "_session_preferences", None
                         ),
+                        force_llm=bool(getattr(agent.config, "force_llm", False)),
                         debug=debug_flag,
                     )
                 )
@@ -638,6 +650,7 @@ class ReadToolsMixin:
                         session_preferences=getattr(
                             agent, "_session_preferences", None
                         ),
+                        force_llm=bool(getattr(agent.config, "force_llm", False)),
                         debug=debug_flag,
                     )
                 )
