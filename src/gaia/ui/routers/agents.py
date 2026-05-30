@@ -98,6 +98,11 @@ def _reg_to_info(reg) -> AgentInfo:
                 }
             )
 
+    # Serialize DeviceConfig dataclasses into dicts for the API response.
+    import dataclasses as _dc
+
+    device_configs = [_dc.asdict(dc) for dc in getattr(reg, "device_configs", [])]
+
     return AgentInfo(
         id=reg.id,
         name=reg.name,
@@ -113,6 +118,7 @@ def _reg_to_info(reg) -> AgentInfo:
         icon=reg.icon,
         tools_count=reg.tools_count,
         language=reg.language,
+        device_configs=device_configs,
     )
 
 

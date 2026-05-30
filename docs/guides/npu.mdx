@@ -1,0 +1,118 @@
+---
+title: "NPU Acceleration"
+description: "Run GAIA agents on AMD Ryzen AI NPU for power-efficient local inference"
+---
+
+# NPU Acceleration
+
+GAIA supports running agents on your AMD Ryzen AI NPU via the [FastFlowLM (FLM)](https://fastflowlm.com) backend. NPU inference is power-efficient and frees your GPU for other tasks.
+
+## Requirements
+
+- **Hardware:** AMD Ryzen AI 300/400/Max series processor with XDNA2 NPU
+  - Strix Point, Strix Halo, Kraken Point, or Gorgon Point
+  - Ryzen AI 7000/8000/200-series (XDNA1) is **not supported**
+- **Software:** [Lemonade Server](https://lemonade-server.ai) v10.2.0+
+- **Driver:** Latest AMD NPU driver (firmware v1.1.0.0+)
+
+<Warning>
+Ryzen AI 7000/8000/200-series chips have XDNA1 NPUs which are not supported by FastFlowLM. Use `--device gpu` instead.
+</Warning>
+
+## Setup
+
+Initialize GAIA with the NPU profile:
+
+```bash
+gaia init --profile npu
+```
+
+This will:
+1. Verify NPU hardware is detected
+2. Install the FLM backend (`flm:npu`)
+3. Download the NPU-optimized model (`gemma4-it-e2b-FLM`)
+4. Run a verification test
+
+## Usage
+
+### CLI
+
+```bash
+# Chat on NPU
+gaia chat --device npu
+
+# Chat on GPU (default)
+gaia chat
+
+# Chat on CPU
+gaia chat --device cpu
+
+# Single prompt on NPU
+gaia prompt "Hello" --device npu
+```
+
+### Agent UI
+
+1. Launch with `gaia chat --ui`
+2. In the Agent Hub, each agent card shows a **device dropdown**
+3. Select **NPU** from the dropdown (only visible if NPU hardware is detected)
+4. A green ✓ badge indicates the agent has been verified on that device
+
+### Evaluation
+
+Compare agent quality across devices:
+
+```bash
+# Run eval on GPU (baseline)
+gaia eval agent --device gpu
+
+# Run eval on NPU
+gaia eval agent --device npu
+
+# Compare results
+gaia eval agent --compare eval/results/run1/scorecard.json eval/results/run2/scorecard.json
+```
+
+## Device Selection
+
+| Device | Model | Backend | Best For |
+|--------|-------|---------|----------|
+| **GPU** (default) | Gemma-4-E4B-it-GGUF | llamacpp:vulkan | General use, best throughput |
+| **CPU** | Gemma-4-E4B-it-GGUF | llamacpp:cpu | No GPU available (slower) |
+| **NPU** | gemma4-it-e2b-FLM | flm:npu | Power efficiency, background tasks |
+
+### Fallback Behavior
+
+- **Explicit `--device npu`:** fails immediately if NPU not available
+- **Default (no `--device`):** uses GPU; falls back to CPU with a warning if no GPU detected
+
+## Troubleshooting
+
+### NPU not detected
+
+```
+❌ No AMD NPU detected. The 'npu' profile requires AMD NPU hardware
+```
+
+Verify your hardware:
+1. Check processor model supports XDNA2 (Ryzen AI 300+ series)
+2. Ensure NPU driver is installed: check Device Manager (Windows) or `lspci | grep NPU` (Linux)
+3. Try `lemonade backends` to see available backends
+
+### FLM backend installation fails
+
+```
+❌ Failed to install backend 'flm:npu'
+```
+
+Install manually:
+```bash
+lemonade backends install flm:npu
+```
+
+### Model not available
+
+If `gemma4-it-e2b-FLM` is not found, pull it manually:
+```bash
+lemonade pull gemma4-it-e2b-FLM --recipe flm
+```

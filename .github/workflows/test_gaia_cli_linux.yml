@@ -209,8 +209,18 @@ jobs:
           kill $LEMONADE_PID 2>/dev/null || true
           sleep 5
 
-          # Clean up log file
-          rm -f lemonade.log
+          # Report failures — summarizer/RAG tests may fail when the agent's
+          # default model isn't available (only Qwen3-0.6B-GGUF is pulled in CI).
+          # Surface as a GHA warning so failures are visible without blocking the job.
+          FIRST_FAILURE=0
+          for code in "${TEST_EXIT:-0}" "${RAG_TEST_EXIT:-0}" "${LEMONADE_TEST_EXIT:-0}"; do
+            if [ "$code" -ne 0 ] && [ "$FIRST_FAILURE" -eq 0 ]; then
+              FIRST_FAILURE=$code
+            fi
+          done
+          if [ "$FIRST_FAILURE" -ne 0 ]; then
+            echo "::warning::Integration tests had failures (exit code $FIRST_FAILURE) — see logs above"
+          fi
 
       - name: Test evaluation and utility commands
         run: |
@@ -291,3 +301,12 @@ jobs:
           echo "   🔧 Test audio/TTS functionality on Linux"
           echo "   🔧 Add Linux NPU driver support (if available)"
           echo "   🔧 Optimize model loading and performance"
+
+      - name: Upload logs on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gaia-cli-linux-logs
+          path: |
+            lemonade.log
+          if-no-files-found: ignore

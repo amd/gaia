@@ -533,12 +533,11 @@ Add RAG capability to enable document search and retrieval.
 
         def _get_system_prompt(self) -> str:
             indexed = "\n".join(f"- {doc}" for doc in self.indexed_files)
-            return f"""You are a document Q&A assistant.
-
-    Currently indexed:
-    {indexed}
-
-    Use query_documents to search for information."""
+            return (
+                "You are a document Q&A assistant.\n\n"
+                f"Currently indexed:\n{indexed}\n\n"
+                "Use query_documents to search for information."
+            )
 
         def _create_console(self):
             return AgentConsole()
@@ -558,10 +557,10 @@ Add RAG capability to enable document search and retrieval.
                     "answer": response.text
                 }
 
-# Use it
-agent = DocQAAgent(documents=["./manual.pdf"])
-response = agent.process_query("What does the manual say about installation?")
-print(response)
+    # Use it
+    agent = DocQAAgent(documents=["./manual.pdf"])
+    response = agent.process_query("What does the manual say about installation?")
+    print(response)
     ```
   </Tab>
 
