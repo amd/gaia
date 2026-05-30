@@ -41,7 +41,10 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
-          install-package: '.[dev,rag]'
+          # ui  -> fastapi/uvicorn for the :4200 backend
+          # rag -> retrieval deps for the doc agent
+          # eval-> anthropic (Claude judge) + reportlab/pypdf/sklearn
+          install-package: '.[dev,ui,rag,eval]'
           extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
       - name: Install Lemonade Server
@@ -112,6 +115,9 @@ jobs:
             $ready = $false
             for ($i = 0; $i -lt 90 -and -not $ready; $i++) {
               Start-Sleep -Seconds 2
+              if ($backend.HasExited) {
+                throw "Agent UI backend exited early (code $($backend.ExitCode)) — see log above"
+              }
               try {
                 Invoke-RestMethod -Uri "http://localhost:4200/api/health" -TimeoutSec 5 | Out-Null
                 $ready = $true
