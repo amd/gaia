@@ -1600,7 +1600,17 @@ These positions indicate where to split the text."""
             return trimmed[first_space + 1 :]
         return trimmed
 
-    def _create_vector_index(self, chunks: List[str]) -> tuple:
+    def _create_faiss_index(self, embeddings: "np.ndarray"):
+        """Build a FAISS L2 index from precomputed embeddings."""
+        dimension = embeddings.shape[1]
+        index = faiss.IndexFlatL2(dimension)
+        # pylint: disable=no-value-for-parameter
+        index.add(embeddings.astype("float32"))
+        return index
+
+    def _create_vector_index(
+        self, chunks: List[str], return_embeddings: bool = False
+    ) -> tuple:
         """Create FAISS vector index from chunks with progress reporting."""
         import time as time_module  # pylint: disable=reimported
 
@@ -1635,10 +1645,7 @@ These positions indicate where to split the text."""
             print("\n  🏗️  Building FAISS search index...")
 
         index_start = time_module.time()
-        dimension = embeddings.shape[1]
-        index = faiss.IndexFlatL2(dimension)
-        # pylint: disable=no-value-for-parameter
-        index.add(embeddings.astype("float32"))
+        index = self._create_faiss_index(embeddings)
         index_duration = time_module.time() - index_start
 
         if self.config.show_stats:
@@ -1654,6 +1661,8 @@ These positions indicate where to split the text."""
             f"📚 Index ready with {index.ntotal} vectors "
             f"(embed: {embed_duration:.2f}s, index: {index_duration:.2f}s)"
         )
+        if return_embeddings:
+            return index, chunks, embeddings
         return index, chunks
 
     def _snapshot_query_state(self) -> Dict[str, Any]:
@@ -2107,10 +2116,15 @@ These positions indicate where to split the text."""
                         stats["memory_limit_reached"] = True
                         return stats
 
-                    # Track chunk indices for this file and publish only after the
-                    # rebuilt index succeeds so partial state is never visible.
+                    # Encode cached chunks once, then reuse the resulting
+                    # embeddings for both the global index and the per-file
+                    # index instead of rebuilding old work.
                     if self.index is None:
-                        rebuilt_chunks_source = list(cached_chunks)
+                        rebuilt_index, rebuilt_chunks, file_embeddings = (
+                            self._create_vector_index(
+                                list(cached_chunks), return_embeddings=True
+                            )
+                        )
                         file_chunk_indices = list(range(len(cached_chunks)))
                         rebuilt_chunk_to_file = {
                             idx: file_path for idx in file_chunk_indices
@@ -2118,26 +2132,45 @@ These positions indicate where to split the text."""
                     else:
                         old_chunks = list(self.chunks)
                         old_count = len(old_chunks)
-                        rebuilt_chunks_source = old_chunks + list(cached_chunks)
                         start_idx = len(old_chunks)
                         file_chunk_indices = list(
                             range(start_idx, start_idx + len(cached_chunks))
                         )
+                        rebuilt_chunks = old_chunks + list(cached_chunks)
                         rebuilt_chunk_to_file = dict(self.chunk_to_file)
                         for chunk_idx in file_chunk_indices:
                             rebuilt_chunk_to_file[chunk_idx] = file_path
                         if self.config.show_stats:
                             print(
-                                f"  🔄 Rebuilding index ({old_count} + {len(cached_chunks)} = {len(rebuilt_chunks_source)} chunks)"
+                                f"  ➕ Appending {len(cached_chunks)} cached chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                             )
+                        self._load_embedder()
+                        file_embeddings = self._encode_texts(
+                            list(cached_chunks), show_progress=False
+                        )
+                        rebuilt_index = self.index
 
-                    rebuilt_index, rebuilt_chunks = self._create_vector_index(
-                        rebuilt_chunks_source
-                    )
+                    try:
+                        file_index = self._create_faiss_index(file_embeddings)
+                    except Exception as _e:  # pylint: disable=broad-except
+                        self.log.debug(
+                            "Couldn't pre-build per-file index for %s: %s",
+                            file_path,
+                            _e,
+                        )
+                        file_index = None
+
+                    if self.index is not None:
+                        rebuilt_index.add(file_embeddings.astype("float32"))
+
                     self.index = rebuilt_index
                     self.chunks = rebuilt_chunks
                     self.chunk_to_file = rebuilt_chunk_to_file
                     self.file_to_chunk_indices[file_path] = file_chunk_indices
+
+                    if file_index is not None:
+                        self.file_indices[file_path] = file_index
+                        self.file_embeddings[file_path] = file_embeddings
 
                     # Restore metadata in memory
                     if cached_full_text or cached_metadata:
@@ -2147,32 +2180,6 @@ These positions indicate where to split the text."""
                         }
 
                     self.indexed_files.add(file_path)
-
-                    # Build per-file FAISS index NOW so retrieval-time queries
-                    # don't have to rebuild it on every call. Pre-#1030
-                    # follow-up: this block was only present on the
-                    # fresh-index path (~line 2289 below), so any document
-                    # loaded from cache hit ``cached_file_index is None`` in
-                    # _retrieve_chunks_from_file and rebuilt the FAISS index
-                    # from scratch on every query — adding ~3 s × N queries
-                    # of avoidable work. One-time cost on cache load instead.
-                    try:
-                        self._load_embedder()
-                        _file_embeddings = self._encode_texts(
-                            list(cached_chunks), show_progress=False
-                        )
-                        _file_dim = _file_embeddings.shape[1]
-                        _file_index = faiss.IndexFlatL2(_file_dim)
-                        # pylint: disable=no-value-for-parameter
-                        _file_index.add(_file_embeddings.astype("float32"))
-                        self.file_indices[file_path] = _file_index
-                        self.file_embeddings[file_path] = _file_embeddings
-                    except Exception as _e:  # pylint: disable=broad-except
-                        self.log.debug(
-                            "Couldn't pre-build per-file index for %s: %s",
-                            file_path,
-                            _e,
-                        )
 
                     # Track access time for LRU (was missing — pre-existing bug)
                     current_time = time.time()
@@ -2276,57 +2283,55 @@ These positions indicate where to split the text."""
                     stats["memory_limit_reached"] = True
                     return stats
 
-                # Track which chunks belong to this file and only publish them after
-                # the rebuilt global index succeeds.
-                if self.chunks:
+                # Encode each new file once, then reuse those embeddings for both
+                # the global index and the per-file index.
+                if self.index is None:
+                    if self.config.show_stats:
+                        print("🏗️  Building initial search index...")
+                    rebuilt_index, rebuilt_chunks, file_embeddings = (
+                        self._create_vector_index(
+                            list(new_chunks), return_embeddings=True
+                        )
+                    )
+                    file_chunk_indices = list(range(len(new_chunks)))
+                    rebuilt_chunk_to_file = {
+                        idx: file_path for idx in file_chunk_indices
+                    }
+                else:
                     old_chunks = list(self.chunks)
                     old_count = len(old_chunks)
-                    rebuilt_chunks_source = old_chunks + list(new_chunks)
                     start_idx = len(old_chunks)
                     file_chunk_indices = list(
                         range(start_idx, start_idx + len(new_chunks))
                     )
+                    rebuilt_chunks = old_chunks + list(new_chunks)
                     rebuilt_chunk_to_file = dict(self.chunk_to_file)
                     for chunk_idx in file_chunk_indices:
                         rebuilt_chunk_to_file[chunk_idx] = file_path
 
                     if self.config.show_stats:
                         print(
-                            f"🔄 Rebuilding search index ({old_count} + {len(new_chunks)} = {len(rebuilt_chunks_source)} total chunks)"
+                            f"➕ Appending {len(new_chunks)} new chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                         )
-                else:
-                    file_chunk_indices = list(range(len(new_chunks)))
-                    rebuilt_chunks_source = list(new_chunks)
-                    rebuilt_chunk_to_file = {
-                        idx: file_path for idx in file_chunk_indices
-                    }
 
-                    if self.config.show_stats:
-                        print("🏗️  Building initial search index...")
+                    self._load_embedder()
+                    file_embeddings = self._encode_texts(
+                        new_chunks, show_progress=False
+                    )
+                    rebuilt_index = self.index
 
-                rebuilt_index, rebuilt_chunks = self._create_vector_index(
-                    rebuilt_chunks_source
-                )
+                if self.config.show_stats:
+                    print("🔍 Building per-file search index...")
+
+                file_index = self._create_faiss_index(file_embeddings)
+
+                if self.index is not None:
+                    rebuilt_index.add(file_embeddings.astype("float32"))
+
                 self.index = rebuilt_index
                 self.chunks = rebuilt_chunks
                 self.chunk_to_file = rebuilt_chunk_to_file
                 self.file_to_chunk_indices[file_path] = file_chunk_indices
-
-                # Build and cache per-file FAISS index for fast file-specific searches
-                if self.config.show_stats:
-                    print("🔍 Building per-file search index...")
-
-                self._load_embedder()
-                # Generate embeddings for this file's chunks only
-                file_embeddings = self._encode_texts(new_chunks, show_progress=False)
-
-                # Create FAISS index for this file
-                dimension = file_embeddings.shape[1]
-                file_index = faiss.IndexFlatL2(dimension)
-                # pylint: disable=no-value-for-parameter
-                file_index.add(file_embeddings.astype("float32"))
-
-                # Cache the index and embeddings for this file
                 self.file_indices[file_path] = file_index
                 self.file_embeddings[file_path] = file_embeddings
 
