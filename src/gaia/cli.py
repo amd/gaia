@@ -3866,8 +3866,7 @@ Let me know your answer!
 
         # Email-triage throughput benchmark: gaia eval benchmark (#1233)
         if getattr(args, "eval_command", None) == "benchmark":
-            import tempfile as _tempfile
-            from pathlib import Path as _Path
+            import tempfile
 
             from gaia.eval.benchmark import (
                 THROUGHPUT_BAR_TPS,
@@ -3882,7 +3881,7 @@ Let me know your answer!
             mbox_path = args.mbox_path or str(fixtures / "_stub_inbox.mbox")
             gt_path = args.ground_truth or str(fixtures / "ground_truth.json")
             ground_truth = (
-                load_ground_truth(gt_path) if _Path(gt_path).exists() else None
+                load_ground_truth(gt_path) if Path(gt_path).exists() else None
             )
             if ground_truth is None:
                 print(
@@ -3890,7 +3889,7 @@ Let me know your answer!
                     "quality scoring skipped"
                 )
 
-            with _tempfile.TemporaryDirectory(prefix="gaia-bench-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="gaia-bench-") as tmp:
                 results = run_benchmark(
                     args.model,
                     mbox_path=mbox_path,
@@ -3898,7 +3897,7 @@ Let me know your answer!
                     experiments=args.experiments,
                     base_url=args.backend,
                     ground_truth=ground_truth,
-                    db_path=str(_Path(tmp) / "state.db"),
+                    db_path=str(Path(tmp) / "state.db"),
                 )
 
             run_id = f"bench-{args.model.replace('/', '-').lower()}"
@@ -3940,7 +3939,7 @@ Let me know your answer!
             if args.output_dir:
                 from gaia.eval.scorecard import write_summary_md
 
-                outdir = _Path(args.output_dir)
+                outdir = Path(args.output_dir)
                 outdir.mkdir(parents=True, exist_ok=True)
                 (outdir / "scorecard.json").write_text(
                     json.dumps(summary["scorecard"], indent=2, ensure_ascii=False),
@@ -3968,11 +3967,11 @@ Let me know your answer!
                 print(f"[BASELINE] saved throughput baseline → {baseline_path}")
 
             if args.compare:
-                cmp_path = _Path(args.compare)
+                cmp_path = Path(args.compare)
                 if not cmp_path.exists():
                     print(f"[ERROR] baseline not found: {cmp_path}")
                     sys.exit(1)
-                base = json.loads(cmp_path.read_text())
+                base = json.loads(cmp_path.read_text(encoding="utf-8"))
                 base_tps = base.get("performance", {}).get("avg_tokens_per_second")
                 if isinstance(base_tps, (int, float)) and isinstance(tps, (int, float)):
                     print(
