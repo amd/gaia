@@ -20,9 +20,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
 
+# Own group — must NOT share `lemonade-eval` with test_eval_rag.yml, whose
+# runs queue forever for the non-existent runner and would block this one.
 concurrency:
-  group: lemonade-eval
-  cancel-in-progress: false
+  group: eval-rag-dryrun-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   dryrun:
