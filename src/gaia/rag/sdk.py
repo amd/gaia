@@ -2116,11 +2116,9 @@ These positions indicate where to split the text."""
                         stats["memory_limit_reached"] = True
                         return stats
 
-                    # Encode cached chunks once, then reuse the resulting
-                    # embeddings for both the global index and the per-file
-                    # index instead of rebuilding old work.
+                    # Encode once; reuse for both the global and per-file index.
                     if self.index is None:
-                        rebuilt_index, rebuilt_chunks, file_embeddings = (
+                        new_index, rebuilt_chunks, file_embeddings = (
                             self._create_vector_index(
                                 list(cached_chunks), return_embeddings=True
                             )
@@ -2148,7 +2146,6 @@ These positions indicate where to split the text."""
                         file_embeddings = self._encode_texts(
                             list(cached_chunks), show_progress=False
                         )
-                        rebuilt_index = self.index
 
                     try:
                         file_index = self._create_faiss_index(file_embeddings)
@@ -2160,10 +2157,11 @@ These positions indicate where to split the text."""
                         )
                         file_index = None
 
-                    if self.index is not None:
-                        rebuilt_index.add(file_embeddings.astype("float32"))
-
-                    self.index = rebuilt_index
+                    if self.index is None:
+                        self.index = new_index
+                    else:
+                        # Append after the per-file index is ready.
+                        self.index.add(file_embeddings.astype("float32"))
                     self.chunks = rebuilt_chunks
                     self.chunk_to_file = rebuilt_chunk_to_file
                     self.file_to_chunk_indices[file_path] = file_chunk_indices
@@ -2283,12 +2281,11 @@ These positions indicate where to split the text."""
                     stats["memory_limit_reached"] = True
                     return stats
 
-                # Encode each new file once, then reuse those embeddings for both
-                # the global index and the per-file index.
+                # Encode once; reuse for both the global and per-file index.
                 if self.index is None:
                     if self.config.show_stats:
                         print("🏗️  Building initial search index...")
-                    rebuilt_index, rebuilt_chunks, file_embeddings = (
+                    new_index, rebuilt_chunks, file_embeddings = (
                         self._create_vector_index(
                             list(new_chunks), return_embeddings=True
                         )
@@ -2318,17 +2315,17 @@ These positions indicate where to split the text."""
                     file_embeddings = self._encode_texts(
                         new_chunks, show_progress=False
                     )
-                    rebuilt_index = self.index
 
                 if self.config.show_stats:
                     print("🔍 Building per-file search index...")
 
                 file_index = self._create_faiss_index(file_embeddings)
 
-                if self.index is not None:
-                    rebuilt_index.add(file_embeddings.astype("float32"))
-
-                self.index = rebuilt_index
+                if self.index is None:
+                    self.index = new_index
+                else:
+                    # Append after the per-file index is ready.
+                    self.index.add(file_embeddings.astype("float32"))
                 self.chunks = rebuilt_chunks
                 self.chunk_to_file = rebuilt_chunk_to_file
                 self.file_to_chunk_indices[file_path] = file_chunk_indices
