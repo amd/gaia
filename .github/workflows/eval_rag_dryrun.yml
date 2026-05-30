@@ -1,0 +1,140 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# TEMPORARY DIAGNOSTIC — DO NOT MERGE.
+#
+# Proves the `rag_quality` eval runs green end-to-end on the `stx`
+# self-hosted runner *before* we rewrite the real test_eval_rag.yml
+# (which is wedged on the non-existent `lemonade-eval` runner label and
+# never starts Lemonade or the :4200 backend the eval needs).
+#
+# Stack exercised here, mirroring test_rag.yml:
+#   Lemonade (:13305) -> GAIA Agent UI backend (:4200) -> Gemma-4-E4B
+#   (model under test) with Claude (claude-sonnet-4-6) as the judge.
+#
+# Runs ONLY on a PR carrying the `eval-dryrun` label, so the file is inert
+# if it ever lingers. Delete this workflow once the dry-run is green.
+name: Eval RAG Dry-Run (diagnostic)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: lemonade-eval
+  cancel-in-progress: false
+
+jobs:
+  dryrun:
+    name: RAG Quality Eval Dry-Run (stx)
+    if: contains(github.event.pull_request.labels.*.name, 'eval-dryrun')
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    timeout-minutes: 90
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[dev,rag]'
+          extra-index-url: 'https://download.pytorch.org/whl/cpu'
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Run rag_quality eval end-to-end (Lemonade + :4200 backend + Claude judge)
+        shell: powershell
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $env:PYTHONIOENCODING = "utf-8"
+          $env:PYTHONUTF8 = "1"
+          chcp 65001 | Out-Null
+
+          # GAIA defaults Lemonade to :13305 (DEFAULT_PORT); be explicit so the
+          # backend's LemonadeManager attaches to the server we start below.
+          $env:LEMONADE_BASE_URL = "http://localhost:13305"
+
+          $py = ".\.venv\Scripts\python.exe"
+          $gaia = ".\.venv\Scripts\gaia.exe"
+          $backend = $null
+          $serverJob = $null
+
+          try {
+            Write-Host "=== Starting Lemonade Server (:13305) ==="
+            $serverJob = Start-Job -ScriptBlock {
+              # Issue #612 workaround: disable Vulkan coopmat optimization.
+              $env:GGML_VK_DISABLE_COOPMAT = "1"
+              & lemonade-server serve --host localhost --port 13305 --no-tray 2>&1
+            }
+
+            $ready = $false
+            for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
+              Start-Sleep -Seconds 2
+              try {
+                Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -TimeoutSec 5 | Out-Null
+                $ready = $true
+              } catch {}
+            }
+            if (-not $ready) { throw "Lemonade Server failed to become ready on :13305" }
+            Write-Host "[OK] Lemonade ready"
+
+            # Ensure the model-under-test and the RAG embedder are present.
+            # (Both are already cached on stx; this just guarantees it.)
+            foreach ($m in @("Gemma-4-E4B-it-GGUF", "nomic-embed-text-v2-moe-GGUF")) {
+              Write-Host "Pulling $m ..."
+              try {
+                $body = @{ model_name = $m } | ConvertTo-Json
+                Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" -Method POST `
+                  -ContentType "application/json" -Body $body -TimeoutSec 1200 | Out-Null
+                Write-Host "  [OK] $m"
+              } catch { Write-Host "  [WARN] pull $m`: $($_.Exception.Message)" }
+            }
+
+            # Preload the embedder (RAG indexing needs it immediately). The LLM
+            # is loaded by the agent itself at GAIA's expected ctx_size.
+            try {
+              $body = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
+              Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" -Method POST `
+                -ContentType "application/json" -Body $body -TimeoutSec 120 | Out-Null
+              Write-Host "[OK] embedder loaded"
+            } catch { Write-Host "[WARN] embedder load: $($_.Exception.Message)" }
+
+            Write-Host "=== Starting GAIA Agent UI backend (:4200) ==="
+            $backend = Start-Process -FilePath $py `
+              -ArgumentList "-m gaia.ui.server --port 4200" `
+              -PassThru -NoNewWindow
+
+            $ready = $false
+            for ($i = 0; $i -lt 90 -and -not $ready; $i++) {
+              Start-Sleep -Seconds 2
+              try {
+                Invoke-RestMethod -Uri "http://localhost:4200/api/health" -TimeoutSec 5 | Out-Null
+                $ready = $true
+              } catch {}
+            }
+            if (-not $ready) { throw "Agent UI backend failed to become ready on :4200" }
+            Write-Host "[OK] backend ready"
+
+            Write-Host "=== Running rag_quality eval (compare to committed baseline) ==="
+            & $gaia eval agent --category rag_quality `
+              --compare tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json
+            $code = $LASTEXITCODE
+            Write-Host "eval exit code: $code"
+            if ($code -ne 0) { throw "rag_quality eval failed (exit $code)" }
+            Write-Host "[OK] rag_quality eval passed vs baseline"
+          }
+          finally {
+            Write-Host "=== Cleanup ==="
+            if ($backend -and -not $backend.HasExited) {
+              Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
+            }
+            if ($serverJob) {
+              Stop-Job $serverJob -ErrorAction SilentlyContinue
+              Remove-Job $serverJob -Force -ErrorAction SilentlyContinue
+            }
+            Get-Process llama-server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Get-Process lemonade-server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          }
