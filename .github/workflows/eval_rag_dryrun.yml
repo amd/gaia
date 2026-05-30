@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# TEMPORARY DIAGNOSTIC — DO NOT MERGE.
+# TEMPORARY DIAGNOSTIC - DO NOT MERGE.
 #
 # Proves the `rag_quality` eval runs green end-to-end on the `stx`
 # self-hosted runner *before* we rewrite the real test_eval_rag.yml
@@ -20,7 +20,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
 
-# Own group — must NOT share `lemonade-eval` with test_eval_rag.yml, whose
+# Own group - must NOT share `lemonade-eval` with test_eval_rag.yml, whose
 # runs queue forever for the non-existent runner and would block this one.
 concurrency:
   group: eval-rag-dryrun-${{ github.event.pull_request.number }}
@@ -116,7 +116,7 @@ jobs:
             for ($i = 0; $i -lt 90 -and -not $ready; $i++) {
               Start-Sleep -Seconds 2
               if ($backend.HasExited) {
-                throw "Agent UI backend exited early (code $($backend.ExitCode)) — see log above"
+                throw "Agent UI backend exited early (code $($backend.ExitCode)) - see log above"
               }
               try {
                 Invoke-RestMethod -Uri "http://localhost:4200/api/health" -TimeoutSec 5 | Out-Null
