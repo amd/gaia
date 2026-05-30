@@ -25,6 +25,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
+from gaia.connectors.activation_watcher import note_local_write
 from gaia.connectors.activations import (
     activate_agent,
     deactivate_agent,
@@ -37,6 +38,7 @@ from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
 )
+from gaia.connectors.events import emit_change
 from gaia.connectors.flow import (
     cancel_flow,
     complete_authorization,
@@ -317,6 +319,11 @@ def activate(
             len(scopes_for_grant),
         )
     activate_agent(connector_id, agent_id)
+    emit_change(
+        "connector.activation.changed",
+        {"connector_id": connector_id, "agent_id": agent_id, "active": True},
+    )
+    note_local_write(connector_id, agent_id, True)
     logger.info(
         "api: activated connector_id=%s agent_id=%s (auto_granted=%s)",
         connector_id,
@@ -339,6 +346,11 @@ def deactivate(connector_id: str, agent_id: str) -> None:
     """
     _require_mcp_server_for_activation(connector_id)
     deactivate_agent(connector_id, agent_id)
+    emit_change(
+        "connector.activation.changed",
+        {"connector_id": connector_id, "agent_id": agent_id, "active": False},
+    )
+    note_local_write(connector_id, agent_id, False)
 
 
 def tripwire_check() -> None:
