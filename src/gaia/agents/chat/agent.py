@@ -9,7 +9,7 @@ import platform
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 try:
     from watchdog.observers import Observer
@@ -163,6 +163,11 @@ class ChatAgent(
     - Session persistence with auto-save
     - MCP server integration
     """
+
+    # Loads MCP servers dynamically from ``~/.gaia/mcp_servers.json`` and gates
+    # their tools through the activation ledger, so it can use any MCP-server
+    # connector once activated without a static REQUIRED_CONNECTORS declaration.
+    CONSUMES_MCP_SERVERS: ClassVar[bool] = True
 
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """
