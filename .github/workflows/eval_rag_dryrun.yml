@@ -59,11 +59,23 @@ jobs:
           # The eval shells out to the `claude` CLI as the user-simulator and
           # judge (runner.py preflight hard-requires it; anthropic SDK alone is
           # not enough). ANTHROPIC_API_KEY (job env) provides headless auth.
-          npm install -g @anthropic-ai/claude-code
-          $prefix = (npm config get prefix).Trim()
-          $env:PATH = "$prefix;$env:PATH"
-          Add-Content -Path $env:GITHUB_PATH -Value $prefix
-          Write-Host "claude on PATH at: $prefix"
+          # stx runners have no npm, so use the native installer.
+          irm https://claude.ai/install.ps1 | iex
+
+          $candidates = @(
+            "$env:USERPROFILE\.local\bin",
+            "$env:LOCALAPPDATA\Programs\claude",
+            "$env:LOCALAPPDATA\claude"
+          )
+          $bin = $candidates | Where-Object { Test-Path "$_\claude.exe" } | Select-Object -First 1
+          if (-not $bin) {
+            $found = Get-ChildItem -Path $env:USERPROFILE, $env:LOCALAPPDATA -Recurse -Filter claude.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $bin = $found.DirectoryName }
+          }
+          if (-not $bin) { throw "claude.exe not found after install" }
+          $env:PATH = "$bin;$env:PATH"
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+          Write-Host "claude on PATH at: $bin"
           claude --version
 
       - name: Run rag_quality eval end-to-end (Lemonade + :4200 backend + Claude judge)
