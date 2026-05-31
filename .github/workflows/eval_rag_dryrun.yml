@@ -53,6 +53,19 @@ jobs:
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
+      - name: Install Claude Code CLI (eval user-simulator + judge)
+        shell: powershell
+        run: |
+          # The eval shells out to the `claude` CLI as the user-simulator and
+          # judge (runner.py preflight hard-requires it; anthropic SDK alone is
+          # not enough). ANTHROPIC_API_KEY (job env) provides headless auth.
+          npm install -g @anthropic-ai/claude-code
+          $prefix = (npm config get prefix).Trim()
+          $env:PATH = "$prefix;$env:PATH"
+          Add-Content -Path $env:GITHUB_PATH -Value $prefix
+          Write-Host "claude on PATH at: $prefix"
+          claude --version
+
       - name: Run rag_quality eval end-to-end (Lemonade + :4200 backend + Claude judge)
         shell: powershell
         run: |
@@ -130,7 +143,7 @@ jobs:
             Write-Host "[OK] backend ready"
 
             # `--compare <one path>` is diff-only and reads the saved baseline
-            # at eval/results/baseline.json — it does NOT run the eval. So:
+            # at eval/results/baseline.json -- it does NOT run the eval. So:
             # seed the committed baseline there, RUN the eval, then COMPARE.
             Write-Host "=== Seeding baseline -> eval/results/baseline.json ==="
             New-Item -ItemType Directory -Force -Path eval/results | Out-Null
