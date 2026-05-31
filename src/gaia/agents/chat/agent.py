@@ -164,9 +164,7 @@ class ChatAgent(
     - MCP server integration
     """
 
-    # Loads MCP servers dynamically from ``~/.gaia/mcp_servers.json`` and gates
-    # their tools through the activation ledger, so it can use any MCP-server
-    # connector once activated without a static REQUIRED_CONNECTORS declaration.
+    # Dynamic MCP loader — registry exposes this for the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = True
 
     def __init__(self, config: Optional[ChatAgentConfig] = None):

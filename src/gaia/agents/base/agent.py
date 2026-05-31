@@ -168,11 +168,7 @@ class Agent(abc.ABC):
     # Empty list = no external connections required (the default for built-ins).
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = []
 
-    # Whether this agent loads MCP servers dynamically at runtime (from
-    # ``~/.gaia/mcp_servers.json``) and gates their tools through the per-agent
-    # activation ledger. Such agents declare no static ``REQUIRED_CONNECTORS``
-    # for those servers, so the registry surfaces this flag to let the Settings
-    # "Active for" panel list them as activatable for MCP-server connectors.
+    # Registry reads this to include dynamic MCP consumers in the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = False
 
     # Declarative per-agent hardware requirement.  Agents that need a
