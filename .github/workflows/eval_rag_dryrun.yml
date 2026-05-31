@@ -41,10 +41,13 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
+          # -e (editable) is REQUIRED: the eval resolves REPO_ROOT via
+          # Path(__file__)...parent, so a non-editable install points
+          # eval/{scenarios,corpus,results} into .venv\Lib (non-existent).
           # ui  -> fastapi/uvicorn for the :4200 backend
           # rag -> retrieval deps for the doc agent
           # eval-> anthropic (Claude judge) + reportlab/pypdf/sklearn
-          install-package: '.[dev,ui,rag,eval]'
+          install-package: '-e .[dev,ui,rag,eval]'
           extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
       - name: Install Lemonade Server
@@ -126,12 +129,28 @@ jobs:
             if (-not $ready) { throw "Agent UI backend failed to become ready on :4200" }
             Write-Host "[OK] backend ready"
 
-            Write-Host "=== Running rag_quality eval (compare to committed baseline) ==="
-            & $gaia eval agent --category rag_quality `
-              --compare tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json
+            # `--compare <one path>` is diff-only and reads the saved baseline
+            # at eval/results/baseline.json — it does NOT run the eval. So:
+            # seed the committed baseline there, RUN the eval, then COMPARE.
+            Write-Host "=== Seeding baseline -> eval/results/baseline.json ==="
+            New-Item -ItemType Directory -Force -Path eval/results | Out-Null
+            Copy-Item tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json `
+              eval/results/baseline.json -Force
+
+            Write-Host "=== Running rag_quality eval (8 scenarios) ==="
+            & $gaia eval agent --category rag_quality
+            Write-Host "eval run exit code: $LASTEXITCODE"
+
+            $sc = Get-ChildItem eval/results/eval-*/scorecard.json -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime | Select-Object -Last 1
+            if (-not $sc) { throw "no scorecard produced - eval run did not complete" }
+            Write-Host "scorecard: $($sc.FullName)"
+
+            Write-Host "=== Comparing run vs baseline ==="
+            & $gaia eval agent --compare eval/results/baseline.json $sc.FullName
             $code = $LASTEXITCODE
-            Write-Host "eval exit code: $code"
-            if ($code -ne 0) { throw "rag_quality eval failed (exit $code)" }
+            Write-Host "compare exit code: $code"
+            if ($code -ne 0) { throw "rag_quality eval regressed vs baseline (compare exit $code)" }
             Write-Host "[OK] rag_quality eval passed vs baseline"
           }
           finally {
