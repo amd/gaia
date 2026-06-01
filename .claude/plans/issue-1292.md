@@ -4,17 +4,17 @@ source-issue: 1292
 repo: amd/gaia
 title: "feat(connectors): forward a pre-authenticated provider connection via API (no re-auth)"
 created: 2026-06-01
-status: in-progress
+status: ready
 work_type: feature
 complexity: medium
 tdd_required: true
 suggested_team_size: 1
-estimated_files_changed: 7
+estimated_files_changed: 8
 test_command: "python -m pytest tests/unit/connectors/ -x"
 build_command: "uv pip install -e \".[dev]\" && uv pip install -e \".[ui]\""
 lint_command: "python util/lint.py --all"
 branch: feat/issue-1292-forward-connection-api
-reflection_iterations: 0
+reflection_iterations: 1
 agents_used:
   - general-purpose (code-explorer)
   - general-purpose (code-reviewer, security weight)
