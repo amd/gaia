@@ -9,8 +9,6 @@ Tests the deterministic architecture audit helpers that inspect
 
 import textwrap
 
-import pytest
-
 from gaia.eval.audit import (
     audit_agent_persistence,
     audit_chat_helpers,
