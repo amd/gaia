@@ -18,10 +18,11 @@ module because every read tool that returns body bytes needs to honor it.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gaia.agents.base.tools import tool
 from gaia.agents.email.gmail_backend import decode_message_body
+from gaia.agents.email.tools.llm_triage import make_llm_classifier
 from gaia.agents.email.tools.triage_heuristics import (
     CATEGORY_ACTIONABLE,
     CATEGORY_INFORMATIONAL,
@@ -243,19 +244,30 @@ def triage_inbox_impl(
     max_messages: int = 25,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
+    classifier: Optional[Callable[..., Mapping[str, Any]]] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Triage the inbox using heuristic fast path + LLM fallback.
 
     For each message: fetch metadata, run the heuristic. If the heuristic
     is confident, record its category as the triage decision. Otherwise
-    flag the message for LLM follow-up — the LLM tool call happens in the
-    agent's planning loop, not in this tool body (the heuristic alone is
-    cheap; LLM round-trips are expensive and are sequenced by the agent).
+    (and always for ``urgent`` vs ``actionable``, which depend on body
+    content) the message needs LLM follow-up.
 
-    When ``force_llm`` is True, every message is flagged for LLM
-    follow-up regardless of heuristic confidence — used for benchmarking
-    to measure true inference cost across all emails.
+    LLM follow-up (#1107): when ``classifier`` is provided, a heuristic
+    ``confident=False`` message has its body read and classified by the
+    LLM via ``classifier(subject=, sender=, body=, message_id=)`` →
+    ``{category, confidence, reasoning}``. The result is recorded with
+    ``confident=True`` and ``source="llm"``. If the classifier raises
+    (LLM unreachable, unparseable output, or an out-of-taxonomy category)
+    the exception propagates — we never silently default to
+    ``informational``. When ``classifier`` is None, the message is left
+    flagged (``confident=False``) for a caller that sequences LLM calls
+    itself — preserving the heuristic-only path.
+
+    When ``force_llm`` is True, every message is routed to the classifier
+    (if provided) regardless of heuristic confidence — used for
+    benchmarking to measure true inference cost across all emails.
 
     When ``session_preferences`` is provided, sender-based overrides
     (priority / low-priority) are layered on top of the heuristic before
@@ -302,7 +314,28 @@ def triage_inbox_impl(
                     if force_llm and heuristic.confident
                     else heuristic.reason
                 ),
+                "source": "heuristic",
             }
+
+            # LLM follow-up (#1107): re-classify when the heuristic is not
+            # confident (or force_llm), if a classifier is wired in. Raises on
+            # failure — never silently defaults the category.
+            if classifier is not None and (not heuristic.confident or force_llm):
+                body_text, _ = decode_message_body(msg.get("payload") or {})
+                llm = classifier(
+                    subject=decision["subject"],
+                    sender=decision["from"],
+                    body=body_text,
+                    message_id=msg["id"],
+                )
+                decision["category"] = llm["category"]
+                decision["confident"] = True
+                decision["source"] = "llm"
+                if llm.get("reasoning"):
+                    decision["rationale"] = llm["reasoning"]
+                if llm.get("confidence") is not None:
+                    decision["llm_confidence"] = llm["confidence"]
+
             decision = _apply_session_preferences(decision, prefs)
             log_triage_decision(
                 message_id=msg["id"],
@@ -594,6 +627,10 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(1, min(int(max_messages or 25), 100))
+                # Wire LLM follow-up (#1107) for heuristic-uncertain messages.
+                # Built at call time so agent.chat is initialized.
+                chat = getattr(agent, "chat", None)
+                classifier = make_llm_classifier(chat) if chat is not None else None
                 return _envelope_ok(
                     triage_inbox_impl(
                         gmail,
@@ -602,6 +639,7 @@ class ReadToolsMixin:
                             agent, "_session_preferences", None
                         ),
                         force_llm=bool(getattr(agent.config, "force_llm", False)),
+                        classifier=classifier,
                         debug=debug_flag,
                     )
                 )
