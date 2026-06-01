@@ -367,7 +367,7 @@ gaia/
 │   │   ├── chat/       # ChatAgent with RAG (tools/rag_tools, tools/shell_tools)
 │   │   ├── code/       # CodeAgent with orchestration, validators, file_io tools
 │   │   ├── builder/    # BuilderAgent — scaffolds new agents from templates
-│   │   ├── summarize/  # SummarizeAgent — document/text summarization
+│   │   ├── summarize/  # SummarizerAgent — document/text summarization
 │   │   ├── blender/    # BlenderAgent for 3D automation
 │   │   ├── jira/       # JiraAgent for issue management
 │   │   ├── docker/     # DockerAgent for containerization
@@ -375,6 +375,12 @@ gaia/
 │   │   ├── routing/    # RoutingAgent for intelligent agent selection
 │   │   ├── sd/         # SDAgent for Stable Diffusion image generation
 │   │   ├── email/      # EmailTriageAgent for Gmail (local inference)
+│   │   ├── browser/    # BrowserAgent — web research (gaia browse)
+│   │   ├── analyst/    # AnalystAgent — structured data analysis (gaia analyze)
+│   │   ├── docqa/      # DocumentQAAgent — RAG document Q&A
+│   │   ├── fileio/     # FileIOAgent — file system + safe shell
+│   │   ├── code_index/ # Code-aware indexing/search agent + mixin
+│   │   ├── connectors_demo/ # ConnectorsDemoAgent — Google/GitHub connector demo
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
@@ -387,21 +393,28 @@ gaia/
 │   │   └── _shared/    # Shared assets for apps
 │   ├── audio/          # Audio processing (Whisper ASR, Kokoro TTS)
 │   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
+│   ├── code_index/     # Code indexing/search backend
+│   ├── connectors/     # Connector framework (Google/GitHub OAuth, MCP-server connectors, grants)
 │   ├── database/       # DatabaseMixin and DatabaseAgent
 │   ├── electron/       # Electron app integration
 │   ├── eval/           # Evaluation framework
+│   ├── filesystem/     # Filesystem service/utilities
+│   ├── governance/     # Governance / guardrails layer
 │   ├── img/            # Shared image assets
 │   ├── installer/      # Install/init commands (gaia init, lemonade installer)
 │   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI) + providers/
 │   ├── mcp/            # Model Context Protocol servers/clients
+│   ├── messaging/      # Messaging adapters (Telegram, …)
 │   ├── rag/            # Document retrieval (RAG)
 │   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
+│   ├── scratchpad/     # Scratchpad tables backend
 │   ├── shell/          # Shell integration
 │   ├── talk/           # Voice interaction SDK
 │   ├── testing/        # Test utilities and fixtures
 │   ├── ui/             # Agent UI backend (FastAPI server, routers, SSE, database)
 │   ├── utils/          # Utility modules (FileWatcher, parsing)
 │   ├── vlm/            # Vision LLM tool mixin (VLMToolsMixin, structured extraction)
+│   ├── web/            # Web utilities (search/fetch backend)
 │   └── cli.py          # Main CLI entry point (all `gaia <command>` subparsers)
 ├── tests/              # Test suite
 │   ├── unit/           # Unit tests
