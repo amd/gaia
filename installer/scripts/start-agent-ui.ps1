@@ -36,8 +36,8 @@ $RunBackend = -not $FrontendOnly
 $RunFrontend = -not $BackendOnly
 
 # ── Resolve project root ─────────────────────────────────────────────
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = Split-Path -Parent $ScriptDir
+# installer/scripts/ -> installer/ -> repo root
+$ProjectRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
 $WebUIDir = Join-Path $ProjectRoot "src\gaia\apps\webui"
 
 Write-Host "=========================================="
