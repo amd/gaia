@@ -1,11 +1,14 @@
 name: Eval RAG Quality
 
-# DISABLED on PRs pending rebuild -- see #1315.
+# FULLY DISABLED pending rebuild -- see #1315.
 # This gate has never executed successfully: it targeted a runner label
 # that never existed plus several more blocking bugs, and overflows the
-# 90-min budget even once fixed. `workflow_dispatch` is kept so the
-# rebuild work (#1315) can run it manually; restore the `pull_request`
-# trigger only with a working, time-bounded config.
+# 90-min budget even once fixed. `workflow_dispatch` below is only a
+# placeholder so the YAML stays valid -- a manual dispatch runs nothing
+# useful, because the job `if:` conditions gate on `github.event.pull_request`
+# (null on dispatch) and the job body is still broken. The working
+# reference config lives on branch `ci/eval-rag-dryrun`; rebuild and
+# re-enable (job conditions + `pull_request` trigger) are tracked in #1315.
 on:
   workflow_dispatch:
 
