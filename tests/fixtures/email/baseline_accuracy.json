@@ -1,12 +1,386 @@
 {
-  "_comment": "Categorization baseline for the 220-message synthetic_inbox.mbox corpus (#1230). category_accuracy/category_breakdown are PLACEHOLDERS — the orchestrator records the real numbers on gemma4-it-e2b via `python tests/fixtures/email/score_baseline.py --model gemma4-it-e2b --write` on the test machine (Lemonade at :13305). The integration test gates on category_accuracy - tolerance_pp.",
+  "_comment": "Primary categorization baseline for the 220-message synthetic_inbox.mbox corpus (#1230). category_accuracy/category_breakdown are a REAL LLM measurement on Gemma-4-E4B-it-GGUF (the demo model; matches the repo's gemma-4-e4b-* baselines) via `python tests/fixtures/email/score_baseline.py --model Gemma-4-E4B-it-GGUF --out tests/fixtures/email/baseline_accuracy.json --write`. is_spam_accuracy/is_phishing_accuracy are the model-independent CONFIDENT-decision heuristic accuracy (the integration test scores spam/phishing only on confident decisions; deferred messages go to the not-yet-wired LLM fallback). The second demo model (Gemma-4-E2B-it-GGUF) is recorded in baseline_accuracy_e2b.json. The integration test gates each axis on accuracy - tolerance_pp.",
+  "model": "Gemma-4-E4B-it-GGUF",
   "fixture": "synthetic_inbox.mbox",
-  "model": "gemma4-it-e2b",
-  "category_accuracy": null,
-  "category_breakdown": {},
-  "is_spam_accuracy": null,
-  "is_phishing_accuracy": null,
+  "category_accuracy": 0.6682,
+  "category_breakdown": {
+    "urgent": 0.7021,
+    "actionable": 0.7143,
+    "informational": 0.65,
+    "low priority": 0.5946
+  },
+  "is_spam_accuracy": 1.0,
+  "is_phishing_accuracy": 1.0,
+  "scored": 220,
+  "correct": 147,
   "tolerance_pp": 5,
-  "_recorded_on": null,
-  "_recorded_by": "PENDING real measurement on gemma4-it-e2b (see score_baseline.py)"
+  "_recorded_on": "2026-06-01",
+  "_recorded_by": "category: real LLM measurement on Gemma-4-E4B-it-GGUF; spam/phishing: confident-decision heuristic (model-independent)",
+  "_misses": [
+    {
+      "id": "e4864064468878f1",
+      "predicted": "informational",
+      "expected": "urgent"
+    },
+    {
+      "id": "4ed514432cf621b5",
+      "predicted": "urgent",
+      "expected": "informational"
+    },
+    {
+      "id": "9d12f9b0fe8f988a",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "7328a3c4e6d53011",
+      "predicted": "actionable",
+      "expected": "informational"
+    },
+    {
+      "id": "a67517233f89e53e",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "3ebd9b5933bb073c",
+      "predicted": "informational",
+      "expected": "low priority"
+    },
+    {
+      "id": "37eb07fad9beaa71",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "661497ee89108259",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "0d9d22ee99a31414",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "7e3d7462c8003a0d",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "0e38d3e3de658414",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "664403d88eec7ac6",
+      "predicted": "actionable",
+      "expected": "urgent"
+    },
+    {
+      "id": "610bcdec214508cc",
+      "predicted": "actionable",
+      "expected": "informational"
+    },
+    {
+      "id": "e29dbca60e95cbc2",
+      "predicted": "actionable",
+      "expected": "low priority"
+    },
+    {
+      "id": "4f732ef810d87f00",
+      "predicted": "actionable",
+      "expected": "urgent"
+    },
+    {
+      "id": "340f55dba2aeb6f3",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "694b32c76e5ea3d7",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "2cb64a0ba21b9268",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "521f395dba78e883",
+      "predicted": "urgent",
+      "expected": "informational"
+    },
+    {
+      "id": "2acd572540cadc93",
+      "predicted": "actionable",
+      "expected": "urgent"
+    },
+    {
+      "id": "1ba3a0bfb3be0294",
+      "predicted": "urgent",
+      "expected": "informational"
+    },
+    {
+      "id": "c18f46b7b6ed5a61",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "86fe03cff1d35a76",
+      "predicted": "actionable",
+      "expected": "urgent"
+    },
+    {
+      "id": "93f7a86b6bdc40fe",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "adbfea2474fd792c",
+      "predicted": "urgent",
+      "expected": "actionable"
+    },
+    {
+      "id": "4ee1819f7acd0626",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "2cf804e142471278",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "44a7717cc7180dec",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "930abefe0a4560c5",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "02af2bc580efca9c",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "0331e586db6beecc",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "1d0d36513b432301",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "0dd088cb18014d56",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "0d73235e52fe22e5",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "640d9d69eb1d77c5",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "50eb7532cae3a6d1",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "310099835078216e",
+      "predicted": "actionable",
+      "expected": "urgent"
+    },
+    {
+      "id": "af70540f06d2feb7",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "89c3447dda4a8a20",
+      "predicted": "informational",
+      "expected": "low priority"
+    },
+    {
+      "id": "6f2c37358df34725",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "69956070b60793f4",
+      "predicted": "actionable",
+      "expected": "urgent"
+    },
+    {
+      "id": "61466449dfab4466",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "d3e1ac7008005d39",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "ea20ddf4bf4c3f24",
+      "predicted": "informational",
+      "expected": "urgent"
+    },
+    {
+      "id": "10615bf57b103609",
+      "predicted": "actionable",
+      "expected": "informational"
+    },
+    {
+      "id": "8bd3a251ac5c4df2",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "13f3a09ea74b8a0f",
+      "predicted": "actionable",
+      "expected": "urgent"
+    },
+    {
+      "id": "3519d0d858262214",
+      "predicted": "urgent",
+      "expected": "informational"
+    },
+    {
+      "id": "5bdc8a450f9a5be9",
+      "predicted": "actionable",
+      "expected": "urgent"
+    },
+    {
+      "id": "f88c7f9bbcf3695e",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "a51f16a07ebb422f",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "2a815cc224f58d42",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "172661e0f889e4bf",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "4633737427659afc",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "7e0ec9a333dad98d",
+      "predicted": "actionable",
+      "expected": "urgent"
+    },
+    {
+      "id": "0dac53455383ce87",
+      "predicted": "informational",
+      "expected": "urgent"
+    },
+    {
+      "id": "05be3f793f825bf0",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "640c46e59d1dca89",
+      "predicted": "actionable",
+      "expected": "informational"
+    },
+    {
+      "id": "0d0a0edc3d7f1655",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "797289caa75f4a11",
+      "predicted": "actionable",
+      "expected": "urgent"
+    },
+    {
+      "id": "f58906b71d8da4a3",
+      "predicted": "urgent",
+      "expected": "low priority"
+    },
+    {
+      "id": "e4b1e85cc2f58d40",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "f705177b99e02779",
+      "predicted": "urgent",
+      "expected": "informational"
+    },
+    {
+      "id": "b4f5006c33ef70df",
+      "predicted": "urgent",
+      "expected": "informational"
+    },
+    {
+      "id": "9c7e08663d181714",
+      "predicted": "informational",
+      "expected": "urgent"
+    },
+    {
+      "id": "1c93950535ac01d5",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "9a73e95a0c84ab79",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "693b0ff3a7e09c7b",
+      "predicted": "low priority",
+      "expected": "actionable"
+    },
+    {
+      "id": "9cf9776d2db39885",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "01584c7b8ee54ff6",
+      "predicted": "informational",
+      "expected": "actionable"
+    },
+    {
+      "id": "c99238b82a3ced93",
+      "predicted": "low priority",
+      "expected": "informational"
+    },
+    {
+      "id": "26a9bacc9f5b81b2",
+      "predicted": "urgent",
+      "expected": "informational"
+    },
+    {
+      "id": "3114084d55859295",
+      "predicted": "urgent",
+      "expected": "informational"
+    }
+  ]
 }

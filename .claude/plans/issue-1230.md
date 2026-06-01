@@ -103,6 +103,13 @@ So the reconciliation is: **fix the generator so its output matches the code
 that consumes it (220/4, `"low priority"` string, Gmail-id keys), commit that
 output, and record the baseline against it.** No production code changes.
 
+**Baseline models (real measurement, recorded on the Strix Halo NPU):** record
+BOTH Gemma-4 demo models and drop the Qwen3.5-35B stub. `Gemma-4-E4B-it-GGUF`
+is the primary/demo model (matches the repo's existing `gemma-4-e4b-*`
+baselines and the integration test) at **category_accuracy 0.6682 (147/220)**;
+`Gemma-4-E2B-it-GGUF` is the smaller second model at **0.4455 (98/220)**,
+recorded in `baseline_accuracy_e2b.json` via the `--out` flag.
+
 ## Implementation
 
 1. **TDD first.** Add failing tests:
@@ -130,46 +137,62 @@ output, and record the baseline against it.** No production code changes.
    decision + why not 1000/5.
 5. **Baseline artifact + harness.** Add `tests/fixtures/email/score_baseline.py`
    (drives the LLM per message over the corpus, scores categories vs ground
-   truth, writes the scorecard) and a `baseline_accuracy.json` template pointed
-   at `gemma4-it-e2b` for the orchestrator to fill from the real-world run. The
-   orchestrator records the real number on the test machine.
+   truth, writes the scorecard; `--out` selects the per-model baseline file)
+   and record both Gemma-4 demo models. Category numbers are the real LLM
+   measurement; `is_spam_accuracy`/`is_phishing_accuracy` are the
+   model-independent confident-decision heuristic accuracy.
 
-## Real-world baseline recipe (for the orchestrator — DO NOT run here)
+## Real-world baseline recipe (recorded on the NPU; re-runnable)
 
-The email-triage categorization baseline is recorded by the dedicated
+The email-triage **category** baseline is recorded by the dedicated
 `score_baseline.py` harness, **not** `gaia eval agent` (no email scenario type
-exists; F2 descoped) and **not** the existing triage integration test (that
-path is heuristic-only and model-independent — it would not produce a real
-`gemma4-it-e2b` number). `score_baseline.py` drives the LLM per message over
-the committed corpus and scores categories against ground truth.
+exists; F2 descoped) and **not** the triage integration test (its heuristic
+path is model-independent — it does not produce an LLM category number).
+`score_baseline.py` drives the LLM per message over the committed corpus and
+scores categories against ground truth.
 
-On the test machine with Lemonade serving `gemma4-it-e2b` at port 13305:
+On the test machine with Lemonade at port 13305 (working dir = repo root;
+Lemonade is single-tenant — run serially):
 
 ```bash
-# Working dir: repo root. Lemonade is single-tenant — run serially, never
-# alongside another eval.
 export LEMONADE_BASE_URL=http://localhost:13305
 
-# Records the baseline and overwrites the committed baseline_accuracy.json:
-python tests/fixtures/email/score_baseline.py --model gemma4-it-e2b --write
+# Primary demo model -> baseline_accuracy.json (default --out):
+python tests/fixtures/email/score_baseline.py \
+    --model Gemma-4-E4B-it-GGUF --write
+
+# Second demo model -> baseline_accuracy_e2b.json:
+python tests/fixtures/email/score_baseline.py \
+    --model Gemma-4-E2B-it-GGUF \
+    --out tests/fixtures/email/baseline_accuracy_e2b.json --write
 
 # (Drop --write for a dry run that only prints the scorecard.)
 ```
 
-The harness writes the measured `category_accuracy`, per-category
-`category_breakdown`, `scored`/`correct` counts, `"model": "gemma4-it-e2b"`,
-`"_recorded_on"`, and `"_recorded_by"` into:
+Recorded results (Strix Halo NPU, 2026-06-01):
+- `Gemma-4-E4B-it-GGUF` (primary) -> `baseline_accuracy.json`,
+  category_accuracy **0.6682** (147/220).
+- `Gemma-4-E2B-it-GGUF` (second) -> `baseline_accuracy_e2b.json`,
+  category_accuracy **0.4455** (98/220).
 
-`tests/fixtures/email/baseline_accuracy.json`
-
-(replacing the `null` placeholders). Commit that file on this branch. The
-integration test then gates future runs on `category_accuracy - tolerance_pp`.
+**spam / phishing gating.** The integration test scores `is_spam` and
+`is_phishing` ONLY on the heuristic's *confident* decisions — it defers
+low-confidence messages to the (not-yet-wired) LLM fallback, and scoring those
+deferrals would penalize correct behaviour. The corpus carries inbox-spam with
+no Gmail SPAM label that the keyword heuristic legitimately can't catch (FN on
+deferral, FP=0). On confident decisions the heuristic is perfect
+(spam 43/43, phishing 43/43), so `is_spam_accuracy`/`is_phishing_accuracy` are
+recorded as `1.0` in `baseline_accuracy.json` (model-independent — computed by
+running the heuristic over the corpus, not the LLM). Each axis (category, spam,
+phishing) is a baseline-relative soft gate that xfails on a genuine regression.
+`baseline_accuracy_e2b.json` omits the spam/phishing fields (category only).
 
 ## Acceptance criteria mapping
 
 - **AC1** (synthetic corpus committed): generator output committed; RFC 2606
   domains only, deterministic — synthetic by construction.
-- **AC2** (real gemma4-it-e2b baseline): recipe above + `baseline_accuracy.json`
-  template; orchestrator records the number.
+- **AC2** (real demo-model baseline): recorded on the NPU — `Gemma-4-E4B-it-GGUF`
+  0.6682 in `baseline_accuracy.json` (primary), `Gemma-4-E2B-it-GGUF` 0.4455 in
+  `baseline_accuracy_e2b.json`. Re-runnable via the recipe above.
 - **AC3** (size/split reconciled): 220/4, documented here + in commit + schema.
 - **Test ACs**: unit (count/split/schema) + integration (1:1 GT↔mbox alignment).

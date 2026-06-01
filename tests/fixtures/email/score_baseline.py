@@ -3,10 +3,16 @@
 # SPDX-License-Identifier: MIT
 """Record a real LLM categorization baseline for the synthetic email corpus.
 
-This is the harness that produces the #1230 ``baseline_accuracy.json``
-number on the demo model (``gemma4-it-e2b``). It is NOT run in CI — it
-needs a live Lemonade server (single-tenant; run serially). The
-orchestrator runs it on the test machine.
+This is the harness that produces the #1230 ``category_accuracy`` numbers
+on the demo models. It is NOT run in CI — it needs a live Lemonade server
+(single-tenant; run serially). The orchestrator runs it on the test
+machine.
+
+Two Gemma-4 demo models are recorded:
+- ``Gemma-4-E4B-it-GGUF`` (primary; matches the repo's gemma-4-e4b-*
+  baselines and the integration test) -> ``baseline_accuracy.json``
+- ``Gemma-4-E2B-it-GGUF`` (smaller second model) ->
+  ``baseline_accuracy_e2b.json``
 
 What it does:
 
@@ -18,17 +24,22 @@ What it does:
    the agent emits and the eval scores against.
 3. Scores per-message category accuracy against ``ground_truth.json``
    (which is keyed by the Gmail-derived id, so it aligns 1:1).
-4. Writes ``baseline_accuracy.json`` with the model, the measured
-   ``category_accuracy``, and a per-category breakdown.
+4. Writes the chosen baseline file (``--out``) with the model, the
+   measured ``category_accuracy``, and a per-category breakdown.
 
-Usage (on the test machine, Lemonade serving gemma4-it-e2b at :13305)::
+Usage (on the test machine, Lemonade at :13305)::
 
     export LEMONADE_BASE_URL=http://localhost:13305
+    # Primary demo model -> baseline_accuracy.json (the default --out):
     python tests/fixtures/email/score_baseline.py \
-        --model gemma4-it-e2b --write
+        --model Gemma-4-E4B-it-GGUF --write
+    # Second demo model -> baseline_accuracy_e2b.json:
+    python tests/fixtures/email/score_baseline.py \
+        --model Gemma-4-E2B-it-GGUF \
+        --out tests/fixtures/email/baseline_accuracy_e2b.json --write
 
-Omit ``--write`` for a dry run that prints the scorecard without
-overwriting the committed baseline.
+Omit ``--write`` for a dry run that prints the scorecard without writing
+the baseline file.
 """
 
 from __future__ import annotations
@@ -118,7 +129,7 @@ def score(model: str, max_messages: int = 1000) -> Dict[str, Any]:
     ground_truth = json.loads(GROUND_TRUTH.read_text())
     labels = {k: v for k, v in ground_truth.items() if not k.startswith("_")}
 
-    client = LemonadeClient(model_id=model)
+    client = LemonadeClient(model=model)
 
     listing = backend.list_messages(label_ids=["INBOX"], max_results=max_messages)
     correct = 0
@@ -175,14 +186,23 @@ def score(model: str, max_messages: int = 1000) -> Dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="gemma4-it-e2b", help="Lemonade model id")
+    parser.add_argument(
+        "--model", default="Gemma-4-E4B-it-GGUF", help="Lemonade model id"
+    )
     parser.add_argument(
         "--max-messages", type=int, default=1000, help="Cap messages scored"
     )
     parser.add_argument(
         "--write",
         action="store_true",
-        help="Overwrite the committed baseline_accuracy.json with the result",
+        help="Write the result to the baseline file (see --out)",
+    )
+    parser.add_argument(
+        "--out",
+        default=str(BASELINE_OUT),
+        help="Baseline file to write when --write is set "
+        "(default: baseline_accuracy.json). Use a per-model path to record "
+        "more than one demo model.",
     )
     args = parser.parse_args()
 
@@ -191,8 +211,9 @@ def main() -> int:
     print(f"\nMisses: {len(scorecard['_misses'])}")
 
     if args.write:
-        BASELINE_OUT.write_text(json.dumps(scorecard, indent=2), encoding="utf-8")
-        print(f"\nWrote baseline to {BASELINE_OUT}")
+        out_path = Path(args.out)
+        out_path.write_text(json.dumps(scorecard, indent=2), encoding="utf-8")
+        print(f"\nWrote baseline to {out_path}")
     return 0
 
 

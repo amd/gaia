@@ -83,8 +83,16 @@ NOT a message entry — consumers must skip `_`-prefixed keys.
 
 ## Baseline
 
-`baseline_accuracy.json` records the categorization baseline on the demo model
-`gemma4-it-e2b`. It is produced by
-`python tests/fixtures/email/score_baseline.py --model gemma4-it-e2b --write`
-on a machine with Lemonade serving the model. The committed file ships with
-`category_accuracy: null` until that real-world run fills it in.
+`baseline_accuracy.json` records the categorization baseline on the primary
+demo model `Gemma-4-E4B-it-GGUF` (category_accuracy 0.6682, 147/220);
+`baseline_accuracy_e2b.json` records the second model `Gemma-4-E2B-it-GGUF`
+(0.4455, 98/220). Both are produced by
+`python tests/fixtures/email/score_baseline.py --model <id> --out <file> --write`
+on a machine with Lemonade serving the model.
+
+`is_spam_accuracy` / `is_phishing_accuracy` in `baseline_accuracy.json` are the
+model-independent **confident-decision** heuristic accuracy (both 1.0): the
+integration test scores spam/phishing only on the heuristic's confident
+decisions, deferring low-confidence messages to the not-yet-wired LLM fallback.
+Each axis is gated baseline-relative (`accuracy - tolerance_pp`), xfailing on a
+genuine regression.
