@@ -1512,6 +1512,48 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 
 ---
 
+### Email Throughput Benchmark
+
+Measure end-to-end email-triage throughput (tokens/sec), time-to-first-token, and pipeline latency for an on-device model. Direct-drives the email agent over the committed synthetic corpus and harvests metrics from the agent's per-step stats. The committed bar is **≥10 tok/s** (snappy-UX stretch ~30 tok/s); the benchmark is **non-gating** — a miss is reported, not failed.
+
+```bash
+gaia eval benchmark [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--model` | str | `Gemma-4-E4B-it-GGUF` | Lemonade model id to benchmark |
+| `--limit` | int | `50` | Target message count steered to the triage call (effective = min(limit, corpus size)) |
+| `--experiments` | int | `1` | Repeat count per model; >1 prints a variance report |
+| `--mbox-path` | str | stub fixture | MBOX corpus to triage |
+| `--ground-truth` | str | fixture's | Ground-truth JSON for quality scoring |
+| `--backend` | str | agent default | Lemonade base URL |
+| `--output-dir` | str | — | Write `scorecard.json` / `summary.md` / `variance.json` |
+| `--compare` | path | — | Compare throughput against a saved baseline (non-gating) |
+| `--save-baseline` | flag | off | Save this run's scorecard as the throughput baseline |
+
+<CodeGroup>
+```bash Benchmark the primary model
+gaia eval benchmark --model Gemma-4-E4B-it-GGUF --limit 50
+```
+
+```bash Repeat for variance + save a baseline
+gaia eval benchmark --experiments 3 --save-baseline
+```
+
+```bash Compare against a saved baseline
+gaia eval benchmark --compare eval/results/bench_baseline.json
+```
+</CodeGroup>
+
+<Note>
+  Runs from a GAIA repo checkout (it drives the synthetic corpus in `tests/fixtures/email/`) and needs Lemonade serving the target model. Run at most one `gaia eval` process at a time against a single Lemonade server.
+</Note>
+
+---
+
 ### Performance Visualization
 
 Plot llama.cpp server performance metrics from one or more log files. Plots are saved as images; pass `--show` to also display them interactively.
