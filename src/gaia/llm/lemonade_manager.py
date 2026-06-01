@@ -334,10 +334,25 @@ class LemonadeManager:
         except HardwareRequirementError:
             raise
         except Exception as e:
-            # Server not reachable / transient — can't validate now. Don't
-            # mislabel it as a hardware shortfall; the unreachable server is
-            # surfaced by the init path below (or the subsequent model load).
-            cls._log.debug("Skipping device validation (not reachable yet): %s", e)
+            # A server that's merely unreachable (connection refused / timeout)
+            # is expected and soft — don't mislabel it as missing hardware; the
+            # down server is surfaced by the init path (or the model load).
+            # Anything else (e.g. a malformed system-info response, a bug in
+            # _validate_device_requirement) is logged at WARNING so it stays
+            # visible instead of silently skipping validation.
+            msg = str(e)
+            is_conn = (
+                "Request failed:" in msg
+                or "refused" in msg.lower()
+                or "timeout" in msg.lower()
+                or "timed out" in msg.lower()
+            )
+            if is_conn:
+                cls._log.debug("Skipping device validation (not reachable yet): %s", e)
+            else:
+                cls._log.warning(
+                    "Skipping device validation (unexpected probe error): %s", e
+                )
             return
         cls._validated_min_devices.add(required_min_device)
 

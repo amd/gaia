@@ -272,42 +272,42 @@ class TestChatAgentConfigDeviceField:
 
 
 class TestResolveDeviceModelUI:
-    """``_resolve_device_model`` is the heart of the UI dropdown fix."""
+    """``resolve_device_model`` is the heart of the UI dropdown fix."""
 
     def test_npu_resolves_to_flm_model_and_4k_ctx(self):
-        from gaia.ui._chat_helpers import _resolve_device_model
+        from gaia.ui._chat_helpers import resolve_device_model
 
-        model, ctx = _resolve_device_model("chat", "npu", None)
+        model, ctx = resolve_device_model("chat", "npu", None)
         assert model == "gemma4-it-e2b-FLM"
         assert ctx == 4096
 
     def test_gpu_resolves_to_gguf_model_and_32k_ctx(self):
-        from gaia.ui._chat_helpers import _resolve_device_model
+        from gaia.ui._chat_helpers import resolve_device_model
 
-        model, ctx = _resolve_device_model("chat", "gpu", None)
+        model, ctx = resolve_device_model("chat", "gpu", None)
         assert model == "Gemma-4-E4B-it-GGUF"
         assert ctx == 32768
 
     def test_cpu_resolves_to_gguf_model(self):
-        from gaia.ui._chat_helpers import _resolve_device_model
+        from gaia.ui._chat_helpers import resolve_device_model
 
-        model, _ = _resolve_device_model("chat", "cpu", None)
+        model, _ = resolve_device_model("chat", "cpu", None)
         assert model == "Gemma-4-E4B-it-GGUF"
 
     def test_no_device_returns_none(self):
-        from gaia.ui._chat_helpers import _resolve_device_model
+        from gaia.ui._chat_helpers import resolve_device_model
 
-        assert _resolve_device_model("chat", None, None) == (None, None)
+        assert resolve_device_model("chat", None, None) == (None, None)
 
     def test_unknown_device_returns_none(self):
-        from gaia.ui._chat_helpers import _resolve_device_model
+        from gaia.ui._chat_helpers import resolve_device_model
 
-        assert _resolve_device_model("chat", "quantum", None) == (None, None)
+        assert resolve_device_model("chat", "quantum", None) == (None, None)
 
     def test_registered_agent_device_configs_used(self):
         """A registry entry's own device_configs take precedence over defaults."""
         from gaia.agents.registry import DeviceConfig
-        from gaia.ui._chat_helpers import _resolve_device_model
+        from gaia.ui._chat_helpers import resolve_device_model
 
         custom = SimpleNamespace(
             device_configs=[
@@ -321,7 +321,7 @@ class TestResolveDeviceModelUI:
             ]
         )
         registry = SimpleNamespace(get=lambda _id: custom)
-        model, ctx = _resolve_device_model("my-agent", "npu", registry)
+        model, ctx = resolve_device_model("my-agent", "npu", registry)
         assert model == "custom-npu-model"
         assert ctx == 2048
 
@@ -345,3 +345,46 @@ class TestCliDeviceModelMapping:
 
         model = next(dc.model for dc in DEFAULT_DEVICE_CONFIGS if dc.device == device)
         assert model == expected_model
+
+
+# ── B1: sessions router rewrites the model on a device switch (HTTP layer) ────
+
+
+class TestSessionsRouterDeviceRewrite:
+    """PUT /api/sessions/{id} with a device must rewrite the persisted model."""
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+
+        from gaia.ui.server import create_app
+
+        # No `with` — avoids running the lifespan (which would touch Lemonade);
+        # the device rewrite path needs only the DB + DEFAULT_DEVICE_CONFIGS.
+        return TestClient(create_app(db_path=":memory:"))
+
+    def test_switch_to_npu_rewrites_model(self, client):
+        created = client.post(
+            "/api/sessions", json={"model": "Gemma-4-E4B-it-GGUF"}
+        ).json()
+        resp = client.put(f"/api/sessions/{created['id']}", json={"device": "npu"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["device"] == "npu"
+        assert body["model"] == "gemma4-it-e2b-FLM"
+
+    def test_switch_to_gpu_keeps_default_model(self, client):
+        created = client.post("/api/sessions", json={}).json()
+        resp = client.put(f"/api/sessions/{created['id']}", json={"device": "gpu"})
+        assert resp.status_code == 200
+        assert resp.json()["model"] == "Gemma-4-E4B-it-GGUF"
+
+    def test_title_only_update_leaves_model_untouched(self, client):
+        created = client.post(
+            "/api/sessions", json={"model": "Gemma-4-E4B-it-GGUF"}
+        ).json()
+        resp = client.put(f"/api/sessions/{created['id']}", json={"title": "Renamed"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["title"] == "Renamed"
+        assert body["model"] == "Gemma-4-E4B-it-GGUF"

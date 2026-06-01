@@ -55,11 +55,7 @@ class ChatAgentConfig:
     max_steps: int = 10
     streaming: bool = False  # Use --streaming to enable
 
-    # Multi-device support (issue #1220). ``device`` is the runtime device the
-    # user selected ('cpu'/'gpu'/'npu'); it is validated against detected
-    # hardware at startup (fails loudly if absent). ``min_context_size`` lets a
-    # device config override the default 32K window — NPU's FLM build runs at
-    # 4K, so loading it at 32K would fail.
+    # NPU's FLM build runs at 4K, so a device config can override the 32K ctx.
     device: Optional[str] = None
     min_context_size: Optional[int] = None
 
@@ -363,7 +359,9 @@ class ChatAgent(
             debug=config.debug,
             device=config.device,
             min_context_size=(
-                config.min_context_size if config.min_context_size else 32768
+                config.min_context_size
+                if config.min_context_size is not None
+                else 32768
             ),
         )
 

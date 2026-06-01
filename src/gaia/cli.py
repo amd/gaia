@@ -647,16 +647,29 @@ async def async_main(action, **kwargs):
                             effective_device = "cpu"
                 except LemonadeClientError as _probe_err:
                     # Only treat "server not reachable yet" (connection refused /
-                    # timeout) as a soft pass — LemonadeClient surfaces those as
-                    # "Request failed: <reason>" with no HTTP status. A reachable
-                    # but broken server (HTTP 4xx/5xx, 401 auth) must NOT silently
-                    # let an explicit --device proceed; surface it so the user
-                    # sees the real failure. The agent runtime re-validates the
-                    # device regardless (LemonadeManager.ensure_ready).
-                    _probe_msg = str(_probe_err)
-                    _unreachable = (
-                        _probe_msg.startswith("Request failed:")
-                        and "with status" not in _probe_msg
+                    # timeout) as a soft pass. A reachable but broken server
+                    # (HTTP 4xx/5xx, 401 auth) must NOT silently let an explicit
+                    # --device proceed; surface it so the user sees the real
+                    # failure. The agent runtime re-validates the device
+                    # regardless (LemonadeManager.ensure_ready).
+                    #
+                    # Prefer the original requests exception preserved in the
+                    # cause chain over message-string matching — the client
+                    # wraps RequestException without an HTTP status, but the
+                    # exact wrapper text can change independently of this guard.
+                    import requests
+
+                    _cause = _probe_err.__cause__ or _probe_err.__context__
+                    _unreachable = isinstance(
+                        _cause,
+                        (
+                            requests.exceptions.ConnectionError,
+                            requests.exceptions.Timeout,
+                        ),
+                    ) or (
+                        # Fallback for wrappers that don't preserve __cause__.
+                        str(_probe_err).startswith("Request failed:")
+                        and "with status" not in str(_probe_err)
                     )
                     if not _unreachable:
                         raise

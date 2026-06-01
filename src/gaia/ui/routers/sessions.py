@@ -11,7 +11,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from .._chat_helpers import _resolve_device_model, evict_session_agent
+from .._chat_helpers import evict_session_agent, resolve_device_model
 from ..database import SESSION_DEFAULT_MODEL, ChatDatabase
 from ..dependencies import get_db
 from ..models import (
@@ -92,15 +92,15 @@ async def update_session(
 
     # On a device switch, rewrite the session's model to that device's
     # registered model so the agent rebuilt after eviction loads the right
-    # model (release blocker B1) and the model dropdown reflects reality.
-    # Only rewrite when the device model differs and the session isn't pinned
-    # to a non-default model on the default GPU device — mirrors the runtime
-    # guard in ``_chat_helpers`` so an agent's own model isn't clobbered.
+    # model and the model dropdown reflects reality. Only rewrite when the
+    # device model differs and the session isn't pinned to a non-default model
+    # on the default GPU device — mirrors the runtime guard in ``_chat_helpers``
+    # so an agent's own model isn't clobbered.
     device_model = None
     if request.device is not None:
         existing = db.get_session(session_id)
         agent_type = request.agent_type or (existing or {}).get("agent_type") or "chat"
-        resolved, _ = _resolve_device_model(agent_type, request.device)
+        resolved, _ = resolve_device_model(agent_type, request.device)
         if resolved:
             current_model = (existing or {}).get("model")
             is_default_model = current_model in (None, SESSION_DEFAULT_MODEL)

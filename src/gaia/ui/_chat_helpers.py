@@ -444,10 +444,10 @@ def _build_create_kwargs(
     Note: if registry.resolve_model() already promoted model_id before this
     call, it is forwarded as-is via branch 2 (resolve_model result ≠ default).
 
-    ``device``/``min_context_size`` (issue #1220) flow through to the agent's
-    config so the requested device is validated at runtime. Agent factories
-    filter unknown kwargs via ``dataclasses.fields``, so this is safe for
-    agents whose config doesn't declare them.
+    ``device``/``min_context_size`` flow through to the agent's config so the
+    requested device is validated at runtime. Agent factories filter unknown
+    kwargs via ``dataclasses.fields``, so this is safe for agents whose config
+    doesn't declare them.
     """
     suffix = " (streaming)" if streaming else ""
     kwargs: dict = {"silent_mode": not streaming, "debug": False}
@@ -487,16 +487,15 @@ def _effective_model(agent, fallback: str | None) -> str | None:
     return effective if effective is not None else fallback
 
 
-def _resolve_device_model(
+def resolve_device_model(
     agent_type: str, device: str | None, registry=None
 ) -> tuple[str | None, int | None]:
     """Resolve the (model, ctx_size) an agent should use on *device*.
 
-    Multi-device agents declare a ``DeviceConfig`` per device (issue #1220).
-    The Agent UI device dropdown writes ``session["device"]``; without this
-    lookup every agent-build site resolved the model from ``session["model"]``
-    only, so selecting "NPU" silently rebuilt the agent on the GPU model
-    (release blocker B1).
+    The Agent UI device dropdown writes ``session["device"]``; resolving the
+    model here is what makes selecting "NPU" actually switch models instead of
+    rebuilding on the GPU model. Public (no underscore) because the sessions
+    router also calls it to rewrite the session model on a device switch.
 
     Looks up the registered agent's ``device_configs`` and returns the model
     and context size of the entry matching *device*.  Falls back to the
@@ -521,6 +520,38 @@ def _resolve_device_model(
         if getattr(dc, "device", None) == device:
             return dc.model, getattr(dc, "ctx_size", None)
     return None, None
+
+
+def _apply_device_model(
+    session: dict,
+    agent_type: str,
+    model_id: str | None,
+    custom_model: str | None,
+    registry=None,
+) -> tuple[str | None, int | None]:
+    """Apply the session's device choice to the model + context window.
+
+    Returns ``(model_id, device_ctx)``. The device config drives the model when
+    the current model is the generic default (so built-in Gemma agents switch
+    correctly) OR the user picked a non-GPU device explicitly (a pinned model
+    can't run there) — so an agent that declares its own model isn't clobbered
+    on the default GPU. Skipped when the user pinned a ``custom_model``.
+    """
+    device = session.get("device")
+    if custom_model or not device:
+        return model_id, None
+    dev_model, dev_ctx = resolve_device_model(agent_type, device, registry)
+    if not dev_model:
+        return model_id, None
+    is_default_model = model_id in (None, _DB_DEFAULT_MODEL)
+    device_is_explicit = device != "gpu"
+    if dev_model == model_id or is_default_model or device_is_explicit:
+        if dev_model != model_id:
+            logger.info(
+                "chat: device=%s -> model %s (was %s)", device, dev_model, model_id
+            )
+        return dev_model, dev_ctx
+    return model_id, None
 
 
 def get_cached_mcp_status() -> list[dict]:
@@ -1108,31 +1139,11 @@ async def _get_chat_response(
                 )
                 model_id = preferred
 
-        # ── Multi-device: the selected device dictates the model + ctx (B1) ────
-        # The UI device dropdown writes ``session["device"]``; without this the
-        # agent was always (re)built on the GPU model regardless of the choice.
-        # Skipped when the user pinned a custom model override. We only let the
-        # device config drive the model when the current model is the generic
-        # default (so built-in Gemma agents switch correctly) OR the user picked
-        # a non-GPU device explicitly (a pinned preference can't run there) — so
-        # an agent that declares its own model isn't clobbered on the default GPU.
+        # The UI device dropdown drives the model + ctx window.
         device = session.get("device")
-        device_ctx = None
-        if not custom_model:
-            dev_model, dev_ctx = _resolve_device_model(agent_type, device, registry)
-            if dev_model:
-                is_default_model = model_id in (None, _DB_DEFAULT_MODEL)
-                device_is_explicit = bool(device) and device != "gpu"
-                if dev_model == model_id or is_default_model or device_is_explicit:
-                    if dev_model != model_id:
-                        logger.info(
-                            "chat: device=%s -> model %s (was %s)",
-                            device,
-                            dev_model,
-                            model_id,
-                        )
-                    model_id = dev_model
-                    device_ctx = dev_ctx
+        model_id, device_ctx = _apply_device_model(
+            session, agent_type, model_id, custom_model, registry
+        )
 
         # ── Agent cache ──────────────────────────────────────────────────────
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
@@ -1495,31 +1506,11 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 )
                 model_id = preferred
 
-        # ── Multi-device: the selected device dictates the model + ctx (B1) ────
-        # The UI device dropdown writes ``session["device"]``; without this the
-        # agent was always (re)built on the GPU model regardless of the choice.
-        # Skipped when the user pinned a custom model override. We only let the
-        # device config drive the model when the current model is the generic
-        # default (so built-in Gemma agents switch correctly) OR the user picked
-        # a non-GPU device explicitly (a pinned preference can't run there) — so
-        # an agent that declares its own model isn't clobbered on the default GPU.
+        # The UI device dropdown drives the model + ctx window.
         device = session.get("device")
-        device_ctx = None
-        if not custom_model:
-            dev_model, dev_ctx = _resolve_device_model(agent_type, device, registry)
-            if dev_model:
-                is_default_model = model_id in (None, _DB_DEFAULT_MODEL)
-                device_is_explicit = bool(device) and device != "gpu"
-                if dev_model == model_id or is_default_model or device_is_explicit:
-                    if dev_model != model_id:
-                        logger.info(
-                            "chat: device=%s -> model %s (was %s) (streaming)",
-                            device,
-                            dev_model,
-                            model_id,
-                        )
-                    model_id = dev_model
-                    device_ctx = dev_ctx
+        model_id, device_ctx = _apply_device_model(
+            session, agent_type, model_id, custom_model, registry
+        )
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
