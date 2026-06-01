@@ -75,6 +75,7 @@ _API_NAMES: frozenset[str] = frozenset(
         "get_access_token_sync",
         "get_connection",
         "grant_agent",
+        "import_forwarded_connection",
         "is_agent_active",
         "list_agent_activations",
         "list_agent_grants",
