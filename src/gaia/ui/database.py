@@ -84,7 +84,7 @@ CREATE INDEX IF NOT EXISTS idx_session_docs ON session_documents(session_id);
 class ChatDatabase:
     """SQLite database for Agent UI sessions, messages, and documents."""
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str | None = None):
         """Initialize database connection.
 
         Args:
@@ -251,14 +251,14 @@ class ChatDatabase:
 
     def create_session(
         self,
-        title: str = None,
-        model: str = None,
-        system_prompt: str = None,
-        document_ids: List[str] = None,
+        title: str | None = None,
+        model: str | None = None,
+        system_prompt: str | None = None,
+        document_ids: List[str] | None = None,
         private: bool = False,
-        agent_type: str = None,
-        device: str = None,
-    ) -> Dict[str, Any]:
+        agent_type: str | None = None,
+        device: str | None = None,
+    ) -> Optional[Dict[str, Any]]:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
@@ -348,21 +348,21 @@ class ChatDatabase:
         """Count total sessions."""
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*) as cnt FROM sessions").fetchone()
-            return row["cnt"]
+            return int(row["cnt"])
 
     def update_session(
         self,
         session_id: str,
-        title: str = None,
-        system_prompt: str = None,
-        document_ids: list = None,
-        private: bool = None,
-        agent_type: str = None,
-        device: str = None,
+        title: str | None = None,
+        system_prompt: str | None = None,
+        document_ids: list | None = None,
+        private: bool | None = None,
+        agent_type: str | None = None,
+        device: str | None = None,
     ) -> Optional[Dict[str, Any]]:
         """Update session title, system prompt, agent_type, device, private flag, and/or document_ids."""
-        updates = []
-        params = []
+        updates: list[str] = []
+        params: list[Any] = []
 
         if title is not None:
             updates.append("title = ?")
@@ -432,11 +432,11 @@ class ChatDatabase:
         session_id: str,
         role: str,
         content: str,
-        rag_sources: List[Dict] = None,
-        agent_steps: List[Dict] = None,
-        tokens_prompt: int = None,
-        tokens_completion: int = None,
-        inference_stats: Dict = None,
+        rag_sources: List[Dict] | None = None,
+        agent_steps: List[Dict] | None = None,
+        tokens_prompt: int | None = None,
+        tokens_completion: int | None = None,
+        inference_stats: Dict | None = None,
     ) -> int:
         """Add a message to a session. Returns message ID."""
         sources_json = json.dumps(rag_sources) if rag_sources else None
@@ -469,7 +469,7 @@ class ChatDatabase:
             )
             msg_id = cursor.lastrowid
 
-        return msg_id
+        return msg_id or 0
 
     def get_messages(
         self, session_id: str, limit: int = 100, offset: int = 0
@@ -566,7 +566,7 @@ class ChatDatabase:
                 "SELECT COUNT(*) as cnt FROM messages WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
-            return row["cnt"]
+            return int(row["cnt"])
 
     # ── Documents ───────────────────────────────────────────────────────
 
@@ -578,7 +578,7 @@ class ChatDatabase:
         file_size: int = 0,
         chunk_count: int = 0,
         file_mtime: Optional[float] = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Add a document to the library. Returns existing doc if hash matches.
 
         Uses a single lock acquisition for the check-then-insert pattern
@@ -733,7 +733,7 @@ class ChatDatabase:
     # ── Document Status ────────────────────────────────────────────
 
     def update_document_status(
-        self, doc_id: str, status: str, chunk_count: int = None
+        self, doc_id: str, status: str, chunk_count: int | None = None
     ) -> bool:
         """Update a document's indexing status and optionally its chunk count.
 
@@ -824,7 +824,7 @@ class ChatDatabase:
 
     # ── Settings ──────────────────────────────────────────────────────
 
-    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+    def get_setting(self, key: str, default: str | None = None) -> Optional[str]:
         """Get a setting value by key."""
         with self._lock:
             row = self._conn.execute(

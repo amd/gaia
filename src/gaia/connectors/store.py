@@ -229,7 +229,7 @@ def load_connection(
             AuthRequiredError.Reason.REAUTH_REQUIRED, provider=provider
         )
 
-    return blob
+    return blob  # type: ignore[no-any-return]
 
 
 def peek_connection(
@@ -271,7 +271,7 @@ def peek_connection(
     if raw is None:
         return None
     try:
-        return json.loads(raw)
+        return json.loads(raw)  # type: ignore[no-any-return]
     except json.JSONDecodeError:
         # Corrupt blob — caller treats as "not configured" without
         # rewriting state. ``load_connection`` (auth path) still clears
@@ -342,7 +342,7 @@ def peek_provider_credentials(provider: str) -> Optional[dict]:
     if raw is None:
         return None
     try:
-        return json.loads(raw)
+        return json.loads(raw)  # type: ignore[no-any-return]
     except json.JSONDecodeError:
         return None
 

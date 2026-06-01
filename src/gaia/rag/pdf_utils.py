@@ -206,7 +206,7 @@ def get_image_positions_on_page(pdf_path: str, page_num: int) -> List[dict]:
             ...
         ]
     """
-    positions = []
+    positions: list[dict] = []
 
     try:
         import fitz  # PyMuPDF

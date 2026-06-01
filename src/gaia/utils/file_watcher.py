@@ -39,10 +39,10 @@ try:
     WATCHDOG_AVAILABLE = True
 except ImportError:
     # Create dummy base class when watchdog is not available
-    class FileSystemEventHandler:
+    class FileSystemEventHandler:  # type: ignore[no-redef]
         """Dummy base class when watchdog is not installed."""
 
-    class FileSystemEvent:
+    class FileSystemEvent:  # type: ignore[no-redef]
         """Dummy event class when watchdog is not installed."""
 
         src_path: str = ""
