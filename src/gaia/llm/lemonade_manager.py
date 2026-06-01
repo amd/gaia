@@ -141,6 +141,13 @@ class LemonadeManager:
     _last_recheck_time: float = 0.0
     _RECHECK_INTERVAL: float = 30.0  # seconds between re-checks
 
+    # Device tiers (``amd_npu``/``amd_dgpu``/``cpu``/…) already validated OK on
+    # this host. Hardware is static per process, so once a tier passes we never
+    # re-probe it — but a NEWLY requested tier (e.g. the user switching the UI
+    # device dropdown to NPU after the manager warmed up on GPU) is still
+    # validated, which the ``_initialized`` fast-path would otherwise skip.
+    _validated_min_devices: set = set()
+
     @classmethod
     def is_lemonade_installed(cls) -> bool:
         """Check if Lemonade server is installed."""
@@ -242,6 +249,99 @@ class LemonadeManager:
         print("", file=sys.stderr)
 
     @classmethod
+    def _validate_device_requirement(cls, client, required_min_device, device):
+        """Raise ``HardwareRequirementError`` if *required_min_device* isn't met.
+
+        Resolves detected devices via ``client.get_system_info()`` and compares
+        capability tiers. Raises only on a *genuine* hardware shortfall — any
+        failure reaching the server (connection refused, timeout) propagates
+        unchanged so the caller can treat it as "not reachable yet" rather than
+        mislabelling a down server as missing hardware.
+        """
+        sys_info = client.get_system_info()
+        devices = sys_info.get("devices", {})
+        detected = set()
+        # devices may be a dict or a list; handle both
+        if isinstance(devices, dict):
+            detected = set(devices.keys())
+        elif isinstance(devices, list):
+            if all(isinstance(x, str) for x in devices):
+                detected = set(devices)
+            else:
+                for item in devices:
+                    if isinstance(item, dict):
+                        # Prefer explicit device_type when available.
+                        for k in ("device_type", "type", "id", "name"):
+                            if k in item:
+                                detected.add(str(item[k]))
+                                break
+        # Find highest-capability detected device
+        highest = None
+        for dev in _DEVICE_PRIORITY:
+            if dev in detected:
+                highest = dev
+                break
+        if highest is None:
+            # assume CPU-only host if nothing reported
+            highest = "cpu"
+
+        # Check capability ordering: lower index == higher capability
+        req_idx = (
+            _DEVICE_PRIORITY.index(required_min_device)
+            if required_min_device in _DEVICE_PRIORITY
+            else len(_DEVICE_PRIORITY) - 1
+        )
+        detected_idx = (
+            _DEVICE_PRIORITY.index(highest)
+            if highest in _DEVICE_PRIORITY
+            else len(_DEVICE_PRIORITY) - 1
+        )
+        if detected_idx <= req_idx:
+            recipe = _RECIPE_BY_DEVICE.get(highest, _RECIPE_BY_DEVICE.get("cpu"))
+            cls._log.debug(
+                f"Hardware requirement satisfied: {highest} -> recipe={recipe}"
+            )
+        else:
+            raise HardwareRequirementError(
+                _format_device_error(device, required_min_device, detected)
+            )
+
+    @classmethod
+    def _maybe_validate_device(
+        cls, required_min_device, device, base_url, host, port, quiet
+    ):
+        """Validate the requested device on EVERY ensure_ready call.
+
+        The ``_initialized`` singleton fast-path skips the full init block, so
+        without this a device switch after the manager is already warm (the UI
+        dropdown case) would never be checked. Memoised per tier so a passing
+        device is probed at most once per process. Caller must hold ``_lock``.
+        """
+        if not required_min_device:
+            return
+        if required_min_device in cls._validated_min_devices:
+            return
+        try:
+            if base_url:
+                probe = LemonadeClient(
+                    base_url=base_url, keep_alive=True, verbose=not quiet
+                )
+            else:
+                probe = LemonadeClient(
+                    host=host, port=port, keep_alive=True, verbose=not quiet
+                )
+            cls._validate_device_requirement(probe, required_min_device, device)
+        except HardwareRequirementError:
+            raise
+        except Exception as e:
+            # Server not reachable / transient — can't validate now. Don't
+            # mislabel it as a hardware shortfall; the unreachable server is
+            # surfaced by the init path below (or the subsequent model load).
+            cls._log.debug("Skipping device validation (not reachable yet): %s", e)
+            return
+        cls._validated_min_devices.add(required_min_device)
+
+    @classmethod
     def ensure_ready(
         cls,
         min_context_size: int = DEFAULT_CONTEXT_SIZE,
@@ -298,6 +398,15 @@ class LemonadeManager:
             if port is None:
                 port = parsed.port
         with cls._lock:
+            # Validate the requested device first — runs on every call (not just
+            # first init) so a UI device switch after the manager is warm is
+            # still checked. Memoised per tier, so this is at most one probe per
+            # distinct device per process. Raises HardwareRequirementError when
+            # the device is genuinely absent.
+            cls._maybe_validate_device(
+                required_min_device, device, base_url, host, port, quiet
+            )
+
             # If already initialized, just verify context size
             if cls._initialized:
                 if cls._context_size >= min_context_size:
@@ -471,74 +580,9 @@ class LemonadeManager:
                     f"(context: {cls._context_size} tokens)"
                 )
 
-                # If a caller requested a minimum device tier, resolve
-                # detected devices and ensure the requirement is met.
-                if required_min_device:
-                    try:
-                        sys_info = client.get_system_info()
-                        devices = sys_info.get("devices", {})
-                        detected = set()
-                        # devices may be a dict or a list; handle both
-                        if isinstance(devices, dict):
-                            detected = set(devices.keys())
-                        elif isinstance(devices, list):
-                            # list of strings or list of dicts
-                            if all(isinstance(x, str) for x in devices):
-                                detected = set(devices)
-                            else:
-                                for item in devices:
-                                    if isinstance(item, dict):
-                                        # try common keys
-                                        # Prefer explicit device_type when available.
-                                        for k in ("device_type", "type", "id", "name"):
-                                            if k in item:
-                                                detected.add(str(item[k]))
-                                                break
-                        # Find highest-capability detected device
-                        highest = None
-                        for dev in _DEVICE_PRIORITY:
-                            if dev in detected:
-                                highest = dev
-                                break
-                        if highest is None:
-                            # assume CPU-only host if nothing reported
-                            highest = "cpu"
-
-                        # Check capability ordering: lower index == higher capability
-                        req_idx = (
-                            _DEVICE_PRIORITY.index(required_min_device)
-                            if required_min_device in _DEVICE_PRIORITY
-                            else len(_DEVICE_PRIORITY) - 1
-                        )
-                        detected_idx = (
-                            _DEVICE_PRIORITY.index(highest)
-                            if highest in _DEVICE_PRIORITY
-                            else len(_DEVICE_PRIORITY) - 1
-                        )
-                        if detected_idx <= req_idx:
-                            # Satisfied: determine recipe (allow-listed)
-                            recipe = _RECIPE_BY_DEVICE.get(
-                                highest, _RECIPE_BY_DEVICE.get("cpu")
-                            )
-                            cls._log.debug(
-                                f"Hardware requirement satisfied: {highest} -> recipe={recipe}"
-                            )
-                        else:
-                            # Not satisfied: raise actionable error naming the
-                            # requested device and the concrete remedy.
-                            raise HardwareRequirementError(
-                                _format_device_error(
-                                    device, required_min_device, detected
-                                )
-                            )
-                    except HardwareRequirementError:
-                        raise
-                    except Exception as e:
-                        # Propagate as a HardwareRequirementError so callers
-                        # cannot silently ignore device-resolution failures.
-                        raise HardwareRequirementError(
-                            f"Failed to resolve hardware devices: {e}"
-                        ) from e
+                # Device requirement is validated up-front by
+                # ``_maybe_validate_device`` (runs on every call, before this
+                # init block), so there is nothing to re-check here.
 
                 # Only warn if:
                 # 1. Context size is non-zero (0 means no model loaded or model still loading)
@@ -769,4 +813,5 @@ class LemonadeManager:
             cls._base_url = None
             cls._context_size = 0
             cls._last_recheck_time = 0.0
+            cls._validated_min_devices = set()
             cls._log.debug("LemonadeManager state reset")

@@ -124,6 +124,71 @@ class TestUnavailableDeviceRaises:
         assert "gaia init" in msg
 
 
+class TestDeviceValidatedAfterWarmInit:
+    """B2: validation must run even when the manager is already initialized.
+
+    The ``_initialized`` singleton fast-path used to skip device validation, so
+    a UI device switch after the server warmed up on GPU silently bypassed the
+    check. Validation now runs on every call (memoised per tier).
+    """
+
+    def test_device_switch_validated_when_already_initialized(self, monkeypatch):
+        from gaia.llm.lemonade_manager import (
+            HardwareRequirementError,
+            LemonadeManager,
+        )
+
+        _patch_lemonade(monkeypatch, "cpu_only.json")
+        # Warm up the singleton with a plain (no-device) call.
+        assert LemonadeManager.ensure_ready(min_context_size=4096) is True
+        assert LemonadeManager._initialized is True
+        # A device switch to NPU on a CPU-only host must STILL raise.
+        with pytest.raises(HardwareRequirementError):
+            LemonadeManager.ensure_ready(device="npu")
+
+    def test_passing_device_is_memoized(self, monkeypatch):
+        from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        calls = {"n": 0}
+        data = _load_fixture("npu_igpu.json")
+
+        def _counting_sysinfo(self):
+            calls["n"] += 1
+            return data
+
+        monkeypatch.setattr(
+            LemonadeClient, "get_status", lambda self: _make_status(), raising=False
+        )
+        monkeypatch.setattr(
+            LemonadeClient, "get_system_info", _counting_sysinfo, raising=False
+        )
+        assert LemonadeManager.ensure_ready(device="npu") is True
+        after_first = calls["n"]
+        assert after_first >= 1
+        # A second build on the SAME device must not re-probe hardware.
+        assert LemonadeManager.ensure_ready(device="npu") is True
+        assert calls["n"] == after_first
+
+    def test_unreachable_server_does_not_become_hardware_error(self, monkeypatch):
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        def _down_status(self):
+            return _make_status(running=False)
+
+        def _down_sysinfo(self):
+            raise LemonadeClientError("Request failed: connection refused")
+
+        monkeypatch.setattr(LemonadeClient, "get_status", _down_status, raising=False)
+        monkeypatch.setattr(
+            LemonadeClient, "get_system_info", _down_sysinfo, raising=False
+        )
+        # Server down + device requested must NOT raise a hardware error — it
+        # returns False (not ready), same as the no-device down-server path.
+        assert LemonadeManager.ensure_ready(device="npu") is False
+
+
 class TestFormatDeviceError:
     def test_named_device_includes_remedy(self):
         from gaia.llm.lemonade_manager import _format_device_error
