@@ -13,6 +13,17 @@
 # 2025-09-22) and Opus 4.7 support (v1.0.98). v1's API replaces `direct_prompt` /
 # `custom_instructions` / `model` / `max_turns` with `prompt` + `claude_args`.
 #
+# Authentication: all 5 jobs prefer a subscription OAuth token over a billed API key.
+# Set the `CLAUDE_CODE_OAUTH_TOKEN` repo secret (generate locally with `claude setup-token`,
+# valid ~1 year) and runs draw from the Claude Max subscription instead of per-token API
+# billing. When that secret is set, each job blanks `anthropic_api_key` so OAuth wins (the
+# action prefers the API key when both are non-empty). If `CLAUDE_CODE_OAUTH_TOKEN` is absent
+# — or its token expires — jobs fall back to `ANTHROPIC_API_KEY`. With neither secret set the
+# action fails loudly ("Either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN is required").
+# NOTE: this covers only the claude-code-action jobs here. The Claude judge in
+# test_eval_rag.yml still needs `ANTHROPIC_API_KEY` — OAuth tokens are scoped to Claude Code
+# and cannot authenticate direct Anthropic API/SDK calls.
+#
 # Mode: All 4 jobs run in AUTOMATION mode (via `prompt` input), not tag mode.
 # Tag mode has an open bug (anthropics/claude-code-action#1223) where `--model` is
 # silently ignored, falling back to Sonnet 4.6. Automation mode also fixes the
@@ -31,7 +42,7 @@
 # built-in actor-permission gate so fork PRs from external contributors get auto-reviewed
 # without a maintainer having to babysit. The action's own warning calls this "extreme
 # caution" territory: a malicious fork's diff gets fed to Claude, which has Bash in
-# --allowedTools and access to ANTHROPIC_API_KEY + GITHUB_TOKEN. Prompt injection in the
+# --allowedTools and access to the Anthropic credential (OAuth token or API key) + GITHUB_TOKEN. Prompt injection in the
 # diff could try to coerce Claude into running an exfiltration command. The action mitigates
 # with subprocess secret scrubbing (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, auto-set when this
 # input is non-empty) + a pinned bun binary + hardened PATH. We accept the residual risk
@@ -42,7 +53,8 @@
 # NOTE: pull_request_target uses the workflow file from the BASE branch (main), not the PR head.
 # Changes to this file only take effect after merging to main.
 #
-# COST: Fork PRs will consume your Anthropic API quota. `synchronize` re-reviews on every push;
+# COST: Fork PRs consume your Anthropic quota — the Max subscription pool when
+# CLAUDE_CODE_OAUTH_TOKEN is set, otherwise per-token API billing. `synchronize` re-reviews on every push;
 # the pr-review concurrency group cancels in-progress runs so rapid pushes only review the latest.
 
 name: Claude AI Assistant
@@ -116,7 +128,9 @@ jobs:
         uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
         continue-on-error: true
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # Allow fork-PR authors (no write perms) to trigger auto-review.
           # See file header for the security trade-off.
@@ -372,7 +386,9 @@ jobs:
         uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
         continue-on-error: true
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             REPO: ${{ github.repository }}
@@ -546,7 +562,9 @@ jobs:
         uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
         continue-on-error: true
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # Allow non-write users (fork-PR authors, external issue reporters) to invoke
           # @claude. See file header for the security trade-off.
@@ -706,7 +724,9 @@ jobs:
       - name: Attempt auto-fix
         uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             REPO: ${{ github.repository }}
@@ -1042,7 +1062,9 @@ jobs:
         uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
         continue-on-error: true
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # Note: claude-code-action does not support workflow_run events natively.
           # Using automation mode (via `prompt`) to bypass event type validation.
