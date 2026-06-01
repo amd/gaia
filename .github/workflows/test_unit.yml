@@ -89,7 +89,17 @@ jobs:
           echo "=== Running Unit Tests ==="
           echo "These are fast tests for core SDK components"
           echo ""
-          pytest tests/unit/ -v --tb=short --cov=src/gaia --cov-report=term-missing
+          pytest tests/unit/ -v --tb=short \
+            --cov=src/gaia --cov-report=term-missing --cov-report=xml:coverage.xml
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          flags: unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
       - name: Run DatabaseMixin integration tests
         env:

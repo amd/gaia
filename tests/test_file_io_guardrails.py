@@ -89,9 +89,7 @@ class TestWritePythonFileGuardrails(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         # Should have audited the success
         audit_calls = [
-            c
-            for c in self.mock_pv.audit_write.call_args_list
-            if c[0][3] == "success"
+            c for c in self.mock_pv.audit_write.call_args_list if c[0][3] == "success"
         ]
         self.assertGreater(len(audit_calls), 0)
 
@@ -195,9 +193,7 @@ class TestEditPythonFileGuardrails(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         audit_calls = [
-            c
-            for c in self.mock_pv.audit_write.call_args_list
-            if c[0][3] == "success"
+            c for c in self.mock_pv.audit_write.call_args_list if c[0][3] == "success"
         ]
         self.assertGreater(len(audit_calls), 0)
 
@@ -246,9 +242,7 @@ class TestWriteMarkdownFileGuardrails(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         audit_calls = [
-            c
-            for c in self.mock_pv.audit_write.call_args_list
-            if c[0][3] == "success"
+            c for c in self.mock_pv.audit_write.call_args_list if c[0][3] == "success"
         ]
         self.assertGreater(len(audit_calls), 0)
 
@@ -352,9 +346,7 @@ class TestReplaceFunctionGuardrails(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         audit_calls = [
-            c
-            for c in self.mock_pv.audit_write.call_args_list
-            if c[0][3] == "success"
+            c for c in self.mock_pv.audit_write.call_args_list if c[0][3] == "success"
         ]
         self.assertGreater(len(audit_calls), 0)
 

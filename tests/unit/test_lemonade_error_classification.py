@@ -284,3 +284,217 @@ def test_agent_extract_lemonade_user_message_typed_in_cycle() -> None:
     msg = agent._extract_lemonade_user_message(wrapper)
     assert msg is not None
     assert "didn't respond in time" in msg
+
+
+# ── #1294: corrupt-download classification must not over-match ───────────
+#
+# ``LemonadeClient._is_corrupt_download_error`` used to treat the GENERIC
+# string ``"llama-server failed to start"`` as proof of a corrupt/incomplete
+# download. Lemonade raises that string for many non-corruption failures
+# (resource limits, ctx_size issues, GPU/backend startup, port conflicts).
+# Misclassifying routed an ordinary load failure into the delete +
+# re-download path (the default model is ~25GB) and dead-ended first-boot.
+#
+# The fix: keep the five SPECIFIC corruption phrases unconditional, but only
+# treat ``llama-server failed to start`` as corruption when one of those
+# specific phrases is ALSO present (corroboration). A bare load failure must
+# classify as NOT corrupt and surface as an actionable error.
+
+from unittest.mock import patch
+
+import pytest
+
+from gaia.llm.lemonade_client import (
+    LemonadeClient,
+    LemonadeClientError,
+    ModelDownloadCancelledError,
+)
+
+# The five legitimate corruption signals — each must keep returning True.
+_SPECIFIC_CORRUPTION_PHRASES = [
+    "download validation failed",
+    "files are incomplete",
+    "files are missing",
+    "incomplete or missing",
+    "corrupted download",
+]
+
+
+def _client() -> LemonadeClient:
+    """Construct a client without touching the network.
+
+    ``__init__`` only parses host/port and resolves the API key from env;
+    it issues no HTTP, so this is safe in a unit test.
+    """
+    return LemonadeClient(host="localhost", port=13305)
+
+
+@pytest.mark.parametrize("phrase", _SPECIFIC_CORRUPTION_PHRASES)
+def test_specific_corruption_phrase_is_corrupt(phrase: str) -> None:
+    """Each of the five specific corruption signals classifies as corrupt (no regression)."""
+    client = _client()
+    message = f"Failed to load model: {phrase} for Qwen3-Coder-30B-GGUF"
+    assert client._is_corrupt_download_error(message) is True
+
+
+@pytest.mark.parametrize("phrase", _SPECIFIC_CORRUPTION_PHRASES)
+def test_specific_corruption_phrase_is_case_insensitive(phrase: str) -> None:
+    """Classification is case-insensitive (Lemonade casing is not guaranteed)."""
+    client = _client()
+    assert client._is_corrupt_download_error(phrase.upper()) is True
+
+
+def test_bare_llama_server_failed_is_not_corrupt() -> None:
+    """A bare ``llama-server failed to start`` is NOT corruption (the #1294 bug)."""
+    client = _client()
+    message = (
+        "Failed to load model Qwen3-Coder-30B-A3B-Instruct-GGUF: "
+        "llama-server failed to start"
+    )
+    assert client._is_corrupt_download_error(message) is False
+
+
+def test_real_world_model_load_error_payload_is_not_corrupt() -> None:
+    """The exact structured payload from the bug report classifies as NOT corrupt.
+
+    ``code``/``type`` is ``model_load_error`` — a generic load failure, not a
+    corruption signal — so it must not enter the delete + re-download path.
+    """
+    client = _client()
+    payload = {
+        "error": {
+            "code": "model_load_error",
+            "type": "model_load_error",
+            "message": (
+                "Failed to load model Qwen3-Coder-30B-A3B-Instruct-GGUF: "
+                "llama-server failed to start"
+            ),
+        }
+    }
+    assert client._is_corrupt_download_error(payload) is False
+
+
+@pytest.mark.parametrize("phrase", _SPECIFIC_CORRUPTION_PHRASES)
+def test_llama_server_failed_with_corruption_phrase_is_corrupt(phrase: str) -> None:
+    """``llama-server failed to start`` PLUS a specific corruption phrase IS corrupt.
+
+    When Lemonade corroborates the startup failure with a real corruption
+    signal, the repair path is the correct response.
+    """
+    client = _client()
+    message = f"llama-server failed to start: {phrase}"
+    assert client._is_corrupt_download_error(message) is True
+
+
+def test_unrelated_load_failure_is_not_corrupt() -> None:
+    """An unrelated load failure (e.g. ctx/resource) is not corruption."""
+    client = _client()
+    message = "llama-server failed to start: out of memory allocating KV cache"
+    assert client._is_corrupt_download_error(message) is False
+
+
+class TestLoadModelCorruptRouting:
+    """`load_model` must route bare load failures away from the repair path."""
+
+    def test_bare_load_failure_does_not_redownload_and_raises_actionable(self) -> None:
+        """Issue #1294 AC#3: a bare ``llama-server failed to start`` load failure
+        raises an actionable ``LemonadeClientError`` WITHOUT deleting or
+        re-downloading the model.
+        """
+        client = _client()
+
+        send_error = LemonadeClientError(
+            "Failed to load model Qwen3-Coder-30B-A3B-Instruct-GGUF: "
+            "llama-server failed to start"
+        )
+
+        with (
+            patch.object(client, "_send_request", side_effect=send_error),
+            patch.object(client, "delete_model") as mock_delete,
+            patch.object(client, "pull_model_stream") as mock_pull,
+        ):
+            with pytest.raises(LemonadeClientError) as exc_info:
+                client.load_model(
+                    "Qwen3-Coder-30B-A3B-Instruct-GGUF", auto_download=True
+                )
+
+        # The destructive repair path must NOT have been touched.
+        mock_delete.assert_not_called()
+        mock_pull.assert_not_called()
+
+        # Error must name what failed so the user can act on it.
+        assert "Qwen3-Coder-30B-A3B-Instruct-GGUF" in str(exc_info.value)
+        assert "llama-server failed to start" in str(exc_info.value)
+
+    def test_specific_corruption_enters_repair_path(self) -> None:
+        """Issue #1294 AC#4: a SPECIFIC corruption error DOES enter the repair
+        flow (resume via ``pull_model_stream``) and reloads on success.
+        """
+        client = _client()
+
+        corrupt_error = LemonadeClientError(
+            "Failed to load model Qwen3-Coder-30B-A3B-Instruct-GGUF: "
+            "download validation failed - files are incomplete"
+        )
+
+        # First _send_request (initial load) raises corruption; the second
+        # (post-resume reload) succeeds.
+        send_results = [corrupt_error, {"status": "loaded"}]
+
+        def fake_send(*_args, **_kwargs):
+            result = send_results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        # Resume succeeds in one streamed "complete" event.
+        def fake_pull(*_args, **_kwargs):
+            yield {"event": "complete"}
+
+        with (
+            patch.object(client, "_send_request", side_effect=fake_send),
+            patch.object(client, "delete_model") as mock_delete,
+            patch.object(
+                client, "pull_model_stream", side_effect=fake_pull
+            ) as mock_pull,
+            patch(
+                "gaia.llm.lemonade_client._prompt_user_for_repair", return_value=True
+            ),
+        ):
+            response = client.load_model(
+                "Qwen3-Coder-30B-A3B-Instruct-GGUF", auto_download=False
+            )
+
+        # Repair path ran: resume (pull) was attempted; reload succeeded.
+        mock_pull.assert_called_once()
+        assert response == {"status": "loaded"}
+        # Resume succeeded, so we never escalated to delete.
+        mock_delete.assert_not_called()
+
+    def test_user_declining_repair_raises_cancelled(self) -> None:
+        """When corruption is detected but the user declines repair, we raise
+        ``ModelDownloadCancelledError`` — we must NOT silently fall through to
+        a non-corrupt re-raise or proceed to delete/re-download.
+        """
+        client = _client()
+
+        corrupt_error = LemonadeClientError(
+            "Failed to load model Qwen3-Coder-30B-A3B-Instruct-GGUF: "
+            "corrupted download detected"
+        )
+
+        with (
+            patch.object(client, "_send_request", side_effect=corrupt_error),
+            patch.object(client, "delete_model") as mock_delete,
+            patch.object(client, "pull_model_stream") as mock_pull,
+            patch(
+                "gaia.llm.lemonade_client._prompt_user_for_repair", return_value=False
+            ),
+        ):
+            with pytest.raises(ModelDownloadCancelledError):
+                client.load_model(
+                    "Qwen3-Coder-30B-A3B-Instruct-GGUF", auto_download=False
+                )
+
+        mock_delete.assert_not_called()
+        mock_pull.assert_not_called()
