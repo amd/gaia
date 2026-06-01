@@ -128,39 +128,42 @@ output, and record the baseline against it.** No production code changes.
    documented), category taxonomy uses `"low priority"` (space), corpus is the
    220-message synthetic dataset (no longer "stub"), and the 220/4 reconciliation
    decision + why not 1000/5.
-5. **Baseline artifact.** Write a `baseline_accuracy.json` template pointed at
-   `gemma4-it-e2b` for the orchestrator to fill from the real-world run. The
+5. **Baseline artifact + harness.** Add `tests/fixtures/email/score_baseline.py`
+   (drives the LLM per message over the corpus, scores categories vs ground
+   truth, writes the scorecard) and a `baseline_accuracy.json` template pointed
+   at `gemma4-it-e2b` for the orchestrator to fill from the real-world run. The
    orchestrator records the real number on the test machine.
 
 ## Real-world baseline recipe (for the orchestrator — DO NOT run here)
 
-The email-triage baseline is recorded by the integration test, **not**
-`gaia eval agent` (no email scenario type exists; F2 descoped). On the test
-machine with Lemonade serving `gemma4-it-e2b` at port 13305:
+The email-triage categorization baseline is recorded by the dedicated
+`score_baseline.py` harness, **not** `gaia eval agent` (no email scenario type
+exists; F2 descoped) and **not** the existing triage integration test (that
+path is heuristic-only and model-independent — it would not produce a real
+`gemma4-it-e2b` number). `score_baseline.py` drives the LLM per message over
+the committed corpus and scores categories against ground truth.
+
+On the test machine with Lemonade serving `gemma4-it-e2b` at port 13305:
 
 ```bash
-# 1. Point the integration test at the demo model + corpus.
-export GAIA_EMAIL_EVAL_MODEL=gemma4-it-e2b
+# Working dir: repo root. Lemonade is single-tenant — run serially, never
+# alongside another eval.
 export LEMONADE_BASE_URL=http://localhost:13305
 
-# 2. Run the triage integration test against the committed 220-msg corpus and
-#    capture per-category / spam / phishing accuracy (prints the breakdown).
-python -m pytest tests/integration/test_email_agent_triage.py \
-  -k corpus -s -v
+# Records the baseline and overwrites the committed baseline_accuracy.json:
+python tests/fixtures/email/score_baseline.py --model gemma4-it-e2b --write
+
+# (Drop --write for a dry run that only prints the scorecard.)
 ```
 
-The orchestrator transcribes the printed `category`, `spam`, `phishing`
-accuracies into:
+The harness writes the measured `category_accuracy`, per-category
+`category_breakdown`, `scored`/`correct` counts, `"model": "gemma4-it-e2b"`,
+`"_recorded_on"`, and `"_recorded_by"` into:
 
 `tests/fixtures/email/baseline_accuracy.json`
 
-with `"model": "gemma4-it-e2b"`, the measured `category_accuracy` /
-`is_spam_accuracy` / `is_phishing_accuracy`, `"_recorded_on"`, and
-`"_recorded_by": "real measurement on gemma4-it-e2b"` (replacing the stub
-Qwen number). Commit that file on this branch.
-
-Working dir: repo root. Lemonade single-tenant — run serially, never alongside
-another eval.
+(replacing the `null` placeholders). Commit that file on this branch. The
+integration test then gates future runs on `category_accuracy - tolerance_pp`.
 
 ## Acceptance criteria mapping
 
