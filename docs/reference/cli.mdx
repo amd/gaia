@@ -880,6 +880,104 @@ gaia talk -i guide.pdf --no-tts
 
 ---
 
+### Jira Command
+
+<Card title="Jira / Atlassian" icon="ticket" href="/guides/jira">
+  Natural-language interface for Jira, Confluence, and Compass via the MCP bridge.
+</Card>
+
+```bash
+gaia jira "Create a bug report for the login issue"
+gaia jira --interactive
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `command` | string | – | Natural-language command to execute (positional). |
+| `--interactive` | flag | false | Continuous interactive mode. |
+| `--mcp-host` | string | localhost | MCP bridge host. |
+| `--mcp-port` | integer | 8765 | MCP bridge port. |
+| `--verbose` | flag | false | Verbose output. |
+| `--debug` | flag | false | Debug logging. |
+
+[→ Full Jira Guide](/guides/jira)
+
+---
+
+### Docker Command
+
+<Card title="Docker" icon="docker" href="/guides/docker">
+  Natural-language interface for Docker containerization.
+</Card>
+
+```bash
+gaia docker "Create a Dockerfile for my Flask app"
+gaia docker "Containerize this project" --directory ./myapp
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `command` | string | – | Natural-language command to execute (positional). |
+| `--directory` | path | current dir | Directory to analyze/containerize. |
+| `--verbose` | flag | false | Verbose output. |
+| `--debug` | flag | false | Debug logging. |
+
+[→ Full Docker Guide](/guides/docker)
+
+---
+
+### Summarize Command
+
+Summarize meeting transcripts, emails, and PDFs.
+
+```bash
+gaia summarize --input ./meeting.vtt
+gaia summarize --input ./inbox/ --type email --format both
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--input` | path | – | Input file or directory (required unless `--list-configs`). |
+| `--output` | path | auto | Output file/directory (auto-adjusted to format). |
+| `--type` | `transcript`\|`email`\|`pdf`\|`auto` | auto | Input type. |
+| `--format` | `json`\|`pdf`\|`email`\|`both` | json | Output format (`both` = json + pdf). |
+| `--styles` | one or more styles | executive participants action_items | `brief`, `detailed`, `bullets`, `executive`, `participants`, `action_items`, `all`. |
+
+---
+
+### Telegram Command
+
+<Card title="Telegram Adapter" icon="telegram" href="/guides/telegram-adapter">
+  Bridge a Telegram bot to GAIA so you can chat with your agents from Telegram.
+</Card>
+
+```bash
+gaia telegram start --token <BOT_TOKEN> --background
+gaia telegram status
+gaia telegram stop
+```
+
+**Subcommands & options:**
+
+| Subcommand | Option | Default | Description |
+|-----------|--------|---------|-------------|
+| `start` | `--token` (required) | – | Telegram bot token. |
+| `start` | `--allowed-users` | allow all | Comma-separated user IDs permitted to interact. |
+| `start` | `--background` | false | Run as a daemon (writes PID + health endpoint). |
+| `stop` | `--force` | false | Force stop if graceful shutdown fails. |
+| `status` | `--health-host` | 127.0.0.1 | Health server host. |
+| `status` | `--health-port` | 8765 | Health server port. |
+
+[→ Telegram Adapter Guide](/guides/telegram-adapter)
+
+---
+
 ## API Server
 
 <Card title="API Server" icon="server" href="/reference/api">
