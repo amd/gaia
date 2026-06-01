@@ -332,6 +332,7 @@ def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
             capture_output=True,
             text=True,
             timeout=120,
+            check=False,
         )
 
         if result.returncode == 0 and os.path.exists(pdf_abs):
@@ -352,6 +353,7 @@ def convert_pptx_to_pdf(pptx_path: str, output_dir: str) -> str | None:
             ["taskkill", "/f", "/im", "POWERPNT.EXE"],
             capture_output=True,
             timeout=10,
+            check=False,
         )
         return None
     except FileNotFoundError:

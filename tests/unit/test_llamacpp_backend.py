@@ -587,13 +587,15 @@ class TestModelNotLoadedClassification:
 class TestLlamaServerCorruptDownload:
     """Verify _is_corrupt_download_error catches llama-server startup failures."""
 
-    def test_llama_server_failed_to_start(self):
-        """'llama-server failed to start' indicates corrupt model files."""
+    def test_llama_server_failed_to_start_is_not_corruption(self):
+        """'llama-server failed to start' is NOT a corruption signal — Lemonade
+        emits it for many non-corruption failures (resource limits, ctx_size,
+        port conflicts), so it must not trigger the delete+redownload path."""
         client = LemonadeClient(host="localhost", port=13305)
         error = Exception(
             "model_load_error: llama-server failed to start after loading model"
         )
-        assert client._is_corrupt_download_error(error) is True
+        assert client._is_corrupt_download_error(error) is False
 
     def test_incomplete_download(self):
         client = LemonadeClient(host="localhost", port=13305)
