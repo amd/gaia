@@ -13,8 +13,6 @@ Skips when Lemonade is not reachable.
 
 from __future__ import annotations
 
-import os
-import tempfile
 import time
 from pathlib import Path
 from urllib.error import URLError
