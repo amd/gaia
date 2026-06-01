@@ -57,13 +57,13 @@ class LemonadeContextOverflowError(LemonadeError):
 
     ``retryable`` is dynamic — set in ``_classify_lemonade_response`` based
     on the reported ``n_ctx``. When n_ctx is smaller than GAIA's expected
-    32K, the model was loaded with the wrong ctx_size; reloading via the
-    pre-flight helper will fix it, so we mark retryable so the chat layer
-    auto-recovers. When n_ctx is already at full size, this is a genuine
-    "conversation too big" situation and retry won't help.
+    65536 (64K), the model was loaded with the wrong ctx_size; reloading
+    via the pre-flight helper will fix it, so we mark retryable so the
+    chat layer auto-recovers. When n_ctx is already at full size, this is
+    a genuine "conversation too big" situation and retry won't help.
     """
 
-    retryable = False  # default; set True dynamically when n_ctx < 32K
+    retryable = False  # default; set True dynamically when n_ctx < 65536
     user_message = (
         "This conversation got too long for the model's context window. "
         "Start a fresh task to keep going."
