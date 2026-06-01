@@ -1072,30 +1072,13 @@ Configure MCP servers that your agents can connect to. Servers are saved to `~/.
 
 ### Commands
 
-#### `gaia mcp add`
+#### Managing MCP servers (`add` / `remove`)
 
-Add an MCP server to configuration.
-
-```bash
-gaia mcp add <server-name> "<command>" [--config PATH]
-```
-
-**Arguments:**
-- `<server-name>` - Unique identifier for the server (e.g., "time", "memory")
-- `"<command>"` - Shell command to start the MCP server (must be quoted)
-
-**Options:**
-- `--config PATH` - Custom config file path (default: `~/.gaia/mcp_servers.json`)
-
-**Examples:**
-```bash
-# Add to user config (default)
-gaia mcp add time "uvx mcp-server-time"
-gaia mcp add memory "npx -y @modelcontextprotocol/server-memory"
-
-# Add to project config (can be committed to git)
-gaia mcp add time "uvx mcp-server-time" --config ./mcp_servers.json
-```
+<Note>
+`gaia mcp add` and `gaia mcp remove` were removed in #977 — MCP servers are now
+configured through the connectors framework. Run `gaia connectors --help` for the
+current commands. `gaia mcp list` (below) still lists configured servers.
+</Note>
 
 #### `gaia mcp list`
 
@@ -1115,29 +1098,6 @@ gaia mcp list
 
 # List from project config
 gaia mcp list --config ./mcp_servers.json
-```
-
-#### `gaia mcp remove`
-
-Remove an MCP server from configuration.
-
-```bash
-gaia mcp remove <server-name> [--config PATH]
-```
-
-**Arguments:**
-- `<server-name>` - Name of the server to remove
-
-**Options:**
-- `--config PATH` - Custom config file path (default: `~/.gaia/mcp_servers.json`)
-
-**Example:**
-```bash
-# Remove from user config
-gaia mcp remove time
-
-# Remove from project config
-gaia mcp remove memory --config ./mcp_servers.json
 ```
 
 #### `gaia mcp tools`
