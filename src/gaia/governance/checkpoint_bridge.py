@@ -10,7 +10,6 @@ can run with no external dependencies.
 from __future__ import annotations
 
 from threading import Lock
-
 from typing import cast
 
 from .exceptions import CheckpointNotFoundError, InvalidResolutionError
