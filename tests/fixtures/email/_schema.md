@@ -83,16 +83,27 @@ NOT a message entry — consumers must skip `_`-prefixed keys.
 
 ## Baseline
 
-`baseline_accuracy.json` records the categorization baseline on the primary
-demo model `Gemma-4-E4B-it-GGUF` (category_accuracy 0.6682, 147/220);
-`baseline_accuracy_e2b.json` records the second model `Gemma-4-E2B-it-GGUF`
-(0.4455, 98/220). Both are produced by
-`python tests/fixtures/email/score_baseline.py --model <id> --out <file> --write`
-on a machine with Lemonade serving the model.
+The baselines are recorded via the **production heuristic + LLM-assist triage
+path** (#1107) — `triage_inbox_impl(fake_gmail, classifier=make_llm_classifier(agent.chat))`
+over the 220 corpus — so they are apples-to-apples with what the integration
+test gates on. This supersedes the earlier stub-inbox + Qwen3.5-35B baseline
+and the standalone single-prompt classifier.
 
-`is_spam_accuracy` / `is_phishing_accuracy` in `baseline_accuracy.json` are the
-model-independent **confident-decision** heuristic accuracy (both 1.0): the
-integration test scores spam/phishing only on the heuristic's confident
-decisions, deferring low-confidence messages to the not-yet-wired LLM fallback.
-Each axis is gated baseline-relative (`accuracy - tolerance_pp`), xfailing on a
-genuine regression.
+`baseline_accuracy.json` records the primary demo model `Gemma-4-E4B-it-GGUF`;
+`baseline_accuracy_e2b.json` records the second model `Gemma-4-E2B-it-GGUF`.
+Both carry `category_accuracy` + `category_breakdown`, plus `is_spam_accuracy`
+and `is_phishing_accuracy` measured on the same run. Produced by:
+
+```bash
+export LEMONADE_BASE_URL=http://localhost:13305   # Lemonade / NPU
+python tests/fixtures/email/score_baseline.py --model Gemma-4-E4B-it-GGUF --write
+python tests/fixtures/email/score_baseline.py --model Gemma-4-E2B-it-GGUF \
+    --out tests/fixtures/email/baseline_accuracy_e2b.json --write
+```
+
+The integration test gates each axis (category, is_spam, is_phishing)
+baseline-relative (`accuracy - tolerance_pp`). spam/phishing are not perfect on
+the 220 corpus: `is_spam`/`is_phishing` are heuristic-set and the LLM follow-up
+only revises the *category*, so it cannot flip those flags — gating
+baseline-relative (vs a faked 100% assert) keeps the real spam-recall ceiling
+visible.
