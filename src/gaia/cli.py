@@ -622,7 +622,9 @@ async def async_main(action, **kwargs):
                             if device_was_explicit:
                                 print(
                                     "❌ NPU not available on this system. "
-                                    "Requires Ryzen AI 300/400/Max (XDNA2).",
+                                    "Requires Ryzen AI 300/400/Max (XDNA2). "
+                                    "Run `gaia init --profile npu` to set it up, "
+                                    "or choose --device gpu.",
                                     file=sys.stderr,
                                 )
                                 sys.exit(1)
@@ -635,9 +637,32 @@ async def async_main(action, **kwargs):
                             for k, v in _devices.items()
                         )
                         if not has_gpu and not device_was_explicit:
+                            # Default GPU target unavailable — announce the
+                            # *reason* for the CPU fallback so it doesn't read
+                            # like a deliberate user choice.
+                            print(
+                                "No GPU detected; falling back to CPU (slower). "
+                                "Run `gaia init` to set up GPU acceleration."
+                            )
                             effective_device = "cpu"
-                except Exception:
-                    pass  # Lemonade not running yet; proceed with requested device
+                except LemonadeClientError as _probe_err:
+                    # Only treat "server not reachable yet" (connection refused /
+                    # timeout) as a soft pass — LemonadeClient surfaces those as
+                    # "Request failed: <reason>" with no HTTP status. A reachable
+                    # but broken server (HTTP 4xx/5xx, 401 auth) must NOT silently
+                    # let an explicit --device proceed; surface it so the user
+                    # sees the real failure. The agent runtime re-validates the
+                    # device regardless (LemonadeManager.ensure_ready).
+                    _probe_msg = str(_probe_err)
+                    _unreachable = (
+                        _probe_msg.startswith("Request failed:")
+                        and "with status" not in _probe_msg
+                    )
+                    if not _unreachable:
+                        raise
+                    log.debug(
+                        "Device probe: Lemonade not reachable yet (%s)", _probe_err
+                    )
 
                 for dc in DEFAULT_DEVICE_CONFIGS:
                     if dc.device == effective_device:
@@ -666,6 +691,7 @@ async def async_main(action, **kwargs):
                     os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
                 ),
                 model_id=explicit_model,
+                device=effective_device,
                 max_steps=kwargs.get("max_steps", 100),
                 streaming=kwargs.get("stream", False),
                 show_prompts=kwargs.get("show_prompts", False),

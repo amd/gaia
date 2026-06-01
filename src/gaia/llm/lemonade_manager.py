@@ -38,6 +38,55 @@ _RECIPE_BY_DEVICE = {
 # Device capability priority (high -> low)
 _DEVICE_PRIORITY = ["amd_npu", "amd_igpu", "amd_dgpu", "cpu"]
 
+# Map the high-level device selector ('cpu'/'gpu'/'npu') exposed to users
+# (Agent UI dropdown, CLI ``--device``) to the minimum detected-device tier
+# required to satisfy it.  A GPU requirement is met by EITHER integrated or
+# discrete Radeon graphics, so it maps to the lowest GPU tier (``amd_dgpu``):
+# ``_DEVICE_PRIORITY`` orders igpu above dgpu and the satisfaction check is
+# ``detected_idx <= req_idx``, so requiring ``amd_dgpu`` accepts an iGPU-only
+# box too.  Mapping ``gpu`` to ``amd_igpu`` (the old value) would wrongly
+# reject a discrete-Radeon-only host.
+_DEVICE_TO_MIN = {
+    "cpu": "cpu",
+    "gpu": "amd_dgpu",
+    "npu": "amd_npu",
+}
+
+# User-facing remedy for each device when the host can't satisfy it.
+_DEVICE_REMEDY = {
+    "npu": (
+        "NPU not available on this host; run `gaia init --profile npu` to set "
+        "up NPU acceleration, or choose --device gpu"
+    ),
+    "gpu": (
+        "No AMD GPU available on this host; run `gaia init` to set up GPU "
+        "acceleration, or choose --device cpu"
+    ),
+    "cpu": "CPU is unavailable on this host",
+}
+
+
+def _format_device_error(
+    device: Optional[str], required_min_device: Optional[str], detected
+) -> str:
+    """Build an actionable message for an unmet hardware requirement.
+
+    Names the requested device and the concrete remedy when a high-level
+    ``device`` selector was supplied; falls back to the raw tier comparison
+    for callers that passed only ``required_min_device`` (e.g. a static
+    ``REQUIRED_HARDWARE`` floor).
+    """
+    detected_list = sorted(str(d) for d in detected)
+    if device and device in _DEVICE_REMEDY:
+        return (
+            f"Requested device '{device}' is not available on this host "
+            f"(detected: {detected_list}). {_DEVICE_REMEDY[device]}."
+        )
+    return (
+        f"Hardware requirement not met: required={required_min_device}, "
+        f"detected={detected_list}"
+    )
+
 
 class HardwareRequirementError(Exception):
     """Raised when an agent's hardware requirement is not met by the host."""
@@ -238,10 +287,6 @@ class LemonadeManager:
         # Map high-level device selector to required_min_device when the
         # caller didn't pass an explicit required_min_device.
         if device and not required_min_device:
-            _DEVICE_TO_MIN = {
-                "npu": "amd_npu",
-                "gpu": "amd_igpu",
-            }
             required_min_device = _DEVICE_TO_MIN.get(device)
         # Parse host and port from base_url if provided
         if base_url and (host is None or port is None):
@@ -479,9 +524,12 @@ class LemonadeManager:
                                 f"Hardware requirement satisfied: {highest} -> recipe={recipe}"
                             )
                         else:
-                            # Not satisfied: raise actionable error
+                            # Not satisfied: raise actionable error naming the
+                            # requested device and the concrete remedy.
                             raise HardwareRequirementError(
-                                f"Hardware requirement not met: required={required_min_device}, detected={sorted(list(detected))}"
+                                _format_device_error(
+                                    device, required_min_device, detected
+                                )
                             )
                     except HardwareRequirementError:
                         raise
