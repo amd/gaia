@@ -1,9 +1,10 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { Cpu, Wrench, Shield } from 'lucide-react';
+import { Cpu, Wrench, Shield, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { getAgentIcon } from './agentIcons';
 import type { AgentInfo } from '../types';
+import { useChatStore } from '../stores/chatStore';
 
 function sourceBadge(source: string) {
     if (source === 'builtin') return <span className="agent-badge agent-badge-builtin">Built-in</span>;
@@ -11,6 +12,8 @@ function sourceBadge(source: string) {
     if (source === 'installed') return <span className="agent-badge agent-badge-installed">Installed</span>;
     return <span className="agent-badge agent-badge-custom">Custom</span>;
 }
+
+const DEVICE_LABELS: Record<string, string> = { cpu: 'CPU', gpu: 'GPU', npu: 'NPU' };
 
 interface AgentHubCardProps {
     agent: AgentInfo;
@@ -29,6 +32,18 @@ export function AgentHubCard({ agent, isActive, isElectron, onSelect, onStartCha
     const starter = agent.conversation_starters?.[0];
     const connections = agent.required_connections ?? [];
     const Icon = getAgentIcon(agent.icon);
+
+    // Device selection
+    const activeDevice = useChatStore((s) => s.activeDevice);
+    const setActiveDevice = useChatStore((s) => s.setActiveDevice);
+    const detectedDevices = useChatStore((s) => s.detectedDevices);
+    const deviceConfigs = agent.device_configs ?? [];
+    // Show only devices the agent supports AND that are detected on the system
+    const availableConfigs = deviceConfigs.filter(
+        (c) => detectedDevices.includes(c.device),
+    );
+    const selectedConfig = availableConfigs.find((c) => c.device === activeDevice);
+    const showDeviceSelector = availableConfigs.length > 1;
 
     const cardClass = [
         'agent-hub-card',
@@ -92,6 +107,39 @@ export function AgentHubCard({ agent, isActive, isElectron, onSelect, onStartCha
                     </span>
                 )}
             </div>
+
+            {/* Device selector */}
+            {availableConfigs.length > 0 && (
+                <div className="agent-hub-card-device">
+                    {showDeviceSelector ? (
+                        <select
+                            className="agent-hub-device-select"
+                            aria-label={`Device for ${agent.name}`}
+                            value={activeDevice}
+                            onChange={(e) => { e.stopPropagation(); setActiveDevice(e.target.value); }}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            {availableConfigs.map((c) => (
+                                <option key={c.device} value={c.device}>
+                                    {DEVICE_LABELS[c.device] ?? c.device.toUpperCase()}{c.verified ? '' : ' ⚠'}
+                                </option>
+                            ))}
+                        </select>
+                    ) : (
+                        <span className="agent-hub-device-label">
+                            {DEVICE_LABELS[availableConfigs[0].device] ?? availableConfigs[0].device.toUpperCase()}
+                        </span>
+                    )}
+                    {selectedConfig && (
+                        <span className={`agent-hub-device-verified ${selectedConfig.verified ? 'verified' : 'unverified'}`}>
+                            {selectedConfig.verified
+                                ? <><CheckCircle2 size={11} /> Verified</>
+                                : <><AlertTriangle size={11} /> Unverified</>
+                            }
+                        </span>
+                    )}
+                </div>
+            )}
 
             {/* Starter preview */}
             {starter && <div className="agent-hub-card-starter">{starter}</div>}

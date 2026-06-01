@@ -480,7 +480,7 @@ class MockToolExecutor:
         """
         calls = self.get_tool_calls(tool_name)
         if call_index < len(calls):
-            return calls[call_index]["args"]
+            return dict(calls[call_index]["args"])
         return None
 
     @property

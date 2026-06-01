@@ -1051,7 +1051,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have empty chat suggestion chips', () => {
-      expect(chatContent).toContain('empty-chat-chip');
+      expect(chatContent).toContain('empty-task-chip');
       expect(chatContent).toContain('handleSuggestionClick');
     });
 
@@ -1083,8 +1083,8 @@ describe('Chat App Integration', () => {
       expect(chatContent).toContain('aria-label="Message input"');
       expect(chatContent).toContain('aria-label="Send message"');
       expect(chatContent).toContain('aria-label="Upload document"');
-      expect(chatContent).toContain('aria-label="Rename chat"');
-      expect(chatContent).toContain('aria-label="Export chat"');
+      expect(chatContent).toContain('aria-label="Rename task"');
+      expect(chatContent).toContain('aria-label="Export task"');
       expect(chatContent).toContain('aria-label="Attach documents"');
     });
 
@@ -1173,9 +1173,9 @@ describe('Chat App Integration', () => {
     });
 
     it('should have empty chat state styles', () => {
-      expect(chatCss).toContain('.empty-chat');
-      expect(chatCss).toContain('.empty-chat-title');
-      expect(chatCss).toContain('.empty-chat-chip');
+      expect(chatCss).toContain('.empty-task');
+      expect(chatCss).toContain('.empty-task-title');
+      expect(chatCss).toContain('.empty-task-chip');
     });
 
     it('should have drag overlay styles', () => {

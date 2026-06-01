@@ -476,15 +476,15 @@ class ChecklistGenerator:
 
         # Handle response objects with text attribute
         if hasattr(response, "text"):
-            return response.text
+            return response.text  # type: ignore[no-any-return]
 
         # Handle response objects with content attribute
         if hasattr(response, "content"):
-            return response.content
+            return response.content  # type: ignore[no-any-return]
 
         # Handle dict-like responses
         if isinstance(response, dict):
-            return response.get("text", response.get("content", str(response)))
+            return response.get("text", response.get("content", str(response)))  # type: ignore[return-value]
 
         return str(response)
 

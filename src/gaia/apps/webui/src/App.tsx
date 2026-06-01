@@ -121,6 +121,11 @@ function App() {
             const status = await api.getSystemStatus();
             setBackendConnected(true);
 
+            // Propagate detected devices to the store
+            if (status.detected_devices && status.detected_devices.length > 0) {
+                useChatStore.getState().setDetectedDevices(status.detected_devices);
+            }
+
             if (status.lemonade_running) {
                 // Server confirmed running — reset failure counter
                 lemonadeFailCountRef.current = 0;
@@ -331,8 +336,8 @@ function App() {
         log.chat.info('Creating new task session...');
         setCreateError(null);
         try {
-            const { activeAgentId } = useChatStore.getState();
-            const session = await api.createSession({ title: 'New Task', agent_type: activeAgentId });
+            const { activeAgentId, activeDevice } = useChatStore.getState();
+            const session = await api.createSession({ title: 'New Task', agent_type: activeAgentId, device: activeDevice });
             log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
             addSession(session);
             setCurrentSession(session.id);

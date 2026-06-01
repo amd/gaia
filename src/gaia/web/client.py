@@ -71,6 +71,13 @@ class PinnedIPAdapter(HTTPAdapter):
     subsequent requests to the same origin reuse the same IP — preventing
     DNS-rebind attacks between ``WebClient.validate_url`` and the actual
     TCP connect.
+
+    For HTTPS, the original hostname is encoded in the URL's userinfo
+    section (``originalhostname@pinnedip:port``) so that urllib3 creates
+    separate connection-pool keys per original hostname.  This avoids a
+    race where two threads requesting different hostnames that resolve to
+    the same IP would overwrite each other's ``assert_hostname`` on a
+    shared pool.
     """
 
     def __init__(self, *args, **kwargs):
@@ -90,6 +97,34 @@ class PinnedIPAdapter(HTTPAdapter):
         self._pinned_cache[key] = ip
         return ip
 
+    @staticmethod
+    def _strip_tls_host(url: str) -> Tuple[str, "str | None"]:
+        """Extract the original hostname stashed in URL userinfo.
+
+        Returns ``(clean_url_without_userinfo, hostname_or_None)``.
+        """
+        parsed = urlparse(url)
+        if not parsed.username:
+            return url, None
+        tls_hostname = parsed.username
+        # Rebuild netloc without userinfo
+        host_part = parsed.hostname
+        if parsed.port:
+            netloc = f"{host_part}:{parsed.port}"
+        else:
+            netloc = host_part
+        clean = urlunparse(
+            (
+                parsed.scheme,
+                netloc,
+                parsed.path or "",
+                parsed.params or "",
+                parsed.query or "",
+                parsed.fragment or "",
+            )
+        )
+        return clean, tls_hostname
+
     def send(self, request: requests.PreparedRequest, **kwargs) -> requests.Response:
         parsed = urlparse(request.url)
         host = parsed.hostname
@@ -98,7 +133,12 @@ class PinnedIPAdapter(HTTPAdapter):
         if host:
             pinned_ip = self._resolve_first_ip(host, port)
 
-            new_netloc = f"{pinned_ip}:{port}" if port else pinned_ip
+            if parsed.scheme == "https":
+                # Encode original hostname in userinfo for unique pool keys
+                new_netloc = f"{host}@{pinned_ip}:{port}"
+            else:
+                new_netloc = f"{pinned_ip}:{port}"
+
             new_url = urlunparse(
                 (
                     parsed.scheme,
@@ -113,6 +153,25 @@ class PinnedIPAdapter(HTTPAdapter):
             request.headers.setdefault("Host", host)
 
         return super().send(request, **kwargs)
+
+    def get_connection(self, url, proxies=None):
+        clean_url, tls_hostname = self._strip_tls_host(url)
+        pool = super().get_connection(clean_url, proxies)
+        if tls_hostname:
+            pool.assert_hostname = tls_hostname
+        return pool
+
+    def get_connection_with_tls_context(self, request, verify, proxies=None, cert=None):
+        original_url = request.url
+        clean_url, tls_hostname = self._strip_tls_host(original_url)
+        request.url = clean_url
+        pool = super().get_connection_with_tls_context(
+            request, verify, proxies=proxies, cert=cert
+        )
+        request.url = original_url
+        if tls_hostname:
+            pool.assert_hostname = tls_hostname
+        return pool
 
 
 class WebClient:

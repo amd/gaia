@@ -70,6 +70,27 @@ def mcp_test_spec(monkeypatch):
     return fresh
 
 
+class _RecordingEmitter:
+    def __init__(self):
+        self.events = []
+
+    async def emit(self, event_type, payload):
+        self.events.append((event_type, dict(payload)))
+
+
+@pytest.fixture
+def recording_emitter():
+    """Capture events published through the connectors event bus (#1226)."""
+    from gaia.connectors import events
+
+    rec = _RecordingEmitter()
+    events.set_emitter(rec)
+    try:
+        yield rec
+    finally:
+        events.reset_emitter()
+
+
 class TestActivateWithExistingGrant:
     def test_activate_with_existing_grant_does_not_touch_grant(
         self, fake_home, mcp_test_spec
@@ -263,3 +284,49 @@ class TestActivateColdStartLoadsCatalog:
         rc, out, err = self._spawn(code)
         assert rc == 0, f"deactivate failed cold: stderr={err!r}"
         assert "OK" in out
+
+
+class TestActivationEmitsSseEvent:
+    """#1226 — CLI/SDK callers flow through ``api.activate``/``deactivate``,
+    which must emit ``connector.activation.changed`` with the same payload the
+    HTTP PUT/DELETE handlers used to emit inline. This is the mockable
+    ``CLI → SSE`` path: the CLI calls these functions directly.
+    """
+
+    _EVENT = "connector.activation.changed"
+
+    def test_activate_emits_changed_event_active_true(
+        self, fake_home, mcp_test_spec, recording_emitter
+    ):
+        activate("mcp-test", "builtin:chat", scopes_for_grant=["use"])
+        assert (
+            self._EVENT,
+            {"connector_id": "mcp-test", "agent_id": "builtin:chat", "active": True},
+        ) in recording_emitter.events
+
+    def test_deactivate_emits_changed_event_active_false(
+        self, fake_home, mcp_test_spec, recording_emitter
+    ):
+        grant_agent("mcp-test", "builtin:chat", ["use"])
+        activate("mcp-test", "builtin:chat")
+        recording_emitter.events.clear()
+        deactivate("mcp-test", "builtin:chat")
+        assert (
+            self._EVENT,
+            {"connector_id": "mcp-test", "agent_id": "builtin:chat", "active": False},
+        ) in recording_emitter.events
+
+    def test_failed_activate_emits_nothing(
+        self, fake_home, mcp_test_spec, recording_emitter
+    ):
+        # No grant + no scopes raises before any write — and before any emit.
+        with pytest.raises(ConfigurationError):
+            activate("mcp-test", "builtin:chat")
+        assert recording_emitter.events == []
+
+    def test_rejected_oauth_activate_emits_nothing(
+        self, fake_home, mcp_test_spec, recording_emitter
+    ):
+        with pytest.raises(ConfigurationError):
+            activate("oauth-test", "builtin:chat", scopes_for_grant=["openid"])
+        assert recording_emitter.events == []

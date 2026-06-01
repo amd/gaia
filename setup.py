@@ -155,6 +155,7 @@ setup(
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
             "pypdf",
+            "python-pptx>=0.6.21",
             "sentence-transformers",
             "safetensors",
             # torch is pinned lower-bound only. The "audio" extra caps
@@ -181,9 +182,12 @@ setup(
         ],
         "dev": [
             "pytest",
+            "pytest-cov",
             "pytest-benchmark",
             "pytest-mock",
             "pytest-asyncio",
+            "pytest-xdist",
+            "pytest-rerunfailures",
             "pyfakefs",
             "memory_profiler",
             "matplotlib",
@@ -229,6 +233,7 @@ setup(
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
             "pypdf",
+            "python-pptx>=0.6.21",
             "sentence-transformers",
         ],
         "lint": [

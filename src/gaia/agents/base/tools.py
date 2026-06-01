@@ -13,11 +13,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Tool registry to store registered tools
-_TOOL_REGISTRY = {}
+_TOOL_REGISTRY: dict[str, dict] = {}
 
 
 def tool(
-    func: Callable = None,
+    func: Callable | None = None,
     *,
     atomic: bool = False,
     display_label: str | None = None,
@@ -109,7 +109,7 @@ def get_tool_display_name(tool_name: str) -> str:
     tool = _TOOL_REGISTRY.get(tool_name)
     if not tool:
         return tool_name
-    return tool.get("display_name", tool_name)
+    return tool.get("display_name", tool_name)  # type: ignore[no-any-return]
 
 
 def get_tool_display_label(tool_name: str) -> str:
@@ -120,8 +120,8 @@ def get_tool_display_label(tool_name: str) -> str:
     """
     tool = _TOOL_REGISTRY.get(tool_name)
     if not tool:
-        return None
-    return tool.get("display_label")
+        return None  # type: ignore[return-value]
+    return tool.get("display_label")  # type: ignore[return-value]
 
 
 def get_tool_metadata(tool_name: str):

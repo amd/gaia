@@ -135,7 +135,11 @@ class CodeAgent(
 
         # Security: Configure allowed paths for file operations
         self.allowed_paths = kwargs.pop("allowed_paths", None)
-        self.path_validator = PathValidator(self.allowed_paths)
+        self.path_validator = PathValidator(
+            self.allowed_paths,
+            on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
+            on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
+        )
 
         # Workspace root for API mode (passed from VSCode)
         self.workspace_root = None

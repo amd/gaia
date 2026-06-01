@@ -13,8 +13,9 @@ import os
 import platform
 import shutil
 import sys
+from contextlib import contextmanager
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import Callable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -177,12 +178,21 @@ class PathValidator:
     - Symlink resolution (TOCTOU prevention)
     """
 
-    def __init__(self, allowed_paths: Optional[List[str]] = None):
+    def __init__(
+        self,
+        allowed_paths: Optional[List[str]] = None,
+        on_prompt_start: Optional[Callable[[], None]] = None,
+        on_prompt_end: Optional[Callable[[], None]] = None,
+    ):
         """
         Initialize PathValidator.
 
         Args:
             allowed_paths: Initial list of allowed paths. Defaults to [CWD].
+            on_prompt_start: Optional callback invoked before prompting the
+                user for input (e.g. to pause a progress spinner).
+            on_prompt_end: Optional callback invoked after user input is
+                collected (e.g. to resume a progress spinner).
         """
         self.allowed_paths: Set[Path] = set()
 
@@ -200,6 +210,11 @@ class PathValidator:
 
         # Audit log file
         self._setup_audit_logging()
+
+        # Prompt lifecycle callbacks (used to pause spinners / progress
+        # indicators that would otherwise race with ``input()`` on stdout).
+        self._on_prompt_start = on_prompt_start
+        self._on_prompt_end = on_prompt_end
 
         # Load persisted paths
         self._load_persisted_paths()
@@ -273,6 +288,28 @@ class PathValidator:
                 logger.info(f"Persisted new allowed path: {path}")
         except Exception as e:
             logger.error(f"Failed to save allowed path to {self.config_file}: {e}")
+
+    @contextmanager
+    def _prompt_guard(self):
+        """Pause external progress indicators while prompting the user.
+
+        Calls the ``on_prompt_start`` / ``on_prompt_end`` callbacks supplied
+        at construction time so that a spinner running on a background thread
+        does not race with ``input()`` on stdout (see #1089).
+        """
+        if self._on_prompt_start:
+            try:
+                self._on_prompt_start()
+            except Exception:  # pragma: no cover – best-effort
+                pass
+        try:
+            yield
+        finally:
+            if self._on_prompt_end:
+                try:
+                    self._on_prompt_end()
+                except Exception:  # pragma: no cover – best-effort
+                    pass
 
     def add_allowed_path(self, path: str) -> None:
         """
@@ -362,36 +399,39 @@ class PathValidator:
             )
             return False
 
-        print(
-            "\n⚠️  SECURITY WARNING: Agent is attempting to access a path outside allowed directories."
-        )
-        print(f"   Path: {path}")
-        print(f"   Allowed: {[str(p) for p in self.allowed_paths]}")
-
-        while True:
-            response = (
-                input("Allow this access? [y]es / [n]o / [a]lways: ").lower().strip()
+        with self._prompt_guard():
+            print(
+                "\n⚠️  SECURITY WARNING: Agent is attempting to access a path outside allowed directories."
             )
+            print(f"   Path: {path}")
+            print(f"   Allowed: {[str(p) for p in self.allowed_paths]}")
 
-            if response in ["y", "yes"]:
-                # Allow for this session only (add to memory but don't persist)
-                # We add the specific file or directory to allowed paths
-                self.allowed_paths.add(path)
-                logger.info(f"User temporarily allowed access to: {path}")
-                return True
+            while True:
+                response = (
+                    input("Allow this access? [y]es / [n]o / [a]lways: ")
+                    .lower()
+                    .strip()
+                )
 
-            elif response in ["a", "always"]:
-                # Allow and persist
-                self.allowed_paths.add(path)
-                self._save_persisted_path(path)
-                logger.info(f"User permanently allowed access to: {path}")
-                return True
+                if response in ["y", "yes"]:
+                    # Allow for this session only (add to memory but don't persist)
+                    # We add the specific file or directory to allowed paths
+                    self.allowed_paths.add(path)
+                    logger.info(f"User temporarily allowed access to: {path}")
+                    return True
 
-            elif response in ["n", "no"]:
-                logger.warning(f"User denied access to: {path}")
-                return False
+                elif response in ["a", "always"]:
+                    # Allow and persist
+                    self.allowed_paths.add(path)
+                    self._save_persisted_path(path)
+                    logger.info(f"User permanently allowed access to: {path}")
+                    return True
 
-            print("Please answer 'y', 'n', or 'a'.")
+                elif response in ["n", "no"]:
+                    logger.warning(f"User denied access to: {path}")
+                    return False
+
+                print("Please answer 'y', 'n', or 'a'.")
 
     # ── Write Guardrails ──────────────────────────────────────────────
 
@@ -410,8 +450,11 @@ class PathValidator:
             Tuple of (is_blocked, reason). If blocked, reason explains why.
         """
         try:
-            real_path = Path(os.path.realpath(path)).resolve()
-            real_path_str = str(real_path)
+            # Use os.path.realpath exclusively for symlink resolution — do NOT
+            # chain Path.resolve(), which re-resolves on Python <3.12 via a
+            # separate code path and can disagree with realpath.
+            real_path_str = os.path.realpath(path)
+            real_path = Path(real_path_str)
             # Apply macOS /private normalization so /etc, /var/run, etc. match
             # the BLOCKED_DIRECTORIES entries (they're stored unprefixed).
             norm_path = os.path.normpath(_normalize_macos_symlinks(real_path_str))
@@ -547,17 +590,18 @@ class PathValidator:
             return True
 
         size_str = _format_size(existing_size)
-        print(f"\n⚠️  File already exists: {path} ({size_str})")
+        with self._prompt_guard():
+            print(f"\n⚠️  File already exists: {path} ({size_str})")
 
-        while True:
-            response = input("Overwrite this file? [y]es / [n]o: ").lower().strip()
-            if response in ["y", "yes"]:
-                logger.info(f"User approved overwrite of: {path}")
-                return True
-            elif response in ["n", "no"]:
-                logger.info(f"User declined overwrite of: {path}")
-                return False
-            print("Please answer 'y' or 'n'.")
+            while True:
+                response = input("Overwrite this file? [y]es / [n]o: ").lower().strip()
+                if response in ["y", "yes"]:
+                    logger.info(f"User approved overwrite of: {path}")
+                    return True
+                elif response in ["n", "no"]:
+                    logger.info(f"User declined overwrite of: {path}")
+                    return False
+                print("Please answer 'y' or 'n'.")
 
     def create_backup(self, path: str) -> Optional[str]:
         """Create a timestamped backup of a file before modification.

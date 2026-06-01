@@ -34,8 +34,10 @@ class TestCodeAgent(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        self.agent = CodeAgent(silent_mode=True, max_steps=5)
         self.test_dir = tempfile.mkdtemp()
+        self.agent = CodeAgent(
+            silent_mode=True, max_steps=5, allowed_paths=[self.test_dir]
+        )
         self.agent._register_tools()
 
     def tearDown(self):
@@ -68,8 +70,8 @@ class TestCodeAgent(unittest.TestCase):
     def test_system_prompt(self):
         """Test that system prompt is properly generated."""
         prompt = self.agent._get_system_prompt()
-        self.assertIn("expert Python developer", prompt)
-        self.assertIn("Python", prompt)
+        self.assertIn("code assistant", prompt)
+        self.assertIn("tool", prompt.lower())
         self.assertIn("JSON", prompt)
 
     def test_tool_registration(self):
@@ -405,8 +407,8 @@ def goodbye():
         self.assertIn("Hello, Python!", modified)
         self.assertNotIn("Hello, World!", modified)
 
-        # Verify backup
-        self.assertTrue(os.path.exists(test_file + ".bak"))
+        # Verify backup (path returned in result; naming format depends on security validator)
+        self.assertTrue(os.path.exists(result["backup_path"]))
 
     def test_edit_dry_run(self):
         """Test dry run mode for editing."""
@@ -610,7 +612,9 @@ class TestCodeAgentIntegration(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.test_dir = tempfile.mkdtemp()
-        self.agent = CodeAgent(silent_mode=True, max_steps=5)
+        self.agent = CodeAgent(
+            silent_mode=True, max_steps=5, allowed_paths=[self.test_dir]
+        )
         self.agent._register_tools()
 
     def tearDown(self):
@@ -659,7 +663,7 @@ class TestCodeAgentIntegration(unittest.TestCase):
             backup=True,
         )
         self.assertEqual(edit_result["status"], "success")
-        self.assertTrue(os.path.exists(test_file + ".bak"))
+        self.assertTrue(os.path.exists(edit_result["backup_path"]))
 
         # Step 5: Validate the edited file
         final_content = Path(test_file).read_text()

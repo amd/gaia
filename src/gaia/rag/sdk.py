@@ -15,6 +15,7 @@ import re
 import secrets
 import threading
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -850,6 +851,355 @@ class RAGSDK:
             self.log.error(f"Error reading PDF {pdf_path}: {e}")
             raise
 
+    def _extract_text_from_pptx(self, pptx_path: str) -> tuple:
+        """
+        Extract text from PowerPoint (.pptx) file with VLM for embedded images.
+
+        Mirrors :meth:`_extract_text_from_pdf` — same per-slide loop, VLM
+        integration, merge strategy, and metadata structure.
+
+        Returns:
+            ``(text, num_slides, metadata)`` tuple where metadata contains:
+
+            - num_slides: int
+            - vlm_slides: int (slides enhanced with VLM)
+            - total_images: int (total images processed)
+            - vlm_checked: bool
+            - vlm_available: bool
+            - pptx_status: str (``"readable"`` or ``"corrupted"``)
+        """
+        import time as time_module  # pylint: disable=reimported
+
+        file_name = Path(pptx_path).name
+
+        # Step 0: Open the PPTX. python-pptx raises PackageNotFoundError or
+        # similar for corrupt / non-PPTX files.
+        try:
+            from pptx import Presentation  # pylint: disable=import-outside-toplevel
+        except ImportError:
+            raise ImportError(
+                "python-pptx is required for PowerPoint processing. "
+                "Install it with: uv pip install python-pptx"
+            )
+
+        # Guard against zip bombs: .pptx is a ZIP container. Check that
+        # the total uncompressed size is sane before handing it to python-pptx.
+
+        try:
+            with zipfile.ZipFile(pptx_path, "r") as zf:
+                total_uncompressed = sum(info.file_size for info in zf.infolist())
+                max_uncompressed = 500 * 1024 * 1024  # 500 MB
+                if total_uncompressed > max_uncompressed:
+                    msg = (
+                        f"PowerPoint file too large after decompression: {file_name}\n"
+                        f"Uncompressed size: {total_uncompressed / (1024*1024):.0f} MB "
+                        f"(limit: {max_uncompressed / (1024*1024):.0f} MB)\n"
+                        "The file may be a zip bomb or contain very large embedded media.\n"
+                        "Suggestions:\n"
+                        "  1. Remove unnecessary images/media to reduce file size\n"
+                        "  2. Save as PDF and index the PDF instead"
+                    )
+                    self.log.error(
+                        f"PPTX zip bomb guard: {pptx_path} ({total_uncompressed} bytes uncompressed)"
+                    )
+                    raise ValueError(msg)
+        except zipfile.BadZipFile as e:
+            msg = (
+                f"Could not read PowerPoint file: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a valid .pptx file.\n"
+                "Suggestions:\n"
+                "  1. Re-download or re-export the presentation\n"
+                "  2. Try opening the file in PowerPoint to confirm it is readable\n"
+                "  3. Save as PDF and index the PDF instead"
+            )
+            self.log.error(f"Corrupted PPTX (bad zip): {pptx_path}: {e}")
+            raise ValueError(msg) from e
+
+        try:
+            prs = Presentation(pptx_path)
+        except Exception as e:
+            msg = (
+                f"Could not read PowerPoint file: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a valid .pptx file.\n"
+                "Suggestions:\n"
+                "  1. Re-download or re-export the presentation\n"
+                "  2. Try opening the file in PowerPoint to confirm it is readable\n"
+                "  3. Save as PDF and index the PDF instead"
+            )
+            self.log.error(f"Corrupted PPTX {pptx_path}: {e}")
+            raise ValueError(msg) from e
+
+        try:
+            extract_start = time_module.time()
+            total_slides = len(prs.slides)
+            self.log.info(f"📊 Extracting text from {total_slides} slides...")
+
+            from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
+                convert_pptx_to_pdf,
+                extract_notes_from_slide,
+                extract_text_from_slide,
+            )
+
+            # ----------------------------------------------------------
+            # Fast path: PPTX → PDF via PowerPoint COM, then existing
+            # PDF pipeline.  Captures charts, SmartArt, and visual
+            # layout that python-pptx cannot access.
+            # ----------------------------------------------------------
+            pdf_conversion_path = None
+            tmp_dir = None
+            try:
+                import tempfile as _tempfile
+
+                tmp_dir = _tempfile.mkdtemp(prefix="gaia_pptx_")
+                pdf_conversion_path = convert_pptx_to_pdf(
+                    str(Path(pptx_path).resolve()), tmp_dir
+                )
+            except Exception as conv_err:
+                self.log.debug("PPTX→PDF conversion not available: %s", conv_err)
+
+            if pdf_conversion_path:
+                try:
+                    if self.config.show_stats:
+                        print(
+                            "  📊 Using PowerPoint→PDF conversion for full-fidelity extraction"
+                        )
+                    self.log.info("Using PowerPoint→PDF conversion for %s", file_name)
+                    pdf_text, pdf_pages, pdf_metadata = self._extract_text_from_pdf(
+                        pdf_conversion_path
+                    )
+
+                    # Append speaker notes (not in PDF render)
+                    notes_parts = []
+                    for i, slide in enumerate(prs.slides, 1):
+                        notes = extract_notes_from_slide(slide)
+                        if notes:
+                            notes_parts.append(
+                                f"\n[Page {i}] **Speaker Notes:**\n{notes}"
+                            )
+                    if notes_parts:
+                        pdf_text += "\n\n" + "\n".join(notes_parts)
+
+                    metadata = {
+                        "num_slides": pdf_pages,
+                        "vlm_slides": pdf_metadata.get("vlm_pages", 0),
+                        "total_images": pdf_metadata.get("total_images", 0),
+                        "vlm_checked": pdf_metadata.get("vlm_checked", False),
+                        "vlm_available": pdf_metadata.get("vlm_available", False),
+                        "pptx_status": "readable",
+                        "conversion": "powerpoint_com",
+                    }
+
+                    extract_duration = time_module.time() - extract_start
+                    self.log.info(
+                        f"📝 Extracted {len(pdf_text):,} characters via PDF conversion in {extract_duration:.2f}s"
+                    )
+                    return pdf_text, pdf_pages, metadata
+                except Exception as pdf_err:
+                    self.log.warning(
+                        "PDF extraction from converted PPTX failed, falling back: %s",
+                        pdf_err,
+                    )
+                finally:
+                    import shutil
+
+                    if tmp_dir:
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            # ----------------------------------------------------------
+            # Fallback: python-pptx native extraction
+            # ----------------------------------------------------------
+
+            # Initialize VLM client (auto-enabled if available)
+            vlm = None
+            vlm_available = False
+            try:
+                from gaia.llm import (  # pylint: disable=import-outside-toplevel
+                    VLMClient,
+                )
+                from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
+                    count_images_in_slide,
+                    extract_images_from_slide,
+                )
+
+                vlm = VLMClient(
+                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                )
+                vlm_available = vlm.check_availability()
+
+                if vlm_available and self.config.show_stats:
+                    print("  🔍 VLM enabled: Will extract text from slide images")
+                elif not vlm_available and self.config.show_stats:
+                    print("  ⚠️  VLM not available - images will not be processed")
+                    print("  📥 To enable VLM image extraction:")
+                    print(
+                        "     1. Open Lemonade Model Manager (http://localhost:13305)"
+                    )
+                    print(f"     2. Download model: {self.config.vlm_model}")
+
+            except Exception as vlm_error:
+                if self.config.show_stats:
+                    print(f"  ⚠️  VLM initialization failed: {vlm_error}")
+                self.log.warning(f"VLM initialization failed: {vlm_error}")
+                vlm_available = False
+
+            if self.config.show_stats:
+                print(f"\n{'='*60}")
+                print("  📊 COMPUTE INTENSIVE: PowerPoint Text Extraction")
+                print(f"  📊 Total slides: {total_slides}")
+                print(f"  ⏱️  Estimated time: {total_slides * 0.2:.1f} seconds")
+                if vlm_available:
+                    print("  🖼️  VLM: Enabled for image text extraction")
+                else:
+                    print("  🖼️  VLM: Disabled (text-only extraction)")
+                print(f"{'='*60}")
+
+            pages_data = []
+            vlm_slides_count = 0
+            total_images_processed = 0
+
+            for i, slide in enumerate(prs.slides, 1):
+                page_start = time_module.time()
+
+                # Step 1: Extract native text from shapes / tables
+                slide_text = extract_text_from_slide(slide, slide_num=i)
+
+                # Step 2: Extract speaker notes
+                notes_text = extract_notes_from_slide(slide)
+                if notes_text:
+                    slide_text = (
+                        slide_text + "\n\n**Speaker Notes:**\n" + notes_text
+                        if slide_text
+                        else "**Speaker Notes:**\n" + notes_text
+                    )
+
+                # Step 3: Check for images
+                has_imgs = False
+                num_imgs = 0
+                if vlm_available:
+                    try:
+                        has_imgs, num_imgs = count_images_in_slide(slide)
+                    except Exception as e:  # pylint: disable=broad-except
+                        self.log.debug(
+                            "count_images_in_slide failed on slide %d: %s", i, e
+                        )
+
+                # Step 4: Extract from images if present
+                image_texts = []
+                if has_imgs and vlm_available:
+                    try:
+                        images = extract_images_from_slide(slide, slide_num=i)
+                        if images:
+                            image_texts = vlm.extract_from_page_images(
+                                images, page_num=i
+                            )
+                            if image_texts:
+                                vlm_slides_count += 1
+                                total_images_processed += len(image_texts)
+                    except Exception as img_error:
+                        self.log.warning(
+                            f"Image extraction failed on slide {i}: {img_error}"
+                        )
+
+                # Step 5: Merge native text + VLM image texts
+                merged_text = self._merge_page_texts(
+                    slide_text, image_texts, page_num=i
+                )
+
+                pages_data.append(
+                    {
+                        "page": i,
+                        "text": merged_text,
+                        "has_images": has_imgs,
+                        "num_images": num_imgs,
+                        "vlm_used": len(image_texts) > 0,
+                    }
+                )
+
+                page_duration = time_module.time() - page_start
+
+                if self.config.show_stats:
+                    progress_pct = (i / total_slides) * 100
+                    avg_time = (time_module.time() - extract_start) / i
+                    eta = avg_time * (total_slides - i)
+                    vlm_indicator = " 🖼️" if len(image_texts) > 0 else ""
+                    print(
+                        f"  📊 Slide {i}/{total_slides} ({progress_pct:.0f}%){vlm_indicator} | "
+                        f"⏱️  {page_duration:.2f}s | ETA: {eta:.1f}s" + " " * 10,
+                        end="\r",
+                        flush=True,
+                    )
+
+            # Cleanup VLM
+            if vlm_available and vlm:
+                try:
+                    vlm.cleanup()
+                except Exception as e:  # pylint: disable=broad-except
+                    self.log.debug("VLM cleanup failed: %s", e)
+
+            extract_duration = time_module.time() - extract_start
+
+            # Build full text — uses [Page N] markers for downstream compatibility
+            # with chunking/retrieval code that parses [Page N] patterns.
+            full_text = "\n\n".join(
+                [f"[Page {p['page']}]\n{p['text']}" for p in pages_data]
+            )
+
+            if self.config.show_stats:
+                print(
+                    f"\n  ✅ Extracted {len(full_text):,} characters from {total_slides} slides"
+                )
+                slides_per_sec = (
+                    total_slides / extract_duration
+                    if extract_duration > 0
+                    else float("inf")
+                )
+                print(
+                    f"  ⏱️  Total extraction time: {extract_duration:.2f}s ({slides_per_sec:.1f} slides/sec)"
+                )
+                print(f"  💾 Text size: {len(full_text) / 1024:.1f} KB")
+                if vlm_slides_count > 0:
+                    print(
+                        f"  🖼️  VLM enhanced: {vlm_slides_count} slides, {total_images_processed} images"
+                    )
+                print(f"{'='*60}\n")
+
+            self.log.info(
+                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_slides_count} slides)"
+            )
+
+            # Check for empty presentation
+            has_any_content = any((p["text"] or "").strip() for p in pages_data)
+            if not has_any_content:
+                msg = (
+                    f"No extractable text in PowerPoint: {file_name}\n"
+                    f"The file has {total_slides} slide(s) but none contained text.\n"
+                    "Suggestions:\n"
+                    "  1. Ensure the presentation has text content (not just images)\n"
+                    "  2. Enable VLM image extraction by downloading "
+                    f"{self.config.vlm_model} in Lemonade\n"
+                    "  3. Save as PDF and index the PDF instead"
+                )
+                self.log.error(f"Empty PPTX (no text): {pptx_path}")
+                raise ValueError(msg)
+
+            metadata = {
+                "num_slides": total_slides,
+                "vlm_slides": vlm_slides_count,
+                "total_images": total_images_processed,
+                "vlm_checked": True,
+                "vlm_available": vlm_available,
+                "pptx_status": "readable",
+            }
+
+            return full_text, total_slides, metadata
+        except ValueError:
+            raise
+        except Exception as e:
+            self.log.error(f"Error reading PPTX {pptx_path}: {e}")
+            raise
+
     def _merge_page_texts(
         self, pypdf_text: str, image_texts: list, page_num: int
     ) -> str:
@@ -1217,9 +1567,9 @@ These positions indicate where to split the text."""
 
         Returns:
             (text, metadata_dict) tuple where metadata_dict contains:
-            - num_pages: int (for PDFs) or None
-            - vlm_pages: int (for PDFs with VLM) or None
-            - total_images: int (for PDFs with VLM) or None
+            - num_pages: int (for PDFs/PPTX) or None
+            - vlm_pages: int (for PDFs/PPTX with VLM) or None
+            - total_images: int (for PDFs/PPTX with VLM) or None
         """
         file_type = self._get_file_type(file_path)
         metadata = {"num_pages": None, "vlm_pages": None, "total_images": None}
@@ -1230,6 +1580,14 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_pages
             metadata["vlm_pages"] = pdf_metadata.get("vlm_pages", 0)
             metadata["total_images"] = pdf_metadata.get("total_images", 0)
+            return text, metadata
+
+        # PowerPoint files
+        elif file_type == ".pptx":
+            text, num_slides, pptx_metadata = self._extract_text_from_pptx(file_path)
+            metadata["num_pages"] = num_slides
+            metadata["vlm_pages"] = pptx_metadata.get("vlm_slides", 0)
+            metadata["total_images"] = pptx_metadata.get("total_images", 0)
             return text, metadata
 
         # Text-based files
@@ -1909,7 +2267,7 @@ These positions indicate where to split the text."""
         Index a document for retrieval.
 
         Supports:
-        - Documents: PDF, TXT, MD, CSV, JSON
+        - Documents: PDF, PPTX, TXT, MD, CSV, JSON
         - Backend Code: Python, Java, C/C++, Go, Rust, Ruby, PHP, Swift, Kotlin, Scala
         - Web Code: JavaScript/TypeScript, HTML, CSS/SCSS/SASS/LESS, Vue, Svelte, Astro
         - Config: YAML, XML, TOML, INI, ENV, Properties
@@ -2390,6 +2748,8 @@ These positions indicate where to split the text."""
             stats["total_chunks"] = len(self.chunks)
             if file_type == ".pdf":
                 stats["pdf_status"] = "readable"
+            elif file_type == ".pptx":
+                stats["pptx_status"] = "readable"
             return stats
 
         except PDFExtractionError as e:

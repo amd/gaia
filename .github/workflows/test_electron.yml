@@ -81,6 +81,31 @@ jobs:
           path: tests/electron/coverage/
           retention-days: 7
 
+  test-webui-vitest:
+    name: Test Agent UI Components (Vitest)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/gaia/apps/webui/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd src/gaia/apps/webui
+          npm ci
+
+      - name: Run Vitest component tests
+        run: |
+          cd src/gaia/apps/webui
+          npm test
+
   test-apps-integration:
     name: Test Apps Integration
     runs-on: ubuntu-latest
@@ -441,7 +466,7 @@ jobs:
     name: Test Summary
     runs-on: ubuntu-latest
     if: always()
-    needs: [test-electron-framework, test-apps-integration, test-apps-functional, test-apps-build, dependency-audit, test-electron-runtime]
+    needs: [test-electron-framework, test-webui-vitest, test-apps-integration, test-apps-functional, test-apps-build, dependency-audit, test-electron-runtime]
 
     steps:
       - name: Check test results
@@ -451,6 +476,7 @@ jobs:
           echo "=========================================="
           echo ""
           echo "Test Electron Framework: ${{ needs.test-electron-framework.result }}"
+          echo "Test Agent UI Vitest: ${{ needs.test-webui-vitest.result }}"
           echo "Test Apps Integration: ${{ needs.test-apps-integration.result }}"
           echo "Test Apps Functionality: ${{ needs.test-apps-functional.result }}"
           echo "Test Apps Build: ${{ needs.test-apps-build.result }}"
@@ -462,6 +488,11 @@ jobs:
 
           if [[ "${{ needs.test-electron-framework.result }}" == "failure" ]]; then
             echo "❌ FAILED: Electron Framework tests"
+            FAILED=true
+          fi
+
+          if [[ "${{ needs.test-webui-vitest.result }}" == "failure" ]]; then
+            echo "❌ FAILED: Agent UI Vitest component tests"
             FAILED=true
           fi
 

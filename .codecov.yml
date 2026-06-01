@@ -1,0 +1,24 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+codecov:
+  require_ci_to_pass: true
+
+coverage:
+  status:
+    project:
+      default:
+        target: 60%
+        threshold: 2%
+    patch:
+      default:
+        target: 70%
+
+ignore:
+  - "tests/"
+  - "docs/"
+  - "scripts/"
+  - "workshop/"
+  - "src/gaia/eval/"
+  - "src/gaia/apps/webui/"
+  - "setup.py"

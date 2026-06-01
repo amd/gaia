@@ -11,6 +11,8 @@ Provides 3-pane interface:
 Works with any GAIA agent type.
 """
 
+from typing import Optional
+
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import Completer, Completion
@@ -156,7 +158,7 @@ class AgentPromptSession:
         # Print with formatting
         print(f"\nA: {message}")
 
-    def get_input(self) -> str:
+    def get_input(self) -> Optional[str]:
         """
         Get user input with autocomplete and fixed bottom position.
 
@@ -168,7 +170,7 @@ class AgentPromptSession:
 
         # Get input with autocomplete
         try:
-            user_input = self.session.prompt(self.prompt_text).strip()
+            user_input: str = self.session.prompt(self.prompt_text).strip()
             return user_input
         except (KeyboardInterrupt, EOFError):
             return None
