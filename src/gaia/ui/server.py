@@ -345,6 +345,15 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await monitor.start()
         logger.info("Document file monitor started (30s polling interval)")
 
+        # ── Connector activation watcher (issue #1226) ──────────────────
+        # CLI/SDK activation writes land in the activations ledger from a
+        # separate process; poll it and emit connector.activation.changed so
+        # an open Settings tab reflects them live without a manual refresh.
+        from gaia.connectors.activation_watcher import start_watcher
+
+        start_watcher()
+        logger.info("Connector activation watcher started")
+
         # ── Connections (issue #915) ────────────────────────────────────
         # Eager tripwire sweep so a rotated OAuth client_id surfaces in
         # the server logs at boot (and clears stale entries) BEFORE any
@@ -405,6 +414,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await queue.shutdown()
         await monitor.stop()
         logger.info("Document file monitor stopped")
+        from gaia.connectors.activation_watcher import stop_watcher
+
+        await stop_watcher()
+        logger.info("Connector activation watcher stopped")
         db.close()
         logger.info("Database connection closed")
         memory_router_mod.close_store()

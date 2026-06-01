@@ -45,11 +45,9 @@ from pydantic import BaseModel, Field
 
 import gaia.connectors as connections
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-from gaia.connectors.activations import (
-    deactivate_agent,
-    list_agent_activations,
-)
+from gaia.connectors.activations import list_agent_activations
 from gaia.connectors.api import activate as activate_connector_for_agent
+from gaia.connectors.api import deactivate as deactivate_connector_for_agent
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -802,10 +800,8 @@ async def put_activation(
                 "scopes": list(body.scopes or []),
             },
         )
-    await _emitter.emit(
-        "connector.activation.changed",
-        {"connector_id": connector_id, "agent_id": agent_id, "active": True},
-    )
+    # ``connector.activation.changed`` is emitted by ``api.activate`` so CLI,
+    # SDK, and HTTP callers all notify through one path (#1226).
     return {
         "connector_id": connector_id,
         "agent_id": agent_id,
@@ -826,10 +822,10 @@ async def delete_activation(connector_id: str, agent_id: str) -> Response:
     one click. To wipe the grant call ``DELETE
     /api/connectors/{id}/grants/{agent_id}`` instead.
     """
+    # Route through ``api.deactivate`` so the MCP-only guard and the
+    # ``connector.activation.changed`` emit fire on one path for all callers
+    # (#1226). Previously this called the bare ledger function and emitted
+    # inline, bypassing the guard.
     _require_mcp_server(connector_id)
-    deactivate_agent(connector_id, agent_id)
-    await _emitter.emit(
-        "connector.activation.changed",
-        {"connector_id": connector_id, "agent_id": agent_id, "active": False},
-    )
+    deactivate_connector_for_agent(connector_id, agent_id)
     return Response(status_code=204)
