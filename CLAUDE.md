@@ -271,13 +271,16 @@ python -m gaia.mcp.mcp_bridge
 - The default LLM model, tokenizer config, or the `is_tool_calling_model` mapping
 - Tool-call response parsing / native-tool-call sentinel handling
 
-**Claude API access is almost always already available** when you are running from a Claude Code session — the user's subscription provides Claude API usage by default. Do not assume otherwise, and do not skip the eval on the assumption that no key is configured. Check first:
+**Claude access is almost always already available** when you are running from a Claude Code session — it comes from the user's Claude Code subscription, **not** from an exported `ANTHROPIC_API_KEY`. An empty `ANTHROPIC_API_KEY` therefore does **not** mean you lack Claude access, and is never a reason to skip the eval. Check access in this order:
+
+1. **Confirm subscription auth first.** If you are running inside a Claude Code session, the subscription is active — that *is* your Claude access. The env var being unset is expected and fine. `ANTHROPIC_API_KEY` is rarely needed.
+2. **Only then consider the key.** `gaia eval`'s judge client ([`src/gaia/eval/claude.py`](src/gaia/eval/claude.py)) reads `ANTHROPIC_API_KEY` from the environment specifically, so it is the *fallback* path used when an eval subprocess can't ride the subscription. Check it only when you actually need that path:
 
 ```bash
-echo "${ANTHROPIC_API_KEY:0:8}"   # prints the first 8 chars if set
+echo "${ANTHROPIC_API_KEY:0:8}"   # prints the first 8 chars if set; empty is normal
 ```
 
-If it's empty, ask the user to export the key from their subscription rather than skipping the eval. "I didn't run the eval because I assumed no key was available" is not acceptable.
+Only if the eval genuinely requires the key (the subprocess errors with `ANTHROPIC_API_KEY not found`) and it is absent, ask the user to export it. "I didn't run the eval because the env var looked empty" is not acceptable — verify auth access first.
 
 **How to run:**
 
