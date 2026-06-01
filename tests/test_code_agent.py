@@ -407,12 +407,8 @@ def goodbye():
         self.assertIn("Hello, Python!", modified)
         self.assertNotIn("Hello, World!", modified)
 
-        # Verify backup — PathValidator creates timestamped backups like
-        # edit_test.YYYYMMDD_HHMMSS.bak.py, not edit_test.py.bak
-        backup_files = [
-            f for f in os.listdir(self.test_dir) if ".bak" in f and "edit_test" in f
-        ]
-        self.assertTrue(len(backup_files) > 0, "No backup file created")
+        # Verify backup (path returned in result; naming format depends on security validator)
+        self.assertTrue(os.path.exists(result["backup_path"]))
 
     def test_edit_dry_run(self):
         """Test dry run mode for editing."""
@@ -667,8 +663,7 @@ class TestCodeAgentIntegration(unittest.TestCase):
             backup=True,
         )
         self.assertEqual(edit_result["status"], "success")
-        backup_files = [f for f in os.listdir(self.test_dir) if ".bak" in f]
-        self.assertTrue(len(backup_files) > 0, "No backup file created")
+        self.assertTrue(os.path.exists(edit_result["backup_path"]))
 
         # Step 5: Validate the edited file
         final_content = Path(test_file).read_text()

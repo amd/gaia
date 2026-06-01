@@ -61,6 +61,7 @@ class OpenAIProvider(LLMClient):
         if stream:
             return self._handle_stream(response)
         return response.choices[0].message.content  # type: ignore[no-any-return]
+        return response.choices[0].message.content  # type: ignore[no-any-return]
 
     def embed(
         self, texts: list[str], model: str = "text-embedding-3-small", **kwargs

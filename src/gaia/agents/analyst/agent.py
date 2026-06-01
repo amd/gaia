@@ -43,7 +43,11 @@ class AnalystAgent(
         if config is None:
             config = AnalystAgentConfig()
         self.config = config
-        self.path_validator = PathValidator(config.allowed_paths)
+        self.path_validator = PathValidator(
+            config.allowed_paths,
+            on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
+            on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
+        )
         self._path_validator = self.path_validator
         self._scratchpad = ScratchpadService(db_path=config.scratchpad_db_path)
 
