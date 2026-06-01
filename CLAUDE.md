@@ -455,19 +455,19 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 
 | Agent | Location | Description | Default Model |
 |-------|----------|-------------|---------------|
-| **ChatAgent** | `agents/chat/agent.py` | Document Q&A with RAG | Qwen3.5-35B |
-| **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3.5-35B |
-| **BuilderAgent** | `agents/builder/agent.py` | Scaffolds new agents from templates | Qwen3.5-35B |
-| **SummarizerAgent** | `agents/summarize/agent.py` | Document/text summarization | Qwen3.5-35B |
-| **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B |
-| **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B |
-| **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B |
+| **ChatAgent** | `agents/chat/agent.py` | Document Q&A with RAG | Gemma-4-E4B |
+| **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3.5-35B-A3B |
+| **BuilderAgent** | `agents/builder/agent.py` | Scaffolds new agents from templates | Qwen3.5-35B-A3B |
+| **SummarizerAgent** | `agents/summarize/agent.py` | Document/text summarization | Gemma-4-E4B |
+| **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B-A3B |
+| **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Gemma-4-E4B |
+| **DockerAgent** | `agents/docker/agent.py` | Container management | Gemma-4-E4B |
 | **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing | Qwen3-VL-4B (VLM) |
-| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B |
+| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Gemma-4-E4B |
 | **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
-| **EmailTriageAgent** | `agents/email/agent.py` | Email triage for Gmail — local inference, needs the Google connector | Lemonade default |
-| **BrowserAgent** | `agents/browser/agent.py` | Web research — search, page fetch, download (`gaia browse`) | Lemonade default |
-| **AnalystAgent** | `agents/analyst/agent.py` | Structured data analysis with scratchpad tables (`gaia analyze`) | Lemonade default |
+| **EmailTriageAgent** | `agents/email/agent.py` | Email triage for Gmail — local inference, needs the Google connector | Gemma-4-E4B |
+| **BrowserAgent** | `agents/browser/agent.py` | Web research — search, page fetch, download (`gaia browse`) | Gemma-4-E4B |
+| **AnalystAgent** | `agents/analyst/agent.py` | Structured data analysis with scratchpad tables (`gaia analyze`) | Gemma-4-E4B |
 
 `gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent respectively (see [`src/gaia/cli.py`](src/gaia/cli.py)). `gaia telegram` is a messaging adapter, not an agent. Internal building-block agents (DocumentQAAgent, FileIOAgent, ConnectorsDemoAgent) live under `src/gaia/agents/` but aren't standalone CLI commands.
 
@@ -478,19 +478,24 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | Tool name | Mixin | Purpose |
 |-----------|-------|---------|
 | `rag` | `gaia.agents.chat.tools.rag_tools.RAGToolsMixin` | Document retrieval |
+| `code_index` | `gaia.agents.code_index.tools.mixin.CodeIndexToolsMixin` | Code-aware indexing/search |
 | `file_search` | `gaia.agents.tools.file_tools.FileSearchToolsMixin` | Fuzzy/glob file search |
 | `file_io` | `gaia.agents.code.tools.file_io.FileIOToolsMixin` | Read/write/edit files |
 | `shell` | `gaia.agents.chat.tools.shell_tools.ShellToolsMixin` | Sandboxed shell commands |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | Screen capture |
+| `filesystem` | `gaia.agents.tools.filesystem_tools.FileSystemToolsMixin` | Filesystem operations |
+| `scratchpad` | `gaia.agents.tools.scratchpad_tools.ScratchpadToolsMixin` | Scratchpad tables/notes |
+| `browser` | `gaia.agents.tools.browser_tools.BrowserToolsMixin` | Web search / page fetch / download |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
 ### Default Models
-- General tasks: `Qwen3-0.6B-GGUF`
-- Code/Agents: `Qwen3.5-35B-A3B-GGUF`
+- Default for most agents and `gaia llm`: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py))
+- Code-heavy agents (Code, Builder, Jira): `Qwen3.5-35B-A3B-GGUF` (hardcoded per agent)
 - Vision tasks: `Qwen3-VL-4B-Instruct-GGUF`
+- Image generation (SD): `SDXL-Turbo`
 
 ## CLI Commands
 
@@ -607,13 +612,13 @@ The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://am
 - [`docs/plans/oem-bundling.mdx`](docs/plans/oem-bundling.mdx) - OEM hardware pre-configuration
 
 **Infrastructure:**
-- [`docs/plans/installer.mdx`](docs/plans/installer.mdx) - Desktop installer
-- [`docs/plans/mcp-client.mdx`](docs/plans/mcp-client.mdx) - MCP client integration
+- [`docs/plans/desktop-installer.mdx`](docs/plans/desktop-installer.mdx) - Desktop installer
+- [`docs/plans/mcp-docs.mdx`](docs/plans/mcp-docs.mdx) - MCP integration
 - [`docs/plans/cua.mdx`](docs/plans/cua.mdx) - Computer Use Agent
 - [`docs/plans/docker-containers.mdx`](docs/plans/docker-containers.mdx) - Docker deployment
 
 **Key architectural decisions (April 2026):**
-- ChatAgent renamed to **GaiaAgent** in v0.20.0 (#696)
+- **GaiaAgent** rename planned (#696) — not yet landed; the chat agent class is still `ChatAgent` (`src/gaia/agents/chat/agent.py`)
 - Voice-first is P0 enabling technology (#702)
 - No context compaction — memory + RAG handles long conversations
 - Configuration dashboard + Observability dashboard as separate Agent UI panels
