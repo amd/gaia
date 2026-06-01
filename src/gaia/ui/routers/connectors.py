@@ -86,6 +86,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/connectors", tags=["connectors"])
 
+# Issue #1292 — forwarded pre-authenticated connections. Separate prefix
+# (``/v1/connections``) per the issue's REST contract: a host app that already
+# authenticated a user POSTs the forwarded grant here; GAIA persists it and
+# acts on the mailbox as the host app's client — no second OAuth. The UI
+# server binds localhost by default and gates remote/tunnel access behind a
+# token (see ``TunnelAuthMiddleware``); mutating routes also require the
+# ``X-Gaia-UI`` CSRF header below.
+forwarded_router = APIRouter(prefix="/v1/connections", tags=["connections"])
+
 
 # ─────────────────────────────────────────────────────────────────
 # CSRF guard (plan amendment A8)
@@ -155,6 +164,29 @@ class ActivationRequest(BaseModel):
 
 class ConfigureRequest(BaseModel):
     config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ForwardConnectionRequest(BaseModel):
+    """Body for ``POST /v1/connections/{provider}`` (#1292).
+
+    A host app forwards the OAuth client it authenticated the user under
+    (``client_id`` + ``client_secret``) plus the user's ``refresh_token``.
+    GAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second
+    OAuth, no consent step.
+
+    ``refresh_token`` / ``client_secret`` are secret INPUTS — they are never
+    echoed back in any response. ``account_email`` is display-only in v1
+    (the keyring slot is single-account per provider). ``grant_agents`` is
+    the list of namespaced agent ids (e.g. ``builtin:email``) to grant the
+    forwarded scopes so they can resolve the connection ambiently.
+    """
+
+    client_id: str = Field(min_length=1)
+    client_secret: str = Field(default="")
+    refresh_token: str = Field(min_length=1)
+    scopes: List[str] = Field(default_factory=list)
+    account_email: str = Field(default="")
+    grant_agents: List[str] = Field(default_factory=list)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -832,4 +864,88 @@ async def delete_activation(connector_id: str, agent_id: str) -> Response:
         "connector.activation.changed",
         {"connector_id": connector_id, "agent_id": agent_id, "active": False},
     )
+    return Response(status_code=204)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Forwarded pre-authenticated connections — /v1/connections (#1292)
+#
+# A consuming app that ALREADY authenticated a user FORWARDS that connection
+# to GAIA. GAIA persists it and acts on the mailbox as the host app's client —
+# no second OAuth. Read routes return metadata only (secrets masked); the POST
+# requires the X-Gaia-UI CSRF header; the whole surface is localhost-bound /
+# tunnel-token-gated by the UI server.
+# ─────────────────────────────────────────────────────────────────
+
+
+@forwarded_router.post(
+    "/{provider}", status_code=201, dependencies=[Depends(_require_ui_header)]
+)
+async def forward_connection(
+    provider: str, body: ForwardConnectionRequest
+) -> Dict[str, Any]:
+    """Persist a forwarded grant — no browser/consent step (AC1, AC3, AC4).
+
+    Fails loudly: insecure keyring backend → 500; missing required scopes →
+    403 + ``missing_scopes``; empty client_id/refresh_token → 500. Returns a
+    metadata-only summary — never the refresh token or client secret.
+    """
+    try:
+        summary = connections.import_forwarded_connection(
+            provider=provider,
+            client_id=body.client_id,
+            client_secret=body.client_secret,
+            refresh_token=body.refresh_token,
+            scopes=body.scopes,
+            account_email=body.account_email,
+            grant_agents=body.grant_agents,
+        )
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
+
+    await _emitter.emit(
+        "connector.configured",
+        {"connector_id": provider, "account_id": summary.get("account_email")},
+    )
+    return summary
+
+
+@forwarded_router.get("")
+@forwarded_router.get("/")
+async def list_forwarded_connections() -> Dict[str, Any]:
+    """List persisted connections — metadata only, secrets omitted (AC4)."""
+    return {"connections": connections.list_connections()}
+
+
+@forwarded_router.get("/{provider}")
+async def get_forwarded_connection(provider: str) -> Dict[str, Any]:
+    """Return one connection's metadata, or 404 — secrets omitted (AC4)."""
+    entry = connections.get_connection(provider)
+    if entry is None:
+        raise HTTPException(
+            status_code=404, detail=f"No connection for provider {provider!r}"
+        )
+    return entry
+
+
+@forwarded_router.delete(
+    "/{provider}", status_code=204, dependencies=[Depends(_require_ui_header)]
+)
+async def revoke_forwarded_connection(provider: str) -> Response:
+    """Revoke a forwarded connection: clear the refresh token, the forwarded
+    OAuth client credentials, every per-agent grant, and the cached provider /
+    token state (AC4). Idempotent."""
+    from gaia.connectors.grants import revoke_all_grants_for
+    from gaia.connectors.providers import _registry as _provider_registry
+    from gaia.connectors.store import clear_provider_credentials
+    from gaia.connectors.tokens import _cache as _token_cache
+
+    connections.revoke_connection(provider)
+    clear_provider_credentials(provider)
+    revoke_all_grants_for(provider)
+    _provider_registry.pop(provider, None)
+    for key in [k for k in _token_cache if k[0] == provider]:
+        _token_cache.pop(key, None)
+
+    await _emitter.emit("connector.disconnected", {"connector_id": provider})
     return Response(status_code=204)

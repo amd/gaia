@@ -106,8 +106,10 @@ class TunnelAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        # Only gate /api/* routes
-        if not path.startswith("/api/"):
+        # Gate /api/* routes and the /v1/connections forwarded-grant surface
+        # (#1292) — the latter carries OAuth secrets, so remote/tunnel access
+        # must present a valid token just like /api/*.
+        if not (path.startswith("/api/") or path.startswith("/v1/")):
             return await call_next(request)
 
         # Always allow exempt paths (health check, etc.)
@@ -492,6 +494,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(mcp_router_mod.router)
     # Issue #915 — OAuth connections (Settings page + agent grants).
     app.include_router(connectors_router_mod.router)
+    # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).
+    app.include_router(connectors_router_mod.forwarded_router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.
