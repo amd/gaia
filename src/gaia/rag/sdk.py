@@ -2147,15 +2147,7 @@ These positions indicate where to split the text."""
                             list(cached_chunks), show_progress=False
                         )
 
-                    try:
-                        file_index = self._create_faiss_index(file_embeddings)
-                    except Exception as _e:  # pylint: disable=broad-except
-                        self.log.debug(
-                            "Couldn't pre-build per-file index for %s: %s",
-                            file_path,
-                            _e,
-                        )
-                        file_index = None
+                    file_index = self._create_faiss_index(file_embeddings)
 
                     if self.index is None:
                         self.index = new_index
@@ -2166,9 +2158,8 @@ These positions indicate where to split the text."""
                     self.chunk_to_file = rebuilt_chunk_to_file
                     self.file_to_chunk_indices[file_path] = file_chunk_indices
 
-                    if file_index is not None:
-                        self.file_indices[file_path] = file_index
-                        self.file_embeddings[file_path] = file_embeddings
+                    self.file_indices[file_path] = file_index
+                    self.file_embeddings[file_path] = file_embeddings
 
                     # Restore metadata in memory
                     if cached_full_text or cached_metadata:
