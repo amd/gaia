@@ -307,7 +307,7 @@ gaia eval agent --category rag_quality --agent-type doc \
 ps aux | grep "gaia eval" | grep -v grep | wc -l    # must print "0"
 ```
 
-This applies to **all** eval flavours: `gaia eval agent`, `gaia eval --use-claude`, `gaia eval fix-code`, batch experiments. The judge LLM (Claude) can run concurrently across scenarios — the bottleneck is the local Lemonade backend, which is single-tenant per model slot.
+This applies to every `gaia eval agent` run — including `--fix` auto-fix runs and any batch fix-loop that chains them. The judge LLM (Claude) can run concurrently across scenarios — the bottleneck is the local Lemonade backend, which is single-tenant per model slot.
 
 ## Development Workflow
 
@@ -531,7 +531,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia agent {export|import}` - Manage custom agent bundles
 
 **Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
-- `gaia eval {fix-code|agent}` - Run evaluation harness
+- `gaia eval agent` - Run the agent eval benchmark (`--fix` auto-fixes failures)
 - `gaia report` - Render eval reports
 - `gaia perf-vis` - Visualize performance results
 

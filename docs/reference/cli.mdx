@@ -1258,35 +1258,14 @@ Use `lemonade-server list` to see all available models and their download status
 </Card>
 
 **Tools for:**
-- Ground Truth Generation
-- Automated Evaluation
-- Batch Experimentation
-- Performance Analysis
-- Transcript Testing
+- Agent eval benchmark (scenario-based, end-to-end)
+- Auto-fixing failures with Claude Code
+- Report generation
+- Performance-log visualization
 
 **Quick Examples:**
 
-Generate evaluation data:
-```bash
-gaia groundtruth -f ./data/document.html
-```
-
-Create sample experiment configuration:
-```bash
-gaia batch-experiment --create-sample-config experiments.json
-```
-
-Run systematic experiments:
-```bash
-gaia batch-experiment -c experiments.json -i ./data -o ./results
-```
-
-Evaluate results:
-```bash
-gaia eval -f ./results/experiment.json
-```
-
-Run agent eval benchmark:
+Run the agent eval benchmark:
 ```bash
 gaia eval agent                                    # Run all scenarios
 gaia eval agent --category mcp_reliability         # Run MCP reliability scenarios only
@@ -1296,14 +1275,14 @@ gaia eval agent --fix                              # Auto-fix failures with Clau
 gaia eval agent --compare run1/scorecard.json run2/scorecard.json  # Compare runs
 ```
 
-Generate report:
+Generate a report:
 ```bash
 gaia report -d ./eval_results
 ```
 
-Launch visualizer:
+Visualize llama.cpp performance logs:
 ```bash
-gaia visualize
+gaia perf-vis ./logs/llama-server.log
 ```
 
 [→ Full Evaluation Guide](/reference/eval)
@@ -1409,53 +1388,32 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 
 ---
 
-### Visualize Command
+### Performance Visualization
 
-Launch interactive web-based visualizer for comparing evaluation results.
+Plot llama.cpp server performance metrics from one or more log files. Plots are saved as images; pass `--show` to also display them interactively.
 
 ```bash
-gaia visualize [OPTIONS]
+gaia perf-vis LOG_PATH [LOG_PATH ...] [--show]
 ```
 
 **Options:**
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--port` | integer | 3000 | Visualizer server port |
-| `--experiments-dir` | path | ./output/experiments | Experiments directory |
-| `--evaluations-dir` | path | ./output/evaluations | Evaluations directory |
-| `--workspace` | path | current directory | Base workspace directory |
-| `--no-browser` | flag | false | Don't auto-open browser |
-| `--host` | string | localhost | Host address |
+| `log_paths` | path(s) | - | One or more llama.cpp server log files to visualize |
+| `--show` | flag | false | Display plots interactively in addition to saving images |
 
 **Examples:**
 
 <CodeGroup>
-```bash Default
-gaia visualize
+```bash Single log
+gaia perf-vis ./logs/llama-server.log
 ```
 
-```bash Custom Directories
-gaia visualize \
-  --experiments-dir ./my_experiments \
-  --evaluations-dir ./my_evaluations
-```
-
-```bash Custom Port
-gaia visualize --port 8080 --no-browser
+```bash Multiple logs + show
+gaia perf-vis ./logs/run1.log ./logs/run2.log --show
 ```
 </CodeGroup>
-
-**Features:**
-- Interactive Comparison (side-by-side)
-- Key Metrics Dashboard
-- Quality Analysis
-- Real-time Updates
-- Responsive Design
-
-<Note>
-Node.js must be installed. Dependencies are automatically installed on first run.
-</Note>
 
 ---
 
