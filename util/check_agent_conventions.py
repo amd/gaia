@@ -11,7 +11,8 @@ Hard checks (block CI on failure):
 - Defines at least one class inheriting from something named ``Agent`` / ``*Agent`` / ``*Mixin``
 - The agent class implements ``_get_system_prompt`` and ``_register_tools``
   (or inherits them transitively from a known base)
-- ``_register_tools`` contains ``_TOOL_REGISTRY.clear()`` (when defined locally)
+- The agent isolates its tool set — via ``self._snapshot_tools()`` (preferred) or
+  local ``_TOOL_REGISTRY`` mutation (``.clear()`` / ``.pop()``)
 - Copyright header + SPDX line present
 - ``KNOWN_TOOLS`` entries in registry.py resolve to importable classes
 
@@ -68,7 +69,23 @@ def _method_names(cls: ast.ClassDef) -> set:
 
 
 def _manages_registry_state(cls: ast.ClassDef) -> bool:
-    """True if _register_* locally manages registry state (.clear() or .pop())."""
+    """True if the agent isolates its tool set from the global registry.
+
+    Two sanctioned mechanisms count:
+      - Local mutation of ``_TOOL_REGISTRY`` (``.clear()`` / ``.pop()`` / item access)
+        inside a ``_register_*`` method.
+      - The per-instance snapshot pattern — calling ``self._snapshot_tools()`` or
+        manipulating ``self._instance_tools`` anywhere in the class. This is the
+        modern replacement for the old global ``_TOOL_REGISTRY.pop()`` pattern
+        (see ``base/agent.py`` ``_snapshot_tools``) and may be invoked from
+        ``__init__`` rather than ``_register_tools``.
+    """
+    # Snapshot-based isolation can live in any method (commonly __init__), so
+    # scan the whole class body for it.
+    class_src = ast.unparse(cls)
+    if "_snapshot_tools" in class_src or "_instance_tools" in class_src:
+        return True
+
     has_register_tools = False
     for node in cls.body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -149,9 +166,9 @@ def _check_agent_file(
 
         if not _manages_registry_state(cls):
             warnings.append(
-                f"{rel}: class {cls.name}._register_tools does not call "
-                "_TOOL_REGISTRY.clear() or .pop() — tools may leak across "
-                "agent instances; confirm this is intentional"
+                f"{rel}: class {cls.name} does not isolate its tool set — call "
+                "self._snapshot_tools() (preferred) or mutate _TOOL_REGISTRY "
+                "(.clear()/.pop()); tools may leak across agent instances"
             )
 
     # ── Soft: tests exist ─────────────────────────────────────────────────
@@ -170,7 +187,9 @@ def _check_agent_file(
         TESTS_DIR / name
     ).is_dir()
     if not has_tests and TESTS_DIR.exists():
-        for p in TESTS_DIR.glob("test_*.py"):
+        # Recurse: tests live under tests/unit/, tests/integration/, tests/mcp/,
+        # tests/unit/agents/, etc. — not just the top-level tests/ directory.
+        for p in TESTS_DIR.rglob("test_*.py"):
             lower = p.stem.lower()
             if any(needle and needle in lower for needle in needles):
                 has_tests = True

@@ -363,17 +363,24 @@ gaia/
 ├── src/gaia/           # Main source code
 │   ├── agents/         # Agent implementations
 │   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent
-│   │   ├── tools/      # Cross-agent tool mixins (file_tools, screenshot_tools)
-│   │   ├── chat/       # ChatAgent with RAG (tools/rag_tools, tools/shell_tools)
+│   │   ├── tools/      # Cross-agent tool mixins (file, filesystem, scratchpad, browser, screenshot)
+│   │   ├── chat/       # ChatAgent (chat/doc/file profiles) with RAG and shell tools
 │   │   ├── code/       # CodeAgent with orchestration, validators, file_io tools
+│   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
+│   │   ├── analyst/    # AnalystAgent — structured data analysis (CSV/Excel, scratchpad SQL)
+│   │   ├── browser/    # BrowserAgent — web research (search, fetch, download)
+│   │   ├── docqa/      # DocumentQAAgent — standalone document Q&A with RAG
+│   │   ├── fileio/     # FileIOAgent — file read/write/edit operations
+│   │   ├── email/      # EmailTriageAgent — email triage and summarization
 │   │   ├── builder/    # BuilderAgent — scaffolds new agents from templates
-│   │   ├── summarize/  # SummarizeAgent — document/text summarization
+│   │   ├── summarize/  # SummarizerAgent — document/text summarization
 │   │   ├── blender/    # BlenderAgent for 3D automation
 │   │   ├── jira/       # JiraAgent for issue management
 │   │   ├── docker/     # DockerAgent for containerization
 │   │   ├── emr/        # MedicalIntakeAgent for healthcare (VLM)
 │   │   ├── routing/    # RoutingAgent for intelligent agent selection
 │   │   ├── sd/         # SDAgent for Stable Diffusion image generation
+│   │   ├── connectors_demo/ # ConnectorsDemoAgent — per-agent connector activation demo
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
@@ -454,16 +461,22 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 
 | Agent | Location | Description | Default Model |
 |-------|----------|-------------|---------------|
-| **ChatAgent** | `agents/chat/agent.py` | Document Q&A with RAG | Qwen3.5-35B |
+| **ChatAgent** | `agents/chat/agent.py` | Multi-profile conversation (chat/doc/file) with RAG | Gemma-4-E4B (default) |
+| **DocumentQAAgent** | `agents/docqa/agent.py` | Standalone document Q&A with RAG | Qwen3.5-35B |
+| **AnalystAgent** | `agents/analyst/agent.py` | Structured data analysis (CSV/Excel, scratchpad SQL) | Qwen3.5-35B |
+| **BrowserAgent** | `agents/browser/agent.py` | Web research — search, fetch pages, download | Qwen3.5-35B |
+| **FileIOAgent** | `agents/fileio/agent.py` | File read/write/edit operations | Qwen3.5-35B |
+| **EmailTriageAgent** | `agents/email/agent.py` | Email triage and summarization | Gemma-4-E4B (default) |
 | **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3.5-35B |
 | **BuilderAgent** | `agents/builder/agent.py` | Scaffolds new agents from templates | Qwen3.5-35B |
-| **SummarizeAgent** | `agents/summarize/agent.py` | Document/text summarization | Qwen3.5-35B |
+| **SummarizerAgent** | `agents/summarize/agent.py` | Document/text summarization | Qwen3.5-35B |
 | **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B |
 | **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B |
 | **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B |
 | **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing | Qwen3-VL-4B (VLM) |
 | **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B |
 | **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
+| **ConnectorsDemoAgent** | `agents/connectors_demo/agent.py` | Per-agent connector activation demo | Qwen3.5-35B |
 
 ### Agent Registry & Tool Mixins
 
@@ -472,10 +485,14 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | Tool name | Mixin | Purpose |
 |-----------|-------|---------|
 | `rag` | `gaia.agents.chat.tools.rag_tools.RAGToolsMixin` | Document retrieval |
+| `code_index` | `gaia.agents.code_index.tools.mixin.CodeIndexToolsMixin` | Semantic code search (FAISS) |
 | `file_search` | `gaia.agents.tools.file_tools.FileSearchToolsMixin` | Fuzzy/glob file search |
 | `file_io` | `gaia.agents.code.tools.file_io.FileIOToolsMixin` | Read/write/edit files |
 | `shell` | `gaia.agents.chat.tools.shell_tools.ShellToolsMixin` | Sandboxed shell commands |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | Screen capture |
+| `filesystem` | `gaia.agents.tools.filesystem_tools.FileSystemToolsMixin` | File system navigation |
+| `scratchpad` | `gaia.agents.tools.scratchpad_tools.ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |
+| `browser` | `gaia.agents.tools.browser_tools.BrowserToolsMixin` | Web search, page fetch, download |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 
@@ -497,6 +514,9 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia talk` - Voice interaction
 - `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
 - `gaia llm "<text>"` - Simple LLM queries
+- `gaia browse` - Web research (search, fetch pages, download)
+- `gaia analyze` - Structured data analysis with scratchpad tables
+- `gaia email` - Email triage and summarization
 - `gaia summarize` - Document summarization
 - `gaia blender` - Blender 3D agent
 - `gaia sd` - Stable Diffusion image generation
@@ -630,7 +650,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 2. **Check for duplicates:** Search existing issues/PRs to avoid redundant responses
 
 3. **Reference specific files:** Use precise file references with line numbers when possible
-   - Agent implementations: `src/gaia/agents/` (base/, tools/, chat/, code/, builder/, summarize/, blender/, jira/, docker/, emr/, routing/, sd/, registry.py)
+   - Agent implementations: `src/gaia/agents/` (base/, tools/, chat/, code/, code_index/, analyst/, browser/, docqa/, fileio/, email/, builder/, summarize/, blender/, jira/, docker/, emr/, routing/, sd/, connectors_demo/, registry.py)
    - CLI commands: `src/gaia/cli.py`
    - MCP integration: `src/gaia/mcp/`
    - LLM backend: `src/gaia/llm/` (+ `providers/` for Claude/OpenAI)
