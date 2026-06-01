@@ -213,6 +213,9 @@ class CodeAgent(
         self.register_validation_tools()  # ValidationToolsMixin (Testing and validation)
         self.register_code_index_tools()  # CodeIndexToolsMixin (Semantic code search)
 
+        # Isolate this agent's tools from other agents in the same process.
+        self._snapshot_tools()
+
     def process_query(
         self, user_input: str, workspace_root=None, progress_callback=None, **kwargs
     ):  # pylint: disable=arguments-differ,unused-argument

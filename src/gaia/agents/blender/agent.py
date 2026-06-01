@@ -432,6 +432,9 @@ Examples of colored requests:
                 self.error_history.append(str(e))
                 return {"status": "error", "error": str(e)}
 
+        # Isolate this agent's tools from other agents in the same process.
+        self._snapshot_tools()
+
     def _post_process_tool_result(
         self,
         tool_name: str,

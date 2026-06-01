@@ -1314,6 +1314,9 @@ Use the available tools to search and retrieve patient information."""
                 }
             return {"success": False, "error": "Failed to extract patient data"}
 
+        # Isolate this agent's tools from other agents in the same process.
+        self._snapshot_tools()
+
     def get_stats(self) -> Dict[str, Any]:
         """
         Get statistics about intake form processing.

@@ -218,6 +218,9 @@ Step 3: Build with build_image
             """
             return self._run_container(image, port, name)
 
+        # Isolate this agent's tools from other agents in the same process.
+        self._snapshot_tools()
+
     def _analyze_directory(self, path: str) -> Dict[str, Any]:
         """Analyze directory to determine application type and structure."""
         logger.debug(f"Analyzing directory: {path}")

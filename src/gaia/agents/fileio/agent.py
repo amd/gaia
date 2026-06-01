@@ -61,5 +61,8 @@ class FileIOAgent(
 
             get_logger(__name__).debug("FileIOAgent: optional tools skipped: %s", e)
 
+        # Isolate this agent's tools from other agents in the same process.
+        self._snapshot_tools()
+
     def _get_system_prompt(self) -> str:
         return "You are FileIOAgent. Perform file operations safely and ask for confirmation before destructive actions."

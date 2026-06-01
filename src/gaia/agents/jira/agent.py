@@ -381,6 +381,9 @@ JQL RULES:
                 issue_key, summary, description, priority, status
             )
 
+        # Isolate this agent's tools from other agents in the same process.
+        self._snapshot_tools()
+
     def _get_jira_credentials(self) -> tuple[str, str, str]:
         """Get Jira credentials from environment.
 

@@ -220,3 +220,6 @@ RULES:
                 "image_path": str(path),
                 "story_file": story_path,
             }
+
+        # Isolate this agent's tools from other agents in the same process.
+        self._snapshot_tools()

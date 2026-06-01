@@ -74,5 +74,8 @@ class DocumentQAAgent(
 
             get_logger(__name__).debug("DocumentQAAgent: optional tools skipped: %s", e)
 
+        # Isolate this agent's tools from other agents in the same process.
+        self._snapshot_tools()
+
     def _get_system_prompt(self) -> str:
         return "You are DocumentQAAgent. Use indexed documents to answer user queries accurately and cite sources."

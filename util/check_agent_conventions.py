@@ -11,7 +11,9 @@ Hard checks (block CI on failure):
 - Defines at least one class inheriting from something named ``Agent`` / ``*Agent`` / ``*Mixin``
 - The agent class implements ``_get_system_prompt`` and ``_register_tools``
   (or inherits them transitively from a known base)
-- ``_register_tools`` contains ``_TOOL_REGISTRY.clear()`` (when defined locally)
+- ``_register_tools`` isolates its tool registry when defined locally — either
+  the modern ``self._snapshot_tools()`` (preferred) or the older
+  ``_TOOL_REGISTRY.clear()``/``.pop()``
 - Copyright header + SPDX line present
 - ``KNOWN_TOOLS`` entries in registry.py resolve to importable classes
 
@@ -68,7 +70,11 @@ def _method_names(cls: ast.ClassDef) -> set:
 
 
 def _manages_registry_state(cls: ast.ClassDef) -> bool:
-    """True if _register_* locally manages registry state (.clear() or .pop())."""
+    """True if _register_* locally isolates the tool registry.
+
+    Accepts the modern per-instance ``self._snapshot_tools()`` (preferred) or
+    the older global ``_TOOL_REGISTRY.clear()``/``.pop()`` patterns.
+    """
     has_register_tools = False
     for node in cls.body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -79,7 +85,8 @@ def _manages_registry_state(cls: ast.ClassDef) -> bool:
             has_register_tools = True
         src = ast.unparse(node)
         if (
-            "_TOOL_REGISTRY.clear" in src
+            "_snapshot_tools" in src  # modern per-instance isolation (preferred)
+            or "_TOOL_REGISTRY.clear" in src
             or "_TOOL_REGISTRY.pop" in src
             or "_TOOL_REGISTRY[" in src  # explicit manipulation
         ):
@@ -149,9 +156,10 @@ def _check_agent_file(
 
         if not _manages_registry_state(cls):
             warnings.append(
-                f"{rel}: class {cls.name}._register_tools does not call "
-                "_TOOL_REGISTRY.clear() or .pop() — tools may leak across "
-                "agent instances; confirm this is intentional"
+                f"{rel}: class {cls.name}._register_tools does not isolate its "
+                "tool registry (call self._snapshot_tools(), or "
+                "_TOOL_REGISTRY.clear()/.pop()) — tools may leak across agent "
+                "instances; confirm this is intentional"
             )
 
     # ── Soft: tests exist ─────────────────────────────────────────────────

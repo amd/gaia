@@ -199,6 +199,8 @@ class SummarizerAgent(Agent):
 
     def _register_tools(self) -> None:
         """Register tools for the agent. No tools needed for summarizer."""
+        # Isolate this agent's (empty) tool set from other agents in-process.
+        self._snapshot_tools()
 
     def _prepare_chat(self, input_type: str) -> None:
         """Clear prior chat context and set system prompt for the given input type."""
