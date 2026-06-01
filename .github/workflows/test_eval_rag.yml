@@ -1,13 +1,13 @@
 name: Eval RAG Quality
 
+# DISABLED on PRs pending rebuild -- see #1315.
+# This gate has never executed successfully: it targeted a runner label
+# that never existed plus several more blocking bugs, and overflows the
+# 90-min budget even once fixed. `workflow_dispatch` is kept so the
+# rebuild work (#1315) can run it manually; restore the `pull_request`
+# trigger only with a working, time-bounded config.
 on:
-  pull_request:
-    paths:
-      - 'src/gaia/agents/**'
-      - 'src/gaia/llm/**'
-      - 'src/gaia/rag/**'
-      - 'src/gaia/eval/**'
-      - 'eval/scenarios/**'
+  workflow_dispatch:
 
 concurrency:
   group: lemonade-eval
