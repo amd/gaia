@@ -188,7 +188,11 @@ class ChatAgent(
             self._gaia_namespaced_agent_id = config.namespaced_agent_id
 
         # Initialize path validator
-        self.path_validator = PathValidator(config.allowed_paths)
+        self.path_validator = PathValidator(
+            config.allowed_paths,
+            on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
+            on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
+        )
 
         # Store config for access in other methods
         self.config = config

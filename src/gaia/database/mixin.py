@@ -116,6 +116,7 @@ class DatabaseMixin:
             )
         """
         self._require_db()
+        assert self._db is not None
         cursor = self._db.execute(sql, params or {})
         rows = [dict(row) for row in cursor.fetchall()]
         if one:
@@ -140,13 +141,14 @@ class DatabaseMixin:
             })
         """
         self._require_db()
+        assert self._db is not None
         cols = ", ".join(data.keys())
         placeholders = ", ".join(f":{k}" for k in data.keys())
         sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"
         cursor = self._db.execute(sql, data)
         if not self._in_tx:
             self._db.commit()
-        return cursor.lastrowid
+        return cursor.lastrowid or 0
 
     def update(
         self,
@@ -176,6 +178,7 @@ class DatabaseMixin:
             )
         """
         self._require_db()
+        assert self._db is not None
         # Prefix data params with __set_ to avoid collision with where params
         set_clause = ", ".join(f"{k} = :__set_{k}" for k in data.keys())
         merged_params = {f"__set_{k}": v for k, v in data.items()}
@@ -202,6 +205,7 @@ class DatabaseMixin:
             count = self.delete("sessions", "expires_at < :now", {"now": now})
         """
         self._require_db()
+        assert self._db is not None
         sql = f"DELETE FROM {table} WHERE {where}"
         cursor = self._db.execute(sql, params)
         if not self._in_tx:
@@ -261,6 +265,7 @@ class DatabaseMixin:
             ''')
         """
         self._require_db()
+        assert self._db is not None
         if self._in_tx:
             raise RuntimeError(
                 "execute() cannot be called inside a transaction() block. "

@@ -563,6 +563,157 @@ jobs:
           path: /tmp/gaia-wheel/*.whl
           retention-days: 14
 
+  # ─── Pre-release artifact validation (issue #990) ───────────────────
+  # Downloads all platform artifacts from the build matrix and validates
+  # file existence, minimum sizes, correct extensions, and update
+  # metadata files. Catches truncated downloads, missing blockmaps, and
+  # malformed update manifests before they reach users.
+  validate-artifacts:
+    name: Validate build artifacts
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download all installer artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/artifacts
+
+      - name: Validate artifact structure and sizes
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTIFACTS="${RUNNER_TEMP}/artifacts"
+          FAIL=0
+
+          echo "=== Artifact tree ==="
+          find "${ARTIFACTS}" -type f | sort
+          echo ""
+
+          # ── Windows artifacts ──────────────────────────────────────
+          WIN_DIR="${ARTIFACTS}/windows-installer"
+          if [ -d "${WIN_DIR}" ]; then
+            echo "--- Windows ---"
+            EXE=$(find "${WIN_DIR}" -maxdepth 1 -name "*.exe" | head -n1)
+            if [ -z "${EXE}" ]; then
+              echo "::error::Windows: no .exe found"
+              FAIL=1
+            else
+              SIZE=$(stat -c%s "${EXE}" 2>/dev/null || stat -f%z "${EXE}")
+              echo "EXE: $(basename "${EXE}") (${SIZE} bytes)"
+              # NSIS installer should be >50MB with bundled Lemonade MSI
+              if [ "${SIZE}" -lt 52428800 ]; then
+                echo "::error::Windows .exe smaller than 50MB — likely missing bundled components"
+                FAIL=1
+              fi
+            fi
+            # Blockmap for delta updates
+            if ! find "${WIN_DIR}" -maxdepth 1 -name "*.exe.blockmap" | grep -q .; then
+              echo "::error::Windows: missing .exe.blockmap (electron-updater needs it)"
+              FAIL=1
+            fi
+            # Update manifest
+            if [ ! -f "${WIN_DIR}/latest.yml" ]; then
+              echo "::error::Windows: missing latest.yml"
+              FAIL=1
+            else
+              # Sanity: latest.yml must contain the installer filename
+              EXE_NAME=$(basename "${EXE}" 2>/dev/null || true)
+              if [ -n "${EXE_NAME}" ] && ! grep -qF "${EXE_NAME}" "${WIN_DIR}/latest.yml"; then
+                echo "::warning::latest.yml does not reference ${EXE_NAME}"
+              fi
+            fi
+          else
+            echo "::warning::Windows artifact directory not found (build may have been skipped)"
+          fi
+
+          # ── macOS artifacts ────────────────────────────────────────
+          MAC_DIR="${ARTIFACTS}/macos-installer"
+          if [ -d "${MAC_DIR}" ]; then
+            echo "--- macOS ---"
+            DMG=$(find "${MAC_DIR}" -maxdepth 1 -name "*.dmg" | head -n1)
+            if [ -z "${DMG}" ]; then
+              echo "::error::macOS: no .dmg found"
+              FAIL=1
+            else
+              SIZE=$(stat -c%s "${DMG}" 2>/dev/null || stat -f%z "${DMG}")
+              echo "DMG: $(basename "${DMG}") (${SIZE} bytes)"
+              if [ "${SIZE}" -lt 52428800 ]; then
+                echo "::error::macOS .dmg smaller than 50MB — likely incomplete build"
+                FAIL=1
+              fi
+            fi
+            if [ ! -f "${MAC_DIR}/latest-mac.yml" ]; then
+              echo "::error::macOS: missing latest-mac.yml"
+              FAIL=1
+            fi
+          else
+            echo "::warning::macOS artifact directory not found"
+          fi
+
+          # ── Linux artifacts ────────────────────────────────────────
+          LINUX_DIR="${ARTIFACTS}/linux-installer"
+          if [ -d "${LINUX_DIR}" ]; then
+            echo "--- Linux ---"
+            APPIMAGE=$(find "${LINUX_DIR}" -maxdepth 1 -name "*.AppImage" | head -n1)
+            DEB=$(find "${LINUX_DIR}" -maxdepth 1 -name "*.deb" | head -n1)
+            if [ -z "${APPIMAGE}" ]; then
+              echo "::error::Linux: no .AppImage found"
+              FAIL=1
+            else
+              SIZE=$(stat -c%s "${APPIMAGE}" 2>/dev/null || stat -f%z "${APPIMAGE}")
+              echo "AppImage: $(basename "${APPIMAGE}") (${SIZE} bytes)"
+              if [ "${SIZE}" -lt 52428800 ]; then
+                echo "::error::Linux .AppImage smaller than 50MB"
+                FAIL=1
+              fi
+            fi
+            if [ -z "${DEB}" ]; then
+              echo "::error::Linux: no .deb found"
+              FAIL=1
+            else
+              SIZE=$(stat -c%s "${DEB}" 2>/dev/null || stat -f%z "${DEB}")
+              echo "DEB: $(basename "${DEB}") (${SIZE} bytes)"
+              if [ "${SIZE}" -lt 52428800 ]; then
+                echo "::error::Linux .deb smaller than 50MB"
+                FAIL=1
+              fi
+            fi
+            if [ ! -f "${LINUX_DIR}/latest-linux.yml" ]; then
+              echo "::error::Linux: missing latest-linux.yml"
+              FAIL=1
+            fi
+          else
+            echo "::warning::Linux artifact directory not found"
+          fi
+
+          # ── Python wheel (if present) ──────────────────────────────
+          WHEEL_DIR="${ARTIFACTS}/gaia-wheel"
+          if [ -d "${WHEEL_DIR}" ]; then
+            echo "--- Python wheel ---"
+            WHL=$(find "${WHEEL_DIR}" -maxdepth 1 -name "*.whl" | head -n1)
+            if [ -z "${WHL}" ]; then
+              echo "::error::gaia-wheel artifact dir exists but contains no .whl"
+              FAIL=1
+            else
+              SIZE=$(stat -c%s "${WHL}" 2>/dev/null || stat -f%z "${WHL}")
+              echo "Wheel: $(basename "${WHL}") (${SIZE} bytes)"
+              if [ "${SIZE}" -lt 10240 ]; then
+                echo "::error::Python wheel smaller than 10KB — likely corrupt"
+                FAIL=1
+              fi
+            fi
+          fi
+
+          echo ""
+          if [ "${FAIL}" -eq 1 ]; then
+            echo "::error::Artifact validation FAILED — see errors above"
+            exit 1
+          fi
+          echo "All artifact validations passed."
+
   # ─── AppImage smoke tests (issue #782) ──────────────────────────────
   # Consume the linux-installer artifact produced by the `build` matrix
   # and run structural + distro-level smoke checks against the AppImage.
@@ -1110,13 +1261,14 @@ jobs:
           prerelease: ${{ contains(inputs.tag, '-rc.') || contains(inputs.tag, '-beta.') }}
 
   # ─── Gate job ───────────────────────────────────────────────────────
-  # Final job that confirms all platform builds succeeded AND the Linux
-  # AppImage smoke suite passed. This is the single dependency that
+  # Final job that confirms all platform builds succeeded AND all
+  # validation / smoke jobs passed. This is the single dependency that
   # publish.yml (or any caller) should wait on.
   #
   # The smoke jobs (appimage-structural-smoke, appimage-distro-matrix,
   # appimage-userns-restricted) are issue #782 regression guards. The
-  # custom-agent MCP harness is issue #993's installed-runtime guard. A
+  # custom-agent MCP harness is issue #993's installed-runtime guard.
+  # validate-artifacts is issue #990's pre-release artifact gate. A
   # broken AppImage that still builds but does not launch would slip past
   # if we gated only on `build`.
   build-complete:
@@ -1124,6 +1276,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - build
+      - validate-artifacts
       - appimage-structural-smoke
       - appimage-distro-matrix
       - appimage-userns-restricted
@@ -1135,12 +1288,14 @@ jobs:
         shell: bash
         run: |
           build_result="${{ needs.build.result }}"
+          validate_result="${{ needs.validate-artifacts.result }}"
           structural_result="${{ needs.appimage-structural-smoke.result }}"
           distro_result="${{ needs.appimage-distro-matrix.result }}"
           userns_result="${{ needs.appimage-userns-restricted.result }}"
           mcp_harness_result="${{ needs.custom-agent-mcp-harness.result }}"
           dmg_result="${{ needs.dmg-structural-smoke.result }}"
           echo "build:                       $build_result"
+          echo "validate-artifacts:          $validate_result"
           echo "appimage-structural-smoke:   $structural_result"
           echo "appimage-distro-matrix:      $distro_result"
           echo "appimage-userns-restricted:  $userns_result"
@@ -1151,7 +1306,7 @@ jobs:
             echo "::error::One or more platform installer builds failed"
             fail=1
           fi
-          for r in "$structural_result" "$distro_result" "$userns_result" "$mcp_harness_result" "$dmg_result"; do
+          for r in "$validate_result" "$structural_result" "$distro_result" "$userns_result" "$mcp_harness_result" "$dmg_result"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
               echo "::error::Installer smoke job failed (status: $r)"
               fail=1

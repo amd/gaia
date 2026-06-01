@@ -7,7 +7,7 @@ Creates workflow phases for Python applications.
 """
 
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List, cast
 
 from ..steps.base import UserContext
 from ..workflows.base import WorkflowPhase
@@ -103,4 +103,4 @@ class PythonFactory(ProjectFactory):
                 "test_command": "pytest",
             },
         }
-        return configs.get(phase_name, {})
+        return cast(Dict[str, Any], configs.get(phase_name, {}))

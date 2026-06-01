@@ -280,13 +280,20 @@ DELETE /api/connectors/{id}/activations/{agent_id}
 ```
 
 Both mutating routes reject non-`mcp_server` connectors with `400 Bad
-Request` (after the standard `X-Gaia-UI` CSRF check). SSE event
-`connector.activation.changed` is emitted on every successful PUT /
-DELETE so the Agent UI tile refreshes within ~1 s when another caller
-(CLI, SDK) changes the state. Disconnecting a connector wipes both
-grants **and** activations for that connector — re-adding the same
-`connector_id` must not silently inherit the previous user's
-tool-visibility decisions.
+Request` (after the standard `X-Gaia-UI` CSRF check).
+
+Every activation change emits the SSE event `connector.activation.changed`
+(`{connector_id, agent_id, active}`) so an open Agent UI Settings tab
+refreshes the "Active for" state without a manual reload. The emit is
+centralized in `api.activate` / `api.deactivate`, so HTTP, SDK, and CLI
+callers all notify through one path. Because the CLI runs in a separate
+process from the UI server, the server also runs a background watcher on
+`activations.json` that emits the same event (within ~1 s) when an
+out-of-process writer changes the ledger.
+
+Disconnecting a connector wipes both grants **and** activations for that
+connector — re-adding the same `connector_id` must not silently inherit
+the previous user's tool-visibility decisions.
 
 ## Where things live
 
