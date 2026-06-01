@@ -1,24 +1,24 @@
 {
-  "model": "Gemma-4-E4B-it-GGUF",
+  "model": "Gemma-4-E2B-it-GGUF",
   "fixture": "synthetic_inbox.mbox",
-  "category_accuracy": 0.3955,
+  "category_accuracy": 0.4273,
   "category_breakdown": {
     "urgent": 0.2553,
-    "actionable": 0.5536,
-    "informational": 0.425,
-    "low priority": 0.2703
+    "actionable": 0.5893,
+    "informational": 0.5875,
+    "low priority": 0.0541
   },
   "is_spam_accuracy": 0.9091,
   "is_phishing_accuracy": 0.9545,
   "scored": 220,
-  "correct": 87,
+  "correct": 94,
   "tolerance_pp": 5,
   "_recorded_on": "2026-06-01",
-  "_recorded_by": "real measurement on Gemma-4-E4B-it-GGUF via production heuristic + LLM-assist triage path (#1107)",
+  "_recorded_by": "real measurement on Gemma-4-E2B-it-GGUF via production heuristic + LLM-assist triage path (#1107)",
   "_misses": [
     {
       "id": "01584c7b8ee54ff6",
-      "predicted": "low priority",
+      "predicted": "informational",
       "expected": "actionable",
       "source": "llm"
     },
@@ -32,12 +32,6 @@
       "id": "0331e586db6beecc",
       "predicted": "urgent",
       "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "05be3f793f825bf0",
-      "predicted": "low priority",
-      "expected": "informational",
       "source": "llm"
     },
     {
@@ -89,6 +83,12 @@
       "source": "llm"
     },
     {
+      "id": "10ec7574161d746d",
+      "predicted": "informational",
+      "expected": "low priority",
+      "source": "llm"
+    },
+    {
       "id": "13b9073e65646964",
       "predicted": "low priority",
       "expected": "informational",
@@ -102,8 +102,14 @@
     },
     {
       "id": "172661e0f889e4bf",
-      "predicted": "low priority",
+      "predicted": "informational",
       "expected": "actionable",
+      "source": "llm"
+    },
+    {
+      "id": "17278778f3ec1f9c",
+      "predicted": "informational",
+      "expected": "low priority",
       "source": "llm"
     },
     {
@@ -174,7 +180,7 @@
     },
     {
       "id": "2cb64a0ba21b9268",
-      "predicted": "low priority",
+      "predicted": "informational",
       "expected": "actionable",
       "source": "llm"
     },
@@ -216,14 +222,8 @@
     },
     {
       "id": "37eb07fad9beaa71",
-      "predicted": "low priority",
+      "predicted": "informational",
       "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "3a1e0cb982d817bf",
-      "predicted": "low priority",
-      "expected": "informational",
       "source": "llm"
     },
     {
@@ -248,6 +248,12 @@
       "id": "3e060a7638864950",
       "predicted": "actionable",
       "expected": "urgent",
+      "source": "llm"
+    },
+    {
+      "id": "3ebd9b5933bb073c",
+      "predicted": "informational",
+      "expected": "low priority",
       "source": "llm"
     },
     {
@@ -281,9 +287,9 @@
       "source": "heuristic"
     },
     {
-      "id": "4633737427659afc",
-      "predicted": "low priority",
-      "expected": "informational",
+      "id": "483f7a3ed6ea0821",
+      "predicted": "actionable",
+      "expected": "low priority",
       "source": "llm"
     },
     {
@@ -291,6 +297,12 @@
       "predicted": "low priority",
       "expected": "informational",
       "source": "heuristic"
+    },
+    {
+      "id": "4bc416276e06a1f1",
+      "predicted": "actionable",
+      "expected": "informational",
+      "source": "llm"
     },
     {
       "id": "4ed514432cf621b5",
@@ -305,12 +317,6 @@
       "source": "llm"
     },
     {
-      "id": "4f36064c25b26a9a",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
       "id": "4f732ef810d87f00",
       "predicted": "low priority",
       "expected": "urgent",
@@ -318,7 +324,7 @@
     },
     {
       "id": "50eb7532cae3a6d1",
-      "predicted": "low priority",
+      "predicted": "informational",
       "expected": "actionable",
       "source": "llm"
     },
@@ -377,15 +383,9 @@
       "source": "heuristic"
     },
     {
-      "id": "5d6d263121d77226",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "5eab68237c9d81dc",
-      "predicted": "urgent",
-      "expected": "actionable",
+      "id": "5e9f54b13e2662a3",
+      "predicted": "informational",
+      "expected": "low priority",
       "source": "llm"
     },
     {
@@ -401,20 +401,14 @@
       "source": "llm"
     },
     {
-      "id": "610bcdec214508cc",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
       "id": "61466449dfab4466",
       "predicted": "urgent",
       "expected": "low priority",
       "source": "llm"
     },
     {
-      "id": "632225d599c83565",
-      "predicted": "low priority",
+      "id": "617376457500ffa5",
+      "predicted": "actionable",
       "expected": "informational",
       "source": "llm"
     },
@@ -431,8 +425,8 @@
       "source": "llm"
     },
     {
-      "id": "661497ee89108259",
-      "predicted": "low priority",
+      "id": "65c13168c5294b34",
+      "predicted": "actionable",
       "expected": "informational",
       "source": "llm"
     },
@@ -449,33 +443,21 @@
       "source": "heuristic"
     },
     {
-      "id": "694b32c76e5ea3d7",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
       "id": "69956070b60793f4",
       "predicted": "actionable",
       "expected": "urgent",
       "source": "llm"
     },
     {
-      "id": "6be88778db1bd94f",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "6bf3df0f6b17f111",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
       "id": "6e4df8202944d6db",
       "predicted": "actionable",
       "expected": "urgent",
+      "source": "llm"
+    },
+    {
+      "id": "6e89802d1f345848",
+      "predicted": "actionable",
+      "expected": "informational",
       "source": "llm"
     },
     {
@@ -491,14 +473,14 @@
       "source": "llm"
     },
     {
-      "id": "7472825a6824ddb1",
-      "predicted": "actionable",
-      "expected": "informational",
+      "id": "74cd4919d3d621e6",
+      "predicted": "urgent",
+      "expected": "low priority",
       "source": "llm"
     },
     {
       "id": "758cdb051c3b37ca",
-      "predicted": "actionable",
+      "predicted": "informational",
       "expected": "low priority",
       "source": "llm"
     },
@@ -539,10 +521,22 @@
       "source": "llm"
     },
     {
+      "id": "8873445e960e86c6",
+      "predicted": "informational",
+      "expected": "low priority",
+      "source": "llm"
+    },
+    {
       "id": "89178213970a8117",
       "predicted": "informational",
       "expected": "urgent",
       "source": "heuristic"
+    },
+    {
+      "id": "89c3447dda4a8a20",
+      "predicted": "informational",
+      "expected": "low priority",
+      "source": "llm"
     },
     {
       "id": "8b6c816705e5c7c8",
@@ -552,7 +546,7 @@
     },
     {
       "id": "8bd3a251ac5c4df2",
-      "predicted": "low priority",
+      "predicted": "informational",
       "expected": "actionable",
       "source": "llm"
     },
@@ -569,27 +563,15 @@
       "source": "llm"
     },
     {
-      "id": "93f7a86b6bdc40fe",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "9532911209bf64a3",
-      "predicted": "low priority",
+      "id": "98b5862a1a250847",
+      "predicted": "actionable",
       "expected": "informational",
       "source": "llm"
     },
     {
       "id": "9a73e95a0c84ab79",
-      "predicted": "low priority",
+      "predicted": "informational",
       "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "9bd86df02a01a39b",
-      "predicted": "actionable",
-      "expected": "informational",
       "source": "llm"
     },
     {
@@ -611,14 +593,8 @@
       "source": "llm"
     },
     {
-      "id": "a3668842b185971f",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
       "id": "a51f16a07ebb422f",
-      "predicted": "low priority",
+      "predicted": "informational",
       "expected": "actionable",
       "source": "llm"
     },
@@ -626,6 +602,12 @@
       "id": "adbfea2474fd792c",
       "predicted": "informational",
       "expected": "actionable",
+      "source": "llm"
+    },
+    {
+      "id": "af3ade86f9ac0556",
+      "predicted": "actionable",
+      "expected": "informational",
       "source": "llm"
     },
     {
@@ -659,14 +641,8 @@
       "source": "heuristic"
     },
     {
-      "id": "b881a320646fe933",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
       "id": "bb7193d32a828e09",
-      "predicted": "actionable",
+      "predicted": "urgent",
       "expected": "low priority",
       "source": "llm"
     },
@@ -689,14 +665,8 @@
       "source": "llm"
     },
     {
-      "id": "c99238b82a3ced93",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
       "id": "cd28b28167a294a7",
-      "predicted": "informational",
+      "predicted": "actionable",
       "expected": "low priority",
       "source": "llm"
     },
@@ -707,8 +677,8 @@
       "source": "heuristic"
     },
     {
-      "id": "d3e1ac7008005d39",
-      "predicted": "low priority",
+      "id": "d2f7b9b507ee6da3",
+      "predicted": "actionable",
       "expected": "informational",
       "source": "llm"
     },
@@ -717,12 +687,6 @@
       "predicted": "informational",
       "expected": "actionable",
       "source": "heuristic"
-    },
-    {
-      "id": "d5d99e10a2b3fb8a",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "llm"
     },
     {
       "id": "d9c437157ad659bb",
@@ -782,12 +746,6 @@
       "id": "f58906b71d8da4a3",
       "predicted": "urgent",
       "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "f5e064daf29bb077",
-      "predicted": "actionable",
-      "expected": "informational",
       "source": "llm"
     },
     {
