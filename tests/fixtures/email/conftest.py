@@ -18,23 +18,34 @@ import pytest
 
 FIXTURES_DIR = Path(__file__).resolve().parent
 STUB_INBOX_MBOX = FIXTURES_DIR / "_stub_inbox.mbox"
+CORPUS_INBOX_MBOX = FIXTURES_DIR / "synthetic_inbox.mbox"
 GROUND_TRUTH_JSON = FIXTURES_DIR / "ground_truth.json"
 BASELINE_ACCURACY_JSON = FIXTURES_DIR / "baseline_accuracy.json"
 
 
 @pytest.fixture
 def stub_inbox_path() -> Path:
-    """Return the path to the stub mbox fixture."""
+    """Return the path to the small stub mbox fixture (legacy, ~10 msgs)."""
     assert STUB_INBOX_MBOX.exists(), STUB_INBOX_MBOX
     return STUB_INBOX_MBOX
 
 
 @pytest.fixture
-def synthetic_inbox(stub_inbox_path):
-    """A pre-loaded ``FakeGmailBackend`` over the stub mbox."""
+def corpus_inbox_path() -> Path:
+    """Return the path to the committed 220-message synthetic corpus."""
+    assert CORPUS_INBOX_MBOX.exists(), CORPUS_INBOX_MBOX
+    return CORPUS_INBOX_MBOX
+
+
+@pytest.fixture
+def synthetic_inbox(corpus_inbox_path):
+    """A pre-loaded ``FakeGmailBackend`` over the 220-message synthetic
+    corpus. Its ground_truth is keyed by the Gmail-derived id, so it
+    aligns 1:1 with this backend.
+    """
     from tests.fixtures.email.fake_gmail import FakeGmailBackend
 
-    return FakeGmailBackend(stub_inbox_path)
+    return FakeGmailBackend(corpus_inbox_path)
 
 
 @pytest.fixture
