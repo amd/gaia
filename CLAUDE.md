@@ -458,7 +458,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 | **ChatAgent** | `agents/chat/agent.py` | Document Q&A with RAG | Qwen3.5-35B |
 | **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3.5-35B |
 | **BuilderAgent** | `agents/builder/agent.py` | Scaffolds new agents from templates | Qwen3.5-35B |
-| **SummarizeAgent** | `agents/summarize/agent.py` | Document/text summarization | Qwen3.5-35B |
+| **SummarizerAgent** | `agents/summarize/agent.py` | Document/text summarization | Qwen3.5-35B |
 | **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B |
 | **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B |
 | **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B |
@@ -466,8 +466,10 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 | **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B |
 | **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
 | **EmailTriageAgent** | `agents/email/agent.py` | Email triage for Gmail — local inference, needs the Google connector | Lemonade default |
+| **BrowserAgent** | `agents/browser/agent.py` | Web research — search, page fetch, download (`gaia browse`) | Lemonade default |
+| **AnalystAgent** | `agents/analyst/agent.py` | Structured data analysis with scratchpad tables (`gaia analyze`) | Lemonade default |
 
-`gaia browse` and `gaia analyze` are ChatAgent modes (web research / structured data analysis), not separate agent classes. `gaia telegram` is a messaging adapter, not an agent.
+`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent respectively (see [`src/gaia/cli.py`](src/gaia/cli.py)). `gaia telegram` is a messaging adapter, not an agent. Internal building-block agents (DocumentQAAgent, FileIOAgent, ConnectorsDemoAgent) live under `src/gaia/agents/` but aren't standalone CLI commands.
 
 ### Agent Registry & Tool Mixins
 
@@ -545,6 +547,9 @@ All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
 **User Guides:**
 - [`docs/guides/chat.mdx`](docs/guides/chat.mdx) - Chat with RAG
 - [`docs/guides/agent-ui.mdx`](docs/guides/agent-ui.mdx) - Agent UI (desktop chat)
+- [`docs/guides/browse.mdx`](docs/guides/browse.mdx) - Web research (`gaia browse`)
+- [`docs/guides/analyze.mdx`](docs/guides/analyze.mdx) - Structured data analysis (`gaia analyze`)
+- [`docs/guides/email.mdx`](docs/guides/email.mdx) - Email triage (`gaia email`)
 - [`docs/guides/talk.mdx`](docs/guides/talk.mdx) - Voice interaction
 - [`docs/guides/code.mdx`](docs/guides/code.mdx) - Code generation
 - [`docs/guides/blender.mdx`](docs/guides/blender.mdx) - 3D automation
@@ -552,6 +557,12 @@ All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
 - [`docs/guides/docker.mdx`](docs/guides/docker.mdx) - Docker management
 - [`docs/guides/routing.mdx`](docs/guides/routing.mdx) - Agent routing
 - [`docs/guides/emr.mdx`](docs/guides/emr.mdx) - Medical intake
+- [`docs/guides/telegram-adapter.mdx`](docs/guides/telegram-adapter.mdx) - Telegram messaging adapter
+- [`docs/guides/memory.mdx`](docs/guides/memory.mdx) - Agent memory
+- [`docs/guides/install.mdx`](docs/guides/install.mdx) - Installation
+- [`docs/guides/custom-agent.mdx`](docs/guides/custom-agent.mdx) - Build a custom agent
+- [`docs/guides/hardware-advisor.mdx`](docs/guides/hardware-advisor.mdx) - Hardware advisor
+- [`docs/guides/npu.mdx`](docs/guides/npu.mdx) - NPU setup
 
 **SDK Reference:**
 - [`docs/sdk/core/agent-system.mdx`](docs/sdk/core/agent-system.mdx) - Agent framework
@@ -622,7 +633,7 @@ When responding to GitHub issues and pull requests, follow these guidelines:
 
 The documentation is organized in [`docs/docs.json`](docs/docs.json) with the following structure:
 - **SDK**: `docs/sdk/` - Agent system, tools, core SDKs (chat, llm, rag, vlm, audio)
-- **User Guides** (`docs/guides/`): Feature-specific guides (chat, talk, code, blender, jira, docker, routing, emr)
+- **User Guides** (`docs/guides/`): Feature-specific guides (chat, browse, analyze, email, talk, code, blender, jira, docker, routing, emr, telegram-adapter, memory)
 - **Playbooks** (`docs/playbooks/`): Step-by-step tutorials for building agents
 - **SDK Reference** (`docs/sdk/`): Core concepts, SDKs, infrastructure, mixins, agents
 - **Specifications** (`docs/spec/`): Technical specs for all components
