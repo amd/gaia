@@ -407,17 +407,8 @@ def goodbye():
         self.assertIn("Hello, Python!", modified)
         self.assertNotIn("Hello, World!", modified)
 
-        # Verify backup was created (may be timestamped or .bak)
-        self.assertTrue(result.get("backup_created") or result.get("backup_path"))
-        backup_path = result.get("backup_path")
-        if backup_path:
-            self.assertTrue(
-                os.path.exists(backup_path), f"Backup not found at {backup_path}"
-            )
-        else:
-            # Fallback: find any backup file in the test dir
-            bak_files = list(Path(self.test_dir).glob("edit_test*bak*"))
-            self.assertTrue(len(bak_files) > 0, "No backup file found")
+        # Verify backup (path returned in result; naming format depends on security validator)
+        self.assertTrue(os.path.exists(result["backup_path"]))
 
     def test_edit_dry_run(self):
         """Test dry run mode for editing."""
@@ -672,17 +663,7 @@ class TestCodeAgentIntegration(unittest.TestCase):
             backup=True,
         )
         self.assertEqual(edit_result["status"], "success")
-        self.assertTrue(
-            edit_result.get("backup_created") or edit_result.get("backup_path")
-        )
-        backup_path = edit_result.get("backup_path")
-        if backup_path:
-            self.assertTrue(
-                os.path.exists(backup_path), f"Backup not found at {backup_path}"
-            )
-        else:
-            bak_files = list(Path(self.test_dir).glob("calculator*bak*"))
-            self.assertTrue(len(bak_files) > 0, "No backup file found")
+        self.assertTrue(os.path.exists(edit_result["backup_path"]))
 
         # Step 5: Validate the edited file
         final_content = Path(test_file).read_text()

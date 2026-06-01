@@ -61,7 +61,11 @@ class DockerAgent(MCPAgent):
         # Security: Configure allowed paths for file operations
         # If None, allow current directory and subdirectories
         self.allowed_paths = kwargs.pop("allowed_paths", None)
-        self.path_validator = PathValidator(self.allowed_paths)
+        self.path_validator = PathValidator(
+            self.allowed_paths,
+            on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
+            on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
+        )
 
         super().__init__(**kwargs)
 
