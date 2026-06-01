@@ -374,6 +374,7 @@ gaia/
 │   │   ├── emr/        # MedicalIntakeAgent for healthcare (VLM)
 │   │   ├── routing/    # RoutingAgent for intelligent agent selection
 │   │   ├── sd/         # SDAgent for Stable Diffusion image generation
+│   │   ├── email/      # EmailTriageAgent for Gmail (local inference)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
@@ -464,6 +465,9 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 | **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing | Qwen3-VL-4B (VLM) |
 | **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B |
 | **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
+| **EmailTriageAgent** | `agents/email/agent.py` | Email triage for Gmail — local inference, needs the Google connector | Lemonade default |
+
+`gaia browse` and `gaia analyze` are ChatAgent modes (web research / structured data analysis), not separate agent classes. `gaia telegram` is a messaging adapter, not an agent.
 
 ### Agent Registry & Tool Mixins
 
@@ -502,10 +506,14 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia sd` - Stable Diffusion image generation
 - `gaia jira` - Jira integration
 - `gaia docker` - Docker management
+- `gaia browse` - Web research agent (search, page fetch, download)
+- `gaia analyze` - Structured data analysis agent (scratchpad tables)
+- `gaia email` - Email triage for Gmail (local inference; needs the Google connector)
 
 **Servers & infrastructure:**
 - `gaia api` - OpenAI-compatible API server
 - `gaia mcp {start|stop|status|test|agent|docker|serve|add|list|remove|tools|test-client}` - MCP bridge
+- `gaia telegram {start|stop|status}` - Telegram messaging adapter
 - `gaia cache {status|clear}` - Cache management
 
 **Setup & utilities:**
@@ -514,16 +522,16 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia download` - Download a model
 - `gaia kill` - Kill stray GAIA / Lemonade processes
 - `gaia test` - Smoke tests
-- `gaia yt` - YouTube transcript ingest
-- `gaia template` - Scaffold agent templates
+- `gaia youtube --download-transcript <url>` - YouTube utilities (transcript download)
+- `gaia stats` - Show statistics from the most recent run
+- `gaia memory` - Manage agent memory (onboarding bootstrap, status)
+- `gaia diagnostics` - Bundle logs + system info into a tarball for bug reports
+- `gaia agent {export|import}` - Manage custom agent bundles
 
 **Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
 - `gaia eval {fix-code|agent}` - Run evaluation harness
-- `gaia gt` - Generate ground truth
-- `gaia generate` - Dataset/response generation
-- `gaia batch-exp` - Batch experiments
 - `gaia report` - Render eval reports
-- `gaia visualize` / `gaia perf-vis` - Visualize results
+- `gaia perf-vis` - Visualize performance results
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):
 - `gaia-code` - CodeAgent entry (`src/gaia/agents/code/cli.py`)
