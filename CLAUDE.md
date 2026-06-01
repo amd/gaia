@@ -476,7 +476,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 | **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Gemma-4-E4B |
 | **DockerAgent** | `agents/docker/agent.py` | Container management | Gemma-4-E4B |
 | **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing | Qwen3-VL-4B (VLM) |
-| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Gemma-4-E4B |
+| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B-A3B (`AGENT_ROUTING_MODEL`) |
 | **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
 | **EmailTriageAgent** | `agents/email/agent.py` | Email triage for Gmail — local inference, needs the Google connector | Gemma-4-E4B |
 | **BrowserAgent** | `agents/browser/agent.py` | Web research — search, page fetch, download (`gaia browse`) | Gemma-4-E4B |
