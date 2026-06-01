@@ -13,6 +13,7 @@ on:
     branches: [ main ]
     paths:
       - 'src/gaia/mcp/**'
+      - 'src/gaia/cli.py'
       - 'tests/mcp/**'
       - 'setup.py'
       - '.github/workflows/test_mcp.yml'
@@ -21,6 +22,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/gaia/mcp/**'
+      - 'src/gaia/cli.py'
       - 'tests/mcp/**'
       - 'setup.py'
       - '.github/workflows/test_mcp.yml'
