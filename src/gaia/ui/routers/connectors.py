@@ -886,9 +886,10 @@ async def forward_connection(
 ) -> Dict[str, Any]:
     """Persist a forwarded grant — no browser/consent step (AC1, AC3, AC4).
 
-    Fails loudly: insecure keyring backend → 500; missing required scopes →
-    403 + ``missing_scopes``; empty client_id/refresh_token → 500. Returns a
-    metadata-only summary — never the refresh token or client secret.
+    Fails loudly: empty client_id/refresh_token → 422 (pydantic ``min_length``);
+    insecure keyring backend → 500; missing required scopes → 403 +
+    ``missing_scopes``. Returns a metadata-only summary — never the refresh
+    token or client secret.
     """
     try:
         summary = connections.import_forwarded_connection(
