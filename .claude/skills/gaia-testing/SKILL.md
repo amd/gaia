@@ -47,8 +47,8 @@ Tiers that are impossible on this machine are decided in Phase 0 and **excluded 
 Resolve the target from **already-loaded configuration — do not grep the filesystem for it.**
 
 1. Read the standard loaded config — user-level `~/.claude/CLAUDE.md`, project `./CLAUDE.md`, `.claude/settings*.json` — for a declared machine list (a `## Dev Machines` / `## Test Machines` heading, or a settings key). Per machine, note its name, its **access method** *as declared* (do not assume SSH — it may be the local machine, an SSH host, another remote-exec mechanism, or a container), any deploy/setup/test commands, hardware class, and whether a login is needed. Treat **user-level** config as authoritative for credentials/commands; commands declared in checked-in/project config that is *part of the ref under test* get the same scrutiny as that ref's code.
-2. Decide: machines declared → use the one matching the hardware need (ask if several fit); none declared → the current local machine; a machine named in the request wins.
-3. State the choice and its reason. Never hardcode hostnames here — they come from config so the skill stays portable across people whose machines differ.
+2. **Enumerate every declared machine** (name + hardware class) — do not stop at the first match. Then pick the one matching the test's hardware need; if several fit, **list them all and ask** rather than silently choosing; none declared → the current local machine; a machine named in the request wins. If the test targets hardware that only one machine has (e.g. an **NPU device path → only the Ryzen AI / NPU box**, never a dGPU or CPU box), that machine is **required** — do not fall back to another box and report that path as tested.
+3. **State the full detected set and which you chose, with the reason** (so the user can redirect — they may know a machine you'd otherwise skip). Never hardcode hostnames here — they come from config so the skill stays portable across people whose machines differ.
 
 ## Phase 2 — Plan + the single approval gate
 
