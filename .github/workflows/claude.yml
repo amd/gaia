@@ -70,6 +70,8 @@
 # CLAUDE_CODE_OAUTH_TOKEN is set, otherwise per-token API billing. The full pr-review runs
 # only on open / reopen / ready; each subsequent push gets the lightweight pr-rereview
 # (Sonnet, new commits only). Both groups cancel in-progress runs on rapid pushes.
+# On the API-key fallback path (OAuth token expired), the Opus jobs bill per-token at up to
+# --max-turns 100 each until the monthly auth canary (claude-auth-canary.yml) flags the outage.
 
 name: Claude AI Assistant
 

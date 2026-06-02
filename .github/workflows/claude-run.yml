@@ -200,7 +200,7 @@ jobs:
       - name: Verify Claude output was produced
         if: "!cancelled()"
         env:
-          EXEC_FILE: ${{ steps.a1.outputs.execution_file != '' && steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
+          EXEC_FILE: ${{ steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
           KIND: ${{ github.event_name == 'pull_request_target' && 'review' || 'reply' }}
           TARGET: "${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment') && format('PR #{0}', github.event.pull_request.number) || format('#{0}', github.event.issue.number) }}"
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
