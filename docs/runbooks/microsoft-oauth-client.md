@@ -36,7 +36,9 @@ Application (client) ID. Do NOT commit the id into the repository.
 
 ## Azure Portal setup
 
-1. Visit <https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade>.
+1. In the [Azure Portal](https://portal.azure.com), go to **Microsoft Entra
+   ID → App registrations** (direct link:
+   <https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade>).
 2. **New registration**:
    - Name: `GAIA Desktop` (or similar).
    - Supported account types: **Personal Microsoft accounts only**

@@ -25,15 +25,16 @@ secret** — so you only paste **one** value into GAIA: an **Application
 
 ## Step 1 — Create an app registration
 
-1. Go to the [Azure Portal → App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade).
-2. Click **New registration**.
-3. **Name**: `GAIA Personal` (or whatever you want).
-4. **Supported account types**: choose **Personal Microsoft accounts
+1. In the [Azure Portal](https://portal.azure.com), go to **Microsoft Entra
+   ID → App registrations → New registration**. (Direct link:
+   [App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade).)
+2. **Name**: `GAIA Personal` (or whatever you want).
+3. **Supported account types**: choose **Personal Microsoft accounts
    only**. <Tooltip tip="This matches GAIA's `consumers` tenant. If you
    pick a broader option the consent screen still works for personal
    accounts, but org accounts may be blocked by conditional access.">Why
    this option?</Tooltip>
-5. Leave **Redirect URI** empty for now and click **Register**.
+4. Leave **Redirect URI** empty for now and click **Register**.
 
 ## Step 2 — Add the loopback redirect URI
 
