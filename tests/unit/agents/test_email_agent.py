@@ -134,6 +134,7 @@ class TestToolRegistry:
         "add_star_batch",
         "remove_star_batch",
         "archive_message_batch",
+        "undo_archive_batch",
         "label_message_batch",
         "move_to_label_batch",
         # Reply / send / forward

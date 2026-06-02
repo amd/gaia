@@ -173,6 +173,54 @@ def move_to_label_impl(
         return {"action_id": action_id, "message_id": message_id, "label_id": label_id}
 
 
+def undo_archive_batch_impl(
+    gmail,
+    db,
+    *,
+    batch_id: str,
+    window_seconds: int,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    """Reverse a batch archive within the undo window.
+
+    Re-adds the labels that ``archive`` removed (INBOX, plus any other
+    label the message carried before) for every still-undoable ``archive``
+    row sharing ``batch_id``, then marks each row undone.
+
+    Raises ``RuntimeError`` if the batch has no undoable rows — the window
+    expired, every row was already undone, or the batch_id is unknown. We
+    fail loudly rather than silently no-op so the caller surfaces it.
+    """
+    with log_tool_call("undo_archive_batch", {"batch_id": batch_id}, debug=debug) as st:
+        rows = action_store.fetch_batch_undoable(
+            db, batch_id=batch_id, window_seconds=window_seconds
+        )
+        if not rows:
+            raise RuntimeError(
+                f"undo window has expired ({window_seconds} s) or batch_id "
+                f"{batch_id!r} has no undoable archive actions. Use Gmail to "
+                "move the messages back to the inbox manually."
+            )
+        restored: List[Dict[str, Any]] = []
+        for row in rows:
+            if row["action_type"] != "archive":
+                # batch_id is archive-only today; skip anything else rather
+                # than mis-restore an unrelated action recorded under the
+                # same id by a future caller.
+                continue
+            mid = row["message_id"]
+            prior_labels = set(row["payload"].get("prior_labels") or [])
+            current = set(gmail.get_message(mid).get("labelIds", []))
+            # Archive only ever removes labels (INBOX); re-add whatever the
+            # message carried before that it no longer has.
+            for lab in prior_labels - current:
+                gmail.add_label(mid, lab)
+            action_store.mark_undone(db, action_id=row["action_id"])
+            restored.append({"message_id": mid, "action_id": row["action_id"]})
+        st["result_summary"] = {"restored": len(restored)}
+        return {"batch_id": batch_id, "restored": len(restored), "messages": restored}
+
+
 # ---------------------------------------------------------------------------
 # Mixin
 # ---------------------------------------------------------------------------
@@ -297,6 +345,7 @@ class OrganizeToolsMixin:
         gmail = self._gmail
         db = self
         debug_flag = bool(getattr(self.config, "debug", False))
+        window = int(getattr(self.config, "undo_window_seconds", 30))
         agent = self  # for batch-threshold counter access
 
         def _check_threshold() -> Optional[str]:
@@ -628,6 +677,26 @@ class OrganizeToolsMixin:
                         "succeeded": result["succeeded"],
                         "failed": result["failed"],
                     }
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def undo_archive_batch(batch_id: str) -> str:
+            """Undo a batch archive by its batch_id, restoring every message
+            to the inbox within the undo window. Reverses archive_message_batch."""
+            try:
+                return _envelope_ok(
+                    undo_archive_batch_impl(
+                        gmail,
+                        db,
+                        batch_id=batch_id,
+                        window_seconds=window,
+                        debug=debug_flag,
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(str(exc))
