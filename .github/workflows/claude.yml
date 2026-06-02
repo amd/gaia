@@ -68,8 +68,8 @@ name: Claude AI Assistant
 on:
   issues:
     # `labeled` so auto-fix fires when `bug` is added AFTER opening (the common
-    # triage path); `reopened` so a reopened issue is re-handled. issue-handler
-    # restricts itself to opened/reopened so it doesn't reply on every label add.
+    # triage path); `reopened` so a reopened bug issue is re-checked by auto-fix.
+    # issue-handler stays opened-only so it doesn't reply on every label add or reopen.
     types: [opened, labeled, reopened]
   issue_comment:
     types: [created, edited]
@@ -387,11 +387,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: write   # post threaded reply on the review comment
-    # Per-PR + per-actor group: bounds one user's @claude burst (shared
-    # subscription rate pool) while still answering distinct PRs/users in parallel.
-    concurrency:
-      group: claude-pr-comment-${{ github.event.pull_request.number }}-${{ github.actor }}
-      cancel-in-progress: false
+    # No concurrency group — distinct @claude comments must each get answered.
+    # GitHub keeps only one pending run per group, so grouping a user's burst would
+    # cancel the middle comments instead of serializing them.
     steps:
       - uses: actions/checkout@v6
         with:
@@ -528,8 +526,7 @@ jobs:
   issue-handler:
     if: |
       github.repository == 'amd/gaia' &&
-      ((github.event_name == 'issues' &&
-        (github.event.action == 'opened' || github.event.action == 'reopened')) ||
+      ((github.event_name == 'issues' && github.event.action == 'opened') ||
        (github.event_name == 'issue_comment' &&
         contains(github.event.comment.body, '@claude')))
     runs-on: ubuntu-latest
@@ -537,11 +534,9 @@ jobs:
       contents: read
       issues: write          # comment on issues
       pull-requests: write   # comment on PR conversations
-    # Per-issue + per-actor group: bounds one user's @claude burst (shared
-    # subscription rate pool) while still answering distinct issues/users in parallel.
-    concurrency:
-      group: claude-issue-handler-${{ github.event.issue.number }}-${{ github.actor }}
-      cancel-in-progress: false
+    # No concurrency group — distinct @claude comments must each get answered.
+    # GitHub keeps only one pending run per group, so grouping a user's burst would
+    # cancel the middle comments instead of serializing them.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -898,8 +893,8 @@ jobs:
             with: one-sentence root cause (`file.py:line`), a fenced ```diff block of the
             proposed change, and what a human must verify before merging. Then stop.
             **C — DECLINE:** root cause is opaque, OR it's a feature / perf / LLM-behavior /
-            duplicate issue, OR a security issue. Exit silently (issue-handler already
-            replied) — except security issues, which follow HARD CONSTRAINTS.
+            duplicate issue, OR a security issue. Exit silently without a comment — except
+            security issues, which follow HARD CONSTRAINTS.
 
             ## PHASE 2: IMPLEMENT (only if outcome A)
 
@@ -1022,9 +1017,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
         run: |
-          echo "::warning title=Auto-fix failed::auto-fix aborted for issue #$ISSUE_NUMBER (infra/tooling error, not a triage decline)."
-          gh issue comment "$ISSUE_NUMBER" --body "⚠️ The automated fix attempt failed to run to completion (infrastructure or tooling error, not a decision to skip). A maintainer may need to take a look. cc @kovtcharov-amd"
+          echo "::warning title=Auto-fix failed::auto-fix aborted for issue #$ISSUE_NUMBER."
+          # Only ping the issue when the fix attempt itself failed — not for checkout /
+          # setup / dependency-install flakes (infra noise the reporter can't act on).
+          if [ "$CLAUDE_OUTCOME" = "failure" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body "⚠️ The automated fix attempt ran but didn't complete cleanly. A maintainer may need to take a look. cc @kovtcharov-amd"
+          fi
 
   # Generate release notes when PyPi workflow completes successfully on a tag
   release-notes:
