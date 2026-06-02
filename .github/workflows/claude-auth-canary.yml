@@ -66,5 +66,5 @@ jobs:
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "$BODY"
           else
-            gh issue create --title "$TITLE" --body "$BODY" --assignee kovtcharov-amd --label "bug,devops"
+            gh issue create --title "$TITLE" --body "$BODY" --assignee kovtcharov-amd --label bug --label devops
           fi
