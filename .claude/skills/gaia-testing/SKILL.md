@@ -70,7 +70,16 @@ RED in both = pre-existing (report, don't block); GREEN-base → RED-patch = a r
 Exercise cross-component behaviour through the **real CLI a user runs** — never by importing modules (CLAUDE.md "Testing Philosophy"). If Phase 0 flagged an LLM-affecting change, run the eval here:
 
 1. **Start the eval backend first** — `python -m gaia.ui.server --port 4200 --host 127.0.0.1` (background) — and confirm it answers before running the eval. `gaia eval agent` targets `localhost:4200`; with nothing listening, every scenario returns `INFRA_ERROR` and looks (wrongly) like a model failure.
-2. Run `gaia eval agent --category <cat> --agent-type <type>` against the committed baseline. **Verify the exact `--compare` invocation against `gaia eval agent --help` before relying on it** (its argument form is easy to get wrong). Pick the baseline matching the model under test rather than hardcoding a SHA (the baseline dirs are named `<model>-<hash>`): list candidates with `ls tests/fixtures/eval_baselines/*/scorecard_<cat>.json` and choose the one for your model. Do **not** sort by mtime (`ls -t`) — a fresh clone stamps every baseline with the checkout time, so `-t` picks arbitrarily.
+2. Run the eval, then diff its scorecard against the committed baseline. `--compare` takes two explicit paths — `BASELINE` then `CURRENT` — and runs no eval itself (the eval prints `Output: eval/results/<run-id>/` and writes `<run-id>/scorecard.json`):
+
+   ```bash
+   gaia eval agent --category <cat> --agent-type <type>   # prints: Output: eval/results/<run-id>/
+   gaia eval agent --compare \
+     tests/fixtures/eval_baselines/<model>-<hash>/scorecard_<cat>.json \
+     eval/results/<run-id>/scorecard.json
+   ```
+
+   Pick the BASELINE matching the model under test (the dirs are `<model>-<hash>`; `ls tests/fixtures/eval_baselines/*/scorecard_<cat>.json`) — do **not** sort by mtime (`ls -t`): a fresh clone stamps every baseline with the checkout time, so `-t` picks arbitrarily.
 3. **Regression rule:** a category dropping materially below baseline (beyond run-to-run noise) blocks; an *intentional* capability removal must be re-baselined (`--save-baseline`) and called out in the report. An invalid run (concurrent eval, wrong ctx, mid-run model swap) is "invalid — re-run", not a result.
 4. **Stop this backend before Phase 5** (kill the :4200 process) so the real-world tier brings up its own clean instance rather than inheriting integration-tier state.
 
