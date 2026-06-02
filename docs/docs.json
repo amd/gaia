@@ -404,6 +404,8 @@
             "group": "Ecosystem",
             "pages": [
               "plans/agent-hub",
+              "plans/agent-hub-ui",
+              "spec/agent-hub-restructure",
               "plans/skill-format",
               "plans/oem-bundling"
             ]
