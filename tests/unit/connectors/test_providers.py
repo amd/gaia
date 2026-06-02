@@ -72,8 +72,10 @@ class TestConnectorRequirement:
 
 class TestRegistry:
     def test_get_unknown_provider_raises_keyerror(self):
+        # "dropbox" is genuinely unknown — "google" and "microsoft" are both
+        # lazily instantiated by get() and would not raise.
         with pytest.raises(KeyError):
-            providers.get("microsoft")
+            providers.get("dropbox")
 
     def test_register_then_get_round_trip(self):
         class FakeProvider:

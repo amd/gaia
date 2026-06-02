@@ -1,0 +1,138 @@
+---
+title: "Microsoft"
+icon: "microsoft"
+description: "Connect GAIA to Outlook mail, calendar, and OneDrive via Microsoft Graph."
+---
+
+<Info>
+  **Connector ID:** `microsoft` · **Type:** `oauth_pkce` · **Catalog entry:** [`src/gaia/connectors/catalog/microsoft.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/microsoft.py)
+</Info>
+
+This connector targets **personal Microsoft accounts** (Outlook.com,
+Hotmail, Live.com) — the `consumers` tenant of the Microsoft identity
+platform. Work/school (Azure AD organization) accounts are tracked
+separately.
+
+## What you'll need
+
+Microsoft requires every desktop app — including GAIA running locally —
+to identify itself with an **app registration** that you create in the
+Azure Portal. For a single developer it takes a few minutes and is free.
+
+Unlike Google, a Microsoft **public client** uses PKCE **without a client
+secret** — so you only paste **one** value into GAIA: an **Application
+(client) ID**. GAIA stores it encrypted in your OS keyring.
+
+## Step 1 — Create an app registration
+
+1. Go to the [Azure Portal → App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade).
+2. Click **New registration**.
+3. **Name**: `GAIA Personal` (or whatever you want).
+4. **Supported account types**: choose **Personal Microsoft accounts
+   only**. <Tooltip tip="This matches GAIA's `consumers` tenant. If you
+   pick a broader option the consent screen still works for personal
+   accounts, but org accounts may be blocked by conditional access.">Why
+   this option?</Tooltip>
+5. Leave **Redirect URI** empty for now and click **Register**.
+
+## Step 2 — Add the desktop/loopback redirect
+
+1. In your new app, go to **Authentication → Add a platform**.
+2. Pick **Mobile and desktop applications**. <Tooltip tip="GAIA runs a
+   temporary loopback web server on 127.0.0.1 to receive the OAuth
+   callback. The 'Mobile and desktop applications' platform allows the
+   http://localhost loopback redirect that a 'Web' platform would
+   reject.">Why this platform?</Tooltip>
+3. Check (or add) the redirect URI **`http://localhost`**.
+4. Click **Configure** / **Save**.
+
+<Warning>
+  Do **not** create a client secret. Microsoft public clients authenticate
+  the token exchange with PKCE; a secret is neither needed nor used by
+  GAIA. (If you registered a "Web" platform with a secret, delete it and
+  add the "Mobile and desktop applications" platform instead.)
+</Warning>
+
+## Step 3 — Copy the Application (client) ID
+
+In your app's **Overview** page, copy the **Application (client) ID** — a
+GUID like `00000000-1111-2222-3333-444444444444`.
+
+## Step 4 — Paste it into GAIA
+
+1. Launch the Agent UI: `gaia chat --ui`.
+2. Click **Settings** (gear) → **Connections**.
+3. Click the **Microsoft** tile to expand it.
+4. Paste the **Application (client) ID** from Step 3.
+5. Click **Save & Connect**.
+
+GAIA will:
+
+1. Store the client ID in your OS keyring (macOS Keychain,
+   gnome-keyring/kwallet on Linux, Credential Locker on Windows).
+2. Open the Microsoft consent screen in your default browser.
+3. Receive the callback on a temporary loopback server.
+4. Exchange the auth code for a refresh token (also stored in the
+   keyring). The `offline_access` scope is requested automatically so a
+   refresh token is issued.
+
+The tile flips to **Connected** once the flow completes.
+
+## Step 5 — Grant scopes to specific agents
+
+Connecting Microsoft doesn't automatically give every agent access to
+your mailbox. Each agent must be granted the specific scopes it needs:
+
+```bash
+# Grant the chat agent read-only Outlook mail access
+gaia connectors grants grant microsoft builtin:chat \
+  --scopes https://graph.microsoft.com/Mail.Read
+```
+
+The default and available scopes are listed in the spec at
+[`src/gaia/connectors/catalog/microsoft.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/microsoft.py).
+
+## Common issues
+
+### `redirect_uri mismatch` / `AADSTS500113`
+
+You either skipped Step 2 or added the redirect under a "Web" platform.
+Add `http://localhost` under **Mobile and desktop applications** in
+**Authentication**.
+
+### `AADSTS700016` / "application not found in the directory"
+
+The Application (client) ID is wrong, or the app was registered under a
+different account type. Re-copy the ID from the app's **Overview** page
+and confirm the app's supported account types include personal accounts.
+
+### Token endpoint returned no `refresh_token`
+
+The `offline_access` scope was not requested. GAIA includes it in the
+connector's `default_scopes`; if you've customized scopes, make sure
+`offline_access` is still present.
+
+### Work/school account is blocked
+
+This connector uses the `consumers` (personal-account) tenant. Azure AD
+organization accounts are out of scope here — see the connectors roadmap
+for the enterprise (work/school) Graph path.
+
+## Revoking access
+
+Two places — both work:
+
+- **From GAIA**: Settings → Connections → Microsoft → **Disconnect**.
+  Removes the refresh token from the keyring; the next API call errors
+  with `NOT_CONNECTED`.
+- **From Microsoft**: <a href="https://account.live.com/consent/Manage"
+  target="_blank">account.live.com/consent/Manage</a> → find the app →
+  **Remove these permissions**. Useful if you've lost the laptop the
+  keyring lives on.
+
+## See also
+
+- [Connectors overview](/connectors)
+- [Google connector](/connectors/google)
+- [Microsoft identity platform — OAuth 2.0 auth code + PKCE](https://learn.microsoft.com/entra/identity-platform/v2-oauth2-auth-code-flow)
+- [Connectors security model](/security/connections)

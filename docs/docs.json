@@ -88,6 +88,7 @@
                 "pages": [
                   "connectors/index",
                   "connectors/google",
+                  "connectors/microsoft",
                   "connectors/github",
                   "security/connections"
                 ]
