@@ -94,7 +94,7 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
             'Save Word as PDF, then index the PDF',
             'Re-save legacy .xls workbooks as .xlsx — GAIA supports modern Excel files',
         ],
-        featureTitle: 'Support Microsoft Office (docx, xls) indexing',
+        featureTitle: 'Support Microsoft Office (doc, docx, ppt, xls) indexing',
     },
 ];
 

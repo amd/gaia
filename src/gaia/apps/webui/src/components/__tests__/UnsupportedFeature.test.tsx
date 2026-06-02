@@ -36,7 +36,7 @@ describe('getUnsupportedCategory', () => {
         expect(getUnsupportedCategory('.docx')?.label).toBe('Microsoft Office');
     });
 
-    it('returns null for .pptx — PowerPoint indexing shipped in #1224', () => {
+    it('returns null for .pptx — PowerPoint indexing is supported', () => {
         expect(getUnsupportedCategory('.pptx')).toBeNull();
     });
 
