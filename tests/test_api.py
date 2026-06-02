@@ -1144,5 +1144,336 @@ class TestErrorResponseFormat:
         assert "detail" in error_data
 
 
+# =============================================================================
+# EMAIL AGENT REST SURFACE (#1229) — TestClient, no external server / Lemonade
+# =============================================================================
+#
+# These exercise the /v1/email/* endpoints added by src/gaia/api/email_routes.py.
+# The triage endpoint accepts / returns the FROZEN #1262 contract
+# (gaia.agents.email.contract). The send endpoint enforces the confirmation
+# gate (#1264) at the API boundary: a send without a valid confirmation token
+# is rejected with a 4xx — never silently auto-confirmed.
+
+
+def _single_email_payload(
+    *,
+    subject: str = "Can you review the Q3 budget?",
+    body: str = "Hi, please review the attached Q3 budget and reply by Friday.",
+    sender_email: str = "alice@example.com",
+    principal_email: str = "me@example.com",
+):
+    """A contract-valid SingleEmailInput request envelope."""
+    return {
+        "payload": {
+            "kind": "single",
+            "principal": {"email": principal_email},
+            "message": {
+                "message_id": "m-1",
+                "from": {"name": "Alice", "email": sender_email},
+                "to": [{"email": principal_email}],
+                "subject": subject,
+                "body": body,
+            },
+        }
+    }
+
+
+def _thread_payload(*, principal_email: str = "me@example.com"):
+    """A contract-valid ThreadInput request envelope (two messages)."""
+    return {
+        "payload": {
+            "kind": "thread",
+            "principal": {"email": principal_email},
+            "thread_id": "t-1",
+            "messages": [
+                {
+                    "message_id": "m-1",
+                    "thread_id": "t-1",
+                    "from": {"email": "bob@example.com"},
+                    "to": [{"email": principal_email}],
+                    "subject": "Project kickoff",
+                    "body": "Let's kick off the project next week.",
+                },
+                {
+                    "message_id": "m-2",
+                    "thread_id": "t-1",
+                    "from": {"email": principal_email},
+                    "to": [{"email": "bob@example.com"}],
+                    "subject": "Re: Project kickoff",
+                    "body": "Sounds good, please send the agenda.",
+                },
+            ],
+        }
+    }
+
+
+class TestEmailTriageEndpoint:
+    """POST /v1/email/triage — single email / thread in, structured result out."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        self.client = TestClient(app)
+
+    def test_single_email_in_structured_out(self):
+        """A single email in returns a contract-valid structured result."""
+        from gaia.agents.email.contract import SCHEMA_VERSION, parse_response
+        from gaia.agents.email.tools.triage_heuristics import ALL_CATEGORIES
+
+        resp = self.client.post("/v1/email/triage", json=_single_email_payload())
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+
+        # Round-trips through the FROZEN contract (extra="forbid" — any drift
+        # from the #1262 shape raises here).
+        parsed = parse_response(data)
+        assert parsed.schema_version == SCHEMA_VERSION
+        assert parsed.request_kind == "single"
+        assert parsed.result.category.value in ALL_CATEGORIES
+        assert parsed.result.summary  # non-empty plain-text summary
+
+    def test_thread_in_structured_out(self):
+        """A full thread in returns request_kind == 'thread'."""
+        from gaia.agents.email.contract import parse_response
+
+        resp = self.client.post("/v1/email/triage", json=_thread_payload())
+        assert resp.status_code == 200, resp.text
+        parsed = parse_response(resp.json())
+        assert parsed.request_kind == "thread"
+        assert parsed.result.summary
+        # The thread's last message is from the principal, so there is no one
+        # to reply to — no draft is proposed.
+        assert parsed.result.draft is None
+
+    def test_single_email_proposes_draft_to_sender(self):
+        """An inbound email from someone else yields a draft addressed back
+        to that sender."""
+        from gaia.agents.email.contract import parse_response
+
+        resp = self.client.post(
+            "/v1/email/triage",
+            json=_single_email_payload(sender_email="bob@example.com"),
+        )
+        assert resp.status_code == 200, resp.text
+        parsed = parse_response(resp.json())
+        assert parsed.result.draft is not None
+        assert parsed.result.draft.to[0].email == "bob@example.com"
+        assert parsed.result.draft.subject.lower().startswith("re:")
+
+    def test_promotional_email_is_low_priority(self):
+        """The agent's real heuristic categorizer drives the result —
+        a promo subject lands in 'low priority' deterministically."""
+        from gaia.agents.email.contract import parse_response
+        from gaia.agents.email.tools.triage_heuristics import CATEGORY_LOW_PRIORITY
+
+        payload = _single_email_payload(
+            subject="50% off — sale ends tonight!",
+            body="Shop our biggest sale of the year.",
+            sender_email="deals@store.example.com",
+        )
+        resp = self.client.post("/v1/email/triage", json=payload)
+        assert resp.status_code == 200, resp.text
+        parsed = parse_response(resp.json())
+        assert parsed.result.category.value == CATEGORY_LOW_PRIORITY
+
+    def test_response_matches_contract_schema_shape(self):
+        """The response body has exactly the #1262 top-level keys."""
+        resp = self.client.post("/v1/email/triage", json=_single_email_payload())
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert set(data.keys()) == {"schema_version", "request_kind", "result"}
+        assert set(data["result"].keys()) >= {
+            "category",
+            "is_spam",
+            "is_phishing",
+            "summary",
+            "action_items",
+            "draft",
+        }
+
+    def test_unknown_field_rejected_422(self):
+        """extra='forbid' on the frozen contract → unknown field is a 422."""
+        payload = _single_email_payload()
+        payload["payload"]["message"]["totally_unknown_field"] = "x"
+        resp = self.client.post("/v1/email/triage", json=payload)
+        assert resp.status_code == 422
+
+    def test_empty_thread_rejected_422(self):
+        """A thread with no messages violates the contract (min_length=1)."""
+        payload = _thread_payload()
+        payload["payload"]["messages"] = []
+        resp = self.client.post("/v1/email/triage", json=payload)
+        assert resp.status_code == 422
+
+    def test_missing_payload_rejected_422(self):
+        resp = self.client.post("/v1/email/triage", json={})
+        assert resp.status_code == 422
+
+
+class TestEmailSendConfirmationGate:
+    """POST /v1/email/send — the send path MUST reject when confirmation is
+    absent (#1264). This is the security-critical acceptance criterion.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        # Inject an in-memory Gmail backend so the (authorized) send path
+        # never touches live mail. The gate-rejection cases never reach the
+        # backend — the confirmation check is enforced first.
+        import sys
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from gaia.api import email_routes
+        from tests.fixtures.email.fake_gmail import FakeGmailBackend
+
+        self.fake_backend = FakeGmailBackend()
+        monkeypatch.setattr(
+            email_routes, "resolve_send_backend", lambda: self.fake_backend
+        )
+        self.client = TestClient(app)
+
+    def test_send_without_confirmation_token_is_4xx(self):
+        """No confirmation token → server-side rejection in the 4xx range."""
+        resp = self.client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "alice@example.com"}],
+                "subject": "Re: budget",
+                "body": "Looks good, approved.",
+            },
+        )
+        assert 400 <= resp.status_code < 500
+        # Actionable error names the missing confirmation.
+        assert "confirm" in resp.text.lower()
+
+    def test_send_with_empty_confirmation_token_is_4xx(self):
+        """An empty/blank token is not a confirmation."""
+        resp = self.client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "alice@example.com"}],
+                "subject": "Re: budget",
+                "body": "Looks good, approved.",
+                "confirmation_token": "",
+            },
+        )
+        # Exactly 403 (the gate), not an incidental 404 — the route exists.
+        assert resp.status_code == 403
+
+    def test_send_with_invalid_confirmation_token_is_4xx(self):
+        """A token that was never issued is rejected."""
+        resp = self.client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "alice@example.com"}],
+                "subject": "Re: budget",
+                "body": "Looks good, approved.",
+                "confirmation_token": "not-a-real-token",
+            },
+        )
+        assert resp.status_code == 403
+
+    def test_draft_then_send_with_valid_token_succeeds(self):
+        """The golden path: draft issues a confirmation token bound to the
+        exact payload; echoing it back authorizes the send."""
+        draft_resp = self.client.post(
+            "/v1/email/draft",
+            json={
+                "to": [{"email": "alice@example.com"}],
+                "subject": "Re: budget",
+                "body": "Looks good, approved.",
+            },
+        )
+        assert draft_resp.status_code == 200, draft_resp.text
+        token = draft_resp.json()["confirmation_token"]
+        assert token
+
+        send_resp = self.client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "alice@example.com"}],
+                "subject": "Re: budget",
+                "body": "Looks good, approved.",
+                "confirmation_token": token,
+            },
+        )
+        assert send_resp.status_code == 200, send_resp.text
+        body = send_resp.json()
+        assert body["sent"] is True
+        assert body["sent_id"]
+
+    def test_token_does_not_authorize_a_different_payload(self):
+        """A token is bound to its payload — you cannot reuse it to send
+        different content (prevents bait-and-switch)."""
+        draft_resp = self.client.post(
+            "/v1/email/draft",
+            json={
+                "to": [{"email": "alice@example.com"}],
+                "subject": "Re: budget",
+                "body": "Looks good, approved.",
+            },
+        )
+        token = draft_resp.json()["confirmation_token"]
+
+        # Same token, different body → rejected.
+        send_resp = self.client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "attacker@evil.example.com"}],
+                "subject": "Re: budget",
+                "body": "Wire $10,000 to account 12345.",
+                "confirmation_token": token,
+            },
+        )
+        assert send_resp.status_code == 403
+
+    def test_confirmation_token_is_single_use(self):
+        """A token authorizes exactly one send; a replay is rejected."""
+        payload = {
+            "to": [{"email": "alice@example.com"}],
+            "subject": "Re: budget",
+            "body": "Looks good, approved.",
+        }
+        token = self.client.post("/v1/email/draft", json=payload).json()[
+            "confirmation_token"
+        ]
+        first = self.client.post(
+            "/v1/email/send", json={**payload, "confirmation_token": token}
+        )
+        assert first.status_code == 200, first.text
+        # Replaying the consumed token must NOT send again.
+        replay = self.client.post(
+            "/v1/email/send", json={**payload, "confirmation_token": token}
+        )
+        assert replay.status_code == 403
+
+    def test_gate_fires_before_backend_resolution(self, monkeypatch):
+        """The confirmation gate is checked BEFORE the send backend is
+        resolved: a no-token send returns 403 even when the backend is
+        unavailable (would otherwise 503). The gate must never be masked by
+        backend health."""
+        from gaia.api import email_routes
+
+        def _boom():
+            raise AssertionError("backend resolved before the gate — gate bypassed")
+
+        monkeypatch.setattr(email_routes, "resolve_send_backend", _boom)
+        resp = self.client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "alice@example.com"}],
+                "subject": "Re: budget",
+                "body": "Looks good, approved.",
+            },
+        )
+        assert resp.status_code == 403
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
