@@ -2,14 +2,21 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for gaia.eval.quality_metrics (pure — no Lemonade)."""
 
+import json
+
 import pytest
 
 from gaia.eval.quality_metrics import (
+    QualityThresholds,
     binary_confusion,
+    categorization_export,
     category_accuracy,
     compute_cost,
     confusion_for_categories,
     confusion_for_flag,
+    connection_diagnostics,
+    evaluate_gate,
+    load_quality_thresholds,
     per_category_confusion,
 )
 
@@ -124,6 +131,256 @@ class TestComputeCost:
             compute_cost(1_000_000, 0, cost_per_1m_input=2.0, cost_per_1m_output=8.0)
             == 2.0
         )
+
+
+# Needs-attention axis used across export/gate tests: urgent+actionable positive.
+_ATTENTION = {"urgent", "actionable"}
+
+
+class TestCategorizationExport:
+    def test_rows_carry_predicted_expected_and_correctness(self):
+        preds = {
+            "a": "urgent",  # TP on attention axis (gt urgent)
+            "b": "urgent",  # FP (gt low priority → negative class flagged positive)
+            "c": "informational",  # TN (gt informational)
+            "d": "informational",  # FN (gt actionable → positive class missed)
+        }
+        export = categorization_export(preds, GT, axis_positive_categories=_ATTENTION)
+        rows = {r["id"]: r for r in export["rows"]}
+        assert rows["a"]["predicted"] == "urgent"
+        assert rows["a"]["expected"] == "urgent"
+        assert rows["a"]["category_correct"] is True
+        # FP row: predicted attention, ground truth not attention
+        assert rows["b"]["is_false_positive"] is True
+        assert rows["b"]["is_false_negative"] is False
+        # FN row: ground truth attention, predicted not attention
+        assert rows["d"]["is_false_negative"] is True
+        assert rows["d"]["is_false_positive"] is False
+        # TN row: neither
+        assert rows["c"]["is_false_positive"] is False
+        assert rows["c"]["is_false_negative"] is False
+
+    def test_false_positive_and_negative_id_lists(self):
+        preds = {
+            "a": "urgent",
+            "b": "urgent",
+            "c": "informational",
+            "d": "informational",
+        }
+        export = categorization_export(preds, GT, axis_positive_categories=_ATTENTION)
+        assert export["false_positives"] == ["b"]
+        assert export["false_negatives"] == ["d"]
+
+    def test_summary_confusion_matches_axis_helper(self):
+        preds = {"a": "urgent", "b": "urgent", "c": "informational", "d": "actionable"}
+        export = categorization_export(preds, GT, axis_positive_categories=_ATTENTION)
+        expected = confusion_for_categories(preds, GT, _ATTENTION).to_dict()
+        assert export["summary"] == expected
+        assert export["axis"] == "needs_attention"
+
+    def test_skips_metadata_and_unmatched_ids(self):
+        # _meta never appears; an id present in preds but not GT is ignored
+        preds = {"a": "urgent", "z": "urgent"}
+        export = categorization_export(preds, GT, axis_positive_categories=_ATTENTION)
+        ids = {r["id"] for r in export["rows"]}
+        assert ids == {"a"}  # only the overlapping labelled id
+
+    def test_custom_axis_label(self):
+        export = categorization_export(
+            {"a": "urgent"},
+            GT,
+            axis_positive_categories={"urgent"},
+            axis_label="urgent_only",
+        )
+        assert export["axis"] == "urgent_only"
+
+    def test_empty_positive_set_raises(self):
+        with pytest.raises(ValueError, match="at least one positive category"):
+            categorization_export({"a": "urgent"}, GT, axis_positive_categories=set())
+
+
+class TestConnectionDiagnostics:
+    def _conn(self, **over):
+        base = {
+            "provider": "google",
+            "account_email": "user@example.com",
+            "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+            "connected_at": 1_000.0,
+        }
+        base.update(over)
+        return base
+
+    def test_healthy_connection(self):
+        diag = connection_diagnostics([self._conn()])
+        assert diag["aggregate"]["total"] == 1
+        assert diag["aggregate"]["connected"] == 1
+        assert diag["aggregate"]["errored"] == 0
+        row = diag["connectors"][0]
+        assert row["provider"] == "google"
+        assert row["connected"] is True
+        assert row["errored"] is False
+
+    def test_errored_connection_flagged(self):
+        diag = connection_diagnostics([self._conn(error="configuration")])
+        row = diag["connectors"][0]
+        assert row["errored"] is True
+        assert row["error"] == "configuration"
+        assert row["connected"] is False
+        assert diag["aggregate"]["errored"] == 1
+        assert diag["aggregate"]["connected"] == 0
+
+    def test_missing_scopes_reported(self):
+        diag = connection_diagnostics(
+            [self._conn(scopes=["a"])],
+            required_scopes={"google": ["a", "b"]},
+        )
+        row = diag["connectors"][0]
+        assert row["scope_complete"] is False
+        assert row["missing_scopes"] == ["b"]
+        assert diag["aggregate"]["scope_incomplete"] == 1
+
+    def test_scope_complete_when_required_met(self):
+        diag = connection_diagnostics(
+            [self._conn(scopes=["a", "b", "c"])],
+            required_scopes={"google": ["a", "b"]},
+        )
+        row = diag["connectors"][0]
+        assert row["scope_complete"] is True
+        assert row["missing_scopes"] == []
+
+    def test_age_seconds_from_now(self):
+        diag = connection_diagnostics([self._conn(connected_at=100.0)], now=160.0)
+        assert diag["connectors"][0]["age_seconds"] == 60.0
+
+    def test_no_connections_is_empty_not_error(self):
+        diag = connection_diagnostics([])
+        assert diag["aggregate"]["total"] == 0
+        assert diag["connectors"] == []
+
+    def test_non_dict_entry_raises(self):
+        with pytest.raises(ValueError, match="connection entry"):
+            connection_diagnostics(["not-a-dict"])
+
+    def test_missing_provider_raises(self):
+        with pytest.raises(ValueError, match="provider"):
+            connection_diagnostics([{"account_email": "x@example.com"}])
+
+
+def _quality_block(fp_rate, fn_rate, axis="needs_attention"):
+    """A minimal benchmark-style quality block with one axis confusion dict."""
+    return {
+        "category_accuracy": 0.4,
+        axis: {
+            "false_positive_rate": fp_rate,
+            "false_negative_rate": fn_rate,
+            "fp": 0,
+            "fn": 0,
+            "tp": 0,
+            "tn": 0,
+        },
+    }
+
+
+class TestQualityThresholds:
+    def test_load_from_manifest(self, tmp_path):
+        p = tmp_path / "thresholds.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "fp_max": 0.05,
+                    "fn_max": 0.02,
+                    "axis": "needs_attention",
+                    "enforce": False,
+                }
+            )
+        )
+        th = load_quality_thresholds(p)
+        assert isinstance(th, QualityThresholds)
+        assert th.fp_max == 0.05
+        assert th.fn_max == 0.02
+        assert th.axis == "needs_attention"
+        assert th.enforce is False
+
+    def test_missing_key_raises(self, tmp_path):
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps({"fp_max": 0.05}))  # missing fn_max/axis
+        with pytest.raises(ValueError, match="quality-gate thresholds"):
+            load_quality_thresholds(p)
+
+    def test_non_numeric_threshold_raises(self, tmp_path):
+        p = tmp_path / "bad.json"
+        p.write_text(
+            json.dumps({"fp_max": "lots", "fn_max": 0.02, "axis": "needs_attention"})
+        )
+        with pytest.raises(ValueError, match="numeric"):
+            load_quality_thresholds(p)
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_quality_thresholds(tmp_path / "nope.json")
+
+    def test_enforce_defaults_false_when_absent(self, tmp_path):
+        p = tmp_path / "t.json"
+        p.write_text(
+            json.dumps({"fp_max": 0.05, "fn_max": 0.02, "axis": "needs_attention"})
+        )
+        # enforce is the one safety switch — absent means report-only.
+        assert load_quality_thresholds(p).enforce is False
+
+
+class TestEvaluateGate:
+    def test_clean_input_passes(self):
+        th = QualityThresholds(fp_max=0.05, fn_max=0.02, axis="needs_attention")
+        result = evaluate_gate(_quality_block(0.01, 0.0), th)
+        assert result["passed"] is True
+        assert result["breaches"] == []
+        assert result["fp_rate"] == 0.01
+        assert result["fn_rate"] == 0.0
+        assert result["enforce"] is False
+
+    def test_high_fp_breaches(self):
+        th = QualityThresholds(fp_max=0.05, fn_max=0.02, axis="needs_attention")
+        result = evaluate_gate(_quality_block(0.30, 0.0), th)
+        assert result["passed"] is False
+        assert any(b["metric"] == "false_positive_rate" for b in result["breaches"])
+
+    def test_high_fn_breaches(self):
+        th = QualityThresholds(fp_max=0.05, fn_max=0.02, axis="needs_attention")
+        result = evaluate_gate(_quality_block(0.0, 0.50), th)
+        assert result["passed"] is False
+        assert any(b["metric"] == "false_negative_rate" for b in result["breaches"])
+
+    def test_boundary_at_threshold_passes(self):
+        # exactly at the bar is a pass (bar is "must be below-or-equal").
+        th = QualityThresholds(fp_max=0.05, fn_max=0.02, axis="needs_attention")
+        assert evaluate_gate(_quality_block(0.05, 0.02), th)["passed"] is True
+
+    def test_enforce_flag_propagates(self):
+        th = QualityThresholds(
+            fp_max=0.05, fn_max=0.02, axis="needs_attention", enforce=True
+        )
+        result = evaluate_gate(_quality_block(0.30, 0.0), th)
+        assert result["enforce"] is True
+        assert result["should_fail"] is True  # enforce AND breached
+
+    def test_report_mode_never_fails_even_on_breach(self):
+        th = QualityThresholds(
+            fp_max=0.05, fn_max=0.02, axis="needs_attention", enforce=False
+        )
+        result = evaluate_gate(_quality_block(0.99, 0.99), th)
+        assert result["passed"] is False
+        assert result["should_fail"] is False  # report mode: machinery only
+
+    def test_missing_axis_in_quality_block_raises(self):
+        th = QualityThresholds(fp_max=0.05, fn_max=0.02, axis="spam")
+        with pytest.raises(ValueError, match="axis 'spam'"):
+            evaluate_gate(_quality_block(0.0, 0.0, axis="needs_attention"), th)
+
+    def test_axis_missing_rate_keys_raises(self):
+        th = QualityThresholds(fp_max=0.05, fn_max=0.02, axis="needs_attention")
+        bad = {"needs_attention": {"tp": 1}}  # no rate keys
+        with pytest.raises(ValueError, match="false_positive_rate"):
+            evaluate_gate(bad, th)
 
 
 if __name__ == "__main__":

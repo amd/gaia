@@ -58,6 +58,7 @@ from gaia.agents.email.tools.preference_tools import (
 )
 from gaia.agents.email.tools.read_tools import ReadToolsMixin
 from gaia.agents.email.tools.reply_tools import ReplyToolsMixin
+from gaia.agents.email.tools.summarize_tools import SummarizeToolsMixin
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
@@ -137,6 +138,7 @@ class EmailTriageAgent(
     ReadToolsMixin,
     OrganizeToolsMixin,
     ReplyToolsMixin,
+    SummarizeToolsMixin,
     DeleteToolsMixin,
     CalendarToolsMixin,
     PreferenceToolsMixin,
@@ -262,6 +264,13 @@ class EmailTriageAgent(
     def _get_system_prompt(self) -> str:
         return _SYSTEM_PROMPT
 
+    def process_query(self, *args, **kwargs):
+        # Zero the batch-organize counter per turn so a long-lived instance
+        # can't carry a prior turn's count into the batch-confirm threshold.
+        # Only the batch counter resets here; session preferences persist.
+        self._reset_organize_counter()
+        return super().process_query(*args, **kwargs)
+
     def _register_tools(self) -> None:
         # Mirror BuilderAgent / ConnectorsDemoAgent: clear the
         # module-level registry before registering this agent's tools so
@@ -272,6 +281,7 @@ class EmailTriageAgent(
         self._register_read_tools()
         self._register_organize_tools()
         self._register_reply_tools()
+        self._register_summarize_tools()
         self._register_delete_tools()
         self._register_calendar_tools()
         self._register_preference_tools()
