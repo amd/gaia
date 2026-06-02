@@ -248,6 +248,7 @@ Do NOT wrap conversational replies in JSON.
         max_consecutive_repeats: int = 4,
         min_context_size: int = 32768,
         skip_lemonade: bool = False,
+        device: Optional[str] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -272,9 +273,14 @@ Do NOT wrap conversational replies in JSON.
             min_context_size: Minimum context size required for this agent (default: 32768).
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
+            device: Runtime device selector ('cpu', 'gpu', 'npu') chosen by the
+                          user (Agent UI dropdown / CLI --device). Validated against
+                          detected hardware at startup via LemonadeManager.ensure_ready;
+                          an unavailable device fails loudly (default: None = no check).
 
         Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
         """
+        self.device = device
         self.error_history = []  # Store error history for learning
         self.conversation_history = (
             []
@@ -312,6 +318,7 @@ Do NOT wrap conversational replies in JSON.
                 quiet=silent_mode,
                 base_url=base_url,
                 required_min_device=required_min_device,
+                device=device,
             )
 
         # Initialize state management

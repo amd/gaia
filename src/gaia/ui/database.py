@@ -359,14 +359,18 @@ class ChatDatabase:
         private: bool | None = None,
         agent_type: str | None = None,
         device: str | None = None,
+        model: str | None = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title, system prompt, agent_type, device, private flag, and/or document_ids."""
+        """Update session title, system prompt, agent_type, device, model, private flag, and/or document_ids."""
         updates: list[str] = []
         params: list[Any] = []
 
         if title is not None:
             updates.append("title = ?")
             params.append(title)
+        if model is not None:
+            updates.append("model = ?")
+            params.append(model)
         if system_prompt is not None:
             updates.append("system_prompt = ?")
             params.append(system_prompt)
