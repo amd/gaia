@@ -244,6 +244,13 @@ class EmailTriageAgent(
     def _get_system_prompt(self) -> str:
         return _SYSTEM_PROMPT
 
+    def process_query(self, *args, **kwargs):
+        # Zero the batch-organize counter per turn so a long-lived instance
+        # can't carry a prior turn's count into the batch-confirm threshold.
+        # Only the batch counter resets here; session preferences persist.
+        self._reset_organize_counter()
+        return super().process_query(*args, **kwargs)
+
     def _register_tools(self) -> None:
         # Mirror BuilderAgent / ConnectorsDemoAgent: clear the
         # module-level registry before registering this agent's tools so
