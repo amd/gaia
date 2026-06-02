@@ -182,7 +182,7 @@ jobs:
       # existence check); not worth the added untestable logic for that probability.
       - name: Run Claude (attempt 2 — retry install-phase crash)
         id: a2
-        if: ${{ !cancelled() && steps.a1.outcome == 'failure' && steps.a1.outputs.execution_file == '' }}
+        if: "!cancelled() && steps.a1.outcome == 'failure' && steps.a1.outputs.execution_file == ''"
         uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
         continue-on-error: true
         with:
@@ -198,7 +198,7 @@ jobs:
       # before it's set). Check the real artifact from whichever attempt ran. !cancelled()
       # so a superseded run doesn't warn spuriously.
       - name: Verify Claude output was produced
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         env:
           EXEC_FILE: ${{ steps.a1.outputs.execution_file != '' && steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
           KIND: ${{ github.event_name == 'pull_request_target' && 'review' || 'reply' }}
@@ -207,6 +207,7 @@ jobs:
         run: |
           ok=false
           if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            # last is_error across all Claude turns (recurse every object, take the final one)
             is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
             [ "$is_err" = "false" ] && ok=true
           fi
