@@ -99,7 +99,7 @@ jobs:
           # PR_NUMBER comes from env to avoid shell injection
 
           # Get PR details including fork info
-          PR_DATA=$(gh pr view $PR_NUMBER --json headRefOid,baseRefName,headRefName,headRepository,headRepositoryOwner)
+          PR_DATA=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefName,headRefName,headRepository,headRepositoryOwner)
           PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r '.headRefOid')
           BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
           HEAD_REPO_OWNER=$(echo "$PR_DATA" | jq -r '.headRepositoryOwner.login')
@@ -109,10 +109,10 @@ jobs:
           echo "Head repo: $HEAD_REPO_OWNER/$HEAD_REPO_NAME"
 
           # Fetch base branch from origin BEFORE any URL changes
-          git fetch origin $BASE_BRANCH
+          git fetch origin "$BASE_BRANCH"
 
           # Save base branch SHA before any origin URL changes (fork fetches can overwrite origin/$BASE_BRANCH)
-          BASE_SHA=$(git rev-parse origin/$BASE_BRANCH)
+          BASE_SHA=$(git rev-parse "origin/$BASE_BRANCH")
           echo "Base SHA: $BASE_SHA"
 
           # Extract branch name first
@@ -124,33 +124,33 @@ jobs:
 
             # Temporarily point origin to the fork so the action's prepare.ts can fetch from it
             echo "Temporarily redirecting 'origin' remote to fork"
-            git remote set-url origin https://github.com/$HEAD_REPO_OWNER/$HEAD_REPO_NAME.git
+            git remote set-url origin "https://github.com/$HEAD_REPO_OWNER/$HEAD_REPO_NAME.git"
 
             # Fetch and checkout branch from origin (now pointing to fork)
-            git fetch origin $HEAD_REF || {
+            git fetch origin "$HEAD_REF" || {
               echo "Failed to fetch branch from fork. Fork may be private or deleted."
               exit 1
             }
 
             # Use -B to force-create branch (handles case where HEAD_REF matches an existing
             # branch like 'main' — common when contributors push to their fork's default branch)
-            git checkout -B pr-head origin/$HEAD_REF
+            git checkout -B pr-head "origin/$HEAD_REF"
 
             echo "Successfully checked out $HEAD_REF as pr-head (origin now points to fork)"
           else
             echo "Non-fork PR, fetching from origin"
-            git fetch origin $PR_HEAD_SHA
-            git checkout $PR_HEAD_SHA
-            git checkout -b "$HEAD_REF" $PR_HEAD_SHA 2>/dev/null || git checkout "$HEAD_REF"
+            git fetch origin "$PR_HEAD_SHA"
+            git checkout "$PR_HEAD_SHA"
+            git checkout -b "$HEAD_REF" "$PR_HEAD_SHA" 2>/dev/null || git checkout "$HEAD_REF"
           fi
 
           # Generate diff using saved base SHA (not origin/$BASE_BRANCH which may have been
           # overwritten when origin was redirected to the fork)
           echo "Generating diff between base ($BASE_SHA) and PR head ($PR_HEAD_SHA)..."
-          git diff $BASE_SHA...$PR_HEAD_SHA > pr-diff.txt
+          git diff "$BASE_SHA...$PR_HEAD_SHA" > pr-diff.txt
 
           # Also get list of changed files
-          git diff --name-status $BASE_SHA...$PR_HEAD_SHA > pr-files.txt
+          git diff --name-status "$BASE_SHA...$PR_HEAD_SHA" > pr-files.txt
 
           echo "Diff generated: $(wc -l < pr-diff.txt) lines"
           echo "Files changed: $(wc -l < pr-files.txt) files"
