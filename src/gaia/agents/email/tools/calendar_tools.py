@@ -1,13 +1,19 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Calendar tools — list events, RSVP to invites, create events from emails,
-and detect meeting requests embedded in an email body.
+detect meeting requests embedded in an email body, and flag scheduling
+conflicts against the user's calendar.
 
 ``accept_invite``, ``decline_invite``, ``create_event_from_email`` are
 registered in ``TOOLS_REQUIRING_CONFIRMATION`` at the agent level —
 calendar mutations are externally visible to other attendees.
-``detect_meeting_request`` is read-only (it only inspects text) and is NOT
+``detect_meeting_request`` and ``detect_calendar_conflicts`` are read-only
+(they inspect text / read the calendar but make no changes) and are NOT
 confirmation-gated.
+
+Conflict detection (issue #1273) is deterministic interval arithmetic — no
+LLM. It is the natural follow-on to meeting detection: detect a meeting →
+check the proposed time against the calendar for overlaps.
 
 Meeting detection (issue #1272) mirrors the package's two-tier triage
 pattern: a deterministic heuristic for the obvious cases, and an LLM
@@ -22,7 +28,8 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Mapping, Optional
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gaia.agents.base.tools import tool
 from gaia.agents.email.verbose import log_tool_call
@@ -457,6 +464,135 @@ def detect_meeting_request_impl(
     return result
 
 
+# ===========================================================================
+# Calendar conflict detection (issue #1273)
+# ===========================================================================
+#
+# Deterministic interval arithmetic — no LLM. Every event is the half-open
+# interval ``[start, end)``; two intervals overlap iff
+# ``a.start < b.end and b.start < a.end``. Abutting intervals (``end ==
+# start``) therefore do NOT conflict, which is exactly the boundary the
+# issue calls out (2:00-3:00 vs 3:00-4:00 is not a conflict).
+
+
+def _parse_event_dt(value: str) -> datetime:
+    """Parse an RFC 3339 ``dateTime`` or a bare ``date`` into UTC-naive.
+
+    The Calendar API hands back offset-qualified timestamps (e.g.
+    ``2026-05-06T14:00:00Z`` or ``...+02:00``) for timed events and a bare
+    ``YYYY-MM-DD`` for all-day events. ``datetime.fromisoformat`` on the 3.10
+    floor rejects a trailing ``Z``, so normalise it to ``+00:00`` first.
+
+    Everything is returned as a naive UTC datetime so aware and (rare,
+    test-only) naive inputs compare without raising — a missing offset is
+    assumed to already be UTC. A bare date becomes midnight UTC.
+
+    Raises ``ValueError`` on anything unparseable; callers decide whether to
+    skip the offending event or surface the error.
+    """
+    text = (value or "").strip()
+    if not text:
+        raise ValueError("empty datetime value")
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _event_window(event: Mapping[str, Any]) -> Optional[tuple[datetime, datetime]]:
+    """Return ``(start, end)`` for a Google-shaped event, or ``None``.
+
+    Accepts both timed events (``start.dateTime``) and all-day events
+    (``start.date``). Returns ``None`` when the event has no usable
+    start/end or the timestamps don't parse — a malformed event is skipped,
+    never counted as a spurious conflict.
+    """
+    start_obj = event.get("start") or {}
+    end_obj = event.get("end") or {}
+    start_raw = start_obj.get("dateTime") or start_obj.get("date")
+    end_raw = end_obj.get("dateTime") or end_obj.get("date")
+    if not start_raw or not end_raw:
+        return None
+    try:
+        return _parse_event_dt(start_raw), _parse_event_dt(end_raw)
+    except ValueError:
+        return None
+
+
+def intervals_overlap(a_start: Any, a_end: Any, b_start: Any, b_end: Any) -> bool:
+    """Half-open ``[start, end)`` overlap test.
+
+    Two intervals overlap iff ``a_start < b_end and b_start < a_end``.
+    Abutting intervals (one's end equal to the other's start) do NOT
+    overlap. Operands may be any mutually-comparable type (datetimes or
+    numbers); the comparison is order-independent.
+    """
+    return a_start < b_end and b_start < a_end
+
+
+def detect_calendar_conflicts_impl(
+    cal,
+    *,
+    start_iso: str,
+    end_iso: str,
+    calendar_id: str = "primary",
+    debug: bool = False,
+) -> Dict[str, Any]:
+    """Flag existing calendar events that overlap a proposed time window.
+
+    Queries ``cal.list_events`` for the candidate window (so the live
+    Calendar backend can filter server-side) and independently applies the
+    half-open overlap test to every returned event — correct whether or not
+    the backend pre-filtered. Events whose times can't be parsed are skipped.
+
+    Returns ``{"has_conflict": bool, "conflicts": [...], "candidate": {...}}``
+    where each conflict carries ``id``, ``summary``, ``start``, ``end``.
+
+    Raises ``ValueError`` if the window is empty/inverted (``end <= start``).
+    Any error from ``cal.list_events`` propagates — never a silent "no
+    conflicts" on a backend failure.
+    """
+    candidate_start = _parse_event_dt(start_iso)
+    candidate_end = _parse_event_dt(end_iso)
+    if candidate_end <= candidate_start:
+        raise ValueError(
+            f"proposed window end ({end_iso!r}) must be after start ({start_iso!r})"
+        )
+
+    with log_tool_call(
+        "detect_calendar_conflicts",
+        {"start": start_iso, "end": end_iso},
+        debug=debug,
+    ) as st:
+        data = cal.list_events(
+            calendar_id=calendar_id, time_min=start_iso, time_max=end_iso
+        )
+        conflicts: List[Dict[str, Any]] = []
+        for ev in data.get("items", []):
+            window = _event_window(ev)
+            if window is None:
+                continue
+            ev_start, ev_end = window
+            if intervals_overlap(candidate_start, candidate_end, ev_start, ev_end):
+                start_obj = ev.get("start") or {}
+                end_obj = ev.get("end") or {}
+                conflicts.append(
+                    {
+                        "id": ev.get("id"),
+                        "summary": ev.get("summary", ""),
+                        "start": start_obj.get("dateTime") or start_obj.get("date"),
+                        "end": end_obj.get("dateTime") or end_obj.get("date"),
+                    }
+                )
+        st["result_summary"] = {"conflict_count": len(conflicts)}
+        return {
+            "has_conflict": bool(conflicts),
+            "conflicts": conflicts,
+            "candidate": {"start": start_iso, "end": end_iso},
+        }
+
+
 def list_calendar_events_impl(
     cal, *, time_min: Optional[str], time_max: Optional[str], debug: bool = False
 ) -> Dict[str, Any]:
@@ -675,6 +811,34 @@ class CalendarToolsMixin:
                 return _envelope_ok(data)
             except MeetingDetectionError as exc:
                 return _envelope_err(str(exc))
+            except ConnectorsError as exc:
+                return _envelope_err(str(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def detect_calendar_conflicts(start_iso: str, end_iso: str) -> str:
+            """Flag calendar events that conflict with a proposed time.
+
+            Read-only — reads the calendar but makes no changes. ``start_iso``
+            and ``end_iso`` are RFC 3339 timestamps bounding the proposed
+            meeting. Returns an envelope whose ``data`` has ``has_conflict``
+            (bool) and ``conflicts`` (the overlapping events, each with
+            ``id``/``summary``/``start``/``end``). Overlap is half-open: a
+            meeting ending exactly when another begins does NOT conflict. If
+            the calendar can't be read, this surfaces the error rather than
+            reporting a reassuring "no conflicts".
+            """
+            try:
+                return _envelope_ok(
+                    detect_calendar_conflicts_impl(
+                        cal,
+                        start_iso=start_iso,
+                        end_iso=end_iso,
+                        debug=debug_flag,
+                    )
+                )
             except ConnectorsError as exc:
                 return _envelope_err(str(exc))
             except Exception as exc:
