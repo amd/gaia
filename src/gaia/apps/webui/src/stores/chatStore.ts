@@ -259,8 +259,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     pendingPrompt: null,
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
-    setShowSettings: (show) => set({ showSettings: show }),
-    setShowMemoryDashboard: (show) => set({ showMemoryDashboard: show }),
+    setShowSettings: (show) =>
+        set(show ? { showSettings: true, showMemoryDashboard: false } : { showSettings: false }),
+    setShowMemoryDashboard: (show) =>
+        set(show ? { showMemoryDashboard: true, showSettings: false } : { showMemoryDashboard: false }),
     toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>
