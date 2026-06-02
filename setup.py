@@ -127,6 +127,7 @@ setup(
         "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
+        "tavily-python>=0.5.0",
     ],
     extras_require={
         "image": [
