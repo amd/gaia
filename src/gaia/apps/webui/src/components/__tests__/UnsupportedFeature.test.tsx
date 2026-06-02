@@ -35,6 +35,16 @@ describe('getUnsupportedCategory', () => {
     it('returns "Microsoft Office" for .docx', () => {
         expect(getUnsupportedCategory('.docx')?.label).toBe('Microsoft Office');
     });
+
+    it('returns null for .pptx — PowerPoint indexing shipped in #1224', () => {
+        expect(getUnsupportedCategory('.pptx')).toBeNull();
+    });
+
+    it('keeps legacy Office formats (.ppt, .doc, .xls) blocked', () => {
+        expect(getUnsupportedCategory('.ppt')?.label).toBe('Microsoft Office');
+        expect(getUnsupportedCategory('.doc')?.label).toBe('Microsoft Office');
+        expect(getUnsupportedCategory('.xls')?.label).toBe('Microsoft Office');
+    });
 });
 
 describe('isExtensionSupported', () => {
@@ -44,6 +54,10 @@ describe('isExtensionSupported', () => {
 
     it('returns true for .py', () => {
         expect(isExtensionSupported('.py')).toBe(true);
+    });
+
+    it('returns true for .pptx — modern PowerPoint is indexable', () => {
+        expect(isExtensionSupported('.pptx')).toBe(true);
     });
 
     it('returns false for .exe', () => {
