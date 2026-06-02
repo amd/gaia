@@ -221,21 +221,76 @@ def build_result(
             "phishing": quality_metrics.confusion_for_flag(
                 predicted_phishing, ground_truth, "is_phishing"
             ).to_dict(),
-            # Needs-attention axis (one candidate FP/FN gate for #1278).
+            # Needs-attention axis — the axis #1278's FP/FN gate scores.
             "needs_attention": quality_metrics.confusion_for_categories(
-                predicted_categories, ground_truth, {"urgent", "actionable"}
+                predicted_categories,
+                ground_truth,
+                quality_metrics.NEEDS_ATTENTION_CATEGORIES,
             ).to_dict(),
+            # Per-email categorization log: predicted-vs-expected + FP/FN ids
+            # (#1278: "logs/exports categorization results, FP, FN").
+            "categorization": quality_metrics.categorization_export(
+                predicted_categories, ground_truth
+            ),
         }
 
     return out
 
 
-def summarize_benchmark(results: list[dict], *, run_id: str) -> dict[str, Any]:
+def _aggregate_quality(results: list[dict]) -> dict[str, Any] | None:
+    """Sum per-run confusion across runs into one aggregate ``quality`` block.
+
+    Confusion counts are additive, so the corpus-level FP/FN rate is computed by
+    summing tp/fp/fn/tn over every run that scored quality, then re-deriving the
+    rates via :class:`~gaia.eval.quality_metrics.Confusion`. Returns ``None`` when
+    no run carried a quality block (no ground truth) — the gate keys off that.
+    """
+    axes = ("spam", "phishing", "needs_attention")
+    totals = {axis: quality_metrics.Confusion() for axis in axes}
+    accuracies: list[float] = []
+    saw_quality = False
+
+    for r in results:
+        q = r.get("quality")
+        if not isinstance(q, dict):
+            continue
+        saw_quality = True
+        if isinstance(q.get("category_accuracy"), (int, float)):
+            accuracies.append(float(q["category_accuracy"]))
+        for axis in axes:
+            block = q.get(axis)
+            if isinstance(block, dict):
+                c = totals[axis]
+                c.tp += int(block.get("tp", 0))
+                c.fp += int(block.get("fp", 0))
+                c.fn += int(block.get("fn", 0))
+                c.tn += int(block.get("tn", 0))
+
+    if not saw_quality:
+        return None
+
+    out: dict[str, Any] = {axis: totals[axis].to_dict() for axis in axes}
+    out["category_accuracy"] = (
+        round(sum(accuracies) / len(accuracies), 4) if accuracies else 0.0
+    )
+    return out
+
+
+def summarize_benchmark(
+    results: list[dict],
+    *,
+    run_id: str,
+    thresholds: "quality_metrics.QualityThresholds | None" = None,
+) -> dict[str, Any]:
     """Aggregate per-run results into a scorecard + per-model variance report.
 
     Reuses :func:`gaia.eval.scorecard.build_scorecard` (perf section) and
-    :func:`gaia.eval.statistics.compare_runs_by_model` (variance) — no new
-    aggregation logic.
+    :func:`gaia.eval.statistics.compare_runs_by_model` (variance) — no new perf
+    aggregation logic. When any run scored quality, an aggregate ``quality``
+    block (corpus-level confusion across runs) is added. When ``thresholds`` is
+    given, the configurable FP/FN gate runs against that aggregate and a
+    ``quality_gate`` block is added (report mode unless the manifest sets
+    ``enforce``). The gate is the machinery #1112 consumes; it never fails here.
     """
     from gaia.eval.scorecard import build_scorecard
     from gaia.eval.statistics import compare_runs_by_model
@@ -248,7 +303,32 @@ def summarize_benchmark(results: list[dict], *, run_id: str) -> dict[str, Any]:
         model: variance_to_dict(report)
         for model, report in compare_runs_by_model(results).items()
     }
-    return {"scorecard": scorecard, "variance": variance}
+    summary: dict[str, Any] = {"scorecard": scorecard, "variance": variance}
+
+    aggregate_quality = _aggregate_quality(results)
+    if aggregate_quality is not None:
+        summary["quality"] = aggregate_quality
+
+    if thresholds is not None:
+        if aggregate_quality is None:
+            # No ground truth → no axis to score. Surface a loud skip rather
+            # than silently inventing a pass.
+            summary["quality_gate"] = {
+                "skipped": True,
+                "reason": (
+                    "no quality block in any run (ground truth not provided); "
+                    "FP/FN gate cannot be evaluated"
+                ),
+                "axis": thresholds.axis,
+                "enforce": thresholds.enforce,
+                "should_fail": False,
+            }
+        else:
+            summary["quality_gate"] = quality_metrics.evaluate_gate(
+                aggregate_quality, thresholds
+            )
+
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -341,3 +421,29 @@ def load_ground_truth(path: str | Path) -> dict[str, dict]:
     """Load a ground-truth JSON file (loud on missing/invalid)."""
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+# Canonical location of the committed quality-gate thresholds manifest for the
+# #1230 corpus. The single entry point #1112 (CI) and #1266 consume — flip
+# 'enforce' in this file (data, not code) to make CI gate on FP/FN.
+_THRESHOLDS_MANIFEST = (
+    Path(__file__).resolve().parents[3]
+    / "tests"
+    / "fixtures"
+    / "email"
+    / "quality_gate_thresholds.json"
+)
+
+
+def default_quality_thresholds_path() -> Path:
+    """Path to the committed quality-gate thresholds manifest (#1230 corpus)."""
+    return _THRESHOLDS_MANIFEST
+
+
+def load_default_quality_thresholds() -> "quality_metrics.QualityThresholds":
+    """Load the committed quality-gate thresholds (loud if absent/malformed).
+
+    The one call CI (#1112) makes to discover the FP<5%/FN<2% bars and the
+    ``enforce`` switch without hardcoding a fixture path.
+    """
+    return quality_metrics.load_quality_thresholds(default_quality_thresholds_path())

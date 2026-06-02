@@ -28,6 +28,7 @@ from fastapi.responses import StreamingResponse
 from gaia.agents.base.api_agent import ApiAgent
 
 from .agent_registry import registry
+from .email_routes import router as email_router
 from .schemas import (
     ChatCompletionChoice,
     ChatCompletionRequest,
@@ -93,6 +94,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Email Triage Agent REST surface (#1229): POST /v1/email/{triage,draft,send}.
+app.include_router(email_router)
 
 
 # Raw request logging middleware (debug mode only)
