@@ -7,9 +7,11 @@
 #   1. checkout + PR-diff generation (mode auto-detected from github.event_name)
 #   2. the Claude action call WITH a second attempt — the upstream install-phase
 #      ENOENT crash (anthropics/claude-code-action) is intermittent, so a retry
-#      recovers it without a human re-run. Attempt 2 fires ONLY when attempt 1
-#      produced no execution_file (the crash signature), so a run that posted a
-#      comment then errored is never double-posted.
+#      recovers it without a human re-run. Attempt 2 fires only when attempt 1 FAILED
+#      and produced no execution_file; any run that reached Claude (even one that
+#      errored) writes execution_file and is NOT retried. The retried case is thus a
+#      hard crash with no output, overwhelmingly the pre-Claude install ENOENT (no
+#      comment posted). See the attempt-2 step for the one vanishingly-rare residual.
 #   3. artifact-based verification: the action only sets execution_file once Claude
 #      ran to completion, and is_error flags a mid-flight error. Either gap emits a
 #      loud ::warning:: (the step outcome is unreliable — continue-on-error masks it
@@ -23,8 +25,11 @@
 # claude.yml header "SECURITY" / "NOTE: pull_request_target uses the base workflow".
 #
 # The github event context here is the CALLER's, so github.event.pull_request.* /
-# github.event.issue.* resolve exactly as they do in claude.yml. Permissions and
-# secrets come from the calling job (permissions:) and `secrets: inherit`.
+# github.event.issue.* resolve exactly as they do in claude.yml. This workflow declares
+# NO permissions block, so each caller MUST set a job-level `permissions:` with the write
+# scopes Claude needs to post (pull-requests / issues) and pass `secrets: inherit`. A
+# caller that omits permissions falls back to the read-only default and Claude will fail
+# to post — surfaced only as the verification ::warning::, not a hard failure.
 
 name: Claude run (reusable)
 
@@ -166,13 +171,18 @@ jobs:
           prompt: ${{ inputs.prompt }}
           claude_args: ${{ inputs.claude_args }}
 
-      # --- Attempt 2 (retry only the install-phase crash) ---
-      # Fires only when attempt 1 set no execution_file — i.e. it crashed before Claude
-      # ran (the ENOENT signature). A run that produced output (even an errored one) is
-      # NOT retried, so a posted comment is never duplicated.
+      # --- Attempt 2 (retry the install-phase crash) ---
+      # Fires only when attempt 1 FAILED and produced no execution_file. The action writes
+      # execution_file on completion — including a Claude-level error (is_error) — so any
+      # run that reached Claude is excluded here; the only retried case is a hard crash
+      # with no output, overwhelmingly the pre-Claude install ENOENT (no comment posted).
+      # RESIDUAL (accepted, vanishingly rare): if the runner died in the brief window
+      # AFTER Claude's `gh` post but BEFORE the action finalized execution_file, this would
+      # retry and double-post. Closing it fully would require an idempotent post (a comment-
+      # existence check); not worth the added untestable logic for that probability.
       - name: Run Claude (attempt 2 — retry install-phase crash)
         id: a2
-        if: ${{ !cancelled() && steps.a1.outputs.execution_file == '' }}
+        if: ${{ !cancelled() && steps.a1.outcome == 'failure' && steps.a1.outputs.execution_file == '' }}
         uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
         continue-on-error: true
         with:
