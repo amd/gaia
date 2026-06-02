@@ -58,6 +58,7 @@ from gaia.agents.email.tools.preference_tools import (
 )
 from gaia.agents.email.tools.read_tools import ReadToolsMixin
 from gaia.agents.email.tools.reply_tools import ReplyToolsMixin
+from gaia.agents.email.tools.summarize_tools import SummarizeToolsMixin
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
@@ -137,6 +138,7 @@ class EmailTriageAgent(
     ReadToolsMixin,
     OrganizeToolsMixin,
     ReplyToolsMixin,
+    SummarizeToolsMixin,
     DeleteToolsMixin,
     CalendarToolsMixin,
     PreferenceToolsMixin,
@@ -261,6 +263,7 @@ class EmailTriageAgent(
         self._register_read_tools()
         self._register_organize_tools()
         self._register_reply_tools()
+        self._register_summarize_tools()
         self._register_delete_tools()
         self._register_calendar_tools()
         self._register_preference_tools()
