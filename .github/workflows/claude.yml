@@ -99,60 +99,23 @@ jobs:
       github.event_name == 'pull_request_target' &&
       (github.event.pull_request.draft == false ||
        contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write   # post the review as a PR comment
     concurrency:
       group: claude-pr-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-      - name: Generate PR diff
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
-        run: |
-          echo "Generating diff from $BASE_BRANCH to PR head"
-
-          # Fetch base branch
-          git fetch origin "$BASE_BRANCH"
-
-          # Generate diff in repo root (where Claude has access)
-          git diff "origin/$BASE_BRANCH...HEAD" > pr-diff.txt
-          git diff --name-status "origin/$BASE_BRANCH...HEAD" > pr-files.txt
-
-          echo "Diff generated: $(wc -l < pr-diff.txt) lines"
-          echo "Files changed: $(wc -l < pr-files.txt) files"
-
-      - name: Run Claude Code Review
-        id: claude
-        # Pinned to v1.0.99 by SHA: supports `pull_request_target` (added in PR #579,
-        # merged 2025-09-22) and Opus 4.7 (fixed in v1.0.98).
-        #
-        # v1.0 API migration: `direct_prompt` + `custom_instructions` → single `prompt`.
-        # `model` + `max_turns` → `claude_args`. See upstream migration guide:
-        # https://github.com/anthropics/claude-code-action/blob/main/docs/migration-guide.md
-        #
-        # continue-on-error: a rate-limit / expired-token / outage failure shouldn't
-        # fail PR CI — the review is best-effort. Because that turns a failure into a
-        # green check, the "Verify review was produced" step below checks the actual
-        # execution artifact and emits a ::warning:: when no review was produced.
-        uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
-        continue-on-error: true
-        with:
-          # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
-          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          # Allow fork-PR authors (no write perms) to trigger auto-review.
-          # See file header for the security trade-off.
-          allowed_non_write_users: "*"
-          prompt: |
+    # Delegates to the reusable workflow: checkout + diff, the Claude call WITH a
+    # retry for the upstream install-phase ENOENT flake, and artifact-based
+    # verification. Reusable (not a local composite action) so a fork PR can't
+    # tamper with it under pull_request_target — see claude-run.yml header.
+    uses: ./.github/workflows/claude-run.yml
+    secrets: inherit
+    with:
+      # Allow fork-PR authors (no write perms) to trigger auto-review.
+      # See file header for the security trade-off.
+      allowed_non_write_users: "*"
+      prompt: |
             Review this pull request following the custom_instructions exactly.
             Then post one structured review comment with: Summary → Issues (grouped by severity) → Strengths → Verdict.
             Post the review via: `gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md` (write body to /tmp/review.md first).
@@ -362,34 +325,10 @@ jobs:
             - Reference `file.py:line` for every claim
             - Make it easy for maintainers to accept suggestions with one click
 
-          claude_args: |
-            --max-turns 100
-            --model claude-opus-4-8
-            --allowedTools Edit,Read,Write,Grep,Glob,Bash
-
-      # continue-on-error above hides a failed run as a green check. Don't trust the
-      # step outcome — an install-phase crash (e.g. the action's ENOENT bug) exits
-      # before `outcome` is reliably 'failure'. Verify the real artifact: the action
-      # only sets execution_file once Claude ran to completion, and is_error flags a
-      # run that errored mid-flight. Either gap → loud ::warning:: so the silent
-      # failure is visible and the run can be re-run.
-      - name: Verify review was produced
-        if: ${{ !cancelled() }}
-        env:
-          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          ok=false
-          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
-            is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
-            [ "$is_err" = "false" ] && ok=true
-          fi
-          if [ "$ok" = "true" ]; then
-            echo "✅ Claude review completed (log: $EXEC_FILE)"
-          else
-            echo "::warning title=PR review did not complete::No review was posted to PR #${PR_NUMBER} — the Claude action crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: ${RUN_URL}"
-          fi
+      claude_args: |
+        --max-turns 100
+        --model claude-opus-4-8
+        --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
   #
@@ -402,53 +341,19 @@ jobs:
       github.event_name == 'pull_request_review_comment' &&
       contains(github.event.comment.body, '@claude') &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write   # post threaded reply on the review comment
     # No concurrency group — distinct @claude comments must each get answered.
     # GitHub keeps only one pending run per group, so grouping a user's burst would
     # cancel the middle comments instead of serializing them.
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-      - name: Generate PR diff
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
-        run: |
-          echo "Generating diff from $BASE_BRANCH to current PR head"
-
-          # Fetch base branch
-          git fetch origin "$BASE_BRANCH"
-
-          # Generate diff in repo root (where Claude has access)
-          git diff "origin/$BASE_BRANCH...HEAD" > pr-diff.txt
-          git diff --name-status "origin/$BASE_BRANCH...HEAD" > pr-files.txt
-
-          echo "Diff generated: $(wc -l < pr-diff.txt) lines"
-          echo "Files changed: $(wc -l < pr-files.txt) files"
-
-      - name: Respond to PR comment
-        id: claude
-        # Automation mode (passes `prompt`) avoids the tag-mode `--model` bug
-        # (https://github.com/anthropics/claude-code-action/issues/1223). Tag mode
-        # would silently fall back to Sonnet 4.6 regardless of --model.
-        #
-        # continue-on-error: a rate-limit / expired-token / outage failure shouldn't
-        # block the conversation; the "Verify reply was produced" step keeps it visible
-        # by checking the execution artifact (not the masked step outcome).
-        uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
-        continue-on-error: true
-        with:
-          # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
-          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          prompt: |
+    # Delegates to the reusable workflow (checkout + diff, Claude call with retry,
+    # artifact verification) — see claude-run.yml. No allowed_non_write_users: this
+    # job is gated to non-fork PRs above, so the action's default write-perm check applies.
+    uses: ./.github/workflows/claude-run.yml
+    secrets: inherit
+    with:
+      prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
             REVIEW COMMENT ID: ${{ github.event.comment.id }}
@@ -529,30 +434,10 @@ jobs:
 
             Maintain a helpful, professional tone.
 
-          claude_args: |
-            --max-turns 100
-            --model claude-opus-4-8
-            --allowedTools Edit,Read,Write,Grep,Glob,Bash
-
-      # See "Verify review was produced" in pr-review for why this checks the
-      # execution artifact instead of the (continue-on-error-masked) step outcome.
-      - name: Verify reply was produced
-        if: ${{ !cancelled() }}
-        env:
-          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          ok=false
-          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
-            is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
-            [ "$is_err" = "false" ] && ok=true
-          fi
-          if [ "$ok" = "true" ]; then
-            echo "✅ Claude reply completed (log: $EXEC_FILE)"
-          else
-            echo "::warning title=PR reply did not complete::No reply was posted to PR #${PR_NUMBER} — the Claude action crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: ${RUN_URL}"
-          fi
+      claude_args: |
+        --max-turns 100
+        --model claude-opus-4-8
+        --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Respond to new issues or @claude mentions in PR conversations (including forks)
   #
@@ -565,7 +450,6 @@ jobs:
       ((github.event_name == 'issues' && github.event.action == 'opened') ||
        (github.event_name == 'issue_comment' &&
         contains(github.event.comment.body, '@claude')))
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write          # comment on issues
@@ -573,101 +457,16 @@ jobs:
     # No concurrency group — distinct @claude comments must each get answered.
     # GitHub keeps only one pending run per group, so grouping a user's burst would
     # cancel the middle comments instead of serializing them.
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      # If this is a PR comment, fetch and checkout the PR head
-      - name: Checkout PR head and generate diff if commenting on PR
-        if: github.event.issue.pull_request != null
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.issue.number }}
-          REPO_OWNER: ${{ github.repository_owner }}
-        run: |
-          # PR_NUMBER comes from env to avoid shell injection
-
-          # Get PR details including fork info
-          PR_DATA=$(gh pr view $PR_NUMBER --json headRefOid,baseRefName,headRefName,headRepository,headRepositoryOwner)
-          PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r '.headRefOid')
-          BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
-          HEAD_REPO_OWNER=$(echo "$PR_DATA" | jq -r '.headRepositoryOwner.login')
-          HEAD_REPO_NAME=$(echo "$PR_DATA" | jq -r '.headRepository.name')
-
-          echo "PR #$PR_NUMBER: $BASE_BRANCH...$PR_HEAD_SHA"
-          echo "Head repo: $HEAD_REPO_OWNER/$HEAD_REPO_NAME"
-
-          # Fetch base branch from origin BEFORE any URL changes
-          git fetch origin $BASE_BRANCH
-
-          # Save base branch SHA before any origin URL changes (fork fetches can overwrite origin/$BASE_BRANCH)
-          BASE_SHA=$(git rev-parse origin/$BASE_BRANCH)
-          echo "Base SHA: $BASE_SHA"
-
-          # Extract branch name first
-          HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
-
-          # For fork PRs, temporarily redirect origin to the fork
-          if [ "$HEAD_REPO_OWNER" != "$REPO_OWNER" ]; then
-            echo "Fork PR detected: $HEAD_REPO_OWNER/$HEAD_REPO_NAME"
-
-            # Temporarily point origin to the fork so the action's prepare.ts can fetch from it
-            echo "Temporarily redirecting 'origin' remote to fork"
-            git remote set-url origin https://github.com/$HEAD_REPO_OWNER/$HEAD_REPO_NAME.git
-
-            # Fetch and checkout branch from origin (now pointing to fork)
-            git fetch origin $HEAD_REF || {
-              echo "Failed to fetch branch from fork. Fork may be private or deleted."
-              exit 1
-            }
-
-            # Use -B to force-create branch (handles case where HEAD_REF matches an existing
-            # branch like 'main' — common when contributors push to their fork's default branch)
-            git checkout -B pr-head origin/$HEAD_REF
-
-            echo "Successfully checked out $HEAD_REF as pr-head (origin now points to fork)"
-          else
-            echo "Non-fork PR, fetching from origin"
-            git fetch origin $PR_HEAD_SHA
-            git checkout $PR_HEAD_SHA
-            git checkout -b "$HEAD_REF" $PR_HEAD_SHA 2>/dev/null || git checkout "$HEAD_REF"
-          fi
-
-          # Generate diff using saved base SHA (not origin/$BASE_BRANCH which may have been
-          # overwritten when origin was redirected to the fork)
-          echo "Generating diff between base ($BASE_SHA) and PR head ($PR_HEAD_SHA)..."
-          git diff $BASE_SHA...$PR_HEAD_SHA > pr-diff.txt
-
-          # Also get list of changed files
-          git diff --name-status $BASE_SHA...$PR_HEAD_SHA > pr-files.txt
-
-          echo "Diff generated: $(wc -l < pr-diff.txt) lines"
-          echo "Files changed: $(wc -l < pr-files.txt) files"
-
-      - name: Respond to issue or PR comment
-        id: claude
-        # Automation mode (passes `prompt`) avoids the tag-mode `--model` bug
-        # (https://github.com/anthropics/claude-code-action/issues/1223). It also
-        # sidesteps the previous "Claude posts an unchecked TODO list and never
-        # updates it" behavior — in automation mode Claude runs to completion and
-        # posts one final comment. `--max-turns 100` gives ample budget for large repos.
-        #
-        # continue-on-error: a rate-limit / expired-token / outage failure shouldn't
-        # block the conversation; the "Verify reply was produced" step keeps it visible
-        # by checking the execution artifact (not the masked step outcome).
-        uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
-        continue-on-error: true
-        with:
-          # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
-          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          # Allow non-write users (fork-PR authors, external issue reporters) to invoke
-          # @claude. See file header for the security trade-off.
-          allowed_non_write_users: "*"
-          prompt: |
+    # Delegates to the reusable workflow, which does the fork-aware checkout + diff
+    # for PR conversations, the Claude call with retry, and artifact verification.
+    # See claude-run.yml.
+    uses: ./.github/workflows/claude-run.yml
+    secrets: inherit
+    with:
+      # Allow non-write users (fork-PR authors, external issue reporters) to invoke
+      # @claude. See file header for the security trade-off.
+      allowed_non_write_users: "*"
+      prompt: |
             REPO: ${{ github.repository }}
             ISSUE/PR NUMBER: ${{ github.event.issue.number }}
             EVENT: ${{ github.event_name }}
@@ -779,30 +578,10 @@ jobs:
             - Assume good intent
             - Welcome contributors
 
-          claude_args: |
-            --max-turns 100
-            --model claude-opus-4-8
-            --allowedTools Edit,Read,Write,Grep,Glob,Bash
-
-      # See "Verify review was produced" in pr-review for why this checks the
-      # execution artifact instead of the (continue-on-error-masked) step outcome.
-      - name: Verify reply was produced
-        if: ${{ !cancelled() }}
-        env:
-          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          ok=false
-          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
-            is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
-            [ "$is_err" = "false" ] && ok=true
-          fi
-          if [ "$ok" = "true" ]; then
-            echo "✅ Claude reply completed (log: $EXEC_FILE)"
-          else
-            echo "::warning title=Issue reply did not complete::No reply was posted to #${ISSUE_NUMBER} — the Claude action crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: ${RUN_URL}"
-          fi
+      claude_args: |
+        --max-turns 100
+        --model claude-opus-4-8
+        --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Auto-fix: attempt to implement a fix for bulletproof, easy bug reports
   #

@@ -1,0 +1,207 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Reusable runner for the conversational Claude jobs (pr-review, pr-comment,
+# issue-handler in claude.yml). It centralizes three things that were previously
+# copy-pasted per job:
+#   1. checkout + PR-diff generation (mode auto-detected from github.event_name)
+#   2. the Claude action call WITH a second attempt — the upstream install-phase
+#      ENOENT crash (anthropics/claude-code-action) is intermittent, so a retry
+#      recovers it without a human re-run. Attempt 2 fires ONLY when attempt 1
+#      produced no execution_file (the crash signature), so a run that posted a
+#      comment then errored is never double-posted.
+#   3. artifact-based verification: the action only sets execution_file once Claude
+#      ran to completion, and is_error flags a mid-flight error. Either gap emits a
+#      loud ::warning:: (the step outcome is unreliable — continue-on-error masks it
+#      and an install crash exits before outcome is set).
+#
+# WHY a reusable workflow and not a local composite action: for pull_request_target
+# and issue_comment, GitHub reads workflow files (including a `uses: ./...` reusable
+# workflow) from the BASE branch, not the PR head — so a fork PR can't tamper with
+# this file while the Anthropic credential + GITHUB_TOKEN are in scope. A local
+# composite action, by contrast, is read from the checked-out (fork) tree. See the
+# claude.yml header "SECURITY" / "NOTE: pull_request_target uses the base workflow".
+#
+# The github event context here is the CALLER's, so github.event.pull_request.* /
+# github.event.issue.* resolve exactly as they do in claude.yml. Permissions and
+# secrets come from the calling job (permissions:) and `secrets: inherit`.
+
+name: Claude run (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      prompt:
+        description: "Full prompt passed to the Claude action (automation mode)."
+        required: true
+        type: string
+      claude_args:
+        description: "CLI args for the action (--max-turns / --model / --allowedTools)."
+        required: true
+        type: string
+      allowed_non_write_users:
+        description: "Pass '*' to let non-write users trigger (fork PRs); '' enforces the gate."
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      # --- PR events (pull_request_target = review, pull_request_review_comment = reply):
+      #     checkout the PR head and diff it against base. ---
+      - name: Checkout PR head
+        if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Generate PR diff
+        if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: |
+          echo "Generating diff from $BASE_BRANCH to PR head"
+
+          # Fetch base branch
+          git fetch origin "$BASE_BRANCH"
+
+          # Generate diff in repo root (where Claude has access)
+          git diff "origin/$BASE_BRANCH...HEAD" > pr-diff.txt
+          git diff --name-status "origin/$BASE_BRANCH...HEAD" > pr-files.txt
+
+          echo "Diff generated: $(wc -l < pr-diff.txt) lines"
+          echo "Files changed: $(wc -l < pr-files.txt) files"
+
+      # --- Issue / issue_comment events: plain checkout, plus a fork-aware diff when
+      #     the comment is on a PR conversation. ---
+      - name: Checkout repository
+        if: github.event_name == 'issues' || github.event_name == 'issue_comment'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Checkout PR head and generate diff if commenting on PR
+        if: (github.event_name == 'issues' || github.event_name == 'issue_comment') && github.event.issue.pull_request != null
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          # PR_NUMBER comes from env to avoid shell injection
+
+          # Get PR details including fork info
+          PR_DATA=$(gh pr view $PR_NUMBER --json headRefOid,baseRefName,headRefName,headRepository,headRepositoryOwner)
+          PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r '.headRefOid')
+          BASE_BRANCH=$(echo "$PR_DATA" | jq -r '.baseRefName')
+          HEAD_REPO_OWNER=$(echo "$PR_DATA" | jq -r '.headRepositoryOwner.login')
+          HEAD_REPO_NAME=$(echo "$PR_DATA" | jq -r '.headRepository.name')
+
+          echo "PR #$PR_NUMBER: $BASE_BRANCH...$PR_HEAD_SHA"
+          echo "Head repo: $HEAD_REPO_OWNER/$HEAD_REPO_NAME"
+
+          # Fetch base branch from origin BEFORE any URL changes
+          git fetch origin $BASE_BRANCH
+
+          # Save base branch SHA before any origin URL changes (fork fetches can overwrite origin/$BASE_BRANCH)
+          BASE_SHA=$(git rev-parse origin/$BASE_BRANCH)
+          echo "Base SHA: $BASE_SHA"
+
+          # Extract branch name first
+          HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
+
+          # For fork PRs, temporarily redirect origin to the fork
+          if [ "$HEAD_REPO_OWNER" != "$REPO_OWNER" ]; then
+            echo "Fork PR detected: $HEAD_REPO_OWNER/$HEAD_REPO_NAME"
+
+            # Temporarily point origin to the fork so the action's prepare.ts can fetch from it
+            echo "Temporarily redirecting 'origin' remote to fork"
+            git remote set-url origin https://github.com/$HEAD_REPO_OWNER/$HEAD_REPO_NAME.git
+
+            # Fetch and checkout branch from origin (now pointing to fork)
+            git fetch origin $HEAD_REF || {
+              echo "Failed to fetch branch from fork. Fork may be private or deleted."
+              exit 1
+            }
+
+            # Use -B to force-create branch (handles case where HEAD_REF matches an existing
+            # branch like 'main' — common when contributors push to their fork's default branch)
+            git checkout -B pr-head origin/$HEAD_REF
+
+            echo "Successfully checked out $HEAD_REF as pr-head (origin now points to fork)"
+          else
+            echo "Non-fork PR, fetching from origin"
+            git fetch origin $PR_HEAD_SHA
+            git checkout $PR_HEAD_SHA
+            git checkout -b "$HEAD_REF" $PR_HEAD_SHA 2>/dev/null || git checkout "$HEAD_REF"
+          fi
+
+          # Generate diff using saved base SHA (not origin/$BASE_BRANCH which may have been
+          # overwritten when origin was redirected to the fork)
+          echo "Generating diff between base ($BASE_SHA) and PR head ($PR_HEAD_SHA)..."
+          git diff $BASE_SHA...$PR_HEAD_SHA > pr-diff.txt
+
+          # Also get list of changed files
+          git diff --name-status $BASE_SHA...$PR_HEAD_SHA > pr-files.txt
+
+          echo "Diff generated: $(wc -l < pr-diff.txt) lines"
+          echo "Files changed: $(wc -l < pr-files.txt) files"
+
+      # --- Attempt 1 ---
+      # continue-on-error: a rate-limit / expired-token / outage / install-crash must
+      # not red-X a contributor's PR CI. Visibility comes from the verification step.
+      - name: Run Claude (attempt 1)
+        id: a1
+        uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
+        continue-on-error: true
+        with:
+          # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+          prompt: ${{ inputs.prompt }}
+          claude_args: ${{ inputs.claude_args }}
+
+      # --- Attempt 2 (retry only the install-phase crash) ---
+      # Fires only when attempt 1 set no execution_file — i.e. it crashed before Claude
+      # ran (the ENOENT signature). A run that produced output (even an errored one) is
+      # NOT retried, so a posted comment is never duplicated.
+      - name: Run Claude (attempt 2 — retry install-phase crash)
+        id: a2
+        if: ${{ !cancelled() && steps.a1.outputs.execution_file == '' }}
+        uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
+        continue-on-error: true
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+          prompt: ${{ inputs.prompt }}
+          claude_args: ${{ inputs.claude_args }}
+
+      # --- Verify a result was actually produced ---
+      # Don't trust step outcome (continue-on-error masks it; an install crash exits
+      # before it's set). Check the real artifact from whichever attempt ran. !cancelled()
+      # so a superseded run doesn't warn spuriously.
+      - name: Verify Claude output was produced
+        if: ${{ !cancelled() }}
+        env:
+          EXEC_FILE: ${{ steps.a1.outputs.execution_file != '' && steps.a1.outputs.execution_file || steps.a2.outputs.execution_file }}
+          KIND: ${{ github.event_name == 'pull_request_target' && 'review' || 'reply' }}
+          TARGET: "${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment') && format('PR #{0}', github.event.pull_request.number) || format('#{0}', github.event.issue.number) }}"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ok=false
+          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
+            [ "$is_err" = "false" ] && ok=true
+          fi
+          if [ "$ok" = "true" ]; then
+            echo "✅ Claude $KIND completed (log: $EXEC_FILE)"
+          else
+            echo "::warning title=Claude $KIND did not complete::No $KIND was posted to $TARGET after 2 attempts — the Claude action crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: $RUN_URL"
+          fi
