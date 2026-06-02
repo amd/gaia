@@ -149,6 +149,42 @@ def fetch_undoable(
     }
 
 
+def fetch_batch_undoable(
+    db, *, batch_id: str, window_seconds: int
+) -> list[Dict[str, Any]]:
+    """Return every action row in ``batch_id`` that is still undoable.
+
+    A row is undoable when it has not been undone and is inside the window.
+    Stale or already-undone rows are filtered out — this is the bulk
+    analogue of ``fetch_undoable`` for the batch-undo follow-up (#1270).
+    Returns ``[]`` for an unknown batch.
+    """
+    rows = db.query(
+        "SELECT * FROM email_actions WHERE batch_id = :b ORDER BY created_at",
+        {"b": batch_id},
+    )
+    cutoff = time.time() - window_seconds
+    out: list[Dict[str, Any]] = []
+    for row in rows or ():
+        if row["undone_at"] is not None:
+            continue
+        if row["created_at"] < cutoff:
+            continue
+        payload = json.loads(row["payload_json"]) if row["payload_json"] else {}
+        out.append(
+            {
+                "action_id": row["action_id"],
+                "action_type": row["action_type"],
+                "message_id": row["message_id"],
+                "thread_id": row["thread_id"],
+                "payload": payload,
+                "batch_id": row["batch_id"],
+                "created_at": row["created_at"],
+            }
+        )
+    return out
+
+
 def mark_undone(db, *, action_id: str) -> None:
     """Mark an action as undone. Idempotent — re-marking is a no-op.
 
@@ -220,6 +256,7 @@ __all__ = [
     "BODY_PREVIEW_MAX_CHARS",
     "EMAIL_ACTIONS_DDL",
     "EMAIL_DRAFTS_DDL",
+    "fetch_batch_undoable",
     "fetch_draft",
     "fetch_undoable",
     "init_schema",
