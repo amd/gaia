@@ -77,12 +77,26 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="OAuth scopes to request (connector-specific)",
     )
 
-    # configure (generic dispatcher)
+    # configure (generic dispatcher + OAuth-client convenience flags)
     p_cfg = sub.add_parser(
         "configure",
         help="Configure a connector (MCP API keys, OAuth client creds, etc.)",
     )
     p_cfg.add_argument("connector_id", help="Connector id")
+    p_cfg.add_argument(
+        "--client-id",
+        dest="client_id",
+        help=(
+            "OAuth client id for an oauth_pkce connector (e.g. the Google "
+            "Desktop-app client). Persists to the keyring; requires --client-secret. "
+            "Run 'gaia connectors connect <id>' afterward to complete login."
+        ),
+    )
+    p_cfg.add_argument(
+        "--client-secret",
+        dest="client_secret",
+        help="OAuth client secret (paired with --client-id; stored encrypted in the keyring)",
+    )
     p_cfg.add_argument(
         "--set",
         action="append",
@@ -309,6 +323,16 @@ def _handle_configure(args: argparse.Namespace) -> int:
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     from gaia.connectors.handler import configure
 
+    client_id = getattr(args, "client_id", None)
+    client_secret = getattr(args, "client_secret", None)
+
+    # OAuth-client convenience path (#1084): --client-id / --client-secret
+    # persist the application's OAuth client creds to the same keyring slot the
+    # provider reads from, completing OAuth *config* without the Agent UI. The
+    # interactive browser login stays a separate `gaia connectors connect`.
+    if client_id is not None or client_secret is not None:
+        return _handle_configure_client_credentials(args, client_id, client_secret)
+
     config: dict = {}
     if getattr(args, "config_json", None):
         try:
@@ -339,6 +363,80 @@ def _handle_configure(args: argparse.Namespace) -> int:
     sys.stdout.write(f"Configured {args.connector_id}.\n")
     if result.get("authorization_url"):
         sys.stdout.write(f"Complete OAuth flow at:\n  {result['authorization_url']}\n")
+    return 0
+
+
+def _handle_configure_client_credentials(
+    args: argparse.Namespace,
+    client_id: str | None,
+    client_secret: str | None,
+) -> int:
+    """Persist an oauth_pkce connector's OAuth *client* credentials (#1084).
+
+    Writes ``client_id`` / ``client_secret`` to the keyring slot the provider
+    resolves from (``store.peek_provider_credentials``) and evicts the cached
+    provider so the next construction re-reads them. Does NOT start the PKCE
+    flow — the browser login stays a separate ``gaia connectors connect``.
+
+    Both flags are required together: Google rejects token requests that omit
+    the secret even for Desktop PKCE clients, so a half-configured client would
+    fail loudly later instead of here. Mixing with ``--set`` / ``--json`` is a
+    usage error to avoid an ambiguous double-write.
+    """
+    if not client_id:
+        sys.stderr.write(
+            "gaia connectors configure: --client-secret requires --client-id.\n"
+        )
+        return 2
+    if not client_secret:
+        sys.stderr.write(
+            "gaia connectors configure: --client-id requires --client-secret "
+            "(Google requires the secret even for Desktop-app PKCE clients).\n"
+        )
+        return 2
+    if getattr(args, "config_pairs", None) or getattr(args, "config_json", None):
+        sys.stderr.write(
+            "gaia connectors configure: --client-id/--client-secret cannot be "
+            "combined with --set/--json. Use one configuration style at a time.\n"
+        )
+        return 2
+
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.providers import _registry as _provider_registry
+    from gaia.connectors.registry import REGISTRY
+    from gaia.connectors.store import save_provider_credentials
+
+    try:
+        spec = REGISTRY.get(args.connector_id)
+    except KeyError:
+        sys.stderr.write(
+            f"gaia connectors configure: unknown connector {args.connector_id!r}\n"
+        )
+        return 1
+
+    if spec.type != "oauth_pkce":
+        sys.stderr.write(
+            f"gaia connectors configure: --client-id/--client-secret apply only to "
+            f"oauth_pkce connectors; {args.connector_id!r} is type {spec.type!r}.\n"
+        )
+        return 2
+
+    provider_id = spec.oauth_provider_ref or spec.id
+    save_provider_credentials(
+        provider_id,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    # Evict any cached provider instance so the next get_provider() re-reads the
+    # freshly persisted creds instead of a stale id/secret.
+    _provider_registry.pop(provider_id, None)
+
+    sys.stdout.write(
+        f"Configured {args.connector_id}. OAuth client credentials saved to the "
+        "keyring.\n"
+        f"Next: run 'gaia connectors connect {args.connector_id}' to sign in and "
+        "authorize.\n"
+    )
     return 0
 
 
