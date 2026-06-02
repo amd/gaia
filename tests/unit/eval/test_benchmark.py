@@ -12,9 +12,12 @@ from gaia.eval.benchmark import (
     _maybe_parse_tool_envelope,
     _normalize_agent_result,
     build_result,
+    default_quality_thresholds_path,
+    load_default_quality_thresholds,
     run_benchmark,
     summarize_benchmark,
 )
+from gaia.eval.quality_metrics import QualityThresholds
 
 GT = {
     "_meta": {"note": "skip me"},
@@ -195,6 +198,24 @@ class TestRunBenchmarkOffline:
         assert results[1]["is_cold_start"] is False
 
 
+class TestCategorizationExportInResult:
+    def test_quality_block_carries_categorization_export(self):
+        out = build_result(
+            _agent_result(),
+            run_id="r1",
+            timestamp="t",
+            model_id="Gemma-4-E4B-it-GGUF",
+            total_duration_ms=2000,
+            ground_truth=GT,
+        )
+        export = out["quality"]["categorization"]
+        assert "rows" in export
+        assert "false_positives" in export
+        assert "false_negatives" in export
+        ids = {r["id"] for r in export["rows"]}
+        assert ids == {"a", "b"}  # both overlap the labelled GT
+
+
 class TestSummarizeBenchmark:
     def test_scorecard_perf_section_populated(self):
         results = [
@@ -212,6 +233,67 @@ class TestSummarizeBenchmark:
         assert perf["avg_tokens_per_second"] == 50.0
         assert perf["scenarios_with_data"] == 3
         assert "Gemma-4-E4B-it-GGUF" in summary["variance"]
+
+    def test_quality_gate_block_present_with_thresholds(self):
+        results = [
+            build_result(
+                _agent_result(),
+                run_id="r0",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=2000,
+                ground_truth=GT,
+            )
+        ]
+        th = QualityThresholds(fp_max=0.05, fn_max=0.02, axis="needs_attention")
+        summary = summarize_benchmark(results, run_id="bench-run", thresholds=th)
+        gate = summary["quality_gate"]
+        assert "passed" in gate
+        assert "breaches" in gate
+        assert gate["enforce"] is False  # report mode
+        # aggregate quality across runs is surfaced too
+        assert "quality" in summary
+        assert "needs_attention" in summary["quality"]
+
+    def test_no_thresholds_means_no_gate_block(self):
+        results = [
+            build_result(
+                _agent_result(),
+                run_id="r0",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=2000,
+                ground_truth=GT,
+            )
+        ]
+        summary = summarize_benchmark(results, run_id="bench-run")
+        assert "quality_gate" not in summary
+
+    def test_committed_manifest_loads_in_report_mode(self):
+        # The #1112/#1266 contract: the shipped manifest must exist, parse, and
+        # default to report mode (enforce=False) until accuracy (#1266) lands.
+        assert default_quality_thresholds_path().exists()
+        th = load_default_quality_thresholds()
+        assert th.fp_max == 0.05
+        assert th.fn_max == 0.02
+        assert th.axis == "needs_attention"
+        assert th.enforce is False
+
+    def test_gate_skipped_when_no_ground_truth(self):
+        # No quality block (no GT) → gate can't run; surfaces a clear skip note,
+        # never silently invents a pass.
+        results = [
+            build_result(
+                _agent_result(),
+                run_id="r0",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=2000,
+            )
+        ]
+        th = QualityThresholds(fp_max=0.05, fn_max=0.02, axis="needs_attention")
+        summary = summarize_benchmark(results, run_id="bench-run", thresholds=th)
+        assert summary["quality_gate"]["skipped"] is True
 
 
 if __name__ == "__main__":
