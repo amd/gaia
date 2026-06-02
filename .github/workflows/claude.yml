@@ -659,10 +659,12 @@ jobs:
 
   # Auto-fix: attempt to implement a fix for bulletproof, easy bug reports
   #
-  # Runs in parallel with issue-handler. The issue-handler posts a diagnosis
-  # comment (~2 min); this job independently triages the bug, and if the fix
-  # passes lint + unit tests, opens a PR and comments on the issue with the PR
-  # link and how to verify the fix.
+  # Runs in parallel with issue-handler on `issues: opened` (issue-handler posts a
+  # diagnosis comment ~2 min in). On the `labeled` / `reopened` paths auto-fix runs
+  # alone — issue-handler stays opened-only to avoid spurious replies on triage label
+  # churn. Either way this job independently triages the bug, and if the fix passes
+  # lint + unit tests, opens a PR and comments on the issue with the PR link and how
+  # to verify the fix.
   #
   # Self-selecting: Claude triages each bug and picks one outcome — open a
   # validated PR, propose a patch in an issue comment, or decline. The PR path
