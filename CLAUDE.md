@@ -12,6 +12,14 @@ GAIA (Generative AI Is Awesome) is AMD's open-source framework for running gener
 - SDK Reference: https://amd-gaia.ai/sdk
 - Guides: https://amd-gaia.ai/guides
 
+## How You Communicate
+
+Applies to **every response** — interactive chat in a local session and GitHub issue/PR replies alike. Lead with the finding (the [Issue Response Guidelines](#issue-response-guidelines) cover that and the GitHub-specific detail); the rules below add the conciseness bar that holds everywhere.
+
+- **Write for the human reading it, not an engineer auditing the code.** Plain language; the shortest response that fully answers. If one line suffices, send one line.
+- **Cite `file.py:line`, symbols, module paths, or flags ONLY when the reader needs them to act** — never to show your work. Cut internal implementation detail (import paths, subparser/flag mechanics, class names) the reader doesn't need to make a decision.
+- **Don't pad.** Skip restating the question, "what I changed" walls the diff already shows, and exhaustive option dumps when one recommendation will do.
+
 ## Version Control Guidelines
 
 ### Repository Structure
