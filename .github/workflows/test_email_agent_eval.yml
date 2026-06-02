@@ -1,0 +1,281 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Nightly + manual offline eval for the email-triage agent (#1112).
+#
+# Drives the email-triage throughput/quality benchmark over the committed
+# SYNTHETIC corpus (tests/fixtures/email/) via FakeGmailBackend — never a live
+# mailbox. Computes the quality (FP/FN, #1278) and performance (TTFT / tok-per-s
+# / 50-email latency / peak memory, #1277) gates and the categorization-accuracy
+# / phishing-precision numbers, logs them, and uploads the full gate report.
+#
+# REPORT MODE. The gate bars + the single on/off switch live in ONE committed
+# source each — the threshold manifests under tests/fixtures/email/, read here
+# only through the harness loaders (no thresholds are hardcoded in this YAML):
+#   - tests/fixtures/email/quality_gate_thresholds.json  (FP<5% / FN<2%)
+#   - tests/fixtures/email/perf_gate_thresholds.json      (TTFT / tps / latency / mem)
+# CI keys off each gate's `should_fail` (= enforce and not passed). Both manifests
+# ship `enforce: false`, so `should_fail` is always false today: the gate
+# machinery runs, logs, and uploads, but the build stays green. This is the
+# honest posture — categorization accuracy is still ~0.40, so the FP/FN bars are
+# not yet meaningful and the Strix Halo perf bars are not yet confirmed on
+# hardware. Flipping `enforce: true` IN THE MANIFEST (data, not this workflow) is
+# what makes the build start failing on a breach, once #1266 (categorization),
+# #1271 (phishing) and the perf bars land. No edit to this file is needed then.
+#
+# NOTE on accuracy gates: categorization >=85% (#1266), phishing precision >=90%
+# (#1271) and draft-approval >=70% (#1269) do not yet have committed threshold
+# manifests (they are owned by those issues). This workflow REPORTS the
+# categorization accuracy and phishing precision the benchmark already emits, but
+# does not gate on them — there is no committed bar to read, and inventing one in
+# YAML would violate the single-source rule above. They become gating once their
+# manifests land and this gate-reader is pointed at them.
+#
+# Self-hosted: this needs a running Lemonade Server with the email-triage model
+# loaded on AMD hardware (Ryzen AI / Strix Halo). That hardware is the gating
+# dependency for turning this from report mode into a hard gate.
+
+name: Email Agent Eval (offline, report mode)
+
+on:
+  # Nightly — 07:00 UTC daily.
+  schedule:
+    - cron: '0 7 * * *'
+  # Manual trigger, with a knob for repeat experiments (variance).
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Lemonade model id to benchmark'
+        required: false
+        default: 'Gemma-4-E4B-it-GGUF'
+      limit:
+        description: 'Max messages to triage from the synthetic corpus'
+        required: false
+        default: '50'
+      experiments:
+        description: 'Repeat count for variance analysis'
+        required: false
+        default: '1'
+
+concurrency:
+  # Share the single Lemonade backend slot with the other self-hosted evals so
+  # two runs never race-evict each other's model (see CLAUDE.md: evals serial).
+  group: lemonade-eval
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  email-eval:
+    name: Email Triage Eval (synthetic corpus, report mode)
+    runs-on: [self-hosted, lemonade-eval]
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies in isolated venv
+        run: |
+          python -m venv .venv-email-eval
+          source .venv-email-eval/bin/activate
+          python -m pip install --upgrade pip
+          # [dev] + [eval] for the benchmark + quality/perf gate machinery and
+          # the Anthropic/scikit-learn judge deps; [api] for the connectors
+          # layer the email agent boots.
+          pip install -e ".[dev,eval,api]"
+          # Make the venv bin available to subsequent workflow steps.
+          echo "$PWD/.venv-email-eval/bin" >> "$GITHUB_PATH"
+
+      - name: Run email-triage benchmark over the synthetic corpus
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+          EMAIL_EVAL_MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+          EMAIL_EVAL_LIMIT: ${{ github.event.inputs.limit || '50' }}
+          EMAIL_EVAL_EXPERIMENTS: ${{ github.event.inputs.experiments || '1' }}
+        run: |
+          set -e
+          echo "================================================================"
+          echo "        EMAIL TRIAGE EVAL — synthetic corpus (report mode)"
+          echo "================================================================"
+          echo "Model:        ${EMAIL_EVAL_MODEL}"
+          echo "Limit:        ${EMAIL_EVAL_LIMIT} emails (synthetic inbox)"
+          echo "Experiments:  ${EMAIL_EVAL_EXPERIMENTS}"
+          echo "Corpus:       tests/fixtures/email/synthetic_inbox.mbox (FakeGmailBackend)"
+          echo "Ground truth: tests/fixtures/email/ground_truth.json"
+          echo ""
+          mkdir -p eval-out
+          # Drives EmailTriageAgent over FakeGmailBackend(synthetic_inbox.mbox)
+          # — synthetic/sandbox only, never a live mailbox. Writes the scorecard
+          # + variance for the artifact; the gate-reader step below recomputes
+          # the gates against the committed manifests.
+          gaia eval benchmark \
+            --model "${EMAIL_EVAL_MODEL}" \
+            --limit "${EMAIL_EVAL_LIMIT}" \
+            --experiments "${EMAIL_EVAL_EXPERIMENTS}" \
+            --mbox-path tests/fixtures/email/synthetic_inbox.mbox \
+            --ground-truth tests/fixtures/email/ground_truth.json \
+            --output-dir eval-out
+
+      - name: Evaluate committed gates (report mode — reads the threshold manifests)
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+          EMAIL_EVAL_MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+          EMAIL_EVAL_LIMIT: ${{ github.event.inputs.limit || '50' }}
+          EMAIL_EVAL_EXPERIMENTS: ${{ github.event.inputs.experiments || '1' }}
+        run: |
+          set -e
+          python - <<'PY'
+          # Gate-reader. Reads the gate bars ONLY through the harness loaders
+          # (the single committed thresholds source — no thresholds inlined
+          # here), runs the benchmark's own gate machinery, logs the result, and
+          # writes eval-out/gate_report.json. Exits non-zero ONLY if a gate's
+          # `should_fail` is true (= its manifest has enforce:true AND it
+          # breached). In report mode (enforce:false) it never fails the build.
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from gaia.eval.benchmark import (
+              default_perf_thresholds_path,
+              default_quality_thresholds_path,
+              load_default_perf_thresholds,
+              load_default_quality_thresholds,
+              load_ground_truth,
+              run_benchmark,
+              summarize_benchmark,
+          )
+
+          model = os.environ["EMAIL_EVAL_MODEL"]
+          limit = int(os.environ["EMAIL_EVAL_LIMIT"])
+          experiments = int(os.environ["EMAIL_EVAL_EXPERIMENTS"])
+          mbox = "tests/fixtures/email/synthetic_inbox.mbox"
+          gt_path = "tests/fixtures/email/ground_truth.json"
+
+          quality_thresholds = load_default_quality_thresholds()
+          perf_thresholds = load_default_perf_thresholds()
+          print(f"[GATE] quality manifest: {default_quality_thresholds_path()}")
+          print(f"[GATE] perf manifest:    {default_perf_thresholds_path()}")
+          print(
+              f"[GATE] quality enforce={quality_thresholds.enforce} "
+              f"fp_max={quality_thresholds.fp_max} fn_max={quality_thresholds.fn_max} "
+              f"axis={quality_thresholds.axis}"
+          )
+          print(
+              f"[GATE] perf enforce={perf_thresholds.enforce} "
+              f"ttft_max_s={perf_thresholds.ttft_max_s} "
+              f"throughput_min_tps={perf_thresholds.throughput_min_tps} "
+              f"pipeline_max_s={perf_thresholds.pipeline_max_s} "
+              f"peak_memory_max_gb={perf_thresholds.peak_memory_max_gb}"
+          )
+
+          ground_truth = load_ground_truth(gt_path)
+
+          # Synthetic corpus only — FakeGmailBackend, never a live mailbox.
+          results = run_benchmark(
+              model,
+              mbox_path=mbox,
+              limit=limit,
+              experiments=experiments,
+              ground_truth=ground_truth,
+          )
+          summary = summarize_benchmark(
+              results,
+              run_id=f"email-eval-{model.replace('/', '-').lower()}",
+              thresholds=quality_thresholds,
+              perf_thresholds=perf_thresholds,
+          )
+
+          quality_gate = summary.get("quality_gate", {})
+          perf_gate = summary.get("perf_gate", {})
+          quality = summary.get("quality", {})
+          perf = summary.get("scorecard", {}).get("performance", {})
+
+          # Reported-only accuracy numbers (gates pending #1266 / #1271 / #1269 —
+          # no committed accuracy-threshold manifest yet, so we log, not gate).
+          cat_acc = quality.get("category_accuracy")
+          phishing = quality.get("phishing", {})
+          phishing_precision = (
+              phishing.get("precision") if isinstance(phishing, dict) else None
+          )
+
+          print("\n================ EMAIL EVAL GATE REPORT (report mode) ================")
+          print(f"  Categorization accuracy : {cat_acc}   (target >=0.85 #1266, REPORTED)")
+          print(f"  Phishing precision      : {phishing_precision}   (target >=0.90 #1271, REPORTED)")
+          print(f"  Draft-approval rate     : not emitted by the benchmark yet (#1269, REPORTED)")
+          print("  ----------------------------------------------------------------")
+          print(f"  Quality gate (FP/FN)    : passed={quality_gate.get('passed')} "
+                f"breaches={len(quality_gate.get('breaches', []))} "
+                f"enforce={quality_gate.get('enforce')} "
+                f"should_fail={quality_gate.get('should_fail')}")
+          print(f"  Perf gate (Strix Halo)  : passed={perf_gate.get('passed')} "
+                f"breaches={len(perf_gate.get('breaches', []))} "
+                f"enforce={perf_gate.get('enforce')} "
+                f"should_fail={perf_gate.get('should_fail')}")
+          print("====================================================================\n")
+
+          report = {
+              "model": model,
+              "limit": limit,
+              "experiments": experiments,
+              "corpus": mbox,
+              "reported": {
+                  "category_accuracy": cat_acc,
+                  "phishing_precision": phishing_precision,
+              },
+              "quality_gate": quality_gate,
+              "perf_gate": perf_gate,
+              "quality": quality,
+              "performance": perf,
+          }
+          out = Path("eval-out")
+          out.mkdir(parents=True, exist_ok=True)
+          (out / "gate_report.json").write_text(
+              json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+          )
+          print("[OUT] wrote eval-out/gate_report.json")
+
+          # The ONLY hook CI keys off. Report mode (enforce:false) -> always
+          # false -> green. Flip enforce:true in the manifests to gate.
+          failing = [
+              name
+              for name, gate in (("quality", quality_gate), ("perf", perf_gate))
+              if gate.get("should_fail")
+          ]
+          if failing:
+              print(f"[GATE] enforced gate breach: {failing} — failing the build.")
+              sys.exit(1)
+          print("[GATE] report mode (or no breach) — gates do not block the build.")
+          PY
+
+      - name: Upload eval scorecard + gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: email-eval-report
+          path: eval-out/
+          if-no-files-found: warn
+
+      - name: Eval summary
+        if: always()
+        run: |
+          echo ""
+          echo "================================================================"
+          echo "               EMAIL TRIAGE EVAL SUMMARY"
+          echo "================================================================"
+          echo "Ran the email-triage benchmark over the committed SYNTHETIC corpus"
+          echo "(FakeGmailBackend — never a live mailbox) and scored the quality"
+          echo "(FP/FN) and performance gates from the committed threshold"
+          echo "manifests under tests/fixtures/email/."
+          echo ""
+          echo "Report mode: while the manifests ship enforce:false, a breach is"
+          echo "logged + uploaded but does NOT fail the build. Flip enforce:true in"
+          echo "the manifest (data, not this workflow) to make CI block — see the"
+          echo "header of this workflow file."
+          echo "================================================================"
