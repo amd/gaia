@@ -1,0 +1,7 @@
+{
+  "_comment": "Quality-gate thresholds for the #1230 email-triage corpus (#1278). The bars (fp_max/fn_max) are the AC targets; 'enforce' is the SINGLE switch CI keys off. It ships FALSE (report mode) on purpose: the FP<5%/FN<2% bars only become meaningful once categorization accuracy lands (#1266; current corpus accuracy ~0.40). #1112 (CI) and #1266 flip 'enforce' to true here — in data, not code — to make the harness fail on a breach. Loaded by gaia.eval.quality_metrics.load_quality_thresholds.",
+  "fp_max": 0.05,
+  "fn_max": 0.02,
+  "axis": "needs_attention",
+  "enforce": false
+}
