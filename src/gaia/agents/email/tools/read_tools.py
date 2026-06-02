@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Read tools mixin for ``EmailTriageAgent``.
 
-Tools: ``list_inbox``, ``get_message``, ``get_thread``, ``search_messages``,
-``list_labels``, ``triage_inbox``, ``pre_scan_inbox``.
+Tools: ``list_inbox``, ``get_message``, ``get_thread``, ``summarize_thread``,
+``search_messages``, ``list_labels``, ``triage_inbox``, ``pre_scan_inbox``.
 
 Each tool returns a JSON string with the canonical envelope::
 
@@ -140,6 +140,167 @@ def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, 
         out = [_format_message_for_llm(m) for m in thread.get("messages", [])]
         st["result_summary"] = {"thread_id": thread_id, "count": len(out)}
         return {"thread_id": thread_id, "messages": out}
+
+
+def _thread_message_sort_key(msg: Dict[str, Any]) -> int:
+    """Chronological sort key for a raw thread message.
+
+    Gmail ``threads.get`` returns messages oldest-first, but we sort
+    defensively by ``internalDate`` (millis since epoch) so a misordered
+    backend can't make the LLM read the conversation out of sequence.
+    """
+    try:
+        return int(msg.get("internalDate", "0"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _format_thread_for_summary(
+    messages: List[Dict[str, Any]], *, per_message_body_limit: int
+) -> str:
+    """Render an oldest-first transcript of the FULL thread for the LLM.
+
+    Every message is numbered and labelled with From/Date, and each body is
+    wrapped in the untrusted-input delimiters — so the model comprehends the
+    whole conversation (early decisions included), never just the latest reply,
+    yet still treats body text as data, never instructions.
+    """
+    ordered = sorted(messages, key=_thread_message_sort_key)
+    blocks: List[str] = []
+    for idx, msg in enumerate(ordered, start=1):
+        payload = msg.get("payload") or {}
+        headers = {
+            (h.get("name") or "").lower(): h.get("value", "")
+            for h in payload.get("headers", [])
+        }
+        body, _attachments = decode_message_body(payload)
+        body = (body or "").strip()
+        if per_message_body_limit and len(body) > per_message_body_limit:
+            body = body[:per_message_body_limit] + "\n...[truncated]"
+        blocks.append(
+            f"--- Message {idx} of {len(ordered)} ---\n"
+            f"From: {headers.get('from', '')}\n"
+            f"Date: {headers.get('date', '')}\n"
+            f"{wrap_untrusted_body(body)}"
+        )
+    return "\n\n".join(blocks)
+
+
+def _build_thread_user_prompt(subject: str, transcript: str) -> str:
+    """Build the user-turn prompt for whole-thread summarization.
+
+    Unlike the single-email prompt, this does NOT clip the body to a single
+    message's budget — the transcript is the FULL conversation and each
+    message body is already individually wrapped + truncated by
+    ``_format_thread_for_summary``. Re-clipping here would drop later
+    messages and defeat full-thread comprehension.
+    """
+    return (
+        "Summarize this email thread as a whole. Reflect decisions, asks, and "
+        "outcomes from EVERY message — including earlier messages the latest "
+        "reply does not repeat.\n\n"
+        f"Subject: {subject}\n"
+        f"Thread (oldest first):\n{transcript}\n"
+    )
+
+
+def summarize_thread_impl(
+    gmail,
+    chat,
+    *,
+    thread_id: str,
+    max_chars: Optional[int] = None,
+    per_message_body_limit: int = DEFAULT_BODY_LIMIT_CHARS,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    """Summarize a whole email thread, comprehending the FULL conversation.
+
+    Reads every message via ``get_thread``, renders them oldest-first into a
+    single transcript, and summarizes that transcript — so a decision made in
+    an early message that the latest reply doesn't repeat is still reflected.
+
+    Reuses the per-email summarization contract (#1267) — the shared system
+    prompt, the empty-output guard, the word-boundary length bound, and the
+    ``EmailSummarizeError`` type — so the bounded, fail-loud behavior is
+    identical: an empty thread or an LLM failure raises rather than silently
+    collapsing to a latest-only summary (repo "No Silent Fallbacks" rule). The
+    user-turn prompt is thread-shaped (no single-email body clip) so the whole
+    conversation reaches the model.
+    """
+    # Deferred import: ``summarize_tools`` imports from this module, so a
+    # top-level import would create a cycle.
+    from gaia.agents.email.tools.summarize_tools import (
+        _SYSTEM_PROMPT,
+        DEFAULT_SUMMARY_CHAR_LIMIT,
+        EmailSummarizeError,
+        _bound_to_length,
+    )
+
+    if max_chars is None:
+        max_chars = DEFAULT_SUMMARY_CHAR_LIMIT
+
+    with log_tool_call("summarize_thread", {"thread_id": thread_id}, debug=debug) as st:
+        if chat is None:
+            raise EmailSummarizeError(
+                f"summarize_thread has no LLM connection for thread "
+                f"{thread_id!r}; the agent's chat client is not initialized",
+                message_id=thread_id,
+            )
+        thread = gmail.get_thread(thread_id)
+        messages = thread.get("messages", []) or []
+        if not messages:
+            raise EmailSummarizeError(
+                f"thread {thread_id!r} has no messages to summarize",
+                message_id=thread_id,
+            )
+
+        ordered = sorted(messages, key=_thread_message_sort_key)
+        first_headers = {
+            (h.get("name") or "").lower(): h.get("value", "")
+            for h in (ordered[0].get("payload") or {}).get("headers", [])
+        }
+        subject = first_headers.get("subject", "")
+        transcript = _format_thread_for_summary(
+            messages, per_message_body_limit=per_message_body_limit
+        )
+
+        prompt = _build_thread_user_prompt(subject, transcript)
+        try:
+            response = chat.send_messages(
+                [{"role": "user", "content": prompt}],
+                system_prompt=_SYSTEM_PROMPT,
+                temperature=0.0,
+            )
+        except Exception as exc:  # LLM/transport failure — surface, never default
+            raise EmailSummarizeError(
+                f"LLM thread summarization call failed for thread {thread_id!r}: "
+                f"{type(exc).__name__}: {exc}",
+                message_id=thread_id,
+            ) from exc
+
+        text = getattr(response, "text", None)
+        if text is None:
+            text = response if isinstance(response, str) else ""
+        text = str(text).strip()
+        if not text:
+            raise EmailSummarizeError(
+                f"LLM thread summarization returned an empty summary for thread "
+                f"{thread_id!r}",
+                message_id=thread_id,
+            )
+        summary = _bound_to_length(text, max_chars)
+
+        st["result_summary"] = {
+            "thread_id": thread_id,
+            "message_count": len(ordered),
+            "chars": len(summary),
+        }
+        return {
+            "thread_id": thread_id,
+            "subject": subject,
+            "message_count": len(ordered),
+            "summary": summary,
+        }
 
 
 def search_messages_impl(
@@ -571,6 +732,47 @@ class ReadToolsMixin:
                     get_thread_impl(gmail, thread_id=thread_id, debug=debug_flag)
                 )
             except ConnectorsError as exc:
+                return _envelope_err(str(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def summarize_thread(thread_id: str) -> str:
+            """Summarize an entire email thread, not just its latest message.
+
+            Reads every message in the thread and produces one concise,
+            length-bounded summary that reflects decisions, asks, and outcomes
+            across the WHOLE conversation — including earlier messages the most
+            recent reply does not restate. Use this when the user asks what a
+            thread or conversation is about, to catch up on a thread, or to
+            summarize a multi-message exchange (prefer ``summarize_message`` for
+            a single message).
+
+            Args:
+                thread_id: The id of the thread to summarize.
+
+            Returns:
+                JSON envelope ``{"ok": true, "data": {"thread_id", "subject",
+                "message_count", "summary"}}`` — ``summary`` is a short,
+                length-bounded string covering the full thread.
+            """
+            try:
+                # Deferred import avoids a module-load cycle with summarize_tools.
+                from gaia.agents.email.tools.summarize_tools import (
+                    EmailSummarizeError,
+                )
+
+                chat = getattr(agent, "chat", None)
+                return _envelope_ok(
+                    summarize_thread_impl(
+                        gmail,
+                        chat,
+                        thread_id=thread_id,
+                        debug=debug_flag,
+                    )
+                )
+            except (ConnectorsError, EmailSummarizeError) as exc:
                 return _envelope_err(str(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
