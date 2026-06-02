@@ -540,6 +540,7 @@ def run_pipeline(
     auto_spawn: bool = True,
     model_id: str = "Qwen3.5-35B-A3B-GGUF",
     debug: bool = False,
+    skip_lemonade: bool = False,
 ) -> Dict[str, Any]:
     """
     Convenience function to run pipeline without instantiating class.
@@ -549,11 +550,14 @@ def run_pipeline(
         auto_spawn: Whether to auto-generate missing agents
         model_id: Model ID for all stages
         debug: Enable debug logging
+        skip_lemonade: Skip Lemonade server initialization (stub/demo mode)
 
     Returns:
         Pipeline execution result
     """
-    orchestrator = PipelineOrchestrator(model_id=model_id, debug=debug, max_steps=50)
+    orchestrator = PipelineOrchestrator(
+        model_id=model_id, debug=debug, max_steps=50, skip_lemonade=skip_lemonade
+    )
     return orchestrator.run_pipeline(
         task_description=task_description, auto_spawn=auto_spawn
     )

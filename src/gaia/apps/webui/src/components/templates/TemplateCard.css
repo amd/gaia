@@ -39,6 +39,7 @@
   width: 40px;
   height: 40px;
   background: var(--primary-bg, #eff6ff);
+  border: 1px solid var(--primary-border, #bfdbfe);
   border-radius: 8px;
   color: var(--primary-color, #3b82f6);
   flex-shrink: 0;
@@ -88,6 +89,7 @@
   font-size: 0.75rem;
   color: var(--text-secondary, #64748b);
   background: var(--bg-secondary, #f1f5f9);
+  border: 1px solid var(--border-color, #e2e8f0);
   padding: 4px 8px;
   border-radius: 4px;
 }
@@ -115,6 +117,7 @@
 
 .template-card-weight {
   background: var(--bg-secondary, #f1f5f9);
+  border: 1px solid var(--border-color, #e2e8f0);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 0.7rem;
@@ -155,20 +158,99 @@
 .template-card-btn-edit {
   background: var(--bg-secondary, #f1f5f9);
   color: var(--text-primary, #1e293b);
-  border-color: var(--border-color, #e2e8f0);
+  border: 1px solid var(--border-color, #e2e8f0);
 }
 
 .template-card-btn-edit:hover {
-  background: var(--border-color, #e2e8f0);
+  background: var(--bg-hover, #e2e8f0);
 }
 
 .template-card-btn-validate {
   background: transparent;
   color: var(--text-secondary, #64748b);
-  border-color: var(--border-color, #e2e8f0);
+  border: 1px solid var(--border-color, #e2e8f0);
 }
 
 .template-card-btn-validate:hover {
   background: var(--bg-secondary, #f1f5f9);
   color: var(--text-primary, #1e293b);
+}
+
+/* ============================================================
+   Dark theme overrides
+   ============================================================ */
+
+[data-theme="dark"] .template-card {
+  border-color: #333350;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .template-card:hover {
+  border-color: var(--primary-color, #3b82f6);
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.25);
+}
+
+[data-theme="dark"] .template-card-icon {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: #60a5fa;
+}
+
+[data-theme="dark"] .template-card-name {
+  color: var(--text-primary, #e8e8f0);
+}
+
+[data-theme="dark"] .template-card-description {
+  color: var(--text-secondary, #9898b0);
+}
+
+[data-theme="dark"] .template-card-stat {
+  background: #1a1a2e;
+  border-color: #2a2a44;
+  color: #b0b0c8;
+}
+
+[data-theme="dark"] .template-card-stat span {
+  color: #d0d0e0;
+}
+
+[data-theme="dark"] .template-card-weights {
+  color: #b0b0c8;
+}
+
+[data-theme="dark"] .template-card-weight {
+  background: #1a1a2e;
+  border-color: #2a2a44;
+  color: #b0b0c8;
+}
+
+[data-theme="dark"] .template-card-weight-more {
+  color: var(--text-muted, #6868a0);
+}
+
+[data-theme="dark"] .template-card-footer {
+  border-top-color: #333350;
+}
+
+[data-theme="dark"] .template-card-btn-edit {
+  background: #1e1e2e;
+  color: var(--text-primary, #e8e8f0);
+  border-color: #333350;
+}
+
+[data-theme="dark"] .template-card-btn-edit:hover {
+  background: #2a2a44;
+  border-color: #444466;
+}
+
+[data-theme="dark"] .template-card-btn-validate {
+  background: transparent;
+  color: var(--text-secondary, #9898b0);
+  border-color: #333350;
+}
+
+[data-theme="dark"] .template-card-btn-validate:hover {
+  background: #1a1a2e;
+  color: var(--text-primary, #e8e8f0);
+  border-color: #444466;
 }

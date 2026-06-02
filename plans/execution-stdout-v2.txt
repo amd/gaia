@@ -1,0 +1,823 @@
+Processing 111 commits (v2 with Windows GIT_EDITOR fix)
+Skipping 40 pre-existing branches
+======================================================================
+
+[1/111] MO=  1 | phase6-matrix-update-74
+  Commit: 52df806 | Branch: pr-phase6-matrix-update-74
+  Issue #162: https://github.com/antmikinka/gaia/issues/162
+  Resolving 1 conflicted file(s)...
+  Branch pr-phase6-matrix-update-74 pushed OK
+  [OK] Issue=162 Branch=OK
+
+[2/111] MO=  1 | design-spec-coherence
+  Commit: e28a922 | Branch: pr-design-spec-coherence
+  Issue #163: https://github.com/antmikinka/gaia/issues/163
+  Resolving 2 conflicted file(s)...
+  Branch pr-design-spec-coherence pushed OK
+  [OK] Issue=163 Branch=OK
+
+[3/111] MO=  1 | phase6-matrix-update-73
+  Commit: 49b6704 | Branch: pr-phase6-matrix-update-73
+  Issue #164: https://github.com/antmikinka/gaia/issues/164
+  Resolving 1 conflicted file(s)...
+  Branch pr-phase6-matrix-update-73 pushed OK
+  [OK] Issue=164 Branch=OK
+
+[4/111] MO=  1 | rc2-tool-package
+  Commit: b533669 | Branch: pr-rc2-tool-package
+  Issue #165: https://github.com/antmikinka/gaia/issues/165
+  Resolving 1 conflicted file(s)...
+  Branch pr-rc2-tool-package pushed OK
+  [OK] Issue=165 Branch=OK
+
+[5/111] MO=  1 | toctou-security-fix
+  Commit: 8c2d24a | Branch: pr-toctou-security-fix
+  Issue #166: https://github.com/antmikinka/gaia/issues/166
+  Resolving 5 conflicted file(s)...
+  Branch pr-toctou-security-fix pushed OK
+  [OK] Issue=166 Branch=OK
+
+[6/111] MO=  2 | pr606-integration-analysis
+  Commit: 5c52eb8 | Branch: pr-pr606-integration-analysis
+  Issue #167: https://github.com/antmikinka/gaia/issues/167
+  Resolving 1 conflicted file(s)...
+  Branch pr-pr606-integration-analysis pushed OK
+  [OK] Issue=167 Branch=OK
+
+[7/111] MO=  2 | phase5-matrix-design-docs
+  Commit: 6f839a6 | Branch: pr-phase5-matrix-design-docs
+  Issue #168: https://github.com/antmikinka/gaia/issues/168
+  Resolving 3 conflicted file(s)...
+  Branch pr-phase5-matrix-design-docs pushed OK
+  [OK] Issue=168 Branch=OK
+
+[8/111] MO=  2 | pr720-integration-analysis
+  Commit: 078739b | Branch: pr-pr720-integration-analysis
+  [SKIP] Branch already pushed from v1
+
+[9/111] MO=  2 | minor-fixes-updates
+  Commit: 5931d85 | Branch: pr-minor-fixes-updates
+  Issue #169: https://github.com/antmikinka/gaia/issues/169
+  Resolving 6 conflicted file(s)...
+  Branch pr-minor-fixes-updates pushed OK
+  [OK] Issue=169 Branch=OK
+
+[10/111] MO=  2 | demo-lemonade-integration
+  Commit: 8cce2d9 | Branch: pr-demo-lemonade-integration
+  Issue #170: https://github.com/antmikinka/gaia/issues/170
+  Resolving 3 conflicted file(s)...
+  Branch pr-demo-lemonade-integration pushed OK
+  [OK] Issue=170 Branch=OK
+
+[11/111] MO=  3 | agent-ecosystem-design-spec
+  Commit: 08b93eb | Branch: pr-agent-ecosystem-design-spec
+  [SKIP] Branch already pushed from v1
+
+[12/111] MO=  3 | lemonade-version-warning
+  Commit: 780a711 | Branch: pr-lemonade-version-warning
+  Issue #171: https://github.com/antmikinka/gaia/issues/171
+  Resolving 6 conflicted file(s)...
+  Branch pr-lemonade-version-warning pushed OK
+  [OK] Issue=171 Branch=OK
+
+[13/111] MO=  3 | mcp-test-isolation
+  Commit: e0e5695 | Branch: pr-mcp-test-isolation
+  [SKIP] Branch already pushed from v1
+
+[14/111] MO=  3 | pipeline-pr-description
+  Commit: 4345b92 | Branch: pr-pipeline-pr-description
+  [SKIP] Branch already pushed from v1
+
+[15/111] MO=  4 | agent-ui-build-init
+  Commit: bb010a0 | Branch: pr-agent-ui-build-init
+  Issue #172: https://github.com/antmikinka/gaia/issues/172
+  Resolving 3 conflicted file(s)...
+  Branch pr-agent-ui-build-init pushed OK
+  [OK] Issue=172 Branch=OK
+
+[16/111] MO=  4 | merge-upstream-main
+  Commit: 7e7ff14 | Branch: N/A (merge commit)
+  Issue #173: https://github.com/antmikinka/gaia/issues/173
+  SKIP: invalid branch name 'N/A (merge commit)'
+  [PARTIAL] Issue=173 Branch=X
+
+[17/111] MO=  4 | merge-queue-notify-fix
+  Commit: 776dc34 | Branch: pr-merge-queue-notify-fix
+  Issue #174: https://github.com/antmikinka/gaia/issues/174
+  Resolving 1 conflicted file(s)...
+  Branch pr-merge-queue-notify-fix pushed OK
+  [OK] Issue=174 Branch=OK
+
+[18/111] MO=  4 | npm-oidc-switch
+  Commit: 83a4db1 | Branch: pr-npm-oidc-switch
+  Issue #175: https://github.com/antmikinka/gaia/issues/175
+  Resolving 3 conflicted file(s)...
+  Branch pr-npm-oidc-switch pushed OK
+  [OK] Issue=175 Branch=OK
+
+[19/111] MO=  5 | baibel-integration-phases
+  Commit: 32f4cf4 | Branch: pr-baibel-integration-phases
+  Issue #176: https://github.com/antmikinka/gaia/issues/176
+  Resolving 1 conflicted file(s)...
+  Branch pr-baibel-integration-phases pushed OK
+  [OK] Issue=176 Branch=OK
+
+[20/111] MO=  5 | artifact-extractor
+  Commit: 1fbffb9 | Branch: pr-artifact-extractor
+  Issue #177: https://github.com/antmikinka/gaia/issues/177
+  Resolving 1 conflicted file(s)...
+  Branch pr-artifact-extractor pushed OK
+  [OK] Issue=177 Branch=OK
+
+[21/111] MO=  5 | llm-output-propagation
+  Commit: eed48d2 | Branch: pr-llm-output-propagation
+  Issue #178: https://github.com/antmikinka/gaia/issues/178
+  Resolving 4 conflicted file(s)...
+  Branch pr-llm-output-propagation pushed OK
+  [OK] Issue=178 Branch=OK
+
+[22/111] MO=  5 | model-id-support
+  Commit: 7832c7e | Branch: pr-model-id-support
+  Issue #179: https://github.com/antmikinka/gaia/issues/179
+  Resolving 25 conflicted file(s)...
+  Branch pr-model-id-support pushed OK
+  [OK] Issue=179 Branch=OK
+
+[23/111] MO=  5 | cpp-sse-streaming
+  Commit: 7ed2db3 | Branch: pr-cpp-sse-streaming
+  [SKIP] Branch already pushed from v1
+
+[24/111] MO=  5 | pipeline-engine-p1p6
+  Commit: efb1ca7 | Branch: pr-pipeline-engine-p1p6
+  Issue #180: https://github.com/antmikinka/gaia/issues/180
+  Resolving 6 conflicted file(s)...
+  Branch pr-pipeline-engine-p1p6 pushed OK
+  [OK] Issue=180 Branch=OK
+
+[25/111] MO=  5 | phase-contract-audit-defect
+  Commit: 2630b38 | Branch: pr-phase-contract-audit-defect
+  Issue #181: https://github.com/antmikinka/gaia/issues/181
+  Resolving 3 conflicted file(s)...
+  Branch pr-phase-contract-audit-defect pushed OK
+  [OK] Issue=181 Branch=OK
+
+[26/111] MO=  6 | modular-architecture-core
+  Commit: d8f0269 | Branch: pr-modular-architecture-core
+  Issue #182: https://github.com/antmikinka/gaia/issues/182
+  Resolving 2 conflicted file(s)...
+  Branch pr-modular-architecture-core pushed OK
+  [OK] Issue=182 Branch=OK
+
+[27/111] MO=  6 | metrics-dashboard
+  Commit: 5d167c4 | Branch: pr-metrics-dashboard
+  Issue #183: https://github.com/antmikinka/gaia/issues/183
+  Resolving 80 conflicted file(s)...
+  Branch pr-metrics-dashboard pushed OK
+  [OK] Issue=183 Branch=OK
+
+[28/111] MO=  6 | missing-metrics-modules
+  Commit: c290ed7 | Branch: pr-missing-metrics-modules
+  [SKIP] Branch already pushed from v1
+
+[29/111] MO=  6 | agent-ui-eval-benchmark
+  Commit: c72e6d9 | Branch: pr-agent-ui-eval-benchmark
+  Issue #184: https://github.com/antmikinka/gaia/issues/184
+  Resolving 42 conflicted file(s)...
+  Branch pr-agent-ui-eval-benchmark pushed OK
+  [OK] Issue=184 Branch=OK
+
+[30/111] MO=  7 | pipeline-engine-wiring
+  Commit: 969eefe | Branch: pr-pipeline-engine-wiring
+  Issue #185: https://github.com/antmikinka/gaia/issues/185
+  Resolving 3 conflicted file(s)...
+  Branch pr-pipeline-engine-wiring pushed OK
+  [OK] Issue=185 Branch=OK
+
+[31/111] MO=  7 | v0170-release-notes-fix
+  Commit: 2fd4a80 | Branch: pr-v0170-release-notes-fix
+  Issue #186: https://github.com/antmikinka/gaia/issues/186
+  Resolving 1 conflicted file(s)...
+  Branch pr-v0170-release-notes-fix pushed OK
+  [OK] Issue=186 Branch=OK
+
+[32/111] MO=  8 | supervisor-agents
+  Commit: 214c314 | Branch: pr-supervisor-agents
+  Issue #187: https://github.com/antmikinka/gaia/issues/187
+  Resolving 2 conflicted file(s)...
+  Branch pr-supervisor-agents pushed OK
+  [OK] Issue=187 Branch=OK
+
+[33/111] MO=  8 | release-v0171
+  Commit: bc26a31 | Branch: pr-release-v0171
+  [SKIP] Branch already pushed from v1
+
+[34/111] MO=  8 | system-prompt-reduction
+  Commit: 2d08088 | Branch: pr-system-prompt-reduction
+  Issue #188: https://github.com/antmikinka/gaia/issues/188
+  Resolving 16 conflicted file(s)...
+  Branch pr-system-prompt-reduction pushed OK
+  [OK] Issue=188 Branch=OK
+
+[35/111] MO=  8 | agent-definition-dataclass-fix
+  Commit: ec86362 | Branch: pr-agent-definition-dataclass-fix
+  Issue #189: https://github.com/antmikinka/gaia/issues/189
+  Resolving 2 conflicted file(s)...
+  Branch pr-agent-definition-dataclass-fix pushed OK
+  [OK] Issue=189 Branch=OK
+
+[36/111] MO=  9 | baibel-phase-status-fix
+  Commit: d794360 | Branch: pr-baibel-phase-status-fix
+  Issue #190: https://github.com/antmikinka/gaia/issues/190
+  Resolving 1 conflicted file(s)...
+  Branch pr-baibel-phase-status-fix pushed OK
+  [OK] Issue=190 Branch=OK
+
+[37/111] MO=  9 | tool-guardrails
+  Commit: 3df90ff | Branch: pr-tool-guardrails
+  Issue #191: https://github.com/antmikinka/gaia/issues/191
+  Resolving 12 conflicted file(s)...
+  Branch pr-tool-guardrails pushed OK
+  [OK] Issue=191 Branch=OK
+
+[38/111] MO=  9 | agent-ui-round5-fixes
+  Commit: cc90935 | Branch: pr-agent-ui-round5-fixes
+  Issue #192: https://github.com/antmikinka/gaia/issues/192
+  Resolving 46 conflicted file(s)...
+  Branch pr-agent-ui-round5-fixes pushed OK
+  [OK] Issue=192 Branch=OK
+
+[39/111] MO=  9 | rag-indexing-guards
+  Commit: af652d9 | Branch: pr-rag-indexing-guards
+  Issue #193: https://github.com/antmikinka/gaia/issues/193
+  Resolving 1 conflicted file(s)...
+  Branch pr-rag-indexing-guards pushed OK
+  [OK] Issue=193 Branch=OK
+
+[40/111] MO=  9 | agent-ui-guardrails-round6
+  Commit: 95b304f | Branch: pr-agent-ui-guardrails-round6
+  Issue #194: https://github.com/antmikinka/gaia/issues/194
+  Resolving 15 conflicted file(s)...
+  Branch pr-agent-ui-guardrails-round6 pushed OK
+  [OK] Issue=194 Branch=OK
+
+[41/111] MO=  9 | agent-ui-device-guard
+  Commit: 5dd71a2 | Branch: pr-agent-ui-device-guard
+  Issue #195: https://github.com/antmikinka/gaia/issues/195
+  Resolving 13 conflicted file(s)...
+  Branch pr-agent-ui-device-guard pushed OK
+  [OK] Issue=195 Branch=OK
+
+[42/111] MO=  9 | agent-ui-terminal-fixes
+  Commit: 25c6d25 | Branch: pr-agent-ui-terminal-fixes
+  Issue #196: https://github.com/antmikinka/gaia/issues/196
+  Resolving 40 conflicted file(s)...
+  Branch pr-agent-ui-terminal-fixes pushed OK
+  [OK] Issue=196 Branch=OK
+
+[43/111] MO= 10 | component-framework-loader
+  Commit: 57ee63d | Branch: pr-component-framework-loader
+  [SKIP] Branch already pushed from v1
+
+[44/111] MO= 10 | restore-reverted-changes
+  Commit: b7a97e6 | Branch: pr-restore-reverted-changes
+  Issue #197: https://github.com/antmikinka/gaia/issues/197
+  Resolving 41 conflicted file(s)...
+  Branch pr-restore-reverted-changes pushed OK
+  [OK] Issue=197 Branch=OK
+
+[45/111] MO= 11 | agent-base-tools
+  Commit: 520bea3 | Branch: pr-agent-base-tools
+  [SKIP] Branch already pushed from v1
+
+[46/111] MO= 12 | phase3-sprint2-di
+  Commit: 505d22f | Branch: pr-phase3-sprint2-di
+  Issue #198: https://github.com/antmikinka/gaia/issues/198
+  Resolving 2 conflicted file(s)...
+  Branch pr-phase3-sprint2-di pushed OK
+  [OK] Issue=198 Branch=OK
+
+[47/111] MO= 13 | etherrepl-security-fix
+  Commit: 0702252 | Branch: pr-etherrepl-security-fix
+  Issue #199: https://github.com/antmikinka/gaia/issues/199
+  Resolving 2 conflicted file(s)...
+  Branch pr-etherrepl-security-fix pushed OK
+  [OK] Issue=199 Branch=OK
+
+[48/111] MO= 14 | health-monitoring
+  Commit: 8b05805 | Branch: pr-health-monitoring
+  [SKIP] Branch already pushed from v1
+
+[49/111] MO= 15 | resilience-patterns
+  Commit: 84ed269 | Branch: pr-resilience-patterns
+  [SKIP] Branch already pushed from v1
+
+[50/111] MO= 16 | data-protection-perf
+  Commit: 4c02e45 | Branch: pr-data-protection-perf
+  [SKIP] Branch already pushed from v1
+
+[51/111] MO= 17 | resilience-error-consolidation
+  Commit: fa8b17d | Branch: pr-resilience-error-consolidation
+  Issue #200: https://github.com/antmikinka/gaia/issues/200
+  Resolving 4 conflicted file(s)...
+  Branch pr-resilience-error-consolidation pushed OK
+  [OK] Issue=200 Branch=OK
+
+[52/111] MO= 18 | phase4-closeout-report
+  Commit: 82a6d42 | Branch: pr-phase4-closeout-report
+  Issue #201: https://github.com/antmikinka/gaia/issues/201
+  Resolving 1 conflicted file(s)...
+  Branch pr-phase4-closeout-report pushed OK
+  [OK] Issue=201 Branch=OK
+
+[53/111] MO= 19 | resilience-apis-fix
+  Commit: 5a37360 | Branch: pr-resilience-apis-fix
+  Issue #202: https://github.com/antmikinka/gaia/issues/202
+  Resolving 6 conflicted file(s)...
+  Branch pr-resilience-apis-fix pushed OK
+  [OK] Issue=202 Branch=OK
+
+[54/111] MO= 20 | core-orchestration-kernel
+  Commit: eb0a838 | Branch: pr-core-orchestration-kernel
+  [SKIP] Branch already pushed from v1
+
+[55/111] MO= 21 | project-supervisor-hierarchy
+  Commit: dd1d314 | Branch: pr-project-supervisor-hierarchy
+  Issue #203: https://github.com/antmikinka/gaia/issues/203
+  Resolving 2 conflicted file(s)...
+  Branch pr-project-supervisor-hierarchy pushed OK
+  [OK] Issue=203 Branch=OK
+
+[56/111] MO= 22 | git-supervisor-hierarchy
+  Commit: dc02956 | Branch: pr-git-supervisor-hierarchy
+  Issue #204: https://github.com/antmikinka/gaia/issues/204
+  Resolving 3 conflicted file(s)...
+  Branch pr-git-supervisor-hierarchy pushed OK
+  [OK] Issue=204 Branch=OK
+
+[57/111] MO= 23 | automation-hooks
+  Commit: 6f95323 | Branch: pr-automation-hooks
+  Issue #205: https://github.com/antmikinka/gaia/issues/205
+  Resolving 4 conflicted file(s)...
+  Branch pr-automation-hooks pushed OK
+  [OK] Issue=205 Branch=OK
+
+[58/111] MO= 24 | phase3-sprint3-caching
+  Commit: 64db788 | Branch: pr-phase3-sprint3-caching
+  Issue #206: https://github.com/antmikinka/gaia/issues/206
+  Resolving 5 conflicted file(s)...
+  Branch pr-phase3-sprint3-caching pushed OK
+  [OK] Issue=206 Branch=OK
+
+[59/111] MO= 25 | parallel-execution-engine
+  Commit: e0ed934 | Branch: pr-parallel-execution-engine
+  Issue #207: https://github.com/antmikinka/gaia/issues/207
+  Resolving 5 conflicted file(s)...
+  Branch pr-parallel-execution-engine pushed OK
+  [OK] Issue=207 Branch=OK
+
+[60/111] MO= 26 | phase3-sprint4-observability
+  Commit: c25982b | Branch: pr-phase3-sprint4-observability
+  Issue #208: https://github.com/antmikinka/gaia/issues/208
+  Resolving 2 conflicted file(s)...
+  Branch pr-phase3-sprint4-observability pushed OK
+  [OK] Issue=208 Branch=OK
+
+[61/111] MO= 27 | domain-analyzer
+  Commit: 8d6ffdd | Branch: pr-domain-analyzer
+  Issue #209: https://github.com/antmikinka/gaia/issues/209
+  Resolving 1 conflicted file(s)...
+  Branch pr-domain-analyzer pushed OK
+  [OK] Issue=209 Branch=OK
+
+[62/111] MO= 28 | orchestrator-ui-visibility
+  Commit: 5bd6ef8 | Branch: pr-orchestrator-ui-visibility
+  Issue #210: https://github.com/antmikinka/gaia/issues/210
+  Resolving 2 conflicted file(s)...
+  Branch pr-orchestrator-ui-visibility pushed OK
+  [OK] Issue=210 Branch=OK
+
+[63/111] MO= 29 | workflow-modeler
+  Commit: a32187c | Branch: pr-workflow-modeler
+  [SKIP] Branch already pushed from v1
+
+[64/111] MO= 30 | loom-builder
+  Commit: 8dd22c1 | Branch: pr-loom-builder
+  [SKIP] Branch already pushed from v1
+
+[65/111] MO= 31 | parallel-exec-edge-tests
+  Commit: b3d707e | Branch: pr-parallel-exec-edge-tests
+  Issue #211: https://github.com/antmikinka/gaia/issues/211
+  Resolving 1 conflicted file(s)...
+  Branch pr-parallel-exec-edge-tests pushed OK
+  [OK] Issue=211 Branch=OK
+
+[66/111] MO= 32 | component-framework-templates
+  Commit: e952716 | Branch: pr-component-framework-templates
+  Issue #212: https://github.com/antmikinka/gaia/issues/212
+  Resolving 1 conflicted file(s)...
+  Branch pr-component-framework-templates pushed OK
+  [OK] Issue=212 Branch=OK
+
+[67/111] MO= 33 | gap-detector
+  Commit: fa3ef98 | Branch: pr-autonomous-agent-spawning
+  [SKIP] Branch already pushed from v1
+
+[68/111] MO= 34 | pipeline-executor
+  Commit: 0c5f294 | Branch: pr-pipeline-executor
+  [SKIP] Branch already pushed from v1
+
+[69/111] MO= 35 | auto-spawn-pipeline
+  Commit: 41ee396 | Branch: pr-auto-spawn-pipeline
+  Issue #213: https://github.com/antmikinka/gaia/issues/213
+  Resolving 20 conflicted file(s)...
+  Branch pr-auto-spawn-pipeline pushed OK
+  [OK] Issue=213 Branch=OK
+
+[70/111] MO= 37 | supervisor-decision-tests
+  Commit: c3ccc4f | Branch: pr-supervisor-decision-tests
+  [SKIP] Branch already pushed from v1
+
+[71/111] MO= 39 | phase3-sprint4-test-fixes
+  Commit: 7781ef9 | Branch: pr-phase3-sprint4-test-fixes
+  Issue #214: https://github.com/antmikinka/gaia/issues/214
+  Resolving 5 conflicted file(s)...
+  Branch pr-phase3-sprint4-test-fixes pushed OK
+  [OK] Issue=214 Branch=OK
+
+[72/111] MO= 42 | orchestration-user-guide
+  Commit: 8772238 | Branch: pr-orchestration-user-guide
+  [SKIP] Branch already pushed from v1
+
+[73/111] MO= 44 | pipeline-runner-page
+  Commit: 33686dd | Branch: pr-pipeline-runner-page
+  Issue #215: https://github.com/antmikinka/gaia/issues/215
+  Resolving 2 conflicted file(s)...
+  Branch pr-pipeline-runner-page pushed OK
+  [OK] Issue=215 Branch=OK
+
+[74/111] MO= 45 | pipeline-sse-wiring
+  Commit: 97edfd7 | Branch: pr-pipeline-sse-wiring
+  Issue #216: https://github.com/antmikinka/gaia/issues/216
+  Resolving 6 conflicted file(s)...
+  Branch pr-pipeline-sse-wiring pushed OK
+  [OK] Issue=216 Branch=OK
+
+[75/111] MO= 46 | artifact-provenance
+  Commit: d3951f8 | Branch: pr-artifact-provenance
+  Issue #217: https://github.com/antmikinka/gaia/issues/217
+  Resolving 2 conflicted file(s)...
+  Branch pr-artifact-provenance pushed OK
+  [OK] Issue=217 Branch=OK
+
+[76/111] MO= 47 | remove-pipeline-isolation
+  Commit: 03d15bd | Branch: pr-remove-pipeline-isolation
+  Issue #218: https://github.com/antmikinka/gaia/issues/218
+  Resolving 1 conflicted file(s)...
+  Branch pr-remove-pipeline-isolation pushed OK
+  [OK] Issue=218 Branch=OK
+
+[77/111] MO= 49 | canvas-wiring-quality
+  Commit: 574d142 | Branch: pr-canvas-wiring-quality
+  Issue #219: https://github.com/antmikinka/gaia/issues/219
+  Resolving 2 conflicted file(s)...
+  Branch pr-canvas-wiring-quality pushed OK
+  [OK] Issue=219 Branch=OK
+
+[78/111] MO= 50 | visual-pipeline-canvas
+  Commit: 3838a8a | Branch: pr-visual-pipeline-canvas
+  Issue #220: https://github.com/antmikinka/gaia/issues/220
+  Resolving 6 conflicted file(s)...
+  Branch pr-visual-pipeline-canvas pushed OK
+  [OK] Issue=220 Branch=OK
+
+[79/111] MO= 51 | canvas-typescript-fix
+  Commit: cea803a | Branch: pr-canvas-typescript-fix
+  Issue #221: https://github.com/antmikinka/gaia/issues/221
+  Resolving 3 conflicted file(s)...
+  Branch pr-canvas-typescript-fix pushed OK
+  [OK] Issue=221 Branch=OK
+
+[80/111] MO= 52 | pipeline-canvas-docs
+  Commit: 9106a72 | Branch: pr-pipeline-canvas-docs
+  Issue #222: https://github.com/antmikinka/gaia/issues/222
+  Resolving 1 conflicted file(s)...
+  Branch pr-pipeline-canvas-docs pushed OK
+  [OK] Issue=222 Branch=OK
+
+[81/111] MO= 53 | event-loop-consolidation
+  Commit: 0ed82d4 | Branch: pr-event-loop-consolidation
+  Issue #223: https://github.com/antmikinka/gaia/issues/223
+  Resolving 1 conflicted file(s)...
+  Branch pr-event-loop-consolidation pushed OK
+  [OK] Issue=223 Branch=OK
+
+[82/111] MO= 54 | canvas-loop-path-fix
+  Commit: 961c7d5 | Branch: pr-canvas-loop-path-fix
+  Issue #224: https://github.com/antmikinka/gaia/issues/224
+  Resolving 1 conflicted file(s)...
+  Branch pr-canvas-loop-path-fix pushed OK
+  [OK] Issue=224 Branch=OK
+
+[83/111] MO= 55 | final-quality-review-fixes
+  Commit: 9bc85ec | Branch: pr-final-quality-review-fixes
+  Issue #225: https://github.com/antmikinka/gaia/issues/225
+  Resolving 2 conflicted file(s)...
+  Branch pr-final-quality-review-fixes pushed OK
+  [OK] Issue=225 Branch=OK
+
+[84/111] MO= 56 | sec-003-path-traversal
+  Commit: ee43966 | Branch: pr-sec-003-path-traversal
+  Issue #226: https://github.com/antmikinka/gaia/issues/226
+  Resolving 1 conflicted file(s)...
+  Branch pr-sec-003-path-traversal pushed OK
+  [OK] Issue=226 Branch=OK
+
+[85/111] MO= 57 | canvas-supervisors-gates
+  Commit: ef98904 | Branch: pr-canvas-supervisors-gates
+  Issue #227: https://github.com/antmikinka/gaia/issues/227
+  Resolving 7 conflicted file(s)...
+  Branch pr-canvas-supervisors-gates pushed OK
+  [OK] Issue=227 Branch=OK
+
+[86/111] MO= 58 | tier12-tracker-update
+  Commit: 3ce237c | Branch: pr-tier12-tracker-update
+  Issue #228: https://github.com/antmikinka/gaia/issues/228
+  Resolving 1 conflicted file(s)...
+  Branch pr-tier12-tracker-update pushed OK
+  [OK] Issue=228 Branch=OK
+
+[87/111] MO= 59 | multiple-independent-loops
+  Commit: 55b890d | Branch: pr-multiple-independent-loops
+  Issue #229: https://github.com/antmikinka/gaia/issues/229
+  Resolving 9 conflicted file(s)...
+  Branch pr-multiple-independent-loops pushed OK
+  [OK] Issue=229 Branch=OK
+
+[88/111] MO= 60 | sprint-integration-tests
+  Commit: 47c0c0c | Branch: pr-sprint-integration-tests
+  Issue #230: https://github.com/antmikinka/gaia/issues/230
+  Resolving 3 conflicted file(s)...
+  Branch pr-sprint-integration-tests pushed OK
+  [OK] Issue=230 Branch=OK
+
+[89/111] MO= 60 | execution-history-replay
+  Commit: 9a85250 | Branch: pr-execution-history-replay
+  Issue #231: https://github.com/antmikinka/gaia/issues/231
+  Resolving 4 conflicted file(s)...
+  Branch pr-execution-history-replay pushed OK
+  [OK] Issue=231 Branch=OK
+
+[90/111] MO= 61 | pipeline-canvas-guide-update
+  Commit: b1a15ec | Branch: pr-pipeline-canvas-guide-update
+  Issue #232: https://github.com/antmikinka/gaia/issues/232
+  Resolving 2 conflicted file(s)...
+  Branch pr-pipeline-canvas-guide-update pushed OK
+  [OK] Issue=232 Branch=OK
+
+[91/111] MO= 62 | component-registry-ui
+  Commit: c27e42e | Branch: pr-component-registry-ui
+  Issue #233: https://github.com/antmikinka/gaia/issues/233
+  Resolving 1 conflicted file(s)...
+  Branch pr-component-registry-ui pushed OK
+  [OK] Issue=233 Branch=OK
+
+[92/111] MO= 63 | tier3-pipeline-canvas
+  Commit: 856f1b2 | Branch: pr-tier3-pipeline-canvas
+  Issue #234: https://github.com/antmikinka/gaia/issues/234
+  Resolving 10 conflicted file(s)...
+  Branch pr-tier3-pipeline-canvas pushed OK
+  [OK] Issue=234 Branch=OK
+
+[93/111] MO= 64 | recursive-pipeline-sse
+  Commit: d187907 | Branch: pr-recursive-pipeline-sse
+  Issue #235: https://github.com/antmikinka/gaia/issues/235
+  Resolving 12 conflicted file(s)...
+  Branch pr-recursive-pipeline-sse pushed OK
+  [OK] Issue=235 Branch=OK
+
+[94/111] MO= 65 | canvas-ui-wiring-fix
+  Commit: 1ffd7a6 | Branch: pr-canvas-ui-wiring-fix
+  Issue #236: https://github.com/antmikinka/gaia/issues/236
+  Resolving 21 conflicted file(s)...
+  Branch pr-canvas-ui-wiring-fix pushed OK
+  [OK] Issue=236 Branch=OK
+
+[95/111] MO= 66 | canvas-config-quality-bridge
+  Commit: 957a7cb | Branch: pr-canvas-config-quality-bridge
+  Issue #237: https://github.com/antmikinka/gaia/issues/237
+  Resolving 3 conflicted file(s)...
+  Branch pr-canvas-config-quality-bridge pushed OK
+  [OK] Issue=237 Branch=OK
+
+[96/111] MO= 67 | tier3-tracker-update
+  Commit: 7c3a6a4 | Branch: pr-tier3-tracker-update
+  Issue #238: https://github.com/antmikinka/gaia/issues/238
+  Resolving 1 conflicted file(s)...
+  Branch pr-tier3-tracker-update pushed OK
+  [OK] Issue=238 Branch=OK
+
+[97/111] MO= 68 | webui-typescript-fix
+  Commit: 0ab5554 | Branch: pr-webui-typescript-fix
+  Issue #239: https://github.com/antmikinka/gaia/issues/239
+  Resolving 7 conflicted file(s)...
+  Branch pr-webui-typescript-fix pushed OK
+  [OK] Issue=239 Branch=OK
+
+[98/111] MO= 69 | pipelinerunner-typescript-fix
+  Commit: 1761d70 | Branch: pr-pipelinerunner-typescript-fix
+  Issue #240: https://github.com/antmikinka/gaia/issues/240
+  Resolving 3 conflicted file(s)...
+  Branch pr-pipelinerunner-typescript-fix pushed OK
+  [OK] Issue=240 Branch=OK
+
+[99/111] MO= 70 | webui-double-api-fix
+  Commit: 4faa22e | Branch: pr-webui-double-api-fix
+  Issue #241: https://github.com/antmikinka/gaia/issues/241
+  Resolving 1 conflicted file(s)...
+  Branch pr-webui-double-api-fix pushed OK
+  [OK] Issue=241 Branch=OK
+
+[100/111] MO= 71 | agent-ecosystem-display
+  Commit: f22f48a | Branch: pr-agent-ecosystem-display
+  Issue #242: https://github.com/antmikinka/gaia/issues/242
+  Resolving 2 conflicted file(s)...
+  Branch pr-agent-ecosystem-display pushed OK
+  [OK] Issue=242 Branch=OK
+
+[101/111] MO= 72 | pipelinerunner-accessibility
+  Commit: 859058f | Branch: pr-pipelinerunner-accessibility
+  Issue #243: https://github.com/antmikinka/gaia/issues/243
+  Resolving 3 conflicted file(s)...
+  Branch pr-pipelinerunner-accessibility pushed OK
+  [OK] Issue=243 Branch=OK
+
+[102/111] MO= 73 | phase5-milestone3-agents
+  Commit: 54c5499 | Branch: pr-phase5-milestone3-agents
+  Issue #244: https://github.com/antmikinka/gaia/issues/244
+  Resolving 16 conflicted file(s)...
+  Branch pr-phase5-milestone3-agents pushed OK
+  [OK] Issue=244 Branch=OK
+
+[103/111] MO= 74 | sse-endpoint-tests
+  Commit: 3b6ebe6 | Branch: pr-sse-endpoint-tests
+  Issue #245: https://github.com/antmikinka/gaia/issues/245
+  Resolving 3 conflicted file(s)...
+  Branch pr-sse-endpoint-tests pushed OK
+  [OK] Issue=245 Branch=OK
+
+[104/111] MO= 75 | phase5-agent-docs
+  Commit: 8522e0b | Branch: pr-phase5-agent-docs
+  Issue #246: https://github.com/antmikinka/gaia/issues/246
+  Resolving 1 conflicted file(s)...
+  Branch pr-phase5-agent-docs pushed OK
+  [OK] Issue=246 Branch=OK
+
+[105/111] MO= 76 | phase5-runtime-verification-docs
+  Commit: cf3469f | Branch: pr-phase5-runtime-verification-docs
+  Issue #247: https://github.com/antmikinka/gaia/issues/247
+  Resolving 1 conflicted file(s)...
+  Branch pr-phase5-runtime-verification-docs pushed OK
+  [OK] Issue=247 Branch=OK
+
+[106/111] MO= 77 | session3-quality-review-fixes
+  Commit: 9b19f90 | Branch: pr-session3-quality-review-fixes
+  Issue #248: https://github.com/antmikinka/gaia/issues/248
+  Resolving 8 conflicted file(s)...
+  Branch pr-session3-quality-review-fixes pushed OK
+  [OK] Issue=248 Branch=OK
+
+[107/111] MO= 78 | phase5-docs-coherence
+  Commit: c9abc59 | Branch: pr-phase5-docs-coherence
+  Issue #249: https://github.com/antmikinka/gaia/issues/249
+  Resolving 2 conflicted file(s)...
+  Branch pr-phase5-docs-coherence pushed OK
+  [OK] Issue=249 Branch=OK
+
+[108/111] MO= 79 | execute-tool-dispatch-fix
+  Commit: 242e380 | Branch: pr-execute-tool-dispatch-fix
+  Issue #250: https://github.com/antmikinka/gaia/issues/250
+  Resolving 7 conflicted file(s)...
+  Branch pr-execute-tool-dispatch-fix pushed OK
+  [OK] Issue=250 Branch=OK
+
+[109/111] MO= 80 | pipeline-cli-wiring
+  Commit: 71d5d48 | Branch: pr-pipeline-cli-wiring
+  Issue #251: https://github.com/antmikinka/gaia/issues/251
+  Resolving 9 conflicted file(s)...
+  Branch pr-pipeline-cli-wiring pushed OK
+  [OK] Issue=251 Branch=OK
+
+[110/111] MO= 82 | e2e-pipeline-timeout-fix
+  Commit: 0ae23c9 | Branch: pr-e2e-pipeline-timeout-fix
+  Issue #252: https://github.com/antmikinka/gaia/issues/252
+  Resolving 1 conflicted file(s)...
+  Branch pr-e2e-pipeline-timeout-fix pushed OK
+  [OK] Issue=252 Branch=OK
+
+[111/111] MO= 83 | quality-gate7-tests
+  Commit: f57e5ba | Branch: pr-quality-gate7-tests
+  Issue #253: https://github.com/antmikinka/gaia/issues/253
+  Resolving 1 conflicted file(s)...
+  Branch pr-quality-gate7-tests pushed OK
+  [OK] Issue=253 Branch=OK
+
+======================================================================
+COMPLETE: 91 new OK, 19 skipped (pre-existing)
+FAILURES: 0
+PARTIAL: 1
+
+FAILURES/PARTIAL (1):
+  - N/A (merge commit): issue=173, branch=FAIL
+
+NEW SUCCESS (91):
+  #162 pr-phase6-matrix-update-74
+  #163 pr-design-spec-coherence
+  #164 pr-phase6-matrix-update-73
+  #165 pr-rc2-tool-package
+  #166 pr-toctou-security-fix
+  #167 pr-pr606-integration-analysis
+  #168 pr-phase5-matrix-design-docs
+  #169 pr-minor-fixes-updates
+  #170 pr-demo-lemonade-integration
+  #171 pr-lemonade-version-warning
+  #172 pr-agent-ui-build-init
+  #174 pr-merge-queue-notify-fix
+  #175 pr-npm-oidc-switch
+  #176 pr-baibel-integration-phases
+  #177 pr-artifact-extractor
+  #178 pr-llm-output-propagation
+  #179 pr-model-id-support
+  #180 pr-pipeline-engine-p1p6
+  #181 pr-phase-contract-audit-defect
+  #182 pr-modular-architecture-core
+  #183 pr-metrics-dashboard
+  #184 pr-agent-ui-eval-benchmark
+  #185 pr-pipeline-engine-wiring
+  #186 pr-v0170-release-notes-fix
+  #187 pr-supervisor-agents
+  #188 pr-system-prompt-reduction
+  #189 pr-agent-definition-dataclass-fix
+  #190 pr-baibel-phase-status-fix
+  #191 pr-tool-guardrails
+  #192 pr-agent-ui-round5-fixes
+  #193 pr-rag-indexing-guards
+  #194 pr-agent-ui-guardrails-round6
+  #195 pr-agent-ui-device-guard
+  #196 pr-agent-ui-terminal-fixes
+  #197 pr-restore-reverted-changes
+  #198 pr-phase3-sprint2-di
+  #199 pr-etherrepl-security-fix
+  #200 pr-resilience-error-consolidation
+  #201 pr-phase4-closeout-report
+  #202 pr-resilience-apis-fix
+  #203 pr-project-supervisor-hierarchy
+  #204 pr-git-supervisor-hierarchy
+  #205 pr-automation-hooks
+  #206 pr-phase3-sprint3-caching
+  #207 pr-parallel-execution-engine
+  #208 pr-phase3-sprint4-observability
+  #209 pr-domain-analyzer
+  #210 pr-orchestrator-ui-visibility
+  #211 pr-parallel-exec-edge-tests
+  #212 pr-component-framework-templates
+  #213 pr-auto-spawn-pipeline
+  #214 pr-phase3-sprint4-test-fixes
+  #215 pr-pipeline-runner-page
+  #216 pr-pipeline-sse-wiring
+  #217 pr-artifact-provenance
+  #218 pr-remove-pipeline-isolation
+  #219 pr-canvas-wiring-quality
+  #220 pr-visual-pipeline-canvas
+  #221 pr-canvas-typescript-fix
+  #222 pr-pipeline-canvas-docs
+  #223 pr-event-loop-consolidation
+  #224 pr-canvas-loop-path-fix
+  #225 pr-final-quality-review-fixes
+  #226 pr-sec-003-path-traversal
+  #227 pr-canvas-supervisors-gates
+  #228 pr-tier12-tracker-update
+  #229 pr-multiple-independent-loops
+  #230 pr-sprint-integration-tests
+  #231 pr-execution-history-replay
+  #232 pr-pipeline-canvas-guide-update
+  #233 pr-component-registry-ui
+  #234 pr-tier3-pipeline-canvas
+  #235 pr-recursive-pipeline-sse
+  #236 pr-canvas-ui-wiring-fix
+  #237 pr-canvas-config-quality-bridge
+  #238 pr-tier3-tracker-update
+  #239 pr-webui-typescript-fix
+  #240 pr-pipelinerunner-typescript-fix
+  #241 pr-webui-double-api-fix
+  #242 pr-agent-ecosystem-display
+  #243 pr-pipelinerunner-accessibility
+  #244 pr-phase5-milestone3-agents
+  #245 pr-sse-endpoint-tests
+  #246 pr-phase5-agent-docs
+  #247 pr-phase5-runtime-verification-docs
+  #248 pr-session3-quality-review-fixes
+  #249 pr-phase5-docs-coherence
+  #250 pr-execute-tool-dispatch-fix
+  #251 pr-pipeline-cli-wiring
+  #252 pr-e2e-pipeline-timeout-fix
+  #253 pr-quality-gate7-tests

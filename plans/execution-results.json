@@ -1,0 +1,1112 @@
+[
+  {
+    "merge_order": 1,
+    "name": "phase6-matrix-update-74",
+    "commit": "52df806",
+    "branch": "pr-phase6-matrix-update-74",
+    "issue_num": 50,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/50",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 1,
+    "name": "design-spec-coherence",
+    "commit": "e28a922",
+    "branch": "pr-design-spec-coherence",
+    "issue_num": 52,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/52",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 1,
+    "name": "phase6-matrix-update-73",
+    "commit": "49b6704",
+    "branch": "pr-phase6-matrix-update-73",
+    "issue_num": 53,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/53",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 1,
+    "name": "rc2-tool-package",
+    "commit": "b533669",
+    "branch": "pr-rc2-tool-package",
+    "issue_num": 54,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/54",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 1,
+    "name": "toctou-security-fix",
+    "commit": "8c2d24a",
+    "branch": "pr-toctou-security-fix",
+    "issue_num": 55,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/55",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 2,
+    "name": "pr606-integration-analysis",
+    "commit": "5c52eb8",
+    "branch": "pr-pr606-integration-analysis",
+    "issue_num": 56,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/56",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 2,
+    "name": "phase5-matrix-design-docs",
+    "commit": "6f839a6",
+    "branch": "pr-phase5-matrix-design-docs",
+    "issue_num": 57,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/57",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 2,
+    "name": "pr720-integration-analysis",
+    "commit": "078739b",
+    "branch": "pr-pr720-integration-analysis",
+    "issue_num": 58,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/58",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 2,
+    "name": "minor-fixes-updates",
+    "commit": "5931d85",
+    "branch": "pr-minor-fixes-updates",
+    "issue_num": 59,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/59",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 2,
+    "name": "demo-lemonade-integration",
+    "commit": "8cce2d9",
+    "branch": "pr-demo-lemonade-integration",
+    "issue_num": 60,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/60",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 3,
+    "name": "agent-ecosystem-design-spec",
+    "commit": "08b93eb",
+    "branch": "pr-agent-ecosystem-design-spec",
+    "issue_num": 61,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/61",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 3,
+    "name": "lemonade-version-warning",
+    "commit": "780a711",
+    "branch": "pr-lemonade-version-warning",
+    "issue_num": 62,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/62",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 3,
+    "name": "mcp-test-isolation",
+    "commit": "e0e5695",
+    "branch": "pr-mcp-test-isolation",
+    "issue_num": 63,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/63",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 3,
+    "name": "pipeline-pr-description",
+    "commit": "4345b92",
+    "branch": "pr-pipeline-pr-description",
+    "issue_num": 64,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/64",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 4,
+    "name": "agent-ui-build-init",
+    "commit": "bb010a0",
+    "branch": "pr-agent-ui-build-init",
+    "issue_num": 65,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/65",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 4,
+    "name": "merge-upstream-main",
+    "commit": "7e7ff14",
+    "branch": "N/A (merge commit)",
+    "issue_num": 66,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/66",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 4,
+    "name": "merge-queue-notify-fix",
+    "commit": "776dc34",
+    "branch": "pr-merge-queue-notify-fix",
+    "issue_num": 67,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/67",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 4,
+    "name": "npm-oidc-switch",
+    "commit": "83a4db1",
+    "branch": "pr-npm-oidc-switch",
+    "issue_num": 68,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/68",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 5,
+    "name": "baibel-integration-phases",
+    "commit": "32f4cf4",
+    "branch": "pr-baibel-integration-phases",
+    "issue_num": 69,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/69",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 5,
+    "name": "artifact-extractor",
+    "commit": "1fbffb9",
+    "branch": "pr-artifact-extractor",
+    "issue_num": 70,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/70",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 5,
+    "name": "llm-output-propagation",
+    "commit": "eed48d2",
+    "branch": "pr-llm-output-propagation",
+    "issue_num": 71,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/71",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 5,
+    "name": "model-id-support",
+    "commit": "7832c7e",
+    "branch": "pr-model-id-support",
+    "issue_num": 72,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/72",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 5,
+    "name": "cpp-sse-streaming",
+    "commit": "7ed2db3",
+    "branch": "pr-cpp-sse-streaming",
+    "issue_num": 73,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/73",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 5,
+    "name": "pipeline-engine-p1p6",
+    "commit": "efb1ca7",
+    "branch": "pr-pipeline-engine-p1p6",
+    "issue_num": 74,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/74",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 5,
+    "name": "phase-contract-audit-defect",
+    "commit": "2630b38",
+    "branch": "pr-phase-contract-audit-defect",
+    "issue_num": 75,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/75",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 6,
+    "name": "modular-architecture-core",
+    "commit": "d8f0269",
+    "branch": "pr-modular-architecture-core",
+    "issue_num": 76,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/76",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 6,
+    "name": "metrics-dashboard",
+    "commit": "5d167c4",
+    "branch": "pr-metrics-dashboard",
+    "issue_num": 77,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/77",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 6,
+    "name": "missing-metrics-modules",
+    "commit": "c290ed7",
+    "branch": "pr-missing-metrics-modules",
+    "issue_num": 78,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/78",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 6,
+    "name": "agent-ui-eval-benchmark",
+    "commit": "c72e6d9",
+    "branch": "pr-agent-ui-eval-benchmark",
+    "issue_num": 79,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/79",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 7,
+    "name": "pipeline-engine-wiring",
+    "commit": "969eefe",
+    "branch": "pr-pipeline-engine-wiring",
+    "issue_num": 80,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/80",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 7,
+    "name": "v0170-release-notes-fix",
+    "commit": "2fd4a80",
+    "branch": "pr-v0170-release-notes-fix",
+    "issue_num": 81,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/81",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 8,
+    "name": "supervisor-agents",
+    "commit": "214c314",
+    "branch": "pr-supervisor-agents",
+    "issue_num": 82,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/82",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 8,
+    "name": "release-v0171",
+    "commit": "bc26a31",
+    "branch": "pr-release-v0171",
+    "issue_num": 83,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/83",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 8,
+    "name": "system-prompt-reduction",
+    "commit": "2d08088",
+    "branch": "pr-system-prompt-reduction",
+    "issue_num": 84,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/84",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 8,
+    "name": "agent-definition-dataclass-fix",
+    "commit": "ec86362",
+    "branch": "pr-agent-definition-dataclass-fix",
+    "issue_num": 85,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/85",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 9,
+    "name": "baibel-phase-status-fix",
+    "commit": "d794360",
+    "branch": "pr-baibel-phase-status-fix",
+    "issue_num": 86,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/86",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 9,
+    "name": "tool-guardrails",
+    "commit": "3df90ff",
+    "branch": "pr-tool-guardrails",
+    "issue_num": 87,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/87",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 9,
+    "name": "agent-ui-round5-fixes",
+    "commit": "cc90935",
+    "branch": "pr-agent-ui-round5-fixes",
+    "issue_num": 88,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/88",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 9,
+    "name": "rag-indexing-guards",
+    "commit": "af652d9",
+    "branch": "pr-rag-indexing-guards",
+    "issue_num": 89,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/89",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 9,
+    "name": "agent-ui-guardrails-round6",
+    "commit": "95b304f",
+    "branch": "pr-agent-ui-guardrails-round6",
+    "issue_num": 90,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/90",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 9,
+    "name": "agent-ui-device-guard",
+    "commit": "5dd71a2",
+    "branch": "pr-agent-ui-device-guard",
+    "issue_num": 91,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/91",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 9,
+    "name": "agent-ui-terminal-fixes",
+    "commit": "25c6d25",
+    "branch": "pr-agent-ui-terminal-fixes",
+    "issue_num": 92,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/92",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 10,
+    "name": "component-framework-loader",
+    "commit": "57ee63d",
+    "branch": "pr-component-framework-loader",
+    "issue_num": 93,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/93",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 10,
+    "name": "restore-reverted-changes",
+    "commit": "b7a97e6",
+    "branch": "pr-restore-reverted-changes",
+    "issue_num": 94,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/94",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 11,
+    "name": "agent-base-tools",
+    "commit": "520bea3",
+    "branch": "pr-agent-base-tools",
+    "issue_num": 95,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/95",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 12,
+    "name": "phase3-sprint2-di",
+    "commit": "505d22f",
+    "branch": "pr-phase3-sprint2-di",
+    "issue_num": 96,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/96",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 13,
+    "name": "etherrepl-security-fix",
+    "commit": "0702252",
+    "branch": "pr-etherrepl-security-fix",
+    "issue_num": 97,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/97",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 14,
+    "name": "health-monitoring",
+    "commit": "8b05805",
+    "branch": "pr-health-monitoring",
+    "issue_num": 98,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/98",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 15,
+    "name": "resilience-patterns",
+    "commit": "84ed269",
+    "branch": "pr-resilience-patterns",
+    "issue_num": 99,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/99",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 16,
+    "name": "data-protection-perf",
+    "commit": "4c02e45",
+    "branch": "pr-data-protection-perf",
+    "issue_num": 100,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/100",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 17,
+    "name": "resilience-error-consolidation",
+    "commit": "fa8b17d",
+    "branch": "pr-resilience-error-consolidation",
+    "issue_num": 101,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/101",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 18,
+    "name": "phase4-closeout-report",
+    "commit": "82a6d42",
+    "branch": "pr-phase4-closeout-report",
+    "issue_num": 102,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/102",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 19,
+    "name": "resilience-apis-fix",
+    "commit": "5a37360",
+    "branch": "pr-resilience-apis-fix",
+    "issue_num": 103,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/103",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 20,
+    "name": "core-orchestration-kernel",
+    "commit": "eb0a838",
+    "branch": "pr-core-orchestration-kernel",
+    "issue_num": 104,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/104",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 21,
+    "name": "project-supervisor-hierarchy",
+    "commit": "dd1d314",
+    "branch": "pr-project-supervisor-hierarchy",
+    "issue_num": 105,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/105",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 22,
+    "name": "git-supervisor-hierarchy",
+    "commit": "dc02956",
+    "branch": "pr-git-supervisor-hierarchy",
+    "issue_num": 106,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/106",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 23,
+    "name": "automation-hooks",
+    "commit": "6f95323",
+    "branch": "pr-automation-hooks",
+    "issue_num": 107,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/107",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 24,
+    "name": "phase3-sprint3-caching",
+    "commit": "64db788",
+    "branch": "pr-phase3-sprint3-caching",
+    "issue_num": 108,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/108",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 25,
+    "name": "parallel-execution-engine",
+    "commit": "e0ed934",
+    "branch": "pr-parallel-execution-engine",
+    "issue_num": 109,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/109",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 26,
+    "name": "phase3-sprint4-observability",
+    "commit": "c25982b",
+    "branch": "pr-phase3-sprint4-observability",
+    "issue_num": 110,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/110",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 27,
+    "name": "domain-analyzer",
+    "commit": "8d6ffdd",
+    "branch": "pr-domain-analyzer",
+    "issue_num": 111,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/111",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 28,
+    "name": "orchestrator-ui-visibility",
+    "commit": "5bd6ef8",
+    "branch": "pr-orchestrator-ui-visibility",
+    "issue_num": 112,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/112",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 29,
+    "name": "workflow-modeler",
+    "commit": "a32187c",
+    "branch": "pr-workflow-modeler",
+    "issue_num": 113,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/113",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 30,
+    "name": "loom-builder",
+    "commit": "8dd22c1",
+    "branch": "pr-loom-builder",
+    "issue_num": 114,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/114",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 31,
+    "name": "parallel-exec-edge-tests",
+    "commit": "b3d707e",
+    "branch": "pr-parallel-exec-edge-tests",
+    "issue_num": 115,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/115",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 32,
+    "name": "component-framework-templates",
+    "commit": "e952716",
+    "branch": "pr-component-framework-templates",
+    "issue_num": 116,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/116",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 33,
+    "name": "gap-detector",
+    "commit": "fa3ef98",
+    "branch": "pr-autonomous-agent-spawning",
+    "issue_num": 117,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/117",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 34,
+    "name": "pipeline-executor",
+    "commit": "0c5f294",
+    "branch": "pr-pipeline-executor",
+    "issue_num": 118,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/118",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 35,
+    "name": "auto-spawn-pipeline",
+    "commit": "41ee396",
+    "branch": "pr-auto-spawn-pipeline",
+    "issue_num": 119,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/119",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 37,
+    "name": "supervisor-decision-tests",
+    "commit": "c3ccc4f",
+    "branch": "pr-supervisor-decision-tests",
+    "issue_num": 120,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/120",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 39,
+    "name": "phase3-sprint4-test-fixes",
+    "commit": "7781ef9",
+    "branch": "pr-phase3-sprint4-test-fixes",
+    "issue_num": 121,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/121",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 42,
+    "name": "orchestration-user-guide",
+    "commit": "8772238",
+    "branch": "pr-orchestration-user-guide",
+    "issue_num": 122,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/122",
+    "branch_ok": true,
+    "status": "OK"
+  },
+  {
+    "merge_order": 44,
+    "name": "pipeline-runner-page",
+    "commit": "33686dd",
+    "branch": "pr-pipeline-runner-page",
+    "issue_num": 123,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/123",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 45,
+    "name": "pipeline-sse-wiring",
+    "commit": "97edfd7",
+    "branch": "pr-pipeline-sse-wiring",
+    "issue_num": 124,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/124",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 46,
+    "name": "artifact-provenance",
+    "commit": "d3951f8",
+    "branch": "pr-artifact-provenance",
+    "issue_num": 125,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/125",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 47,
+    "name": "remove-pipeline-isolation",
+    "commit": "03d15bd",
+    "branch": "pr-remove-pipeline-isolation",
+    "issue_num": 126,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/126",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 49,
+    "name": "canvas-wiring-quality",
+    "commit": "574d142",
+    "branch": "pr-canvas-wiring-quality",
+    "issue_num": 127,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/127",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 50,
+    "name": "visual-pipeline-canvas",
+    "commit": "3838a8a",
+    "branch": "pr-visual-pipeline-canvas",
+    "issue_num": 128,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/128",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 51,
+    "name": "canvas-typescript-fix",
+    "commit": "cea803a",
+    "branch": "pr-canvas-typescript-fix",
+    "issue_num": 129,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/129",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 52,
+    "name": "pipeline-canvas-docs",
+    "commit": "9106a72",
+    "branch": "pr-pipeline-canvas-docs",
+    "issue_num": 130,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/130",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 53,
+    "name": "event-loop-consolidation",
+    "commit": "0ed82d4",
+    "branch": "pr-event-loop-consolidation",
+    "issue_num": 131,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/131",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 54,
+    "name": "canvas-loop-path-fix",
+    "commit": "961c7d5",
+    "branch": "pr-canvas-loop-path-fix",
+    "issue_num": 132,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/132",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 55,
+    "name": "final-quality-review-fixes",
+    "commit": "9bc85ec",
+    "branch": "pr-final-quality-review-fixes",
+    "issue_num": 133,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/133",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 56,
+    "name": "sec-003-path-traversal",
+    "commit": "ee43966",
+    "branch": "pr-sec-003-path-traversal",
+    "issue_num": 134,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/134",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 57,
+    "name": "canvas-supervisors-gates",
+    "commit": "ef98904",
+    "branch": "pr-canvas-supervisors-gates",
+    "issue_num": 135,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/135",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 58,
+    "name": "tier12-tracker-update",
+    "commit": "3ce237c",
+    "branch": "pr-tier12-tracker-update",
+    "issue_num": 136,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/136",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 59,
+    "name": "multiple-independent-loops",
+    "commit": "55b890d",
+    "branch": "pr-multiple-independent-loops",
+    "issue_num": 137,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/137",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 60,
+    "name": "sprint-integration-tests",
+    "commit": "47c0c0c",
+    "branch": "pr-sprint-integration-tests",
+    "issue_num": 138,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/138",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 60,
+    "name": "execution-history-replay",
+    "commit": "9a85250",
+    "branch": "pr-execution-history-replay",
+    "issue_num": 139,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/139",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 61,
+    "name": "pipeline-canvas-guide-update",
+    "commit": "b1a15ec",
+    "branch": "pr-pipeline-canvas-guide-update",
+    "issue_num": 140,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/140",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 62,
+    "name": "component-registry-ui",
+    "commit": "c27e42e",
+    "branch": "pr-component-registry-ui",
+    "issue_num": 141,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/141",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 63,
+    "name": "tier3-pipeline-canvas",
+    "commit": "856f1b2",
+    "branch": "pr-tier3-pipeline-canvas",
+    "issue_num": 142,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/142",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 64,
+    "name": "recursive-pipeline-sse",
+    "commit": "d187907",
+    "branch": "pr-recursive-pipeline-sse",
+    "issue_num": 143,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/143",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 65,
+    "name": "canvas-ui-wiring-fix",
+    "commit": "1ffd7a6",
+    "branch": "pr-canvas-ui-wiring-fix",
+    "issue_num": 144,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/144",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 66,
+    "name": "canvas-config-quality-bridge",
+    "commit": "957a7cb",
+    "branch": "pr-canvas-config-quality-bridge",
+    "issue_num": 145,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/145",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 67,
+    "name": "tier3-tracker-update",
+    "commit": "7c3a6a4",
+    "branch": "pr-tier3-tracker-update",
+    "issue_num": 146,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/146",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 68,
+    "name": "webui-typescript-fix",
+    "commit": "0ab5554",
+    "branch": "pr-webui-typescript-fix",
+    "issue_num": 147,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/147",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 69,
+    "name": "pipelinerunner-typescript-fix",
+    "commit": "1761d70",
+    "branch": "pr-pipelinerunner-typescript-fix",
+    "issue_num": 148,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/148",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 70,
+    "name": "webui-double-api-fix",
+    "commit": "4faa22e",
+    "branch": "pr-webui-double-api-fix",
+    "issue_num": 149,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/149",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 71,
+    "name": "agent-ecosystem-display",
+    "commit": "f22f48a",
+    "branch": "pr-agent-ecosystem-display",
+    "issue_num": 150,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/150",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 72,
+    "name": "pipelinerunner-accessibility",
+    "commit": "859058f",
+    "branch": "pr-pipelinerunner-accessibility",
+    "issue_num": 151,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/151",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 73,
+    "name": "phase5-milestone3-agents",
+    "commit": "54c5499",
+    "branch": "pr-phase5-milestone3-agents",
+    "issue_num": 152,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/152",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 74,
+    "name": "sse-endpoint-tests",
+    "commit": "3b6ebe6",
+    "branch": "pr-sse-endpoint-tests",
+    "issue_num": 153,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/153",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 75,
+    "name": "phase5-agent-docs",
+    "commit": "8522e0b",
+    "branch": "pr-phase5-agent-docs",
+    "issue_num": 154,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/154",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 76,
+    "name": "phase5-runtime-verification-docs",
+    "commit": "cf3469f",
+    "branch": "pr-phase5-runtime-verification-docs",
+    "issue_num": 155,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/155",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 77,
+    "name": "session3-quality-review-fixes",
+    "commit": "9b19f90",
+    "branch": "pr-session3-quality-review-fixes",
+    "issue_num": 156,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/156",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 78,
+    "name": "phase5-docs-coherence",
+    "commit": "c9abc59",
+    "branch": "pr-phase5-docs-coherence",
+    "issue_num": 157,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/157",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 79,
+    "name": "execute-tool-dispatch-fix",
+    "commit": "242e380",
+    "branch": "pr-execute-tool-dispatch-fix",
+    "issue_num": 158,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/158",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 80,
+    "name": "pipeline-cli-wiring",
+    "commit": "71d5d48",
+    "branch": "pr-pipeline-cli-wiring",
+    "issue_num": 159,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/159",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 82,
+    "name": "e2e-pipeline-timeout-fix",
+    "commit": "0ae23c9",
+    "branch": "pr-e2e-pipeline-timeout-fix",
+    "issue_num": 160,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/160",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  },
+  {
+    "merge_order": 83,
+    "name": "quality-gate7-tests",
+    "commit": "f57e5ba",
+    "branch": "pr-quality-gate7-tests",
+    "issue_num": 161,
+    "issue_url": "https://github.com/antmikinka/gaia/issues/161",
+    "branch_ok": false,
+    "status": "PARTIAL"
+  }
+]

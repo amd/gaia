@@ -1,0 +1,1776 @@
+Processing 111 commits in dependency order
+======================================================================
+
+[1/111] MO=  1 | phase6-matrix-update-74
+  Commit: 52df806 | Branch: pr-phase6-matrix-update-74
+  Issue #50 (pre-existing, skipping)
+  Resolving 1 conflicted file(s)...
+    Restored: docs/reference/branch-change-matrix.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 52df806
+  [PARTIAL] Issue=50 Branch=X
+
+[2/111] MO=  1 | design-spec-coherence
+  Commit: e28a922 | Branch: pr-design-spec-coherence
+  Issue #52: https://github.com/antmikinka/gaia/issues/52
+  Resolving 2 conflicted file(s)...
+    Restored: docs/reference/branch-change-matrix.md
+    Restored: docs/spec/agent-ecosystem-design-spec.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for e28a922
+  [PARTIAL] Issue=52 Branch=X
+
+[3/111] MO=  1 | phase6-matrix-update-73
+  Commit: 49b6704 | Branch: pr-phase6-matrix-update-73
+  Issue #53: https://github.com/antmikinka/gaia/issues/53
+  Resolving 1 conflicted file(s)...
+    Restored: docs/reference/branch-change-matrix.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 49b6704
+  [PARTIAL] Issue=53 Branch=X
+
+[4/111] MO=  1 | rc2-tool-package
+  Commit: b533669 | Branch: pr-rc2-tool-package
+  Issue #54: https://github.com/antmikinka/gaia/issues/54
+  Resolving 1 conflicted file(s)...
+    Restored: src/gaia/agents/configurable.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for b533669
+  [PARTIAL] Issue=54 Branch=X
+
+[5/111] MO=  1 | toctou-security-fix
+  Commit: 8c2d24a | Branch: pr-toctou-security-fix
+  Issue #55: https://github.com/antmikinka/gaia/issues/55
+  Resolving 5 conflicted file(s)...
+    Restored: src/gaia/ui/dependencies.py
+    Restored: src/gaia/ui/routers/documents.py
+    Restored: src/gaia/ui/server.py
+    Restored: src/gaia/ui/utils.py
+    Restored: tests/unit/chat/ui/test_server.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 8c2d24a
+  [PARTIAL] Issue=55 Branch=X
+
+[6/111] MO=  2 | pr606-integration-analysis
+  Commit: 5c52eb8 | Branch: pr-pr606-integration-analysis
+  Issue #56: https://github.com/antmikinka/gaia/issues/56
+  Resolving 1 conflicted file(s)...
+    Restored: docs/reference/branch-change-matrix.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 5c52eb8
+  [PARTIAL] Issue=56 Branch=X
+
+[7/111] MO=  2 | phase5-matrix-design-docs
+  Commit: 6f839a6 | Branch: pr-phase5-matrix-design-docs
+  Issue #57: https://github.com/antmikinka/gaia/issues/57
+  Resolving 3 conflicted file(s)...
+    Restored: docs/reference/branch-change-matrix.md
+    Restored: docs/spec/agent-ecosystem-design-spec.md
+    Restored: docs/spec/senior-dev-work-order.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 6f839a6
+  [PARTIAL] Issue=57 Branch=X
+
+[8/111] MO=  2 | pr720-integration-analysis
+  Commit: 078739b | Branch: pr-pr720-integration-analysis
+  Issue #58: https://github.com/antmikinka/gaia/issues/58
+  Branch pr-pr720-integration-analysis pushed OK
+  [OK] Issue=58 Branch=OK
+
+[9/111] MO=  2 | minor-fixes-updates
+  Commit: 5931d85 | Branch: pr-minor-fixes-updates
+  Issue #59: https://github.com/antmikinka/gaia/issues/59
+  Resolving 6 conflicted file(s)...
+    Restored: chroma_data/chroma.sqlite3
+    Restored: src/gaia/agents/configurable.py
+    Restored: src/gaia/perf/__init__.py
+    Restored: src/gaia/pipeline/audit_logger.py
+    Restored: src/gaia/pipeline/engine.py
+    Restored: src/gaia/security/__init__.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 5931d85
+  [PARTIAL] Issue=59 Branch=X
+
+[10/111] MO=  2 | demo-lemonade-integration
+  Commit: 8cce2d9 | Branch: pr-demo-lemonade-integration
+  Issue #60: https://github.com/antmikinka/gaia/issues/60
+  Resolving 3 conflicted file(s)...
+    Restored: src/gaia/agents/configurable.py
+    Restored: src/gaia/pipeline/engine.py
+    Restored: src/gaia/pipeline/loop_manager.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 8cce2d9
+  [PARTIAL] Issue=60 Branch=X
+
+[11/111] MO=  3 | agent-ecosystem-design-spec
+  Commit: 08b93eb | Branch: pr-agent-ecosystem-design-spec
+  Issue #61: https://github.com/antmikinka/gaia/issues/61
+  Branch pr-agent-ecosystem-design-spec pushed OK
+  [OK] Issue=61 Branch=OK
+
+[12/111] MO=  3 | lemonade-version-warning
+  Commit: 780a711 | Branch: pr-lemonade-version-warning
+  Issue #62: https://github.com/antmikinka/gaia/issues/62
+  Resolving 6 conflicted file(s)...
+    Restored: eval/prompts/judge_scenario.md
+    Restored: eval/prompts/judge_turn.md
+    Restored: eval/prompts/simulator.md
+    Restored: src/gaia/eval/runner.py
+    Restored: src/gaia/eval/scorecard.py
+    Restored: src/gaia/mcp/servers/agent_ui_mcp.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 780a711
+  [PARTIAL] Issue=62 Branch=X
+
+[13/111] MO=  3 | mcp-test-isolation
+  Commit: e0e5695 | Branch: pr-mcp-test-isolation
+  Issue #63: https://github.com/antmikinka/gaia/issues/63
+  Branch pr-mcp-test-isolation pushed OK
+  [OK] Issue=63 Branch=OK
+
+[14/111] MO=  3 | pipeline-pr-description
+  Commit: 4345b92 | Branch: pr-pipeline-pr-description
+  Issue #64: https://github.com/antmikinka/gaia/issues/64
+  Branch pr-pipeline-pr-description pushed OK
+  [OK] Issue=64 Branch=OK
+
+[15/111] MO=  4 | agent-ui-build-init
+  Commit: bb010a0 | Branch: pr-agent-ui-build-init
+  Issue #65: https://github.com/antmikinka/gaia/issues/65
+  Resolving 3 conflicted file(s)...
+    Restored: docs/guides/agent-ui.mdx
+    Restored: src/gaia/apps/webui/bin/gaia-ui.mjs
+    Restored: src/gaia/ui/server.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for bb010a0
+  [PARTIAL] Issue=65 Branch=X
+
+[16/111] MO=  4 | merge-upstream-main
+  Commit: 7e7ff14 | Branch: N/A (merge commit)
+  Issue #66: https://github.com/antmikinka/gaia/issues/66
+  SKIP: cannot create branch: fatal: Cannot update paths and switch to branch 'N/A' at the same time.
+  [PARTIAL] Issue=66 Branch=X
+
+[17/111] MO=  4 | merge-queue-notify-fix
+  Commit: 776dc34 | Branch: pr-merge-queue-notify-fix
+  Issue #67: https://github.com/antmikinka/gaia/issues/67
+  Resolving 1 conflicted file(s)...
+    Restored: .github/workflows/publish-npm-ui.yml
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 776dc34
+  [PARTIAL] Issue=67 Branch=X
+
+[18/111] MO=  4 | npm-oidc-switch
+  Commit: 83a4db1 | Branch: pr-npm-oidc-switch
+  Issue #68: https://github.com/antmikinka/gaia/issues/68
+  Resolving 3 conflicted file(s)...
+    Restored: .github/workflows/publish-npm-ui.yml
+    Restored: src/gaia/apps/webui/bin/gaia-ui.mjs
+    Restored: src/gaia/apps/webui/package.json
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 83a4db1
+  [PARTIAL] Issue=68 Branch=X
+
+[19/111] MO=  5 | baibel-integration-phases
+  Commit: 32f4cf4 | Branch: pr-baibel-integration-phases
+  Issue #69: https://github.com/antmikinka/gaia/issues/69
+  Resolving 1 conflicted file(s)...
+    Restored: docs/spec/baibel-gaia-integration-master.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 32f4cf4
+  [PARTIAL] Issue=69 Branch=X
+
+[20/111] MO=  5 | artifact-extractor
+  Commit: 1fbffb9 | Branch: pr-artifact-extractor
+  Issue #70: https://github.com/antmikinka/gaia/issues/70
+  Resolving 1 conflicted file(s)...
+    Restored: examples/pipeline_demo.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 1fbffb9
+  [PARTIAL] Issue=70 Branch=X
+
+[21/111] MO=  5 | llm-output-propagation
+  Commit: eed48d2 | Branch: pr-llm-output-propagation
+  Issue #71: https://github.com/antmikinka/gaia/issues/71
+  Resolving 4 conflicted file(s)...
+    Restored: examples/pipeline_demo.py
+    Restored: src/gaia/hooks/registry.py
+    Restored: src/gaia/pipeline/engine.py
+    Restored: src/gaia/quality/scorer.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for eed48d2
+  [PARTIAL] Issue=71 Branch=X
+
+[22/111] MO=  5 | model-id-support
+  Commit: 7832c7e | Branch: pr-model-id-support
+  Issue #72: https://github.com/antmikinka/gaia/issues/72
+  Resolving 25 conflicted file(s)...
+    Restored: config/agents/accessibility-reviewer.yaml
+    Restored: config/agents/api-designer.yaml
+    Restored: config/agents/backend-specialist.yaml
+    Restored: config/agents/data-engineer.yaml
+    Restored: config/agents/database-architect.yaml
+    Restored: config/agents/devops-engineer.yaml
+    Restored: config/agents/frontend-specialist.yaml
+    Restored: config/agents/performance-analyst.yaml
+    Restored: config/agents/planning-analysis-strategist.yaml
+    Restored: config/agents/quality-reviewer.yaml
+    Restored: config/agents/release-manager.yaml
+    Restored: config/agents/security-auditor.yaml
+    Restored: config/agents/senior-developer.yaml
+    Restored: config/agents/software-program-manager.yaml
+    Restored: config/agents/solutions-architect.yaml
+    Restored: config/agents/technical-writer.yaml
+    Restored: config/agents/test-coverage-analyzer.yaml
+    Restored: config/pipeline_templates/enterprise.yaml
+    Restored: config/pipeline_templates/generic.yaml
+    Restored: config/pipeline_templates/rapid.yaml
+    Restored: src/gaia/agents/base/context.py
+    Restored: src/gaia/agents/registry.py
+    Restored: src/gaia/pipeline/engine.py
+    Restored: src/gaia/pipeline/loop_manager.py
+    Restored: src/gaia/pipeline/recursive_template.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 7832c7e
+  [PARTIAL] Issue=72 Branch=X
+
+[23/111] MO=  5 | cpp-sse-streaming
+  Commit: 7ed2db3 | Branch: pr-cpp-sse-streaming
+  Issue #73: https://github.com/antmikinka/gaia/issues/73
+  Branch pr-cpp-sse-streaming pushed OK
+  [OK] Issue=73 Branch=OK
+
+[24/111] MO=  5 | pipeline-engine-p1p6
+  Commit: efb1ca7 | Branch: pr-pipeline-engine-p1p6
+  Issue #74: https://github.com/antmikinka/gaia/issues/74
+  Resolving 6 conflicted file(s)...
+    Restored: src/gaia/agents/registry.py
+    Restored: src/gaia/pipeline/__init__.py
+    Restored: src/gaia/pipeline/engine.py
+    Restored: src/gaia/quality/__init__.py
+    Restored: src/gaia/quality/models.py
+    Restored: src/gaia/quality/scorer.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for efb1ca7
+  [PARTIAL] Issue=74 Branch=X
+
+[25/111] MO=  5 | phase-contract-audit-defect
+  Commit: 2630b38 | Branch: pr-phase-contract-audit-defect
+  Issue #75: https://github.com/antmikinka/gaia/issues/75
+  Resolving 3 conflicted file(s)...
+    Restored: src/gaia/pipeline/__init__.py
+    Restored: src/gaia/pipeline/state.py
+    Restored: tests/pipeline/test_state_machine.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 2630b38
+  [PARTIAL] Issue=75 Branch=X
+
+[26/111] MO=  6 | modular-architecture-core
+  Commit: d8f0269 | Branch: pr-modular-architecture-core
+  Issue #76: https://github.com/antmikinka/gaia/issues/76
+  Resolving 2 conflicted file(s)...
+    Restored: docs/spec/baibel-gaia-integration-master.md
+    Restored: future-where-to-resume-left-off.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for d8f0269
+  [PARTIAL] Issue=76 Branch=X
+
+[27/111] MO=  6 | metrics-dashboard
+  Commit: 5d167c4 | Branch: pr-metrics-dashboard
+  Issue #77: https://github.com/antmikinka/gaia/issues/77
+  Resolving 80 conflicted file(s)...
+    Restored: src/gaia/agents/base/context.py
+    Restored: src/gaia/agents/configurable.py
+    Restored: src/gaia/agents/definitions/__init__.py
+    Restored: src/gaia/agents/registry.py
+    Restored: src/gaia/apps/webui/package.json
+    Restored: src/gaia/apps/webui/src/App.tsx
+    Restored: src/gaia/apps/webui/src/components/Sidebar.css
+    Restored: src/gaia/apps/webui/src/components/Sidebar.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/exceptions.py
+    Restored: src/gaia/hooks/__init__.py
+    Restored: src/gaia/hooks/base.py
+    Restored: src/gaia/hooks/production/__init__.py
+    Restored: src/gaia/hooks/production/context_hooks.py
+    Restored: src/gaia/hooks/production/quality_hooks.py
+    Restored: src/gaia/hooks/production/validation_hooks.py
+    Restored: src/gaia/hooks/registry.py
+    Restored: src/gaia/metrics/__init__.py
+    Restored: src/gaia/metrics/analyzer.py
+    Restored: src/gaia/metrics/benchmarks.py
+    Restored: src/gaia/metrics/collector.py
+    Restored: src/gaia/metrics/models.py
+    Restored: src/gaia/metrics/production_monitor.py
+    Restored: src/gaia/pipeline/__init__.py
+    Restored: src/gaia/pipeline/audit_logger.py
+    Restored: src/gaia/pipeline/decision_engine.py
+    Restored: src/gaia/pipeline/defect_remediation_tracker.py
+    Restored: src/gaia/pipeline/defect_router.py
+    Restored: src/gaia/pipeline/defect_types.py
+    Restored: src/gaia/pipeline/engine.py
+    Restored: src/gaia/pipeline/loop_manager.py
+    Restored: src/gaia/pipeline/phase_contract.py
+    Restored: src/gaia/pipeline/recursive_template.py
+    Restored: src/gaia/pipeline/routing_engine.py
+    Restored: src/gaia/pipeline/state.py
+    Restored: src/gaia/pipeline/template_loader.py
+    Restored: src/gaia/quality/__init__.py
+    Restored: src/gaia/quality/models.py
+    Restored: src/gaia/quality/scorer.py
+    Restored: src/gaia/quality/templates.py
+    Restored: src/gaia/quality/templates_pkg/__init__.py
+    Restored: src/gaia/quality/templates_pkg/pipeline_templates.py
+    Restored: src/gaia/quality/validators/__init__.py
+    Restored: src/gaia/quality/validators/base.py
+    Restored: src/gaia/quality/validators/code_validators.py
+    Restored: src/gaia/quality/validators/docs_validators.py
+    Restored: src/gaia/quality/validators/requirements_validators.py
+    Restored: src/gaia/quality/validators/security_validators.py
+    Restored: src/gaia/quality/validators/test_validators.py
+    Restored: src/gaia/quality/weight_config.py
+    Restored: src/gaia/ui/server.py
+    Restored: src/gaia/utils/id_generator.py
+    Restored: src/gaia/utils/logging.py
+    Restored: tests/agents/test_specialist_routing.py
+    Restored: tests/metrics/test_analyzer.py
+    Restored: tests/metrics/test_benchmarks.py
+    Restored: tests/metrics/test_collector.py
+    Restored: tests/metrics/test_models.py
+    Restored: tests/pipeline/test_audit_logger.py
+    Restored: tests/pipeline/test_bounded_concurrency.py
+    Restored: tests/pipeline/test_decision_engine.py
+    Restored: tests/pipeline/test_defect_remediation_tracker.py
+    Restored: tests/pipeline/test_defect_types.py
+    Restored: tests/pipeline/test_engine_phase_helpers.py
+    Restored: tests/pipeline/test_engine_template_wiring.py
+    Restored: tests/pipeline/test_loop_manager.py
+    Restored: tests/pipeline/test_phase_contract.py
+    Restored: tests/pipeline/test_routing_engine.py
+    Restored: tests/pipeline/test_state_machine.py
+    Restored: tests/pipeline/test_template_loader.py
+    Restored: tests/pipeline/test_template_weights.py
+    Restored: tests/production/test_production_monitor.py
+    Restored: tests/production/test_smoke.py
+    Restored: tests/quality/test_models_routing.py
+    Restored: tests/quality/test_quality_scorer.py
+    Restored: tests/quality/test_scorer_parallel.py
+    Restored: tests/quality/test_weight_config.py
+    Restored: tests/scale/scale_test_runner.py
+    Restored: tests/unit/test_pipeline_smoke.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 5d167c4
+  [PARTIAL] Issue=77 Branch=X
+
+[28/111] MO=  6 | missing-metrics-modules
+  Commit: c290ed7 | Branch: pr-missing-metrics-modules
+  Issue #78: https://github.com/antmikinka/gaia/issues/78
+  Branch pr-missing-metrics-modules pushed OK
+  [OK] Issue=78 Branch=OK
+
+[29/111] MO=  6 | agent-ui-eval-benchmark
+  Commit: c72e6d9 | Branch: pr-agent-ui-eval-benchmark
+  Issue #79: https://github.com/antmikinka/gaia/issues/79
+  Resolving 42 conflicted file(s)...
+    Restored: docs/guides/agent-ui.mdx
+    Restored: docs/plans/agent-ui-eval-benchmark.md
+    Restored: docs/sdk/sdks/agent-ui.mdx
+    Restored: src/gaia/apps/webui/forge.config.cjs
+    Restored: src/gaia/apps/webui/package-lock.json
+    Restored: src/gaia/apps/webui/package.json
+    Restored: src/gaia/apps/webui/src/App.tsx
+    Restored: src/gaia/apps/webui/src/components/AgentActivity.css
+    Restored: src/gaia/apps/webui/src/components/AgentActivity.tsx
+    Restored: src/gaia/apps/webui/src/components/ChatView.tsx
+    Restored: src/gaia/apps/webui/src/components/ConnectionBanner.css
+    Restored: src/gaia/apps/webui/src/components/ConnectionBanner.tsx
+    Restored: src/gaia/apps/webui/src/components/DocumentLibrary.css
+    Restored: src/gaia/apps/webui/src/components/DocumentLibrary.tsx
+    Restored: src/gaia/apps/webui/src/components/MessageBubble.css
+    Restored: src/gaia/apps/webui/src/components/MessageBubble.tsx
+    Restored: src/gaia/apps/webui/src/components/PermissionPrompt.css
+    Restored: src/gaia/apps/webui/src/components/SettingsModal.tsx
+    Restored: src/gaia/apps/webui/src/components/Sidebar.css
+    Restored: src/gaia/apps/webui/src/components/WelcomeScreen.css
+    Restored: src/gaia/apps/webui/src/components/WelcomeScreen.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/stores/chatStore.ts
+    Restored: src/gaia/apps/webui/src/styles/index.css
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/device.py
+    Restored: src/gaia/mcp/servers/agent_ui_mcp.py
+    Restored: src/gaia/ui/_chat_helpers.py
+    Restored: src/gaia/ui/database.py
+    Restored: src/gaia/ui/models.py
+    Restored: src/gaia/ui/routers/chat.py
+    Restored: src/gaia/ui/routers/files.py
+    Restored: src/gaia/ui/routers/sessions.py
+    Restored: src/gaia/ui/routers/system.py
+    Restored: src/gaia/ui/server.py
+    Restored: src/gaia/ui/sse_handler.py
+    Restored: src/gaia/ui/utils.py
+    Restored: tests/unit/chat/ui/test_chat_concurrency.py
+    Restored: tests/unit/chat/ui/test_chat_helpers.py
+    Restored: tests/unit/chat/ui/test_server.py
+    Restored: tests/unit/chat/ui/test_sse_handler.py
+    Restored: tests/unit/chat/ui/test_utils_helpers.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for c72e6d9
+  [PARTIAL] Issue=79 Branch=X
+
+[30/111] MO=  7 | pipeline-engine-wiring
+  Commit: 969eefe | Branch: pr-pipeline-engine-wiring
+  Issue #80: https://github.com/antmikinka/gaia/issues/80
+  Resolving 3 conflicted file(s)...
+    Restored: src/gaia/agents/registry.py
+    Restored: src/gaia/hooks/production/quality_hooks.py
+    Restored: src/gaia/pipeline/engine.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 969eefe
+  [PARTIAL] Issue=80 Branch=X
+
+[31/111] MO=  7 | v0170-release-notes-fix
+  Commit: 2fd4a80 | Branch: pr-v0170-release-notes-fix
+  Issue #81: https://github.com/antmikinka/gaia/issues/81
+  Resolving 1 conflicted file(s)...
+    Restored: docs/releases/v0.17.0.mdx
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 2fd4a80
+  [PARTIAL] Issue=81 Branch=X
+
+[32/111] MO=  8 | supervisor-agents
+  Commit: 214c314 | Branch: pr-supervisor-agents
+  Issue #82: https://github.com/antmikinka/gaia/issues/82
+  Resolving 2 conflicted file(s)...
+    Restored: config/agents/quality-supervisor.md
+    Restored: config/agents/quality-supervisor.yaml
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 214c314
+  [PARTIAL] Issue=82 Branch=X
+
+[33/111] MO=  8 | release-v0171
+  Commit: bc26a31 | Branch: pr-release-v0171
+  Issue #83: https://github.com/antmikinka/gaia/issues/83
+  Branch pr-release-v0171 pushed OK
+  [OK] Issue=83 Branch=OK
+
+[34/111] MO=  8 | system-prompt-reduction
+  Commit: 2d08088 | Branch: pr-system-prompt-reduction
+  Issue #84: https://github.com/antmikinka/gaia/issues/84
+  Resolving 16 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/components/ChatView.tsx
+    Restored: src/gaia/apps/webui/src/components/ConnectionBanner.tsx
+    Restored: src/gaia/apps/webui/src/components/DocumentLibrary.tsx
+    Restored: src/gaia/apps/webui/src/components/FileBrowser.tsx
+    Restored: src/gaia/apps/webui/src/components/SettingsModal.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/apps/webui/src/utils/logger.ts
+    Restored: src/gaia/ui/_chat_helpers.py
+    Restored: src/gaia/ui/routers/mcp.py
+    Restored: src/gaia/ui/routers/sessions.py
+    Restored: src/gaia/ui/server.py
+    Restored: src/gaia/ui/sse_handler.py
+    Restored: tests/unit/chat/ui/test_server.py
+    Restored: tests/unit/chat/ui/test_sse_handler.py
+    Restored: tests/unit/test_file_tools.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 2d08088
+  [PARTIAL] Issue=84 Branch=X
+
+[35/111] MO=  8 | agent-definition-dataclass-fix
+  Commit: ec86362 | Branch: pr-agent-definition-dataclass-fix
+  Issue #85: https://github.com/antmikinka/gaia/issues/85
+  Resolving 2 conflicted file(s)...
+    Restored: src/gaia/agents/base/context.py
+    Restored: src/gaia/agents/registry.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for ec86362
+  [PARTIAL] Issue=85 Branch=X
+
+[36/111] MO=  9 | baibel-phase-status-fix
+  Commit: d794360 | Branch: pr-baibel-phase-status-fix
+  Issue #86: https://github.com/antmikinka/gaia/issues/86
+  Resolving 1 conflicted file(s)...
+    Restored: docs/reference/branch-change-matrix.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for d794360
+  [PARTIAL] Issue=86 Branch=X
+
+[37/111] MO=  9 | tool-guardrails
+  Commit: 3df90ff | Branch: pr-tool-guardrails
+  Issue #87: https://github.com/antmikinka/gaia/issues/87
+  Resolving 12 conflicted file(s)...
+    Restored: docs/guides/agent-ui.mdx
+    Restored: docs/sdk/sdks/agent-ui.mdx
+    Restored: src/gaia/apps/webui/src/components/ChatView.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/stores/notificationStore.ts
+    Restored: src/gaia/apps/webui/src/styles/index.css
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/ui/_chat_helpers.py
+    Restored: src/gaia/ui/models.py
+    Restored: src/gaia/ui/routers/chat.py
+    Restored: src/gaia/ui/server.py
+    Restored: src/gaia/ui/sse_handler.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 3df90ff
+  [PARTIAL] Issue=87 Branch=X
+
+[38/111] MO=  9 | agent-ui-round5-fixes
+  Commit: cc90935 | Branch: pr-agent-ui-round5-fixes
+  Issue #88: https://github.com/antmikinka/gaia/issues/88
+  Resolving 46 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/App.tsx
+    Restored: src/gaia/apps/webui/src/components/AgentActivity.css
+    Restored: src/gaia/apps/webui/src/components/AgentActivity.tsx
+    Restored: src/gaia/apps/webui/src/components/AgentChat.css
+    Restored: src/gaia/apps/webui/src/components/AgentInstallDialog.css
+    Restored: src/gaia/apps/webui/src/components/AgentManager.css
+    Restored: src/gaia/apps/webui/src/components/AgentTerminal.css
+    Restored: src/gaia/apps/webui/src/components/ChatView.css
+    Restored: src/gaia/apps/webui/src/components/ChatView.tsx
+    Restored: src/gaia/apps/webui/src/components/ConnectionBanner.css
+    Restored: src/gaia/apps/webui/src/components/ConnectionBanner.tsx
+    Restored: src/gaia/apps/webui/src/components/DocumentLibrary.css
+    Restored: src/gaia/apps/webui/src/components/FileBrowser.css
+    Restored: src/gaia/apps/webui/src/components/MessageBubble.css
+    Restored: src/gaia/apps/webui/src/components/MessageBubble.tsx
+    Restored: src/gaia/apps/webui/src/components/MobileAccessModal.css
+    Restored: src/gaia/apps/webui/src/components/NotificationCenter.css
+    Restored: src/gaia/apps/webui/src/components/PermissionManager.css
+    Restored: src/gaia/apps/webui/src/components/PermissionPrompt.css
+    Restored: src/gaia/apps/webui/src/components/SettingsModal.css
+    Restored: src/gaia/apps/webui/src/components/SettingsModal.tsx
+    Restored: src/gaia/apps/webui/src/components/Sidebar.css
+    Restored: src/gaia/apps/webui/src/components/Sidebar.tsx
+    Restored: src/gaia/apps/webui/src/components/UnsupportedFeature.css
+    Restored: src/gaia/apps/webui/src/components/WelcomeScreen.css
+    Restored: src/gaia/apps/webui/src/components/WelcomeScreen.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/stores/chatStore.ts
+    Restored: src/gaia/apps/webui/src/stores/notificationStore.ts
+    Restored: src/gaia/apps/webui/src/styles/index.css
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/apps/webui/src/utils/format.ts
+    Restored: src/gaia/ui/_chat_helpers.py
+    Restored: src/gaia/ui/database.py
+    Restored: src/gaia/ui/dependencies.py
+    Restored: src/gaia/ui/models.py
+    Restored: src/gaia/ui/routers/chat.py
+    Restored: src/gaia/ui/routers/documents.py
+    Restored: src/gaia/ui/routers/system.py
+    Restored: src/gaia/ui/server.py
+    Restored: src/gaia/ui/sse_handler.py
+    Restored: src/gaia/ui/utils.py
+    Restored: tests/unit/chat/ui/test_database.py
+    Restored: tests/unit/chat/ui/test_server.py
+    Restored: tests/unit/chat/ui/test_sse_confirmation.py
+    Restored: tests/unit/chat/ui/test_sse_handler.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for cc90935
+  [PARTIAL] Issue=88 Branch=X
+
+[39/111] MO=  9 | rag-indexing-guards
+  Commit: af652d9 | Branch: pr-rag-indexing-guards
+  Issue #89: https://github.com/antmikinka/gaia/issues/89
+  Resolving 1 conflicted file(s)...
+    Restored: docs/guides/agent-ui.mdx
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for af652d9
+  [PARTIAL] Issue=89 Branch=X
+
+[40/111] MO=  9 | agent-ui-guardrails-round6
+  Commit: 95b304f | Branch: pr-agent-ui-guardrails-round6
+  Issue #90: https://github.com/antmikinka/gaia/issues/90
+  Resolving 15 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/App.tsx
+    Restored: src/gaia/apps/webui/src/components/AgentActivity.tsx
+    Restored: src/gaia/apps/webui/src/components/ChatView.tsx
+    Restored: src/gaia/apps/webui/src/components/PermissionPrompt.css
+    Restored: src/gaia/apps/webui/src/components/PermissionPrompt.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/stores/notificationStore.ts
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/ui/_chat_helpers.py
+    Restored: src/gaia/ui/routers/chat.py
+    Restored: src/gaia/ui/routers/documents.py
+    Restored: src/gaia/ui/server.py
+    Restored: src/gaia/ui/sse_handler.py
+    Restored: src/gaia/ui/utils.py
+    Restored: tests/unit/chat/ui/test_sse_confirmation.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 95b304f
+  [PARTIAL] Issue=90 Branch=X
+
+[41/111] MO=  9 | agent-ui-device-guard
+  Commit: 5dd71a2 | Branch: pr-agent-ui-device-guard
+  Issue #91: https://github.com/antmikinka/gaia/issues/91
+  Resolving 13 conflicted file(s)...
+    Restored: docs/guides/agent-ui.mdx
+    Restored: docs/sdk/sdks/agent-ui.mdx
+    Restored: src/gaia/apps/webui/src/components/ConnectionBanner.css
+    Restored: src/gaia/apps/webui/src/components/ConnectionBanner.tsx
+    Restored: src/gaia/apps/webui/src/components/SettingsModal.css
+    Restored: src/gaia/apps/webui/src/components/SettingsModal.tsx
+    Restored: src/gaia/apps/webui/src/components/WelcomeScreen.css
+    Restored: src/gaia/apps/webui/src/components/WelcomeScreen.tsx
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/ui/_chat_helpers.py
+    Restored: src/gaia/ui/models.py
+    Restored: src/gaia/ui/routers/system.py
+    Restored: tests/unit/chat/ui/test_server.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 5dd71a2
+  [PARTIAL] Issue=91 Branch=X
+
+[42/111] MO=  9 | agent-ui-terminal-fixes
+  Commit: 25c6d25 | Branch: pr-agent-ui-terminal-fixes
+  Issue #92: https://github.com/antmikinka/gaia/issues/92
+  Resolving 40 conflicted file(s)...
+    Restored: docs/guides/agent-ui.mdx
+    Restored: docs/sdk/sdks/agent-ui.mdx
+    Restored: src/gaia/apps/webui/src/App.tsx
+    Restored: src/gaia/apps/webui/src/components/AgentActivity.css
+    Restored: src/gaia/apps/webui/src/components/AgentActivity.tsx
+    Restored: src/gaia/apps/webui/src/components/AgentChat.css
+    Restored: src/gaia/apps/webui/src/components/AgentInstallDialog.css
+    Restored: src/gaia/apps/webui/src/components/AgentManager.css
+    Restored: src/gaia/apps/webui/src/components/AgentTerminal.css
+    Restored: src/gaia/apps/webui/src/components/ChatView.css
+    Restored: src/gaia/apps/webui/src/components/ChatView.tsx
+    Restored: src/gaia/apps/webui/src/components/ConnectionBanner.css
+    Restored: src/gaia/apps/webui/src/components/ConnectionBanner.tsx
+    Restored: src/gaia/apps/webui/src/components/DocumentLibrary.css
+    Restored: src/gaia/apps/webui/src/components/FileBrowser.css
+    Restored: src/gaia/apps/webui/src/components/MessageBubble.css
+    Restored: src/gaia/apps/webui/src/components/MessageBubble.tsx
+    Restored: src/gaia/apps/webui/src/components/MobileAccessModal.css
+    Restored: src/gaia/apps/webui/src/components/NotificationCenter.css
+    Restored: src/gaia/apps/webui/src/components/PermissionManager.css
+    Restored: src/gaia/apps/webui/src/components/PermissionPrompt.css
+    Restored: src/gaia/apps/webui/src/components/SettingsModal.css
+    Restored: src/gaia/apps/webui/src/components/SettingsModal.tsx
+    Restored: src/gaia/apps/webui/src/components/Sidebar.css
+    Restored: src/gaia/apps/webui/src/components/Sidebar.tsx
+    Restored: src/gaia/apps/webui/src/components/UnsupportedFeature.css
+    Restored: src/gaia/apps/webui/src/components/WelcomeScreen.css
+    Restored: src/gaia/apps/webui/src/components/WelcomeScreen.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/stores/chatStore.ts
+    Restored: src/gaia/apps/webui/src/styles/index.css
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/apps/webui/src/utils/format.ts
+    Restored: src/gaia/ui/_chat_helpers.py
+    Restored: src/gaia/ui/database.py
+    Restored: src/gaia/ui/models.py
+    Restored: src/gaia/ui/routers/system.py
+    Restored: src/gaia/ui/sse_handler.py
+    Restored: tests/unit/chat/ui/test_database.py
+    Restored: tests/unit/chat/ui/test_sse_handler.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 25c6d25
+  [PARTIAL] Issue=92 Branch=X
+
+[43/111] MO= 10 | component-framework-loader
+  Commit: 57ee63d | Branch: pr-component-framework-loader
+  Issue #93: https://github.com/antmikinka/gaia/issues/93
+  Branch pr-component-framework-loader pushed OK
+  [OK] Issue=93 Branch=OK
+
+[44/111] MO= 10 | restore-reverted-changes
+  Commit: b7a97e6 | Branch: pr-restore-reverted-changes
+  Issue #94: https://github.com/antmikinka/gaia/issues/94
+  Resolving 41 conflicted file(s)...
+    Restored: src/gaia/apps/webui/package-lock.json
+    Restored: src/gaia/apps/webui/package.json
+    Restored: src/gaia/apps/webui/src/App.tsx
+    Restored: src/gaia/apps/webui/src/components/AgentActivity.css
+    Restored: src/gaia/apps/webui/src/components/AgentActivity.tsx
+    Restored: src/gaia/apps/webui/src/components/AgentChat.css
+    Restored: src/gaia/apps/webui/src/components/AgentInstallDialog.css
+    Restored: src/gaia/apps/webui/src/components/AgentManager.css
+    Restored: src/gaia/apps/webui/src/components/AgentTerminal.css
+    Restored: src/gaia/apps/webui/src/components/ChatView.css
+    Restored: src/gaia/apps/webui/src/components/ChatView.tsx
+    Restored: src/gaia/apps/webui/src/components/DocumentLibrary.css
+    Restored: src/gaia/apps/webui/src/components/FileBrowser.css
+    Restored: src/gaia/apps/webui/src/components/MessageBubble.css
+    Restored: src/gaia/apps/webui/src/components/MessageBubble.tsx
+    Restored: src/gaia/apps/webui/src/components/MobileAccessModal.css
+    Restored: src/gaia/apps/webui/src/components/NotificationCenter.css
+    Restored: src/gaia/apps/webui/src/components/PermissionManager.css
+    Restored: src/gaia/apps/webui/src/components/PermissionPrompt.css
+    Restored: src/gaia/apps/webui/src/components/PermissionPrompt.tsx
+    Restored: src/gaia/apps/webui/src/components/SettingsModal.css
+    Restored: src/gaia/apps/webui/src/components/SettingsModal.tsx
+    Restored: src/gaia/apps/webui/src/components/Sidebar.css
+    Restored: src/gaia/apps/webui/src/components/Sidebar.tsx
+    Restored: src/gaia/apps/webui/src/components/UnsupportedFeature.css
+    Restored: src/gaia/apps/webui/src/components/WelcomeScreen.css
+    Restored: src/gaia/apps/webui/src/components/WelcomeScreen.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/stores/chatStore.ts
+    Restored: src/gaia/apps/webui/src/stores/notificationStore.ts
+    Restored: src/gaia/apps/webui/src/styles/index.css
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/apps/webui/src/utils/format.ts
+    Restored: src/gaia/ui/_chat_helpers.py
+    Restored: src/gaia/ui/database.py
+    Restored: src/gaia/ui/dependencies.py
+    Restored: src/gaia/ui/routers/documents.py
+    Restored: src/gaia/ui/server.py
+    Restored: src/gaia/ui/sse_handler.py
+    Restored: tests/unit/chat/ui/test_database.py
+    Restored: tests/unit/chat/ui/test_sse_handler.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for b7a97e6
+  [PARTIAL] Issue=94 Branch=X
+
+[45/111] MO= 11 | agent-base-tools
+  Commit: 520bea3 | Branch: pr-agent-base-tools
+  Issue #95: https://github.com/antmikinka/gaia/issues/95
+  Branch pr-agent-base-tools pushed OK
+  [OK] Issue=95 Branch=OK
+
+[46/111] MO= 12 | phase3-sprint2-di
+  Commit: 505d22f | Branch: pr-phase3-sprint2-di
+  Issue #96: https://github.com/antmikinka/gaia/issues/96
+  Resolving 2 conflicted file(s)...
+    Restored: docs/spec/baibel-gaia-integration-master.md
+    Restored: future-where-to-resume-left-off.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 505d22f
+  [PARTIAL] Issue=96 Branch=X
+
+[47/111] MO= 13 | etherrepl-security-fix
+  Commit: 0702252 | Branch: pr-etherrepl-security-fix
+  Issue #97: https://github.com/antmikinka/gaia/issues/97
+  Resolving 2 conflicted file(s)...
+    Restored: src/gaia/security/__init__.py
+    Restored: src/gaia/utils/component_loader.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 0702252
+  [PARTIAL] Issue=97 Branch=X
+
+[48/111] MO= 14 | health-monitoring
+  Commit: 8b05805 | Branch: pr-health-monitoring
+  Issue #98: https://github.com/antmikinka/gaia/issues/98
+  Branch pr-health-monitoring pushed OK
+  [OK] Issue=98 Branch=OK
+
+[49/111] MO= 15 | resilience-patterns
+  Commit: 84ed269 | Branch: pr-resilience-patterns
+  Issue #99: https://github.com/antmikinka/gaia/issues/99
+  Branch pr-resilience-patterns pushed OK
+  [OK] Issue=99 Branch=OK
+
+[50/111] MO= 16 | data-protection-perf
+  Commit: 4c02e45 | Branch: pr-data-protection-perf
+  Issue #100: https://github.com/antmikinka/gaia/issues/100
+  Branch pr-data-protection-perf pushed OK
+  [OK] Issue=100 Branch=OK
+
+[51/111] MO= 17 | resilience-error-consolidation
+  Commit: fa8b17d | Branch: pr-resilience-error-consolidation
+  Issue #101: https://github.com/antmikinka/gaia/issues/101
+  Resolving 4 conflicted file(s)...
+    Restored: src/gaia/resilience/__init__.py
+    Restored: src/gaia/resilience/bulkhead.py
+    Restored: src/gaia/resilience/circuit_breaker.py
+    Restored: src/gaia/resilience/retry.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for fa8b17d
+  [PARTIAL] Issue=101 Branch=X
+
+[52/111] MO= 18 | phase4-closeout-report
+  Commit: 82a6d42 | Branch: pr-phase4-closeout-report
+  Issue #102: https://github.com/antmikinka/gaia/issues/102
+  Resolving 1 conflicted file(s)...
+    Restored: future-where-to-resume-left-off.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 82a6d42
+  [PARTIAL] Issue=102 Branch=X
+
+[53/111] MO= 19 | resilience-apis-fix
+  Commit: 5a37360 | Branch: pr-resilience-apis-fix
+  Issue #103: https://github.com/antmikinka/gaia/issues/103
+  Resolving 6 conflicted file(s)...
+    Restored: src/gaia/pipeline/orchestrator.py
+    Restored: src/gaia/resilience/__init__.py
+    Restored: src/gaia/resilience/bulkhead.py
+    Restored: src/gaia/resilience/circuit_breaker.py
+    Restored: src/gaia/resilience/retry.py
+    Restored: tests/pipeline/test_routing_engine_resilience.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 5a37360
+  [PARTIAL] Issue=103 Branch=X
+
+[54/111] MO= 20 | core-orchestration-kernel
+  Commit: eb0a838 | Branch: pr-core-orchestration-kernel
+  Issue #104: https://github.com/antmikinka/gaia/issues/104
+  Branch pr-core-orchestration-kernel pushed OK
+  [OK] Issue=104 Branch=OK
+
+[55/111] MO= 21 | project-supervisor-hierarchy
+  Commit: dd1d314 | Branch: pr-project-supervisor-hierarchy
+  Issue #105: https://github.com/antmikinka/gaia/issues/105
+  Resolving 2 conflicted file(s)...
+    Restored: src/gaia/orchestration/__init__.py
+    Restored: src/gaia/orchestration/engine.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for dd1d314
+  [PARTIAL] Issue=105 Branch=X
+
+[56/111] MO= 22 | git-supervisor-hierarchy
+  Commit: dc02956 | Branch: pr-git-supervisor-hierarchy
+  Issue #106: https://github.com/antmikinka/gaia/issues/106
+  Resolving 3 conflicted file(s)...
+    Restored: src/gaia/exceptions.py
+    Restored: src/gaia/orchestration/__init__.py
+    Restored: src/gaia/orchestration/engine.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for dc02956
+  [PARTIAL] Issue=106 Branch=X
+
+[57/111] MO= 23 | automation-hooks
+  Commit: 6f95323 | Branch: pr-automation-hooks
+  Issue #107: https://github.com/antmikinka/gaia/issues/107
+  Resolving 4 conflicted file(s)...
+    Restored: src/gaia/hooks/base.py
+    Restored: src/gaia/orchestration/__init__.py
+    Restored: src/gaia/orchestration/engine.py
+    Restored: src/gaia/orchestration/hooks.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 6f95323
+  [PARTIAL] Issue=107 Branch=X
+
+[58/111] MO= 24 | phase3-sprint3-caching
+  Commit: 64db788 | Branch: pr-phase3-sprint3-caching
+  Issue #108: https://github.com/antmikinka/gaia/issues/108
+  Resolving 5 conflicted file(s)...
+    Restored: docs/reference/phase3-implementation-plan.md
+    Restored: docs/spec/baibel-gaia-integration-master.md
+    Restored: future-where-to-resume-left-off.md
+    Restored: src/gaia/core/__init__.py
+    Restored: src/gaia/quality/__init__.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 64db788
+  [PARTIAL] Issue=108 Branch=X
+
+[59/111] MO= 25 | parallel-execution-engine
+  Commit: e0ed934 | Branch: pr-parallel-execution-engine
+  Issue #109: https://github.com/antmikinka/gaia/issues/109
+  Resolving 5 conflicted file(s)...
+    Restored: src/gaia/orchestration/__init__.py
+    Restored: src/gaia/orchestration/adapters.py
+    Restored: src/gaia/orchestration/engine.py
+    Restored: src/gaia/orchestration/models.py
+    Restored: src/gaia/orchestration/supervisor.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for e0ed934
+  [PARTIAL] Issue=109 Branch=X
+
+[60/111] MO= 26 | phase3-sprint4-observability
+  Commit: c25982b | Branch: pr-phase3-sprint4-observability
+  Issue #110: https://github.com/antmikinka/gaia/issues/110
+  Resolving 2 conflicted file(s)...
+    Restored: docs/spec/baibel-gaia-integration-master.md
+    Restored: future-where-to-resume-left-off.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for c25982b
+  [PARTIAL] Issue=110 Branch=X
+
+[61/111] MO= 27 | domain-analyzer
+  Commit: 8d6ffdd | Branch: pr-domain-analyzer
+  Issue #111: https://github.com/antmikinka/gaia/issues/111
+  Resolving 1 conflicted file(s)...
+    Restored: src/gaia/pipeline/engine.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 8d6ffdd
+  [PARTIAL] Issue=111 Branch=X
+
+[62/111] MO= 28 | orchestrator-ui-visibility
+  Commit: 5bd6ef8 | Branch: pr-orchestrator-ui-visibility
+  Issue #112: https://github.com/antmikinka/gaia/issues/112
+  Resolving 2 conflicted file(s)...
+    Restored: src/gaia/orchestration/engine.py
+    Restored: src/gaia/ui/server.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 5bd6ef8
+  [PARTIAL] Issue=112 Branch=X
+
+[63/111] MO= 29 | workflow-modeler
+  Commit: a32187c | Branch: pr-workflow-modeler
+  Issue #113: https://github.com/antmikinka/gaia/issues/113
+  Branch pr-workflow-modeler pushed OK
+  [OK] Issue=113 Branch=OK
+
+[64/111] MO= 30 | loom-builder
+  Commit: 8dd22c1 | Branch: pr-loom-builder
+  Issue #114: https://github.com/antmikinka/gaia/issues/114
+  Branch pr-loom-builder pushed OK
+  [OK] Issue=114 Branch=OK
+
+[65/111] MO= 31 | parallel-exec-edge-tests
+  Commit: b3d707e | Branch: pr-parallel-exec-edge-tests
+  Issue #115: https://github.com/antmikinka/gaia/issues/115
+  Resolving 1 conflicted file(s)...
+    Restored: tests/unit/orchestration/test_parallel_execution.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for b3d707e
+  [PARTIAL] Issue=115 Branch=X
+
+[66/111] MO= 32 | component-framework-templates
+  Commit: e952716 | Branch: pr-component-framework-templates
+  Issue #116: https://github.com/antmikinka/gaia/issues/116
+  Resolving 1 conflicted file(s)...
+    Restored: src/gaia/utils/component_loader.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for e952716
+  [PARTIAL] Issue=116 Branch=X
+
+[67/111] MO= 33 | gap-detector
+  Commit: fa3ef98 | Branch: pr-autonomous-agent-spawning
+  Issue #117: https://github.com/antmikinka/gaia/issues/117
+  Branch pr-autonomous-agent-spawning pushed OK
+  [OK] Issue=117 Branch=OK
+
+[68/111] MO= 34 | pipeline-executor
+  Commit: 0c5f294 | Branch: pr-pipeline-executor
+  Issue #118: https://github.com/antmikinka/gaia/issues/118
+  Branch pr-pipeline-executor pushed OK
+  [OK] Issue=118 Branch=OK
+
+[69/111] MO= 35 | auto-spawn-pipeline
+  Commit: 41ee396 | Branch: pr-auto-spawn-pipeline
+  Issue #119: https://github.com/antmikinka/gaia/issues/119
+  Resolving 20 conflicted file(s)...
+    Restored: docs/guides/auto-spawn-pipeline.mdx
+    Restored: docs/reference/branch-change-matrix.md
+    Restored: docs/spec/agent-ecosystem-design-spec.md
+    Restored: docs/spec/agent-ui-eval-kpi-reference.md
+    Restored: docs/spec/agent-ui-eval-kpis.md
+    Restored: docs/spec/component-framework-design-spec.md
+    Restored: docs/spec/component-framework-implementation-plan.md
+    Restored: docs/spec/gaia-loom-architecture.md
+    Restored: docs/spec/nexus-gaia-native-integration-spec.md
+    Restored: docs/spec/phase5-update-manifest.md
+    Restored: docs/spec/phase5_multi_stage_pipeline.md
+    Restored: docs/spec/pipeline-metrics-competitive-analysis.md
+    Restored: docs/spec/pipeline-metrics-kpi-reference.md
+    Restored: docs/spec/senior-dev-work-order.md
+    Restored: src/gaia/pipeline/stages/domain_analyzer.py
+    Restored: src/gaia/pipeline/stages/gap_detector.py
+    Restored: src/gaia/pipeline/stages/loom_builder.py
+    Restored: src/gaia/pipeline/stages/pipeline_executor.py
+    Restored: src/gaia/pipeline/stages/workflow_modeler.py
+    Restored: tests/e2e/test_full_pipeline.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 41ee396
+  [PARTIAL] Issue=119 Branch=X
+
+[70/111] MO= 37 | supervisor-decision-tests
+  Commit: c3ccc4f | Branch: pr-supervisor-decision-tests
+  Issue #120: https://github.com/antmikinka/gaia/issues/120
+  Branch pr-supervisor-decision-tests pushed OK
+  [OK] Issue=120 Branch=OK
+
+[71/111] MO= 39 | phase3-sprint4-test-fixes
+  Commit: 7781ef9 | Branch: pr-phase3-sprint4-test-fixes
+  Issue #121: https://github.com/antmikinka/gaia/issues/121
+  Resolving 5 conflicted file(s)...
+    Restored: future-where-to-resume-left-off.md
+    Restored: src/gaia/api/openapi.py
+    Restored: src/gaia/cache/cache_layer.py
+    Restored: tests/integration/test_api_integration.py
+    Restored: tests/integration/test_cache_integration.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 7781ef9
+  [PARTIAL] Issue=121 Branch=X
+
+[72/111] MO= 42 | orchestration-user-guide
+  Commit: 8772238 | Branch: pr-orchestration-user-guide
+  Issue #122: https://github.com/antmikinka/gaia/issues/122
+  Branch pr-orchestration-user-guide pushed OK
+  [OK] Issue=122 Branch=OK
+
+[73/111] MO= 44 | pipeline-runner-page
+  Commit: 33686dd | Branch: pr-pipeline-runner-page
+  Issue #123: https://github.com/antmikinka/gaia/issues/123
+  Resolving 2 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/App.tsx
+    Restored: src/gaia/apps/webui/src/components/Sidebar.tsx
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 33686dd
+  [PARTIAL] Issue=123 Branch=X
+
+[74/111] MO= 45 | pipeline-sse-wiring
+  Commit: 97edfd7 | Branch: pr-pipeline-sse-wiring
+  Issue #124: https://github.com/antmikinka/gaia/issues/124
+  Resolving 6 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.tsx
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/pipeline/engine.py
+    Restored: src/gaia/pipeline/orchestrator.py
+    Restored: src/gaia/ui/routers/pipeline.py
+    Restored: src/gaia/ui/schemas/pipeline_templates.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 97edfd7
+  [PARTIAL] Issue=124 Branch=X
+
+[75/111] MO= 46 | artifact-provenance
+  Commit: d3951f8 | Branch: pr-artifact-provenance
+  Issue #125: https://github.com/antmikinka/gaia/issues/125
+  Resolving 2 conflicted file(s)...
+    Restored: src/gaia/pipeline/engine.py
+    Restored: src/gaia/pipeline/state.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for d3951f8
+  [PARTIAL] Issue=125 Branch=X
+
+[76/111] MO= 47 | remove-pipeline-isolation
+  Commit: 03d15bd | Branch: pr-remove-pipeline-isolation
+  Issue #126: https://github.com/antmikinka/gaia/issues/126
+  Resolving 1 conflicted file(s)...
+    Restored: src/gaia/pipeline/engine.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 03d15bd
+  [PARTIAL] Issue=126 Branch=X
+
+[77/111] MO= 49 | canvas-wiring-quality
+  Commit: 574d142 | Branch: pr-canvas-wiring-quality
+  Issue #127: https://github.com/antmikinka/gaia/issues/127
+  Resolving 2 conflicted file(s)...
+    Restored: src/gaia/pipeline/engine.py
+    Restored: src/gaia/pipeline/loop_manager.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 574d142
+  [PARTIAL] Issue=127 Branch=X
+
+[78/111] MO= 50 | visual-pipeline-canvas
+  Commit: 3838a8a | Branch: pr-visual-pipeline-canvas
+  Issue #128: https://github.com/antmikinka/gaia/issues/128
+  Resolving 6 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/App.tsx
+    Restored: src/gaia/apps/webui/src/components/Sidebar.tsx
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.css
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/types/index.ts
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 3838a8a
+  [PARTIAL] Issue=128 Branch=X
+
+[79/111] MO= 51 | canvas-typescript-fix
+  Commit: cea803a | Branch: pr-canvas-typescript-fix
+  Issue #129: https://github.com/antmikinka/gaia/issues/129
+  Resolving 3 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/components/pipeline/AgentPalette.tsx
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineCanvas.tsx
+    Restored: src/gaia/apps/webui/src/stores/pipelineCanvasStore.ts
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for cea803a
+  [PARTIAL] Issue=129 Branch=X
+
+[80/111] MO= 52 | pipeline-canvas-docs
+  Commit: 9106a72 | Branch: pr-pipeline-canvas-docs
+  Issue #130: https://github.com/antmikinka/gaia/issues/130
+  Resolving 1 conflicted file(s)...
+    Restored: docs/sdk/sdks/agent-ui.mdx
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 9106a72
+  [PARTIAL] Issue=130 Branch=X
+
+[81/111] MO= 53 | event-loop-consolidation
+  Commit: 0ed82d4 | Branch: pr-event-loop-consolidation
+  Issue #131: https://github.com/antmikinka/gaia/issues/131
+  Resolving 1 conflicted file(s)...
+    Restored: src/gaia/pipeline/loop_manager.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 0ed82d4
+  [PARTIAL] Issue=131 Branch=X
+
+[82/111] MO= 54 | canvas-loop-path-fix
+  Commit: 961c7d5 | Branch: pr-canvas-loop-path-fix
+  Issue #132: https://github.com/antmikinka/gaia/issues/132
+  Resolving 1 conflicted file(s)...
+    Restored: src/gaia/pipeline/engine.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 961c7d5
+  [PARTIAL] Issue=132 Branch=X
+
+[83/111] MO= 55 | final-quality-review-fixes
+  Commit: 9bc85ec | Branch: pr-final-quality-review-fixes
+  Issue #133: https://github.com/antmikinka/gaia/issues/133
+  Resolving 2 conflicted file(s)...
+    Restored: src/gaia/pipeline/loop_manager.py
+    Restored: src/gaia/pipeline/orchestrator.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 9bc85ec
+  [PARTIAL] Issue=133 Branch=X
+
+[84/111] MO= 56 | sec-003-path-traversal
+  Commit: ee43966 | Branch: pr-sec-003-path-traversal
+  Issue #134: https://github.com/antmikinka/gaia/issues/134
+  Resolving 1 conflicted file(s)...
+    Restored: src/gaia/pipeline/artifact_extractor.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for ee43966
+  [PARTIAL] Issue=134 Branch=X
+
+[85/111] MO= 57 | canvas-supervisors-gates
+  Commit: ef98904 | Branch: pr-canvas-supervisors-gates
+  Issue #135: https://github.com/antmikinka/gaia/issues/135
+  Resolving 7 conflicted file(s)...
+    Restored: docs/guides/pipeline-canvas.mdx
+    Restored: src/gaia/apps/webui/src/components/pipeline/AgentPalette.tsx
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineCanvas.css
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineCanvas.tsx
+    Restored: src/gaia/apps/webui/src/components/pipeline/StageZone.tsx
+    Restored: src/gaia/apps/webui/src/stores/pipelineCanvasStore.ts
+    Restored: src/gaia/apps/webui/src/types/index.ts
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for ef98904
+  [PARTIAL] Issue=135 Branch=X
+
+[86/111] MO= 58 | tier12-tracker-update
+  Commit: 3ce237c | Branch: pr-tier12-tracker-update
+  Issue #136: https://github.com/antmikinka/gaia/issues/136
+  Resolving 1 conflicted file(s)...
+    Restored: docs/archive/working-documents/PIPELINE-CANVAS-IMPLEMENTATION-TRACKER.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 3ce237c
+  [PARTIAL] Issue=136 Branch=X
+
+[87/111] MO= 59 | multiple-independent-loops
+  Commit: 55b890d | Branch: pr-multiple-independent-loops
+  Issue #137: https://github.com/antmikinka/gaia/issues/137
+  Resolving 9 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/components/pipeline/LoopBlock.tsx
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineCanvas.css
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineCanvas.tsx
+    Restored: src/gaia/apps/webui/src/components/pipeline/StageZone.tsx
+    Restored: src/gaia/apps/webui/src/stores/pipelineCanvasStore.ts
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/ui/routers/pipeline.py
+    Restored: src/gaia/ui/schemas/pipeline_templates.py
+    Restored: src/gaia/ui/services/template_service.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 55b890d
+  [PARTIAL] Issue=137 Branch=X
+
+[88/111] MO= 60 | sprint-integration-tests
+  Commit: 47c0c0c | Branch: pr-sprint-integration-tests
+  Issue #138: https://github.com/antmikinka/gaia/issues/138
+  Resolving 3 conflicted file(s)...
+    Restored: tests/pipeline/test_decision_engine.py
+    Restored: tests/pipeline/test_loop_manager.py
+    Restored: tests/pipeline/test_state_machine.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 47c0c0c
+  [PARTIAL] Issue=138 Branch=X
+
+[89/111] MO= 60 | execution-history-replay
+  Commit: 9a85250 | Branch: pr-execution-history-replay
+  Issue #139: https://github.com/antmikinka/gaia/issues/139
+  Resolving 4 conflicted file(s)...
+    Restored: docs/archive/working-documents/PIPELINE-CANVAS-IMPLEMENTATION-TRACKER.md
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.css
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.tsx
+    Restored: src/gaia/ui/routers/pipeline.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 9a85250
+  [PARTIAL] Issue=139 Branch=X
+
+[90/111] MO= 61 | pipeline-canvas-guide-update
+  Commit: b1a15ec | Branch: pr-pipeline-canvas-guide-update
+  Issue #140: https://github.com/antmikinka/gaia/issues/140
+  Resolving 2 conflicted file(s)...
+    Restored: docs/archive/working-documents/PIPELINE-CANVAS-IMPLEMENTATION-TRACKER.md
+    Restored: docs/guides/pipeline-canvas.mdx
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for b1a15ec
+  [PARTIAL] Issue=140 Branch=X
+
+[91/111] MO= 62 | component-registry-ui
+  Commit: c27e42e | Branch: pr-component-registry-ui
+  Issue #141: https://github.com/antmikinka/gaia/issues/141
+  Resolving 1 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/App.tsx
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for c27e42e
+  [PARTIAL] Issue=141 Branch=X
+
+[92/111] MO= 63 | tier3-pipeline-canvas
+  Commit: 856f1b2 | Branch: pr-tier3-pipeline-canvas
+  Issue #142: https://github.com/antmikinka/gaia/issues/142
+  Resolving 10 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/components/pipeline/ExecutionHistory.tsx
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineCanvas.css
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.css
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/stores/metricsStore.ts
+    Restored: src/gaia/apps/webui/src/stores/templateStore.ts
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/ui/routers/pipeline.py
+    Restored: src/gaia/ui/schemas/pipeline_templates.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 856f1b2
+  [PARTIAL] Issue=142 Branch=X
+
+[93/111] MO= 64 | recursive-pipeline-sse
+  Commit: d187907 | Branch: pr-recursive-pipeline-sse
+  Issue #143: https://github.com/antmikinka/gaia/issues/143
+  Resolving 12 conflicted file(s)...
+    Restored: src/gaia/apps/webui/package-lock.json
+    Restored: src/gaia/apps/webui/package.json
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.css
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.tsx
+    Restored: src/gaia/apps/webui/src/components/registry/AgentRegistry.css
+    Restored: src/gaia/apps/webui/src/components/registry/AgentRegistry.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/stores/pipelineStore.ts
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/pipeline/engine.py
+    Restored: src/gaia/pipeline/orchestrator.py
+    Restored: src/gaia/ui/routers/pipeline.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for d187907
+  [PARTIAL] Issue=143 Branch=X
+
+[94/111] MO= 65 | canvas-ui-wiring-fix
+  Commit: 1ffd7a6 | Branch: pr-canvas-ui-wiring-fix
+  Issue #144: https://github.com/antmikinka/gaia/issues/144
+  Resolving 21 conflicted file(s)...
+    Restored: docs/archive/phase-reports/agent_ui_test_plan.md
+    Restored: docs/archive/phase-reports/pipeline-handoff-phase1.md
+    Restored: docs/archive/phase-reports/pipeline-phase1-summary.md
+    Restored: docs/archive/phase-reports/pipeline-ui-test-plan.md
+    Restored: docs/archive/phase-reports/pipeline-validation-report.md
+    Restored: docs/archive/phase-reports/program-management-plan-pipeline-orchestration.md
+    Restored: docs/archive/phase-reports/quality_review_session3.md
+    Restored: docs/archive/working-documents/ARCHITECTURAL-DECISIONS-pipeline-orchestration-v1.md
+    Restored: docs/archive/working-documents/MERGE_DECISION_pipeline-orchestration-v1.md
+    Restored: docs/archive/working-documents/QUALITY-REVIEW-REPORT-pipeline-orchestration-v1.md
+    Restored: docs/archive/working-documents/TESTING-PLAN-pipeline-orchestration-v1.md
+    Restored: docs/reference/branch-change-matrix.md
+    Restored: docs/sdk/sdks/agent-ui.mdx
+    Restored: src/gaia/apps/webui/src/components/pipeline/DecisionGate.tsx
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineCanvas.css
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.css
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.tsx
+    Restored: src/gaia/apps/webui/src/components/pipeline/SupervisorNode.tsx
+    Restored: src/gaia/apps/webui/src/services/pipelineCanvas.ts
+    Restored: src/gaia/apps/webui/src/stores/pipelineCanvasStore.ts
+    Restored: src/gaia/apps/webui/src/types/index.ts
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 1ffd7a6
+  [PARTIAL] Issue=144 Branch=X
+
+[95/111] MO= 66 | canvas-config-quality-bridge
+  Commit: 957a7cb | Branch: pr-canvas-config-quality-bridge
+  Issue #145: https://github.com/antmikinka/gaia/issues/145
+  Resolving 3 conflicted file(s)...
+    Restored: src/gaia/pipeline/engine.py
+    Restored: src/gaia/pipeline/loop_manager.py
+    Restored: src/gaia/pipeline/recursive_template.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 957a7cb
+  [PARTIAL] Issue=145 Branch=X
+
+[96/111] MO= 67 | tier3-tracker-update
+  Commit: 7c3a6a4 | Branch: pr-tier3-tracker-update
+  Issue #146: https://github.com/antmikinka/gaia/issues/146
+  Resolving 1 conflicted file(s)...
+    Restored: docs/archive/working-documents/PIPELINE-CANVAS-IMPLEMENTATION-TRACKER.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 7c3a6a4
+  [PARTIAL] Issue=146 Branch=X
+
+[97/111] MO= 68 | webui-typescript-fix
+  Commit: 0ab5554 | Branch: pr-webui-typescript-fix
+  Issue #147: https://github.com/antmikinka/gaia/issues/147
+  Resolving 7 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/components/metrics/MetricSummaryCards.tsx
+    Restored: src/gaia/apps/webui/src/components/metrics/MetricsDashboard.tsx
+    Restored: src/gaia/apps/webui/src/components/metrics/PhaseTimingChart.tsx
+    Restored: src/gaia/apps/webui/src/components/metrics/QualityOverTimeChart.tsx
+    Restored: src/gaia/apps/webui/src/components/templates/TemplateEditorDialog.tsx
+    Restored: src/gaia/apps/webui/src/stores/metricsStore.ts
+    Restored: src/gaia/apps/webui/tsconfig.json
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 0ab5554
+  [PARTIAL] Issue=147 Branch=X
+
+[98/111] MO= 69 | pipelinerunner-typescript-fix
+  Commit: 1761d70 | Branch: pr-pipelinerunner-typescript-fix
+  Issue #148: https://github.com/antmikinka/gaia/issues/148
+  Resolving 3 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/components/__tests__/MetricsDashboard.test.tsx
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.tsx
+    Restored: src/gaia/apps/webui/src/services/api.ts
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 1761d70
+  [PARTIAL] Issue=148 Branch=X
+
+[99/111] MO= 70 | webui-double-api-fix
+  Commit: 4faa22e | Branch: pr-webui-double-api-fix
+  Issue #149: https://github.com/antmikinka/gaia/issues/149
+  Resolving 1 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/services/api.ts
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 4faa22e
+  [PARTIAL] Issue=149 Branch=X
+
+[100/111] MO= 71 | agent-ecosystem-display
+  Commit: f22f48a | Branch: pr-agent-ecosystem-display
+  Issue #150: https://github.com/antmikinka/gaia/issues/150
+  Resolving 2 conflicted file(s)...
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.css
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.tsx
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for f22f48a
+  [PARTIAL] Issue=150 Branch=X
+
+[101/111] MO= 72 | pipelinerunner-accessibility
+  Commit: 859058f | Branch: pr-pipelinerunner-accessibility
+  Issue #151: https://github.com/antmikinka/gaia/issues/151
+  Resolving 3 conflicted file(s)...
+    Restored: docs/guides/agent-ui.mdx
+    Restored: docs/guides/pipeline.mdx
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.tsx
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 859058f
+  [PARTIAL] Issue=151 Branch=X
+
+[102/111] MO= 73 | phase5-milestone3-agents
+  Commit: 54c5499 | Branch: pr-phase5-milestone3-agents
+  Issue #152: https://github.com/antmikinka/gaia/issues/152
+  Resolving 16 conflicted file(s)...
+    Restored: MERGE_DECISION_pipeline-orchestration-v1.md
+    Restored: docs/reference/branch-change-matrix.md
+    Restored: docs/spec/agent-ecosystem-action-plan.md
+    Restored: docs/spec/agent-ecosystem-design-spec.md
+    Restored: quality_review_session3.md
+    Restored: src/gaia/agents/registry.py
+    Restored: src/gaia/apps/webui/package-lock.json
+    Restored: src/gaia/apps/webui/src/App.tsx
+    Restored: src/gaia/apps/webui/src/components/Sidebar.tsx
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.css
+    Restored: src/gaia/apps/webui/src/components/pipeline/PipelineRunner.tsx
+    Restored: src/gaia/apps/webui/src/components/templates/PipelineTemplateManager.css
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/core/capabilities.py
+    Restored: src/gaia/ui/routers/pipeline.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 54c5499
+  [PARTIAL] Issue=152 Branch=X
+
+[103/111] MO= 74 | sse-endpoint-tests
+  Commit: 3b6ebe6 | Branch: pr-sse-endpoint-tests
+  Issue #153: https://github.com/antmikinka/gaia/issues/153
+  Resolving 3 conflicted file(s)...
+    Restored: MERGE_DECISION_pipeline-orchestration-v1.md
+    Restored: docs/reference/branch-change-matrix.md
+    Restored: quality_review_session3.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 3b6ebe6
+  [PARTIAL] Issue=153 Branch=X
+
+[104/111] MO= 75 | phase5-agent-docs
+  Commit: 8522e0b | Branch: pr-phase5-agent-docs
+  Issue #154: https://github.com/antmikinka/gaia/issues/154
+  Resolving 1 conflicted file(s)...
+    Restored: future-where-to-resume-left-off.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 8522e0b
+  [PARTIAL] Issue=154 Branch=X
+
+[105/111] MO= 76 | phase5-runtime-verification-docs
+  Commit: cf3469f | Branch: pr-phase5-runtime-verification-docs
+  Issue #155: https://github.com/antmikinka/gaia/issues/155
+  Resolving 1 conflicted file(s)...
+    Restored: future-where-to-resume-left-off.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for cf3469f
+  [PARTIAL] Issue=155 Branch=X
+
+[106/111] MO= 77 | session3-quality-review-fixes
+  Commit: 9b19f90 | Branch: pr-session3-quality-review-fixes
+  Issue #156: https://github.com/antmikinka/gaia/issues/156
+  Resolving 8 conflicted file(s)...
+    Restored: config/agents/security-auditor.yaml
+    Restored: config/agents/senior-developer.yaml
+    Restored: docs/reference/branch-change-matrix.md
+    Restored: src/gaia/apps/webui/src/services/api.ts
+    Restored: src/gaia/apps/webui/src/types/index.ts
+    Restored: src/gaia/pipeline/routing_engine.py
+    Restored: src/gaia/ui/routers/pipeline.py
+    Restored: src/gaia/ui/schemas/pipeline_templates.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 9b19f90
+  [PARTIAL] Issue=156 Branch=X
+
+[107/111] MO= 78 | phase5-docs-coherence
+  Commit: c9abc59 | Branch: pr-phase5-docs-coherence
+  Issue #157: https://github.com/antmikinka/gaia/issues/157
+  Resolving 2 conflicted file(s)...
+    Restored: docs/reference/PR_PIPELINE_ORCHESTRATION.md
+    Restored: docs/spec/phase5-update-manifest.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for c9abc59
+  [PARTIAL] Issue=157 Branch=X
+
+[108/111] MO= 79 | execute-tool-dispatch-fix
+  Commit: 242e380 | Branch: pr-execute-tool-dispatch-fix
+  Issue #158: https://github.com/antmikinka/gaia/issues/158
+  Resolving 7 conflicted file(s)...
+    Restored: src/gaia/pipeline/orchestrator.py
+    Restored: src/gaia/pipeline/stages/domain_analyzer.py
+    Restored: src/gaia/pipeline/stages/gap_detector.py
+    Restored: src/gaia/pipeline/stages/loom_builder.py
+    Restored: src/gaia/pipeline/stages/pipeline_executor.py
+    Restored: src/gaia/pipeline/stages/workflow_modeler.py
+    Restored: tests/unit/pipeline/test_orchestrator.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 242e380
+  [PARTIAL] Issue=158 Branch=X
+
+[109/111] MO= 80 | pipeline-cli-wiring
+  Commit: 71d5d48 | Branch: pr-pipeline-cli-wiring
+  Issue #159: https://github.com/antmikinka/gaia/issues/159
+  Resolving 9 conflicted file(s)...
+    Restored: docs/reference/branch-change-matrix.md
+    Restored: src/gaia/pipeline/__init__.py
+    Restored: src/gaia/pipeline/orchestrator.py
+    Restored: src/gaia/pipeline/stages/domain_analyzer.py
+    Restored: src/gaia/pipeline/stages/gap_detector.py
+    Restored: src/gaia/pipeline/stages/loom_builder.py
+    Restored: src/gaia/pipeline/stages/pipeline_executor.py
+    Restored: src/gaia/pipeline/stages/workflow_modeler.py
+    Restored: tests/unit/pipeline/test_orchestrator.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 71d5d48
+  [PARTIAL] Issue=159 Branch=X
+
+[110/111] MO= 82 | e2e-pipeline-timeout-fix
+  Commit: 0ae23c9 | Branch: pr-e2e-pipeline-timeout-fix
+  Issue #160: https://github.com/antmikinka/gaia/issues/160
+  Resolving 1 conflicted file(s)...
+    Restored: tests/e2e/test_full_pipeline.py
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for 0ae23c9
+  [PARTIAL] Issue=160 Branch=X
+
+[111/111] MO= 83 | quality-gate7-tests
+  Commit: f57e5ba | Branch: pr-quality-gate7-tests
+  Issue #161: https://github.com/antmikinka/gaia/issues/161
+  Resolving 1 conflicted file(s)...
+    Restored: docs/reference/phase5-quality-gate-7-plan.md
+  --continue failed: 'GIT_EDITOR' is not recognized as an internal or external command,
+operable program or batch file.
+  Trying patch apply fallback...
+  Cherry-pick FAILED for f57e5ba
+  [PARTIAL] Issue=161 Branch=X
+
+======================================================================
+COMPLETE: 19/111 OK, 92 partial/fail
+
+PARTIAL/FAIL (92):
+  - pr-phase6-matrix-update-74: issue=50, branch=FAIL
+  - pr-design-spec-coherence: issue=52, branch=FAIL
+  - pr-phase6-matrix-update-73: issue=53, branch=FAIL
+  - pr-rc2-tool-package: issue=54, branch=FAIL
+  - pr-toctou-security-fix: issue=55, branch=FAIL
+  - pr-pr606-integration-analysis: issue=56, branch=FAIL
+  - pr-phase5-matrix-design-docs: issue=57, branch=FAIL
+  - pr-minor-fixes-updates: issue=59, branch=FAIL
+  - pr-demo-lemonade-integration: issue=60, branch=FAIL
+  - pr-lemonade-version-warning: issue=62, branch=FAIL
+  - pr-agent-ui-build-init: issue=65, branch=FAIL
+  - N/A (merge commit): issue=66, branch=FAIL
+  - pr-merge-queue-notify-fix: issue=67, branch=FAIL
+  - pr-npm-oidc-switch: issue=68, branch=FAIL
+  - pr-baibel-integration-phases: issue=69, branch=FAIL
+  - pr-artifact-extractor: issue=70, branch=FAIL
+  - pr-llm-output-propagation: issue=71, branch=FAIL
+  - pr-model-id-support: issue=72, branch=FAIL
+  - pr-pipeline-engine-p1p6: issue=74, branch=FAIL
+  - pr-phase-contract-audit-defect: issue=75, branch=FAIL
+  - pr-modular-architecture-core: issue=76, branch=FAIL
+  - pr-metrics-dashboard: issue=77, branch=FAIL
+  - pr-agent-ui-eval-benchmark: issue=79, branch=FAIL
+  - pr-pipeline-engine-wiring: issue=80, branch=FAIL
+  - pr-v0170-release-notes-fix: issue=81, branch=FAIL
+  - pr-supervisor-agents: issue=82, branch=FAIL
+  - pr-system-prompt-reduction: issue=84, branch=FAIL
+  - pr-agent-definition-dataclass-fix: issue=85, branch=FAIL
+  - pr-baibel-phase-status-fix: issue=86, branch=FAIL
+  - pr-tool-guardrails: issue=87, branch=FAIL
+  - pr-agent-ui-round5-fixes: issue=88, branch=FAIL
+  - pr-rag-indexing-guards: issue=89, branch=FAIL
+  - pr-agent-ui-guardrails-round6: issue=90, branch=FAIL
+  - pr-agent-ui-device-guard: issue=91, branch=FAIL
+  - pr-agent-ui-terminal-fixes: issue=92, branch=FAIL
+  - pr-restore-reverted-changes: issue=94, branch=FAIL
+  - pr-phase3-sprint2-di: issue=96, branch=FAIL
+  - pr-etherrepl-security-fix: issue=97, branch=FAIL
+  - pr-resilience-error-consolidation: issue=101, branch=FAIL
+  - pr-phase4-closeout-report: issue=102, branch=FAIL
+  - pr-resilience-apis-fix: issue=103, branch=FAIL
+  - pr-project-supervisor-hierarchy: issue=105, branch=FAIL
+  - pr-git-supervisor-hierarchy: issue=106, branch=FAIL
+  - pr-automation-hooks: issue=107, branch=FAIL
+  - pr-phase3-sprint3-caching: issue=108, branch=FAIL
+  - pr-parallel-execution-engine: issue=109, branch=FAIL
+  - pr-phase3-sprint4-observability: issue=110, branch=FAIL
+  - pr-domain-analyzer: issue=111, branch=FAIL
+  - pr-orchestrator-ui-visibility: issue=112, branch=FAIL
+  - pr-parallel-exec-edge-tests: issue=115, branch=FAIL
+  - pr-component-framework-templates: issue=116, branch=FAIL
+  - pr-auto-spawn-pipeline: issue=119, branch=FAIL
+  - pr-phase3-sprint4-test-fixes: issue=121, branch=FAIL
+  - pr-pipeline-runner-page: issue=123, branch=FAIL
+  - pr-pipeline-sse-wiring: issue=124, branch=FAIL
+  - pr-artifact-provenance: issue=125, branch=FAIL
+  - pr-remove-pipeline-isolation: issue=126, branch=FAIL
+  - pr-canvas-wiring-quality: issue=127, branch=FAIL
+  - pr-visual-pipeline-canvas: issue=128, branch=FAIL
+  - pr-canvas-typescript-fix: issue=129, branch=FAIL
+  - pr-pipeline-canvas-docs: issue=130, branch=FAIL
+  - pr-event-loop-consolidation: issue=131, branch=FAIL
+  - pr-canvas-loop-path-fix: issue=132, branch=FAIL
+  - pr-final-quality-review-fixes: issue=133, branch=FAIL
+  - pr-sec-003-path-traversal: issue=134, branch=FAIL
+  - pr-canvas-supervisors-gates: issue=135, branch=FAIL
+  - pr-tier12-tracker-update: issue=136, branch=FAIL
+  - pr-multiple-independent-loops: issue=137, branch=FAIL
+  - pr-sprint-integration-tests: issue=138, branch=FAIL
+  - pr-execution-history-replay: issue=139, branch=FAIL
+  - pr-pipeline-canvas-guide-update: issue=140, branch=FAIL
+  - pr-component-registry-ui: issue=141, branch=FAIL
+  - pr-tier3-pipeline-canvas: issue=142, branch=FAIL
+  - pr-recursive-pipeline-sse: issue=143, branch=FAIL
+  - pr-canvas-ui-wiring-fix: issue=144, branch=FAIL
+  - pr-canvas-config-quality-bridge: issue=145, branch=FAIL
+  - pr-tier3-tracker-update: issue=146, branch=FAIL
+  - pr-webui-typescript-fix: issue=147, branch=FAIL
+  - pr-pipelinerunner-typescript-fix: issue=148, branch=FAIL
+  - pr-webui-double-api-fix: issue=149, branch=FAIL
+  - pr-agent-ecosystem-display: issue=150, branch=FAIL
+  - pr-pipelinerunner-accessibility: issue=151, branch=FAIL
+  - pr-phase5-milestone3-agents: issue=152, branch=FAIL
+  - pr-sse-endpoint-tests: issue=153, branch=FAIL
+  - pr-phase5-agent-docs: issue=154, branch=FAIL
+  - pr-phase5-runtime-verification-docs: issue=155, branch=FAIL
+  - pr-session3-quality-review-fixes: issue=156, branch=FAIL
+  - pr-phase5-docs-coherence: issue=157, branch=FAIL
+  - pr-execute-tool-dispatch-fix: issue=158, branch=FAIL
+  - pr-pipeline-cli-wiring: issue=159, branch=FAIL
+  - pr-e2e-pipeline-timeout-fix: issue=160, branch=FAIL
+  - pr-quality-gate7-tests: issue=161, branch=FAIL
+
+SUCCESS (19):
+  #58 pr-pr720-integration-analysis
+  #61 pr-agent-ecosystem-design-spec
+  #63 pr-mcp-test-isolation
+  #64 pr-pipeline-pr-description
+  #73 pr-cpp-sse-streaming
+  #78 pr-missing-metrics-modules
+  #83 pr-release-v0171
+  #93 pr-component-framework-loader
+  #95 pr-agent-base-tools
+  #98 pr-health-monitoring
+  #99 pr-resilience-patterns
+  #100 pr-data-protection-perf
+  #104 pr-core-orchestration-kernel
+  #113 pr-workflow-modeler
+  #114 pr-loom-builder
+  #117 pr-autonomous-agent-spawning
+  #118 pr-pipeline-executor
+  #120 pr-supervisor-decision-tests
+  #122 pr-orchestration-user-guide

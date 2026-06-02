@@ -2552,6 +2552,11 @@ Examples:
         action="store_true",
         help="Show pipeline engine information and documentation links",
     )
+    pipeline_parser.add_argument(
+        "--skip-lemonade",
+        action="store_true",
+        help="Skip Lemonade server initialization (stub/demo mode)",
+    )
 
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
@@ -4746,12 +4751,14 @@ Let me know your answer!
         task_description = args.task
         model_id = getattr(args, "model", "Qwen3.5-35B-A3B-GGUF")
         auto_spawn = not getattr(args, "no_spawn", False)
+        skip_lemonade = getattr(args, "skip_lemonade", False)
         print(f"Running pipeline: {task_description!r}")
-        print(f"Model: {model_id}  |  auto_spawn: {auto_spawn}")
+        print(f"Model: {model_id}  |  auto_spawn: {auto_spawn}  |  skip_lemonade: {skip_lemonade}")
         print("")
-        success, base_url = initialize_lemonade_for_agent("pipeline")
-        if not success:
-            raise SystemExit(1)
+        if not skip_lemonade:
+            success, base_url = initialize_lemonade_for_agent("pipeline")
+            if not success:
+                raise SystemExit(1)
         try:
             from gaia.pipeline.orchestrator import run_pipeline as _run_pipeline
 
@@ -4759,6 +4766,7 @@ Let me know your answer!
                 task_description=task_description,
                 auto_spawn=auto_spawn,
                 model_id=model_id,
+                skip_lemonade=skip_lemonade,
             )
             status = result.get("pipeline_status", "unknown")
             print(f"Pipeline status: {status}")

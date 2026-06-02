@@ -336,3 +336,104 @@
   max-height: 500px;
   overflow-y: auto;
 }
+
+/* ============================================================
+   Dark theme overrides
+   ============================================================ */
+
+[data-theme="dark"] .template-viewer-dialog {
+  background: #12121c;
+  border: 1px solid #333350;
+}
+
+[data-theme="dark"] .template-viewer-close:hover {
+  background: #1e1e2e;
+  color: #e8e8f0;
+}
+
+[data-theme="dark"] .template-viewer-error {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+[data-theme="dark"] .template-viewer-loading {
+  color: #9898b0;
+}
+
+[data-theme="dark"] .template-viewer-tab {
+  color: #9898b0;
+}
+
+[data-theme="dark"] .template-viewer-tab:hover {
+  color: #e8e8f0;
+}
+
+[data-theme="dark"] .template-preview-section h3 {
+  color: #e8e8f0;
+}
+
+[data-theme="dark"] .template-preview-section p {
+  color: #9898b0;
+}
+
+[data-theme="dark"] .template-preview-item {
+  background: #1a1a2e;
+}
+
+[data-theme="dark"] .template-preview-label {
+  color: #b0b0c8;
+}
+
+[data-theme="dark"] .template-preview-value {
+  color: #e8e8f0;
+}
+
+[data-theme="dark"] .template-category-item {
+  background: #1a1a2e;
+}
+
+[data-theme="dark"] .template-category-name {
+  color: #e8e8f0;
+}
+
+[data-theme="dark"] .template-category-agents {
+  color: #9898b0;
+}
+
+[data-theme="dark"] .template-rule-item {
+  background: #1a1a2e;
+}
+
+[data-theme="dark"] .template-rule-priority {
+  background: #12121c;
+  color: #6868a0;
+}
+
+[data-theme="dark"] .template-rule-condition {
+  background: #12121c;
+  color: #e8e8f0;
+}
+
+[data-theme="dark"] .template-rule-details {
+  color: #9898b0;
+}
+
+[data-theme="dark"] .template-rule-guidance {
+  color: #6868a0;
+}
+
+[data-theme="dark"] .template-weight-item {
+  background: #1a1a2e;
+}
+
+[data-theme="dark"] .template-viewer-copy {
+  background: #12121c;
+  border-color: #333350;
+  color: #9898b0;
+}
+
+[data-theme="dark"] .template-viewer-copy:hover:not(:disabled) {
+  background: #1a1a2e;
+  color: #e8e8f0;
+}

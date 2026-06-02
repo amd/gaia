@@ -74,6 +74,19 @@
     --bg-assistant-msg: rgba(0, 0, 0, 0.015);
     --bg-modal-overlay: rgba(0, 0, 0, 0.5);
     --bg-card: #f8f9fa;
+    --card-bg: #ffffff;
+    --primary-color: #3b82f6;
+    --primary-hover: #2563eb;
+    --primary-bg: #eff6ff;
+    --primary-border: #bfdbfe;
+    --border-color: #e2e8f0;
+    --error-bg: #fef2f2;
+    --error-border: #fecaca;
+    --error-text: #dc2626;
+    --warning-text: #f59e0b;
+    --code-bg: #1e293b;
+    --code-text: #e2e8f0;
+    --bg-secondary: #f1f5f9;
 
     /* Background image (set via App.tsx or inline style) */
     --bg-image: none;
@@ -125,6 +138,19 @@
     --bg-active: #262638;        /* Active/selected — obvious highlight */
     --bg-code: #0a0a12;          /* Code blocks — near-black */
     --bg-card: #12121c;          /* Cards — slightly lifted */
+    --card-bg: #12121c;          /* Dialog/card backgrounds */
+    --primary-color: #3b82f6;
+    --primary-hover: #2563eb;
+    --primary-bg: rgba(59, 130, 246, 0.1);
+    --primary-border: rgba(59, 130, 246, 0.3);
+    --border-color: #222236;
+    --error-bg: rgba(239, 68, 68, 0.1);
+    --error-border: rgba(239, 68, 68, 0.2);
+    --error-text: #f87171;
+    --warning-text: #f59e0b;
+    --code-bg: #1e293b;
+    --code-text: #e2e8f0;
+    --bg-secondary: #0a0a12;
     --bg-user-msg: rgba(255, 255, 255, 0.015);
     --bg-assistant-msg: rgba(255, 255, 255, 0.02);
     --bg-modal-overlay: rgba(0, 0, 0, 0.88);
