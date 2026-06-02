@@ -12,11 +12,14 @@ from gaia.eval.benchmark import (
     _maybe_parse_tool_envelope,
     _normalize_agent_result,
     build_result,
+    default_perf_thresholds_path,
     default_quality_thresholds_path,
+    load_default_perf_thresholds,
     load_default_quality_thresholds,
     run_benchmark,
     summarize_benchmark,
 )
+from gaia.eval.performance import PerfThresholds
 from gaia.eval.quality_metrics import QualityThresholds
 
 GT = {
@@ -294,6 +297,99 @@ class TestSummarizeBenchmark:
         th = QualityThresholds(fp_max=0.05, fn_max=0.02, axis="needs_attention")
         summary = summarize_benchmark(results, run_id="bench-run", thresholds=th)
         assert summary["quality_gate"]["skipped"] is True
+
+
+class TestPerfGateInBenchmark:
+    """The perf gate (#1277) added alongside #1278's quality gate — report mode."""
+
+    def _results(self, *, total_duration_ms=2000):
+        return [
+            build_result(
+                _agent_result(),
+                run_id="r0",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=total_duration_ms,
+            )
+        ]
+
+    def test_perf_gate_block_present_with_perf_thresholds(self):
+        pth = PerfThresholds(
+            ttft_max_s=5.0,
+            throughput_min_tps=10.0,
+            pipeline_max_s=300.0,
+            peak_memory_max_gb=8.0,
+            enforce=False,
+        )
+        summary = summarize_benchmark(
+            self._results(), run_id="bench-run", perf_thresholds=pth
+        )
+        gate = summary["perf_gate"]
+        assert "passed" in gate
+        assert "breaches" in gate
+        assert "metrics" in gate  # each metric marked gating-vs-reported
+        assert gate["enforce"] is False  # report mode
+        assert gate["should_fail"] is False
+
+    def test_perf_gate_uses_run_max_pipeline_latency(self):
+        # pipeline latency comes from the (max) wall-clock across runs; a >5min
+        # run breaches the 300s bar but report mode does not fail.
+        pth = PerfThresholds(
+            ttft_max_s=5.0,
+            throughput_min_tps=10.0,
+            pipeline_max_s=300.0,
+            peak_memory_max_gb=8.0,
+            enforce=False,
+        )
+        summary = summarize_benchmark(
+            self._results(total_duration_ms=400_000),  # 400s > 300s bar
+            run_id="bench-run",
+            perf_thresholds=pth,
+        )
+        breached = {b["metric"] for b in summary["perf_gate"]["breaches"]}
+        assert "pipeline_latency_s" in breached
+        assert summary["perf_gate"]["should_fail"] is False  # report mode
+
+    def test_no_perf_thresholds_means_no_perf_gate_block(self):
+        summary = summarize_benchmark(self._results(), run_id="bench-run")
+        assert "perf_gate" not in summary
+
+    def test_perf_and_quality_gates_coexist(self):
+        # The two gates are independent and both surface from one summarize call.
+        qth = QualityThresholds(fp_max=0.05, fn_max=0.02, axis="needs_attention")
+        pth = PerfThresholds(
+            ttft_max_s=5.0,
+            throughput_min_tps=10.0,
+            pipeline_max_s=300.0,
+            peak_memory_max_gb=8.0,
+            enforce=False,
+        )
+        results = [
+            build_result(
+                _agent_result(),
+                run_id="r0",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=2000,
+                ground_truth=GT,
+            )
+        ]
+        summary = summarize_benchmark(
+            results, run_id="bench-run", thresholds=qth, perf_thresholds=pth
+        )
+        assert "quality_gate" in summary
+        assert "perf_gate" in summary
+
+    def test_committed_perf_manifest_loads_in_report_mode(self):
+        # #1112 contract: the shipped perf manifest must exist, parse, and default
+        # to report mode until the Strix Halo bars are ratified on hardware.
+        assert default_perf_thresholds_path().exists()
+        pth = load_default_perf_thresholds()
+        assert pth.ttft_max_s == 5.0
+        assert pth.throughput_min_tps == 10.0
+        assert pth.pipeline_max_s == 300.0
+        assert pth.peak_memory_max_gb == 8.0
+        assert pth.enforce is False
 
 
 if __name__ == "__main__":
