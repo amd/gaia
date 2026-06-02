@@ -169,6 +169,8 @@ jobs:
 
             CLAUDE.md "Issue Response Guidelines" sets the style — follow it. Lead with the verdict in 1–2 sentences; `file.py:line` references go AFTER the finding, not before; do not open with a labelled `In plain English:` preamble. Length caps: summary ≤400 words; each blocking-issue block ≤150; nits ≤50. The Summary → Issues → Strengths → Verdict structure stays as-is.
 
+            Be concise and write for the human: plain language over implementation detail. A `file.py:line` or symbol name earns its place only when it helps the author act on a finding — not to show your work. Don't narrate internals the reader doesn't need.
+
             ## FIRST ACTIONS (Do these immediately, in this order)
             1. Read `pr-diff.txt` — ALL changes in the PR (this IS the review target)
             2. Read `pr-files.txt` — changed file list
@@ -360,7 +362,7 @@ jobs:
             - Make it easy for maintainers to accept suggestions with one click
 
           claude_args: |
-            --max-turns 75
+            --max-turns 100
             --model claude-opus-4-8
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
@@ -461,6 +463,11 @@ jobs:
 
             CLAUDE.md "Issue Response Guidelines" sets the style — follow it. Lead with the answer in 1–2 sentences; `file.py:line` references go AFTER the finding; do not open with a labelled `In plain English:` preamble. Length cap: ≤200 words per reply.
 
+            Write for the human reading it, not an engineer auditing the code: plain language,
+            shortest reply that fully answers. Cite a `file.py:line`, module path, or flag name
+            ONLY when the reader needs it to act — cut internal implementation detail (symbol
+            names, subparser/flag mechanics, import paths) they don't. If one line suffices, send one line.
+
             ## FIRST ACTIONS
             1. Read `pr-diff.txt` to see what changed
             2. Read `pr-files.txt` to see which files changed
@@ -505,7 +512,7 @@ jobs:
             Maintain a helpful, professional tone.
 
           claude_args: |
-            --max-turns 50
+            --max-turns 100
             --model claude-opus-4-8
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
@@ -614,8 +621,7 @@ jobs:
         # (https://github.com/anthropics/claude-code-action/issues/1223). It also
         # sidesteps the previous "Claude posts an unchecked TODO list and never
         # updates it" behavior — in automation mode Claude runs to completion and
-        # posts one final comment. `--max-turns 50` (up from 30) gives enough
-        # budget for large repos.
+        # posts one final comment. `--max-turns 100` gives ample budget for large repos.
         #
         # continue-on-error: a rate-limit / expired-token / outage failure shouldn't
         # block the conversation; the "Flag failed Claude run" step keeps it visible.
@@ -664,6 +670,11 @@ jobs:
             ## Output style
 
             CLAUDE.md "Issue Response Guidelines" → "Response Length Guidelines" set the style — follow them (quick: 2–4 sentences; how-to ≤150 words; bug/feature ≤200). Lead with the diagnosis / answer; `file.py:line` references go AFTER the finding (don't reference files you guessed at); never open with a labelled `In plain English:` preamble.
+
+            Write for the human reading it, not an engineer auditing the code: plain language,
+            shortest reply that fully answers. Cite a `file.py:line`, module path, or flag name
+            ONLY when the reader needs it to act — cut internal implementation detail (symbol
+            names, subparser/flag mechanics, import paths) they don't. If one line suffices, send one line.
 
             ## Context Detection
             This handler responds to:
@@ -737,7 +748,7 @@ jobs:
             - Welcome contributors
 
           claude_args: |
-            --max-turns 50
+            --max-turns 100
             --model claude-opus-4-8
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
@@ -764,7 +775,7 @@ jobs:
   #
   # COST: runs on the Claude Max subscription (CLAUDE_CODE_OAUTH_TOKEN), so there
   # is no per-fix dollar cost — only shared subscription rate-pool usage. Most
-  # issues decline in triage (few turns); full fix attempts use up to max-turns 60.
+  # issues decline in triage (few turns); full fix attempts use up to max-turns 100.
   auto-fix:
     # Fires on: issue opened/reopened with `bug` already attached, OR the `bug`
     # label being added later. The `labeled` clause checks the specific label so
@@ -999,7 +1010,7 @@ jobs:
               @kovtcharov-amd (matches CLAUDE.md "Security Handling Protocol"), then stop.
 
           claude_args: |
-            --max-turns 60
+            --max-turns 100
             --model claude-opus-4-8
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
