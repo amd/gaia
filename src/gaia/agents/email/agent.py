@@ -39,12 +39,11 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.email import action_store
-from gaia.agents.email.calendar_backend import (
-    LiveCalendarBackend,
-    _get_calendar_token,
-)
 from gaia.agents.email.config import EmailAgentConfig
-from gaia.agents.email.outlook_scopes import OUTLOOK_MAIL_SCOPES
+from gaia.agents.email.outlook_scopes import (
+    OUTLOOK_CALENDAR_SCOPES,
+    OUTLOOK_MAIL_SCOPES,
+)
 from gaia.agents.email.scopes import (
     AGENT_NAMESPACED_ID,
     ALL_SCOPES,
@@ -186,10 +185,11 @@ class EmailTriageAgent(
         ),
         ConnectorRequirement(
             connector_id="microsoft",
-            scopes=OUTLOOK_MAIL_SCOPES,
+            scopes=OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES,
             reason=(
-                "Read and organize your personal Outlook.com mailbox and send "
-                "messages on your behalf via Microsoft Graph."
+                "Read and organize your personal Outlook.com mailbox, send "
+                "messages on your behalf, and read/respond to your Outlook "
+                "calendar via Microsoft Graph."
             ),
         ),
     ]
@@ -212,9 +212,11 @@ class EmailTriageAgent(
         # ``GmailBackend``. The attribute stays ``self._gmail`` for tool-mixin
         # compatibility regardless of the underlying provider.
         self._gmail = config.resolve_mail_backend()
-        self._calendar = config.calendar_backend or LiveCalendarBackend(
-            _get_calendar_token
-        )
+        # ``resolve_calendar_backend`` picks Google vs Outlook from
+        # ``config.calendar_provider`` (#1276) — the tools treat either as a
+        # ``CalendarBackend``. An injected backend (eval/test seam) wins inside
+        # the resolver.
+        self._calendar = config.resolve_calendar_backend()
 
         # I3 — batch-organize counters. Reset per process_query() call by
         # ``_reset_organize_counter``. Per-turn isolation is sufficient

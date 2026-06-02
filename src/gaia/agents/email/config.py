@@ -84,11 +84,19 @@ class EmailAgentConfig:
       ``"google"`` (Gmail, the default) or ``"microsoft"`` (personal
       Outlook.com / Hotmail / Live via MS Graph, #1275). Selects the live
       backend in ``resolve_mail_backend``. Case-insensitive.
+    - ``calendar_provider``: which calendar provider the agent operates on —
+      ``"google"`` (the default) or ``"microsoft"`` (personal Outlook.com
+      calendar via MS Graph, #1276). Selects the live backend in
+      ``resolve_calendar_backend``. Case-insensitive. When ``None`` (the
+      default), tracks ``mail_provider`` so a Microsoft-only user who set
+      ``mail_provider="microsoft"`` gets the Outlook calendar too without
+      separately configuring it.
     - ``gmail_backend`` / ``outlook_backend`` / ``calendar_backend``: eval
       seam — when set, the agent's tools use the injected backend instead of
       constructing the live one. ``gmail_backend`` is honored for
       ``mail_provider="google"`` and ``outlook_backend`` for
-      ``"microsoft"``; an injected backend always wins over the live one.
+      ``"microsoft"``; ``calendar_backend`` is honored for either calendar
+      provider. An injected backend always wins over the live one.
     """
 
     base_url: Optional[str] = None
@@ -102,6 +110,7 @@ class EmailAgentConfig:
     undo_window_seconds: int = 30
     db_path: Optional[str] = None
     mail_provider: str = "google"
+    calendar_provider: Optional[str] = None
     gmail_backend: Optional[Any] = None
     outlook_backend: Optional[Any] = None
     calendar_backend: Optional[Any] = None
@@ -178,6 +187,50 @@ class EmailAgentConfig:
             f"EmailAgentConfig.mail_provider {self.mail_provider!r} is not "
             "supported. Use 'google' (Gmail) or 'microsoft' (Outlook.com / "
             "Hotmail / Live)."
+        )
+
+    def resolve_calendar_backend(self) -> Any:
+        """Return the calendar backend for the configured ``calendar_provider``.
+
+        Resolution order (mirrors ``resolve_mail_backend``):
+          1. An injected ``calendar_backend`` (eval/test seam) — always wins.
+          2. The live backend bound to the provider's grant-checked token
+             resolver.
+
+        ``calendar_provider`` defaults to ``mail_provider`` when unset, so a
+        Microsoft-only user is not forced to set it twice. Both live backends
+        satisfy the ``CalendarBackend`` Protocol, so the agent's calendar tools
+        operate on Google and Outlook calendars interchangeably. An unknown
+        provider raises ``ConfigurationError`` (fail loudly — never silently
+        default to one calendar).
+
+        Live backend imports are local to keep the module import graph free of
+        the ``connectors`` dependency chain at ``config`` import time.
+        """
+        if self.calendar_backend is not None:
+            return self.calendar_backend
+        # Default to the mail provider when calendar_provider is unset.
+        provider = (
+            (self.calendar_provider or self.mail_provider or "google").strip().lower()
+        )
+        if provider == "google":
+            from gaia.agents.email.calendar_backend import (
+                LiveCalendarBackend,
+                _get_calendar_token,
+            )
+
+            return LiveCalendarBackend(_get_calendar_token)
+        if provider == "microsoft":
+            from gaia.agents.email.outlook_calendar_backend import (
+                LiveOutlookCalendarBackend,
+                _get_outlook_calendar_token,
+            )
+
+            return LiveOutlookCalendarBackend(_get_outlook_calendar_token)
+        raise ConfigurationError(
+            f"EmailAgentConfig.calendar_provider {self.calendar_provider!r} is "
+            "not supported. Use 'google' or 'microsoft' (Outlook.com / Hotmail "
+            "/ Live)."
         )
 
 

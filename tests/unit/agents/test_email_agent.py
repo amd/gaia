@@ -25,7 +25,10 @@ if str(_REPO_ROOT) not in sys.path:
 
 from gaia.agents.email.agent import EmailTriageAgent  # noqa: E402
 from gaia.agents.email.config import EmailAgentConfig  # noqa: E402
-from gaia.agents.email.outlook_scopes import OUTLOOK_MAIL_SCOPES  # noqa: E402
+from gaia.agents.email.outlook_scopes import (  # noqa: E402
+    OUTLOOK_CALENDAR_SCOPES,
+    OUTLOOK_MAIL_SCOPES,
+)
 from gaia.agents.email.scopes import AGENT_NAMESPACED_ID, ALL_SCOPES  # noqa: E402
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeCalendarBackend,
@@ -77,9 +80,10 @@ class TestConstruction:
         assert AGENT_NAMESPACED_ID == "builtin:email"
 
     def test_required_connectors_well_formed(self):
-        # Two mailbox providers are declared: Gmail (#962) and personal
-        # Outlook.com via Microsoft Graph (#1275). They coexist — the active
-        # one is chosen by ``config.mail_provider``.
+        # Two providers are declared: Google (Gmail #962 + Calendar) and
+        # Microsoft (Outlook.com mailbox #1275 + calendar #1276). They coexist —
+        # the active mail/calendar backend is chosen by ``config.mail_provider``
+        # / ``config.calendar_provider``.
         reqs = {c.connector_id: c for c in EmailTriageAgent.REQUIRED_CONNECTORS}
         assert set(reqs) == {"google", "microsoft"}
 
@@ -89,7 +93,9 @@ class TestConstruction:
         assert google.reason  # non-empty
 
         microsoft = reqs["microsoft"]
-        assert microsoft.scopes == OUTLOOK_MAIL_SCOPES
+        # Mail (#1275) + calendar (#1276) scopes, mirroring how the Google
+        # requirement bundles Gmail + Calendar in ALL_SCOPES.
+        assert microsoft.scopes == OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES
         assert microsoft.reason  # non-empty
 
     def test_response_mode_is_conversational(self, agent):
