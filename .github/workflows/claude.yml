@@ -140,7 +140,8 @@ jobs:
         #
         # continue-on-error: a rate-limit / expired-token / outage failure shouldn't
         # fail PR CI — the review is best-effort. Because that turns a failure into a
-        # green check, the "Flag failed Claude run" step below emits a ::warning::.
+        # green check, the "Verify review was produced" step below checks the actual
+        # execution artifact and emits a ::warning:: when no review was produced.
         uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
         continue-on-error: true
         with:
@@ -366,11 +367,29 @@ jobs:
             --model claude-opus-4-8
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
-      # continue-on-error above hides a failed run as a green check; this surfaces
-      # it as a ::warning:: so a silent failure (e.g. expired OAuth token) is visible.
-      - name: Flag failed Claude run
-        if: steps.claude.outcome == 'failure'
-        run: echo "::warning title=PR review skipped::Claude review step did not complete (auth/rate-limit/outage). No review posted to PR #${{ github.event.pull_request.number }}."
+      # continue-on-error above hides a failed run as a green check. Don't trust the
+      # step outcome — an install-phase crash (e.g. the action's ENOENT bug) exits
+      # before `outcome` is reliably 'failure'. Verify the real artifact: the action
+      # only sets execution_file once Claude ran to completion, and is_error flags a
+      # run that errored mid-flight. Either gap → loud ::warning:: so the silent
+      # failure is visible and the run can be re-run.
+      - name: Verify review was produced
+        if: ${{ !cancelled() }}
+        env:
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ok=false
+          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
+            [ "$is_err" = "false" ] && ok=true
+          fi
+          if [ "$ok" = "true" ]; then
+            echo "✅ Claude review completed (log: $EXEC_FILE)"
+          else
+            echo "::warning title=PR review did not complete::No review was posted to PR #${PR_NUMBER} — the Claude action crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: ${RUN_URL}"
+          fi
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
   #
@@ -420,7 +439,8 @@ jobs:
         # would silently fall back to Sonnet 4.6 regardless of --model.
         #
         # continue-on-error: a rate-limit / expired-token / outage failure shouldn't
-        # block the conversation; the "Flag failed Claude run" step keeps it visible.
+        # block the conversation; the "Verify reply was produced" step keeps it visible
+        # by checking the execution artifact (not the masked step outcome).
         uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
         continue-on-error: true
         with:
@@ -514,9 +534,25 @@ jobs:
             --model claude-opus-4-8
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
-      - name: Flag failed Claude run
-        if: steps.claude.outcome == 'failure'
-        run: echo "::warning title=PR reply skipped::Claude step did not complete (auth/rate-limit/outage). No reply posted to PR #${{ github.event.pull_request.number }}."
+      # See "Verify review was produced" in pr-review for why this checks the
+      # execution artifact instead of the (continue-on-error-masked) step outcome.
+      - name: Verify reply was produced
+        if: ${{ !cancelled() }}
+        env:
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ok=false
+          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
+            [ "$is_err" = "false" ] && ok=true
+          fi
+          if [ "$ok" = "true" ]; then
+            echo "✅ Claude reply completed (log: $EXEC_FILE)"
+          else
+            echo "::warning title=PR reply did not complete::No reply was posted to PR #${PR_NUMBER} — the Claude action crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: ${RUN_URL}"
+          fi
 
   # Respond to new issues or @claude mentions in PR conversations (including forks)
   #
@@ -619,7 +655,8 @@ jobs:
         # posts one final comment. `--max-turns 100` gives ample budget for large repos.
         #
         # continue-on-error: a rate-limit / expired-token / outage failure shouldn't
-        # block the conversation; the "Flag failed Claude run" step keeps it visible.
+        # block the conversation; the "Verify reply was produced" step keeps it visible
+        # by checking the execution artifact (not the masked step outcome).
         uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
         continue-on-error: true
         with:
@@ -747,9 +784,25 @@ jobs:
             --model claude-opus-4-8
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
-      - name: Flag failed Claude run
-        if: steps.claude.outcome == 'failure'
-        run: echo "::warning title=Issue reply skipped::Claude step did not complete (auth/rate-limit/outage). No reply posted to #${{ github.event.issue.number }}."
+      # See "Verify review was produced" in pr-review for why this checks the
+      # execution artifact instead of the (continue-on-error-masked) step outcome.
+      - name: Verify reply was produced
+        if: ${{ !cancelled() }}
+        env:
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ok=false
+          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
+            [ "$is_err" = "false" ] && ok=true
+          fi
+          if [ "$ok" = "true" ]; then
+            echo "✅ Claude reply completed (log: $EXEC_FILE)"
+          else
+            echo "::warning title=Issue reply did not complete::No reply was posted to #${ISSUE_NUMBER} — the Claude action crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: ${RUN_URL}"
+          fi
 
   # Auto-fix: attempt to implement a fix for bulletproof, easy bug reports
   #
@@ -808,6 +861,7 @@ jobs:
           uv pip install --system -e ".[api]"
 
       - name: Attempt auto-fix
+        id: claude   # referenced by the Notify step's CLAUDE_OUTCOME below
         uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
