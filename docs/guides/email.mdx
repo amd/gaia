@@ -164,6 +164,18 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 
 `list_calendar_events`, `accept_invite`, `decline_invite`, `create_event_from_email`
 
+## Sending email — safety
+
+**The agent never sends email on its own. A send always requires your explicit confirmation, and this holds no matter how you drive the agent.** Drafting a reply is harmless and unconfirmed; turning a draft into a sent message is the only step that asks for your approval, and it always asks.
+
+This guarantee is enforced independently on every surface, so a missing confirmation on one path can't be a back door on another:
+
+- **Chat / Agent UI / CLI** — `send_draft`, `send_now`, and `forward_message` are confirmation-gated in the agent loop. Before the send runs, you're shown the **literal** recipient, subject, and body (not an LLM paraphrase) and must approve. Decline, and nothing is sent. In unattended/background mode there's no one to approve, so the send is refused outright rather than run silently.
+- **REST API** (`POST /v1/email/send`) — rejected with **HTTP 403** unless you supply a single-use confirmation token. You get that token from `POST /v1/email/draft`, and it is **bound to the exact `(to, subject, body)`**: a token minted for one message can't be replayed to send different content, and it's consumed on first use.
+- **MCP server** (`send_email`) — same rule as REST: a send without a valid, payload-bound token returns a structured error and sends nothing.
+
+There is no setting, flag, or "auto-send" mode that bypasses this — it's a safety invariant, not a preference. A consolidated regression test (`tests/integration/test_never_auto_send.py`) exercises all three surfaces together so the guarantee can't be quietly weakened on any one of them.
+
 ## Privacy guarantees
 
 - **Local LLM only** — email body content never leaves your machine. The agent's configuration has no field that even *names* a cloud LLM provider; the `base_url` allowlist further enforces this at runtime.
