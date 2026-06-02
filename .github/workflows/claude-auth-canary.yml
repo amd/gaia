@@ -1,0 +1,70 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Auth canary for the Claude AI Assistant (claude.yml). Those jobs authenticate with
+# a CLAUDE_CODE_OAUTH_TOKEN that expires ~1 year after `claude setup-token`. When it
+# lapses, every Claude job fails *internally* but reports green (they run with
+# continue-on-error), so PRs silently stop being reviewed and nobody notices. This
+# canary exercises auth on a schedule and opens a tracking issue if it breaks —
+# turning a silent, weeks-long outage into a notification.
+name: Claude Auth Canary
+
+on:
+  schedule:
+    # 07:11 UTC on the 1st of each month (off the :00 mark to avoid the fleet-wide spike).
+    - cron: "11 7 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  canary:
+    if: github.repository == 'amd/gaia'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate and run a trivial prompt
+        id: claude
+        # NO continue-on-error: an auth failure MUST fail the job so the notify step
+        # fires. Same OAuth-preferred / API-key-fallback wiring as claude.yml. Haiku +
+        # 1 turn keeps the monthly subscription-quota cost negligible.
+        uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251  # v1.0.133
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            Reply with exactly the word: ok
+          claude_args: |
+            --max-turns 1
+            --model claude-haiku-4-5-20251001
+            --allowedTools Read
+
+      - name: Open issue on auth failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="⚠️ Claude CI auth canary failed — token may have expired"
+          BODY="The monthly Claude auth canary failed. This usually means \`CLAUDE_CODE_OAUTH_TOKEN\` has expired (it is valid ~1 year) or both auth secrets are missing.
+
+          **Fix:** run \`claude setup-token\` locally, then update the repo secret:
+          \`\`\`
+          gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo $GITHUB_REPOSITORY
+          \`\`\`
+
+          Until fixed, the Claude AI Assistant jobs (PR review, @claude replies, auto-fix, release notes) authenticate-and-fail silently — they post nothing.
+
+          - Failing run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          cc @kovtcharov-amd"
+
+          # Reuse an existing open canary issue instead of filing a new one each month.
+          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search 'in:title Claude CI auth canary failed' --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --assignee kovtcharov-amd --label "bug,devops"
+          fi
