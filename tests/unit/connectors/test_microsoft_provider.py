@@ -99,9 +99,7 @@ class TestMicrosoftProvider:
         def _fail(*_args, **_kwargs):
             raise AssertionError("keyring must not be read when client_id is explicit")
 
-        monkeypatch.setattr(
-            "gaia.connectors.store.peek_provider_credentials", _fail
-        )
+        monkeypatch.setattr("gaia.connectors.store.peek_provider_credentials", _fail)
         prov = MicrosoftOAuthProvider(client_id="explicit-id")
         assert prov.client_id == "explicit-id"
         assert prov.client_id_hash == format(zlib.crc32(b"explicit-id"), "08x")
