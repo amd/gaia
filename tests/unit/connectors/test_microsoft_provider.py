@@ -88,6 +88,24 @@ class TestMicrosoftProvider:
             == "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
         )
 
+    def test_explicit_client_id_kwarg_bypasses_keyring_and_env(self, monkeypatch):
+        # Library/test callers pass client_id= directly. This must skip both
+        # the keyring lookup and the env var entirely (no peek_provider_creds
+        # call, no GAIA_MICROSOFT_CLIENT_ID read).
+        from gaia.connectors.providers.microsoft import MicrosoftOAuthProvider
+
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "env-id-should-be-ignored")
+
+        def _fail(*_args, **_kwargs):
+            raise AssertionError("keyring must not be read when client_id is explicit")
+
+        monkeypatch.setattr(
+            "gaia.connectors.store.peek_provider_credentials", _fail
+        )
+        prov = MicrosoftOAuthProvider(client_id="explicit-id")
+        assert prov.client_id == "explicit-id"
+        assert prov.client_id_hash == format(zlib.crc32(b"explicit-id"), "08x")
+
     def test_client_id_hash_is_stable_crc32(self, monkeypatch):
         client_id = "00000000-1111-2222-3333-444444444444"
         monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", client_id)
