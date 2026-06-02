@@ -44,7 +44,7 @@ from gaia.agents.email.calendar_backend import (
     _get_calendar_token,
 )
 from gaia.agents.email.config import EmailAgentConfig
-from gaia.agents.email.gmail_backend import LiveGmailBackend, _get_gmail_token
+from gaia.agents.email.outlook_scopes import OUTLOOK_MAIL_SCOPES
 from gaia.agents.email.scopes import (
     AGENT_NAMESPACED_ID,
     ALL_SCOPES,
@@ -167,6 +167,12 @@ class EmailTriageAgent(
         "Show me today's calendar",
     ]
 
+    # Declares BOTH mailbox providers so the user can connect either Google or
+    # a personal Microsoft account and have the agent grant-checked correctly.
+    # ``mail_provider`` (config) selects which one the live backend talks to;
+    # the requirements list is provider-superset so the AgentUI offers both
+    # tiles. Gmail (#962) and Outlook (#1275) coexist — neither breaks the
+    # other.
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = [
         ConnectorRequirement(
             connector_id="google",
@@ -174,6 +180,14 @@ class EmailTriageAgent(
             reason=(
                 "Read and organize Gmail messages, send drafts on your "
                 "behalf, and respond to Google Calendar invites."
+            ),
+        ),
+        ConnectorRequirement(
+            connector_id="microsoft",
+            scopes=OUTLOOK_MAIL_SCOPES,
+            reason=(
+                "Read and organize your personal Outlook.com mailbox and send "
+                "messages on your behalf via Microsoft Graph."
             ),
         ),
     ]
@@ -191,7 +205,11 @@ class EmailTriageAgent(
         self.config = config
 
         # Backend resolution. Production binds to live; eval injects fakes.
-        self._gmail = config.gmail_backend or LiveGmailBackend(_get_gmail_token)
+        # ``resolve_mail_backend`` picks Gmail vs Outlook from
+        # ``config.mail_provider`` (#1275) — the tools treat either as a
+        # ``GmailBackend``. The attribute stays ``self._gmail`` for tool-mixin
+        # compatibility regardless of the underlying provider.
+        self._gmail = config.resolve_mail_backend()
         self._calendar = config.calendar_backend or LiveCalendarBackend(
             _get_calendar_token
         )

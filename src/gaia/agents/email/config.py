@@ -80,9 +80,15 @@ class EmailAgentConfig:
       Defaults to ``~/.gaia/email/state.db``. Eval harness passes a
       ``tmp_path``-derived path so concurrent live + eval runs don't
       race on the same SQLite file.
-    - ``gmail_backend`` / ``calendar_backend``: eval seam — when set,
-      the agent's tools use these instead of constructing
-      ``LiveGmailBackend(_get_gmail_token)``.
+    - ``mail_provider``: which mailbox provider the agent operates on —
+      ``"google"`` (Gmail, the default) or ``"microsoft"`` (personal
+      Outlook.com / Hotmail / Live via MS Graph, #1275). Selects the live
+      backend in ``resolve_mail_backend``. Case-insensitive.
+    - ``gmail_backend`` / ``outlook_backend`` / ``calendar_backend``: eval
+      seam — when set, the agent's tools use the injected backend instead of
+      constructing the live one. ``gmail_backend`` is honored for
+      ``mail_provider="google"`` and ``outlook_backend`` for
+      ``"microsoft"``; an injected backend always wins over the live one.
     """
 
     base_url: Optional[str] = None
@@ -95,7 +101,9 @@ class EmailAgentConfig:
     output_dir: Optional[str] = None
     undo_window_seconds: int = 30
     db_path: Optional[str] = None
+    mail_provider: str = "google"
     gmail_backend: Optional[Any] = None
+    outlook_backend: Optional[Any] = None
     calendar_backend: Optional[Any] = None
     force_llm: bool = False
 
@@ -129,6 +137,48 @@ class EmailAgentConfig:
         from pathlib import Path
 
         return str(Path.home() / ".gaia" / "email" / "state.db")
+
+    def resolve_mail_backend(self) -> Any:
+        """Return the mailbox backend for the configured ``mail_provider``.
+
+        Resolution order:
+          1. An injected backend for the selected provider (eval/test seam) —
+             always wins.
+          2. The live backend bound to the provider's grant-checked token
+             resolver.
+
+        Both live backends satisfy the ``GmailBackend`` Protocol, so the
+        agent's tools operate on Gmail and Outlook interchangeably. An unknown
+        provider raises ``ConfigurationError`` (fail loudly — never silently
+        default to one mailbox).
+
+        Live backend imports are local to keep the module import graph free of
+        the ``connectors`` dependency chain at ``config`` import time.
+        """
+        provider = (self.mail_provider or "google").strip().lower()
+        if provider == "google":
+            if self.gmail_backend is not None:
+                return self.gmail_backend
+            from gaia.agents.email.gmail_backend import (
+                LiveGmailBackend,
+                _get_gmail_token,
+            )
+
+            return LiveGmailBackend(_get_gmail_token)
+        if provider == "microsoft":
+            if self.outlook_backend is not None:
+                return self.outlook_backend
+            from gaia.agents.email.outlook_backend import (
+                LiveOutlookBackend,
+                _get_outlook_token,
+            )
+
+            return LiveOutlookBackend(_get_outlook_token)
+        raise ConfigurationError(
+            f"EmailAgentConfig.mail_provider {self.mail_provider!r} is not "
+            "supported. Use 'google' (Gmail) or 'microsoft' (Outlook.com / "
+            "Hotmail / Live)."
+        )
 
 
 __all__ = ["ConfigurationError", "EmailAgentConfig"]
