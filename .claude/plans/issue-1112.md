@@ -3,7 +3,7 @@ type: plan
 source-issue: 1112
 repo: amd/gaia
 created: 2026-06-02
-status: in-progress
+status: complete
 work_type: config/infra
 complexity: standard
 tdd_required: false
