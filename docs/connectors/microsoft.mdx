@@ -35,22 +35,41 @@ secret** — so you only paste **one** value into GAIA: an **Application
    this option?</Tooltip>
 5. Leave **Redirect URI** empty for now and click **Register**.
 
-## Step 2 — Add the desktop/loopback redirect
+## Step 2 — Add the loopback redirect URI
 
-1. In your new app, go to **Authentication → Add a platform**.
-2. Pick **Mobile and desktop applications**. <Tooltip tip="GAIA runs a
-   temporary loopback web server on 127.0.0.1 to receive the OAuth
-   callback. The 'Mobile and desktop applications' platform allows the
-   http://localhost loopback redirect that a 'Web' platform would
-   reject.">Why this platform?</Tooltip>
-3. Check (or add) the redirect URI **`http://localhost`**.
-4. Click **Configure** / **Save**.
+GAIA receives the OAuth callback on a temporary loopback server and sends
+the redirect URI **`http://127.0.0.1/callback`**. Register that exact value.
+
+Microsoft ignores the *port* for loopback redirect URIs, so GAIA's
+dynamically-chosen port matches the port-less registered value. The
+scheme, host, and **`/callback` path must match exactly** — `127.0.0.1` and
+`localhost` are *not* interchangeable, and a bare `http://127.0.0.1` (no
+path) will not work.
+
+**Via the Authentication UI:**
+
+1. In your app, go to **Authentication → Add a platform → Mobile and
+   desktop applications**.
+2. In **Add Redirect URI**, enter **`http://127.0.0.1/callback`** and
+   **Save**.
+
+**If the portal rejects the `http://` + `127.0.0.1` combination** (a
+documented limitation of the classic Redirect URI textbox), add it through
+the **Manifest** instead — it's a one-value edit. The manifest is in the
+*Microsoft Graph* app-manifest format:
+
+```json
+"publicClient": {
+  "redirectUris": [
+    "http://127.0.0.1/callback"
+  ]
+}
+```
 
 <Warning>
   Do **not** create a client secret. Microsoft public clients authenticate
   the token exchange with PKCE; a secret is neither needed nor used by
-  GAIA. (If you registered a "Web" platform with a secret, delete it and
-  add the "Mobile and desktop applications" platform instead.)
+  GAIA.
 </Warning>
 
 ## Step 3 — Copy the Application (client) ID
@@ -94,11 +113,15 @@ The default and available scopes are listed in the spec at
 
 ## Common issues
 
-### `redirect_uri mismatch` / `AADSTS500113`
+### `invalid_request: The provided value for the input parameter 'redirect_uri' is not valid`
 
-You either skipped Step 2 or added the redirect under a "Web" platform.
-Add `http://localhost` under **Mobile and desktop applications** in
-**Authentication**.
+Your registered redirect URI doesn't match what GAIA sends
+(`http://127.0.0.1/callback`). Common causes: you registered a bare
+`http://127.0.0.1` (missing the `/callback` path), used `localhost` instead
+of `127.0.0.1`, or added it as a "Web" platform redirect instead of
+**Mobile and desktop applications**. Register exactly
+`http://127.0.0.1/callback` as described in Step 2 — the port is ignored
+for loopback, so you do not register a port.
 
 ### `AADSTS700016` / "application not found in the directory"
 

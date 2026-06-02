@@ -70,10 +70,13 @@ MICROSOFT_SPEC = ConnectorSpec(
             label="Application (client) ID",
             kind="text",
             help_md=(
-                "From the Azure Portal → App registrations → your app → "
-                "Overview. Register the app with the **Mobile and desktop "
-                "applications** platform and redirect URI `http://localhost`. "
-                "No client secret is required for the PKCE public-client flow."
+                "From the Azure Portal → App registrations → your app. "
+                "Register the app as a public client (Authentication → Mobile "
+                "and desktop applications) with the redirect URI "
+                "`http://127.0.0.1/callback` (GAIA's loopback callback; the "
+                "port is dynamic and Microsoft ignores it for loopback). No "
+                "client secret is required for the PKCE public-client flow. "
+                "See docs/connectors/microsoft.mdx for the exact setup."
             ),
         ),
     ),

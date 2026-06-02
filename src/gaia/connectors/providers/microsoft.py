@@ -108,10 +108,11 @@ class MicrosoftOAuthProvider:
                 "Microsoft OAuth client is not configured. Open Settings → "
                 "Connections → Microsoft in the AgentUI and paste the "
                 "Application (client) ID from your Azure app registration "
-                "(Mobile and desktop applications platform, redirect "
-                "http://localhost). No client secret is needed. (Power users "
-                "may also set the GAIA_MICROSOFT_CLIENT_ID env var before "
-                "launching GAIA.) See docs/runbooks/microsoft-oauth-client.md."
+                "(public client; register the redirect URI "
+                "http://127.0.0.1/callback). No client secret is needed. "
+                "(Power users may also set the GAIA_MICROSOFT_CLIENT_ID env "
+                "var before launching GAIA.) See "
+                "docs/runbooks/microsoft-oauth-client.md."
             )
         self.client_id: str = resolved_id
         # CRC32 fingerprint for log correlation / tripwire comparison only.

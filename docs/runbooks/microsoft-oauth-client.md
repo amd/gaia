@@ -42,11 +42,18 @@ Application (client) ID. Do NOT commit the id into the repository.
    - Supported account types: **Personal Microsoft accounts only**
      (matches the `consumers` tenant).
 3. **Authentication → Add a platform → Mobile and desktop applications**:
-   - Add redirect URI **`http://localhost`** (loopback — GAIA binds an
-     ephemeral port on `127.0.0.1`, which Azure permits for public-client
-     loopback redirects).
+   - Add the redirect URI **`http://127.0.0.1/callback`**. GAIA's loopback
+     server sends this exact value; the port is dynamic and Microsoft
+     ignores it for loopback, but scheme/host/path must match (the
+     `/callback` path is required, so a bare `http://127.0.0.1` won't work).
+     If the portal's redirect textbox rejects the `http://` + `127.0.0.1`
+     combination, add it via the **Manifest** (Microsoft Graph format):
+     `"publicClient": { "redirectUris": ["http://127.0.0.1/callback"] }`.
    - **Do not** add a client secret.
 4. Copy the **Application (client) ID** from the app's **Overview** page.
+
+> GAIA uses the `127.0.0.1` loopback (Microsoft's own recommendation over
+> `localhost`, for IPv4/IPv6 reliability) for both Google and Microsoft.
 
 ## Tenant choice
 
@@ -104,5 +111,5 @@ Trouble: "Connect button does nothing in AgentUI."
 1. Confirm `GAIA_MICROSOFT_CLIENT_ID` is set (or credentials were saved via
    the Settings → Connections → Microsoft form).
 2. Check the AgentUI server log for the connectors tripwire sweep on boot.
-3. If the loopback callback timed out: the loopback uses an ephemeral port
-   (`127.0.0.1:0`), so a firewall misconfiguration is the usual culprit.
+3. If the loopback callback timed out: the loopback binds `127.0.0.1` on an
+   ephemeral port, so a firewall misconfiguration is the usual culprit.
