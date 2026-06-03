@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at TEXT DEFAULT (datetime('now')),
     model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
     system_prompt TEXT,
-    device TEXT DEFAULT 'gpu'
+    device TEXT DEFAULT 'gpu',
+    mail_provider TEXT DEFAULT 'google'
 );
 
 -- Many-to-many: which docs are attached to which session
@@ -224,6 +225,25 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for device column: %s", e)
 
+        # Add mail_provider column for per-session email-backend selection
+        # (Gmail vs Outlook). See EmailAgentConfig.mail_provider.
+        try:
+            sess_cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+            ]
+            if "mail_provider" not in sess_cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN mail_provider TEXT DEFAULT 'google'"
+                )
+                self._conn.execute(
+                    "UPDATE sessions SET mail_provider = 'google' WHERE mail_provider IS NULL"
+                )
+                self._conn.commit()
+                logger.info("Migrated sessions table: added mail_provider column")
+        except Exception as e:
+            logger.debug("Migration check for mail_provider column: %s", e)
+
     def close(self):
         """Close database connection."""
         if self._conn:
@@ -258,6 +278,7 @@ class ChatDatabase:
         private: bool = False,
         agent_type: str = None,
         device: str = None,
+        mail_provider: str = None,
     ) -> Dict[str, Any]:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
@@ -266,11 +287,12 @@ class ChatDatabase:
         title = title or "New Chat"
         agent_type = agent_type or "chat"
         device = device or "gpu"
+        mail_provider = mail_provider or "google"
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private, agent_type, device)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private, agent_type, device, mail_provider)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     title,
@@ -281,6 +303,7 @@ class ChatDatabase:
                     1 if private else 0,
                     agent_type,
                     device,
+                    mail_provider,
                 ),
             )
 
@@ -359,8 +382,9 @@ class ChatDatabase:
         private: bool = None,
         agent_type: str = None,
         device: str = None,
+        mail_provider: str = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title, system prompt, agent_type, device, private flag, and/or document_ids."""
+        """Update session title, system prompt, agent_type, device, mail_provider, private flag, and/or document_ids."""
         updates = []
         params = []
 
@@ -379,6 +403,9 @@ class ChatDatabase:
         if device is not None:
             updates.append("device = ?")
             params.append(device)
+        if mail_provider is not None:
+            updates.append("mail_provider = ?")
+            params.append(mail_provider)
 
         updates.append("updated_at = ?")
         params.append(self._now())
