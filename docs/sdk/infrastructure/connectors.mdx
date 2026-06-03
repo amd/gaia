@@ -63,7 +63,7 @@ async def main():
 
     # 3. Fetch a short-lived access token (refresh is automatic).
     token = await conn.get_access_token(
-        connector_id="google",
+        provider="google",
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         agent_id="my-agent",
     )
@@ -170,7 +170,7 @@ class GmailAgent(Agent):
     @tool(description="List the 5 newest Gmail subjects")
     def _list_recent_subjects(self) -> list[str]:
         token = get_access_token_sync(
-            connector_id="google",
+            provider="google",
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         )
         import requests

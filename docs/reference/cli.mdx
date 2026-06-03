@@ -126,7 +126,7 @@ gaia init [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, mcp, vlm, all) |
+| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, vlm, npu, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
@@ -144,23 +144,23 @@ canonical choices list):
 
 | Profile | Models | Description | Approx Size |
 |---------|--------|-------------|-------------|
-| `minimal` | Qwen3-0.6B | Fast setup with lightweight model | ~400 MB |
-| `sd` | SD-Turbo | Image generation with Stable Diffusion | ~8 GB |
-| `chat` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Interactive chat with RAG and vision | ~25 GB |
-| `code` | Qwen3.5-35B | Autonomous coding assistant | ~18 GB |
-| `rag` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Document Q&A with retrieval and vision | ~25 GB |
-| `mcp` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Model Context Protocol bridge server with vision | ~25 GB |
-| `vlm` | Qwen3-VL-4B | Image understanding and analysis | ~3 GB |
+| `minimal` | Gemma-4-E4B-it-GGUF | Fast setup with Gemma 4 E4B multimodal model | ~3 GB |
+| `sd` | SDXL-Turbo, Gemma-4-E4B-it-GGUF | Image generation with multi-modal AI (LLM + SD) | ~10 GB |
+| `chat` | Gemma-4-E4B-it-GGUF, nomic-embed-text-v2-moe-GGUF | Interactive chat with RAG and vision support | ~4 GB |
+| `code` | Gemma-4-E4B-it-GGUF | Autonomous coding assistant | ~3 GB |
+| `rag` | Gemma-4-E4B-it-GGUF, nomic-embed-text-v2-moe-GGUF | Document Q&A with retrieval | ~4 GB |
+| `vlm` | Gemma-4-E4B-it-GGUF | Vision pipeline for document and image extraction | ~3 GB |
+| `npu` | gemma4-it-e2b-FLM | Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU) | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
-The `talk`, `blender`, `jira`, and `docker` agents all rely on the `chat` profile
-(Qwen3.5-35B family) — there is no dedicated profile for each. Run
-`gaia init --profile chat` (or `all`) to prepare their dependencies.
+The `talk`, `blender`, `jira`, and `docker` agents all rely on the `chat` profile —
+there is no dedicated profile for each. Run `gaia init --profile chat` (or `all`)
+to prepare their dependencies.
 </Note>
 
 <Note>
-All profiles also include the lightweight `Qwen3-0.6B` model used by `gaia llm` for quick queries.
+`gaia llm` quick queries use the global default model (`Gemma-4-E4B-it-GGUF`).
 </Note>
 
 **Examples:**
@@ -438,7 +438,7 @@ gaia llm "What is machine learning?"
 
 ```bash Specify Model
 gaia llm "Explain quantum computing" \
-  --model Qwen3-0.6B-GGUF \
+  --model Gemma-4-E4B-it-GGUF \
   --max-tokens 200
 ```
 
@@ -603,7 +603,7 @@ gaia prompt "MESSAGE" [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | Qwen3-0.6B-GGUF | Model to use for the agent |
+| `--model` | string | auto | Model ID to use (default: auto-selected by each agent) |
 | `--max-tokens` | integer | 512 | Maximum tokens to generate |
 | `--stats` | flag | false | Show performance statistics |
 
@@ -616,13 +616,13 @@ gaia prompt "What is the weather like today?"
 
 ```bash With Stats
 gaia prompt "Create a poem about AI" \
-  --model Qwen3-0.6B-GGUF \
+  --model Gemma-4-E4B-it-GGUF \
   --stats
 ```
 
 ```bash Custom Tokens
 gaia prompt "Write a story" \
-  --model Qwen3-0.6B-GGUF \
+  --model Gemma-4-E4B-it-GGUF \
   --max-tokens 1000
 ```
 </CodeGroup>
@@ -731,6 +731,19 @@ Common flags at the `index` level: `--repo`, `--max-files`, `--model`, `--base-u
 - Material Assignment
 - MCP Integration
 
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--query` | string | – | Custom query to run instead of the built-in examples |
+| `--interactive` | flag | false | Continuously input queries in interactive mode |
+| `--example` | string | – | Run a specific built-in example (1-6); omit for interactive mode |
+| `--steps` | integer | 5 | Maximum number of steps per query |
+| `--output-dir` | path | output | Directory to save output files |
+| `--mcp-port` | integer | 9876 | Port for the Blender MCP server |
+| `--debug-prompts` | flag | false | Show prompts sent to the LLM |
+| `--print-result` | flag | false | Print results to the console |
+
 **Examples:**
 
 Interactive Blender mode:
@@ -797,7 +810,7 @@ gaia sd <prompt> [OPTIONS]
 |--------|------|---------|-------------|
 | `prompt` | string | - | Text description of the image to generate |
 | `-i, --interactive` | flag | false | Run in interactive mode |
-| `--sd-model` | string | SD-Turbo | Model: SD-Turbo (fast, default), SDXL-Turbo, SDXL-Base-1.0 (photorealistic), SD-1.5 |
+| `--sd-model` | string | SDXL-Turbo | Model: SDXL-Turbo (fast, good quality, default), SD-Turbo (faster, lower quality), SDXL-Base-1.0 (photorealistic, slow), SD-1.5 |
 | `--size` | string | auto | Image size: 512x512, 768x768, 1024x1024 (auto-selected per model) |
 | `--steps` | integer | auto | Inference steps (auto: 4 for Turbo, 20 for Base) |
 | `--cfg-scale` | float | auto | CFG scale (auto: 1.0 for Turbo, 7.5 for Base) |
@@ -850,7 +863,7 @@ gaia talk [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | Qwen3-0.6B-GGUF | Model to use |
+| `--model` | string | auto | Model ID to use (default: auto-selected by each agent) |
 | `--max-tokens` | integer | 512 | Maximum tokens to generate |
 | `--no-tts` | flag | false | Disable text-to-speech |
 | `--audio-device-index` | integer | auto-detect | Audio input device index |
@@ -943,11 +956,21 @@ gaia summarize --input ./inbox/ --type email --format both
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--input` | path | – | Input file or directory (required unless `--list-configs`). |
-| `--output` | path | auto | Output file/directory (auto-adjusted to format). |
-| `--type` | `transcript`\|`email`\|`pdf`\|`auto` | auto | Input type. |
-| `--format` | `json`\|`pdf`\|`email`\|`both` | json | Output format (`both` = json + pdf). |
+| `-i, --input` | path | – | Input file or directory (required unless `--list-configs`). |
+| `-o, --output` | path | auto | Output file/directory (auto-adjusted to format). |
+| `-t, --type` | `transcript`\|`email`\|`pdf`\|`auto` | auto | Input type. |
+| `-f, --format` | `json`\|`pdf`\|`email`\|`both` | json | Output format (`both` = json + pdf). |
 | `--styles` | one or more styles | executive participants action_items | `brief`, `detailed`, `bullets`, `executive`, `participants`, `action_items`, `all`. |
+| `--max-tokens` | integer | 1024 | Maximum tokens for the summary. |
+| `--email-to` | string | – | Recipients (comma-separated) for `email` output format. |
+| `--email-subject` | string | auto | Email subject line. |
+| `--email-cc` | string | – | CC recipients (comma-separated). |
+| `--config` | path | – | Use a predefined configuration file from `configs/`. |
+| `--list-configs` | flag | false | List available configuration templates and exit. |
+| `--combined-prompt` | flag | false | Combine styles into a single LLM call (experimental). |
+| `--no-viewer` | flag | false | Don't auto-open the HTML viewer for JSON output. |
+| `--quiet` | flag | false | Minimal output. |
+| `--verbose` | flag | false | Detailed/debug output. |
 
 ---
 
@@ -1012,7 +1035,6 @@ curl http://localhost:8080/health
     **Options:**
     - `--host` - Server host (default: localhost)
     - `--port` - Server port (default: 8080). <Warning>The `gaia mcp docker` bridge defaults to the same port — run them on different ports if you need both.</Warning>
-    - `--background` - Run in background
     - `--debug` - Enable debug logging
     - `--show-prompts` - Log the prompts sent to the LLM for every request (useful for debugging)
     - `--streaming` - Stream tokens to clients via SSE (OpenAI-style)
@@ -1025,9 +1047,9 @@ curl http://localhost:8080/health
     gaia api start
     ```
 
-    Background with debug:
+    With debug logging:
     ```bash
-    gaia api start --background --debug
+    gaia api start --debug
     ```
 
     Custom host/port:
@@ -1220,6 +1242,50 @@ start` — run them on different ports if you need both alive at once.</Warning>
 
 ---
 
+## Connectors
+
+<Card title="Connectors" icon="plug" href="/connectors">
+  OAuth providers, MCP-server connectors, and per-agent scope grants
+</Card>
+
+Manage external connectors (OAuth providers like Google/GitHub, MCP servers, API tokens) and control which agents may use them. Configure a connector once, then grant individual agents the scopes they need.
+
+```bash
+gaia connectors <subcommand> [OPTIONS]
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|-----------|-------------|
+| `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output) |
+| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes |
+| `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys, OAuth client creds) |
+| `test <id>` | Run a health check for a configured connector |
+| `disconnect <id>` | Remove credentials and reset a connector's state |
+| `grants {list\|grant\|revoke}` | Manage per-agent scope grants (credential access) |
+| `activations {list\|activate\|deactivate}` | Manage per-agent MCP tool visibility (`mcp_server` connectors only) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Authorize Google
+gaia connectors connect google
+```
+
+```bash Configure an MCP server token
+gaia connectors configure github --set GITHUB_TOKEN=ghp_xxx
+```
+
+```bash Grant an agent scopes
+gaia connectors grants grant google builtin:chat --scopes gmail.readonly
+```
+</CodeGroup>
+
+[→ Connectors Guide](/connectors) · [→ Connectors SDK](/sdk/infrastructure/connectors)
+
+---
+
 ## Model Management
 
 ### Download Command
@@ -1238,7 +1304,7 @@ gaia download [OPTIONS]
 | `--list` | flag | false | List required models without downloading |
 | `--timeout` | integer | 1800 | Timeout per model in seconds |
 | `--host` | string | localhost | Lemonade server host |
-| `--port` | integer | 8000 | Lemonade server port |
+| `--port` | integer | 13305 | Lemonade server port |
 | `--clear-cache` | flag | false | Remove cached download progress/metadata before running |
 
 **Available Agents:**
@@ -1706,7 +1772,7 @@ gaia kill [OPTIONS]
 | Option | Type | Description |
 |--------|------|-------------|
 | `--port` | integer | Port number to kill process on |
-| `--lemonade` | flag | Kill Lemonade server (port 8000) |
+| `--lemonade` | flag | Kill Lemonade server (port 13305) |
 
 **Examples:**
 
@@ -1716,7 +1782,7 @@ gaia kill --lemonade
 ```
 
 ```bash Kill by Port
-gaia kill --port 8000
+gaia kill --port 13305
 ```
 </CodeGroup>
 

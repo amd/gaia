@@ -90,7 +90,8 @@
                   "connectors/index",
                   "connectors/google",
                   "connectors/github",
-                  "security/connections"
+                  "security/connections",
+                  "security/connectors"
                 ]
               },
               {
