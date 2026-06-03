@@ -25,6 +25,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from gaia.agents.email.agent import EmailTriageAgent  # noqa: E402
 from gaia.agents.email.config import EmailAgentConfig  # noqa: E402
+from gaia.agents.email.outlook_scopes import OUTLOOK_MAIL_SCOPES  # noqa: E402
 from gaia.agents.email.scopes import AGENT_NAMESPACED_ID, ALL_SCOPES  # noqa: E402
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeCalendarBackend,
@@ -76,13 +77,20 @@ class TestConstruction:
         assert AGENT_NAMESPACED_ID == "builtin:email"
 
     def test_required_connectors_well_formed(self):
-        reqs = EmailTriageAgent.REQUIRED_CONNECTORS
-        assert len(reqs) == 1
-        google = reqs[0]
-        assert google.connector_id == "google"
+        # Two mailbox providers are declared: Gmail (#962) and personal
+        # Outlook.com via Microsoft Graph (#1275). They coexist — the active
+        # one is chosen by ``config.mail_provider``.
+        reqs = {c.connector_id: c for c in EmailTriageAgent.REQUIRED_CONNECTORS}
+        assert set(reqs) == {"google", "microsoft"}
+
+        google = reqs["google"]
         # Tuple form (frozen dataclass normalizes).
         assert google.scopes == ALL_SCOPES
         assert google.reason  # non-empty
+
+        microsoft = reqs["microsoft"]
+        assert microsoft.scopes == OUTLOOK_MAIL_SCOPES
+        assert microsoft.reason  # non-empty
 
     def test_response_mode_is_conversational(self, agent):
         assert agent.response_mode == "conversational"
