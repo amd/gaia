@@ -1022,9 +1022,10 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         with model_load_lock:
             # Re-check after acquiring the lock: another thread may have
             # already loaded the expected model with sufficient context.
+            resident_chat_models = []
             resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
             if resp2.status_code == 200:
-                models2 = [
+                resident_chat_models = [
                     m
                     for m in resp2.json().get("all_models_loaded", [])
                     if m.get("type") in ("llm", "vlm")
@@ -1033,14 +1034,28 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                     (m.get("model_name") or "").lower() == expected_lower
                     and (m.get("recipe_options", {}).get("ctx_size") or 0)
                     >= DEFAULT_CONTEXT_SIZE
-                    for m in models2
+                    for m in resident_chat_models
                 ):
                     logger.debug(
                         "Expected model loaded with sufficient ctx by concurrent "
                         "thread; skipping load"
                     )
                     return
-            LemonadeClient(verbose=False).load_model(
+
+            client = LemonadeClient(verbose=False)
+            # Lemonade does not evict the resident model on a new /load, so
+            # loading a different model (or the same model at a larger ctx)
+            # leaves the previous one resident — a silent double-load that
+            # wastes memory and can degrade output. Unload the wrong/stale chat
+            # model first, mirroring gaia/rag/sdk.py before an embedder swap.
+            if resident_chat_models:
+                try:
+                    client.unload_model()
+                except Exception as unload_exc:
+                    logger.debug(
+                        "Pre-flight unload before reload failed: %s", unload_exc
+                    )
+            client.load_model(
                 model_id,
                 ctx_size=DEFAULT_CONTEXT_SIZE,
                 prompt=False,
