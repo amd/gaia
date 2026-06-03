@@ -1,0 +1,100 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# ============================================================================
+# SCAFFOLD — DORMANT UNTIL THE C++ EMAIL AGENT LANDS.
+#
+# The C++ email agent (cpp/agents/email/) does not exist yet. Per the repo's
+# fail-loudly rule, this workflow does NOT fabricate a build of nonexistent
+# code: its triggers are PATH-FILTERED to `cpp/agents/email/**`, so the job
+# never runs until that directory is added. The moment the C++ email module
+# ships with its own CMakeLists.txt + GoogleTest mock tests, this workflow
+# activates on the PR that introduces it — no edit needed beyond confirming the
+# build target name below matches what the module defines.
+#
+# The CMake + ctest steps below mirror .github/workflows/build_cpp.yml (the
+# existing C++ build) so that, on activation, this is a real build + mock-test
+# gate, not a placeholder. Until then it is intentionally inert.
+#
+# Tracking: the broader C++ email work is in the C++ milestone (#1110); this is
+# the CI hook that gates it once the source exists.
+# ============================================================================
+
+name: C++ Email Agent Build & Test
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+    paths:
+      - 'cpp/agents/email/**'
+      - '.github/workflows/build_cpp_email.yml'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'cpp/agents/email/**'
+      - '.github/workflows/build_cpp_email.yml'
+  merge_group:
+  workflow_dispatch:
+
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: C++ Email Agent (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Guard: the C++ email agent module must exist before we try to build it.
+      # The path filters above mean this job normally only runs once
+      # cpp/agents/email/ is present; this is a loud, explicit assertion (not a
+      # silent skip) for the manual/merge_group entry points.
+      - name: Assert C++ email module exists
+        shell: bash
+        run: |
+          if [ ! -d "cpp/agents/email" ]; then
+            echo "::error::cpp/agents/email/ does not exist yet — this workflow is a"
+            echo "::error::scaffold awaiting the C++ email agent (C++ milestone, #1110)."
+            echo "::error::It activates automatically on the PR that adds that module."
+            exit 1
+          fi
+          echo "cpp/agents/email/ present — proceeding with the build."
+
+      - name: Install OpenSSL (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libssl-dev
+
+      - name: Install OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        run: choco install openssl --no-progress -y
+
+      - name: Restore FetchContent cache
+        id: cache-deps
+        uses: actions/cache@v5
+        with:
+          path: cpp/build/_deps
+          key: fetchcontent-email-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt', 'cpp/agents/email/**/CMakeLists.txt') }}
+
+      - name: Configure CMake
+        run: cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release -DGAIA_BUILD_INTEGRATION_TESTS=OFF
+
+      - name: Build
+        run: cmake --build cpp/build --config Release --parallel
+
+      - name: Test (mock, cloud)
+        run: ctest --test-dir cpp/build -C Release --output-on-failure
