@@ -155,6 +155,7 @@ class EmailTriageMCPAgent(MCPAgent):
     """
 
     AGENT_ID = "email-mcp"
+    AGENT_NAME = "Email Triage MCP"
 
     def __init__(self, **agent_params: Any):
         # Triage needs no LLM; skip Lemonade so the server starts offline.
