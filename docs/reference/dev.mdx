@@ -288,6 +288,45 @@ Key fixtures live in `tests/conftest.py` (`api_client`, `api_server`,
 `require_lemonade`, `lemonade_available`). The `require_lemonade` fixture
 auto-skips integration tests when no Lemonade server is running.
 
+### Real-World Testing with Claude Code
+
+Unit and integration tests prove code paths; they don't prove a feature works
+end-to-end on real hardware. GAIA ships a **`gaia-testing` skill** (under
+`.claude/skills/`) for [Claude Code](https://claude.com/claude-code): it drives
+the real interface — the Agent UI in a browser, the CLI, or the Agent UI MCP
+server (`gaia mcp serve`) — and brings back screenshots, logs, traces, and
+per-operation timing as evidence, all collected to your local machine. In a
+session, ask it to *"test / validate / QA this feature with screenshots"*; it
+scales from a unit-only run up to a full real-world run gated by a single
+approval prompt.
+
+#### Declaring test machines
+
+The real-world tier runs on a machine you nominate. The skill discovers
+candidates from your **loaded Claude config only** — it never scans your
+filesystem. Declare machines under a `## Dev Machines` (or `## Test Machines`)
+heading in either:
+
+- your **user-level** `~/.claude/CLAUDE.md` (shared across all your projects) —
+  which may summarise them inline and point to a detail file it loads, such as
+  `~/.claude/memory/dev-machines.md`; or
+- the **project** `./CLAUDE.md` or `.claude/settings.json`.
+
+Record each machine's name, access method (local, SSH host, or container),
+hardware class (CPU / discrete GPU / Ryzen AI NPU), and any setup or test
+commands. With nothing declared, the skill targets your **local machine**.
+
+```markdown
+## Dev Machines
+- my-gpu-box — SSH host, Ubuntu 24.04, discrete Radeon GPU; good for dGPU inference tests.
+- my-npu-laptop — local, Ryzen AI NPU; good for NPU device-path tests.
+```
+
+> **Keep credentials out of committed files.** Put sudo passwords, tokens, and
+> keys only in your **user-level** config (or a memory file it points to) —
+> never in the repo's `CLAUDE.md` or `.claude/settings.json`. The skill reads
+> them write-only and never echoes them into logs, screenshots, or reports.
+
 ---
 
 ## Troubleshooting

@@ -340,6 +340,76 @@ class TestPostConstructionPreflight:
         )
 
 
+class TestDeviceModelOverride:
+    """B1: the selected device dictates the model passed to create_agent.
+
+    Pre-fix the device dropdown was a silent no-op — the agent was always
+    (re)built on the session model (GPU) regardless of the chosen device.
+    """
+
+    def test_npu_device_switches_model_and_threads_device(self):
+        registry, captured = _make_registry()
+        db = _make_db(custom_model=None)
+        session = _make_session(model=_DB_DEFAULT)
+        session["device"] = "npu"
+
+        with (
+            patch("gaia.ui._chat_helpers._agent_registry", registry),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+        ):
+            _call_non_streaming(session, db)
+
+        kwargs = captured["kwargs"]
+        assert kwargs.get("model_id") == "gemma4-it-e2b-FLM"
+        assert kwargs.get("device") == "npu"
+        assert kwargs.get("min_context_size") == 4096
+
+    def test_explicit_npu_overrides_session_pinned_model(self):
+        """A non-GPU device wins even over a session-pinned model (it can't run there)."""
+        registry, captured = _make_registry()
+        db = _make_db(custom_model=None)
+        session = _make_session(model="UserChose-GGUF")
+        session["device"] = "npu"
+
+        with (
+            patch("gaia.ui._chat_helpers._agent_registry", registry),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+        ):
+            _call_non_streaming(session, db)
+
+        assert captured["kwargs"].get("model_id") == "gemma4-it-e2b-FLM"
+
+    def test_gpu_device_does_not_clobber_pinned_model(self):
+        """On the default GPU device, an agent's own model preference is kept."""
+        registry, captured = _make_registry()
+        db = _make_db(custom_model=None)
+        session = _make_session(model="UserChose-GGUF")
+        session["device"] = "gpu"
+
+        with (
+            patch("gaia.ui._chat_helpers._agent_registry", registry),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+        ):
+            _call_non_streaming(session, db)
+
+        assert captured["kwargs"].get("model_id") == "UserChose-GGUF"
+
+    def test_custom_model_override_beats_device(self):
+        """An explicit custom_model setting still wins over the device model."""
+        registry, captured = _make_registry()
+        db = _make_db(custom_model="UserPicked-GGUF")
+        session = _make_session(model=_DB_DEFAULT)
+        session["device"] = "npu"
+
+        with (
+            patch("gaia.ui._chat_helpers._agent_registry", registry),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+        ):
+            _call_non_streaming(session, db)
+
+        assert captured["kwargs"].get("model_id") == "UserPicked-GGUF"
+
+
 class TestBuiltinChatAgentUnchanged:
     """Pin AC4: built-in ChatAgent (agent_type='chat') behavior is unchanged."""
 

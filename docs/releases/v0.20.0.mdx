@@ -1,0 +1,171 @@
+---
+title: "v0.20.0"
+description: "Per-agent device selection across CPU, GPU, and Ryzen AI NPU; per-agent MCP tool-visibility activations with live SSE updates; a terminal-native Agent Hub; 10x faster bulk email organization; native PowerPoint indexing for RAG; and a broad security, boot-robustness, and test-infrastructure hardening pass."
+---
+
+# GAIA v0.20.0 Release Notes
+
+GAIA v0.20.0 is a feature release centered on giving agents a choice of hardware and giving users finer control over what each agent can see and do. Agents can now run on CPU, GPU, or the Ryzen AI NPU, selectable per-agent from the Agent UI or the CLI. MCP connectors gain a second control axis — *activations* — so a granted connector's tools only land in an agent's prompt when explicitly switched on, keeping small-model tool selection sharp. A new terminal-native Agent Hub opens when you run `gaia` with no arguments. The email agent gets batch organize tools that turn bulk inbox work from minutes into seconds, and RAG now indexes PowerPoint files natively. Underneath the features, this release lands a large security, first-boot-robustness, and test-coverage hardening pass.
+
+**Why upgrade:**
+- **Multi-device per-agent selection (CPU / GPU / NPU)** — each agent declares the devices it supports; users pick one via the Agent UI dropdown or `--device {cpu,gpu,npu}`, with `gaia init --profile npu` handling NPU detection, FLM backend install, and model download. GPU stays the default.
+- **Per-agent MCP tool-visibility activations** — granted connectors no longer dump every tool into every agent's prompt; activations are explicit opt-in per `(connector, agent)`, and CLI/SDK toggles now emit the same live `connector.activation.changed` SSE update the UI already used.
+- **Agent Hub TUI** — running `gaia` with no args opens a terminal-native hub to browse, search, launch, and manage agents in a ~21MB standalone binary with sub-200ms startup.
+- **10x faster email organization** — seven new batch organize tools cut bulk inbox operations from ~13 LLM round-trips to 2–3 steps (~488s → ~30–60s, ~12K → ~1.2K tokens).
+- **Native PowerPoint (.pptx) RAG** — `.pptx` uploads are indexed directly (text, tables, speaker notes, plus VLM analysis of embedded images) instead of telling users to "save as PDF first."
+- **Security & first-boot robustness** — symlink write-guard bypass closed on Python 3.10/3.11, write guardrails extended to four more file tools, and a corrupt-model misdiagnosis that triggered a destructive ~25 GB re-download is fixed.
+
+---
+
+## What's New
+
+### Multi-Device Support — CPU, GPU, and Ryzen AI NPU
+
+Before this release, GAIA inference defaulted to GPU via llama.cpp with no way to target an alternative device — users with XDNA2 NPUs had no path to power-efficient local inference, and there was no framework for per-agent device selection. PR [#1252](https://github.com/amd/gaia/pull/1252) adds that framework: each agent declares which devices it supports via `DeviceConfig` tuples, and users select a device per-agent through an Agent UI dropdown or the `--device {cpu,gpu,npu}` CLI flag.
+
+GPU remains the default. The NPU path uses the FLM backend (`gemma4-it-e2b-FLM`); CPU falls back automatically with a latency warning. `gaia init --profile npu` handles NPU detection, FLM backend installation, and model download. Eval-verified on a Ryzen AI MAX+ PRO 395, the NPU matches or exceeds GPU output quality (personality 3/3 @ 9.5/10, context retention 4/4 @ 9.8/10) at ~24 tok/s.
+
+PR [#1338](https://github.com/amd/gaia/pull/1338) completes the wiring so the selector isn't just cosmetic: choosing a device now actually switches the model and context window to that device's registered config, and requesting hardware the host doesn't have fails loudly with an actionable remedy instead of silently rebuilding on the GPU.
+
+---
+
+### Per-Agent MCP Tool-Visibility Activations
+
+Layered on the connectors framework, PR [#1219](https://github.com/amd/gaia/pull/1219) (issue [#1005](https://github.com/amd/gaia/issues/1005)) splits connector control into two independent axes: **grants** (credential access, already shipped) and **activations** (which of a connector's MCP tools land in an agent's prompt). Previously, every granted connector surfaced all of its tools to every agent that held the grant — a ChatAgent with several MCP servers granted could carry ~30 extra tool descriptions in its system prompt, bloating context and degrading small-model tool selection. Activations default to **off** and are opt-in per `(connector, agent)` pair.
+
+PR [#1309](https://github.com/amd/gaia/pull/1309) (issue [#1226](https://github.com/amd/gaia/issues/1226)) closes the loop for non-UI writes: activation toggles from `gaia connectors activations activate/deactivate` and direct SDK calls now emit the same live `connector.activation.changed` SSE update the HTTP router already sent, so the Agent UI's "Active for" panel reflects CLI/SDK changes without a manual refresh.
+
+PR [#1310](https://github.com/amd/gaia/pull/1310) (issue [#1227](https://github.com/amd/gaia/issues/1227)) widens the "Active for" panel to also list agents that consume MCP servers *dynamically* — like the chat agent loading servers from `~/.gaia/mcp_servers.json` — not only agents that statically declare `REQUIRED_CONNECTORS`. The chat agent now shows up as an activatable target for MCP-only connectors.
+
+---
+
+### Agent Hub TUI
+
+Running `gaia` with no arguments now opens the Agent Hub — a terminal-native hub for discovering, searching, and launching GAIA agents (PR [#1186](https://github.com/amd/gaia/pull/1186)). Previously the Go TUI only supported `gaia chat --subprocess <binary>`; now users get a full agent browser with a dashboard, fuzzy search, voting, and agent lifecycle management in a ~21MB standalone binary that starts in under 200ms.
+
+---
+
+### Faster Email Agent — Batch Organize Tools
+
+Bulk inbox work in the email agent was expensive: marking 9 emails read took ~13 LLM round-trips (~488s, ~12K tokens) because each tool operated on a single message ID, and parallel tool-call attempts hit a generic retry prompt that could loop until `max_steps` exhaustion. PR [#1067](https://github.com/amd/gaia/pull/1067) adds seven batch organize tools that reduce bulk operations to 2–3 steps (~30–60s, ~1.2K tokens) — roughly 10x faster and 10x cheaper. Parallel tool-call failures now get a targeted retry prompt, the `--trace`/`--show_stats` CLI flags pass through correctly, and a new `force_llm` config flag enables full LLM triage of every email.
+
+---
+
+### PowerPoint (.pptx) Extraction for RAG
+
+Uploading a `.pptx` previously told users to save it as PDF first. PR [#1224](https://github.com/amd/gaia/pull/1224) indexes PowerPoint natively — extracting text from shapes, tables, and speaker notes, with VLM analysis of embedded images when a vision model is available. The implementation mirrors the existing PDF pipeline (same `VLMClient` integration, `[Page N]` markers, merge strategy, and metadata structure) so downstream chunking and retrieval are unchanged. A zip-bomb guard checks uncompressed size before opening (500 MB limit), and WMF/EMF metafiles are skipped gracefully since PIL cannot decode them.
+
+PR [#1366](https://github.com/amd/gaia/pull/1366) makes the feature reachable in the Agent UI: the React file picker had kept `.pptx` on its unsupported-Office blocklist and rejected the upload before it reached the backend that already accepted it (issues [#1072](https://github.com/amd/gaia/issues/1072), [#1291](https://github.com/amd/gaia/issues/1291)). `.pptx` is now in the supported set, matching the server allowlist exactly; `.doc/.docx/.ppt/.xls` stay blocked.
+
+---
+
+## Bug Fixes
+
+- **Corrupt-download misdiagnosis triggered a destructive re-download** (PR [#1300](https://github.com/amd/gaia/pull/1300), closes [#1294](https://github.com/amd/gaia/issues/1294)) — Ordinary model-load failures (resource limits, `ctx_size`, GPU/backend startup, port conflicts) all surface from Lemonade as `"llama-server failed to start"`, and the classifier treated that generic string as file corruption. On a fresh install it sent first-boot into a destructive delete + ~25 GB re-download that couldn't fix the real problem. The bare failure is no longer mistaken for corruption — it surfaces as an actionable `LemonadeClientError` and the model cache is left intact.
+- **First-boot dead-end on a genuinely corrupt model** (PR [#1302](https://github.com/amd/gaia/pull/1302), closes [#1293](https://github.com/amd/gaia/issues/1293)) — When the Agent UI backend detected a corrupt model on first boot it called `input("[y/N]")` inside the FastAPI lifespan threadpool, which has no TTY; `input()` raised `EOFError` and left users with a broken UI requiring a manual force-redownload. The repair path is now fully non-interactive in the boot context.
+- **Symlink write-guard bypass on Python 3.10/3.11** (PR [#1256](https://github.com/amd/gaia/pull/1256)) — Symlinks pointing into blocked directories (`.ssh`, `C:\Windows`, `/etc`, …) were not detected by `is_write_blocked()` on Python < 3.12. Surfaced by the new Python version matrix, the fix drops a redundant `.resolve()` so `os.path.realpath` is the single source of truth across versions.
+- **Write guardrails extended to four unprotected file tools** (PR [#1188](https://github.com/amd/gaia/pull/1188), closes [#955](https://github.com/amd/gaia/issues/955)) — `write_python_file`, `write_markdown_file`, and two more tools only had basic path checks; they now enforce the same `validate_write()` blocklist/size validation, pre-overwrite backups, and audit logging as `write_file`/`edit_file`.
+- **Spinner clobbered interactive security prompts** (PR [#1208](https://github.com/amd/gaia/pull/1208), issue [#1089](https://github.com/amd/gaia/issues/1089)) — The CLI progress spinner kept writing on a background thread during path-access confirmation prompts, eating the first character of option labels (`es / o / lways`). The spinner is now paused before prompting.
+- **`gaia init` failed on Arch/Fedora and crashed on Wayland** (PR [#1218](https://github.com/amd/gaia/pull/1218)) — `gaia init` hardcoded an `add-apt-repository` path that fails on non-Debian distros; it now skips the PPA install when a Lemonade server is already reachable, and disables the Chromium `WaylandColorManagement` feature to prevent a SIGTRAP crash on Wayland compositors.
+- **TLS hostname preserved in pinned-IP HTTPS requests** (PR [#1209](https://github.com/amd/gaia/pull/1209), issue [#1207](https://github.com/amd/gaia/issues/1207)) — `PinnedIPAdapter` now carries the original hostname through for SNI/cert validation instead of validating against the pinned IP.
+- **Agent UI memory API on random backend ports** (PR [#1257](https://github.com/amd/gaia/pull/1257)) — `memoryApi` now uses the dynamic API base so it works when the backend binds a non-default port.
+- **Agent export no longer aborts on an unreadable directory** (PR [#1221](https://github.com/amd/gaia/pull/1221)) — Unreadable agent directories are skipped during export rather than failing the whole pass.
+- **faiss AVX fallback log noise suppressed** (PR [#1222](https://github.com/amd/gaia/pull/1222)) — The AVX2/AVX-512 fallback chatter faiss prints on import is now quieted.
+- **RAG indexing re-embedded everything on every document add** (PR [#1306](https://github.com/amd/gaia/pull/1306)) — Adding a document rebuilt embeddings for all previously indexed chunks and then embedded the new file again for its per-file index, so indexing cost grew far faster than it should as a corpus grew. Each file is now embedded once and the result is reused for both the global and per-file FAISS indexes, on both the fresh-index and cache-load paths.
+- **Overlapping chat turns could corrupt a session** (PR [#1304](https://github.com/amd/gaia/pull/1304)) — A second `/api/chat/send` for a session with an in-flight turn waited 5s and then force-released the per-session lock — but `asyncio.Lock` doesn't track ownership, so a slow-but-healthy request could still be running when a second one was let through. Overlapping requests now get a clean `409` and the unsafe force-release path is gone.
+- **Memory Dashboard and Settings fought over the screen** (PR [#1368](https://github.com/amd/gaia/pull/1368)) — In the (non-router-based) Agent UI, opening the Memory Dashboard did nothing while Settings was open, and the two views could leave each other's flag set so a stale dashboard re-surfaced later. The two top-level views are now mutually exclusive in the store.
+- **Post-init guidance pointed at a removed command** (PR [#1377](https://github.com/amd/gaia/pull/1377)) — `gaia init --profile mcp` and `gaia mcp list` told users to register MCP servers with `gaia mcp add …`, a command removed in #977 — copy-pasting it errored on the very first step. Both now point at the path that works today: editing `~/.gaia/mcp_servers.json` directly.
+
+---
+
+## Tooling, Testing & CI
+
+This release lands a large test-infrastructure and CI-hardening pass:
+
+- **Codecov integration with coverage gates** (PR [#1245](https://github.com/amd/gaia/pull/1245)) — Unit-test runs now upload `coverage.xml` (py3.12 leg only) with a 60% project / 70% patch target so regressions surface before merge.
+- **Python version matrix + macOS smoke lane** (PR [#1247](https://github.com/amd/gaia/pull/1247)) — CI now exercises Python 3.10/3.11/3.12 and a macOS smoke leg, with path-filter fixes; this matrix surfaced the symlink guard bug above.
+- **New test coverage across the stack** — Vitest + React Testing Library component infrastructure (PR [#1249](https://github.com/amd/gaia/pull/1249)), llama.cpp backend integration paths (PR [#1248](https://github.com/amd/gaia/pull/1248)), eval scorecard/audit/runner/judge (PR [#1243](https://github.com/amd/gaia/pull/1243)), RoutingAgent/code validators/OpenAI provider (PR [#1244](https://github.com/amd/gaia/pull/1244)), and doc code-example extraction + syntax validation (PR [#1250](https://github.com/amd/gaia/pull/1250)).
+- **Installer test hardening** (PR [#1251](https://github.com/amd/gaia/pull/1251)) — Artifact validation and scenario parametrization for the installer suite.
+- **Post-publish PyPI smoke test** (PR [#1239](https://github.com/amd/gaia/pull/1239)) — The publish pipeline now installs the freshly published wheel from PyPI and verifies `gaia --version` and the console entry points.
+- **Dependency review scanning** (PR [#1246](https://github.com/amd/gaia/pull/1246)) and **stricter test workflows** (PR [#1240](https://github.com/amd/gaia/pull/1240), which removes `|| true` masking and adds timeouts + log uploads).
+- **`test_jira.py` made collectable** (PR [#1241](https://github.com/amd/gaia/pull/1241)) and **stale electron test assertions updated** (PR [#1210](https://github.com/amd/gaia/pull/1210)).
+- **mypy errors resolved across the codebase** (PRs [#1253](https://github.com/amd/gaia/pull/1253) and [#1296](https://github.com/amd/gaia/pull/1296)).
+- **Value-prop-first release notes via the `gaia-release` skill** (PR [#1330](https://github.com/amd/gaia/pull/1330)).
+- **Installer repo-root resolution fixed** (PRs [#1326](https://github.com/amd/gaia/pull/1326) and [#1332](https://github.com/amd/gaia/pull/1332)) and **`.claude/launch.json` symlink replaced with a repo-local definition** (PR [#1228](https://github.com/amd/gaia/pull/1228)).
+- **Documentation realigned with the code** — a repo-wide doc audit removed fabricated CLI commands, corrected model defaults and Lemonade ports, and synced the agent/tool tables and CLI reference with the source (PRs [#1298](https://github.com/amd/gaia/pull/1298), [#1337](https://github.com/amd/gaia/pull/1337), [#1340](https://github.com/amd/gaia/pull/1340)).
+- **Real-world test-harness skill + CI hardening** — added the `gaia-testing` skill (PR [#1372](https://github.com/amd/gaia/pull/1372)) and hardened the Claude CI automation and Codecov reporting (PRs [#1369](https://github.com/amd/gaia/pull/1369), [#1343](https://github.com/amd/gaia/pull/1343), [#1376](https://github.com/amd/gaia/pull/1376), [#1374](https://github.com/amd/gaia/pull/1374)).
+- **Linux CLI integration no longer flakes on HuggingFace rate limits** (PR [#1379](https://github.com/amd/gaia/pull/1379)) — the Linux `Full Integration` job pulled its test model from HuggingFace unauthenticated and intermittently hit `429 Too Many Requests`, which killed Lemonade startup and failed the run; it now passes `HF_TOKEN` like the Windows, SD, and Agent SDK jobs.
+
+---
+
+## Full Changelog
+
+**65 commits** since v0.19.0:
+
+- `0bc65ee0` — ci(test): authenticate HF model pulls in Linux CLI integration to stop 429 flakes (#1379)
+- `f6d21c96` — fix(mcp): stop pointing users at removed `gaia mcp add` after init (#1377)
+- `a12c39e0` — docs: fix wrong model defaults, fabricated CLI commands, and stale references (#1298)
+- `3d6dbd13` — docs(claude): sync agent/tool tables with code; fix convention checker + add missing agent tests (#1340)
+- `f12308d2` — ci(claude): fix pr-rereview no-op — github.event.before is push-only (#1374)
+- `ddbd95f5` — docs(skills): disambiguate gaia-testing + machine discovery + dev docs (#1375)
+- `2f4b6bc9` — chore(deps): bump the github-actions group across 1 directory with 7 updates (#1373)
+- `0f7ab222` — ci(codecov): disable PR comments (#1376)
+- `1316fae0` — feat(connectors): surface MCP-consuming agents in the "Active for" panel (#1227) (#1310)
+- `ece7a6c6` — docs(cli): fix Jira CLI card to reflect direct Atlassian REST API access (#1364)
+- `58ad3c99` — docs(skills): add gaia-testing real-world test harness skill (#1372)
+- `50589f25` — ci(claude): fix auto-fix triggers, harden for subscription, all-Opus (#1369)
+- `dd38874f` — fix(ui): unblock .pptx upload in Agent UI (#1366)
+- `30653f18` — docs(claude): human-first communication style in CLAUDE.md (#1370)
+- `f91c8cc9` — fix(ui): make Memory Dashboard and Settings mutually exclusive in chatStore (#1368)
+- `1fe50b63` — fix(agents): wire multi-device selection end-to-end and validate at runtime (#1338)
+- `6c31bb48` — docs(spec): Agent Hub restructure spec (#1102) (#1342)
+- `70ac4926` — ci(claude): authenticate claude-code-action via subscription OAuth token (#1343)
+- `5e0467a5` — docs: align CLAUDE.md + CLI reference with the code (release-skill fixups) (#1337)
+- `2466ba02` — fix(ui): return 409 for overlapping chat turns (#1304)
+- `30224306` — fix(rag): reuse per-file embeddings during indexing (#1306)
+- `bb9f43fa` — fix(types): resolve remaining mypy errors missed by #1253 (#1296)
+- `e8c501b0` — fix(installer): resolve repo root correctly in bash scripts under installer/ (#1332)
+- `83255cfd` — fix(installer): resolve repo root correctly in scripts under installer/ (#1326)
+- `62b47c4e` — docs(release): generate value-prop-first release notes from the gaia-release skill (#1330)
+- `6f8d25d2` — test(installer): add artifact validation and scenario parametrization (#1251)
+- `72390d82` — feat(connectors): emit connector.activation.changed for CLI/SDK activation writes (#1226) (#1309)
+- `a12c72a2` — ci: add Python version matrix, macOS smoke lane, and path-filter fixes (#1247)
+- `1f2f7ad3` — feat(rag): add PowerPoint (.pptx) extraction with VLM image support (#1224)
+- `cbc1af97` — test(ui): add Vitest + RTL component test infrastructure (#1249)
+- `6a29767a` — test(llm): cover llama.cpp backend integration paths (#1248)
+- `03b98e60` — ci(coverage): add Codecov integration with 60% project gate (#1245)
+- `6c83a834` — test(agents,llm): cover RoutingAgent, code validators, OpenAI provider (#1244)
+- `b5f887d1` — test(eval): cover scorecard, audit, runner, and claude judge (#1243)
+- `81b81f4a` — fix(lemonade): auto-heal corrupt model on non-interactive boot without prompting (#1302)
+- `b10280f1` — ci(eval): disable RAG eval gate on PRs pending rebuild (#1316)
+- `2d462ef9` — fix(security): pause progress spinner during interactive security prompts (#1089) (#1208)
+- `3ed27c31` — fix(lemonade): don't classify generic "llama-server failed to start" as a corrupt download (#1300)
+- `b083db48` — ci(security): add dependency review scanning (#1246)
+- `29b6dcd0` — chore(deps): bump the root-npm-dependencies group across 1 directory with 6 updates (#1259)
+- `6d4711d2` — test(docs): add code example extraction and syntax validation (#1250)
+- `10740b9f` — fix(security): resolve symlink write-guard bypass on Python 3.10 (#1256)
+- `d12c79f9` — feat(agents): multi-device support — CPU, GPU, NPU per-agent selection (#1252)
+- `b068f016` — fix(tests): make test_jira.py collectable, add xdist/rerunfailures deps, add shared fixture (#1241)
+- `6980f397` — fix(ci): remove || true from test workflows, add timeouts and log uploads (#1240)
+- `f8ff144c` — feat(ci): add post-publish smoke test to validate PyPI install (#1239)
+- `905036c5` — fix(security): apply write guardrails to four unprotected file tools (#1188)
+- `8dca462f` — fix(tests): update stale electron test assertions after #606 UX rework (#1204) (#1210)
+- `6de34fcd` — fix(types): resolve pre-existing mypy errors across 7 modules (#1253)
+- `9c7679c1` — fix(web): preserve TLS hostname in PinnedIPAdapter for HTTPS requests (#1207) (#1209)
+- `ea9de561` — fix(webui): use dynamic API base for memoryApi to support random backend ports (#1257)
+- `fa64caf9` — fix(logging): suppress faiss AVX2/AVX-512 fallback noise (#1222)
+- `d05ddc52` — Skip unreadable agent dirs during export (#1221)
+- `4ee10b07` — ci(claude): upgrade Opus jobs from 4.7 to 4.8 (#1225)
+- `459d3a63` — fix(dev): replace .claude/launch.json symlink with repo-local definition (#1228)
+- `aa2ca33f` — feat(tui): Agent Hub TUI — browse, search, launch, and manage agents (#1186)
+- `1d45d896` — gaia-init-arch-wayland (#1218)
+- `d0e7b592` — chore(deps): bump anthropics/claude-code-action from 1.0.128 to 1.0.133 in the github-actions group (#1215)
+- `97948f7d` — feat(connectors): per-agent MCP tool-visibility activations (#1005) (#1219)
+- `4f2e6e5f` — feat(email-agent): carry forward batch tools, force_llm, CLI wiring, and parallel-retry prompt (#1067)
+- `74c14122` — chore(deps): bump the jira-app-dependencies group in /src/gaia/apps/jira/webui with 8 updates (#1196)
+- `7e95f5fb` — chore(deps): bump the example-app-dependencies group in /src/gaia/apps/example/webui with 5 updates (#1195)
+- `99e73a6b` — chore(deps): bump the github-actions group with 11 updates (#1200)
+- `0b1b6be5` — chore(deps-dev): bump the python-dependencies group with 3 updates (#1197)
+- `298d7bd4` — chore(deps): bump electron from 35.7.5 to 42.2.0 in /src/gaia/agents/emr/dashboard/electron in the emr-dashboard-dependencies group (#1194)
+
+Full Changelog: [v0.19.0...v0.20.0](https://github.com/amd/gaia/compare/v0.19.0...v0.20.0)

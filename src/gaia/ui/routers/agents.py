@@ -112,6 +112,7 @@ def _reg_to_info(reg) -> AgentInfo:
         models=reg.models,
         min_memory_gb=reg.min_memory_gb,
         required_connections=connections,
+        consumes_mcp_servers=getattr(reg, "consumes_mcp_servers", False),
         namespaced_agent_id=reg.namespaced_agent_id,
         category=reg.category,
         tags=reg.tags,

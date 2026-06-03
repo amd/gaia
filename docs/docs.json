@@ -91,7 +91,8 @@
                   "connectors/index",
                   "connectors/google",
                   "connectors/github",
-                  "security/connections"
+                  "security/connections",
+                  "security/connectors"
                 ]
               },
               {
@@ -405,6 +406,8 @@
             "group": "Ecosystem",
             "pages": [
               "plans/agent-hub",
+              "plans/agent-hub-ui",
+              "spec/agent-hub-restructure",
               "plans/skill-format",
               "plans/oem-bundling"
             ]
@@ -434,6 +437,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.20.0",
               "releases/v0.19.0",
               "releases/v0.18.1",
               "releases/v0.18.0",
@@ -487,7 +491,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.19.0 \u00b7 Lemonade 10.2.0",
+        "label": "v0.20.0 \u00b7 Lemonade 10.2.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

@@ -622,7 +622,9 @@ async def async_main(action, **kwargs):
                             if device_was_explicit:
                                 print(
                                     "❌ NPU not available on this system. "
-                                    "Requires Ryzen AI 300/400/Max (XDNA2).",
+                                    "Requires Ryzen AI 300/400/Max (XDNA2). "
+                                    "Run `gaia init --profile npu` to set it up, "
+                                    "or choose --device gpu.",
                                     file=sys.stderr,
                                 )
                                 sys.exit(1)
@@ -635,9 +637,45 @@ async def async_main(action, **kwargs):
                             for k, v in _devices.items()
                         )
                         if not has_gpu and not device_was_explicit:
+                            # Default GPU target unavailable — announce the
+                            # *reason* for the CPU fallback so it doesn't read
+                            # like a deliberate user choice.
+                            print(
+                                "No GPU detected; falling back to CPU (slower). "
+                                "Run `gaia init` to set up GPU acceleration."
+                            )
                             effective_device = "cpu"
-                except Exception:
-                    pass  # Lemonade not running yet; proceed with requested device
+                except LemonadeClientError as _probe_err:
+                    # Only treat "server not reachable yet" (connection refused /
+                    # timeout) as a soft pass. A reachable but broken server
+                    # (HTTP 4xx/5xx, 401 auth) must NOT silently let an explicit
+                    # --device proceed; surface it so the user sees the real
+                    # failure. The agent runtime re-validates the device
+                    # regardless (LemonadeManager.ensure_ready).
+                    #
+                    # Prefer the original requests exception preserved in the
+                    # cause chain over message-string matching — the client
+                    # wraps RequestException without an HTTP status, but the
+                    # exact wrapper text can change independently of this guard.
+                    import requests
+
+                    _cause = _probe_err.__cause__ or _probe_err.__context__
+                    _unreachable = isinstance(
+                        _cause,
+                        (
+                            requests.exceptions.ConnectionError,
+                            requests.exceptions.Timeout,
+                        ),
+                    ) or (
+                        # Fallback for wrappers that don't preserve __cause__.
+                        str(_probe_err).startswith("Request failed:")
+                        and "with status" not in str(_probe_err)
+                    )
+                    if not _unreachable:
+                        raise
+                    log.debug(
+                        "Device probe: Lemonade not reachable yet (%s)", _probe_err
+                    )
 
                 for dc in DEFAULT_DEVICE_CONFIGS:
                     if dc.device == effective_device:
@@ -666,6 +704,7 @@ async def async_main(action, **kwargs):
                     os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
                 ),
                 model_id=explicit_model,
+                device=effective_device,
                 max_steps=kwargs.get("max_steps", 100),
                 streaming=kwargs.get("stream", False),
                 show_prompts=kwargs.get("show_prompts", False),
@@ -6717,11 +6756,11 @@ def handle_mcp_list(args):
     if not servers:
         print("📋 No MCP servers configured")
         print(f"   Config: {config_path}")
-        print("\nAdd a server with: gaia mcp add <name> <command>")
-        if args.config:
-            print(
-                f"                or: gaia mcp add <name> <command> --config {args.config}"
-            )
+        print(f"\nAdd a server by editing {config_path}, for example:")
+        print(
+            '   {"mcpServers": {"time": {"command": "uvx", "args": ["mcp-server-time"]}}}'
+        )
+        print("See https://amd-gaia.ai/docs/guides/mcp/client for details.")
         return
 
     print(f"📋 Configured MCP Servers ({len(servers)}):")

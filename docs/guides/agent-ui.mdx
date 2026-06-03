@@ -317,7 +317,7 @@ The agent supports the **Model Context Protocol** in both directions — connect
 
     Then restart `gaia chat --ui`.
 
-    **pip/PyPI installs (without gaia-ui):** Use the [npm install path](#install-and-launch) — the pip package does not include frontend source files.
+    **pip/PyPI installs (without gaia-ui):** Use the [npm install path](#install) — the pip package does not include frontend source files.
   </Accordion>
 
   <Accordion title="LLM response times out or fails">
@@ -356,7 +356,7 @@ The agent supports the **Model Context Protocol** in both directions — connect
 flowchart TD
     A(["Agent UI (Browser or Electron)"]) --> B(["FastAPI Backend · port 4200"])
     B --> C(["GAIA Core SDKs"])
-    C --> D(["Lemonade Server · port 8000"])
+    C --> D(["Lemonade Server · port 13305"])
 
     B -.- E(["REST API + SSE Streaming"])
     B -.- F(["SQLite Database"])

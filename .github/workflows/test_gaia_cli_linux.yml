@@ -77,6 +77,11 @@ jobs:
           echo "GAIA CLI installed successfully!"
 
       - name: Start Lemonade Server and Test Core Commands
+        env:
+          # Authenticate HF model pulls — unauthenticated requests get 429-throttled
+          # on shared CI runners, which kills Lemonade startup (matches the Windows job).
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
           echo "=== Starting Lemonade Server ==="
 

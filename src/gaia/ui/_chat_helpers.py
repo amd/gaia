@@ -431,6 +431,8 @@ def _build_create_kwargs(
     custom_model: str | None,
     model_id: str | None,
     streaming: bool = False,
+    device: str | None = None,
+    min_context_size: int | None = None,
 ) -> dict:
     """Return the kwargs dict for registry.create_agent().
 
@@ -441,11 +443,20 @@ def _build_create_kwargs(
 
     Note: if registry.resolve_model() already promoted model_id before this
     call, it is forwarded as-is via branch 2 (resolve_model result ≠ default).
+
+    ``device``/``min_context_size`` flow through to the agent's config so the
+    requested device is validated at runtime. Agent factories filter unknown
+    kwargs via ``dataclasses.fields``, so this is safe for agents whose config
+    doesn't declare them.
     """
     suffix = " (streaming)" if streaming else ""
     kwargs: dict = {"silent_mode": not streaming, "debug": False}
     if streaming:
         kwargs["streaming"] = True
+    if device is not None:
+        kwargs["device"] = device
+    if min_context_size is not None:
+        kwargs["min_context_size"] = min_context_size
 
     if custom_model:
         kwargs["model_id"] = custom_model
@@ -474,6 +485,73 @@ def _effective_model(agent, fallback: str | None) -> str | None:
     """
     effective = getattr(agent, "model_id", None)
     return effective if effective is not None else fallback
+
+
+def resolve_device_model(
+    agent_type: str, device: str | None, registry=None
+) -> tuple[str | None, int | None]:
+    """Resolve the (model, ctx_size) an agent should use on *device*.
+
+    The Agent UI device dropdown writes ``session["device"]``; resolving the
+    model here is what makes selecting "NPU" actually switch models instead of
+    rebuilding on the GPU model. Public (no underscore) because the sessions
+    router also calls it to rewrite the session model on a device switch.
+
+    Looks up the registered agent's ``device_configs`` and returns the model
+    and context size of the entry matching *device*.  Falls back to the
+    built-in ``DEFAULT_DEVICE_CONFIGS`` when the agent isn't registered or
+    declares none (e.g. the direct-construction ``chat`` path).  Returns
+    ``(None, None)`` when *device* is falsy or no entry matches, so callers
+    leave the existing model untouched.
+    """
+    if not device:
+        return None, None
+    registry = registry if registry is not None else _agent_registry
+    device_configs = None
+    if registry is not None:
+        reg = registry.get(agent_type)
+        if reg is not None:
+            device_configs = getattr(reg, "device_configs", None)
+    if not device_configs:
+        from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+        device_configs = DEFAULT_DEVICE_CONFIGS
+    for dc in device_configs:
+        if getattr(dc, "device", None) == device:
+            return dc.model, getattr(dc, "ctx_size", None)
+    return None, None
+
+
+def _apply_device_model(
+    session: dict,
+    agent_type: str,
+    model_id: str | None,
+    custom_model: str | None,
+    registry=None,
+) -> tuple[str | None, int | None]:
+    """Apply the session's device choice to the model + context window.
+
+    Returns ``(model_id, device_ctx)``. The device config drives the model when
+    the current model is the generic default (so built-in Gemma agents switch
+    correctly) OR the user picked a non-GPU device explicitly (a pinned model
+    can't run there) — so an agent that declares its own model isn't clobbered
+    on the default GPU. Skipped when the user pinned a ``custom_model``.
+    """
+    device = session.get("device")
+    if custom_model or not device:
+        return model_id, None
+    dev_model, dev_ctx = resolve_device_model(agent_type, device, registry)
+    if not dev_model:
+        return model_id, None
+    is_default_model = model_id in (None, _DB_DEFAULT_MODEL)
+    device_is_explicit = device != "gpu"
+    if dev_model == model_id or is_default_model or device_is_explicit:
+        if dev_model != model_id:
+            logger.info(
+                "chat: device=%s -> model %s (was %s)", device, dev_model, model_id
+            )
+        return dev_model, dev_ctx
+    return model_id, None
 
 
 def get_cached_mcp_status() -> list[dict]:
@@ -944,9 +1022,10 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         with model_load_lock:
             # Re-check after acquiring the lock: another thread may have
             # already loaded the expected model with sufficient context.
+            resident_chat_models = []
             resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
             if resp2.status_code == 200:
-                models2 = [
+                resident_chat_models = [
                     m
                     for m in resp2.json().get("all_models_loaded", [])
                     if m.get("type") in ("llm", "vlm")
@@ -955,14 +1034,28 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                     (m.get("model_name") or "").lower() == expected_lower
                     and (m.get("recipe_options", {}).get("ctx_size") or 0)
                     >= DEFAULT_CONTEXT_SIZE
-                    for m in models2
+                    for m in resident_chat_models
                 ):
                     logger.debug(
                         "Expected model loaded with sufficient ctx by concurrent "
                         "thread; skipping load"
                     )
                     return
-            LemonadeClient(verbose=False).load_model(
+
+            client = LemonadeClient(verbose=False)
+            # Lemonade does not evict the resident model on a new /load, so
+            # loading a different model (or the same model at a larger ctx)
+            # leaves the previous one resident — a silent double-load that
+            # wastes memory and can degrade output. Unload the wrong/stale chat
+            # model first, mirroring gaia/rag/sdk.py before an embedder swap.
+            if resident_chat_models:
+                try:
+                    client.unload_model()
+                except Exception as unload_exc:
+                    logger.debug(
+                        "Pre-flight unload before reload failed: %s", unload_exc
+                    )
+            client.load_model(
                 model_id,
                 ctx_size=DEFAULT_CONTEXT_SIZE,
                 prompt=False,
@@ -1061,6 +1154,12 @@ async def _get_chat_response(
                 )
                 model_id = preferred
 
+        # The UI device dropdown drives the model + ctx window.
+        device = session.get("device")
+        model_id, device_ctx = _apply_device_model(
+            session, agent_type, model_id, custom_model, registry
+        )
+
         # ── Agent cache ──────────────────────────────────────────────────────
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
@@ -1100,6 +1199,8 @@ async def _get_chat_response(
                 max_steps=10,
                 silent_mode=True,
                 debug=False,
+                device=device,
+                min_context_size=device_ctx,
                 **_session_kwargs,
             )
             _stamp_builtin_chat_identity(config)
@@ -1166,7 +1267,10 @@ async def _get_chat_response(
                 agent = registry.create_agent(
                     agent_type,
                     **_build_create_kwargs(
-                        custom_model=custom_model, model_id=model_id
+                        custom_model=custom_model,
+                        model_id=model_id,
+                        device=device,
+                        min_context_size=device_ctx,
                     ),
                     **_session_agent_kwargs(
                         rag_file_paths=rag_file_paths,
@@ -1417,6 +1521,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 )
                 model_id = preferred
 
+        # The UI device dropdown drives the model + ctx window.
+        device = session.get("device")
+        model_id, device_ctx = _apply_device_model(
+            session, agent_type, model_id, custom_model, registry
+        )
+
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
         result_holder = {"answer": "", "error": None}
@@ -1487,6 +1597,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         streaming=True,
                         silent_mode=False,
                         debug=False,
+                        device=device,
+                        min_context_size=device_ctx,
                         **_session_kwargs,
                     )
 
@@ -1589,6 +1701,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                             streaming=True,
                             silent_mode=False,
                             debug=False,
+                            device=device,
+                            min_context_size=device_ctx,
                             **_session_agent_kwargs(
                                 rag_file_paths=[],
                                 library_paths=library_paths,
@@ -1630,6 +1744,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                 custom_model=custom_model,
                                 model_id=model_id,
                                 streaming=True,
+                                device=device,
+                                min_context_size=device_ctx,
                             ),
                             **_session_agent_kwargs(
                                 rag_file_paths=[],
