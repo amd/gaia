@@ -43,7 +43,7 @@ flowchart TD
 
 1. **Vision Language Model (VLM)** - The Gemma-4-E4B-it model "sees" the intake form image and extracts text using a carefully crafted prompt that guides it to identify specific fields (name, DOB, allergies, medications, etc.). Unlike traditional OCR, the VLM understands context—it knows that "DOB" means date of birth and can handle handwritten entries, checkboxes, and varied form layouts.
 
-2. **LLM Validation & Querying** - The Qwen3.5-35B model (a Mixture-of-Experts architecture that activates only 3B parameters per inference) validates extracted data, handles natural language queries, and generates SQL to search the patient database. When you ask "Which patients have penicillin allergies?", the LLM translates this to proper SQL.
+2. **LLM Validation & Querying** - The Qwen3.5-35B-A3B-GGUF model (a Mixture-of-Experts architecture that activates only 3B parameters per inference) validates extracted data, handles natural language queries, and generates SQL to search the patient database. When you ask "Which patients have penicillin allergies?", the LLM translates this to proper SQL.
 
 3. **Embedding Model** - The nomic-embed model creates vector embeddings for semantic similarity search, enabling fuzzy matching when looking up returning patients or finding related records.
 

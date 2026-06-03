@@ -381,7 +381,7 @@ gaia/
 ├── src/gaia/           # Main source code
 │   ├── agents/         # Agent implementations
 │   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent
-│   │   ├── tools/      # Cross-agent tool mixins (file, filesystem, scratchpad, browser, screenshot)
+│   │   ├── tools/      # Cross-agent tool mixins (file search, filesystem, scratchpad, browser, screenshot)
 │   │   ├── chat/       # ChatAgent (chat/doc/file profiles) with RAG and shell tools
 │   │   ├── code/       # CodeAgent with orchestration, validators, file_io tools
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
@@ -498,7 +498,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 | **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B-A3B |
 | **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B-A3B |
 | **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B-A3B |
-| **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing (VLM) | Gemma-4-E4B-it-GGUF |
+| **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing (VLM) | Gemma-4-E4B |
 | **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B-A3B (`AGENT_ROUTING_MODEL`) |
 | **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
 | **ConnectorsDemoAgent** | `agents/connectors_demo/agent.py` | Per-agent connector activation demo | Qwen3.5-35B-A3B |
