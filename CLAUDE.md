@@ -293,9 +293,16 @@ If it's empty, ask the user to export the key from their subscription rather tha
 # Terminal 1 — backend (needed by gaia eval agent)
 python -m gaia.ui.server --port 4200 --host 127.0.0.1
 
-# Terminal 2 — eval the affected category, compare to baseline
-gaia eval agent --category rag_quality --agent-type doc \
-  --compare tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json
+# Terminal 2 — run the eval, then compare its scorecard to the committed baseline.
+# NOTE: `--compare` only DIFFS scorecards (BASELINE CURRENT) — it does NOT run an eval.
+#       Run the eval first; it prints the run dir and writes <run-dir>/scorecard.json.
+gaia eval agent --category rag_quality --agent-type doc
+# → prints an ABSOLUTE path, e.g.  Output: /…/gaia/eval/results/<run-id>/   ← use it as printed, + /scorecard.json
+# Pick the BASELINE matching your model; don't `ls -t` to find it — a fresh clone stamps
+# every baseline with the checkout time, so an mtime sort picks arbitrarily.
+gaia eval agent --compare \
+  tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json \
+  <printed-output-path>/scorecard.json
 ```
 
 **Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), regenerate the baseline with `--save-baseline` and call it out explicitly in the PR description — the reviewer needs to see the diff between baselines, not just the new score.
