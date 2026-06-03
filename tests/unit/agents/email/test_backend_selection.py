@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import pytest
 
+from gaia.agents.email.calendar_backend import CalendarBackend, LiveCalendarBackend
 from gaia.agents.email.config import ConfigurationError, EmailAgentConfig
 from gaia.agents.email.gmail_backend import GmailBackend, LiveGmailBackend
 from gaia.agents.email.outlook_backend import LiveOutlookBackend
+from gaia.agents.email.outlook_calendar_backend import LiveOutlookCalendarBackend
 
 
 class TestResolveMailBackend:
@@ -122,3 +124,88 @@ class TestAgentWiring:
             if c.connector_id == "microsoft"
         )
         assert any("graph.microsoft.com/Mail" in s for s in ms.scopes)
+
+
+class TestResolveCalendarBackend:
+    """Calendar-backend selection (#1276), mirroring ``resolve_mail_backend``.
+
+    The shipped Google calendar path must stay the default; ``microsoft`` must
+    route to the Outlook calendar backend; an injected backend always wins.
+    """
+
+    def test_default_provider_is_google_calendar(self):
+        cfg = EmailAgentConfig()
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveCalendarBackend)
+
+    def test_microsoft_provider_resolves_to_outlook_calendar(self):
+        cfg = EmailAgentConfig(calendar_provider="microsoft")
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveOutlookCalendarBackend)
+
+    def test_microsoft_calendar_satisfies_calendar_protocol(self):
+        cfg = EmailAgentConfig(calendar_provider="microsoft")
+        assert isinstance(cfg.resolve_calendar_backend(), CalendarBackend)
+
+    def test_injected_calendar_backend_wins_over_provider(self):
+        sentinel = object()
+        cfg = EmailAgentConfig(calendar_provider="microsoft", calendar_backend=sentinel)
+        assert cfg.resolve_calendar_backend() is sentinel
+
+    def test_unknown_calendar_provider_raises_actionable(self):
+        cfg = EmailAgentConfig(calendar_provider="yahoo")
+        with pytest.raises(ConfigurationError) as exc:
+            cfg.resolve_calendar_backend()
+        msg = str(exc.value)
+        assert "yahoo" in msg
+        assert "google" in msg and "microsoft" in msg
+
+    def test_calendar_provider_is_case_insensitive(self):
+        cfg = EmailAgentConfig(calendar_provider="Microsoft")
+        assert isinstance(cfg.resolve_calendar_backend(), LiveOutlookCalendarBackend)
+
+    def test_calendar_provider_defaults_to_mail_provider_when_unset(self):
+        # Convenience: a microsoft-only user who set mail_provider="microsoft"
+        # should get the Outlook calendar too without separately setting
+        # calendar_provider. (Default field value tracks mail_provider.)
+        cfg = EmailAgentConfig(mail_provider="microsoft")
+        assert isinstance(cfg.resolve_calendar_backend(), LiveOutlookCalendarBackend)
+
+
+class TestAgentCalendarWiring:
+    def test_agent_routes_microsoft_to_outlook_calendar(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        from gaia.agents.email.agent import EmailTriageAgent
+
+        cfg = EmailAgentConfig(
+            mail_provider="microsoft",
+            calendar_provider="microsoft",
+            outlook_backend=object(),  # avoid live mail token construction
+            db_path=str(tmp_path / "state.db"),
+        )
+        agent = EmailTriageAgent(config=cfg)
+        assert isinstance(agent._calendar, LiveOutlookCalendarBackend)
+
+    def test_agent_keeps_google_calendar_as_default(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        from gaia.agents.email.agent import EmailTriageAgent
+
+        cfg = EmailAgentConfig(
+            gmail_backend=object(),
+            db_path=str(tmp_path / "state.db"),
+        )
+        agent = EmailTriageAgent(config=cfg)
+        assert isinstance(agent._calendar, LiveCalendarBackend)
+
+    def test_injected_calendar_backend_still_wins_in_agent(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        from gaia.agents.email.agent import EmailTriageAgent
+
+        cal_sentinel = object()
+        cfg = EmailAgentConfig(
+            gmail_backend=object(),
+            calendar_backend=cal_sentinel,
+            db_path=str(tmp_path / "state.db"),
+        )
+        agent = EmailTriageAgent(config=cfg)
+        assert agent._calendar is cal_sentinel
