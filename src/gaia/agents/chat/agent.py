@@ -9,7 +9,7 @@ import platform
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 try:
     from watchdog.observers import Observer
@@ -167,6 +167,9 @@ class ChatAgent(
     - Session persistence with auto-save
     - MCP server integration
     """
+
+    # Dynamic MCP loader — registry exposes this for the Settings "Active for" panel.
+    CONSUMES_MCP_SERVERS: ClassVar[bool] = True
 
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """

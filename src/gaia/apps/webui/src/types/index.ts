@@ -44,6 +44,14 @@ export interface AgentInfo {
      */
     required_connections?: ConnectorRequirement[];
     /**
+     * True when the agent loads MCP servers dynamically at runtime (e.g. the
+     * chat agent) and gates their tools through the activation ledger. The
+     * Settings → Connectors "Active for" panel lists such agents as
+     * activatable for `mcp_server` connectors even without a matching
+     * `required_connections` entry.
+     */
+    consumes_mcp_servers?: boolean;
+    /**
      * Opaque grant-ledger key. Built-ins are `builtin:<id>`, custom agents
      * are `custom:<sha256-prefix>:<id>`, installed agents are
      * `installed:<id>`, and native agents are `native:<id>`. Pass this to

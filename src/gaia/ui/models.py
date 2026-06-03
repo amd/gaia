@@ -194,6 +194,11 @@ class AgentInfo(BaseModel):
     # Each entry is a serialized ``ConnectorRequirement``:
     # {connector_id: str, scopes: list[str], reason: str}.
     required_connections: List[dict] = Field(default_factory=list)
+    # True when the agent loads MCP servers dynamically at runtime (e.g. the
+    # chat agent) and gates their tools through the activation ledger. The
+    # Settings "Active for" panel lists such agents as activatable for
+    # MCP-server connectors even without a static ``required_connections`` entry.
+    consumes_mcp_servers: bool = False
     # T-X2: opaque grant-ledger key. Built-ins use ``builtin:<id>``; custom
     # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
     # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.

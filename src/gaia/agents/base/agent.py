@@ -168,6 +168,9 @@ class Agent(abc.ABC):
     # Empty list = no external connections required (the default for built-ins).
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = []
 
+    # Registry reads this to include dynamic MCP consumers in the Settings "Active for" panel.
+    CONSUMES_MCP_SERVERS: ClassVar[bool] = False
+
     # Declarative per-agent hardware requirement.  Agents that need a
     # minimum tier (e.g., NPU) should set this ClassVar to a
     # `HardwareRequirement` instance. Example:
