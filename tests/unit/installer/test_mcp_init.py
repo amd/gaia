@@ -96,6 +96,27 @@ class TestMCPInitCommand:
         assert exit_code == 0
         assert (tmp_path / ".gaia" / "mcp_servers.json").exists()
 
+    def test_completion_guidance_has_no_removed_mcp_add_command(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """`gaia mcp add` was removed in #977; the post-init guidance must not
+        tell users to run it. Regression for the runtime counterpart of #1298."""
+        from gaia.installer.mcp_init import MCPInitCommand
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        cmd = MCPInitCommand(yes=True)
+        exit_code = cmd.run()
+
+        assert exit_code == 0
+        # rich wraps long paths across lines on narrow terminals (e.g. CI's
+        # 80-col default), so strip newlines before substring-checking.
+        out = capsys.readouterr().out.replace("\n", "")
+        assert "gaia mcp add" not in out
+        # Guidance should point at the still-valid path: edit the config file.
+        assert "mcpServers" in out
+        assert "mcp_servers.json" in out
+
 
 class TestRunMCPInit:
     """Tests for run_mcp_init function."""
