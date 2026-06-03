@@ -67,15 +67,22 @@ from gaia.connectors.tokens import get_or_refresh
 logger = logging.getLogger(__name__)
 
 
-# Scopes the built-in Email Triage Agent (#962) needs to act on a mailbox.
-# A forwarded grant MUST cover these or the import fails loudly (AC3) — GAIA
-# cannot widen scope at refresh time, so the host app's initial consent must
-# have requested at least this union.
-_DEFAULT_REQUIRED_SCOPES: tuple[str, ...] = (
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/calendar.events",
-)
+# Per-provider minimum scopes a forwarded grant must cover when the caller
+# passes no explicit ``required_scopes``. Authoritative validation is the
+# caller's job (the UI router resolves the union from the granted agents'
+# ``REQUIRED_CONNECTORS``); this map is a defense-in-depth default so a
+# None-path forward never demands one provider's scopes of another. Unknown
+# providers default to no requirement — the use-time gate in
+# ``get_access_token`` still enforces per-agent scope coverage at the point an
+# agent actually requests a token.
+_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
+    # Built-in Email Triage Agent (#962) mailbox union.
+    "google": (
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar.events",
+    ),
+}
 
 
 async def get_access_token(
@@ -279,10 +286,12 @@ def import_forwarded_connection(
       - insecure keyring backend → ``ConnectorsError`` (via
         ``verify_keyring_backend``);
       - empty ``client_id`` / ``refresh_token`` → ``ConnectorsError``;
-      - forwarded scopes don't cover ``required_scopes`` (defaults to the
-        Email-agent union) → ``ScopeMismatchError``. GAIA cannot widen scope
-        at refresh time, so a shortfall is unrecoverable without re-consent
-        by the host app.
+      - forwarded scopes don't cover ``required_scopes`` → ``ScopeMismatchError``.
+        ``required_scopes is None`` falls back to the per-provider default
+        (``_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER``, empty for unknown providers);
+        an explicit ``[]`` means "require nothing" at import time. GAIA cannot
+        widen scope at refresh time, so a shortfall is unrecoverable without
+        re-consent by the host app.
 
     Returns a metadata-only summary — NEVER the refresh token or client secret.
     """
@@ -315,10 +324,12 @@ def import_forwarded_connection(
         )
 
     # 3. Scope coverage (AC3). Forwarded scopes must be a superset of what the
-    #    agent needs — GAIA cannot add scope at refresh time.
-    required = (
-        list(required_scopes) if required_scopes else list(_DEFAULT_REQUIRED_SCOPES)
-    )
+    #    agent needs — GAIA cannot add scope at refresh time. ``is not None`` so
+    #    an explicit ``[]`` means "require nothing", not "use the default".
+    if required_scopes is not None:
+        required = list(required_scopes)
+    else:
+        required = list(_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER.get(provider, ()))
     granted = set(scopes)
     missing = [s for s in required if s not in granted]
     if missing:
