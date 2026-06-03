@@ -161,6 +161,8 @@ class TestToolRegistry:
         "decline_invite",
         "create_event_from_email",
         "detect_meeting_request",
+        # Summarize (#1267)
+        "summarize_message",
         # Session preferences (in-memory; wiped on agent restart)
         "set_priority_sender",
         "set_low_priority_sender",
