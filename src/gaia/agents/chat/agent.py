@@ -9,7 +9,7 @@ import platform
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 try:
     from watchdog.observers import Observer
@@ -54,6 +54,10 @@ class ChatAgentConfig:
     # Execution settings
     max_steps: int = 10
     streaming: bool = False  # Use --streaming to enable
+
+    # NPU's FLM build runs at 4K, so a device config can override the 32K ctx.
+    device: Optional[str] = None
+    min_context_size: Optional[int] = None
 
     # Debug/output settings
     debug: bool = False
@@ -164,6 +168,9 @@ class ChatAgent(
     - MCP server integration
     """
 
+    # Dynamic MCP loader — registry exposes this for the Settings "Active for" panel.
+    CONSUMES_MCP_SERVERS: ClassVar[bool] = True
+
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """
         Initialize Chat Agent.
@@ -185,7 +192,11 @@ class ChatAgent(
             self._gaia_namespaced_agent_id = config.namespaced_agent_id
 
         # Initialize path validator
-        self.path_validator = PathValidator(config.allowed_paths)
+        self.path_validator = PathValidator(
+            config.allowed_paths,
+            on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
+            on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
+        )
 
         # Store config for access in other methods
         self.config = config
@@ -349,6 +360,12 @@ class ChatAgent(
             show_stats=config.show_stats,
             silent_mode=config.silent_mode,
             debug=config.debug,
+            device=config.device,
+            min_context_size=(
+                config.min_context_size
+                if config.min_context_size is not None
+                else 32768
+            ),
         )
 
         # Index initial documents (only if RAG is available)

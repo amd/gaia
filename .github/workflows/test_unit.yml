@@ -39,17 +39,21 @@ permissions:
 
 jobs:
   unit-tests:
-    name: Run Unit Tests
+    name: Unit Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -63,8 +67,8 @@ jobs:
           # keyring + httpx + respx are required by tests/unit/connections/
           # (issue #915). The in-memory keyring backend in tests/conftest.py
           # avoids the SecretService daemon prerequisite on Linux runners.
-          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pyfakefs \
-                                  keyring httpx respx
+          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
+                                  pyfakefs keyring httpx respx
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
@@ -85,7 +89,17 @@ jobs:
           echo "=== Running Unit Tests ==="
           echo "These are fast tests for core SDK components"
           echo ""
-          pytest tests/unit/ -v --tb=short --cov=src/gaia --cov-report=term-missing
+          pytest tests/unit/ -v --tb=short \
+            --cov=src/gaia --cov-report=term-missing --cov-report=xml:coverage.xml
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v6
+        with:
+          files: coverage.xml
+          flags: unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
       - name: Run DatabaseMixin integration tests
         env:
@@ -139,3 +153,44 @@ jobs:
           echo "Integration Tests:"
           echo "  - DatabaseMixin + Agent: Full agent lifecycle with database"
           echo "  - DatabaseAgent: Auto-registered database tools"
+
+  # Experimental macOS smoke test — validates core SDK imports and pure-Python
+  # unit tests on Darwin. continue-on-error until the full suite is macOS-clean.
+  unit-tests-macos:
+    name: Unit Tests (macOS smoke)
+    runs-on: macos-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
+                                  pyfakefs keyring httpx respx
+          uv pip install --system -e ".[api]"
+
+      - name: Validate packaging integrity
+        run: |
+          echo "=== Validating Packaging Integrity ==="
+          echo "Checking setup.py packages, __init__.py files, and entry points"
+          echo ""
+          pytest tests/unit/test_packaging.py -v --tb=short
+          echo "✅ Packaging integrity checks passed"
+
+      - name: Run unit tests (macOS smoke)
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== macOS Smoke Test ==="
+          echo "Running unit tests on macOS to catch platform-specific issues"
+          echo ""
+          pytest tests/unit/ -x --timeout=60 -v --tb=short

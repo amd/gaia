@@ -126,7 +126,7 @@ gaia init [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, mcp, vlm, npu, all) |
+| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, mcp, vlm, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
@@ -151,7 +151,6 @@ canonical choices list):
 | `rag` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Document Q&A with retrieval and vision | ~25 GB |
 | `mcp` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Model Context Protocol bridge server with vision | ~25 GB |
 | `vlm` | Qwen3-VL-4B | Image understanding and analysis | ~3 GB |
-| `npu` | Qwen3.5-35B, nomic-embed, Qwen3-VL-4B | Ryzen AI NPU-optimized models | ~25 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
@@ -798,7 +797,7 @@ gaia sd <prompt> [OPTIONS]
 |--------|------|---------|-------------|
 | `prompt` | string | - | Text description of the image to generate |
 | `-i, --interactive` | flag | false | Run in interactive mode |
-| `--sd-model` | string | SDXL-Turbo | Model: SDXL-Turbo (fast, good quality, default), SD-Turbo (faster but lower quality), SDXL-Base-1.0 (photorealistic), SD-1.5 |
+| `--sd-model` | string | SD-Turbo | Model: SD-Turbo (fast, default), SDXL-Turbo, SDXL-Base-1.0 (photorealistic), SD-1.5 |
 | `--size` | string | auto | Image size: 512x512, 768x768, 1024x1024 (auto-selected per model) |
 | `--steps` | integer | auto | Inference steps (auto: 4 for Turbo, 20 for Base) |
 | `--cfg-scale` | float | auto | CFG scale (auto: 1.0 for Turbo, 7.5 for Base) |
@@ -808,14 +807,14 @@ gaia sd <prompt> [OPTIONS]
 
 **Examples:**
 
-Fast generation with default (SDXL-Turbo):
+Fast generation with default (SD-Turbo, ~13s):
 ```bash
 gaia sd "a sunset over mountains"
 ```
 
-Faster but lower quality with SD-Turbo:
+Better quality with SDXL-Turbo (~17s):
 ```bash
-gaia sd "cyberpunk city at night" --sd-model SD-Turbo
+gaia sd "cyberpunk city at night" --sd-model SDXL-Turbo
 ```
 
 Photorealistic with SDXL-Base-1.0 (slow, ~9min):
@@ -881,125 +880,101 @@ gaia talk -i guide.pdf --no-tts
 
 ---
 
-### Summarize Command
-
-<Card title="Document Summarization" icon="file-lines" href="/guides/summarize">
-  Summarize transcripts, emails, and PDFs into multiple styles
-</Card>
-
-```bash
-gaia summarize -i <input> [OPTIONS]
-```
-
-**Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `-i, --input` | path | - | Input file or directory (required unless `--list-configs`) |
-| `-o, --output` | path | auto | Output file/directory (auto-adjusted by format) |
-| `-t, --type` | choice | auto | Input type: `transcript`, `email`, `pdf`, `auto` |
-| `-f, --format` | choice | json | Output format: `json`, `pdf`, `email`, `both` |
-| `--styles` | choice(s) | executive participants action_items | One or more of `brief`, `detailed`, `bullets`, `executive`, `participants`, `action_items`, `all` |
-| `--max-tokens` | integer | 1024 | Maximum tokens for summary |
-| `--email-to` | string | - | Recipients (comma-separated) for `email` format |
-| `--email-subject` | string | auto | Email subject line |
-| `--email-cc` | string | - | CC recipients (comma-separated) |
-| `--config` | path | - | Predefined configuration file from `configs/` |
-| `--list-configs` | flag | false | List available configuration templates |
-| `--quiet` | flag | false | Minimal output |
-| `--verbose` | flag | false | Detailed/debug output |
-| `--combined-prompt` | flag | false | Combine styles into a single LLM call (experimental) |
-| `--no-viewer` | flag | false | Don't auto-open the HTML viewer for JSON output |
-
-**Examples:**
-
-<CodeGroup>
-```bash Summarize a transcript
-gaia summarize -i meeting.txt
-```
-
-```bash PDF to PDF
-gaia summarize -i report.pdf -f pdf
-```
-
-```bash Specific styles
-gaia summarize -i meeting.txt --styles brief action_items
-```
-</CodeGroup>
-
-[→ Full Summarize Documentation](/guides/summarize)
-
----
-
 ### Jira Command
 
-<Card title="Jira Integration" icon="ticket" href="/guides/jira">
-  Manage Jira issues with natural language
+<Card title="Jira / Atlassian" icon="ticket" href="/guides/jira">
+  Natural-language interface for Jira, Confluence, and Compass using your Atlassian credentials (REST API).
 </Card>
 
 ```bash
-gaia jira "<command>" [OPTIONS]
+gaia jira "Create a bug report for the login issue"
+gaia jira --interactive
 ```
 
 **Options:**
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `command` | string | - | Natural language command (e.g., "Create a bug report for login issue") |
-| `-i, --interactive` | flag | false | Run in interactive mode for continuous commands |
-| `--mcp-host` | string | localhost | MCP bridge host |
-| `--mcp-port` | integer | 8765 | MCP bridge port |
-| `-v, --verbose` | flag | false | Enable verbose output |
-| `-d, --debug` | flag | false | Enable debug logging |
+| `command` | string | – | Natural-language command to execute (positional). |
+| `--interactive` | flag | false | Continuous interactive mode. |
+| `--mcp-host` | string | localhost | MCP bridge host. |
+| `--mcp-port` | integer | 8765 | MCP bridge port. |
+| `--verbose` | flag | false | Verbose output. |
+| `--debug` | flag | false | Debug logging. |
 
-**Examples:**
-
-<CodeGroup>
-```bash One-shot command
-gaia jira "Create a bug report for the login page"
-```
-
-```bash Interactive
-gaia jira -i
-```
-</CodeGroup>
-
-[→ Full Jira Integration Guide](/guides/jira)
+[→ Full Jira Guide](/guides/jira)
 
 ---
 
 ### Docker Command
 
-<Card title="Docker Management" icon="docker" href="/guides/docker">
-  Containerize applications with natural language
+<Card title="Docker" icon="docker" href="/guides/docker">
+  Natural-language interface for Docker containerization.
 </Card>
 
 ```bash
-gaia docker "<command>" [OPTIONS]
+gaia docker "Create a Dockerfile for my Flask app"
+gaia docker "Containerize this project" --directory ./myapp
 ```
 
 **Options:**
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `command` | string | - | Natural language command (e.g., "Create a Dockerfile for my Flask app") |
-| `-d, --directory` | path | current directory | Directory to analyze/containerize |
-| `-v, --verbose` | flag | false | Enable verbose output |
-| `--debug` | flag | false | Enable debug logging |
+| `command` | string | – | Natural-language command to execute (positional). |
+| `--directory` | path | current dir | Directory to analyze/containerize. |
+| `--verbose` | flag | false | Verbose output. |
+| `--debug` | flag | false | Debug logging. |
 
-**Examples:**
+[→ Full Docker Guide](/guides/docker)
 
-<CodeGroup>
-```bash Generate a Dockerfile
-gaia docker "Create a Dockerfile for my Flask app"
+---
+
+### Summarize Command
+
+Summarize meeting transcripts, emails, and PDFs.
+
+```bash
+gaia summarize --input ./meeting.vtt
+gaia summarize --input ./inbox/ --type email --format both
 ```
 
-```bash Target a directory
-gaia docker "Containerize this project" -d ./my-app
-```
-</CodeGroup>
+**Options:**
 
-[→ Full Docker Management Guide](/guides/docker)
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--input` | path | – | Input file or directory (required unless `--list-configs`). |
+| `--output` | path | auto | Output file/directory (auto-adjusted to format). |
+| `--type` | `transcript`\|`email`\|`pdf`\|`auto` | auto | Input type. |
+| `--format` | `json`\|`pdf`\|`email`\|`both` | json | Output format (`both` = json + pdf). |
+| `--styles` | one or more styles | executive participants action_items | `brief`, `detailed`, `bullets`, `executive`, `participants`, `action_items`, `all`. |
+
+---
+
+### Telegram Command
+
+<Card title="Telegram Adapter" icon="telegram" href="/guides/telegram-adapter">
+  Bridge a Telegram bot to GAIA so you can chat with your agents from Telegram.
+</Card>
+
+```bash
+gaia telegram start --token <BOT_TOKEN> --background
+gaia telegram status
+gaia telegram stop
+```
+
+**Subcommands & options:**
+
+| Subcommand | Option | Default | Description |
+|-----------|--------|---------|-------------|
+| `start` | `--token` (required) | – | Telegram bot token. |
+| `start` | `--allowed-users` | allow all | Comma-separated user IDs permitted to interact. |
+| `start` | `--background` | false | Run as a daemon (writes PID + health endpoint). |
+| `stop` | `--force` | false | Force stop if graceful shutdown fails. |
+| `status` | `--health-host` | 127.0.0.1 | Health server host. |
+| `status` | `--health-port` | 8765 | Health server port. |
+
+[→ Telegram Adapter Guide](/guides/telegram-adapter)
 
 ---
 
@@ -1037,6 +1012,7 @@ curl http://localhost:8080/health
     **Options:**
     - `--host` - Server host (default: localhost)
     - `--port` - Server port (default: 8080). <Warning>The `gaia mcp docker` bridge defaults to the same port — run them on different ports if you need both.</Warning>
+    - `--background` - Run in background
     - `--debug` - Enable debug logging
     - `--show-prompts` - Log the prompts sent to the LLM for every request (useful for debugging)
     - `--streaming` - Stream tokens to clients via SSE (OpenAI-style)
@@ -1049,9 +1025,9 @@ curl http://localhost:8080/health
     gaia api start
     ```
 
-    With debug logging:
+    Background with debug:
     ```bash
-    gaia api start --debug
+    gaia api start --background --debug
     ```
 
     Custom host/port:
@@ -1092,9 +1068,17 @@ curl http://localhost:8080/health
   Connect GAIA agents to external MCP servers
 </Card>
 
-Configure MCP servers that your agents can connect to. Servers are defined in `~/.gaia/mcp_servers.json` by default (one entry per server with its launch command), or in a custom config file passed via `--config`.
+Configure MCP servers that your agents can connect to. Servers are saved to `~/.gaia/mcp_servers.json` by default, or to a custom config file using `--config`.
 
 ### Commands
+
+#### Managing MCP servers (`add` / `remove`)
+
+<Note>
+`gaia mcp add` and `gaia mcp remove` were removed in #977 — MCP servers are now
+configured through the connectors framework. Run `gaia connectors --help` for the
+current commands. `gaia mcp list` (below) still lists configured servers.
+</Note>
 
 #### `gaia mcp list`
 
@@ -1144,11 +1128,14 @@ gaia mcp tools memory --config ./mcp_servers.json
 Test connection to a configured MCP server.
 
 ```bash
-gaia mcp test-client <server-name>
+gaia mcp test-client <server-name> [--config PATH]
 ```
 
 **Arguments:**
 - `<server-name>` - Name of the server to test
+
+**Options:**
+- `--config PATH` - Custom config file path (default: `~/.gaia/mcp_servers.json`)
 
 **Example:**
 ```bash
@@ -1251,7 +1238,7 @@ gaia download [OPTIONS]
 | `--list` | flag | false | List required models without downloading |
 | `--timeout` | integer | 1800 | Timeout per model in seconds |
 | `--host` | string | localhost | Lemonade server host |
-| `--port` | integer | 13305 | Lemonade server port |
+| `--port` | integer | 8000 | Lemonade server port |
 | `--clear-cache` | flag | false | Remove cached download progress/metadata before running |
 
 **Available Agents:**
@@ -1329,13 +1316,14 @@ Use `lemonade-server list` to see all available models and their download status
 </Card>
 
 **Tools for:**
-- Scenario-based agent evaluation (`gaia eval agent`)
-- Report generation (`gaia report`)
-- Performance visualization (`gaia perf-vis`)
+- Agent eval benchmark (scenario-based, end-to-end)
+- Auto-fixing failures with Claude Code
+- Report generation
+- Performance-log visualization
 
 **Quick Examples:**
 
-Run agent eval benchmark:
+Run the agent eval benchmark:
 ```bash
 gaia eval agent                                    # Run all scenarios
 gaia eval agent --category mcp_reliability         # Run MCP reliability scenarios only
@@ -1345,14 +1333,14 @@ gaia eval agent --fix                              # Auto-fix failures with Clau
 gaia eval agent --compare run1/scorecard.json run2/scorecard.json  # Compare runs
 ```
 
-Generate report:
+Generate a report:
 ```bash
-gaia report -d ./output/eval
+gaia report -d ./eval_results
 ```
 
-Launch performance visualizer:
+Visualize llama.cpp performance logs:
 ```bash
-gaia perf-vis
+gaia perf-vis ./logs/llama-server.log
 ```
 
 [→ Full Evaluation Guide](/reference/eval)
@@ -1455,6 +1443,35 @@ gaia eval agent --scenario-dir ~/my-project/eval-scenarios
 </Note>
 
 [→ Full Agent Eval Guide](/guides/eval) · [→ Scenario Authoring](/guides/eval-scenarios) · [→ CI/CD Integration](/guides/eval-ci)
+
+---
+
+### Performance Visualization
+
+Plot llama.cpp server performance metrics from one or more log files. Plots are saved as images; pass `--show` to also display them interactively.
+
+```bash
+gaia perf-vis LOG_PATH [LOG_PATH ...] [--show]
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `log_paths` | path(s) | - | One or more llama.cpp server log files to visualize |
+| `--show` | flag | false | Display plots interactively in addition to saving images |
+
+**Examples:**
+
+<CodeGroup>
+```bash Single log
+gaia perf-vis ./logs/llama-server.log
+```
+
+```bash Multiple logs + show
+gaia perf-vis ./logs/run1.log ./logs/run2.log --show
+```
+</CodeGroup>
 
 ---
 
@@ -1676,6 +1693,40 @@ gaia cache clear --all
 
 ---
 
+### Kill Command
+
+Terminate processes running on specific ports.
+
+```bash
+gaia kill [OPTIONS]
+```
+
+**Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `--port` | integer | Port number to kill process on |
+| `--lemonade` | flag | Kill Lemonade server (port 8000) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Kill Lemonade Server
+gaia kill --lemonade
+```
+
+```bash Kill by Port
+gaia kill --port 8000
+```
+</CodeGroup>
+
+This command will:
+- Find the process ID (PID) bound to the specified port
+- Forcefully terminate that process
+- Provide feedback about success or failure
+
+---
+
 ### Diagnostics Command
 
 Bundle system info and logs into a tarball for bug reports.
@@ -1712,49 +1763,6 @@ The bundle includes:
 - System info snapshot (`uname -a`, distro, relevant env vars, all TCP listeners via `ss -tlnp`)
 - State files from `~/.gaia/` (config, session data — no chat content)
 - Log files: `~/.gaia/gaia.log` and `~/.gaia/electron-main.log` (omitted with `--no-logs`)
-
----
-
-### Telegram Command
-
-Run a Telegram bot adapter that routes messages to a GAIA agent.
-
-```bash
-gaia telegram {start|stop|status} [OPTIONS]
-```
-
-**Actions:**
-
-| Action | Description |
-|--------|-------------|
-| `start` | Start the Telegram adapter (polling) |
-| `stop` | Stop a background Telegram adapter |
-| `status` | Show adapter status |
-
-**`gaia telegram start` options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `--token` | string | required | Telegram bot token |
-| `--allowed-users` | string | allow all | Comma-separated Telegram user IDs allowed to interact |
-| `--background` | flag | false | Run in background/daemon mode (writes PID and health endpoint) |
-
-**Examples:**
-
-<CodeGroup>
-```bash Start (foreground)
-gaia telegram start --token <BOT_TOKEN>
-```
-
-```bash Start in background, restricted users
-gaia telegram start --token <BOT_TOKEN> --allowed-users 12345,67890 --background
-```
-
-```bash Status / stop
-gaia telegram status
-gaia telegram stop
-```
-</CodeGroup>
 
 ---
 

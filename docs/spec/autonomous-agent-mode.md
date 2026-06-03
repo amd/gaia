@@ -952,7 +952,7 @@ async def _run_step(self, trigger: AgentTrigger, session: dict):
 **Settings:**
 - [ ] `agent_mode` in `SettingsResponse` + `SettingsUpdateRequest` (default `"autonomous"`)
 - [ ] GET/PUT `/api/settings` validates `agent_mode` against `"manual"|"goal_driven"|"autonomous"`
-- [ ] `GAIA_AUTO_OBSERVE_MODEL` env var wired into AgentLoop (default `"Qwen3-0.6B-GGUF"`)
+- [ ] `GAIA_AUTO_OBSERVE_MODEL` env var wired into AgentLoop (default `"Qwen3-4B-GGUF"`)
 
 **Audit Log:**
 - [ ] `GET /api/agent/activity` + `GET /api/agent/activity/{id}` endpoints

@@ -407,8 +407,8 @@ def goodbye():
         self.assertIn("Hello, Python!", modified)
         self.assertNotIn("Hello, World!", modified)
 
-        # Verify backup
-        self.assertTrue(os.path.exists(test_file + ".bak"))
+        # Verify backup (path returned in result; naming format depends on security validator)
+        self.assertTrue(os.path.exists(result["backup_path"]))
 
     def test_edit_dry_run(self):
         """Test dry run mode for editing."""
@@ -663,7 +663,7 @@ class TestCodeAgentIntegration(unittest.TestCase):
             backup=True,
         )
         self.assertEqual(edit_result["status"], "success")
-        self.assertTrue(os.path.exists(test_file + ".bak"))
+        self.assertTrue(os.path.exists(edit_result["backup_path"]))
 
         # Step 5: Validate the edited file
         final_content = Path(test_file).read_text()

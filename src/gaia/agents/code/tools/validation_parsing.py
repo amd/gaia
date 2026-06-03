@@ -62,7 +62,7 @@ class ValidationAndParsingMixin:
         Returns:
             Dictionary with validation results
         """
-        return self.requirements_validator.validate(req_file, fix)
+        return self.requirements_validator.validate(req_file, fix)  # type: ignore[no-any-return, attr-defined]
 
     def _validate_python_files(
         self, py_files: List[Path], _fix: bool
@@ -84,7 +84,7 @@ class ValidationAndParsingMixin:
                 content = py_file.read_text()
 
                 # Validate syntax
-                syntax_result = self.syntax_validator.validate_dict(content)
+                syntax_result = self.syntax_validator.validate_dict(content)  # type: ignore[attr-defined]
                 if not syntax_result["is_valid"]:
                     errors.extend(
                         [f"{py_file}: {err}" for err in syntax_result.get("errors", [])]
@@ -114,7 +114,7 @@ class ValidationAndParsingMixin:
         Returns:
             Dictionary with antipattern check results
         """
-        return self.antipattern_checker.check_dict(content)
+        return self.antipattern_checker.check_dict(content)  # type: ignore[no-any-return, attr-defined]
 
     def _validate_python_syntax(self, code: str) -> Dict[str, Any]:
         """Validate Python code syntax (delegates to validator).
@@ -125,7 +125,7 @@ class ValidationAndParsingMixin:
         Returns:
             Dictionary with validation results
         """
-        return self.syntax_validator.validate_dict(code)
+        return self.syntax_validator.validate_dict(code)  # type: ignore[no-any-return, attr-defined]
 
     def _validate_javascript_files(
         self, js_files: List[Path], _fix: bool

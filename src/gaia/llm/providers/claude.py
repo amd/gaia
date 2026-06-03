@@ -74,7 +74,7 @@ class ClaudeProvider(LLMClient):
         response = self._client.messages.create(**params)
         if stream:
             return self._handle_stream(response)
-        return response.content[0].text
+        return response.content[0].text  # type: ignore[no-any-return]
 
     # embed() inherited from ABC - raises NotSupportedError
 
@@ -99,7 +99,8 @@ class ClaudeProvider(LLMClient):
                 ],
             }
         ]
-        return self.chat(messages, **kwargs)
+        result = self.chat(messages, **kwargs)
+        return result if isinstance(result, str) else "".join(result)
 
     # get_performance_stats() inherited from ABC - raises NotSupportedError
     # load_model() inherited from ABC - raises NotSupportedError
