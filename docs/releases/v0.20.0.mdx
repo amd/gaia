@@ -74,6 +74,7 @@ PR [#1366](https://github.com/amd/gaia/pull/1366) makes the feature reachable in
 - **RAG indexing re-embedded everything on every document add** (PR [#1306](https://github.com/amd/gaia/pull/1306)) — Adding a document rebuilt embeddings for all previously indexed chunks and then embedded the new file again for its per-file index, so indexing cost grew far faster than it should as a corpus grew. Each file is now embedded once and the result is reused for both the global and per-file FAISS indexes, on both the fresh-index and cache-load paths.
 - **Overlapping chat turns could corrupt a session** (PR [#1304](https://github.com/amd/gaia/pull/1304)) — A second `/api/chat/send` for a session with an in-flight turn waited 5s and then force-released the per-session lock — but `asyncio.Lock` doesn't track ownership, so a slow-but-healthy request could still be running when a second one was let through. Overlapping requests now get a clean `409` and the unsafe force-release path is gone.
 - **Memory Dashboard and Settings fought over the screen** (PR [#1368](https://github.com/amd/gaia/pull/1368)) — In the (non-router-based) Agent UI, opening the Memory Dashboard did nothing while Settings was open, and the two views could leave each other's flag set so a stale dashboard re-surfaced later. The two top-level views are now mutually exclusive in the store.
+- **Post-init guidance pointed at a removed command** (PR [#1377](https://github.com/amd/gaia/pull/1377)) — `gaia init --profile mcp` and `gaia mcp list` told users to register MCP servers with `gaia mcp add …`, a command removed in #977 — copy-pasting it errored on the very first step. Both now point at the path that works today: editing `~/.gaia/mcp_servers.json` directly.
 
 ---
 
@@ -98,8 +99,9 @@ This release lands a large test-infrastructure and CI-hardening pass:
 
 ## Full Changelog
 
-**63 commits** since v0.19.0:
+**64 commits** since v0.19.0:
 
+- `f6d21c96` — fix(mcp): stop pointing users at removed `gaia mcp add` after init (#1377)
 - `a12c39e0` — docs: fix wrong model defaults, fabricated CLI commands, and stale references (#1298)
 - `3d6dbd13` — docs(claude): sync agent/tool tables with code; fix convention checker + add missing agent tests (#1340)
 - `f12308d2` — ci(claude): fix pr-rereview no-op — github.event.before is push-only (#1374)
