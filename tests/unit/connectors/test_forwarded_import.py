@@ -204,6 +204,82 @@ class TestGrants:
         assert list_agent_grants("google") == {}
 
 
+class TestProviderAwareScopeDefaults:
+    """Verify the fix for the provider-agnostic _DEFAULT_REQUIRED_SCOPES bug.
+
+    Before the fix, forwarding any provider with required_scopes=None fell
+    through to the Google-only default, so Microsoft (and every other non-Google
+    provider) was demanded Gmail scopes.  After the fix:
+      - Unknown providers default to an empty requirement (no import-time check).
+      - An explicit required_scopes=[] is honoured (not overridden by the default).
+      - Google's existing default is preserved for backward compat.
+    """
+
+    MS_SCOPES = [
+        "openid",
+        "offline_access",
+        "https://graph.microsoft.com/Mail.ReadWrite",
+        "https://graph.microsoft.com/Mail.Send",
+        "https://graph.microsoft.com/Calendars.ReadWrite",
+    ]
+
+    def test_non_google_provider_none_path_does_not_demand_google_scopes(
+        self, monkeypatch
+    ):
+        """Microsoft forward with required_scopes=None must NOT raise — there
+        is no Microsoft entry in _DEFAULT_REQUIRED_SCOPES_BY_PROVIDER so the
+        default is an empty list.  The forwarded Graph scopes need not include
+        any gmail.* URL.
+
+        We patch ``gaia.connectors.api.get_provider`` rather than injecting
+        into ``_registry`` because ``import_forwarded_connection`` pops the
+        registry entry (step 5) before re-calling ``get_provider`` to compute
+        the fresh ``client_id_hash``.  Patching the function avoids the pop.
+        """
+        import zlib
+        from unittest.mock import MagicMock
+
+        fake_ms = MagicMock()
+        fake_ms.client_id_hash = format(zlib.crc32(b"ms-client-id"), "08x")
+        monkeypatch.setattr("gaia.connectors.api.get_provider", lambda _: fake_ms)
+
+        result = import_forwarded_connection(
+            provider="microsoft",
+            client_id="ms-client-id",
+            client_secret="ms-secret",
+            refresh_token="ms-refresh",
+            scopes=self.MS_SCOPES,
+            account_email="user@outlook.com",
+            # required_scopes intentionally omitted → defaults to [] for microsoft
+        )
+        assert result["provider"] == "microsoft"
+        assert result["account_email"] == "user@outlook.com"
+
+    def test_explicit_empty_required_scopes_is_honoured(self):
+        """required_scopes=[] must mean "require nothing", not "use the
+        Google default".  Before the fix, [] was falsy so the Google default
+        fired and a Google forward with only openid would fail."""
+        # Even a minimal Google scope list is accepted when required_scopes=[].
+        _do_import(scopes=["openid"], required_scopes=[])
+
+    def test_explicit_nonempty_required_scopes_are_still_enforced(self):
+        """Passing an explicit required list tighter than the forwarded
+        scopes must still fail loudly."""
+        with pytest.raises(ScopeMismatchError):
+            _do_import(
+                scopes=["openid"],
+                required_scopes=["https://www.googleapis.com/auth/gmail.modify"],
+            )
+
+    def test_google_default_still_enforced_on_none_path(self):
+        """Regression: the Google None-path default must still gate a
+        shortfall.  This is the existing test_scope_shortfall_raises_loudly
+        re-asserted to prove the map entry is wired up."""
+        with pytest.raises(ScopeMismatchError) as ei:
+            _do_import(scopes=["https://www.googleapis.com/auth/gmail.modify"])
+        assert "gmail.send" in str(ei.value)
+
+
 class TestRefreshUsesForwardedClient:
     @respx.mock
     async def test_refresh_posts_forwarded_client(self):

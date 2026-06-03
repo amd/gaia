@@ -878,7 +878,7 @@ async def delete_activation(connector_id: str, agent_id: str) -> Response:
     "/{provider}", status_code=201, dependencies=[Depends(_require_ui_header)]
 )
 async def forward_connection(
-    provider: str, body: ForwardConnectionRequest
+    request: Request, provider: str, body: ForwardConnectionRequest
 ) -> Dict[str, Any]:
     """Persist a forwarded grant — no browser/consent step (AC1, AC3, AC4).
 
@@ -886,7 +886,27 @@ async def forward_connection(
     insecure keyring backend → 500; missing required scopes → 403 +
     ``missing_scopes``. Returns a metadata-only summary — never the refresh
     token or client secret.
+
+    Required scopes are resolved from the granted agents' ``REQUIRED_CONNECTORS``
+    declarations (single source of truth). This means scope requirements
+    auto-tighten as agents add new ``ConnectorRequirement`` entries — no
+    duplication in the router.
     """
+    # Resolve required scopes from the granted agents' REQUIRED_CONNECTORS so
+    # the import-time check is driven by what agents actually need, not a
+    # hardcoded list in the connectors layer.
+    registry = getattr(request.app.state, "agent_registry", None)
+    required: set[str] = set()
+    if registry is not None and body.grant_agents:
+        by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
+        for nsid in body.grant_agents:
+            reg = by_nsid.get(nsid)
+            if reg is None:
+                continue
+            for cr in reg.required_connections:
+                if cr.connector_id == provider:
+                    required.update(cr.scopes)
+
     try:
         summary = connections.import_forwarded_connection(
             provider=provider,
@@ -896,6 +916,7 @@ async def forward_connection(
             scopes=body.scopes,
             account_email=body.account_email,
             grant_agents=body.grant_agents,
+            required_scopes=sorted(required),
         )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
