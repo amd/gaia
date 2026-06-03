@@ -39,11 +39,13 @@ def session_id(client):
     return resp.json()["id"]
 
 
-class TestSessionLockForceRelease:
-    """Tests for per-session lock force-release on stuck requests."""
+class TestSessionLockConflict:
+    """Tests for same-session conflict handling."""
 
-    def test_concurrent_request_force_releases_stuck_lock(self, app, session_id):
-        """When a session lock is stuck, a second request force-releases it and proceeds."""
+    def test_concurrent_request_returns_409_if_session_lock_is_held(
+        self, app, session_id
+    ):
+        """When a session lock is held, a second request should get 409."""
         # Pre-acquire the session lock to simulate a stuck request
         lock = asyncio.Lock()
 
@@ -63,14 +65,15 @@ class TestSessionLockForceRelease:
                 "/api/chat/send",
                 json={
                     "session_id": session_id,
-                    "message": "should succeed after force-release",
+                    "message": "should conflict while another turn is active",
                     "stream": False,
                 },
             )
-        # Should succeed (200) instead of deadlocking with 409
-        assert resp.status_code == 200
+        assert resp.status_code == 409
+        assert "already in progress" in resp.json()["detail"]
 
         # Cleanup
+        lock.release()
         loop.close()
 
     def test_different_sessions_not_blocked(self, client, db):

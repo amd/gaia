@@ -84,6 +84,16 @@ class TestSessions:
         result = db.update_session(session["id"])
         assert result["title"] == "Keep"
 
+    def test_update_session_model(self, db):
+        # Multi-device (#1220): a device switch rewrites the session model so
+        # the rebuilt agent loads the device's model (release blocker B1).
+        session = db.create_session(model="Gemma-4-E4B-it-GGUF")
+        updated = db.update_session(
+            session["id"], device="npu", model="gemma4-it-e2b-FLM"
+        )
+        assert updated["device"] == "npu"
+        assert updated["model"] == "gemma4-it-e2b-FLM"
+
     def test_update_session_not_found(self, db):
         result = db.update_session("nonexistent", title="Nope")
         assert result is None

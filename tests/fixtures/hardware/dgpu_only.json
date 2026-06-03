@@ -1,0 +1,6 @@
+{
+  "devices": {
+    "amd_dgpu": { "memory_mb": 16384, "name": "AMD Radeon RX 7900 XTX" },
+    "cpu": { "cores": 16 }
+  }
+}
