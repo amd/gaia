@@ -25,6 +25,8 @@ Before this release, GAIA inference defaulted to GPU via llama.cpp with no way t
 
 GPU remains the default. The NPU path uses the FLM backend (`gemma4-it-e2b-FLM`); CPU falls back automatically with a latency warning. `gaia init --profile npu` handles NPU detection, FLM backend installation, and model download. Eval-verified on a Ryzen AI MAX+ PRO 395, the NPU matches or exceeds GPU output quality (personality 3/3 @ 9.5/10, context retention 4/4 @ 9.8/10) at ~24 tok/s.
 
+PR [#1338](https://github.com/amd/gaia/pull/1338) completes the wiring so the selector isn't just cosmetic: choosing a device now actually switches the model and context window to that device's registered config, and requesting hardware the host doesn't have fails loudly with an actionable remedy instead of silently rebuilding on the GPU.
+
 ---
 
 ### Per-Agent MCP Tool-Visibility Activations
@@ -32,6 +34,8 @@ GPU remains the default. The NPU path uses the FLM backend (`gemma4-it-e2b-FLM`)
 Layered on the connectors framework, PR [#1219](https://github.com/amd/gaia/pull/1219) (issue [#1005](https://github.com/amd/gaia/issues/1005)) splits connector control into two independent axes: **grants** (credential access, already shipped) and **activations** (which of a connector's MCP tools land in an agent's prompt). Previously, every granted connector surfaced all of its tools to every agent that held the grant — a ChatAgent with several MCP servers granted could carry ~30 extra tool descriptions in its system prompt, bloating context and degrading small-model tool selection. Activations default to **off** and are opt-in per `(connector, agent)` pair.
 
 PR [#1309](https://github.com/amd/gaia/pull/1309) (issue [#1226](https://github.com/amd/gaia/issues/1226)) closes the loop for non-UI writes: activation toggles from `gaia connectors activations activate/deactivate` and direct SDK calls now emit the same live `connector.activation.changed` SSE update the HTTP router already sent, so the Agent UI's "Active for" panel reflects CLI/SDK changes without a manual refresh.
+
+PR [#1310](https://github.com/amd/gaia/pull/1310) (issue [#1227](https://github.com/amd/gaia/issues/1227)) widens the "Active for" panel to also list agents that consume MCP servers *dynamically* — like the chat agent loading servers from `~/.gaia/mcp_servers.json` — not only agents that statically declare `REQUIRED_CONNECTORS`. The chat agent now shows up as an activatable target for MCP-only connectors.
 
 ---
 
@@ -51,6 +55,8 @@ Bulk inbox work in the email agent was expensive: marking 9 emails read took ~13
 
 Uploading a `.pptx` previously told users to save it as PDF first. PR [#1224](https://github.com/amd/gaia/pull/1224) indexes PowerPoint natively — extracting text from shapes, tables, and speaker notes, with VLM analysis of embedded images when a vision model is available. The implementation mirrors the existing PDF pipeline (same `VLMClient` integration, `[Page N]` markers, merge strategy, and metadata structure) so downstream chunking and retrieval are unchanged. A zip-bomb guard checks uncompressed size before opening (500 MB limit), and WMF/EMF metafiles are skipped gracefully since PIL cannot decode them.
 
+PR [#1366](https://github.com/amd/gaia/pull/1366) makes the feature reachable in the Agent UI: the React file picker had kept `.pptx` on its unsupported-Office blocklist and rejected the upload before it reached the backend that already accepted it (issues [#1072](https://github.com/amd/gaia/issues/1072), [#1291](https://github.com/amd/gaia/issues/1291)). `.pptx` is now in the supported set, matching the server allowlist exactly; `.doc/.docx/.ppt/.xls` stay blocked.
+
 ---
 
 ## Bug Fixes
@@ -65,6 +71,9 @@ Uploading a `.pptx` previously told users to save it as PDF first. PR [#1224](ht
 - **Agent UI memory API on random backend ports** (PR [#1257](https://github.com/amd/gaia/pull/1257)) — `memoryApi` now uses the dynamic API base so it works when the backend binds a non-default port.
 - **Agent export no longer aborts on an unreadable directory** (PR [#1221](https://github.com/amd/gaia/pull/1221)) — Unreadable agent directories are skipped during export rather than failing the whole pass.
 - **faiss AVX fallback log noise suppressed** (PR [#1222](https://github.com/amd/gaia/pull/1222)) — The AVX2/AVX-512 fallback chatter faiss prints on import is now quieted.
+- **RAG indexing re-embedded everything on every document add** (PR [#1306](https://github.com/amd/gaia/pull/1306)) — Adding a document rebuilt embeddings for all previously indexed chunks and then embedded the new file again for its per-file index, so indexing cost grew far faster than it should as a corpus grew. Each file is now embedded once and the result is reused for both the global and per-file FAISS indexes, on both the fresh-index and cache-load paths.
+- **Overlapping chat turns could corrupt a session** (PR [#1304](https://github.com/amd/gaia/pull/1304)) — A second `/api/chat/send` for a session with an in-flight turn waited 5s and then force-released the per-session lock — but `asyncio.Lock` doesn't track ownership, so a slow-but-healthy request could still be running when a second one was let through. Overlapping requests now get a clean `409` and the unsafe force-release path is gone.
+- **Memory Dashboard and Settings fought over the screen** (PR [#1368](https://github.com/amd/gaia/pull/1368)) — In the (non-router-based) Agent UI, opening the Memory Dashboard did nothing while Settings was open, and the two views could leave each other's flag set so a stale dashboard re-surfaced later. The two top-level views are now mutually exclusive in the store.
 
 ---
 
@@ -82,13 +91,34 @@ This release lands a large test-infrastructure and CI-hardening pass:
 - **mypy errors resolved across the codebase** (PRs [#1253](https://github.com/amd/gaia/pull/1253) and [#1296](https://github.com/amd/gaia/pull/1296)).
 - **Value-prop-first release notes via the `gaia-release` skill** (PR [#1330](https://github.com/amd/gaia/pull/1330)).
 - **Installer repo-root resolution fixed** (PRs [#1326](https://github.com/amd/gaia/pull/1326) and [#1332](https://github.com/amd/gaia/pull/1332)) and **`.claude/launch.json` symlink replaced with a repo-local definition** (PR [#1228](https://github.com/amd/gaia/pull/1228)).
+- **Documentation realigned with the code** — a repo-wide doc audit removed fabricated CLI commands, corrected model defaults and Lemonade ports, and synced the agent/tool tables and CLI reference with the source (PRs [#1298](https://github.com/amd/gaia/pull/1298), [#1337](https://github.com/amd/gaia/pull/1337), [#1340](https://github.com/amd/gaia/pull/1340)).
+- **Real-world test-harness skill + CI hardening** — added the `gaia-testing` skill (PR [#1372](https://github.com/amd/gaia/pull/1372)) and hardened the Claude CI automation and Codecov reporting (PRs [#1369](https://github.com/amd/gaia/pull/1369), [#1343](https://github.com/amd/gaia/pull/1343), [#1376](https://github.com/amd/gaia/pull/1376), [#1374](https://github.com/amd/gaia/pull/1374)).
 
 ---
 
 ## Full Changelog
 
-**44 commits** since v0.19.0:
+**63 commits** since v0.19.0:
 
+- `a12c39e0` — docs: fix wrong model defaults, fabricated CLI commands, and stale references (#1298)
+- `3d6dbd13` — docs(claude): sync agent/tool tables with code; fix convention checker + add missing agent tests (#1340)
+- `f12308d2` — ci(claude): fix pr-rereview no-op — github.event.before is push-only (#1374)
+- `ddbd95f5` — docs(skills): disambiguate gaia-testing + machine discovery + dev docs (#1375)
+- `2f4b6bc9` — chore(deps): bump the github-actions group across 1 directory with 7 updates (#1373)
+- `0f7ab222` — ci(codecov): disable PR comments (#1376)
+- `1316fae0` — feat(connectors): surface MCP-consuming agents in the "Active for" panel (#1227) (#1310)
+- `ece7a6c6` — docs(cli): fix Jira CLI card to reflect direct Atlassian REST API access (#1364)
+- `58ad3c99` — docs(skills): add gaia-testing real-world test harness skill (#1372)
+- `50589f25` — ci(claude): fix auto-fix triggers, harden for subscription, all-Opus (#1369)
+- `dd38874f` — fix(ui): unblock .pptx upload in Agent UI (#1366)
+- `30653f18` — docs(claude): human-first communication style in CLAUDE.md (#1370)
+- `f91c8cc9` — fix(ui): make Memory Dashboard and Settings mutually exclusive in chatStore (#1368)
+- `1fe50b63` — fix(agents): wire multi-device selection end-to-end and validate at runtime (#1338)
+- `6c31bb48` — docs(spec): Agent Hub restructure spec (#1102) (#1342)
+- `70ac4926` — ci(claude): authenticate claude-code-action via subscription OAuth token (#1343)
+- `5e0467a5` — docs: align CLAUDE.md + CLI reference with the code (release-skill fixups) (#1337)
+- `2466ba02` — fix(ui): return 409 for overlapping chat turns (#1304)
+- `30224306` — fix(rag): reuse per-file embeddings during indexing (#1306)
 - `bb9f43fa` — fix(types): resolve remaining mypy errors missed by #1253 (#1296)
 - `e8c501b0` — fix(installer): resolve repo root correctly in bash scripts under installer/ (#1332)
 - `83255cfd` — fix(installer): resolve repo root correctly in scripts under installer/ (#1326)
