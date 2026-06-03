@@ -731,6 +731,19 @@ Common flags at the `index` level: `--repo`, `--max-files`, `--model`, `--base-u
 - Material Assignment
 - MCP Integration
 
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--query` | string | – | Custom query to run instead of the built-in examples |
+| `--interactive` | flag | false | Continuously input queries in interactive mode |
+| `--example` | string | – | Run a specific built-in example (1-6); omit for interactive mode |
+| `--steps` | integer | 5 | Maximum number of steps per query |
+| `--output-dir` | path | output | Directory to save output files |
+| `--mcp-port` | integer | 9876 | Port for the Blender MCP server |
+| `--debug-prompts` | flag | false | Show prompts sent to the LLM |
+| `--print-result` | flag | false | Print results to the console |
+
 **Examples:**
 
 Interactive Blender mode:
@@ -943,11 +956,21 @@ gaia summarize --input ./inbox/ --type email --format both
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--input` | path | – | Input file or directory (required unless `--list-configs`). |
-| `--output` | path | auto | Output file/directory (auto-adjusted to format). |
-| `--type` | `transcript`\|`email`\|`pdf`\|`auto` | auto | Input type. |
-| `--format` | `json`\|`pdf`\|`email`\|`both` | json | Output format (`both` = json + pdf). |
+| `-i, --input` | path | – | Input file or directory (required unless `--list-configs`). |
+| `-o, --output` | path | auto | Output file/directory (auto-adjusted to format). |
+| `-t, --type` | `transcript`\|`email`\|`pdf`\|`auto` | auto | Input type. |
+| `-f, --format` | `json`\|`pdf`\|`email`\|`both` | json | Output format (`both` = json + pdf). |
 | `--styles` | one or more styles | executive participants action_items | `brief`, `detailed`, `bullets`, `executive`, `participants`, `action_items`, `all`. |
+| `--max-tokens` | integer | 1024 | Maximum tokens for the summary. |
+| `--email-to` | string | – | Recipients (comma-separated) for `email` output format. |
+| `--email-subject` | string | auto | Email subject line. |
+| `--email-cc` | string | – | CC recipients (comma-separated). |
+| `--config` | path | – | Use a predefined configuration file from `configs/`. |
+| `--list-configs` | flag | false | List available configuration templates and exit. |
+| `--combined-prompt` | flag | false | Combine styles into a single LLM call (experimental). |
+| `--no-viewer` | flag | false | Don't auto-open the HTML viewer for JSON output. |
+| `--quiet` | flag | false | Minimal output. |
+| `--verbose` | flag | false | Detailed/debug output. |
 
 ---
 
@@ -1012,7 +1035,6 @@ curl http://localhost:8080/health
     **Options:**
     - `--host` - Server host (default: localhost)
     - `--port` - Server port (default: 8080). <Warning>The `gaia mcp docker` bridge defaults to the same port — run them on different ports if you need both.</Warning>
-    - `--background` - Run in background
     - `--debug` - Enable debug logging
     - `--show-prompts` - Log the prompts sent to the LLM for every request (useful for debugging)
     - `--streaming` - Stream tokens to clients via SSE (OpenAI-style)
@@ -1025,9 +1047,9 @@ curl http://localhost:8080/health
     gaia api start
     ```
 
-    Background with debug:
+    With debug logging:
     ```bash
-    gaia api start --background --debug
+    gaia api start --debug
     ```
 
     Custom host/port:
