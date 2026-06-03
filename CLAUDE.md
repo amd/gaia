@@ -143,6 +143,14 @@ This self-review step is mandatory - never skip verification of your output.
 # Check that new .mdx files are referenced in docs/docs.json
 ```
 
+**`amd-gaia.ai` links in `src/gaia/` MUST keep the `/docs/` path prefix.** Use
+`https://amd-gaia.ai/docs/guides/...`, never `https://amd-gaia.ai/guides/...` — the
+Mintlify docs tab serves under `/docs/` and bare paths 404. This is enforced by
+`tests/unit/test_amd_gaia_urls.py` (issue #1058), which scans every `amd-gaia.ai`
+URL literal in `src/gaia/`; dropping `/docs/` from a runtime string is a CI failure,
+not a cleanup. Only the site root and install scripts (`/install.ps1`, `/install.sh`)
+are allowlisted without the prefix.
+
 ### Code Reuse and Base Classes
 
 **Always extend existing base classes and reuse core functionality.** The `src/gaia/agents/base/` directory provides foundational components:
