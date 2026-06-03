@@ -109,7 +109,9 @@ class TestMCPInitCommand:
         exit_code = cmd.run()
 
         assert exit_code == 0
-        out = capsys.readouterr().out
+        # rich wraps long paths across lines on narrow terminals (e.g. CI's
+        # 80-col default), so strip newlines before substring-checking.
+        out = capsys.readouterr().out.replace("\n", "")
         assert "gaia mcp add" not in out
         # Guidance should point at the still-valid path: edit the config file.
         assert "mcpServers" in out
