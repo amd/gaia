@@ -4,6 +4,9 @@
 codecov:
   require_ci_to_pass: true
 
+# Disable Codecov PR comments; coverage status checks still run.
+comment: false
+
 coverage:
   status:
     project:

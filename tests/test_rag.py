@@ -380,6 +380,109 @@ class TestRAGSDK:
                 assert isinstance(result2, dict)
                 assert result2.get("success") is True
 
+    def test_indexing_two_documents_embeds_each_file_once(self, mock_dependencies):
+        """Test that each indexed file is embedded once on the steady-state path."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                doc1 = Path(temp_dir) / "doc1.txt"
+                doc1.write_text("doc1")
+                doc2 = Path(temp_dir) / "doc2.txt"
+                doc2.write_text("doc2")
+
+                encode_calls = []
+
+                def fake_encode(texts, show_progress=False):  # noqa: ARG001
+                    encode_calls.append(list(texts))
+                    return np.array(
+                        [[0.1, 0.2, 0.3, 0.4] for _ in texts], dtype=np.float32
+                    )
+
+                with (
+                    patch.object(
+                        rag,
+                        "_extract_text_from_file",
+                        side_effect=[("doc1 text", {}), ("doc2 text", {})],
+                    ),
+                    patch.object(
+                        rag,
+                        "_split_text_into_chunks",
+                        side_effect=[["doc1 chunk"], ["doc2 chunk"]],
+                    ),
+                    patch.object(rag, "_encode_texts", side_effect=fake_encode),
+                ):
+                    result1 = rag.index_document(str(doc1))
+                    result2 = rag.index_document(str(doc2))
+
+                assert result1["success"] is True
+                assert result2["success"] is True
+                assert encode_calls == [["doc1 chunk"], ["doc2 chunk"]]
+
+    def test_cache_load_embeds_each_cached_file_once(self, mock_dependencies):
+        """Test that cache loads reuse one embedding pass per cached file."""
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir, show_stats=False)
+
+            doc1 = Path(temp_dir) / "doc1.txt"
+            doc1.write_text("doc1")
+            doc2 = Path(temp_dir) / "doc2.txt"
+            doc2.write_text("doc2")
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                seed_rag = RAGSDK(config)
+
+                with (
+                    patch.object(
+                        seed_rag,
+                        "_extract_text_from_file",
+                        side_effect=[("doc1 text", {}), ("doc2 text", {})],
+                    ),
+                    patch.object(
+                        seed_rag,
+                        "_split_text_into_chunks",
+                        side_effect=[["cached doc1 chunk"], ["cached doc2 chunk"]],
+                    ),
+                ):
+                    assert seed_rag.index_document(str(doc1))["success"] is True
+                    assert seed_rag.index_document(str(doc2))["success"] is True
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+
+                encode_calls = []
+
+                def fake_encode(texts, show_progress=False):  # noqa: ARG001
+                    encode_calls.append(list(texts))
+                    return np.array(
+                        [[0.1, 0.2, 0.3, 0.4] for _ in texts], dtype=np.float32
+                    )
+
+                with (
+                    patch.object(
+                        rag,
+                        "_extract_text_from_file",
+                        side_effect=AssertionError("cache load should skip extraction"),
+                    ),
+                    patch.object(rag, "_encode_texts", side_effect=fake_encode),
+                ):
+                    result1 = rag.index_document(str(doc1))
+                    result2 = rag.index_document(str(doc2))
+
+                assert result1["success"] is True
+                assert result1["from_cache"] is True
+                assert result2["success"] is True
+                assert result2["from_cache"] is True
+                assert encode_calls == [["cached doc1 chunk"], ["cached doc2 chunk"]]
+
     # NOTE: The pickle-era cache recovery tests (test_corrupted_cache_recovery,
     # test_cache_checksum_mismatch_recovery, test_oversized_cache_rejected,
     # test_old_format_cache_migration) were removed when the cache format

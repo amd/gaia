@@ -275,6 +275,12 @@ class AgentRegistration:
     # the CLI ``gaia connectors grants`` command can render the prompt
     # without re-importing the agent module.
     required_connections: List[ConnectorRequirement] = field(default_factory=list)
+    # ``consumes_mcp_servers`` is the agent class's ``CONSUMES_MCP_SERVERS``
+    # ClassVar surfaced into the registry. True for agents that load MCP
+    # servers dynamically at runtime (e.g. ChatAgent); lets the Settings
+    # "Active for" panel list them as activatable for MCP-server connectors
+    # even though they declare no static ``REQUIRED_CONNECTORS`` for those.
+    consumes_mcp_servers: bool = False
     # T-X2 (issue #915, plan amendment A9):
     # ``namespaced_agent_id`` is the grant-ledger key for this agent. Built-in
     # agents use ``builtin:<id>``; custom agents under ``~/.gaia/agents/``
@@ -413,6 +419,10 @@ class AgentRegistry:
                 agent_dir=None,
                 models=[],
                 required_connections=[],
+                # Hardcoded to mirror ``ChatAgent.CONSUMES_MCP_SERVERS`` — the
+                # lazy factory must not import the chat module at discovery
+                # time. A guard test keeps the two in sync.
+                consumes_mcp_servers=True,
                 namespaced_agent_id="builtin:chat",
                 category="conversation",
                 tags=["chat", "general", "personality"],
@@ -1185,6 +1195,7 @@ class AgentRegistry:
         required_connections = list(
             getattr(agent_class, "REQUIRED_CONNECTORS", []) or []
         )
+        consumes_mcp_servers = bool(getattr(agent_class, "CONSUMES_MCP_SERVERS", False))
         origin_hash = _compute_custom_origin_hash(py_file)
         namespaced_id = f"custom:{origin_hash}:{agent_id}"
 
@@ -1280,6 +1291,7 @@ class AgentRegistry:
                 agent_dir=agent_dir,
                 models=models,
                 required_connections=required_connections,
+                consumes_mcp_servers=consumes_mcp_servers,
                 namespaced_agent_id=namespaced_id,
                 category=agent_category,
                 tags=agent_tags,

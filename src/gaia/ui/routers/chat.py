@@ -86,22 +86,16 @@ async def send_message(
     sid = request.session_id
     session_lock = session_locks.setdefault(sid, asyncio.Lock())
 
-    # Acquire session lock — if a previous request is stuck (hung LLM
-    # connection, crashed stream), force-release and proceed rather than
-    # leaving the user permanently stuck with "request already in progress".
-    try:
-        await asyncio.wait_for(session_lock.acquire(), timeout=5.0)
-    except asyncio.TimeoutError:
-        logger.warning(
-            "Force-releasing stuck session lock for %s "
-            "(previous request likely hung)",
-            sid,
+    # Reject overlapping turns for the same session. Force-releasing an
+    # asyncio.Lock held by another coroutine is unsafe because the lock
+    # has no ownership tracking.
+    if session_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="A chat request is already in progress for this session. "
+            "Please wait for it to finish.",
         )
-        try:
-            session_lock.release()
-        except RuntimeError:
-            pass  # Lock wasn't held — race condition, safe to ignore
-        await session_lock.acquire()
+    await session_lock.acquire()
 
     # ── Global concurrency gate ──────────────────────────────────────
     # Queue rather than immediately reject: wait up to 60 s for a slot.

@@ -4,6 +4,15 @@ description: "Complete technical specification for MCP client components"
 icon: "sitemap"
 ---
 
+<Warning>
+  **CLI update (#977):** `gaia mcp add` / `gaia mcp remove` referenced in this spec
+  were removed. MCP servers are now configured through the connectors framework
+  (`gaia connectors configure <id> --set KEY=VALUE`; the entry is persisted to
+  `~/.gaia/mcp_servers.json` with secrets in the OS keyring). `gaia mcp list` still
+  lists configured servers. Sections below using `gaia mcp add/remove` are pending a
+  rewrite — see issue #1339.
+</Warning>
+
 <Note>
 🔧 **You are viewing:** API Specification - Complete technical reference
 

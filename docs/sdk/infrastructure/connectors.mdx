@@ -63,7 +63,7 @@ async def main():
 
     # 3. Fetch a short-lived access token (refresh is automatic).
     token = await conn.get_access_token(
-        connector_id="google",
+        provider="google",
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         agent_id="my-agent",
     )
@@ -170,7 +170,7 @@ class GmailAgent(Agent):
     @tool(description="List the 5 newest Gmail subjects")
     def _list_recent_subjects(self) -> list[str]:
         token = get_access_token_sync(
-            connector_id="google",
+            provider="google",
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         )
         import requests
@@ -187,6 +187,16 @@ class GmailAgent(Agent):
 The Agent UI consent dialog renders `reason` in plain language. After
 the user grants the scopes, subsequent `get_access_token_sync` calls
 return fresh tokens transparently.
+
+If instead your agent loads MCP servers dynamically at runtime (from
+`~/.gaia/mcp_servers.json`) rather than declaring specific connectors, set
+`CONSUMES_MCP_SERVERS = True` so the Settings → Connectors "Active for"
+panel lists it for every `mcp_server` connector:
+
+```python
+class MyAgent(Agent):
+    CONSUMES_MCP_SERVERS: ClassVar[bool] = True
+```
 
 ## Per-agent activation (MCP servers only)
 
@@ -245,6 +255,21 @@ gaia connectors activations activate mcp-github builtin:chat --scopes use
 gaia connectors activations list mcp-github
 gaia connectors activations deactivate mcp-github builtin:chat
 ```
+
+### Which agents appear in the "Active for" panel
+
+For an `mcp_server` connector the panel lists agents from **two** sources:
+
+1. Agents that declare the connector in `REQUIRED_CONNECTORS` (static).
+2. Agents that set `CONSUMES_MCP_SERVERS = True` — they load MCP servers
+   dynamically at runtime (from `~/.gaia/mcp_servers.json`) and gate the
+   tools through this same activation ledger, so they can use **any** MCP
+   connector once activated. `builtin:chat` is the canonical example.
+
+Category (2) agents declare no scopes of their own, so one-click activation
+auto-grants the canonical `use` scope. The registry surfaces the flag on
+each agent as `consumes_mcp_servers`. OAuth connectors have no activatable
+agents — the panel is hidden for them entirely.
 
 The HTTP router exposes:
 

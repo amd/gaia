@@ -47,6 +47,11 @@ import type { AgentMcpServer, ConnectorRow } from '../types';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
 import './ConnectorsSection.css';
 
+// Canonical scope for MCP-server grants. Agents that consume MCP servers
+// dynamically declare no scopes of their own, so one-click activation
+// auto-grants this when no prior grant exists.
+const MCP_DEFAULT_GRANT_SCOPES = ['use'];
+
 // ── ConnectorsSection ────────────────────────────────────────────────────────
 
 export function ConnectorsSection() {
@@ -814,9 +819,25 @@ function ConnectorAgentGrants({
     if (loading) return null;
 
     // Every agent that declares a requirement for this connector — granted or not.
+    // Drives the per-agent (credential) grants section below.
     const relevantAgents = agents.filter(
         (a) => a.namespaced_agent_id && a.required_connections?.some((rc) => rc.connector_id === connectorId),
     );
+
+    // Activation eligibility is wider than grant eligibility: for MCP-server
+    // connectors, agents that load MCP servers dynamically (consumes_mcp_servers)
+    // can use this connector's tools once activated even without a static
+    // requirement declaration. OAuth connectors have no MCP tool surface, so
+    // there are no activatable agents for them.
+    const activatableAgents =
+        connectorType === 'mcp_server'
+            ? agents.filter(
+                  (a) =>
+                      a.namespaced_agent_id &&
+                      (a.consumes_mcp_servers ||
+                          a.required_connections?.some((rc) => rc.connector_id === connectorId)),
+              )
+            : [];
 
     return (
         <div className="connection-grants">
@@ -839,7 +860,7 @@ function ConnectorAgentGrants({
                 MCP tool surface — their per-agent access is governed by the
                 per-scope grant toggles above — so showing this block for them
                 would be a switch that does nothing. (issue #1005) */}
-            {connectorType === 'mcp_server' && relevantAgents.length > 0 && (
+            {activatableAgents.length > 0 && (
                 <>
                     <div className="grants-header grants-header--activations">
                         Active for
@@ -848,7 +869,7 @@ function ConnectorAgentGrants({
                         Activations gate which agents see this connector's tools.
                         Activating without a prior grant auto-creates one.
                     </div>
-                    {relevantAgents.map((agent) => (
+                    {activatableAgents.map((agent) => (
                         <AgentActivationCard
                             key={`activation-${agent.namespaced_agent_id}`}
                             agent={agent}
@@ -872,7 +893,9 @@ function ConnectorAgentGrants({
  * Activation gates MCP tool visibility: when ON, the MCP server's tools
  * appear in the agent's prompt; when OFF (or absent), the tools are hidden
  * even if the agent holds a grant. Activating without a prior grant
- * auto-creates one using the agent's declared REQUIRED_CONNECTORS scopes.
+ * auto-creates one using the agent's declared REQUIRED_CONNECTORS scopes, or
+ * the canonical MCP scope for agents that consume MCP servers dynamically and
+ * declare no static requirement.
  *
  * Rendered only for ``type === 'mcp_server'`` connectors — the parent
  * (``ConnectorAgentGrants``) gates the entire ``Active for`` block on
@@ -897,7 +920,9 @@ function AgentActivationCard({
 }) {
     const req = agent.required_connections?.find((rc) => rc.connector_id === connectorId);
     const agentId = agent.namespaced_agent_id;
-    if (!req || !agentId) return null;
+    // A dynamic MCP consumer has no ``req`` for this connector but is still
+    // activatable — only the namespaced id is required.
+    if (!agentId) return null;
 
     const [localActive, setLocalActive] = useState(active);
     const [busy, setBusy] = useState(false);
@@ -915,11 +940,16 @@ function AgentActivationCard({
         setErr(null);
         try {
             if (next) {
-                // Auto-grant uses the agent's declared REQUIRED_CONNECTORS
-                // scopes — but only if no grant is in place yet. The server
-                // ignores the body when a grant already exists.
+                // Auto-grant only when no grant is in place yet (the server
+                // ignores the body when a grant already exists). Use the
+                // agent's declared REQUIRED_CONNECTORS scopes, falling back to
+                // the canonical MCP scope for dynamic consumers that declare none.
                 const scopesForGrant =
-                    grantedScopes.length === 0 ? [...req.scopes] : undefined;
+                    grantedScopes.length === 0
+                        ? req
+                            ? [...req.scopes]
+                            : [...MCP_DEFAULT_GRANT_SCOPES]
+                        : undefined;
                 await api.activateConnectorAgent(connectorId, agentId, scopesForGrant);
             } else {
                 await api.deactivateConnectorAgent(connectorId, agentId);

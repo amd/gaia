@@ -183,3 +183,24 @@ class TestAgentInfoApiModel:
         )
         assert info.source == "native"
         assert info.language == "cpp"
+
+
+class TestConsumesMcpServersExposure:
+    """The /api/agents serializer surfaces ``consumes_mcp_servers`` so the
+    Settings "Active for" panel can list dynamic MCP consumers."""
+
+    def test_reg_to_info_exposes_flag_for_chat(self):
+        from gaia.ui.routers.agents import _reg_to_info
+
+        registry = AgentRegistry()
+        registry._register_builtin_agents()
+        info = _reg_to_info(registry.get("chat"))
+        assert info.consumes_mcp_servers is True
+
+    def test_reg_to_info_defaults_false_for_non_consumer(self):
+        from gaia.ui.routers.agents import _reg_to_info
+
+        registry = AgentRegistry()
+        registry._register_builtin_agents()
+        info = _reg_to_info(registry.get("doc"))
+        assert info.consumes_mcp_servers is False
