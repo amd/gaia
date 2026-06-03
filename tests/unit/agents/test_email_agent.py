@@ -161,6 +161,7 @@ class TestToolRegistry:
         "decline_invite",
         "create_event_from_email",
         "detect_meeting_request",
+        "detect_calendar_conflicts",
         # Summarize (#1267, #1268)
         "summarize_message",
         "summarize_thread",

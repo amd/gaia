@@ -11,11 +11,11 @@ calendar mutations are externally visible to other attendees.
 (they inspect text / read the calendar but make no changes) and are NOT
 confirmation-gated.
 
-Conflict detection (issue #1273) is deterministic interval arithmetic — no
-LLM. It is the natural follow-on to meeting detection: detect a meeting →
-check the proposed time against the calendar for overlaps.
+Conflict detection is deterministic interval arithmetic — no LLM. It is the
+natural follow-on to meeting detection: detect a meeting → check the proposed
+time against the calendar for overlaps.
 
-Meeting detection (issue #1272) mirrors the package's two-tier triage
+Meeting detection mirrors the package's two-tier triage
 pattern: a deterministic heuristic for the obvious cases, and an LLM
 follow-up for the ambiguous ones (soft language with no concrete time, e.g.
 "let's sync sometime"). The LLM path follows the same fail-loud contract as
@@ -29,7 +29,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from gaia.agents.base.tools import tool
 from gaia.agents.email.verbose import log_tool_call
@@ -48,7 +48,7 @@ def _envelope_err(message: str) -> str:
 
 
 # ===========================================================================
-# Meeting-request detection (issue #1272)
+# Meeting-request detection
 # ===========================================================================
 #
 # Two tiers, same shape as triage_heuristics + llm_triage:
@@ -465,7 +465,7 @@ def detect_meeting_request_impl(
 
 
 # ===========================================================================
-# Calendar conflict detection (issue #1273)
+# Calendar conflict detection
 # ===========================================================================
 #
 # Deterministic interval arithmetic — no LLM. Every event is the half-open
@@ -500,7 +500,7 @@ def _parse_event_dt(value: str) -> datetime:
     return parsed
 
 
-def _event_window(event: Mapping[str, Any]) -> Optional[tuple[datetime, datetime]]:
+def _event_window(event: Mapping[str, Any]) -> Optional[Tuple[datetime, datetime]]:
     """Return ``(start, end)`` for a Google-shaped event, or ``None``.
 
     Accepts both timed events (``start.dateTime``) and all-day events
@@ -839,6 +839,9 @@ class CalendarToolsMixin:
                         debug=debug_flag,
                     )
                 )
+            except ValueError as exc:
+                # Inverted/missing window — bad caller input, no stack trace.
+                return _envelope_err(str(exc))
             except ConnectorsError as exc:
                 return _envelope_err(str(exc))
             except Exception as exc:
