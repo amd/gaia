@@ -573,4 +573,7 @@ __all__ = [
     "EmailDraftResponse",
     "EmailSendRequest",
     "EmailSendResponse",
+    # Shared formatting helpers reused by the MCP surface.
+    "_format_address",
+    "_payload_fingerprint",
 ]
