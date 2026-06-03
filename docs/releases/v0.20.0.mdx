@@ -94,13 +94,15 @@ This release lands a large test-infrastructure and CI-hardening pass:
 - **Installer repo-root resolution fixed** (PRs [#1326](https://github.com/amd/gaia/pull/1326) and [#1332](https://github.com/amd/gaia/pull/1332)) and **`.claude/launch.json` symlink replaced with a repo-local definition** (PR [#1228](https://github.com/amd/gaia/pull/1228)).
 - **Documentation realigned with the code** — a repo-wide doc audit removed fabricated CLI commands, corrected model defaults and Lemonade ports, and synced the agent/tool tables and CLI reference with the source (PRs [#1298](https://github.com/amd/gaia/pull/1298), [#1337](https://github.com/amd/gaia/pull/1337), [#1340](https://github.com/amd/gaia/pull/1340)).
 - **Real-world test-harness skill + CI hardening** — added the `gaia-testing` skill (PR [#1372](https://github.com/amd/gaia/pull/1372)) and hardened the Claude CI automation and Codecov reporting (PRs [#1369](https://github.com/amd/gaia/pull/1369), [#1343](https://github.com/amd/gaia/pull/1343), [#1376](https://github.com/amd/gaia/pull/1376), [#1374](https://github.com/amd/gaia/pull/1374)).
+- **Linux CLI integration no longer flakes on HuggingFace rate limits** (PR [#1379](https://github.com/amd/gaia/pull/1379)) — the Linux `Full Integration` job pulled its test model from HuggingFace unauthenticated and intermittently hit `429 Too Many Requests`, which killed Lemonade startup and failed the run; it now passes `HF_TOKEN` like the Windows, SD, and Agent SDK jobs.
 
 ---
 
 ## Full Changelog
 
-**64 commits** since v0.19.0:
+**65 commits** since v0.19.0:
 
+- `0bc65ee0` — ci(test): authenticate HF model pulls in Linux CLI integration to stop 429 flakes (#1379)
 - `f6d21c96` — fix(mcp): stop pointing users at removed `gaia mcp add` after init (#1377)
 - `a12c39e0` — docs: fix wrong model defaults, fabricated CLI commands, and stale references (#1298)
 - `3d6dbd13` — docs(claude): sync agent/tool tables with code; fix convention checker + add missing agent tests (#1340)
