@@ -723,7 +723,27 @@ rm ~/.gaia/memory.db
 | `gaia memory bootstrap --chat-only` | Conversational onboarding only |
 | `gaia memory bootstrap --discover` | System discovery scan only |
 | `gaia memory bootstrap --reset` | Delete discovery items (with confirmation) |
+| `gaia memory bootstrap --system` | Re-scan and refresh system context (OS, hardware, apps, versions) |
+| `gaia memory bootstrap --reset-system` | Clear system context entries and optionally disable auto-collection |
 | `gaia memory status` | Show memory stats (counts, categories, contexts) |
+
+### System context (versions, hardware, apps)
+
+System facts — GAIA/Lemonade versions, OS, CPU/GPU/RAM, installed apps — are
+captured as `system`-category memories. Collection is **opt-in**: the
+`system_context_enabled` flag in `~/.gaia/memory_settings.json` defaults to
+`false`. Enable it from the Agent UI Memory Dashboard or by running
+`gaia memory bootstrap --system` (which offers to turn it on).
+
+Once enabled, system facts auto-refresh on agent startup when either:
+
+- a tracked version (GAIA or Lemonade Server) no longer matches the live value
+  — so version facts update immediately after an upgrade, or
+- the newest fact is more than 7 days old.
+
+Each refresh clears the old `system` entries before re-collecting, so values
+are replaced rather than duplicated. To force a refresh yourself, run
+`gaia memory bootstrap --system`.
 
 ---
 
