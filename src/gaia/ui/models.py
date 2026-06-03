@@ -251,6 +251,9 @@ class CreateSessionRequest(BaseModel):
     private: bool = False
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     device: Optional[str] = None
+    # Mailbox provider for email-backed agents. Gmail by default; "microsoft"
+    # routes the email agent to the Outlook backend (see EmailAgentConfig).
+    mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
 
 
 class UpdateSessionRequest(BaseModel):
@@ -262,6 +265,7 @@ class UpdateSessionRequest(BaseModel):
     private: Optional[bool] = None
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     device: Optional[str] = None
+    mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
 
 
 class SessionResponse(BaseModel):
@@ -278,6 +282,7 @@ class SessionResponse(BaseModel):
     private: bool = False
     agent_type: str = "chat"
     device: str = "gpu"
+    mail_provider: str = "google"
 
 
 class SessionListResponse(BaseModel):

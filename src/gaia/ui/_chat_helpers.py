@@ -1278,6 +1278,10 @@ async def _get_chat_response(
                         allowed=allowed,
                         session_id=session_id,
                     ),
+                    # Forwarded only here (not via _session_agent_kwargs, which
+                    # also feeds the strict ChatAgentConfig). Non-email factories
+                    # drop it via dataclasses.fields filtering.
+                    mail_provider=session.get("mail_provider") or "google",
                 )
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
@@ -1753,6 +1757,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                 allowed=allowed,
                                 session_id=session_id,
                             ),
+                            # See the non-streaming path: email-only kwarg,
+                            # filtered out by non-email factories.
+                            mail_provider=session.get("mail_provider") or "google",
                         )
                         agent.console = sse_handler
                         logger.info(

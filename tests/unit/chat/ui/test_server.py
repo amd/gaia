@@ -829,6 +829,31 @@ class TestSessionEndpoints:
         resp = client.get("/api/sessions/nonexistent-uuid")
         assert resp.status_code == 404
 
+    def test_create_session_default_mail_provider(self, client):
+        data = client.post("/api/sessions", json={}).json()
+        assert data["mail_provider"] == "google"
+
+    def test_create_session_microsoft_mail_provider(self, client):
+        resp = client.post(
+            "/api/sessions",
+            json={"agent_type": "email", "mail_provider": "microsoft"},
+        )
+        assert resp.status_code == 200
+        sid = resp.json()["id"]
+        assert resp.json()["mail_provider"] == "microsoft"
+        # Persists across a fresh GET.
+        assert client.get(f"/api/sessions/{sid}").json()["mail_provider"] == "microsoft"
+
+    def test_create_session_invalid_mail_provider_rejected(self, client):
+        resp = client.post("/api/sessions", json={"mail_provider": "yahoo"})
+        assert resp.status_code == 422  # pattern validation fails loudly
+
+    def test_update_session_mail_provider(self, client):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        resp = client.put(f"/api/sessions/{sid}", json={"mail_provider": "microsoft"})
+        assert resp.status_code == 200
+        assert resp.json()["mail_provider"] == "microsoft"
+
     def test_update_session_title(self, client):
         create_resp = client.post("/api/sessions", json={"title": "Original"})
         session_id = create_resp.json()["id"]
