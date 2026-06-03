@@ -645,6 +645,84 @@ def update_rsvp_impl(
         return {"event_id": event_id, "status": status}
 
 
+# ===========================================================================
+# Event creation from email context (issue #1274)
+# ===========================================================================
+#
+# Two halves: a deterministic extractor that pulls the event's title /
+# attendees / time-signal off an email (reusing this module's ``_TIME_RE``
+# and ``read_tools.extract_sender_email`` — no parallel parser, no LLM), and
+# a fail-loud creation guard. The extractor flags whether a concrete time is
+# present; resolving a phrase like "Thursday at 2pm" into an RFC 3339
+# ``dateTime`` is the LLM's job on the timed-arg path (no date-parse library
+# is vendored). When no time is found, creation must NOT fabricate a slot.
+
+
+class NoEventDateTimeError(ValueError):
+    """Raised when event creation is attempted with no usable start/end.
+
+    The no-datetime negative case: an email with no parseable date/time must
+    not silently create a bogus event with an empty time. Subclasses
+    ``ValueError`` so existing ``ValueError`` handling (and the tool's
+    error-envelope boundary) catches it, while callers that care can match
+    the specific type.
+    """
+
+
+_GENERIC_EVENT_TITLE = "Meeting"
+
+
+def extract_event_details(
+    *, subject: str, body: str, sender: str = ""
+) -> Dict[str, Any]:
+    """Pull event title / attendees / time-signal off an email.
+
+    Deterministic — no LLM. ``title`` is the trimmed subject (falling back to
+    a generic title when the subject is blank so the event is never
+    untitled). ``attendees`` is the sender's bare address, parsed via
+    ``read_tools.extract_sender_email`` (empty list when no sender).
+    ``has_datetime`` reuses this module's ``_TIME_RE`` to report whether a
+    concrete time/date signal is present anywhere in the subject or body;
+    ``time_signal`` is the matched text (empty when none) for verbose
+    logging / auditing.
+
+    This DETECTS whether a time exists; it does not convert a natural-language
+    time into an RFC 3339 timestamp. The ``has_datetime=False`` result is
+    what powers the no-datetime negative case — the caller must not invent a
+    slot when no time was found.
+    """
+    # Local import breaks a potential import cycle while reusing the single
+    # source of truth for From-header parsing.
+    from gaia.agents.email.tools.read_tools import extract_sender_email
+
+    title = (subject or "").strip() or _GENERIC_EVENT_TITLE
+    address = extract_sender_email(sender) if sender else ""
+    attendees = [address] if address else []
+
+    text = f"{subject or ''}\n{body or ''}"
+    time_match = _TIME_RE.search(text)
+    time_signal = time_match.group(0) if time_match else ""
+
+    return {
+        "title": title,
+        "attendees": attendees,
+        "has_datetime": time_match is not None,
+        "time_signal": time_signal,
+    }
+
+
+def _has_usable_time(window: Optional[Mapping[str, Any]]) -> bool:
+    """True when a Google-shaped start/end carries a non-blank time.
+
+    Accepts a timed event (``dateTime``) or an all-day event (``date``). A
+    missing object, missing key, or blank value is NOT usable.
+    """
+    if not window:
+        return False
+    value = window.get("dateTime") or window.get("date")
+    return bool(value and str(value).strip())
+
+
 def create_event_from_email_impl(
     cal,
     *,
@@ -656,6 +734,27 @@ def create_event_from_email_impl(
     description: Optional[str] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
+    # Fail-loud: refuse to create an event with no resolvable time. An email
+    # the agent couldn't extract a time from arrives here with a blank
+    # start/end; POSTing it would create a bogus event. Surface it instead.
+    if not _has_usable_time(start) or not _has_usable_time(end):
+        raise NoEventDateTimeError(
+            "Cannot create a calendar event: no date/time was found for the "
+            "event (start/end are missing). The email may not contain a "
+            "parseable time — confirm the meeting time before creating the "
+            "event."
+        )
+    # Reject an inverted/zero-length window when both ends parse. Unparseable
+    # timestamps fall through to the backend, the authority on its own date
+    # formats — we only veto an ordering we could actually compare.
+    try:
+        start_dt = _parse_event_dt(str(start.get("dateTime") or start.get("date")))
+        end_dt = _parse_event_dt(str(end.get("dateTime") or end.get("date")))
+    except ValueError:
+        start_dt = end_dt = None
+    if start_dt is not None and end_dt is not None and end_dt <= start_dt:
+        raise ValueError(f"event end ({end!r}) must be after start ({start!r})")
+
     with log_tool_call(
         "create_event_from_email",
         {"summary": summary, "start": start, "end": end},
@@ -751,7 +850,11 @@ class CalendarToolsMixin:
             """Create a calendar event derived from an email's content.
 
             Requires user confirmation. ``attendees`` is a comma-separated
-            list of email addresses.
+            list of email addresses. ``start_iso``/``end_iso`` are RFC 3339
+            timestamps you extract from the email; if the email has no
+            parseable date/time, do NOT guess — leave them blank and this
+            returns an error rather than creating an event at a fabricated
+            time.
             """
             try:
                 attendee_list = (
