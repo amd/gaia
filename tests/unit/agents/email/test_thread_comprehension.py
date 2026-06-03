@@ -20,6 +20,7 @@ The chat client is a deterministic double — mirrors the chat-double pattern in
 
 from __future__ import annotations
 
+import base64
 import json
 import sys
 from pathlib import Path
@@ -34,9 +35,11 @@ from gaia.agents.email.tools.read_tools import (  # noqa: E402
     UNTRUSTED_BODY_CLOSE,
     UNTRUSTED_BODY_OPEN,
     ReadToolsMixin,
+    _format_thread_for_summary,
     summarize_thread_impl,
 )
 from gaia.agents.email.tools.summarize_tools import (  # noqa: E402
+    _THREAD_SYSTEM_PROMPT,
     DEFAULT_SUMMARY_CHAR_LIMIT,
     EmailSummarizeError,
 )
@@ -79,8 +82,7 @@ def _msg(
             ],
             "body": {
                 "size": len(body),
-                "data": __import__("base64")
-                .urlsafe_b64encode(body.encode("utf-8"))
+                "data": base64.urlsafe_b64encode(body.encode("utf-8"))
                 .decode("ascii")
                 .rstrip("="),
             },
@@ -277,6 +279,97 @@ class TestSummarizeThreadTool:
         env = json.loads(raw)
         assert env["ok"] is False
         assert env["error"]
+
+
+class TestThreadSystemPrompt:
+    def test_thread_uses_thread_specific_system_prompt(self):
+        """The thread path must NOT reuse the single-email system prompt, whose
+        "ONE or TWO sentences / SINGLE most important point" cap would suppress
+        secondary decisions raised across a multi-message thread."""
+        gmail = FakeGmailBackend()
+        _seed_thread(gmail)
+        chat = _EchoChat()
+        summarize_thread_impl(gmail, chat, thread_id=THREAD_ID)
+
+        assert chat.last_system_prompt == _THREAD_SYSTEM_PROMPT
+        # The single-email constraint must be absent from the thread prompt.
+        assert "ONE or TWO" not in chat.last_system_prompt
+        assert "single most important" not in chat.last_system_prompt.lower()
+
+
+class TestThreadTranscriptCap:
+    """A long thread must not blow the context window, yet every message must
+    still be represented (dropping the oldest would defeat #1268)."""
+
+    @staticmethod
+    def _seed_long_thread(gmail, *, count: int, body_chars: int) -> None:
+        for i in range(count):
+            gmail.add_message(
+                _msg(
+                    msg_id=f"m-{i:03d}",
+                    sender=f"User{i} <u{i}@company.example>",
+                    date_rfc="Mon, 5 May 2026 09:00:00 -0700",
+                    internal_ms=str(1714924800000 + i * 1000),
+                    body=f"MSG{i}-" + ("x" * body_chars),
+                )
+            )
+
+    def test_long_thread_transcript_is_bounded(self):
+        gmail = FakeGmailBackend()
+        self._seed_long_thread(gmail, count=40, body_chars=4000)
+        thread = gmail.get_thread(THREAD_ID)
+        cap = 8000
+        transcript = _format_thread_for_summary(
+            thread["messages"],
+            per_message_body_limit=4000,
+            max_total_transcript_chars=cap,
+        )
+        # 40 × 4000 = 160 KB uncapped; the cap keeps the body budget bounded.
+        # Allow generous header/wrapper overhead per message but assert it is a
+        # small multiple of the cap, not the uncapped 160 KB.
+        assert len(transcript) < cap * 4
+
+    def test_every_message_still_represented_under_cap(self):
+        gmail = FakeGmailBackend()
+        self._seed_long_thread(gmail, count=40, body_chars=4000)
+        thread = gmail.get_thread(THREAD_ID)
+        transcript = _format_thread_for_summary(
+            thread["messages"],
+            per_message_body_limit=4000,
+            max_total_transcript_chars=8000,
+        )
+        # Each message keeps its header block and a (shrunk) body slice — none
+        # are dropped, so an early decision can never be silently lost.
+        for i in range(40):
+            assert f"Message {i + 1} of 40" in transcript
+            assert f"MSG{i}-" in transcript
+
+    def test_cap_none_disables_bounding(self):
+        gmail = FakeGmailBackend()
+        self._seed_long_thread(gmail, count=5, body_chars=4000)
+        thread = gmail.get_thread(THREAD_ID)
+        transcript = _format_thread_for_summary(
+            thread["messages"],
+            per_message_body_limit=4000,
+            max_total_transcript_chars=None,
+        )
+        # No cap → each 4000-char body survives in full.
+        assert len(transcript) > 5 * 4000
+
+    def test_per_message_floor_respected(self):
+        gmail = FakeGmailBackend()
+        # A pathological thread where fair-share would fall below the floor.
+        self._seed_long_thread(gmail, count=100, body_chars=4000)
+        thread = gmail.get_thread(THREAD_ID)
+        transcript = _format_thread_for_summary(
+            thread["messages"],
+            per_message_body_limit=4000,
+            max_total_transcript_chars=1000,  # 1000 // 100 = 10 < floor
+        )
+        # Floor keeps each message meaningful rather than near-empty: every
+        # message survives even when fair-share would fall below the floor.
+        for i in range(100):
+            assert f"MSG{i}-" in transcript
 
 
 if __name__ == "__main__":
