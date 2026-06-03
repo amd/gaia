@@ -289,12 +289,12 @@ python -m gaia.ui.server --port 4200 --host 127.0.0.1
 # NOTE: `--compare` only DIFFS scorecards (BASELINE CURRENT) — it does NOT run an eval.
 #       Run the eval first; it prints the run dir and writes <run-dir>/scorecard.json.
 gaia eval agent --category rag_quality --agent-type doc
-# → prints: Output: eval/results/<run-id>/   ← copy that run-id into the compare below
+# → prints an ABSOLUTE path, e.g.  Output: /…/gaia/eval/results/<run-id>/   ← use it as printed, + /scorecard.json
 # Pick the BASELINE matching your model; don't `ls -t` to find it — a fresh clone stamps
 # every baseline with the checkout time, so an mtime sort picks arbitrarily.
 gaia eval agent --compare \
   tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json \
-  eval/results/<run-id>/scorecard.json
+  <printed-output-path>/scorecard.json
 ```
 
 **Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), regenerate the baseline with `--save-baseline` and call it out explicitly in the PR description — the reviewer needs to see the diff between baselines, not just the new score.
