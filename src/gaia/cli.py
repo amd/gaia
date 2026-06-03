@@ -6756,11 +6756,11 @@ def handle_mcp_list(args):
     if not servers:
         print("📋 No MCP servers configured")
         print(f"   Config: {config_path}")
-        print("\nAdd a server with: gaia mcp add <name> <command>")
-        if args.config:
-            print(
-                f"                or: gaia mcp add <name> <command> --config {args.config}"
-            )
+        print(f"\nAdd a server by editing {config_path}, for example:")
+        print(
+            '   {"mcpServers": {"time": {"command": "uvx", "args": ["mcp-server-time"]}}}'
+        )
+        print("See https://amd-gaia.ai/guides/mcp/client for details.")
         return
 
     print(f"📋 Configured MCP Servers ({len(servers)}):")

@@ -104,11 +104,20 @@ class MCPInitCommand:
         self.console.print()
         self.console.print("  [bold]Next steps:[/bold]")
         self.console.print()
-        self.console.print("  1. Add MCP servers to your config:")
-        self.console.print('     [cyan]gaia mcp add time "uvx mcp-server-time"[/cyan]')
+        self.console.print(
+            f"  1. Add MCP servers by editing [cyan]{config_path}[/cyan]:"
+        )
         self.console.print()
-        self.console.print("  2. Or edit the config file directly:")
-        self.console.print(f"     [cyan]{config_path}[/cyan]")
+        self.console.print("     [dim]{[/dim]")
+        self.console.print('     [dim]  "mcpServers": {[/dim]')
+        self.console.print(
+            '     [dim]    "time": {"command": "uvx", "args": ["mcp-server-time"]}[/dim]'
+        )
+        self.console.print("     [dim]  }[/dim]")
+        self.console.print("     [dim]}[/dim]")
+        self.console.print()
+        self.console.print("  2. List configured servers:")
+        self.console.print("     [cyan]gaia mcp list[/cyan]")
         self.console.print()
         self.console.print("  3. Browse community MCP servers:")
         self.console.print(
@@ -116,9 +125,7 @@ class MCPInitCommand:
         )
         self.console.print()
         self.console.print("  [bold]Learn more:[/bold]")
-        self.console.print(
-            "     [cyan]https://amd-gaia.ai/docs/guides/mcp/client[/cyan]"
-        )
+        self.console.print("     [cyan]https://amd-gaia.ai/guides/mcp/client[/cyan]")
         self.console.print()
 
 
