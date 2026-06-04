@@ -26,9 +26,7 @@ import logging
 import os
 import subprocess
 import sys
-import tempfile
 import time
-from pathlib import Path
 
 import pytest
 import requests
@@ -48,7 +46,7 @@ def _lemonade_reachable() -> bool:
     """Return True if the Lemonade server responds to a health check."""
     base_url = os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
     # Strip /api/v1 suffix to get the root health URL pattern
-    health_url = base_url.rstrip("/api/v1").rstrip("/") + "/api/v1/health"
+    health_url = base_url.removesuffix("/api/v1").rstrip("/") + "/api/v1/health"
     try:
         resp = requests.get(health_url, timeout=5)
         return resp.status_code == 200

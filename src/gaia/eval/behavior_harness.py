@@ -32,10 +32,15 @@ REST API for evidence the tool executed.
 import logging
 import re
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
+
+from gaia.agents.builder.agent import (
+    _normalize_agent_id,
+    _split_camel_case,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,15 +112,12 @@ class Scenario:
             the REST API to determine whether the tool actually executed.
         repeats: Number of independent runs for this scenario.  Defaults to 5
             because the failure is output-format-dependent and non-deterministic.
-        _planted_names: Internal list populated by the harness; one per run.
     """
 
     agent_type: str
     prompt_factory: Callable[[int], str]
     side_effect_check: Callable[[Path, str, str], Verdict]
     repeats: int = 5
-    # Internal storage — not part of the public API.
-    _planted_names: List[str] = field(default_factory=list, repr=False, compare=False)
 
 
 # ---------------------------------------------------------------------------
@@ -142,12 +144,8 @@ def _builder_side_effect_check(
     harness (``BehaviorHarness``), not this pure-function helper, so that
     unit tests do not need a running server.
     """
-    # Derive the agent id the same way the builder does:
-    # lowercase, spaces→hyphens, strip non-alnum-hyphen, strip -agent suffix.
-    slug = re.sub(r"[^a-z0-9-]", "", planted_name.lower().replace(" ", "-")).strip("-")
-    while slug.endswith("-agent"):
-        slug = slug[: -len("-agent")].strip("-")
-    agent_id = slug
+    # Derive the agent id exactly as the builder does.
+    agent_id = _normalize_agent_id(_split_camel_case(planted_name.strip()))
 
     agent_py = home_dir / ".gaia" / "agents" / agent_id / "agent.py"
     file_exists = agent_py.exists()
@@ -276,6 +274,10 @@ class BehaviorHarness:
             agents = data.get("agents", [])
             return any(a.get("id") == agent_id for a in agents)
         except Exception:
+            logger.warning(
+                "_agent_listed: /api/agents request failed",
+                exc_info=True,
+            )
             return False
 
     def run_scenario(
@@ -316,12 +318,10 @@ class BehaviorHarness:
 
                 # Extra check for the builder scenario: confirm registry listing.
                 if verdict == Verdict.true_success:
-                    slug = re.sub(
-                        r"[^a-z0-9-]", "", planted_name.lower().replace(" ", "-")
-                    ).strip("-")
-                    while slug.endswith("-agent"):
-                        slug = slug[: -len("-agent")].strip("-")
-                    if not self._agent_listed(slug):
+                    agent_slug = _normalize_agent_id(
+                        _split_camel_case(planted_name.strip())
+                    )
+                    if not self._agent_listed(agent_slug):
                         # File exists but registry doesn't know about it — treat
                         # as honest failure (tool ran but server didn't reload).
                         verdict = Verdict.honest_failure

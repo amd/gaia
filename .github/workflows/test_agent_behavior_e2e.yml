@@ -21,11 +21,11 @@ jobs:
           uv venv && uv pip install -e ".[dev]"
 
       - name: Ensure Lemonade
-        run: gaia init --check
+        run: uv run gaia init --skip-lemonade
 
       - name: Run behavior E2E harness
         run: |
-          python -m pytest tests/integration/eval/test_behavior_e2e.py \
+          uv run python -m pytest tests/integration/eval/test_behavior_e2e.py \
             -m real_model -v --tb=short
         env:
           LEMONADE_BASE_URL: http://localhost:13305/api/v1
