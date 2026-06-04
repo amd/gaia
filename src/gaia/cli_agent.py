@@ -191,6 +191,52 @@ def register_subparsers(agent_subparsers) -> None:
         help="Publish to R2 only (skip the PyPI upload)",
     )
 
+    configure_p = agent_subparsers.add_parser(
+        "configure",
+        help="Set per-agent config (model preference, settings) in ~/.gaia/agents/<id>",
+    )
+    configure_p.add_argument("id", help="Agent id to configure, e.g. 'chat'")
+    configure_p.add_argument(
+        "--model",
+        default=None,
+        help="Preferred model for this agent (stored as the 'model' setting)",
+    )
+    configure_p.add_argument(
+        "--set",
+        dest="settings",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Set an arbitrary setting (repeatable), e.g. --set temperature=0.2",
+    )
+    configure_p.add_argument(
+        "--replace",
+        action="store_true",
+        help="Replace the whole config instead of merging into the existing one",
+    )
+    configure_p.add_argument(
+        "--show",
+        action="store_true",
+        help="Print the current config and exit (no changes)",
+    )
+
+    health_p = agent_subparsers.add_parser(
+        "health",
+        help="Health check: does an installed agent load + its entry point resolve?",
+    )
+    health_p.add_argument("id", help="Agent id to health-check, e.g. 'chat'")
+
+    status_p = agent_subparsers.add_parser(
+        "status",
+        help="Show installed version, health, and config for one or all agents",
+    )
+    status_p.add_argument(
+        "id",
+        nargs="?",
+        default=None,
+        help="Agent id (omit to show every discovered agent)",
+    )
+
     login_p = agent_subparsers.add_parser(
         "login",
         help="Store publisher tokens (R2 Hub and/or PyPI) in the OS keyring",
@@ -232,6 +278,9 @@ def handle(args) -> bool:
         "pack": cmd_pack,
         "publish": cmd_publish,
         "login": cmd_login,
+        "configure": cmd_configure,
+        "health": cmd_health,
+        "status": cmd_status,
     }
     fn = dispatch.get(action)
     if fn is None:
@@ -834,6 +883,125 @@ def cmd_login(args) -> None:
             "publish time."
         )
     print(f"Stored token(s) in the OS keyring: {', '.join(stored)}.")
+
+
+# ---------------------------------------------------------------------------
+# configure / health / status (lifecycle — issue #465)
+# ---------------------------------------------------------------------------
+
+
+def _coerce_setting(raw: str):
+    """Parse a ``KEY=VALUE`` pair, JSON-decoding the value when possible.
+
+    ``--set temperature=0.2`` stores a float; ``--set verbose=true`` a bool;
+    ``--set model=Qwen3.5-35B-A3B-GGUF`` a string. Anything that is not valid
+    JSON is kept as the raw string.
+    """
+    import json
+
+    if "=" not in raw:
+        raise AgentWorkflowError(
+            f"--set expects KEY=VALUE, got {raw!r}. Example: --set temperature=0.2."
+        )
+    key, _, value = raw.partition("=")
+    key = key.strip()
+    if not key:
+        raise AgentWorkflowError(f"--set has an empty key in {raw!r}.")
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        parsed = value
+    return key, parsed
+
+
+def cmd_configure(args) -> None:
+    """Set per-agent config under ~/.gaia/agents/<id>/config.json."""
+    from gaia.hub import lifecycle
+
+    if args.show:
+        try:
+            current = lifecycle.read_config(args.id)
+        except lifecycle.LifecycleError as exc:
+            raise AgentWorkflowError(str(exc)) from exc
+        if not current:
+            print(f"No config set for '{args.id}'.")
+        else:
+            import json
+
+            print(json.dumps(current, indent=2, sort_keys=True))
+        return
+
+    settings = {}
+    if args.model:
+        settings[lifecycle.CONFIG_MODEL_KEY] = args.model
+    for raw in args.settings:
+        key, value = _coerce_setting(raw)
+        settings[key] = value
+
+    if not settings:
+        raise AgentWorkflowError(
+            "nothing to configure. Pass --model <name> and/or --set KEY=VALUE, "
+            "or --show to view the current config."
+        )
+
+    try:
+        merged = lifecycle.configure(args.id, settings, merge=not args.replace)
+    except lifecycle.LifecycleError as exc:
+        raise AgentWorkflowError(str(exc)) from exc
+
+    import json
+
+    print(f"Updated config for '{args.id}':")
+    print(json.dumps(merged, indent=2, sort_keys=True))
+
+
+def cmd_health(args) -> None:
+    """Run a health check against an installed agent."""
+    from gaia.hub import lifecycle
+
+    registry = _build_registry()
+    result = lifecycle.health_check(args.id, registry=registry)
+    print(f"{args.id}: {result.state}")
+    if result.detail:
+        print(f"  {result.detail}")
+    for warning in result.warnings:
+        print(f"  warning: {warning}")
+    # error/not_installed are non-zero exits so scripts can gate on it.
+    if result.state in (lifecycle.HEALTH_ERROR, lifecycle.HEALTH_NOT_INSTALLED):
+        sys.exit(1)
+
+
+def cmd_status(args) -> None:
+    """Show installed version + health + config for one or all agents."""
+    from gaia.hub import lifecycle
+
+    registry = _build_registry()
+    if args.id:
+        statuses = {args.id: lifecycle.status(args.id, registry=registry)}
+    else:
+        statuses = lifecycle.status_all(registry=registry)
+
+    if not statuses:
+        print("No agents discovered.")
+        return
+
+    width = max(len(aid) for aid in statuses)
+    print(f"{'AGENT'.ljust(width)}  VERSION    HEALTH         SOURCE")
+    for aid, st in statuses.items():
+        version = st.installed_version or "-"
+        print(
+            f"{aid.ljust(width)}  {version.ljust(9)}  "
+            f"{st.health.ljust(13)}  {st.source or '-'}"
+        )
+
+
+def _build_registry():
+    """Build and populate an AgentRegistry for health/status commands."""
+    from gaia.agents.registry import AgentRegistry
+
+    registry = AgentRegistry()
+    registry.discover()
+    return registry
 
 
 # ---------------------------------------------------------------------------

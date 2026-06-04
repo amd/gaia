@@ -412,6 +412,43 @@ gaia agent test --live --timeout 90
 ```
 </CodeGroup>
 
+#### Lifecycle: `configure`, `health`, `status`
+
+Manage an *installed* agent: set per-agent configuration, verify it loads, and inspect its state. Configuration is persisted under `~/.gaia/agents/<id>/config.json` and survives restarts.
+
+```bash
+gaia agent configure <id> [--model NAME] [--set KEY=VALUE ...] [--replace] [--show]
+gaia agent health <id>
+gaia agent status [<id>]
+```
+
+**`configure`** writes per-agent settings (e.g. a preferred model). `--set` values are JSON-decoded when possible (`--set temperature=0.2` stores a number, `--set verbose=true` a boolean), otherwise kept as strings. Settings merge into the existing config by default; pass `--replace` to overwrite it wholesale, or `--show` to print the current config without changing it.
+
+**`health`** verifies that an installed agent actually loads — its registration resolves and its entry point imports. It reports one of `healthy`, `degraded` (loads but something optional is off, e.g. a corrupt config), `error` (a required piece fails to load), or `not_installed`, and exits non-zero for `error` / `not_installed` so scripts can gate on it.
+
+**`status`** aggregates installed version, health, config summary, and source for one agent — or every discovered agent when `<id>` is omitted.
+
+| Option | Applies to | Description |
+|--------|------------|-------------|
+| `id` | all | Agent id (positional; optional for `status`, required otherwise) |
+| `--model` | `configure` | Preferred model, stored as the `model` setting |
+| `--set KEY=VALUE` | `configure` | Set an arbitrary setting (repeatable) |
+| `--replace` | `configure` | Replace the whole config instead of merging |
+| `--show` | `configure` | Print the current config and exit |
+
+**Examples:**
+
+<CodeGroup>
+```bash Set a model preference
+gaia agent configure chat --model Qwen3.5-35B-A3B-GGUF
+```
+
+```bash Check health and status
+gaia agent health chat
+gaia agent status            # every discovered agent
+```
+</CodeGroup>
+
 #### Distribution: `pack`, `publish`, `login`
 
 Build a distributable wheel from a Python agent package, then dual-publish it to the Agent Hub (R2, the source for the Hub UI) **and** PyPI (the source for `pip install`).
