@@ -30,7 +30,6 @@ log = get_logger(__name__)
 
 # Body budget for thread context in compose prompts. Keeps the prompt
 # bounded even on long threads (mirrors the read_tools budget).
-_COMPOSE_BODY_LIMIT_CHARS = 4000
 _COMPOSE_THREAD_BUDGET_CHARS = 12000
 
 # System prompt for the compose path: instructs the local LLM to match
@@ -373,13 +372,22 @@ def compose_reply_impl(
         subject = headers_dict.get("subject", "")
         original_sender = headers_dict.get("from", "")
 
-        # Collect full thread for context (fall back to single message).
+        # Collect full thread for context. A get_thread failure degrades to
+        # composing from the single message — acceptable here, but logged with
+        # context so the degradation is never silent (project "No Silent
+        # Fallbacks" rule).
         thread_id = original.get("threadId", "")
         if thread_id:
             try:
                 thread = gmail.get_thread(thread_id)
                 thread_messages = thread.get("messages", [original])
-            except Exception:
+            except Exception as exc:
+                log.warning(
+                    "compose_reply: get_thread(%r) failed, composing from the "
+                    "single message: %s",
+                    thread_id,
+                    exc,
+                )
                 thread_messages = [original]
         else:
             thread_messages = [original]

@@ -100,6 +100,10 @@ ACTIONS:
   across many senders trigger a single batch-confirm.
 - Trash (trash_message) is reversible via restore_message inside a 30
   second undo window; after that, use Gmail's Trash UI.
+- Draft tools (compose_reply, draft_reply, draft_forward) — create a draft
+  only; they NEVER send. compose_reply generates a tone-and-context-matched
+  reply body with the local LLM and saves it as a draft. After drafting,
+  show the user the draft body and ask them to review before send_draft.
 - Phishing quarantine (quarantine_phishing_message) — REQUIRES explicit
   user confirmation. Moves the message to a GAIA_PHISHING_QUARANTINE
   label and removes it from INBOX. Reversible via unquarantine_message.
