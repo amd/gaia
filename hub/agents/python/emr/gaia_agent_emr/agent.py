@@ -56,7 +56,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
     - Rich console output for processing status
 
     Example:
-        from gaia.agents.emr import MedicalIntakeAgent
+        from gaia_agent_emr import MedicalIntakeAgent
 
         agent = MedicalIntakeAgent(
             watch_dir="./intake_forms",
@@ -71,6 +71,22 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
         # Cleanup
         agent.stop()
     """
+
+    # Modern class attributes — surfaced into the registry by
+    # ``_registration_from_class`` and used by the Agent UI / Hub cards.
+    AGENT_ID = "emr"
+    AGENT_NAME = "Medical Intake"
+    AGENT_DESCRIPTION = (
+        "Medical intake — VLM extraction of patient forms into a records database"
+    )
+    CONVERSATION_STARTERS = [
+        "How many patients were processed today?",
+        "Find patient John Smith",
+    ]
+    AGENT_CATEGORY = "healthcare"
+    AGENT_TAGS = ["emr", "medical", "vlm", "intake"]
+    AGENT_ICON = "stethoscope"
+    AGENT_MODELS = ["Gemma-4-E4B-it-GGUF"]
 
     def __init__(
         self,

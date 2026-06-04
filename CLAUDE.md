@@ -403,7 +403,6 @@ gaia/
 │   │   ├── blender/    # BlenderAgent for 3D automation
 │   │   ├── jira/       # JiraAgent for issue management
 │   │   ├── docker/     # DockerAgent for containerization
-│   │   ├── emr/        # MedicalIntakeAgent for healthcare (VLM)
 │   │   ├── routing/    # RoutingAgent for intelligent agent selection
 │   │   ├── sd/         # SDAgent for Stable Diffusion image generation
 │   │   ├── connectors_demo/ # ConnectorsDemoAgent — per-agent connector activation demo
@@ -465,7 +464,8 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 | `gaia` / `gaia-cli` | `gaia.cli:main` | Main CLI — all `gaia <subcommand>` |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge binary |
 | `gaia-code` | `gaia.agents.code.cli:main` | CodeAgent standalone entry (NOT `gaia code`) |
-| `gaia-emr` | `gaia.agents.emr.cli:main` | EMR/MedicalIntake standalone entry |
+
+The `gaia-emr` console script now ships with the standalone `gaia-agent-emr` hub package (`hub/agents/python/emr/`), not the core wheel.
 
 ## Architecture
 
@@ -506,7 +506,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 | **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B-A3B |
 | **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B-A3B |
 | **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B-A3B |
-| **MedicalIntakeAgent** | `agents/emr/agent.py` | Medical form processing (VLM) | Gemma-4-E4B |
+| **MedicalIntakeAgent** | `hub/agents/python/emr/gaia_agent_emr/agent.py` | Medical form processing (VLM) | Gemma-4-E4B |
 | **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B-A3B (`AGENT_ROUTING_MODEL`) |
 | **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
 | **ConnectorsDemoAgent** | `agents/connectors_demo/agent.py` | Per-agent connector activation demo | Qwen3.5-35B-A3B |
@@ -588,7 +588,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):
 - `gaia-code` - CodeAgent entry (`src/gaia/agents/code/cli.py`)
-- `gaia-emr` - Medical intake entry (`src/gaia/agents/emr/cli.py`)
+- `gaia-emr` - Medical intake entry (ships with the `gaia-agent-emr` hub package, `hub/agents/python/emr/gaia_agent_emr/cli.py`)
 - `gaia-mcp` - Standalone MCP bridge binary
 
 ## Documentation Index
