@@ -37,7 +37,7 @@ You own the GAIA CLI. The entire user surface for `gaia <subcommand>` lives in `
 | `gaia` / `gaia-cli` | `gaia.cli:main` | Main dispatcher |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge |
 | `gaia-code` | `gaia.agents.code.cli:main` | CodeAgent standalone |
-| `gaia-emr` | `gaia.agents.emr.cli:main` | Medical intake standalone |
+| `gaia-emr` | `gaia_agent_emr.cli:main` | Medical intake standalone (ships with the `gaia-agent-emr` hub package) |
 
 ## Current top-level subcommands
 

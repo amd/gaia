@@ -56,8 +56,6 @@ setup(
         "gaia.agents.chat",
         "gaia.agents.chat.tools",
         "gaia.agents.builder",
-        "gaia.agents.emr",
-        "gaia.agents.emr.dashboard",
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
         "gaia.agents.routing",
@@ -250,6 +248,7 @@ setup(
         "agent-docker": ["gaia-agent-docker"],
         "agent-jira": ["gaia-agent-jira"],
         "agent-blender": ["gaia-agent-blender"],
+        "agent-emr": ["gaia-agent-emr"],
         "agent-code": ["gaia-agent-code"],
         "agents": [
             "gaia-agent-summarize",
@@ -258,6 +257,7 @@ setup(
             "gaia-agent-docker",
             "gaia-agent-jira",
             "gaia-agent-blender",
+            "gaia-agent-emr",
             "gaia-agent-code",
         ],
     },
@@ -277,7 +277,6 @@ setup(
             "gaia = gaia.cli:main",
             "gaia-cli = gaia.cli:main",
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
-            "gaia-emr = gaia.agents.emr.cli:main",
         ]
     },
     python_requires=">=3.10",

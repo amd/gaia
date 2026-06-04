@@ -63,7 +63,7 @@
 | **JiraAgent** | `JiraAgent(Agent)` | `agents/jira/agent.py` | Jira issue management |
 | **DockerAgent** | `DockerAgent(MCPAgent)` | `agents/docker/agent.py` | Docker container management via MCP |
 | **SDAgent** | `SDAgent(Agent, SDToolsMixin, VLMToolsMixin)` | `agents/sd/agent.py` | Image generation + visual analysis |
-| **MedicalIntakeAgent** | `MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin)` | `agents/emr/agent.py` | Medical form processing with VLM |
+| **MedicalIntakeAgent** | `MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin)` | `hub/agents/python/emr/gaia_agent_emr/agent.py` | Medical form processing with VLM |
 | **RoutingAgent** | `RoutingAgent` | `agents/routing/agent.py` | Intelligent agent selection |
 | **SummarizerAgent** | `SummarizerAgent(Agent)` | `agents/summarize/agent.py` | Document summarization |
 

@@ -1,11 +1,26 @@
-# GAIA Medical Intake Agent
+# gaia-agent-emr
 
-AI-powered patient intake form processing using AMD Ryzen AI.
+Standalone GAIA agent for AI-powered medical intake form processing on AMD
+Ryzen AI. Depends on the published `amd-gaia` framework wheel.
+
+> **Note:** Demonstration / proof-of-concept. Not intended for production use
+> with real patient data.
+
+## Install
+
+```bash
+pip install gaia-agent-emr               # from PyPI (once published)
+pip install -e hub/agents/python/emr     # editable, for development
+```
+
+Installing registers the `emr` agent via the `gaia.agent` entry-point group;
+the GAIA registry discovers it automatically. It also installs the `gaia-emr`
+console script.
 
 ## Features
 
 - **Automatic Form Processing** - Watch directory for new intake forms
-- **VLM Extraction** - Extract patient data from images using Qwen3-VL-4B
+- **VLM Extraction** - Extract patient data from images using Gemma-4-E4B (Qwen3-VL-4B also supported)
 - **Database Storage** - SQLite database with patient records
 - **Natural Language Interface** - Query patients using conversational AI
 - **Web Dashboard** - Real-time monitoring with live feed
@@ -15,15 +30,11 @@ AI-powered patient intake form processing using AMD Ryzen AI.
 
 ### Prerequisites
 
-1. Install GAIA with dependencies:
-   ```bash
-   pip install -e ".[api,rag]"  # rag includes pymupdf for PDF support
-   ```
+Start Lemonade Server with the VLM model:
 
-2. Start Lemonade Server with VLM model:
-   ```bash
-   lemonade server --model Qwen3-VL-4B-Instruct-GGUF
-   ```
+```bash
+lemonade server --model Gemma-4-E4B-it-GGUF
+```
 
 ### CLI Usage
 
@@ -72,7 +83,7 @@ Then open http://localhost:8080 in your browser.
 ## Python API
 
 ```python
-from gaia.agents.emr import MedicalIntakeAgent
+from gaia_agent_emr import MedicalIntakeAgent
 
 # Create agent
 agent = MedicalIntakeAgent(
@@ -97,7 +108,7 @@ with MedicalIntakeAgent() as agent:
 ### Build Frontend
 
 ```bash
-cd src/gaia/agents/emr/dashboard/frontend
+cd hub/agents/python/emr/gaia_agent_emr/dashboard/frontend
 npm install
 npm run build
 ```
@@ -105,7 +116,7 @@ npm run build
 ### Run Dashboard
 
 ```bash
-python -m gaia.agents.emr.cli dashboard
+python -m gaia_agent_emr.cli dashboard
 ```
 
 Visit http://localhost:8080 to see:
@@ -114,11 +125,11 @@ Visit http://localhost:8080 to see:
 - Critical allergy alerts
 - Patient list with search
 
-## Testing
+## Develop / test
 
 ```bash
-# Run unit tests
-pytest tests/unit/test_emr_agent.py -v
+pip install -e ".[test]"
+pytest hub/agents/python/emr/tests/ -x
 
 # Test with mock VLM (no Lemonade server needed)
 from gaia.testing import MockVLMClient, temp_directory

@@ -8,11 +8,10 @@ import logging
 import sys
 from pathlib import Path
 
+from gaia_agent_emr.agent import MedicalIntakeAgent
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-
-from gaia.agents.emr.agent import MedicalIntakeAgent
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -1072,7 +1071,7 @@ def cmd_dashboard(args):
                 open_browser(url, delay)
 
     try:
-        from gaia.agents.emr.dashboard.server import run_dashboard
+        from gaia_agent_emr.dashboard.server import run_dashboard
 
         console.print()
         console.print(

@@ -32,7 +32,7 @@ class TestCLIArgumentParsing(unittest.TestCase):
 
     def test_no_command_shows_help(self):
         """Test that running without a command shows help."""
-        from gaia.agents.emr.cli import main
+        from gaia_agent_emr.cli import main
 
         sys.argv = ["gaia-emr"]
         # Should return 0 and print help
@@ -43,7 +43,7 @@ class TestCLIArgumentParsing(unittest.TestCase):
         """Test watch command parses with default arguments."""
         import argparse
 
-        from gaia.agents.emr.cli import _add_common_args
+        from gaia_agent_emr.cli import _add_common_args
 
         parser = argparse.ArgumentParser()
         _add_common_args(parser)
@@ -58,7 +58,7 @@ class TestCLIArgumentParsing(unittest.TestCase):
         """Test watch command parses custom arguments."""
         import argparse
 
-        from gaia.agents.emr.cli import _add_common_args
+        from gaia_agent_emr.cli import _add_common_args
 
         parser = argparse.ArgumentParser()
         _add_common_args(parser)
@@ -83,7 +83,7 @@ class TestCLIArgumentParsing(unittest.TestCase):
         """Test process command requires file argument."""
         import argparse
 
-        from gaia.agents.emr.cli import _add_common_args
+        from gaia_agent_emr.cli import _add_common_args
 
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
@@ -103,7 +103,7 @@ class TestCLIArgumentParsing(unittest.TestCase):
         """Test query command requires question argument."""
         import argparse
 
-        from gaia.agents.emr.cli import _add_common_args
+        from gaia_agent_emr.cli import _add_common_args
 
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
@@ -119,7 +119,7 @@ class TestCLIArgumentParsing(unittest.TestCase):
         """Test reset command has force flag option."""
         import argparse
 
-        from gaia.agents.emr.cli import _add_common_args
+        from gaia_agent_emr.cli import _add_common_args
 
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
@@ -143,7 +143,7 @@ class TestCLIArgumentParsing(unittest.TestCase):
         """Test dashboard command parses host and port."""
         import argparse
 
-        from gaia.agents.emr.cli import _add_common_args
+        from gaia_agent_emr.cli import _add_common_args
 
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
@@ -220,7 +220,7 @@ class TestCmdProcess(unittest.TestCase):
 
     def test_process_file_not_found(self):
         """Test process command returns error for missing file."""
-        from gaia.agents.emr.cli import cmd_process
+        from gaia_agent_emr.cli import cmd_process
 
         with temp_directory() as tmp_dir:
             args = argparse.Namespace(
@@ -233,10 +233,10 @@ class TestCmdProcess(unittest.TestCase):
             result = cmd_process(args)
             self.assertEqual(result, 1)
 
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     def test_process_success(self, mock_agent_class):
         """Test successful file processing."""
-        from gaia.agents.emr.cli import cmd_process
+        from gaia_agent_emr.cli import cmd_process
 
         # Setup mock agent
         mock_agent = MagicMock()
@@ -263,10 +263,10 @@ class TestCmdProcess(unittest.TestCase):
             self.assertEqual(result, 0)
             mock_agent.stop.assert_called_once()
 
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     def test_process_failure(self, mock_agent_class):
         """Test failed file processing."""
-        from gaia.agents.emr.cli import cmd_process
+        from gaia_agent_emr.cli import cmd_process
 
         # Setup mock agent that fails
         mock_agent = MagicMock()
@@ -293,10 +293,10 @@ class TestCmdProcess(unittest.TestCase):
 class TestCmdStats(unittest.TestCase):
     """Test cmd_stats command."""
 
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     def test_stats_displays_correctly(self, mock_agent_class):
         """Test stats command displays statistics."""
-        from gaia.agents.emr.cli import cmd_stats
+        from gaia_agent_emr.cli import cmd_stats
 
         # Setup mock agent
         mock_agent = MagicMock()
@@ -332,10 +332,10 @@ class TestCmdStats(unittest.TestCase):
 class TestCmdQuery(unittest.TestCase):
     """Test cmd_query command."""
 
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     def test_query_executes(self, mock_agent_class):
         """Test query command processes question."""
-        from gaia.agents.emr.cli import cmd_query
+        from gaia_agent_emr.cli import cmd_query
 
         mock_agent = MagicMock()
         mock_agent_class.return_value = mock_agent
@@ -362,7 +362,7 @@ class TestCmdReset(unittest.TestCase):
 
     def test_reset_no_database(self):
         """Test reset when database doesn't exist."""
-        from gaia.agents.emr.cli import cmd_reset
+        from gaia_agent_emr.cli import cmd_reset
 
         with temp_directory() as tmp_dir:
             args = argparse.Namespace(
@@ -375,10 +375,10 @@ class TestCmdReset(unittest.TestCase):
             result = cmd_reset(args)
             self.assertEqual(result, 0)
 
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     def test_reset_with_force(self, mock_agent_class):
         """Test reset with force flag skips confirmation."""
-        from gaia.agents.emr.cli import cmd_reset
+        from gaia_agent_emr.cli import cmd_reset
 
         mock_agent = MagicMock()
         mock_agent.get_stats.return_value = {"total_patients": 5}
@@ -401,10 +401,10 @@ class TestCmdReset(unittest.TestCase):
             self.assertFalse(db_path.exists())
 
     @patch("rich.prompt.Confirm.ask", return_value=False)
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     def test_reset_cancelled(self, mock_agent_class, mock_confirm_ask):
         """Test reset cancelled by user."""
-        from gaia.agents.emr.cli import cmd_reset
+        from gaia_agent_emr.cli import cmd_reset
 
         mock_agent = MagicMock()
         mock_agent.get_stats.return_value = {"total_patients": 5}
@@ -432,7 +432,7 @@ class TestCmdTest(unittest.TestCase):
 
     def test_test_file_not_found(self):
         """Test test command returns error for missing file."""
-        from gaia.agents.emr.cli import cmd_test
+        from gaia_agent_emr.cli import cmd_test
 
         with temp_directory() as tmp_dir:
             args = argparse.Namespace(
@@ -453,7 +453,7 @@ class TestPrintStatsTable(unittest.TestCase):
 
     def test_print_stats_with_alerts(self):
         """Test stats table prints alert count when present."""
-        from gaia.agents.emr.cli import _print_stats_table
+        from gaia_agent_emr.cli import _print_stats_table
 
         stats = {
             "total_patients": 10,
@@ -474,7 +474,7 @@ class TestPrintStatsTable(unittest.TestCase):
 
     def test_print_stats_without_alerts(self):
         """Test stats table when no alerts present."""
-        from gaia.agents.emr.cli import _print_stats_table
+        from gaia_agent_emr.cli import _print_stats_table
 
         stats = {
             "total_patients": 0,
@@ -499,7 +499,7 @@ class TestPrintHeader(unittest.TestCase):
 
     def test_print_header_displays(self):
         """Test header displays without error."""
-        from gaia.agents.emr.cli import _print_header
+        from gaia_agent_emr.cli import _print_header
 
         # Should not raise
         _print_header("./intake_forms", "./data/patients.db")
@@ -512,7 +512,7 @@ class TestAddCommonArgs(unittest.TestCase):
         """Test all common arguments are added."""
         import argparse
 
-        from gaia.agents.emr.cli import _add_common_args
+        from gaia_agent_emr.cli import _add_common_args
 
         parser = argparse.ArgumentParser()
         _add_common_args(parser)
@@ -531,12 +531,12 @@ class TestCmdDashboard(unittest.TestCase):
     """Test cmd_dashboard command."""
 
     @patch(
-        "gaia.agents.emr.dashboard.server.run_dashboard",
+        "gaia_agent_emr.dashboard.server.run_dashboard",
         side_effect=ImportError("No FastAPI"),
     )
     def test_dashboard_missing_dependencies(self, mock_run):
         """Test dashboard shows error when dependencies missing."""
-        from gaia.agents.emr.cli import cmd_dashboard
+        from gaia_agent_emr.cli import cmd_dashboard
 
         with temp_directory() as tmp_dir:
             args = argparse.Namespace(
@@ -560,7 +560,7 @@ class TestCmdInit(unittest.TestCase):
     @patch("gaia.llm.lemonade_client.LemonadeClient")
     def test_init_lemonade_not_available(self, mock_client_class):
         """Test init when Lemonade server is not running."""
-        from gaia.agents.emr.cli import cmd_init
+        from gaia_agent_emr.cli import cmd_init
 
         # Mock client to raise connection error
         mock_client = MagicMock()
@@ -578,7 +578,7 @@ class TestCmdInit(unittest.TestCase):
     @patch("gaia.llm.lemonade_client.LemonadeClient")
     def test_init_lemonade_not_ok(self, mock_client_class):
         """Test init when Lemonade returns non-ok status."""
-        from gaia.agents.emr.cli import cmd_init
+        from gaia_agent_emr.cli import cmd_init
 
         mock_client = MagicMock()
         mock_client.health_check.return_value = {"status": "error"}
@@ -596,11 +596,11 @@ class TestCmdInit(unittest.TestCase):
 class TestCmdWatch(unittest.TestCase):
     """Test cmd_watch command."""
 
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     @patch("builtins.input", side_effect=["quit"])
     def test_watch_quit_command(self, mock_input, mock_agent_class):
         """Test watch mode responds to quit command."""
-        from gaia.agents.emr.cli import cmd_watch
+        from gaia_agent_emr.cli import cmd_watch
 
         mock_agent = MagicMock()
         mock_agent_class.return_value = mock_agent
@@ -617,11 +617,11 @@ class TestCmdWatch(unittest.TestCase):
             cmd_watch(args)
             mock_agent.stop.assert_called_once()
 
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     @patch("builtins.input", side_effect=["exit"])
     def test_watch_exit_command(self, mock_input, mock_agent_class):
         """Test watch mode responds to exit command."""
-        from gaia.agents.emr.cli import cmd_watch
+        from gaia_agent_emr.cli import cmd_watch
 
         mock_agent = MagicMock()
         mock_agent_class.return_value = mock_agent
@@ -637,11 +637,11 @@ class TestCmdWatch(unittest.TestCase):
             cmd_watch(args)
             mock_agent.stop.assert_called_once()
 
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     @patch("builtins.input", side_effect=["stats", "quit"])
     def test_watch_stats_command(self, mock_input, mock_agent_class):
         """Test watch mode handles stats command."""
-        from gaia.agents.emr.cli import cmd_watch
+        from gaia_agent_emr.cli import cmd_watch
 
         mock_agent = MagicMock()
         mock_agent.get_stats.return_value = {
@@ -671,11 +671,11 @@ class TestCmdWatch(unittest.TestCase):
             mock_agent.get_stats.assert_called_once()
             mock_agent.stop.assert_called_once()
 
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     @patch("builtins.input", side_effect=["How many patients?", "quit"])
     def test_watch_query_command(self, mock_input, mock_agent_class):
         """Test watch mode handles free-form queries."""
-        from gaia.agents.emr.cli import cmd_watch
+        from gaia_agent_emr.cli import cmd_watch
 
         mock_agent = MagicMock()
         mock_agent_class.return_value = mock_agent
@@ -692,11 +692,11 @@ class TestCmdWatch(unittest.TestCase):
             mock_agent.process_query.assert_called_once_with("How many patients?")
             mock_agent.stop.assert_called_once()
 
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     @patch("builtins.input", side_effect=EOFError())
     def test_watch_handles_eof(self, mock_input, mock_agent_class):
         """Test watch mode handles EOF gracefully."""
-        from gaia.agents.emr.cli import cmd_watch
+        from gaia_agent_emr.cli import cmd_watch
 
         mock_agent = MagicMock()
         mock_agent_class.return_value = mock_agent
@@ -713,11 +713,11 @@ class TestCmdWatch(unittest.TestCase):
             cmd_watch(args)
             mock_agent.stop.assert_called_once()
 
-    @patch("gaia.agents.emr.cli.MedicalIntakeAgent")
+    @patch("gaia_agent_emr.cli.MedicalIntakeAgent")
     @patch("builtins.input", side_effect=KeyboardInterrupt())
     def test_watch_handles_keyboard_interrupt(self, mock_input, mock_agent_class):
         """Test watch mode handles Ctrl+C gracefully."""
-        from gaia.agents.emr.cli import cmd_watch
+        from gaia_agent_emr.cli import cmd_watch
 
         mock_agent = MagicMock()
         mock_agent_class.return_value = mock_agent
@@ -741,7 +741,7 @@ class TestLaunchElectron(unittest.TestCase):
     @patch("shutil.which", return_value=None)
     def test_launch_electron_npx_not_found(self, mock_which):
         """Test launch_electron returns False when npx not found."""
-        from gaia.agents.emr.cli import _launch_electron
+        from gaia_agent_emr.cli import _launch_electron
 
         result = _launch_electron("http://localhost:8080", delay=0)
         self.assertFalse(result)
@@ -754,7 +754,7 @@ class TestMainEntryPoint(unittest.TestCase):
         """Test main returns 0 when called with no args."""
         import sys
 
-        from gaia.agents.emr.cli import main
+        from gaia_agent_emr.cli import main
 
         original_argv = sys.argv.copy()
         try:

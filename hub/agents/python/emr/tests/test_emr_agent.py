@@ -14,7 +14,7 @@ class TestMedicalIntakeAgentImport(unittest.TestCase):
 
     def test_can_import(self):
         """Verify MedicalIntakeAgent can be imported."""
-        from gaia.agents.emr import MedicalIntakeAgent
+        from gaia_agent_emr import MedicalIntakeAgent
 
         self.assertIsNotNone(MedicalIntakeAgent)
 
@@ -28,7 +28,7 @@ class TestMedicalIntakeAgentInit(unittest.TestCase):
             watch_dir = tmp_dir / "intake"
             db_path = tmp_dir / "data" / "patients.db"
 
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(watch_dir),
@@ -48,7 +48,7 @@ class TestMedicalIntakeAgentInit(unittest.TestCase):
     def test_init_creates_database_schema(self):
         """Test agent creates patients table."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -75,7 +75,7 @@ class TestPatientDataParsing(unittest.TestCase):
     def test_parse_valid_json(self):
         """Test parsing valid JSON extraction."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -106,7 +106,7 @@ class TestPatientDataParsing(unittest.TestCase):
     def test_parse_json_with_surrounding_text(self):
         """Test parsing JSON embedded in text."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -132,7 +132,7 @@ class TestPatientDataParsing(unittest.TestCase):
     def test_parse_invalid_json(self):
         """Test parsing returns None for invalid JSON."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -151,7 +151,7 @@ class TestPatientDataParsing(unittest.TestCase):
     def test_parse_nested_json(self):
         """Test parsing JSON with nested objects (critical bug fix test)."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -183,7 +183,7 @@ class TestPatientDataParsing(unittest.TestCase):
     def test_parse_json_with_nested_objects_in_text(self):
         """Test parsing nested JSON embedded in text."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -211,7 +211,7 @@ class TestPatientStorage(unittest.TestCase):
     def test_store_patient(self):
         """Test storing a patient record."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -249,7 +249,7 @@ class TestPatientStorage(unittest.TestCase):
     def test_store_patient_with_additional_fields(self):
         """Test that extra fields are stored in additional_fields JSON column."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -295,7 +295,7 @@ class TestPatientStorage(unittest.TestCase):
     def test_store_patient_validates_required_fields(self):
         """Test that missing required fields are rejected."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -330,7 +330,7 @@ class TestReturningPatientDetection(unittest.TestCase):
     def test_find_existing_patient_by_name_and_dob(self):
         """Test finding existing patient by name and DOB."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -378,7 +378,7 @@ class TestReturningPatientDetection(unittest.TestCase):
     def test_detect_changes(self):
         """Test change detection between old and new patient data."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -418,7 +418,7 @@ class TestPatientUpdate(unittest.TestCase):
     def test_update_patient(self):
         """Test updating existing patient record."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -470,8 +470,9 @@ class TestPatientTools(unittest.TestCase):
     def test_search_patients_empty(self):
         """Test search with no patients."""
         with temp_directory() as tmp_dir:
+            from gaia_agent_emr import MedicalIntakeAgent
+
             from gaia.agents.base.tools import _TOOL_REGISTRY
-            from gaia.agents.emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -493,8 +494,9 @@ class TestPatientTools(unittest.TestCase):
     def test_search_patients_by_name(self):
         """Test search by patient name."""
         with temp_directory() as tmp_dir:
+            from gaia_agent_emr import MedicalIntakeAgent
+
             from gaia.agents.base.tools import _TOOL_REGISTRY
-            from gaia.agents.emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -529,8 +531,9 @@ class TestPatientTools(unittest.TestCase):
     def test_get_patient(self):
         """Test getting patient by ID."""
         with temp_directory() as tmp_dir:
+            from gaia_agent_emr import MedicalIntakeAgent
+
             from gaia.agents.base.tools import _TOOL_REGISTRY
-            from gaia.agents.emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -567,8 +570,9 @@ class TestPatientTools(unittest.TestCase):
     def test_get_intake_stats(self):
         """Test getting intake statistics."""
         with temp_directory() as tmp_dir:
+            from gaia_agent_emr import MedicalIntakeAgent
+
             from gaia.agents.base.tools import _TOOL_REGISTRY
-            from gaia.agents.emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -605,7 +609,7 @@ class TestAlerts(unittest.TestCase):
     def test_create_allergy_alert(self):
         """Test that allergy alerts are created."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -647,7 +651,7 @@ class TestAlerts(unittest.TestCase):
     def test_alerts_table_exists(self):
         """Test that alerts table is created."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -668,7 +672,7 @@ class TestAlerts(unittest.TestCase):
     def test_intake_sessions_table_exists(self):
         """Test that intake_sessions table is created for audit trail."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -689,7 +693,7 @@ class TestAlerts(unittest.TestCase):
     def test_duplicate_alert_prevention(self):
         """Test that duplicate unacknowledged alerts are not created."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             agent = MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
@@ -750,7 +754,7 @@ class TestContextManager(unittest.TestCase):
     def test_context_manager_cleanup(self):
         """Test agent cleans up when used as context manager."""
         with temp_directory() as tmp_dir:
-            from gaia.agents.emr import MedicalIntakeAgent
+            from gaia_agent_emr import MedicalIntakeAgent
 
             with MedicalIntakeAgent(
                 watch_dir=str(tmp_dir / "intake"),
