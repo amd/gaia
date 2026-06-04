@@ -159,12 +159,20 @@ class TestGemmaE2BCatalogEntry:
             req.model_type == ModelType.LLM
         ), f"Expected model_type=ModelType.LLM, got {req.model_type!r}"
 
-    def test_e2b_tool_calling_enabled(self):
-        """Email triage tools require tool_calling=True."""
+    def test_e2b_tool_calling_disabled_for_flm_build(self):
+        """The FLM/NPU build does NOT serve native OpenAI tool calls.
+
+        Verified on Strix Halo hardware: passing an OpenAI ``tools`` payload to
+        the FLM server 500-errors ("type must be string, but is object"). So
+        this entry must declare ``tool_calling=False`` — the agent then uses the
+        embedded-JSON tool path. Email triage itself parses a JSON object from a
+        plain completion, so it is unaffected either way.
+        """
         req = MODELS[self.E2B_KEY]
-        assert req.tool_calling is True, (
-            "gemma-4-e2b must have tool_calling=True — the email agent relies on "
-            "native tool calls for triage, organize, and reply operations."
+        assert req.tool_calling is False, (
+            "gemma-4-e2b is the FLM/NPU build, which 500-errors on a native "
+            "tools payload — it must declare tool_calling=False so the agent "
+            "uses the embedded-JSON tool path."
         )
 
     def test_e2b_min_ctx_size_matches_npu_window(self):
@@ -227,41 +235,47 @@ class TestGemmaE2BLazyDownload:
 
         Guards the #1282 AC "no large download in the critical install path":
         merely declaring the E2B entry in ``MODELS`` must not pull weights or
-        probe the server at import time. We patch at the *real* chokepoints a
-        download/server-spawn must cross — ``requests`` (the HTTP adapter every
-        ``requests.get``/``post`` in this module funnels through) and
-        ``subprocess`` (``Popen``/``run`` for the server) — BEFORE re-importing,
-        so the assertion fails loudly if a future import-time side effect tries
-        to reach out. Patching the module's own ``load_model`` here would be
-        vacuous: ``importlib`` builds a brand-new class object the patch never
-        touches.
+        probe the server at import time. The import runs in an ISOLATED
+        subprocess with the real chokepoints a download/server-spawn must
+        cross — ``requests`` (the HTTP adapter every ``requests`` call funnels
+        through) and ``subprocess`` (``Popen``/``run`` for the server) —
+        instrumented to fail loudly. Running it out-of-process is deliberate:
+        an in-process ``sys.modules`` pop + re-import rebuilds the module's
+        classes and corrupts their identity for every later test in the
+        session. A fresh interpreter also makes the guard stronger (a brand-new
+        class object means patching the module's own ``load_model`` would be
+        vacuous).
         """
-        import importlib
+        import os
         import subprocess
         import sys
-        import unittest.mock as mock
+        import textwrap
 
-        import requests
+        probe = textwrap.dedent("""
+            import requests.adapters
+            import subprocess
 
-        mod_name = "gaia.llm.lemonade_client"
-        saved = sys.modules.pop(mod_name, None)
-        try:
-            with (
-                mock.patch.object(requests.adapters.HTTPAdapter, "send") as mock_http,
-                mock.patch.object(subprocess, "Popen") as mock_popen,
-                mock.patch.object(subprocess, "run") as mock_run,
-            ):
-                importlib.import_module(mod_name)
-                mock_http.assert_not_called()
-                mock_popen.assert_not_called()
-                mock_run.assert_not_called()
-        finally:
-            # Restore the original module object so later tests (and the rest
-            # of the session) keep the same class identity / patched state.
-            if saved is not None:
-                sys.modules[mod_name] = saved
-            else:
-                importlib.import_module(mod_name)
+            def _boom(*_a, **_k):
+                raise AssertionError("import-time network/subprocess call")
+
+            requests.adapters.HTTPAdapter.send = _boom
+            subprocess.Popen = _boom
+            subprocess.run = _boom
+
+            import gaia.llm.lemonade_client  # noqa: F401 — must not trip _boom
+            print("IMPORT_OK")
+            """)
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+        )
+        assert result.returncode == 0 and "IMPORT_OK" in result.stdout, (
+            "importing gaia.llm.lemonade_client triggered an import-time "
+            f"network/subprocess call (the install path must stay lazy):\n"
+            f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+        )
 
     def test_email_agent_config_construction_does_not_call_load_model(
         self, monkeypatch
