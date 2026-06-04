@@ -297,3 +297,158 @@ def test_handle_returns_false_for_export():
 
 def test_handle_returns_true_for_init(tmp_path):
     assert cli_agent.handle(_init_args("demo-agent", tmp_path)) is True
+
+
+# ---------------------------------------------------------------------------
+# pack / publish / login (distribution)
+# ---------------------------------------------------------------------------
+
+
+def _pack_args(path, output=None):
+    return Namespace(agent_action="pack", path=str(path), output=output)
+
+
+def _publish_args(path, output=None, hub_url=None, skip_r2=False, skip_pypi=False):
+    return Namespace(
+        agent_action="publish",
+        path=str(path),
+        output=output,
+        hub_url=hub_url,
+        skip_r2=skip_r2,
+        skip_pypi=skip_pypi,
+    )
+
+
+def _login_args(hub_token=None, pypi_token=None, hub=False, pypi=False):
+    return Namespace(
+        agent_action="login",
+        hub_token=hub_token,
+        pypi_token=pypi_token,
+        hub=hub,
+        pypi=pypi,
+    )
+
+
+class _FakePackResult:
+    def __init__(self, tmp_path):
+        from pathlib import Path
+
+        self.wheel_path = Path(tmp_path) / "gaia_agent_demo-0.1.0-py3-none-any.whl"
+        self.wheel_path.write_bytes(b"wheel")
+        self.sha256 = "abc123def456"
+        self.size_bytes = 5
+        self.agent_id = "demo"
+        self.version = "0.1.0"
+        self.dist_name = "gaia-agent-demo"
+
+
+def test_cmd_pack_calls_packager(tmp_path, monkeypatch, capsys):
+    from gaia.hub import packager
+
+    called = {}
+    fake = _FakePackResult(tmp_path)
+
+    def _fake_pack(path, *, output_dir=None, **kw):
+        called["path"] = path
+        called["output_dir"] = output_dir
+        return fake
+
+    monkeypatch.setattr(packager, "pack", _fake_pack)
+    cli_agent.cmd_pack(_pack_args(tmp_path, output=None))
+    out = capsys.readouterr().out
+    assert "abc123def456" in out
+    assert called["path"] == str(tmp_path)
+
+
+def test_cmd_pack_wraps_packager_error(tmp_path, monkeypatch):
+    from gaia.hub import packager
+
+    def _boom(path, *, output_dir=None, **kw):
+        raise packager.PackagerError("build went boom")
+
+    monkeypatch.setattr(packager, "pack", _boom)
+    with pytest.raises(cli_agent.AgentWorkflowError, match="build went boom"):
+        cli_agent.cmd_pack(_pack_args(tmp_path))
+
+
+def test_cmd_publish_packs_then_publishes(tmp_path, monkeypatch, capsys):
+    from gaia.hub import packager, publisher
+
+    fake = _FakePackResult(tmp_path)
+    monkeypatch.setattr(packager, "pack", lambda p, *, output_dir=None, **k: fake)
+
+    captured = {}
+
+    def _fake_publish(pack_result, manifest_path, **kwargs):
+        captured["manifest"] = manifest_path
+        captured["kwargs"] = kwargs
+        return publisher.PublishResult(
+            agent_id="demo",
+            version="0.1.0",
+            r2=publisher.TargetResult("r2", detail="ok"),
+            pypi=publisher.TargetResult("pypi", detail="ok"),
+        )
+
+    monkeypatch.setattr(publisher, "publish", _fake_publish)
+    cli_agent.cmd_publish(_publish_args(tmp_path, hub_url="https://h"))
+    out = capsys.readouterr().out
+    assert "Published agent 'demo'" in out
+    assert captured["kwargs"]["hub_url"] == "https://h"
+    assert str(captured["manifest"]).endswith("gaia-agent.yaml")
+
+
+def test_cmd_publish_wraps_publisher_error(tmp_path, monkeypatch):
+    from gaia.hub import packager, publisher
+
+    fake = _FakePackResult(tmp_path)
+    monkeypatch.setattr(packager, "pack", lambda p, *, output_dir=None, **k: fake)
+
+    def _boom(*a, **k):
+        raise publisher.PublisherError("no token")
+
+    monkeypatch.setattr(publisher, "publish", _boom)
+    with pytest.raises(cli_agent.AgentWorkflowError, match="no token"):
+        cli_agent.cmd_publish(_publish_args(tmp_path))
+
+
+def test_cmd_login_stores_tokens(monkeypatch, capsys):
+    from gaia.hub import publisher
+
+    stored = {}
+    monkeypatch.setattr(
+        publisher, "store_token", lambda kind, token: stored.__setitem__(kind, token)
+    )
+    cli_agent.cmd_login(_login_args(hub_token="h-tok", pypi_token="p-tok"))
+    assert stored == {"hub": "h-tok", "pypi": "p-tok"}
+    assert "hub, pypi" in capsys.readouterr().out
+
+
+def test_cmd_login_no_token_raises(monkeypatch):
+    from gaia.hub import publisher
+
+    monkeypatch.setattr(publisher, "store_token", lambda kind, token: None)
+    with pytest.raises(cli_agent.AgentWorkflowError, match="no token provided"):
+        cli_agent.cmd_login(_login_args())
+
+
+def test_cmd_login_prompts_when_flag_set(monkeypatch):
+    import getpass
+
+    from gaia.hub import publisher
+
+    stored = {}
+    monkeypatch.setattr(
+        publisher, "store_token", lambda kind, token: stored.__setitem__(kind, token)
+    )
+    monkeypatch.setattr(getpass, "getpass", lambda prompt="": "prompted-secret")
+    cli_agent.cmd_login(_login_args(hub=True))
+    assert stored == {"hub": "prompted-secret"}
+
+
+def test_handle_dispatches_pack(tmp_path, monkeypatch):
+    from gaia.hub import packager
+
+    monkeypatch.setattr(
+        packager, "pack", lambda p, *, output_dir=None, **k: _FakePackResult(tmp_path)
+    )
+    assert cli_agent.handle(_pack_args(tmp_path)) is True

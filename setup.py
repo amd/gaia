@@ -245,6 +245,24 @@ setup(
             "mypy",
             "bandit",
         ],
+        # Agent Hub packaging/publishing toolchain (issues #1093, #1179):
+        # 'gaia agent pack' shells out to 'python -m build', 'gaia agent publish'
+        # to 'twine upload'. Kept out of [dev] so the unit suite stays lean —
+        # install with 'pip install "amd-gaia[publish]"' to package an agent.
+        "publish": [
+            "build>=1.0.0",
+            "twine>=5.0.0",
+        ],
+        # Meta-package extras (issue #1179): install AMD production agents from
+        # PyPI. Each 'gaia-agent-<id>' is a standalone wheel; the set grows as
+        # agents migrate to hub/agents/ (spec Phase 2/3). Add an entry here when
+        # each agent's wheel is first published.
+        "agents": [
+            "gaia-agent-summarize",
+        ],
+        "agent-summarize": [
+            "gaia-agent-summarize",
+        ],
     },
     classifiers=[
         "Development Status :: 4 - Beta",
