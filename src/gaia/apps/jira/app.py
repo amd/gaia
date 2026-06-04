@@ -15,9 +15,24 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.jira.agent import JiraAgent
-
 logger = logging.getLogger(__name__)
+
+
+def _load_jira_agent_class():
+    """Import JiraAgent from its standalone package, or fail loudly.
+
+    The jira agent ships as the separate ``gaia-agent-jira`` wheel
+    (issue #1102); it is no longer part of the core ``amd-gaia`` wheel.
+    """
+    try:
+        from gaia_agent_jira.agent import JiraAgent
+    except ImportError as e:
+        raise ImportError(
+            "The jira agent is not installed. Install it with "
+            "`pip install gaia-agent-jira` (or `pip install amd-gaia[agents]` "
+            "for all AMD agents). See https://amd-gaia.ai/docs/guides/jira."
+        ) from e
+    return JiraAgent
 
 
 @dataclass
@@ -60,7 +75,8 @@ class JiraApp:
         self.step_mode = step_mode
         self.base_url = base_url
         # In demo/debug mode, never use silent mode so we see all agent steps
-        self.agent = JiraAgent(
+        jira_agent_class = _load_jira_agent_class()
+        self.agent = jira_agent_class(
             model_id=self.model,
             base_url=self.base_url,
             debug_prompts=False,  # Don't include prompts in conversation history by default
