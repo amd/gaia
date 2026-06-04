@@ -73,7 +73,6 @@ setup(
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
         "gaia.agents.routing",
-        "gaia.agents.sd",
         "gaia.governance",
         "gaia.sd",
         "gaia.vlm",
@@ -244,6 +243,17 @@ setup(
             "autoflake",
             "mypy",
             "bandit",
+        ],
+        # Standalone AMD production agents (issue #1102). Each agent ships as a
+        # separate ``gaia-agent-<id>`` wheel that depends on this framework
+        # wheel; ``amd-gaia[agents]`` installs all migrated agents at once.
+        # For editable development install the package directly, e.g.
+        # ``pip install -e hub/agents/python/sd``.
+        "summarize": ["gaia-agent-summarize>=0.1.0"],
+        "sd": ["gaia-agent-sd>=0.1.0"],
+        "agents": [
+            "gaia-agent-summarize>=0.1.0",
+            "gaia-agent-sd>=0.1.0",
         ],
     },
     classifiers=[

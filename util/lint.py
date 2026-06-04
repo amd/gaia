@@ -366,7 +366,9 @@ def check_imports() -> CheckResult:
             False,
         ),
         ("from", "gaia.agents.routing", "RoutingAgent", "Routing agent", False),
-        ("from", "gaia.agents.sd", "SDAgent", "SD agent", False),
+        # Migrated to standalone wheels (#1102) — optional so a framework-only
+        # env (no gaia-agent-<id> installed) skips rather than fails.
+        ("from", "gaia_agent_sd", "SDAgent", "SD agent", True),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
         ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),

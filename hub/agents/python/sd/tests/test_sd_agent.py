@@ -27,12 +27,12 @@ class TestSDAgent(unittest.TestCase):
 
     def test_story_file_creation(self):
         """Test that story is saved to .txt file alongside image."""
-        from gaia.agents.sd import SDAgent, SDAgentConfig
+        from gaia_agent_sd import SDAgent, SDAgentConfig
 
         with tempfile.TemporaryDirectory() as tmpdir:
             config = SDAgentConfig(output_dir=tmpdir)
 
-            with patch("gaia.agents.sd.agent.Agent.__init__"):
+            with patch("gaia_agent_sd.agent.Agent.__init__"):
                 with patch("gaia.llm.lemonade_client.LemonadeClient"):
                     agent = SDAgent(config)
                     agent.sd_generations = [
@@ -97,9 +97,9 @@ class TestSDAgent(unittest.TestCase):
 
     def test_system_prompt_extraction(self):
         """Test that SD system prompt is loaded from prompts.py."""
-        from gaia.agents.sd import SDAgent, SDAgentConfig
+        from gaia_agent_sd import SDAgent, SDAgentConfig
 
-        with patch("gaia.agents.sd.agent.Agent.__init__"):
+        with patch("gaia_agent_sd.agent.Agent.__init__"):
             with patch("gaia.llm.lemonade_client.LemonadeClient"):
                 config = SDAgentConfig(sd_model="SDXL-Turbo")
                 agent = SDAgent(config)
@@ -121,12 +121,12 @@ class TestSDAgent(unittest.TestCase):
 
     def test_model_specific_prompts(self):
         """Test that each SD model gets the correct prompt."""
-        from gaia.agents.sd import SDAgent, SDAgentConfig
+        from gaia_agent_sd import SDAgent, SDAgentConfig
 
         models_to_test = ["SD-Turbo", "SDXL-Turbo", "SDXL-Base-1.0", "SD-1.5"]
 
         for model in models_to_test:
-            with patch("gaia.agents.sd.agent.Agent.__init__"):
+            with patch("gaia_agent_sd.agent.Agent.__init__"):
                 with patch("gaia.llm.lemonade_client.LemonadeClient"):
                     config = SDAgentConfig(sd_model=model)
                     agent = SDAgent(config)
@@ -317,8 +317,9 @@ class TestSDAgent(unittest.TestCase):
         """
         from pathlib import Path
 
+        from gaia_agent_sd.agent import SDAgent
+
         from gaia.agents.base.tools import _TOOL_REGISTRY
-        from gaia.agents.sd.agent import SDAgent
 
         with tempfile.TemporaryDirectory() as tmpdir:
             real_png = Path(tmpdir) / "real_image.png"
@@ -352,8 +353,9 @@ class TestSDAgent(unittest.TestCase):
         """
         from pathlib import Path
 
+        from gaia_agent_sd.agent import SDAgent
+
         from gaia.agents.base.tools import _TOOL_REGISTRY
-        from gaia.agents.sd.agent import SDAgent
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Empty dir on purpose: no PNG to recommend.
@@ -376,7 +378,7 @@ class TestSDAgent(unittest.TestCase):
         rather than retyping the path.  Pins the wording so a future prompt
         refactor can't silently drop the directive.
         """
-        from gaia.agents.sd.agent import SDAgent
+        from gaia_agent_sd.agent import SDAgent
 
         # Skip __init__; we only need the bound method.
         agent = SDAgent.__new__(SDAgent)

@@ -1,0 +1,33 @@
+id: sd
+name: Stable Diffusion
+version: 0.1.0
+description: "Image generation — LLM-enhanced prompts for Stable Diffusion"
+author: AMD
+license: MIT
+
+category: creative
+tags: [image, stable-diffusion, sd]
+icon: image
+tools_count: 0
+
+language: python
+min_gaia_version: "0.20.0"
+models: [Gemma-4-E4B-it-GGUF]
+
+python:
+  entry_module: gaia_agent_sd
+  entry_class: SDAgent
+  dependencies:
+    - "amd-gaia>=0.20.0"
+
+requirements:
+  min_memory_gb: 8
+  gpu_vram_gb: 6
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+interfaces:
+  tui: false
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: true

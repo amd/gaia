@@ -4803,7 +4803,14 @@ def handle_sd_command(args):
         print("  gaia sd -i")
         return
 
-    from gaia.agents.sd import SDAgent, SDAgentConfig
+    try:
+        from gaia_agent_sd import SDAgent, SDAgentConfig
+    except ImportError as e:
+        raise ImportError(
+            "The sd agent is not installed. Install it with "
+            "`pip install gaia-agent-sd` (or `pip install amd-gaia[agents]` for "
+            "all AMD agents). See https://amd-gaia.ai/docs/guides/sd."
+        ) from e
 
     # Ensure Lemonade is ready with proper context size for SD agent
     # SD agent needs 8K context for image + story workflow

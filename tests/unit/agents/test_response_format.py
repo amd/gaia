@@ -343,7 +343,8 @@ class TestJiraAgentFormat:
 
 class TestSDAgentFormat:
     def test_sd_no_duplicate_format(self):
-        from gaia.agents.sd.agent import SDAgent
+        pytest.importorskip("gaia_agent_sd")
+        from gaia_agent_sd.agent import SDAgent
 
         prompt = SDAgent._get_system_prompt(None)
         assert "DYNAMIC PARAMETER PLACEHOLDERS" not in prompt
