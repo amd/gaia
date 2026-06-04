@@ -30,7 +30,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union, cast
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -675,7 +675,7 @@ class MemoryStore:
         category: str,
         content: str,
         domain: str | None = None,
-        metadata: dict = None,
+        metadata: dict | None = None,
         confidence: float = 0.5,
         due_at: str | None = None,
         source: str = "tool",
@@ -877,7 +877,7 @@ class MemoryStore:
                         overlap,
                         existing_id,
                     )
-                    return existing_id
+                    return cast(str, existing_id)
         except sqlite3.OperationalError as e:
             logger.debug("[MemoryStore] FTS5 dedup search error: %s", e)
 
@@ -1223,7 +1223,7 @@ class MemoryStore:
         content: str | None = None,
         category: str | None = None,
         domain: str | None = None,
-        metadata: dict = None,
+        metadata: dict | None = None,
         context: str | None = None,
         sensitive: bool | None = None,
         entity: str | None = None,
@@ -1678,7 +1678,7 @@ class MemoryStore:
                 ORDER BY timestamp DESC
                 LIMIT ?
             """
-            params = (tool_name, limit)
+            params: tuple[Any, ...] = (tool_name, limit)
         else:
             sql = """
                 SELECT id, session_id, tool_name, args, result_summary,
@@ -2109,7 +2109,7 @@ class MemoryStore:
             error_map = {r[0]: r[1] for r in error_rows}
 
         # Build timeline for each day in range
-        all_days = set()
+        all_days: set[str] = set()
         all_days.update(conv_map.keys())
         all_days.update(tool_map.keys())
         all_days.update(knowledge_map.keys())

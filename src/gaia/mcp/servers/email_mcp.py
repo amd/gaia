@@ -32,7 +32,7 @@ mail backend, and only on the authorized path.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.mcp_agent import MCPAgent
@@ -139,8 +139,16 @@ class _FakeSendBackend:
         self._seq = 0
 
     def send_message(
-        self, *, to: str, subject: str, body: str, headers: Dict[str, str] = None
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
+        # Signature mirrors LiveGmailBackend.send_message; body/headers are part
+        # of that contract but unused by the in-process fake.
+        # pylint: disable=unused-argument
         self._seq += 1
         return {"id": f"mcp_fake_{self._seq}", "to": to, "subject": subject}
 

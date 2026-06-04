@@ -337,7 +337,10 @@ class GoalStore:
             source,
             status,
         )
-        return self.get_goal(goal_id)
+        goal = self.get_goal(goal_id)
+        if goal is None:
+            raise RuntimeError(f"goal {goal_id} not found immediately after creation")
+        return goal
 
     def get_goal(self, goal_id: str) -> Optional[Goal]:
         """Return a goal by ID, with its tasks, or None if not found."""
@@ -449,7 +452,10 @@ class GoalStore:
             )
             conn.execute("UPDATE goals SET updated_at=? WHERE id=?", (now, goal_id))
             conn.commit()
-        return self.get_task(task_id)
+        task = self.get_task(task_id)
+        if task is None:
+            raise RuntimeError(f"task {task_id} not found immediately after creation")
+        return task
 
     def get_task(self, task_id: str) -> Optional[Task]:
         """Return a task by ID or None."""
@@ -533,7 +539,7 @@ class GoalStore:
             ).fetchone()
             if not row or row["total"] == 0:
                 return False
-            return row["total"] == row["done"]
+            return bool(row["total"] == row["done"])
 
     # ------------------------------------------------------------------
     # Stats / dashboard
