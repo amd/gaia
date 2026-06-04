@@ -257,6 +257,10 @@ def _scaffold_python(pkg_dir: Path, names: _Names) -> None:
         system_prompt=TEMPLATE_INSTRUCTIONS,
     )
 
+    # Normalise generated Python with the same tools (and defaults) the --lint
+    # gate enforces, so a freshly scaffolded package passes 'gaia agent test
+    # --lint' as-is. Done in-process (not via subprocess) so it works wherever
+    # black/isort are importable.
     (pkg_dir / "gaia-agent.yaml").write_text(
         _render_manifest_yaml(names, description), encoding="utf-8"
     )
@@ -267,32 +271,40 @@ def _scaffold_python(pkg_dir: Path, names: _Names) -> None:
         _render_readme(names, description), encoding="utf-8"
     )
     (code_dir / "__init__.py").write_text(
-        _render_init_py(names, description), encoding="utf-8"
+        _format_python_source(_render_init_py(names, description)), encoding="utf-8"
     )
-    (code_dir / "agent.py").write_text(agent_source, encoding="utf-8")
-    (tests_dir / "test_agent.py").write_text(_render_test_py(names), encoding="utf-8")
+    (code_dir / "agent.py").write_text(
+        _format_python_source(agent_source), encoding="utf-8"
+    )
+    (tests_dir / "test_agent.py").write_text(
+        _format_python_source(_render_test_py(names)), encoding="utf-8"
+    )
 
-    # Normalise generated sources with the same tools the --lint gate enforces,
-    # so a freshly scaffolded package passes 'gaia agent test --lint' as-is.
-    _format_python_sources([str(code_dir), str(tests_dir)])
 
-
-def _format_python_sources(targets: List[str]) -> None:
-    """Run black + isort over generated sources; fail loudly if unavailable."""
-    isort_rc, isort_out = _run_tool(["isort", *targets])
-    if isort_rc != 0:
+def _require_formatters():
+    """Import black + isort in-process; fail loudly with an actionable message."""
+    try:
+        import black
+        import isort
+    except ImportError as exc:
         raise AgentWorkflowError(
-            "could not format scaffold with isort. The 'gaia agent' developer "
-            "workflow needs the formatting tools — install them with "
-            f"'pip install \"amd-gaia[dev]\"'.\n{isort_out.strip()}"
-        )
-    black_rc, black_out = _run_tool(["black", "--quiet", *targets])
-    if black_rc != 0:
+            "the 'gaia agent' developer workflow needs black and isort — "
+            "install them with 'pip install \"amd-gaia[dev]\"'."
+        ) from exc
+    return black, isort
+
+
+def _format_python_source(source: str) -> str:
+    """Return *source* formatted with isort (black profile) then black."""
+    black, isort = _require_formatters()
+    sorted_src = isort.code(source, profile="black")
+    try:
+        return black.format_str(sorted_src, mode=black.Mode())
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # black raises on a syntax error in the generated source.
         raise AgentWorkflowError(
-            "could not format scaffold with black. The 'gaia agent' developer "
-            "workflow needs the formatting tools — install them with "
-            f"'pip install \"amd-gaia[dev]\"'.\n{black_out.strip()}"
-        )
+            f"could not format generated Python source: {exc}."
+        ) from exc
 
 
 def _scaffold_cpp(pkg_dir: Path, names: _Names) -> None:
@@ -484,12 +496,12 @@ def _lint_python(pkg_dir: Path, parsed, failures: List[str]) -> None:
             failures.append(err)
 
     # Gate 6: black + isort clean.
-    targets = [str(p) for p in (code_dir,) if p.exists()]
+    fmt_files = list(py_files)
     tests_dir = pkg_dir / "tests"
     if tests_dir.exists():
-        targets.append(str(tests_dir))
-    if targets:
-        _lint_formatters(targets, failures)
+        fmt_files.extend(sorted(tests_dir.rglob("*.py")))
+    if fmt_files:
+        _lint_formatters(fmt_files, failures)
 
 
 def _lint_cpp(pkg_dir: Path, parsed, failures: List[str]) -> None:
@@ -527,29 +539,42 @@ def _lint_cpp(pkg_dir: Path, parsed, failures: List[str]) -> None:
     )
 
 
-def _lint_formatters(targets: List[str], failures: List[str]) -> None:
-    """Run black --check and isort --check-only on the given targets."""
-    black_rc, black_out = _run_tool(["black", "--check", "--quiet", *targets])
-    if black_rc == 0:
-        _ok("black formatting clean")
-    else:
+def _lint_formatters(py_files: List[Path], failures: List[str]) -> None:
+    """Check black + isort cleanliness in-process (defaults, no subprocess)."""
+    black, isort = _require_formatters()
+    mode = black.Mode()
+    black_bad: List[str] = []
+    isort_bad: List[str] = []
+    for py in py_files:
+        src = py.read_text(encoding="utf-8")
+        if isort.code(src, profile="black") != src:
+            isort_bad.append(py.name)
+        try:
+            if black.format_str(src, mode=mode) != src:
+                black_bad.append(py.name)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Syntax errors are already reported by the parse gate; flag here too.
+            black_bad.append(py.name)
+
+    if black_bad:
         _bad("black formatting")
         failures.append(
-            "black would reformat files. Run "
-            "'python util/lint.py --black --fix' (or 'black <path>') to fix.\n"
-            + black_out.strip()
+            "black would reformat: "
+            + ", ".join(black_bad)
+            + ". Run 'python util/lint.py --black --fix' (or 'black <path>')."
         )
-
-    isort_rc, isort_out = _run_tool(["isort", "--check-only", *targets])
-    if isort_rc == 0:
-        _ok("isort import order clean")
     else:
+        _ok("black formatting clean")
+
+    if isort_bad:
         _bad("isort import order")
         failures.append(
-            "isort would reorder imports. Run "
-            "'python util/lint.py --isort --fix' (or 'isort <path>') to fix.\n"
-            + isort_out.strip()
+            "isort would reorder imports in: "
+            + ", ".join(isort_bad)
+            + ". Run 'python util/lint.py --isort --fix' (or 'isort <path>')."
         )
+    else:
+        _ok("isort import order clean")
 
 
 def _run_live_gates(pkg_dir: Path, timeout: int) -> None:
@@ -723,7 +748,7 @@ def _import_check(pkg_dir: Path, module_name: str) -> Tuple[bool, str]:
         "import sys; sys.path.insert(0, %r); "
         "import importlib; importlib.import_module(%r)" % (str(pkg_dir), module_name)
     )
-    rc, out = _run_tool([sys.executable, "-c", code], raw=True)
+    rc, out = _run_subprocess([sys.executable, "-c", code])
     if rc == 0:
         return True, ""
     return False, (
@@ -732,18 +757,12 @@ def _import_check(pkg_dir: Path, module_name: str) -> Tuple[bool, str]:
     )
 
 
-def _run_tool(cmd: List[str], raw: bool = False) -> Tuple[int, str]:
-    """Run a subprocess; return (returncode, combined output)."""
-    full = cmd if raw else [sys.executable, "-m", *cmd]
+def _run_subprocess(cmd: List[str]) -> Tuple[int, str]:
+    """Run a subprocess; return (returncode, combined stdout+stderr)."""
     try:
-        proc = subprocess.run(
-            full,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     except FileNotFoundError as exc:
-        return 1, f"could not run {full[0]}: {exc}"
+        return 1, f"could not run {cmd[0]}: {exc}"
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 

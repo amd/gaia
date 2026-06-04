@@ -8,7 +8,6 @@ agent so the suite runs without Lemonade.
 """
 
 from argparse import Namespace
-from pathlib import Path
 
 import pytest
 import yaml
