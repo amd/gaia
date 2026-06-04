@@ -125,10 +125,17 @@ nsis:
   # `gaia uninstall --purge` command handle data removal when the user opts in.
   deleteAppDataOnUninstall: false
 
-# ─── macOS (DMG) ────────────────────────────────────────────────────────
+# ─── macOS (DMG + ZIP) ──────────────────────────────────────────────────
 mac:
   target:
     - target: dmg
+      arch:
+        - arm64
+    # electron-updater's MacUpdater can ONLY perform in-place updates from a
+    # .zip — a DMG-only release makes it throw "ZIP file not provided" before
+    # any download begins (issue #1393). The zip target also writes the zip
+    # entry into latest-mac.yml, which is the feed electron-updater reads.
+    - target: zip
       arch:
         - arm64
   icon: ../../../../installer/macos/icon.icns
