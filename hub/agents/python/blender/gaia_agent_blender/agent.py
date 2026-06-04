@@ -7,10 +7,11 @@ Blender-specific agent for creating and modifying 3D scenes.
 import logging
 from typing import Any, Dict, List, Optional
 
+from gaia_agent_blender.core.scene import generate_scene_diagnosis_code
+
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import tool
-from gaia.agents.blender.core.scene import generate_scene_diagnosis_code
 from gaia.mcp.blender_mcp_client import MCPClient
 
 # Set up logging
@@ -158,7 +159,7 @@ Examples of colored requests:
             ```
             """
             try:
-                from gaia.agents.blender.core.scene import SceneManager
+                from gaia_agent_blender.core.scene import SceneManager
 
                 scene_manager = SceneManager(self.mcp)
                 return scene_manager.clear_scene()
@@ -244,7 +245,7 @@ Examples of colored requests:
             ```
             """
             try:
-                from gaia.agents.blender.core.materials import MaterialManager
+                from gaia_agent_blender.core.materials import MaterialManager
 
                 material_manager = MaterialManager(self.mcp)
                 return material_manager.set_material_color(object_name, color)

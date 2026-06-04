@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for DockerAgent (gaia.agents.docker).
+"""Unit tests for DockerAgent (gaia_agent_docker).
 
 DockerAgent is an MCPAgent; ``skip_lemonade=True`` lets it construct
 without a live backend. Tool assertions use subset checks because the
@@ -13,14 +13,14 @@ import unittest
 
 class TestDockerAgentImport(unittest.TestCase):
     def test_can_import(self):
-        from gaia.agents.docker import DockerAgent
+        from gaia_agent_docker import DockerAgent
 
         self.assertIsNotNone(DockerAgent)
 
 
 class TestDockerAgentInit(unittest.TestCase):
     def _make(self):
-        from gaia.agents.docker import DockerAgent
+        from gaia_agent_docker import DockerAgent
 
         return DockerAgent(skip_lemonade=True, silent_mode=True)
 

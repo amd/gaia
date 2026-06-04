@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for FileIOAgent (gaia.agents.fileio).
+"""Unit tests for FileIOAgent (gaia_agent_fileio).
 
 These cover construction without a live Lemonade backend, the default
 config, the system prompt, and registration of the file/shell/screenshot
@@ -14,7 +14,7 @@ import unittest
 
 class TestFileIOAgentImport(unittest.TestCase):
     def test_can_import(self):
-        from gaia.agents.fileio.agent import FileIOAgent, FileIOAgentConfig
+        from gaia_agent_fileio.agent import FileIOAgent, FileIOAgentConfig
 
         self.assertIsNotNone(FileIOAgent)
         self.assertIsNotNone(FileIOAgentConfig)
@@ -22,7 +22,7 @@ class TestFileIOAgentImport(unittest.TestCase):
 
 class TestFileIOAgentConfig(unittest.TestCase):
     def test_defaults(self):
-        from gaia.agents.fileio.agent import FileIOAgentConfig
+        from gaia_agent_fileio.agent import FileIOAgentConfig
 
         cfg = FileIOAgentConfig()
         self.assertFalse(cfg.use_claude)
@@ -33,7 +33,7 @@ class TestFileIOAgentConfig(unittest.TestCase):
 
 class TestFileIOAgentInit(unittest.TestCase):
     def _make(self):
-        from gaia.agents.fileio.agent import FileIOAgent, FileIOAgentConfig
+        from gaia_agent_fileio.agent import FileIOAgent, FileIOAgentConfig
 
         # skip_lemonade is hardcoded in the agent, so no backend is required.
         return FileIOAgent(FileIOAgentConfig())
