@@ -661,16 +661,28 @@
     font-variant-numeric: tabular-nums;
 }
 
+.agent-badge-tier-verified,
+.agent-badge-tier-community,
+.agent-badge-tier-experimental,
+.agent-badge-deprecated {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.agent-badge-tier-verified {
+    background: rgba(34, 197, 94, 0.12);
+    color: var(--accent-green, #22c55e);
+}
+
 .agent-badge-tier-community {
     background: rgba(59, 158, 255, 0.1);
     color: var(--accent-blue);
-    text-transform: capitalize;
 }
 
 .agent-badge-tier-experimental {
     background: rgba(168, 85, 247, 0.12);
     color: var(--accent-purple, #a855f7);
-    text-transform: capitalize;
 }
 
 .agent-badge-deprecated {
@@ -921,4 +933,77 @@
     font-size: 13px;
     color: var(--text-muted);
     font-style: italic;
+}
+
+/* ── Install confirmation (native trust / deprecation) ──────────────────── */
+
+.install-confirm-modal {
+    max-width: 480px;
+}
+
+.install-confirm-icon {
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--accent-red, #ef4444);
+}
+
+.install-confirm-subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.install-confirm-warnings {
+    list-style: none;
+    margin: 0 0 20px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.install-confirm-warning {
+    display: flex;
+    gap: 10px;
+    padding: 12px;
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+}
+
+.install-confirm-warning-native_trust .install-confirm-warning-icon {
+    color: var(--accent-red, #ef4444);
+}
+
+.install-confirm-warning-deprecated .install-confirm-warning-icon {
+    color: var(--accent-gold);
+}
+
+.install-confirm-warning-icon {
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.install-confirm-warning-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+.install-confirm-warning-detail {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.install-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.install-confirm-proceed {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }

@@ -6,6 +6,7 @@ import { Plus, Search, WifiOff, AlertTriangle, RotateCcw, Package } from 'lucide
 import type { AgentInfo, InstallStatus } from '../types';
 import { AgentHubCard } from './AgentHubCard';
 import { AgentDetailModal } from './AgentDetailModal';
+import { InstallConfirmDialog, installWarnings, type InstallWarning } from './InstallConfirmDialog';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -43,7 +44,12 @@ function sortAgents(agents: AgentInfo[]): AgentInfo[] {
     });
 }
 
-function filterAgents(agents: AgentInfo[], search: string, categoryFilter: string): AgentInfo[] {
+function filterAgents(
+    agents: AgentInfo[],
+    search: string,
+    categoryFilter: string,
+    tierFilter: string,
+): AgentInfo[] {
     let list = agents;
     if (search) {
         const q = search.toLowerCase();
@@ -57,6 +63,9 @@ function filterAgents(agents: AgentInfo[], search: string, categoryFilter: strin
     if (categoryFilter !== 'all') {
         list = list.filter((a) => a.category === categoryFilter);
     }
+    if (tierFilter !== 'all') {
+        list = list.filter((a) => (a.security_tier ?? 'experimental') === tierFilter);
+    }
     return sortAgents(list);
 }
 
@@ -64,7 +73,11 @@ export function AgentHubGrid({ agents, activeAgentId, onSelect, onStartChat, onC
     const [activeTab, setActiveTab] = useState<HubTab>('installed');
     const [search, setSearch] = useState('');
     const [categoryFilter, setCategoryFilter] = useState('all');
+    const [tierFilter, setTierFilter] = useState('all');
     const [detailAgent, setDetailAgent] = useState<AgentInfo | null>(null);
+    // Agent awaiting an install confirmation (native trust / deprecation), plus
+    // the warnings to display.
+    const [confirm, setConfirm] = useState<{ agent: AgentInfo; warnings: InstallWarning[] } | null>(null);
 
     // Catalog state (issue #1096 backend)
     const [catalog, setCatalog] = useState<AgentInfo[]>([]);
@@ -160,10 +173,12 @@ export function AgentHubGrid({ agents, activeAgentId, onSelect, onStartChat, onC
         pollTimers.current = {};
     }, []);
 
-    const handleInstall = useCallback(async (id: string) => {
+    const doInstall = useCallback(async (id: string, trustNative: boolean) => {
         setInstallStates((s) => ({ ...s, [id]: { agent_id: id, state: 'downloading', progress: 0 } }));
         try {
-            const status = await api.installAgent(id, activeDevice);
+            const status = trustNative
+                ? await api.installAgent(id, activeDevice, true)
+                : await api.installAgent(id, activeDevice);
             setInstallStates((s) => ({ ...s, [id]: status }));
             if (status.state === 'installed') {
                 await fetchCatalog();
@@ -178,6 +193,26 @@ export function AgentHubGrid({ agents, activeAgentId, onSelect, onStartChat, onC
             setInstallStates((s) => ({ ...s, [id]: { agent_id: id, state: 'failed', progress: 0, error: msg } }));
         }
     }, [activeDevice, startPolling, fetchCatalog, refreshAgents]);
+
+    // Install entry point used by the cards: gate native-trust / deprecated
+    // agents behind a confirmation before proceeding.
+    const handleInstall = useCallback((id: string) => {
+        const agent =
+            catalog.find((a) => a.id === id) ?? agents.find((a) => a.id === id);
+        const warnings = agent ? installWarnings(agent) : [];
+        if (agent && warnings.length > 0) {
+            setConfirm({ agent, warnings });
+            return;
+        }
+        void doInstall(id, false);
+    }, [catalog, agents, doInstall]);
+
+    const handleConfirmInstall = useCallback(() => {
+        if (!confirm) return;
+        const id = confirm.agent.id;
+        setConfirm(null);
+        void doInstall(id, true);
+    }, [confirm, doInstall]);
 
     const handleCancelInstall = useCallback(async (id: string) => {
         stopPolling(id);
@@ -231,13 +266,20 @@ export function AgentHubGrid({ agents, activeAgentId, onSelect, onStartChat, onC
     }, [sourceForFilter]);
 
     const filteredInstalled = useMemo(
-        () => filterAgents(installedAgents, search, categoryFilter),
-        [installedAgents, search, categoryFilter],
+        () => filterAgents(installedAgents, search, categoryFilter, tierFilter),
+        [installedAgents, search, categoryFilter, tierFilter],
     );
     const filteredAvailable = useMemo(
-        () => filterAgents(availableAgents, search, categoryFilter),
-        [availableAgents, search, categoryFilter],
+        () => filterAgents(availableAgents, search, categoryFilter, tierFilter),
+        [availableAgents, search, categoryFilter, tierFilter],
     );
+
+    // Security tiers present in the active list (drives the tier dropdown).
+    const tiers = useMemo(() => {
+        const set = new Set<string>();
+        sourceForFilter.forEach((a) => { if (a.security_tier) set.add(a.security_tier); });
+        return Array.from(set).sort();
+    }, [sourceForFilter]);
 
     // Search/filter bar: always shown on Available; shown on Installed when 6+.
     const showControls = activeTab === 'available' || installedAgents.length > 6;
@@ -285,6 +327,21 @@ export function AgentHubGrid({ agents, activeAgentId, onSelect, onStartChat, onC
                                 <option value="all">All categories</option>
                                 {categories.map((c) => (
                                     <option key={c} value={c}>{c}</option>
+                                ))}
+                            </select>
+                        )}
+                        {tiers.length > 1 && (
+                            <select
+                                className="agent-hub-filter"
+                                aria-label="Filter by security tier"
+                                value={tierFilter}
+                                onChange={(e) => setTierFilter(e.target.value)}
+                            >
+                                <option value="all">All tiers</option>
+                                {tiers.map((t) => (
+                                    <option key={t} value={t}>
+                                        {t.charAt(0).toUpperCase() + t.slice(1)}
+                                    </option>
                                 ))}
                             </select>
                         )}
@@ -394,6 +451,15 @@ export function AgentHubGrid({ agents, activeAgentId, onSelect, onStartChat, onC
                     agent={detailAgent}
                     onClose={() => setDetailAgent(null)}
                     onStartChat={onStartChat}
+                />
+            )}
+
+            {confirm && (
+                <InstallConfirmDialog
+                    agent={confirm.agent}
+                    warnings={confirm.warnings}
+                    onConfirm={handleConfirmInstall}
+                    onCancel={() => setConfirm(null)}
                 />
             )}
         </div>
