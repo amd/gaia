@@ -319,7 +319,7 @@ jobs:
               # (which don't need uvx) still gate the build.
               $excludeArg = @()
               if ("${{ steps.uvx_check.outputs.uvx_available }}" -ne "true") {
-                  Write-Host "=== Running C++ Integration Tests (LLM + VLM + WiFi; Health + MCP excluded — uvx unavailable) ==="
+                  Write-Host "=== Running C++ Integration Tests (LLM + VLM + WiFi; Health + MCP excluded - uvx unavailable) ==="
                   $excludeArg = @("-E", "IntegrationHealthTest|IntegrationMCP")
               } else {
                   Write-Host "=== Running C++ Integration Tests (LLM + MCP + WiFi + Health + VLM) ==="
