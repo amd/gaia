@@ -1,0 +1,33 @@
+id: doc-search
+name: Doc Search
+version: 0.1.0
+description: "RAG reference agent — composes the framework RAGToolsMixin for document Q&A"
+author: AMD
+license: MIT
+
+category: examples
+security_tier: experimental
+tags: [example, reference, rag, documents, starter]
+icon: file-search
+tools_count: 10
+
+language: python
+min_gaia_version: "0.20.0"
+models: [Qwen3.5-35B-A3B-GGUF]
+
+python:
+  entry_module: gaia_agent_doc_search
+  entry_class: DocSearchAgent
+  dependencies:
+    - "amd-gaia>=0.20.0"
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+interfaces:
+  tui: true
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: true

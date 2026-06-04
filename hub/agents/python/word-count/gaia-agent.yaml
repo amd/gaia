@@ -1,0 +1,33 @@
+id: word-count
+name: Word Count
+version: 0.1.0
+description: "Single-tool reference agent — demonstrates the @tool decorator"
+author: AMD
+license: MIT
+
+category: examples
+security_tier: experimental
+tags: [example, reference, tools, starter]
+icon: calculator
+tools_count: 1
+
+language: python
+min_gaia_version: "0.20.0"
+models: [Gemma-4-E4B-it-GGUF]
+
+python:
+  entry_module: gaia_agent_word_count
+  entry_class: WordCountAgent
+  dependencies:
+    - "amd-gaia>=0.20.0"
+
+requirements:
+  min_memory_gb: 5
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+interfaces:
+  tui: true
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: true
