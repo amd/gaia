@@ -406,7 +406,9 @@ class TestDirectoryDiscovery:
 
 class TestEntryPointDiscovery:
     def _entry_point(self, name, loaded):
-        return SimpleNamespace(name=name, load=lambda: loaded)
+        return SimpleNamespace(
+            name=name, value=f"{name}:build_registration", load=lambda: loaded
+        )
 
     def _entry_points(self, entry_point):
         return lambda group: (
@@ -436,7 +438,7 @@ class TestEntryPointDiscovery:
         )
 
         registry = AgentRegistry()
-        registry._discover_entry_point_agents()
+        registry._discover_installed_agents()
 
         reg = registry.get("hub-chat")
         assert reg is not None
@@ -478,7 +480,7 @@ class TestEntryPointDiscovery:
 
         registry = AgentRegistry()
         registry._register(existing)
-        registry._discover_entry_point_agents()
+        registry._discover_installed_agents()
 
         assert registry.get("chat").name == "Existing Chat"
         assert registry.create_agent("chat") == "existing"
@@ -493,7 +495,7 @@ class TestEntryPointDiscovery:
 
         registry = AgentRegistry()
         with caplog.at_level("WARNING", logger="gaia.agents.registry"):
-            registry._discover_entry_point_agents()
+            registry._discover_installed_agents()
 
         assert registry.get("broken-agent") is None
         assert "Failed to load agent entry point broken-agent" in caplog.text
@@ -518,7 +520,7 @@ class TestEntryPointDiscovery:
         )
 
         registry = AgentRegistry()
-        registry._discover_entry_point_agents()
+        registry._discover_installed_agents()
 
         assert registry.get("hub-chat").namespaced_agent_id == "installed:hub-chat"
 
@@ -541,7 +543,7 @@ class TestEntryPointDiscovery:
         )
 
         registry = AgentRegistry()
-        registry._discover_entry_point_agents()
+        registry._discover_installed_agents()
 
         assert registry.get("hub-chat").source == "installed"
 
@@ -564,7 +566,7 @@ class TestEntryPointDiscovery:
         )
 
         registry = AgentRegistry()
-        registry._discover_entry_point_agents()
+        registry._discover_installed_agents()
 
         assert registry.get("direct-agent") is not None
 

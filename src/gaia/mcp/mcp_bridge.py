@@ -169,7 +169,7 @@ class GAIAMCPBridge:
                 logger.warning("Blender agent not available")
             # Summarize agent
             try:
-                from gaia.agents.summarize.agent import SummarizerAgent
+                from gaia_agent_summarize.agent import SummarizerAgent
 
                 self.agents["summarize"] = {
                     "class": SummarizerAgent,

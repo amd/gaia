@@ -25,9 +25,7 @@ try:
 except ImportError:
     HAS_REPORTLAB = False
 
-# Import after sys.path.insert to get correct import
-sys.path.insert(0, "src")
-from gaia.agents.summarize.agent import SummarizerAgent
+from gaia_agent_summarize.agent import SummarizerAgent
 
 
 class TestSummarizer:

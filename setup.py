@@ -74,7 +74,6 @@ setup(
         "gaia.agents.code_index.tools",
         "gaia.agents.routing",
         "gaia.agents.sd",
-        "gaia.agents.summarize",
         "gaia.governance",
         "gaia.sd",
         "gaia.vlm",
