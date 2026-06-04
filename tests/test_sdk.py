@@ -624,13 +624,13 @@ class TestToolMixins:
 
     def test_rag_tools_mixin_exists(self):
         """Verify RAGToolsMixin can be imported."""
-        from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
+        from gaia.agents.tools.rag_tools import RAGToolsMixin
 
         assert RAGToolsMixin is not None
 
     def test_shell_tools_mixin_exists(self):
         """Verify ShellToolsMixin can be imported."""
-        from gaia.agents.chat.tools.shell_tools import ShellToolsMixin
+        from gaia.agents.tools.shell_tools import ShellToolsMixin
 
         assert ShellToolsMixin is not None
 
@@ -888,9 +888,9 @@ class TestSDKDocumentation:
         # Tool Mixins
         try:
             from gaia.agents.chat.tools.file_tools import FileToolsMixin  # noqa: F401
-            from gaia.agents.chat.tools.rag_tools import RAGToolsMixin  # noqa: F401
-            from gaia.agents.chat.tools.shell_tools import ShellToolsMixin  # noqa: F401
             from gaia.agents.tools.file_tools import FileSearchToolsMixin  # noqa: F401
+            from gaia.agents.tools.rag_tools import RAGToolsMixin  # noqa: F401
+            from gaia.agents.tools.shell_tools import ShellToolsMixin  # noqa: F401
         except ImportError as e:
             pytest.fail(f"Tool mixin import failed: {e}")
 
@@ -1330,7 +1330,7 @@ class TestCodeToolMixins:
 
     def test_file_io_tools_mixin_exists(self):
         """Verify FileIOToolsMixin can be imported."""
-        from gaia.agents.code.tools.file_io import FileIOToolsMixin
+        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
         assert FileIOToolsMixin is not None
         # Check for registration method
@@ -1415,7 +1415,7 @@ class TestCodeToolMixins:
         from gaia.agents.base.agent import Agent
         from gaia.agents.base.console import SilentConsole
         from gaia.agents.code.tools.cli_tools import CLIToolsMixin
-        from gaia.agents.code.tools.file_io import FileIOToolsMixin
+        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
         class CombinedCodeAgent(Agent, CLIToolsMixin, FileIOToolsMixin):
             def _get_system_prompt(self) -> str:
@@ -1543,7 +1543,7 @@ class TestCodeAgentIntegration:
         """Verify CodeAgent includes all code mixins."""
         from gaia.agents.code.agent import CodeAgent
         from gaia.agents.code.tools.cli_tools import CLIToolsMixin
-        from gaia.agents.code.tools.file_io import FileIOToolsMixin
+        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
         # Should inherit from required mixins
         assert issubclass(CodeAgent, CLIToolsMixin)
@@ -1555,7 +1555,7 @@ class TestCodeAgentIntegration:
         from gaia.agents.base.console import SilentConsole
         from gaia.agents.code.agent import CodeAgent
         from gaia.agents.code.tools.cli_tools import CLIToolsMixin
-        from gaia.agents.code.tools.file_io import FileIOToolsMixin
+        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
         mock_console.return_value = SilentConsole()
 

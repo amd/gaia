@@ -150,8 +150,8 @@ Pull in reusable capabilities instead of duplicating them. GAIA convention: **`A
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
-from gaia.agents.code.tools.file_io import FileIOToolsMixin
+from gaia.agents.tools.rag_tools import RAGToolsMixin
+from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
 
 class DocEditorAgent(Agent, RAGToolsMixin, FileIOToolsMixin):

@@ -172,7 +172,7 @@ chunks = chunk_code_file("agent.go", source_code, max_size_mb=1.0)
 
 ## Agent integration: CodeIndexToolsMixin
 
-The mixin lives at `gaia.agents.code_index.tools.mixin.CodeIndexToolsMixin`. It exposes four `@tool`-decorated methods through `register_code_index_tools()`:
+The mixin lives at `gaia.agents.tools.code_index_tools.CodeIndexToolsMixin`. It exposes four `@tool`-decorated methods through `register_code_index_tools()`:
 
 | Tool | Description |
 |------|-------------|
@@ -187,7 +187,7 @@ The mixin lives at `gaia.agents.code_index.tools.mixin.CodeIndexToolsMixin`. It 
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.code_index.tools.mixin import CodeIndexToolsMixin
+from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 
 class MyResearchAgent(CodeIndexToolsMixin, Agent):
     def __init__(self, repo_path: str = "."):

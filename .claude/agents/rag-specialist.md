@@ -73,7 +73,7 @@ Opt in via the mixin:
 
 ```python
 # In src/gaia/agents/<name>/agent.py
-from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
+from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.agents.base.agent import Agent
 
 class MyAgent(RAGToolsMixin, Agent):   # Agent last in MRO
