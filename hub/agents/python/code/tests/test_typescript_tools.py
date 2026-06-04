@@ -9,9 +9,9 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from gaia_agent_code.tools.typescript_tools import TypeScriptToolsMixin
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.code.tools.typescript_tools import TypeScriptToolsMixin
 
 
 class TestTypeScriptTools:

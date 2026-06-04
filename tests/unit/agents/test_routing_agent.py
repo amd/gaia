@@ -36,10 +36,19 @@ def _patch_create_client(mock_llm_client):
 
 @pytest.fixture()
 def _patch_code_agent():
-    """Patch CodeAgent so _create_agent never touches the real agent stack."""
-    with patch("gaia.agents.code.agent.CodeAgent") as cls:
-        cls.return_value = MagicMock()
-        yield cls
+    """Patch the agent registry so _create_agent resolves CodeAgent without
+    requiring the ``gaia-agent-code`` wheel or touching the real agent stack.
+
+    CodeAgent now ships as a standalone hub package (#1397, #1102);
+    RoutingAgent obtains it via ``AgentRegistry().create_agent("code", ...)``.
+    Yields the ``create_agent`` mock — it doubles as the call tracker and, via
+    ``.return_value``, the agent instance the router returns.
+    """
+    with patch("gaia.agents.registry.AgentRegistry") as registry_cls:
+        registry = registry_cls.return_value
+        registry.get.return_value = MagicMock()  # "code" is installed
+        registry.create_agent.return_value = MagicMock()
+        yield registry.create_agent
 
 
 @pytest.fixture()

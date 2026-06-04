@@ -24,26 +24,26 @@ from unittest.mock import MagicMock
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from gaia.agents.code.orchestration.checklist_executor import (
+from gaia_agent_code.orchestration.checklist_executor import (
     TEMPLATE_TO_TOOL,
     ChecklistExecutionResult,
     ChecklistExecutor,
     ItemExecutionResult,
 )
-from gaia.agents.code.orchestration.checklist_generator import (
+from gaia_agent_code.orchestration.checklist_generator import (
     ChecklistGenerator,
     ChecklistItem,
     GeneratedChecklist,
     ProjectState,
 )
-from gaia.agents.code.orchestration.project_analyzer import (
+from gaia_agent_code.orchestration.project_analyzer import (
     ProjectAnalyzer,
     analyze_project,
     get_missing_crud_parts,
     suggest_checklist_items,
 )
-from gaia.agents.code.orchestration.steps.base import UserContext
-from gaia.agents.code.orchestration.template_catalog import (
+from gaia_agent_code.orchestration.steps.base import UserContext
+from gaia_agent_code.orchestration.template_catalog import (
     TEMPLATE_CATALOG,
     ParameterSpec,
     ParameterType,
@@ -986,7 +986,7 @@ class TestOrchestratorModes(unittest.TestCase):
 
     def test_orchestrator_initializes_with_llm_client(self):
         """Test that orchestrator initializes correctly with LLM client."""
-        from gaia.agents.code.orchestration.orchestrator import Orchestrator
+        from gaia_agent_code.orchestration.orchestrator import Orchestrator
 
         mock_llm = MagicMock()
         mock_llm.send.return_value = json.dumps(
@@ -1016,7 +1016,7 @@ class TestOrchestratorModes(unittest.TestCase):
 
     def test_orchestrator_requires_llm_client(self):
         """Test that orchestrator raises ValueError without LLM client."""
-        from gaia.agents.code.orchestration.orchestrator import Orchestrator
+        from gaia_agent_code.orchestration.orchestrator import Orchestrator
 
         mock_tool_executor = MagicMock()
         mock_tool_executor.return_value = {"success": True}
@@ -1032,7 +1032,7 @@ class TestOrchestratorModes(unittest.TestCase):
 
     def test_orchestrator_passes_error_handler_to_executor(self):
         """Test that orchestrator passes error_handler to ChecklistExecutor."""
-        from gaia.agents.code.orchestration.orchestrator import Orchestrator
+        from gaia_agent_code.orchestration.orchestrator import Orchestrator
 
         mock_llm = MagicMock()
         mock_tool_executor = MagicMock()
@@ -1080,7 +1080,7 @@ class TestErrorRecovery(unittest.TestCase):
 
     def test_execute_item_with_recovery_retry_on_failure(self):
         """Test that failures trigger retries when error_handler is present."""
-        from gaia.agents.code.orchestration.steps.error_handler import (
+        from gaia_agent_code.orchestration.steps.error_handler import (
             ErrorHandler,
             RecoveryAction,
         )
@@ -1126,7 +1126,7 @@ class TestErrorRecovery(unittest.TestCase):
 
     def test_execute_item_with_recovery_abort(self):
         """Test that ABORT action stops retries immediately."""
-        from gaia.agents.code.orchestration.steps.error_handler import (
+        from gaia_agent_code.orchestration.steps.error_handler import (
             ErrorHandler,
             RecoveryAction,
         )
@@ -1168,7 +1168,7 @@ class TestErrorRecovery(unittest.TestCase):
 
     def test_execute_item_with_recovery_max_attempts_exceeded(self):
         """Test that max attempts limits retries."""
-        from gaia.agents.code.orchestration.steps.error_handler import (
+        from gaia_agent_code.orchestration.steps.error_handler import (
             ErrorHandler,
             RecoveryAction,
         )
@@ -1242,7 +1242,7 @@ class TestErrorRecovery(unittest.TestCase):
 
     def test_execute_item_with_recovery_fix_and_retry(self):
         """Test FIX_AND_RETRY action triggers retry."""
-        from gaia.agents.code.orchestration.steps.error_handler import (
+        from gaia_agent_code.orchestration.steps.error_handler import (
             ErrorHandler,
             RecoveryAction,
         )
@@ -1288,7 +1288,7 @@ class TestErrorRecovery(unittest.TestCase):
 
     def test_execute_item_with_recovery_resets_retry_count_on_success(self):
         """Test that error_handler.reset_retry_count is called on success."""
-        from gaia.agents.code.orchestration.steps.error_handler import ErrorHandler
+        from gaia_agent_code.orchestration.steps.error_handler import ErrorHandler
 
         mock_tool_executor = MagicMock()
         mock_tool_executor.return_value = {"success": True}
@@ -1319,7 +1319,7 @@ class TestErrorRecovery(unittest.TestCase):
 
     def test_execute_uses_recovery_method(self):
         """Test that execute() uses _execute_item_with_recovery."""
-        from gaia.agents.code.orchestration.steps.error_handler import (
+        from gaia_agent_code.orchestration.steps.error_handler import (
             ErrorHandler,
             RecoveryAction,
         )
@@ -1373,7 +1373,7 @@ class TestLLMCodeGeneration(unittest.TestCase):
 
     def test_template_classification_constants(self):
         """Test that template classification constants are defined correctly."""
-        from gaia.agents.code.orchestration.checklist_executor import (
+        from gaia_agent_code.orchestration.checklist_executor import (
             DETERMINISTIC_TEMPLATES,
             LLM_GENERATED_TEMPLATES,
         )
@@ -1712,7 +1712,7 @@ export default function TodoForm() {
 
     def test_template_metadata_defined(self):
         """Test that template metadata is defined for all LLM templates."""
-        from gaia.agents.code.orchestration.checklist_executor import (
+        from gaia_agent_code.orchestration.checklist_executor import (
             LLM_GENERATED_TEMPLATES,
             TEMPLATE_METADATA,
         )

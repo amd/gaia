@@ -25,7 +25,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 def _make_agent_with_mocked_validator():
     """Create a CodeAgent with a mocked path_validator for guardrail testing."""
-    from gaia.agents.code.agent import CodeAgent
+    from gaia_agent_code.agent import CodeAgent
 
     agent = CodeAgent(silent_mode=True, max_steps=5)
     agent._register_tools()
@@ -54,7 +54,7 @@ class TestWritePythonFileGuardrails(unittest.TestCase):
         _TOOL_REGISTRY.clear()
 
     def _get_tool(self):
-        return _TOOL_REGISTRY["write_python_file"]
+        return _TOOL_REGISTRY["write_python_file"]["function"]
 
     def test_rejects_when_validate_write_denies(self):
         """write_python_file should reject writes denied by validate_write."""
@@ -121,7 +121,7 @@ class TestEditPythonFileGuardrails(unittest.TestCase):
         _TOOL_REGISTRY.clear()
 
     def _get_tool(self):
-        return _TOOL_REGISTRY["edit_python_file"]
+        return _TOOL_REGISTRY["edit_python_file"]["function"]
 
     def test_rejects_blocked_path(self):
         """edit_python_file should reject writes to blocked paths."""
@@ -210,7 +210,7 @@ class TestWriteMarkdownFileGuardrails(unittest.TestCase):
         _TOOL_REGISTRY.clear()
 
     def _get_tool(self):
-        return _TOOL_REGISTRY["write_markdown_file"]
+        return _TOOL_REGISTRY["write_markdown_file"]["function"]
 
     def test_rejects_when_validate_write_denies(self):
         """write_markdown_file should reject writes denied by validate_write."""
@@ -274,7 +274,7 @@ class TestReplaceFunctionGuardrails(unittest.TestCase):
         _TOOL_REGISTRY.clear()
 
     def _get_tool(self):
-        return _TOOL_REGISTRY["replace_function"]
+        return _TOOL_REGISTRY["replace_function"]["function"]
 
     def test_rejects_blocked_path(self):
         """replace_function should reject writes to blocked paths."""

@@ -8,7 +8,7 @@ icon: "code"
 </Info>
 
 <Note>
-**Import:** `from gaia.agents.code.tools.cli_tools import CLIToolsMixin`
+**Import:** `from gaia_agent_code.tools.cli_tools import CLIToolsMixin`
 </Note>
 ---
 
@@ -24,7 +24,7 @@ icon: "code"
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.code.tools.cli_tools import CLIToolsMixin
+from gaia_agent_code.tools.cli_tools import CLIToolsMixin
 
 class MyDevAgent(Agent, CLIToolsMixin):
     """Agent with CLI capabilities."""
@@ -46,7 +46,7 @@ result = agent.process_query("Run npm install and start the dev server")
 
 ## 13.2 CodeToolsMixin (Code Generation)
 
-**Import:** `from gaia.agents.code.tools.code_tools import CodeToolsMixin`
+**Import:** `from gaia_agent_code.tools.code_tools import CodeToolsMixin`
 
 **Detailed Spec:** [spec/code-tools-mixin](/spec/code-tools-mixin)
 
@@ -54,7 +54,7 @@ result = agent.process_query("Run npm install and start the dev server")
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.code.tools.code_tools import CodeToolsMixin
+from gaia_agent_code.tools.code_tools import CodeToolsMixin
 
 class MyCodeAgent(Agent, CodeToolsMixin):
     """Agent with code generation."""
@@ -99,7 +99,7 @@ class MyAgent(Agent, FileIOToolsMixin):
 
 ## 13.4 ValidationToolsMixin (Code Validation)
 
-**Import:** `from gaia.agents.code.tools.validation_tools import ValidationToolsMixin`
+**Import:** `from gaia_agent_code.tools.validation_tools import ValidationToolsMixin`
 
 **Detailed Spec:** [spec/validation-tools-mixin](/spec/validation-tools-mixin)
 
@@ -107,7 +107,7 @@ class MyAgent(Agent, FileIOToolsMixin):
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.code.tools.validation_tools import ValidationToolsMixin
+from gaia_agent_code.tools.validation_tools import ValidationToolsMixin
 
 class MyAgent(Agent, ValidationToolsMixin):
     """Agent with validation."""
@@ -124,7 +124,7 @@ class MyAgent(Agent, ValidationToolsMixin):
 
 ## 13.5 ErrorFixingMixin (Error Detection & Fixing)
 
-**Import:** `from gaia.agents.code.tools.error_fixing import ErrorFixingMixin`
+**Import:** `from gaia_agent_code.tools.error_fixing import ErrorFixingMixin`
 
 **Detailed Spec:** [spec/error-fixing-mixin](/spec/error-fixing-mixin)
 
@@ -132,7 +132,7 @@ class MyAgent(Agent, ValidationToolsMixin):
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.code.tools.error_fixing import ErrorFixingMixin
+from gaia_agent_code.tools.error_fixing import ErrorFixingMixin
 
 class MyAgent(Agent, ErrorFixingMixin):
     """Agent with error fixing."""
@@ -155,7 +155,7 @@ result = agent.process_query(
 
 ## 13.6 TestingMixin (Test Execution)
 
-**Import:** `from gaia.agents.code.tools.testing import TestingMixin`
+**Import:** `from gaia_agent_code.tools.testing import TestingMixin`
 
 **Detailed Spec:** [spec/testing-mixin](/spec/testing-mixin)
 
@@ -163,7 +163,7 @@ result = agent.process_query(
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.code.tools.testing import TestingMixin
+from gaia_agent_code.tools.testing import TestingMixin
 
 class MyAgent(Agent, TestingMixin):
     """Agent with testing."""
@@ -180,7 +180,7 @@ class MyAgent(Agent, TestingMixin):
 
 ## 13.7 PrismaToolsMixin (Database Setup)
 
-**Import:** `from gaia.agents.code.tools.prisma_tools import PrismaToolsMixin`
+**Import:** `from gaia_agent_code.tools.prisma_tools import PrismaToolsMixin`
 
 **Detailed Spec:** [spec/prisma-tools-mixin](/spec/prisma-tools-mixin)
 
@@ -188,7 +188,7 @@ class MyAgent(Agent, TestingMixin):
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.code.tools.prisma_tools import PrismaToolsMixin
+from gaia_agent_code.tools.prisma_tools import PrismaToolsMixin
 
 class MyAgent(Agent, PrismaToolsMixin):
     """Agent with Prisma support."""
@@ -205,7 +205,7 @@ class MyAgent(Agent, PrismaToolsMixin):
 
 ## 13.8 TypeScriptToolsMixin (TypeScript Development)
 
-**Import:** `from gaia.agents.code.tools.typescript_tools import TypeScriptToolsMixin`
+**Import:** `from gaia_agent_code.tools.typescript_tools import TypeScriptToolsMixin`
 
 **Detailed Spec:** [spec/typescript-tools-mixin](/spec/typescript-tools-mixin)
 
@@ -213,7 +213,7 @@ class MyAgent(Agent, PrismaToolsMixin):
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.code.tools.typescript_tools import TypeScriptToolsMixin
+from gaia_agent_code.tools.typescript_tools import TypeScriptToolsMixin
 
 class MyAgent(Agent, TypeScriptToolsMixin):
     """Agent with TypeScript support."""
@@ -230,7 +230,7 @@ class MyAgent(Agent, TypeScriptToolsMixin):
 
 ## 13.9 WebToolsMixin (Web Development)
 
-**Import:** `from gaia.agents.code.tools.web_dev_tools import WebToolsMixin`
+**Import:** `from gaia_agent_code.tools.web_dev_tools import WebToolsMixin`
 
 **Detailed Spec:** [spec/web-tools-mixin](/spec/web-tools-mixin)
 
@@ -238,7 +238,7 @@ class MyAgent(Agent, TypeScriptToolsMixin):
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.code.tools.web_dev_tools import WebToolsMixin
+from gaia_agent_code.tools.web_dev_tools import WebToolsMixin
 
 class MyAgent(Agent, WebToolsMixin):
     """Agent with web dev tools."""

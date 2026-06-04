@@ -14,10 +14,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
+from gaia_agent_code.prompts.code_patterns import pluralize
+from gaia_agent_code.tools.cli_tools import is_port_available
+from gaia_agent_code.tools.web_dev_tools import read_prisma_model
+
 from gaia.agents.base.tools import tool
-from gaia.agents.code.prompts.code_patterns import pluralize
-from gaia.agents.code.tools.cli_tools import is_port_available
-from gaia.agents.code.tools.web_dev_tools import read_prisma_model
 
 logger = logging.getLogger(__name__)
 

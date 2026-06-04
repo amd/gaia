@@ -475,6 +475,40 @@ Conversation:
 
         return analysis
 
+    def _build_code_agent(self, language: str, project_type: str) -> Agent:
+        """Instantiate CodeAgent via the agent registry.
+
+        CodeAgent ships as the standalone ``gaia-agent-code`` wheel
+        (issues #1397, #1102); the framework resolves it through the registry
+        instead of importing it directly, so the core no longer hard-depends
+        on the external package. Fails loudly with an actionable message when
+        the wheel is not installed.
+        """
+        from gaia.agents.registry import AgentRegistry
+
+        registry = AgentRegistry()
+        registry.discover()
+        if registry.get("code") is None:
+            raise RuntimeError(
+                "CodeAgent is not installed. RoutingAgent routes coding tasks "
+                "to the 'gaia-agent-code' package, which is not present. "
+                "Install it with 'pip install gaia-agent-code' (or "
+                "'pip install amd-gaia[agents]'), then retry. See "
+                "docs/spec/agent-hub-restructure.mdx."
+            )
+
+        # Build agent kwargs, including output_handler if provided
+        agent_init_kwargs = dict(self.agent_kwargs)
+        if self.output_handler:
+            agent_init_kwargs["output_handler"] = self.output_handler
+
+        return registry.create_agent(
+            "code",
+            language=language,
+            project_type=project_type,
+            **agent_init_kwargs,
+        )
+
     def _create_agent(self, analysis: Dict[str, Any]) -> Agent:
         """
         Create configured agent based on analysis.
@@ -489,8 +523,6 @@ Conversation:
         params = analysis.get("parameters", {})
 
         if agent_type == "code":
-            from gaia.agents.code.agent import CodeAgent
-
             language = params.get("language", "python")
             project_type = params.get("project_type", "script")
 
@@ -507,15 +539,7 @@ Conversation:
             # Print agent selected message
             console.print_agent_selected("CodeAgent", language, project_type)
 
-            # Build agent kwargs, including output_handler if provided
-            agent_init_kwargs = dict(self.agent_kwargs)
-            if self.output_handler:
-                agent_init_kwargs["output_handler"] = self.output_handler
-
-            # Merge routing params with any additional kwargs
-            return CodeAgent(
-                language=language, project_type=project_type, **agent_init_kwargs
-            )
+            return self._build_code_agent(language, project_type)
         else:
             raise ValueError(f"Unknown agent type: {agent_type}")
 
@@ -550,18 +574,9 @@ Conversation:
                 project_type = "script"
                 logger.info("Defaulting to script for Python")
 
-        from gaia.agents.code.agent import CodeAgent
-
         console = self._get_console()
         language, project_type = self._enforce_typescript_only(
             language, project_type, console
         )
 
-        # Build agent kwargs, including output_handler if provided
-        agent_init_kwargs = dict(self.agent_kwargs)
-        if self.output_handler:
-            agent_init_kwargs["output_handler"] = self.output_handler
-
-        return CodeAgent(
-            language=language, project_type=project_type, **agent_init_kwargs
-        )
+        return self._build_code_agent(language, project_type)
