@@ -125,7 +125,7 @@ class Scenario:
 # ---------------------------------------------------------------------------
 
 
-def _builder_prompt_factory(idx: int) -> str:
+def _builder_prompt_factory(_idx: int) -> str:
     """Return a prompt that plants a unique, unguessable agent name per call."""
     token = secrets.token_hex(4)  # e.g. "3f6aa1b2" — 8 hex chars
     name = f"test-{token}"
