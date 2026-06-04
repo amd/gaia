@@ -44,7 +44,9 @@ against the 12K number — measure first, then justify on TTFT and slope.
 
 ## Decided design
 
-A two-signal selector with a model-driven safety net. Keyword matching is
+A semantic selector over a CORE floor, with a model-driven safety net — plus a
+skill-driven signal added later once #887 lands (see
+[Part 3](#part-3-skill-driven-signal-gated-on-887)). Keyword matching is
 **explicitly out** — it is too brittle to maintain and was the source of repeated
 review failures on the prior attempts (#811 / #922 / #957 / #958).
 
@@ -61,8 +63,12 @@ review failures on the prior attempts (#811 / #922 / #957 / #958).
 │   recovery is PATH-DEPENDENT (see "Escape hatch"):       │
 │   non-tool-calling → unlisted tool still executes;       │
 │   native tool-calling → explicit load_tools meta-tool.   │
+├──────────────────────────────────────────────────────────┤
+│ SKILL  — future signal, gated on #887 (Part 3).          │
+│   recall_skill(goal) → union matched skills' tools.      │
+│   precision booster; returns [] cleanly until #887.      │
 └──────────────────────────────────────────────────────────┘
-        loaded = CORE ∪ SEMANTIC ∪ (escape-hatch additions)
+   loaded = CORE ∪ SKILL ∪ SEMANTIC ∪ (escape-hatch additions)
 ```
 
 ### Bundles are cohesion groups, not triggers
@@ -140,7 +146,7 @@ implementer must internalize:
 |---|---|---|
 | ~12K tokens, ~400/tool | `_format_tools_for_prompt` emits **one line per tool** (~30–60 tokens) | The text block is ~1–2K, not 12K. Justify on TTFT + slope, not absolute waste. |
 | Filter `_format_tools_for_prompt` | There are **two** render paths | Must also filter the native path or tool-calling models get **zero** benefit. |
-| Three tiers incl. skill (#887) | #887 not landed; #606 memory **has** | Drop the skill tier from v1. Reuse `MemoryMixin._embed_text` — it exists and is already in ChatAgent. |
+| Three tiers incl. skill (#887) | #887 not landed; #606 memory **has** | Defer the skill tier to Part 3 (gated on #887); v1 is CORE + semantic. Reuse `MemoryMixin._embed_text` — it exists and is already in ChatAgent. |
 | Tidy hook into `_compose_system_prompt` | System prompt is **cached** (`_system_prompt_cache`) and takes no user turn | Must recompute when selection changes and thread the user message in. |
 | Embedder unavailable → default raise, opt-in degrade | Memory v2 **disables itself for the session** on embedder failure | Mirror memory v2: embedder down → disable dynamic loading for the session, fall back to full registry, log loudly. |
 
@@ -234,6 +240,26 @@ and sets the concrete TTFT target — before more is built.
   from Part 1 covers only the non-tool-calling path).
 - Instrument escape-hatch activation rate as the semantic-threshold tuning dial.
 
+### Part 3 — Skill-driven signal (gated on #887)
+
+A third selection signal, added **only after** [#887](https://github.com/amd/gaia/issues/887)
+(skill auto-synthesis) lands. A *skill* is a procedure the agent distilled from
+its own successful multi-step runs; each `SKILL.md` declares the exact
+`tools_required` for that recipe in its YAML frontmatter.
+
+- When `recall_skill(goal)` matches the user's goal, union in the matched skills'
+  `tools_required` **ahead of** semantic results.
+- This is **high precision, low recall**: it fires only for goals solved before,
+  but when it does it is exact — the tools come from a recorded successful run,
+  not a similarity guess. It complements semantic match (high recall, lower
+  precision), it does not replace it.
+- **Additive, not a reshape.** It slots in as one more input to the same
+  selector: `loaded = CORE ∪ SKILL ∪ SEMANTIC ∪ escape-hatch`. Precedence is
+  CORE > SKILL > SEMANTIC. Nothing in Parts 0–2 changes.
+- **Soft dependency.** Until #887 ships, this signal returns `[]` cleanly and the
+  loader runs on CORE + semantic exactly as in Parts 1–2 — so Parts 1–2 must not
+  assume it exists.
+
 ## Open questions for the implementer
 
 These are intentionally **not** decided — propose them in your design sketch:
@@ -271,6 +297,7 @@ not a finished base.
   **user-controllable** — when the user turns it off, the loader reverts to the
   legacy all-tools path (see
   [When memory is off](#when-memory-is-off-all-tools-load-the-legacy-path)).
-- **#887 (procedural memory / skills)** — *not landed.* The original spec's
-  skill tier is **dropped from v1**; it can return as an additional selection
-  signal later without reshaping this design.
+- **#887 (procedural memory / skills)** — *not landed.* Provides `recall_skill`
+  and `SKILL.md` `tools_required` frontmatter. The skill tier is **deferred to
+  [Part 3](#part-3-skill-driven-signal-gated-on-887)**, not in v1 (Parts 0–2);
+  it slots in additively once #887 lands and returns `[]` cleanly until then.
