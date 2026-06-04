@@ -502,5 +502,40 @@
     "sender": "notifications@slack.com",
     "body": "You have 12 unread messages across 4 channels and 2 direct messages on your Slack workspace. Channels with activity: #general, #engineering, #deployments, #random. Log in to Slack to catch up.",
     "is_phishing": false
+  },
+  {
+    "id": "ham_hard_001",
+    "subject": "Your FirstService Residential community newsletter",
+    "sender": "news@firstservice.com",
+    "body": "Here is your monthly FirstService Residential community update. This month: pool hours have been extended for summer, the annual HOA meeting is scheduled for June 20, and landscaping improvements begin next week. Questions? Contact your community manager.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_hard_002",
+    "subject": "First Alert smoke detector battery reminder",
+    "sender": "alerts@firstalert.com",
+    "body": "This is your seasonal reminder from First Alert to test your smoke and carbon monoxide detectors and replace the batteries. Working detectors save lives. Visit our site for a quick testing guide and to register your devices for warranty coverage.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_hard_003",
+    "subject": "Your Uberflip content hub weekly analytics",
+    "sender": "reports@uberflip.com",
+    "body": "Your Uberflip content marketing analytics for the week are ready. Your top-performing hub had 1,240 visits and a 4.2 minute average session. Your most-clicked CTA drove 87 conversions. Log in to your Uberflip dashboard to see the full report.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_hard_004",
+    "subject": "Service appointment confirmed at Chase Ford",
+    "sender": "service@chaseford.com",
+    "body": "Your service appointment at Chase Ford is confirmed for Thursday, June 5 at 9:00 AM. Our team will perform your scheduled oil change and tire rotation. A loaner vehicle has been reserved. Reply to reschedule or call our service desk.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_hard_005",
+    "subject": "Your Applewood Farms CSA box ships this week",
+    "sender": "orders@applewoodfarms.com",
+    "body": "Good news! Your Applewood Farms CSA produce box ships this week. This week's harvest includes heirloom tomatoes, fresh basil, summer squash, and strawberries. Your delivery is scheduled for Friday. Thank you for supporting local farming!",
+    "is_phishing": false
   }
 ]

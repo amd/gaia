@@ -393,6 +393,15 @@ _SUSPICIOUS_TLDS: frozenset[str] = frozenset({"tk", "xyz", "ml", "ga", "cf"})
 # Brand keywords that should appear in the SLD of a legitimate sender but,
 # when found inside a *non-canonical* domain (e.g. as a substring of a
 # longer SLD), indicate impersonation.
+#
+# Short brands (<= _SHORT_BRAND_MAX_LEN chars, e.g. "irs", "dhl", "hsbc",
+# "uber") are matched on a WORD-TOKEN boundary, never as a raw substring —
+# otherwise "irs" fires inside legit domains like ``firstservice.com`` /
+# ``firstalert.com`` and "uber" inside ``uberflip.com``. Longer brands are
+# matched as substrings (their collision risk against real words is
+# negligible). See ``_domain_has_impersonation_brand``.
+_SHORT_BRAND_MAX_LEN = 4
+
 _IMPERSONATION_BRANDS: tuple[str, ...] = (
     "paypal",
     "paypa",
@@ -424,7 +433,6 @@ _IMPERSONATION_BRANDS: tuple[str, ...] = (
     "outlook",
     "hsbc",
     "bankofamerica",
-    "citibank",
 )
 
 # Body-level keyword pairs (same structure as subject pairs).  Each tuple
@@ -464,6 +472,31 @@ _IMPERSONATION_SLD_SUFFIXES: tuple[str, ...] = (
 # (e.g. ``amaz0n``, ``micros0ft``, ``g00gle``).
 _NUM_SUB_RE = re.compile(r"[a-z][01][a-z]")
 
+# Splits an SLD into alpha-only word tokens (hyphens and digits are
+# separators), so short brands match whole tokens, not substrings.
+_SLD_TOKEN_RE = re.compile(r"[^a-z]+")
+
+
+def _domain_has_impersonation_brand(full_domain: str, sld: str) -> bool:
+    """Return True when a known brand keyword is present in the domain.
+
+    Short brands (``<= _SHORT_BRAND_MAX_LEN``) match only as a standalone
+    word token of the SLD — never as a substring — so e.g. ``"irs"`` does
+    not fire inside ``firstservice`` / ``firstalert`` and ``"uber"`` does
+    not fire inside ``uberflip``. Longer brands match as a substring of the
+    hyphen-collapsed domain (so ``dropbox-security-alert`` still matches
+    ``dropbox``).
+    """
+    domain_no_hyphens = full_domain.replace("-", "")
+    sld_tokens = set(_SLD_TOKEN_RE.split(sld))
+    for brand in _IMPERSONATION_BRANDS:
+        if len(brand) <= _SHORT_BRAND_MAX_LEN:
+            if brand in sld_tokens:
+                return True
+        elif brand in domain_no_hyphens:
+            return True
+    return False
+
 
 def _suspicious_sender_domain(sender_lower: str) -> bool:
     """Return True when the sender domain shows impersonation signals.
@@ -473,11 +506,12 @@ def _suspicious_sender_domain(sender_lower: str) -> bool:
     1. If the SLD is in the trusted allowlist → never flag.
     2. If TLD is in the suspicious set → flag (unknown org using a spam TLD).
     3. For .com / .net / .org: flag only when a brand keyword appears in the
-       full domain AND (the SLD contains a digit-substitution OR a suspicious
-       suffix pattern).
+       domain AND (the SLD contains a digit-substitution OR a suspicious
+       suffix pattern). Short brands must match on a word-token boundary
+       (see ``_domain_has_impersonation_brand``).
 
-    Ham that would otherwise be flagged (e.g. docusign.net, coinbase.com) is
-    protected by the allowlist on the SLD.
+    Ham that would otherwise be flagged (e.g. docusign.net, coinbase.com,
+    firstservice.com) is protected by the allowlist + token-boundary check.
     """
     match = re.search(r"@([\w.\-]+)", sender_lower)
     if not match:
@@ -499,9 +533,7 @@ def _suspicious_sender_domain(sender_lower: str) -> bool:
         return True
 
     # Tier 3: common TLD (.com / .net) — require brand + impersonation signal.
-    domain_no_hyphens = full_domain.replace("-", "")
-    has_brand = any(brand in domain_no_hyphens for brand in _IMPERSONATION_BRANDS)
-    if not has_brand:
+    if not _domain_has_impersonation_brand(full_domain, sld):
         return False
 
     # Digit substitution in the SLD (e.g. amaz0n, micros0ft).

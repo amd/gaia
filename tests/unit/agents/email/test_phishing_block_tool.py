@@ -17,6 +17,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -28,9 +29,11 @@ if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION  # noqa: E402
+from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 from gaia.agents.email import action_store  # noqa: E402
 from gaia.agents.email.tools.phishing_tools import (  # noqa: E402
     QUARANTINE_LABEL_NAME,
+    PhishingToolsMixin,
     quarantine_phishing_impl,
     unquarantine_impl,
 )
@@ -42,12 +45,25 @@ from gaia.database.mixin import DatabaseMixin  # noqa: E402
 
 
 class _FakeGmail:
-    """Minimal Gmail backend stub for phishing tool tests."""
+    """Minimal Gmail backend stub for phishing tool tests.
 
-    def __init__(self, label_id: str = "Label_quarantine_phishing"):
+    Conforms to the backend Protocol's ``create_label(self, *, name)``
+    keyword-only signature (CA-5 shape parity). ``quarantine_label_exists``
+    controls whether the GAIA_PHISHING_QUARANTINE label is pre-populated:
+    set it False to exercise the create-label path. ``create_label_calls``
+    records every create so a test can assert the create path actually ran.
+    """
+
+    def __init__(
+        self,
+        label_id: str = "Label_quarantine_phishing",
+        quarantine_label_exists: bool = True,
+    ):
         self._label_id = label_id
         self._labels: Dict[str, List[str]] = {}
         self._inbox: set[str] = set()
+        self._quarantine_label_exists = quarantine_label_exists
+        self.create_label_calls: List[str] = []
 
     def get_message(self, message_id: str) -> Dict[str, Any]:
         labels = self._labels.get(message_id, ["INBOX"])
@@ -58,7 +74,9 @@ class _FakeGmail:
         }
 
     def list_labels(self) -> List[Dict[str, Any]]:
-        return [{"id": self._label_id, "name": QUARANTINE_LABEL_NAME}]
+        if self._quarantine_label_exists:
+            return [{"id": self._label_id, "name": QUARANTINE_LABEL_NAME}]
+        return []
 
     def add_label(self, message_id: str, label_id: str) -> None:
         self._labels.setdefault(message_id, ["INBOX"])
@@ -81,7 +99,11 @@ class _FakeGmail:
         labels = self._labels.get(message_id, [])
         self._labels[message_id] = [lbl for lbl in labels if lbl != label_id]
 
-    def create_label(self, name: str) -> Dict[str, Any]:
+    def create_label(self, *, name: str) -> Dict[str, Any]:
+        # Keyword-only — matches GmailBackend / OutlookBackend Protocol.
+        self.create_label_calls.append(name)
+        # Once created, the label is now discoverable via list_labels.
+        self._quarantine_label_exists = True
         return {"id": self._label_id, "name": name}
 
 
@@ -152,6 +174,30 @@ class TestQuarantinePhishingImpl:
         msg = fake_gmail.get_message("msg4")
         assert msg["id"] == "msg4", "Message must not be deleted by quarantine"
 
+    def test_creates_label_when_missing(self, db):
+        """When GAIA_PHISHING_QUARANTINE does not yet exist (the FIRST
+        quarantine on a real account), the tool MUST create it via the
+        keyword-only ``create_label(name=...)`` Protocol call.
+
+        Regression guard: a positional ``create_label(name)`` call would raise
+        TypeError against the real backend (keyword-only signature). This test
+        forces the create path so that bug cannot slip through again.
+        """
+        gmail = _FakeGmail(quarantine_label_exists=False)
+        gmail._labels["msg_new"] = ["INBOX"]
+        result = quarantine_phishing_impl(
+            gmail, db, message_id="msg_new", is_phishing=True
+        )
+        # The create path must have executed exactly once with the right name.
+        assert gmail.create_label_calls == [QUARANTINE_LABEL_NAME], (
+            "create_label was not called (or called with the wrong name) on the "
+            f"label-missing path: {gmail.create_label_calls!r}"
+        )
+        assert result["quarantined"] is True
+        labels = gmail._labels["msg_new"]
+        assert "INBOX" not in labels
+        assert gmail._label_id in labels
+
 
 class TestUnquarantineImpl:
     def test_restores_prior_labels(self, fake_gmail, db):
@@ -177,6 +223,76 @@ class TestUnquarantineImpl:
         action_id = result["action_id"]
         with pytest.raises(RuntimeError, match="undo window"):
             unquarantine_impl(fake_gmail, db, action_id=action_id, window_seconds=0)
+
+
+# ---------------------------------------------------------------------------
+# @tool wrapper error surfacing
+# ---------------------------------------------------------------------------
+
+
+class _StubAgent(PhishingToolsMixin, DatabaseMixin):
+    """Minimal host for ``_register_phishing_tools`` — supplies the
+    attributes the closures capture (``_gmail``, ``config``) plus the DB
+    surface the impls call (via DatabaseMixin)."""
+
+    def __init__(self, gmail, *, undo_window_seconds: int = 30):
+        self._gmail = gmail
+        self.init_db(":memory:")
+        action_store.init_schema(self)
+
+        class _Cfg:
+            debug = False
+
+        self.config = _Cfg()
+        self.config.undo_window_seconds = undo_window_seconds
+
+
+class TestUnquarantineWrapperErrorSurfacing:
+    """The ``unquarantine_message`` @tool wrapper must surface an expired
+    undo-window RuntimeError as an actionable ``_envelope_err`` message,
+    not a generic tool error."""
+
+    def test_expired_window_returns_actionable_error_envelope(self, fake_gmail):
+        # window=0 → the action is immediately outside the undo window.
+        agent = _StubAgent(fake_gmail, undo_window_seconds=0)
+        agent._register_phishing_tools()
+
+        # First quarantine a message (the impl is called directly so we have
+        # a real action_id to undo).
+        fake_gmail._labels["msg_w"] = ["INBOX"]
+        q = quarantine_phishing_impl(
+            fake_gmail, agent, message_id="msg_w", is_phishing=True
+        )
+        action_id = q["action_id"]
+
+        unquarantine = _TOOL_REGISTRY["unquarantine_message"]["function"]
+        out = json.loads(unquarantine(action_id))
+
+        assert out["ok"] is False, "Expired undo window must produce an error envelope"
+        # The message must be the actionable RuntimeError text, NOT a generic
+        # 'RuntimeError: ...' type-prefixed catch-all.
+        assert (
+            "undo window" in out["error"]
+        ), f"Expected the actionable undo-window message; got: {out['error']!r}"
+        assert not out["error"].startswith("RuntimeError:"), (
+            "RuntimeError must be caught explicitly and surfaced via its message, "
+            f"not the generic except-Exception path: {out['error']!r}"
+        )
+
+    def test_successful_unquarantine_via_wrapper(self, fake_gmail):
+        agent = _StubAgent(fake_gmail, undo_window_seconds=60)
+        agent._register_phishing_tools()
+
+        fake_gmail._labels["msg_ok"] = ["INBOX"]
+        q = quarantine_phishing_impl(
+            fake_gmail, agent, message_id="msg_ok", is_phishing=True
+        )
+        unquarantine = _TOOL_REGISTRY["unquarantine_message"]["function"]
+        out = json.loads(unquarantine(q["action_id"]))
+
+        assert out["ok"] is True
+        assert out["data"]["restored"] is True
+        assert "INBOX" in fake_gmail._labels["msg_ok"]
 
 
 # ---------------------------------------------------------------------------
