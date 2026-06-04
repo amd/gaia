@@ -5,7 +5,7 @@ icon: "folder-tree"
 ---
 
 <Note>
-**Tracking issue:** [#1102](https://github.com/amd/gaia/issues/1102) · **Milestone:** Agent Hub Platform [OSS] · **Status:** In Progress
+**Tracking issue:** [#1102](https://github.com/amd/gaia/issues/1102) · **Milestone:** v0.22.0 — Agent Hub Platform [OSS] · **Status:** In Progress
 </Note>
 
 ## Problem
@@ -109,7 +109,7 @@ Agents with cross-agent dependencies (e.g. RoutingAgent uses CodeAgent) declare 
 ## Implementation Steps
 
 <Steps>
-<Step title="Promote shared tool mixins">
+<Step title="Promote shared tool mixins (#1396)">
 Move RAG, FileIO, Shell, CodeIndex mixins to `src/gaia/agents/tools/`. Update all imports and `KNOWN_TOOLS`. Add deprecated re-exports. Run full test suite — no behavior change.
 </Step>
 <Step title="Create agent package skeletons">
@@ -140,6 +140,35 @@ Replace ~16 direct agent imports in `cli.py`, `ui/_chat_helpers.py`, `ui/agent_l
 Move agent-specific tests to `hub/agents/python/{id}/tests/`. Framework tests stay in `tests/`.
 </Step>
 </Steps>
+
+## Legacy Agent Modernization
+
+Several agents predate the Agent UI and the connectors framework. They work only via standalone CLI/app entry points, aren't in the registry, lack the modern class attributes, and have no web UI presence. Moving them to `hub/agents/` is not enough — they must also be **modernized** to the Agent Hub package standard.
+
+| Agent | Registered? | Standalone CLI/app | Modern class attrs | Status |
+|-------|:-----------:|:------------------:|:------------------:|--------|
+| chat, analyst, browser | ✅ (factory) | — | factory-based | **Modern** |
+| email, connectors-demo | ✅ | email has `cli.py` | ✅ full attrs + connectors | **Modern** |
+| builder | ✅ (hidden) | — | factory-based | **Modern** |
+| **jira** | ❌ | — | ❌ | **Legacy** |
+| **docker** | ❌ | — (MCPAgent base) | ❌ | **Legacy** |
+| **blender** | ❌ | `app.py` | ❌ | **Legacy** |
+| **sd** | ❌ | — | ❌ | **Legacy** |
+| **emr** | ❌ | `cli.py` + `gaia-emr` | ❌ | **Legacy** |
+| **code** | entry_points only | `cli.py` + `gaia-code` | ❌ | **Partial** |
+| docqa, fileio, summarize | ❌ | — | ❌ | **Example/util** |
+| routing | ❌ | — | not an `Agent` subclass | **Utility** (keep as-is) |
+
+**Modernization per legacy agent** (tracked in [#1397](https://github.com/amd/gaia/issues/1397)):
+
+1. Add modern class attributes: `AGENT_ID`, `AGENT_NAME`, `AGENT_DESCRIPTION`, `CONVERSATION_STARTERS`, and `REQUIRED_CONNECTORS` where applicable (e.g. jira → Atlassian OAuth).
+2. Author the `gaia-agent.yaml` manifest (category, icon, tags, requirements, interfaces) so the agent renders as a Hub card.
+3. Register via the `gaia.agent` entry point — discoverable in the web UI, not just standalone CLI.
+4. Adopt the conversational/streaming response mode so the agent works in the chat surface.
+5. Keep the standalone CLI/app as a thin wrapper over the registry-created agent (no duplicate logic).
+6. `docker` inherits `MCPAgent` — confirm it composes with the framework server (Step 8) or document why it diverges.
+
+**Not modernized:** `routing` stays a utility dispatcher (not user-discoverable). `docqa`/`fileio`/`summarize` are example/building-block agents — `summarize` becomes the migration pilot (Step 3); `docqa`/`fileio` may collapse into the `chat` profiles (see [#1162](https://github.com/amd/gaia/issues/1162)).
 
 ## Cross-Agent Dependencies
 
