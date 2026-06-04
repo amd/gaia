@@ -50,6 +50,7 @@ import threading
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from gaia.agents.email.contract import (
@@ -561,6 +562,18 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
         )
     logger.info("email send: id=%s to=%s", sent_id, to_header)
     return EmailSendResponse(sent_id=sent_id, to=request.to, subject=request.subject)
+
+
+@router.get("/spec", response_class=HTMLResponse, include_in_schema=False)
+async def email_spec() -> HTMLResponse:
+    """Serve the self-contained HTML endpoint spec page.
+
+    Not included in the OpenAPI schema — this is a human-readable convenience
+    page, not a machine-readable contract endpoint.
+    """
+    from gaia.agents.email.spec_html import render_endpoint_spec_html
+
+    return HTMLResponse(content=render_endpoint_spec_html())
 
 
 __all__ = [

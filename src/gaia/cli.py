@@ -1766,6 +1766,24 @@ def build_parser():
             "verbose output. Sensitive payloads in logs."
         ),
     )
+    email_parser.add_argument(
+        "--spec",
+        action="store_true",
+        help=(
+            "Generate the HTML endpoint spec page, write it to disk, and open "
+            "it in a browser. No LLM or Lemonade required."
+        ),
+    )
+    email_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to write the HTML spec (default: ~/.gaia/email/endpoint-spec.html). "
+            "Only used with --spec."
+        ),
+    )
 
     # Add Docker app command
     docker_parser = subparsers.add_parser(
@@ -4575,6 +4593,25 @@ def handle_email_command(args):
         args: Parsed command line arguments for the email command
     """
     log = get_logger(__name__)
+
+    # --spec: generate the HTML endpoint spec and open it in a browser.
+    # No LLM, no Lemonade — short-circuit before any server check.
+    if getattr(args, "spec", False):
+        import pathlib
+        import webbrowser
+
+        from gaia.agents.email.spec_html import render_endpoint_spec_html
+
+        output_path = getattr(args, "output", None)
+        if output_path:
+            dest = pathlib.Path(output_path).expanduser().resolve()
+        else:
+            dest = pathlib.Path.home() / ".gaia" / "email" / "endpoint-spec.html"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(render_endpoint_spec_html(), encoding="utf-8")
+        print(dest)
+        webbrowser.open(dest.as_uri())
+        sys.exit(0)
 
     # Initialize Lemonade — local LLM only. The email agent's config will
     # also reject any non-local base_url at construction time, but the

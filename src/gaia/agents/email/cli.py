@@ -14,7 +14,9 @@ structured-logging contract from Phase A5 fires for every triage decision.
 from __future__ import annotations
 
 import logging
+import pathlib
 import sys
+import webbrowser
 from typing import Any
 
 from gaia.agents.email.agent import EmailTriageAgent
@@ -29,6 +31,21 @@ async def main(args: Any) -> int:
 
     Returns the process exit code (0 on success, 1 on error).
     """
+    # --spec: local-only, no LLM. Generate the HTML spec and open it.
+    if getattr(args, "spec", False):
+        from gaia.agents.email.spec_html import render_endpoint_spec_html
+
+        output_path = getattr(args, "output", None)
+        if output_path:
+            dest = pathlib.Path(output_path).expanduser().resolve()
+        else:
+            dest = pathlib.Path.home() / ".gaia" / "email" / "endpoint-spec.html"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(render_endpoint_spec_html(), encoding="utf-8")
+        print(dest)
+        webbrowser.open(dest.as_uri())
+        return 0
+
     # Wire verbose/debug to the agent's logger before constructing.
     if getattr(args, "verbose", False) or getattr(args, "debug", False):
         logging.getLogger("gaia.agents.email").setLevel(logging.INFO)
