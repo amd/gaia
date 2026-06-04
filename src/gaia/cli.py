@@ -4597,20 +4597,10 @@ def handle_email_command(args):
     # --spec: generate the HTML endpoint spec and open it in a browser.
     # No LLM, no Lemonade — short-circuit before any server check.
     if getattr(args, "spec", False):
-        import pathlib
-        import webbrowser
+        from gaia.agents.email.spec_html import write_and_open_spec
 
-        from gaia.agents.email.spec_html import render_endpoint_spec_html
-
-        output_path = getattr(args, "output", None)
-        if output_path:
-            dest = pathlib.Path(output_path).expanduser().resolve()
-        else:
-            dest = pathlib.Path.home() / ".gaia" / "email" / "endpoint-spec.html"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(render_endpoint_spec_html(), encoding="utf-8")
+        dest = write_and_open_spec(getattr(args, "output", None))
         print(dest)
-        webbrowser.open(dest.as_uri())
         sys.exit(0)
 
     # Initialize Lemonade — local LLM only. The email agent's config will

@@ -20,11 +20,16 @@ from gaia.agents.email.contract import (
     ActionItem,
     DraftReply,
     EmailCategory,
+    EmailMessage,
     EmailTriageRequest,
     EmailTriageResponse,
     EmailTriageResult,
 )
-from gaia.agents.email.spec_html import render_endpoint_spec_html
+from gaia.agents.email.spec_html import (
+    _required_badge,
+    _type_label,
+    render_endpoint_spec_html,
+)
 
 
 def _html() -> str:
@@ -190,3 +195,139 @@ def test_no_external_protocol_relative_script():
     html = _html()
     proto_relative = re.search(r'<script[^>]+src=["\']\/\/', html, re.IGNORECASE)
     assert proto_relative is None, "Found protocol-relative script src in spec HTML"
+
+
+# ---------------------------------------------------------------------------
+# Required / optional badges — must reflect pydantic's is_required(), not a
+# default-is-None heuristic (which mislabels every required field).
+# ---------------------------------------------------------------------------
+
+
+def _row_badge(html: str, field_name: str) -> str:
+    """Return 'required' or 'optional' for the FIRST rendered row of
+    ``field_name``, or '' if no badge is found.
+    """
+    m = re.search(
+        rf"<td>{re.escape(field_name)}" rf'<span class="(required|optional)-badge">',
+        html,
+    )
+    return m.group(1) if m else ""
+
+
+def test_required_badge_helper_marks_required_field_required():
+    # category has no default (PydanticUndefined) → is_required() is True.
+    badge = _required_badge(EmailTriageResult.model_fields["category"])
+    assert "required" in badge
+    assert "optional" not in badge
+
+
+def test_required_badge_helper_marks_optional_field_optional():
+    # thread_id is Optional[str] with default None → is_required() is False.
+    badge = _required_badge(EmailMessage.model_fields["thread_id"])
+    assert "optional" in badge
+    assert ">required<" not in badge
+
+
+def test_required_badge_helper_marks_default_factory_field_optional():
+    # action_items uses default_factory; its default is PydanticUndefined but
+    # is_required() is False — the old `default is not None` heuristic got this
+    # wrong. Guard against regression.
+    badge = _required_badge(EmailTriageResult.model_fields["action_items"])
+    assert "optional" in badge
+
+
+def test_required_field_renders_required_badge_in_html():
+    # A known-required field (category) must show the 'required' badge.
+    assert _row_badge(_html(), "category") == "required"
+
+
+def test_optional_field_renders_optional_badge_in_html():
+    # A known-optional field unique to one model (is_spam, only in
+    # EmailTriageResult, default False) must show the 'optional' badge.
+    # (thread_id is ambiguous — it's required on ThreadInput but optional on
+    # EmailMessage — so it's a poor page-level probe.)
+    assert _row_badge(_html(), "is_spam") == "optional"
+
+
+def test_send_response_sent_field_is_optional_in_html():
+    # EmailSendResponse.sent has default=True → optional, not required.
+    # (Regression guard for the hand-coded table that marked it 'required'.)
+    assert _row_badge(_html(), "sent") == "optional"
+
+
+# ---------------------------------------------------------------------------
+# Type labels — generics must render cleanly (no truncated `list[str`).
+# ---------------------------------------------------------------------------
+
+
+def test_type_label_renders_list_generic_cleanly():
+    # EmailMessage.to is List[EmailAddress] → 'list[EmailAddress]', not 'List'
+    # or a truncated 'list[EmailAddress' (the bracket-strip ordering bug).
+    label = _type_label(EmailMessage.model_fields["to"])
+    assert label == "list[EmailAddress]"
+
+
+def test_type_label_unwraps_optional():
+    # thread_id is Optional[str] → the value type 'str', not 'Optional'.
+    label = _type_label(EmailMessage.model_fields["thread_id"])
+    assert label == "str"
+
+
+def test_no_truncated_list_label_in_html():
+    # The whole page must never contain a truncated 'list[Something' without a
+    # closing bracket (the _type_label bracket-ordering bug). Every 'list['
+    # generic that opens must close with ']'.
+    html = _html()
+    for m in re.finditer(r"list\[[A-Za-z_]+(.?)", html):
+        assert m.group(1) == "]", f"Unclosed list[ label near: {m.group(0)!r}"
+
+
+# ---------------------------------------------------------------------------
+# /draft and /send sections are derived from the real route models, so their
+# model class names appear in the page (they would not if hand-coded).
+# ---------------------------------------------------------------------------
+
+
+def test_draft_section_derived_from_route_models():
+    html = _html()
+    assert "EmailDraftRequest" in html
+    assert "EmailDraftResponse" in html
+    assert "confirmation_token" in html
+
+
+def test_send_section_derived_from_route_models():
+    html = _html()
+    assert "EmailSendRequest" in html
+    assert "EmailSendResponse" in html
+    assert "sent_id" in html
+
+
+# ---------------------------------------------------------------------------
+# write_and_open_spec — the single shared write/open helper used by the CLI.
+# ---------------------------------------------------------------------------
+
+
+def test_write_and_open_spec_writes_file_and_returns_path(tmp_path, monkeypatch):
+    import gaia.agents.email.spec_html as spec_mod
+
+    opened = []
+    monkeypatch.setattr(spec_mod.webbrowser, "open", lambda uri: opened.append(uri))
+
+    dest = tmp_path / "spec.html"
+    returned = spec_mod.write_and_open_spec(str(dest))
+
+    assert returned == dest.resolve()
+    assert dest.exists()
+    content = dest.read_text(encoding="utf-8")
+    assert content.strip().lower().startswith("<!doctype html")
+    # The browser was opened with this file's URI (no silent no-op).
+    assert opened == [dest.resolve().as_uri()]
+
+
+def test_write_and_open_spec_default_path_constant(monkeypatch):
+    import gaia.agents.email.spec_html as spec_mod
+
+    # Default path lives under ~/.gaia/email/ and is exposed as a constant the
+    # CLI prints; assert the shape without writing to the real home dir.
+    assert spec_mod.DEFAULT_SPEC_PATH.name == "endpoint-spec.html"
+    assert spec_mod.DEFAULT_SPEC_PATH.parent.name == "email"

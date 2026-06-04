@@ -448,15 +448,19 @@ class _Strict(BaseModel):
 class EmailDraftRequest(_Strict):
     """Propose a reply and obtain a confirmation token for it."""
 
-    to: List[EmailAddress] = Field(..., min_length=1)
-    subject: str
-    body: str
+    to: List[EmailAddress] = Field(
+        ..., min_length=1, description="Proposed recipients (non-empty)."
+    )
+    subject: str = Field(..., description="Proposed subject line.")
+    body: str = Field(..., description="Proposed reply body.")
 
 
 class EmailDraftResponse(_Strict):
     """The proposed reply plus a single-use confirmation token bound to it."""
 
-    draft: DraftReply
+    draft: DraftReply = Field(
+        ..., description="The proposed reply (to / subject / body)."
+    )
     confirmation_token: str = Field(
         ...,
         description=(
@@ -469,9 +473,11 @@ class EmailDraftResponse(_Strict):
 class EmailSendRequest(_Strict):
     """Send a reply. Requires a valid confirmation token for this payload."""
 
-    to: List[EmailAddress] = Field(..., min_length=1)
-    subject: str
-    body: str
+    to: List[EmailAddress] = Field(
+        ..., min_length=1, description="Recipients (non-empty)."
+    )
+    subject: str = Field(..., description="Subject line.")
+    body: str = Field(..., description="Reply body.")
     confirmation_token: Optional[str] = Field(
         default=None,
         description=(
@@ -482,10 +488,12 @@ class EmailSendRequest(_Strict):
 
 
 class EmailSendResponse(_Strict):
-    sent_id: str
-    to: List[EmailAddress]
-    subject: str
-    sent: bool = True
+    sent_id: str = Field(..., description="Provider message id of the sent email.")
+    to: List[EmailAddress] = Field(
+        ..., description="Recipients the message was sent to."
+    )
+    subject: str = Field(..., description="Subject of the sent message.")
+    sent: bool = Field(default=True, description="Always true on success.")
 
 
 # ---------------------------------------------------------------------------

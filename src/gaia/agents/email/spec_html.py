@@ -14,7 +14,9 @@ No external assets — inline CSS only. No LLM, no network calls.
 from __future__ import annotations
 
 import html as _html_lib
-from typing import Any, List, Tuple, Type
+import webbrowser
+from pathlib import Path
+from typing import Any, List, Optional, Tuple, Type, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
@@ -35,6 +37,11 @@ from gaia.agents.email.contract import (
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+# The runtime type of ``None`` — used to drop the NoneType arm of Optional[X]
+# unions when labelling a field's type. ``type(None)`` is the canonical way to
+# obtain it; bound to a constant so the comparison reads ``is not _NONE_TYPE``.
+_NONE_TYPE = type(None)
 
 _INLINE_CSS = """
 body {
@@ -193,30 +200,53 @@ def _esc(text: str) -> str:
     return _html_lib.escape(str(text))
 
 
+def _annotation_label(annotation: Any) -> str:
+    """Render a typing annotation into a compact human-readable label.
+
+    Recurses through Optional / List / Union so generics like
+    ``Optional[List[EmailAddress]]`` render as ``list[EmailAddress]``
+    rather than the bare outer name. NoneType arms (from Optional) are
+    dropped so the label names the value type, not ``| None``.
+    """
+    origin = get_origin(annotation)
+    if origin is None:
+        # A concrete class (str, bool, EmailAddress, …) or a bare name.
+        return getattr(annotation, "__name__", None) or str(annotation)
+
+    args = [a for a in get_args(annotation) if a is not _NONE_TYPE]
+    if origin is Union:
+        # Optional[X] collapses to X; a real multi-arm Union joins with ' | '.
+        if len(args) == 1:
+            return _annotation_label(args[0])
+        return " | ".join(_annotation_label(a) for a in args)
+    if origin in (list, List):
+        inner = _annotation_label(args[0]) if args else "any"
+        return f"list[{inner}]"
+
+    # Other generics (e.g. Literal): show the origin name with its args.
+    origin_name = getattr(origin, "__name__", None) or str(origin)
+    if args:
+        inner = ", ".join(_annotation_label(a) for a in args)
+        return f"{origin_name}[{inner}]"
+    return origin_name
+
+
 def _type_label(field_info: Any) -> str:
     """Best-effort human-readable type label from a pydantic FieldInfo."""
     annotation = getattr(field_info, "annotation", None)
     if annotation is None:
         return "any"
-    # Use __name__ when available; fall back to repr for generics.
-    name = getattr(annotation, "__name__", None) or repr(annotation)
-    # Simplify common generic forms
-    name = (
-        name.replace("typing.", "")
-        .replace("Optional[", "")
-        .replace("]", "")
-        .replace("List[", "list[")
-    )
-    return name
+    return _annotation_label(annotation)
 
 
 def _required_badge(field_info: Any) -> str:
-    has_default = (
-        field_info.default is not None or field_info.default_factory is not None
-    )
-    if has_default or getattr(field_info, "is_required", lambda: True)() is False:
-        return '<span class="optional-badge">optional</span>'
-    return '<span class="required-badge">required</span>'
+    # pydantic v2's authoritative required check: a field with no default and
+    # no default_factory has ``is_required()`` True. ``default`` is the
+    # ``PydanticUndefined`` sentinel for required fields (NOT None), so testing
+    # ``default is not None`` would mislabel every required field as optional.
+    if field_info.is_required():
+        return '<span class="required-badge">required</span>'
+    return '<span class="optional-badge">optional</span>'
 
 
 def _model_table(model: Type[BaseModel], title: str) -> str:
@@ -319,62 +349,41 @@ def render_endpoint_spec_html() -> str:
         f"</div>"
     )
 
-    draft_block = (
-        '<div class="endpoint-block">'
-        '<span class="method-badge">POST</span>'
-        '<span class="path">/v1/email/draft</span>'
-        '<p class="desc">Propose a reply and obtain a single-use confirmation '
-        "token bound to the exact (to, subject, body) payload. "
-        "Echo the token to POST /v1/email/send to authorize sending.</p>"
-        "<h3>Request fields</h3>"
-        "<div class='model-section'>"
-        "<table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>"
-        "<tbody>"
-        "<tr><td>to <span class='required-badge'>required</span></td><td>list[EmailAddress]</td><td>Proposed recipients (non-empty).</td></tr>"
-        "<tr><td>subject <span class='required-badge'>required</span></td><td>str</td><td>Proposed subject line.</td></tr>"
-        "<tr><td>body <span class='required-badge'>required</span></td><td>str</td><td>Proposed reply body.</td></tr>"
-        "</tbody></table>"
-        "</div>"
-        "<h3>Response fields</h3>"
-        "<div class='model-section'>"
-        "<table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>"
-        "<tbody>"
-        "<tr><td>draft <span class='required-badge'>required</span></td><td>DraftReply</td><td>The proposed reply (to / subject / body).</td></tr>"
-        "<tr><td>confirmation_token <span class='required-badge'>required</span></td><td>str</td><td>Echo to POST /v1/email/send. Single-use; bound to this exact payload.</td></tr>"
-        "</tbody></table>"
-        "</div>"
-        "</div>"
+    # /draft and /send are derived from the REST route models (the same
+    # pydantic classes the endpoints actually use) via _endpoint_block, so the
+    # tables cannot drift from the live request/response shapes. Imported
+    # lazily here to keep this module's load surface free of FastAPI and to
+    # avoid any import-order coupling with email_routes (which imports this
+    # module lazily for its GET /spec page).
+    from gaia.api.email_routes import (
+        EmailDraftRequest,
+        EmailDraftResponse,
+        EmailSendRequest,
+        EmailSendResponse,
     )
 
-    send_block = (
-        '<div class="endpoint-block">'
-        '<span class="method-badge">POST</span>'
-        '<span class="path">/v1/email/send</span>'
-        '<p class="desc">Send a reply — gated on explicit confirmation (#1264). '
-        "The confirmation gate fires FIRST: a request without a valid, "
-        "payload-bound confirmation token is rejected with HTTP 403 before any "
-        "backend call. Emails are never sent without explicit confirmation.</p>"
-        "<h3>Request fields</h3>"
-        "<div class='model-section'>"
-        "<table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>"
-        "<tbody>"
-        "<tr><td>to <span class='required-badge'>required</span></td><td>list[EmailAddress]</td><td>Recipients (non-empty).</td></tr>"
-        "<tr><td>subject <span class='required-badge'>required</span></td><td>str</td><td>Subject line.</td></tr>"
-        "<tr><td>body <span class='required-badge'>required</span></td><td>str</td><td>Reply body.</td></tr>"
-        "<tr><td>confirmation_token <span class='optional-badge'>optional</span></td><td>str</td><td>Confirmation token from POST /v1/email/draft. A send without a valid token for this exact payload is rejected (403).</td></tr>"
-        "</tbody></table>"
-        "</div>"
-        "<h3>Response fields</h3>"
-        "<div class='model-section'>"
-        "<table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>"
-        "<tbody>"
-        "<tr><td>sent_id <span class='required-badge'>required</span></td><td>str</td><td>Provider message id of the sent email.</td></tr>"
-        "<tr><td>to <span class='required-badge'>required</span></td><td>list[EmailAddress]</td><td>Recipients the message was sent to.</td></tr>"
-        "<tr><td>subject <span class='required-badge'>required</span></td><td>str</td><td>Subject of the sent message.</td></tr>"
-        "<tr><td>sent <span class='required-badge'>required</span></td><td>bool</td><td>Always true on success.</td></tr>"
-        "</tbody></table>"
-        "</div>"
-        "</div>"
+    draft_block = _endpoint_block(
+        path="/v1/email/draft",
+        description=(
+            "Propose a reply and obtain a single-use confirmation token bound "
+            "to the exact (to, subject, body) payload. Echo the token to "
+            "POST /v1/email/send to authorize sending."
+        ),
+        request_sections=[("EmailDraftRequest", EmailDraftRequest)],
+        response_sections=[("EmailDraftResponse", EmailDraftResponse)],
+    )
+
+    send_block = _endpoint_block(
+        path="/v1/email/send",
+        description=(
+            "Send a reply — gated on explicit confirmation (#1264). The "
+            "confirmation gate fires FIRST: a request without a valid, "
+            "payload-bound confirmation token is rejected with HTTP 403 before "
+            "any backend call. Emails are never sent without explicit "
+            "confirmation."
+        ),
+        request_sections=[("EmailSendRequest", EmailSendRequest)],
+        response_sections=[("EmailSendResponse", EmailSendResponse)],
     )
 
     body = f"""<!DOCTYPE html>
@@ -414,4 +423,30 @@ def render_endpoint_spec_html() -> str:
     return body
 
 
-__all__ = ["render_endpoint_spec_html"]
+# Default location for the generated spec when no explicit path is given.
+DEFAULT_SPEC_PATH = Path.home() / ".gaia" / "email" / "endpoint-spec.html"
+
+
+def write_and_open_spec(output_path: Optional[str] = None) -> Path:
+    """Render the spec, write it to disk, and open it in a browser.
+
+    Shared by every ``gaia email --spec`` entry point so the write/open
+    behavior lives in one place. ``output_path`` overrides the default
+    ``~/.gaia/email/endpoint-spec.html``. Returns the resolved destination
+    path (already written) so callers can print it.
+    """
+    if output_path:
+        dest = Path(output_path).expanduser().resolve()
+    else:
+        dest = DEFAULT_SPEC_PATH
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(render_endpoint_spec_html(), encoding="utf-8")
+    webbrowser.open(dest.as_uri())
+    return dest
+
+
+__all__ = [
+    "render_endpoint_spec_html",
+    "write_and_open_spec",
+    "DEFAULT_SPEC_PATH",
+]
