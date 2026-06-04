@@ -61,18 +61,17 @@ _MANIFEST_FINGERPRINT_KEYS = frozenset(
 # "-lite" / ``gaia-lite`` aliases — those no longer register their own card
 # (#1162) but remain reserved so a custom agent can't claim the old ID and
 # shadow the alias resolution in ``_LEGACY_ID_ALIASES``.
+# Only ids that resolve to a framework *builtin* belong here. data/web (and
+# their -lite aliases) migrated to standalone hub wheels (#1102), so they are
+# no longer reserved builtins — they register via the gaia.agent entry point.
 _RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
     {
         "chat",
         "doc",
         "file",
-        "data",
-        "web",
         "chat-lite",
         "doc-lite",
         "file-lite",
-        "data-lite",
-        "web-lite",
         "gaia-lite",
         "builder",
         "email",
