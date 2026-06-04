@@ -28,6 +28,15 @@ export interface DeviceConfig {
     ctx_size: number;
 }
 
+/** Selectable model size for an agent (issue #1162): "full" vs "lite" (~4B). */
+export interface ModelTier {
+    name: string;        // "full" | "lite"
+    label: string;       // e.g. "Lite (~4B)"
+    models: string[];    // preferred models; empty = agent's own default
+    min_memory_gb?: number | null;
+    default?: boolean;
+}
+
 export interface AgentInfo {
     id: string;
     name: string;
@@ -66,6 +75,13 @@ export interface AgentInfo {
     language?: string;
     /** Per-device model/backend/recipe configurations declared by the agent. */
     device_configs?: DeviceConfig[];
+    /**
+     * Model-size tiers (issue #1162). Agents that support a "full" vs "lite"
+     * (~4B) model selection declare both; the card renders a size selector
+     * instead of shipping a separate "… Lite" card. Empty/undefined = single
+     * model size.
+     */
+    model_tiers?: ModelTier[];
 
     // ── Agent Hub catalog/install fields (issue #1097) ──────────────────────
     // Populated by GET /api/agents/catalog (#1096). Locally-registered agents

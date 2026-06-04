@@ -103,6 +103,12 @@ export function AgentHubCard({
     const selectedConfig = availableConfigs.find((c) => c.device === activeDevice);
     const showDeviceSelector = availableConfigs.length > 1;
 
+    // Model-size tier selection (#1162) — replaces duplicate "… Lite" cards.
+    const activeModelTier = useChatStore((s) => s.activeModelTier);
+    const setActiveModelTier = useChatStore((s) => s.setActiveModelTier);
+    const modelTiers = agent.model_tiers ?? [];
+    const showTierSelector = !isAvailable && modelTiers.length > 1;
+
     // Installed-tab cards select-to-chat; available-tab cards do not.
     const clickable = !isAvailable && canStart;
 
@@ -252,6 +258,24 @@ export function AgentHubCard({
                             }
                         </span>
                     )}
+                </div>
+            )}
+
+            {/* Model-size selector (installed agents with multiple tiers, #1162) */}
+            {showTierSelector && (
+                <div className="agent-hub-card-tier">
+                    <Cpu size={12} />
+                    <select
+                        className="agent-hub-tier-select"
+                        aria-label={`Model size for ${agent.name}`}
+                        value={activeModelTier}
+                        onChange={(e) => { e.stopPropagation(); setActiveModelTier(e.target.value); }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {modelTiers.map((t) => (
+                            <option key={t.name} value={t.name}>{t.label}</option>
+                        ))}
+                    </select>
                 </div>
             )}
 

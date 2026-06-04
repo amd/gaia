@@ -389,6 +389,37 @@
     color: var(--accent-gold);
 }
 
+/* Model-size tier selector (#1162) */
+.agent-hub-card-tier {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.agent-hub-tier-select {
+    padding: 3px 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 200ms ease;
+}
+
+.agent-hub-tier-select:hover {
+    border-color: var(--text-secondary);
+}
+
+.agent-hub-tier-select:focus {
+    outline: none;
+    border-color: var(--amd-red);
+}
+
 /* Conversation starter preview */
 .agent-hub-card-starter {
     font-size: 12px;

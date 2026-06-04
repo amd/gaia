@@ -336,8 +336,18 @@ function App() {
         log.chat.info('Creating new task session...');
         setCreateError(null);
         try {
-            const { activeAgentId, activeDevice } = useChatStore.getState();
-            const session = await api.createSession({ title: 'New Task', agent_type: activeAgentId, device: activeDevice });
+            const { activeAgentId, activeDevice, activeModelTier, agents } = useChatStore.getState();
+            // Resolve the selected model-size tier to a concrete model (#1162).
+            // Only the "lite" tier pins a model; "full" defers to the agent default.
+            const activeAgent = agents.find((a) => a.id === activeAgentId);
+            const tier = activeAgent?.model_tiers?.find((t) => t.name === activeModelTier);
+            const tierModel = tier?.models?.[0];
+            const session = await api.createSession({
+                title: 'New Task',
+                agent_type: activeAgentId,
+                device: activeDevice,
+                ...(tierModel ? { model: tierModel } : {}),
+            });
             log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
             addSession(session);
             setCurrentSession(session.id);

@@ -31,9 +31,16 @@ from gaia.version import version
 # Optional imports — degrades to BLENDER_AVAILABLE = False when the blender
 # agent (or the Blender MCP client) is not installed.
 try:
+    # BlenderAgent now ships as the external ``gaia_agent_blender`` wheel
+    # (#1102), splitting it from the gaia.mcp import below; both must stay in
+    # this guarded optional-import block, so the gaia.mcp import is necessarily
+    # ungrouped from the top-of-file gaia imports.
     from gaia_agent_blender.agent import BlenderAgent
 
+    # pylint: disable=ungrouped-imports
     from gaia.mcp.blender_mcp_client import MCPClient
+
+    # pylint: enable=ungrouped-imports
 
     BLENDER_AVAILABLE = True
 except ImportError:
