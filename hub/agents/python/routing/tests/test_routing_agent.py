@@ -30,7 +30,7 @@ def mock_llm_client():
 @pytest.fixture()
 def _patch_create_client(mock_llm_client):
     """Patch create_client so RoutingAgent.__init__ uses the mock LLM."""
-    with patch("gaia.agents.routing.agent.create_client", return_value=mock_llm_client):
+    with patch("gaia_agent_routing.agent.create_client", return_value=mock_llm_client):
         yield
 
 
@@ -54,7 +54,7 @@ def _patch_code_agent():
 @pytest.fixture()
 def router(_patch_create_client):
     """Return a RoutingAgent wired to the mock LLM."""
-    from gaia.agents.routing.agent import RoutingAgent
+    from gaia_agent_routing.agent import RoutingAgent
 
     return RoutingAgent(api_mode=True)
 
@@ -68,7 +68,7 @@ class TestRoutingAgentInit:
     """Constructor and configuration."""
 
     def test_import_and_exposes_process_query(self):
-        from gaia.agents.routing.agent import RoutingAgent
+        from gaia_agent_routing.agent import RoutingAgent
 
         assert hasattr(RoutingAgent, "process_query")
 
@@ -77,25 +77,25 @@ class TestRoutingAgentInit:
 
     def test_custom_routing_model_via_env(self, _patch_create_client, monkeypatch):
         monkeypatch.setenv("AGENT_ROUTING_MODEL", "custom-model")
-        from gaia.agents.routing.agent import RoutingAgent
+        from gaia_agent_routing.agent import RoutingAgent
 
         r = RoutingAgent(api_mode=True)
         assert r.routing_model == "custom-model"
 
     def test_api_mode_stored(self, _patch_create_client):
-        from gaia.agents.routing.agent import RoutingAgent
+        from gaia_agent_routing.agent import RoutingAgent
 
         r = RoutingAgent(api_mode=True)
         assert r.api_mode is True
 
     def test_cli_mode_default(self, _patch_create_client):
-        from gaia.agents.routing.agent import RoutingAgent
+        from gaia_agent_routing.agent import RoutingAgent
 
         r = RoutingAgent()
         assert r.api_mode is False
 
     def test_agent_kwargs_stored(self, _patch_create_client):
-        from gaia.agents.routing.agent import RoutingAgent
+        from gaia_agent_routing.agent import RoutingAgent
 
         r = RoutingAgent(api_mode=True, foo="bar")
         assert r.agent_kwargs["foo"] == "bar"
@@ -445,7 +445,7 @@ class TestProcessQueryCLIMode:
     def test_cli_mode_asks_clarification_then_resolves(
         self, _patch_create_client, mock_llm_client, _patch_code_agent
     ):
-        from gaia.agents.routing.agent import RoutingAgent
+        from gaia_agent_routing.agent import RoutingAgent
 
         router = RoutingAgent(api_mode=False)
 
@@ -488,7 +488,7 @@ class TestProcessQueryCLIMode:
     def test_cli_mode_empty_response_uses_defaults(
         self, _patch_create_client, mock_llm_client, _patch_code_agent
     ):
-        from gaia.agents.routing.agent import RoutingAgent
+        from gaia_agent_routing.agent import RoutingAgent
 
         router = RoutingAgent(api_mode=False)
 
