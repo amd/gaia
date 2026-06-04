@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hub.amd-gaia.ai/schemas/index.schema.json",
+  "title": "GAIA Agent Hub Catalog Index",
+  "description": "Lightweight catalog served at GET /index.json. One entry per agent, summarising the latest published version. Field names mirror gaia-agent.yaml (see docs/spec/agent-hub-restructure.mdx).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "agents"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Index schema version; bumped on breaking shape changes."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp of the last index rebuild."
+    },
+    "agents": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/indexEntry" }
+    }
+  },
+  "definitions": {
+    "indexEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "description",
+        "category",
+        "latest_version",
+        "icon",
+        "language",
+        "author",
+        "security_tier",
+        "download_size_bytes",
+        "requirements",
+        "deprecated"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$",
+          "description": "Agent slug used in hub URLs (/agents/<id>)."
+        },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "latest_version": {
+          "type": "string",
+          "description": "Highest published SemVer for this agent."
+        },
+        "icon": { "type": "string" },
+        "language": { "type": "string", "enum": ["python", "cpp"] },
+        "author": { "type": "string" },
+        "security_tier": {
+          "type": "string",
+          "enum": ["verified", "community", "experimental"]
+        },
+        "download_size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Size of the latest version's artifact in bytes."
+        },
+        "requirements": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["platforms"],
+          "properties": {
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "win-x64",
+                  "win-arm64",
+                  "linux-x64",
+                  "linux-arm64",
+                  "darwin-x64",
+                  "darwin-arm64"
+                ]
+              }
+            }
+          }
+        },
+        "deprecated": { "type": "boolean" }
+      }
+    }
+  }
+}
