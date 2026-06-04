@@ -24,7 +24,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from gaia.agents.email.tools.reply_tools import (  # noqa: E402
+    _COMPOSE_THREAD_BUDGET_CHARS,
     ReplyToolsMixin,
+    _build_compose_prompt,
     compose_reply_impl,
 )
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
@@ -274,6 +276,46 @@ class TestComposeReplyImpl:
 
 
 # ---------------------------------------------------------------------------
+# _build_compose_prompt — transcript budget bound
+# ---------------------------------------------------------------------------
+
+
+class TestComposePromptBudget:
+    def test_long_thread_transcript_is_bounded(self):
+        """A thread with many messages must not blow past the budget.
+
+        The per-message floor (max(200, budget // n)) alone lets a long thread
+        exceed _COMPOSE_THREAD_BUDGET_CHARS; the joined transcript is hard-capped.
+        """
+        # 100 messages × ~600-char bodies would be ~60K of body before headers;
+        # the per-message floor is 200, so the per-message path alone would emit
+        # ~20K+ of transcript. The hard cap must bring it back under budget.
+        big_body = "This is a sentence in a long thread. " * 30  # ~1100 chars
+        thread = [
+            _make_msg(
+                msg_id=f"m-{i:03d}",
+                sender=f"Person {i} <p{i}@example.com>",
+                subject="Long thread",
+                body_text=big_body,
+            )
+            for i in range(100)
+        ]
+
+        prompt = _build_compose_prompt(
+            subject="Long thread",
+            original_sender="Person 0 <p0@example.com>",
+            thread_messages=thread,
+        )
+
+        # The transcript section sits between the "Full thread" header and the
+        # closing instruction; assert it stays within budget (plus a small
+        # allowance for the truncation marker and surrounding prompt scaffolding).
+        assert "[transcript truncated]" in prompt
+        # The whole prompt must stay close to the budget, not balloon to 20K+.
+        assert len(prompt) <= _COMPOSE_THREAD_BUDGET_CHARS + 500, len(prompt)
+
+
+# ---------------------------------------------------------------------------
 # ReplyToolsMixin — registered tool surface test
 # ---------------------------------------------------------------------------
 
@@ -315,21 +357,20 @@ class _Recorder:
         self.config = _Cfg()
         self.config.debug = debug
 
-    # DatabaseMixin surface — delegate to the real host.
+    # DatabaseMixin surface — delegate to the real host. Signatures mirror
+    # DatabaseMixin exactly (execute takes only `sql`; query takes sql+params)
+    # so the stub can't paper over a signature drift in the real path.
     def insert(self, table, data):
         return self._db_host.insert(table, data)
 
     def update(self, table, data, where, params):
         return self._db_host.update(table, data, where, params)
 
-    def execute(self, sql, params=()):
+    def execute(self, sql):
         return self._db_host.execute(sql)
 
-    def fetchone(self, sql, params=()):
-        return self._db_host.fetchone(sql, params)
-
-    def fetchall(self, sql, params=()):
-        return self._db_host.fetchall(sql, params)
+    def query(self, sql, params=None, one=False):
+        return self._db_host.query(sql, params, one=one)
 
 
 def _register_reply_tools(gmail, chat, db_host):

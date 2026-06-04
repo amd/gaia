@@ -12,7 +12,7 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 - **Triage your inbox** — classify every message as `urgent`, `actionable`, `informational`, or `low priority`, plus separate `is_spam` and `is_phishing` flags.
 - **Organize** — archive, label, mark read/unread, star/unstar. Reversible via the per-action undo log.
 - **Soft-delete with undo** — `trash_message` records the action; `restore_message` reverses it within a 30-second window.
-- **Draft + confirmed send** — generate replies (`draft_reply`) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation in the UI.
+- **Draft + confirmed send** — generate replies (`draft_reply`, or `compose_reply` for a tone-and-context-matched draft) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation in the UI.
 - **Calendar** — list events, accept/decline invites, create events from email content (all calendar mutations gated by user confirmation).
 
 ## Setup
@@ -158,7 +158,7 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 
 ### Reply / send (require confirmation)
 
-`draft_reply`, `draft_forward` — drafts are harmless. `send_draft`, `send_now`, `forward_message` — gated by user confirmation; the UI shows the literal recipient/subject/body before you approve.
+`compose_reply` (tone-and-context-matched draft via the local LLM), `draft_reply`, `draft_forward` — drafts are harmless. `send_draft`, `send_now`, `forward_message` — gated by user confirmation; the UI shows the literal recipient/subject/body before you approve.
 
 ### Calendar (require confirmation)
 

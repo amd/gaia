@@ -29,8 +29,15 @@ from gaia.logger import get_logger
 log = get_logger(__name__)
 
 # Body budget for thread context in compose prompts. Keeps the prompt
-# bounded even on long threads (mirrors the read_tools budget).
+# bounded even on long threads (mirrors the read_tools budget). This is a
+# HARD ceiling on the joined transcript — the per-message floor alone can't
+# guarantee it (a 100-message thread would exceed it), so the transcript is
+# also truncated to this length after the per-message bodies are joined.
 _COMPOSE_THREAD_BUDGET_CHARS = 12000
+
+# Sampling temperature for the compose path. Slightly above zero so the draft
+# reads naturally rather than mechanically; not so high it drifts off-topic.
+_COMPOSE_TEMPERATURE = 0.7
 
 # System prompt for the compose path: instructs the local LLM to match
 # the user's tone and style while incorporating thread context.
@@ -317,6 +324,14 @@ def _build_compose_prompt(
         )
 
     transcript = "\n\n".join(blocks)
+    # Hard ceiling: the per-message floor (max(200, budget // n)) lets a very
+    # long thread exceed the budget, so cap the joined transcript here. A
+    # trailing marker tells the model the tail was dropped rather than the
+    # thread simply ending.
+    if len(transcript) > _COMPOSE_THREAD_BUDGET_CHARS:
+        transcript = (
+            transcript[:_COMPOSE_THREAD_BUDGET_CHARS] + "\n...[transcript truncated]"
+        )
     return (
         f"Draft a reply to the email thread below.\n\n"
         f"Subject: {subject}\n"
@@ -406,7 +421,9 @@ def compose_reply_impl(
         messages = [{"role": "user", "content": user_prompt}]
         try:
             response = chat.send_messages(
-                messages, system_prompt=_COMPOSE_SYSTEM_PROMPT, temperature=0.7
+                messages,
+                system_prompt=_COMPOSE_SYSTEM_PROMPT,
+                temperature=_COMPOSE_TEMPERATURE,
             )
         except Exception as exc:
             raise ComposeReplyError(
