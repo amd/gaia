@@ -214,6 +214,23 @@ MODELS = {
         min_ctx_size=65536,
         tool_calling=True,
     ),
+    # --- Gemma 4 E2B: lighter on-device variant for memory-constrained NPU ---
+    # Registered for email triage (issue #1282) where a smaller footprint
+    # is preferable and the lower accuracy trade-off is acceptable (#1107
+    # baseline: category_accuracy=0.4273, is_spam/is_phishing>0.90).
+    # ctx_size=32768: e-mail bodies + system prompt fit well within 32K;
+    # the larger 64K window used by E4B is not needed here.
+    # model_id="Gemma-4-E2B-it-GGUF" matches the baseline fixture at
+    # tests/fixtures/email/baseline_accuracy_e2b.json — confirm the exact
+    # string against `lemonade models list` on the Strix Halo NPU box
+    # before shipping (orchestrator validation step, issue #1282).
+    "gemma-4-e2b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="Gemma-4-E2B-it-GGUF",
+        display_name="Gemma 4 E2B (Lightweight)",
+        min_ctx_size=32768,
+        tool_calling=True,
+    ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
     "qwen3.5-35b": ModelRequirement(
         model_type=ModelType.LLM,
@@ -342,6 +359,13 @@ AGENT_PROFILES = {
         models=["gemma-4-e4b"],
         min_ctx_size=32768,
         description="Stable Diffusion image generation with LLM helper",
+    ),
+    "email": AgentProfile(
+        name="email",
+        display_name="Email Triage Agent",
+        models=["gemma-4-e2b", "gemma-4-e4b"],
+        min_ctx_size=32768,
+        description="Email triage — E2B preferred for NPU efficiency; E4B fallback",
     ),
 }
 

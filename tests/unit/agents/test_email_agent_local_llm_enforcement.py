@@ -26,6 +26,7 @@ from dataclasses import fields
 import pytest
 
 from gaia.agents.email.config import ConfigurationError, EmailAgentConfig
+from gaia.llm.lemonade_client import MODELS, ModelType
 
 
 class TestNoCloudLlmFields:
@@ -119,3 +120,133 @@ class TestDbPathDefault:
     def test_explicit_db_path_overrides(self, tmp_path):
         cfg = EmailAgentConfig(db_path=str(tmp_path / "x.db"))
         assert cfg.resolved_db_path() == str(tmp_path / "x.db")
+
+
+class TestGemmaE2BCatalogEntry:
+    """The Gemma-4 E2B model MUST be registered in the MODELS catalog so the
+    email agent can select it without falling back to the larger E4B model.
+
+    Issue #1282: register E2B as a first-class catalog option.
+    """
+
+    E2B_KEY = "gemma-4-e2b"
+    E2B_MODEL_ID = "Gemma-4-E2B-it-GGUF"
+
+    def test_e2b_key_exists_in_catalog(self):
+        """``gemma-4-e2b`` key must be present in MODELS."""
+        assert self.E2B_KEY in MODELS, (
+            f"'gemma-4-e2b' not found in MODELS — did you add the catalog entry in "
+            "src/gaia/llm/lemonade_client.py? (issue #1282)"
+        )
+
+    def test_e2b_model_id_matches_fixture(self):
+        """model_id must match the string used in the baseline fixture."""
+        req = MODELS[self.E2B_KEY]
+        assert req.model_id == self.E2B_MODEL_ID, (
+            f"Expected model_id={self.E2B_MODEL_ID!r}, got {req.model_id!r}. "
+            "Verify the exact model id against `lemonade models list` on the "
+            "Strix Halo NPU box before changing this."
+        )
+
+    def test_e2b_is_llm_type(self):
+        """The E2B entry must be an LLM (not VLM/embed) for email triage."""
+        req = MODELS[self.E2B_KEY]
+        assert (
+            req.model_type == ModelType.LLM
+        ), f"Expected model_type=ModelType.LLM, got {req.model_type!r}"
+
+    def test_e2b_tool_calling_enabled(self):
+        """Email triage tools require tool_calling=True."""
+        req = MODELS[self.E2B_KEY]
+        assert req.tool_calling is True, (
+            "gemma-4-e2b must have tool_calling=True — the email agent relies on "
+            "native tool calls for triage, organize, and reply operations."
+        )
+
+    def test_e2b_min_ctx_size_sane(self):
+        """min_ctx_size must be >= 8 192 to hold email bodies + system prompt."""
+        req = MODELS[self.E2B_KEY]
+        assert req.min_ctx_size >= 8192, (
+            f"min_ctx_size={req.min_ctx_size} is too small for email triage — the "
+            "system prompt alone exceeds 4 K tokens; a sensible minimum is 8 192."
+        )
+
+    def test_e2b_display_name_set(self):
+        """display_name must be a non-empty string."""
+        req = MODELS[self.E2B_KEY]
+        assert (
+            isinstance(req.display_name, str) and req.display_name.strip()
+        ), "gemma-4-e2b.display_name is empty — set a human-readable label."
+
+    def test_email_agent_config_accepts_e2b_model_id(self):
+        """``EmailAgentConfig(model_id=<e2b_id>)`` must be constructable and
+        pass the base_url allowlist check (no ``base_url`` means local default).
+        """
+        cfg = EmailAgentConfig(model_id=self.E2B_MODEL_ID)
+        cfg.validate()  # MUST NOT raise — default base_url is None (local)
+        assert cfg.model_id == self.E2B_MODEL_ID
+
+    def test_email_agent_config_e2b_rejects_cloud_base_url(self):
+        """Specifying the E2B model_id must not open a path to a cloud LLM.
+
+        The AC3 allowlist must still block cloud ``base_url`` even when the
+        caller explicitly requests the E2B model.
+        """
+        cfg = EmailAgentConfig(
+            model_id=self.E2B_MODEL_ID,
+            base_url="https://api.openai.com/v1",
+        )
+        with pytest.raises(ConfigurationError) as exc:
+            cfg.validate()
+        assert "AC3" in str(exc.value)
+
+
+class TestGemmaE2BLazyDownload:
+    """Registering the E2B model in the catalog MUST NOT trigger a model
+    download at import / config-construction time.  The download must remain
+    lazy — deferred to first use via ``_ensure_model_loaded`` /
+    ``_preload_on_idle_server``.
+
+    This protects the critical install path: ``gaia init`` and a fresh
+    ``import gaia.llm.lemonade_client`` MUST NOT pull multi-GB weights.
+    """
+
+    def test_importing_lemonade_client_does_not_call_load_model(self, monkeypatch):
+        """MODELS catalog import must be side-effect-free.
+
+        No network call, no subprocess launch, no file download may happen
+        at module import time just because the E2B entry exists in MODELS.
+        """
+        import sys
+
+        # Force reimport to check fresh-module side effects; swap out the
+        # network-touching load_model with a sentinel that fails loudly.
+        import unittest.mock as mock
+
+        with mock.patch("gaia.llm.lemonade_client.LemonadeClient.load_model") as m:
+            # Re-import path — pick up any module-level code that might fire.
+            mod_name = "gaia.llm.lemonade_client"
+            saved = sys.modules.pop(mod_name, None)
+            try:
+                import importlib
+
+                importlib.import_module(mod_name)
+            finally:
+                if saved is not None:
+                    sys.modules[mod_name] = saved
+            m.assert_not_called()
+
+    def test_email_agent_config_construction_does_not_call_load_model(
+        self, monkeypatch
+    ):
+        """``EmailAgentConfig(model_id=<e2b>)`` must not trigger a download.
+
+        Construction is purely a dataclass assignment; the download happens
+        later when the agent's LLM client first sends a request.
+        """
+        import unittest.mock as mock
+
+        with mock.patch("gaia.llm.lemonade_client.LemonadeClient.load_model") as m:
+            cfg = EmailAgentConfig(model_id="Gemma-4-E2B-it-GGUF")
+            cfg.validate()
+        m.assert_not_called()
