@@ -269,15 +269,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
 
       - name: Verify uvx is available
+        id: uvx_check
         shell: powershell
         run: |
-          # uvx is provided by uv (installed by setup-venv)
+          # uvx is provided by uv (installed by setup-venv). The Health and MCP
+          # integration tests require `uvx windows-mcp`; when uvx is missing they
+          # are excluded from the test run rather than failing the job (the
+          # bash/LLM/VLM/WiFi suites don't need uvx and still run).
           $uvx = Get-Command uvx -ErrorAction SilentlyContinue
           if ($uvx) {
               Write-Host "[OK] uvx found at: $($uvx.Source)"
+              "uvx_available=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           } else {
-              Write-Host "[WARN] uvx not found -- MCP and Health integration tests will fail"
+              Write-Host "[WARN] uvx not found -- Health and MCP integration tests will be skipped"
               Write-Host "       uvx should be available via uv (installed by setup-venv)"
+              "uvx_available=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
               exit 0
           }
 
@@ -305,12 +311,22 @@ jobs:
               if ($health.status -ne "ok") { throw "Lemonade health check failed" }
               Write-Host "[OK] Lemonade Server ready with Qwen3-4B-Instruct-2507-GGUF"
 
-              # Run all C++ integration tests (LLM + MCP + WiFi + Health)
-              Write-Host "=== Running C++ Integration Tests (LLM + MCP + WiFi + Health) ==="
               $env:GAIA_CPP_TEST_MODEL = "Qwen3-4B-Instruct-2507-GGUF"
               $env:GAIA_CPP_BASE_URL   = "http://localhost:13305/api/v1"
+
+              # Health and MCP integration tests require `uvx windows-mcp`.
+              # Exclude them when uvx isn't available so the LLM/VLM/WiFi suites
+              # (which don't need uvx) still gate the build.
+              $excludeArg = @()
+              if ("${{ steps.uvx_check.outputs.uvx_available }}" -ne "true") {
+                  Write-Host "=== Running C++ Integration Tests (LLM + VLM + WiFi; Health + MCP excluded — uvx unavailable) ==="
+                  $excludeArg = @("-E", "IntegrationHealthTest|IntegrationMCP")
+              } else {
+                  Write-Host "=== Running C++ Integration Tests (LLM + MCP + WiFi + Health + VLM) ==="
+              }
+
               # -j 1: run tests sequentially so they don't compete for the single LLM server
-              ctest --test-dir cpp/build-integration -C Release --output-on-failure -j 1
+              ctest --test-dir cpp/build-integration -C Release --output-on-failure -j 1 @excludeArg
               if ($LASTEXITCODE -ne 0) { throw "C++ integration tests failed" }
               Write-Host "[SUCCESS] All C++ integration tests passed!"
 
