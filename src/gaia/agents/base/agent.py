@@ -695,6 +695,13 @@ Do NOT wrap conversational replies in JSON.
         "Let me search for that.\n{"thought": "...", "tool": "query_documents",
          "tool_args": {"query": "..."}}"
 
+        Decision logic over all {…} candidates that contain a "tool" key,
+        each tagged fenced/unfenced:
+          1. ≥1 unfenced candidate → return the first (unchanged — zero regression).
+          2. else exactly one fenced candidate → return it (the fix for #1428).
+          3. else >1 fenced, 0 unfenced → ambiguous (looks like docs) → None + warning.
+          4. else → None.
+
         This method finds the JSON block using brace-depth matching and returns
         the parsed tool call if it contains a "tool" key.  Returns None if no
         embedded tool call is found, allowing the caller to treat the response
@@ -705,7 +712,6 @@ Do NOT wrap conversational replies in JSON.
             return None
 
         # Build a set of character ranges inside code fences (```...```)
-        # so we don't accidentally extract example JSON from markdown.
         _code_ranges: list[tuple[int, int]] = []
         _search_from = 0
         while True:
@@ -723,17 +729,31 @@ Do NOT wrap conversational replies in JSON.
         def _inside_code_fence(pos: int) -> bool:
             return any(start <= pos < end for start, end in _code_ranges)
 
-        # Walk through looking for { that starts a JSON-like block with "tool"
+        def _parse_candidate(raw: str) -> Optional[Dict[str, Any]]:
+            """Return the parsed dict if raw is valid JSON with a 'tool' key, else None."""
+            try:
+                fixed = re.sub(r",\s*}", "}", raw)
+                fixed = re.sub(r",\s*]", "]", fixed)
+                parsed = json.loads(fixed)
+                if isinstance(parsed, dict) and "tool" in parsed:
+                    if "tool_args" not in parsed:
+                        parsed["tool_args"] = {}
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+            return None
+
+        # Collect all tool-call candidates, tagged by whether they are inside a fence
+        unfenced: list[Dict[str, Any]] = []
+        fenced: list[Dict[str, Any]] = []
+
         idx = 0
         while idx < len(response):
             brace_pos = response.find("{", idx)
             if brace_pos == -1:
                 break
 
-            # Skip JSON inside markdown code fences (example/documentation)
-            if _inside_code_fence(brace_pos):
-                idx = brace_pos + 1
-                continue
+            is_fenced = _inside_code_fence(brace_pos)
 
             # Look ahead for "tool" near this brace (within 200 chars)
             look_ahead = response[brace_pos : brace_pos + 200]
@@ -766,30 +786,42 @@ Do NOT wrap conversational replies in JSON.
                             break
 
             if depth != 0:
-                # Unclosed braces — skip
                 idx = brace_pos + 1
                 continue
 
-            candidate = response[brace_pos : end_pos + 1]
-            try:
-                # Fix common trailing comma issues
-                fixed = re.sub(r",\s*}", "}", candidate)
-                fixed = re.sub(r",\s*]", "]", fixed)
-                parsed = json.loads(fixed)
-
-                # Only accept if it has a "tool" key (it's a tool call)
-                if isinstance(parsed, dict) and "tool" in parsed:
-                    if "tool_args" not in parsed:
-                        parsed["tool_args"] = {}
-                    logger.debug(
-                        f"[PARSE] Extracted embedded tool call: "
-                        f"{parsed.get('tool')}"
-                    )
-                    return parsed
-            except json.JSONDecodeError:
-                pass
+            raw = response[brace_pos : end_pos + 1]
+            parsed = _parse_candidate(raw)
+            if parsed is not None:
+                if is_fenced:
+                    fenced.append(parsed)
+                else:
+                    unfenced.append(parsed)
 
             idx = brace_pos + 1
+
+        # Decision logic
+        if unfenced:
+            # Rule 1: prefer unfenced (unchanged behaviour — zero regression)
+            logger.debug(
+                "[PARSE] Extracted embedded tool call: %s", unfenced[0].get("tool")
+            )
+            return unfenced[0]
+
+        if len(fenced) == 1:
+            # Rule 2: exactly one fenced call — trust it (fix for #1428)
+            logger.debug(
+                "[PARSE] Extracted fenced tool call: %s", fenced[0].get("tool")
+            )
+            return fenced[0]
+
+        if len(fenced) > 1:
+            # Rule 3: multiple fenced calls — ambiguous, likely documentation examples
+            logger.warning(
+                "[PARSE] ambiguous: %d fenced tool-call candidates found and no "
+                "unfenced call; cannot determine which is real — returning None",
+                len(fenced),
+            )
+            return None
 
         return None
 
