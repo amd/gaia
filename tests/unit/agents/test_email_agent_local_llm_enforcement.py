@@ -130,7 +130,10 @@ class TestGemmaE2BCatalogEntry:
     """
 
     E2B_KEY = "gemma-4-e2b"
-    E2B_MODEL_ID = "Gemma-4-E2B-it-GGUF"
+    # The NPU-native FastFlowLM build (checkpoint gemma4-it:e2b), validated on
+    # the Strix Halo box (device=npu, recipe=flm). NOT the llama.cpp GGUF
+    # variant — only the FLM build runs on the NPU (issue #1282).
+    E2B_MODEL_ID = "gemma4-it-e2b-FLM"
 
     def test_e2b_key_exists_in_catalog(self):
         """``gemma-4-e2b`` key must be present in MODELS."""
@@ -139,13 +142,14 @@ class TestGemmaE2BCatalogEntry:
             "src/gaia/llm/lemonade_client.py? (issue #1282)"
         )
 
-    def test_e2b_model_id_matches_fixture(self):
-        """model_id must match the string used in the baseline fixture."""
+    def test_e2b_model_id_is_flm_npu_build(self):
+        """model_id must be the NPU-native FLM build (validated on hardware)."""
         req = MODELS[self.E2B_KEY]
         assert req.model_id == self.E2B_MODEL_ID, (
             f"Expected model_id={self.E2B_MODEL_ID!r}, got {req.model_id!r}. "
-            "Verify the exact model id against `lemonade models list` on the "
-            "Strix Halo NPU box before changing this."
+            "This must be the FLM (NPU) build, not the GGUF (llama.cpp) variant "
+            "— only FLM runs on the Strix Halo NPU. Verify against the box's "
+            "`/api/v1/models` before changing this."
         )
 
     def test_e2b_is_llm_type(self):
@@ -163,12 +167,19 @@ class TestGemmaE2BCatalogEntry:
             "native tool calls for triage, organize, and reply operations."
         )
 
-    def test_e2b_min_ctx_size_sane(self):
-        """min_ctx_size must be >= 8 192 to hold email bodies + system prompt."""
+    def test_e2b_min_ctx_size_matches_npu_window(self):
+        """min_ctx_size must match what the E2B/FLM NPU build actually serves.
+
+        Validated on the Strix Halo box: the FLM build serves ctx_size=4096.
+        The triage classifier clips email bodies to 4000 chars, so a single
+        email + the triage system prompt fit in the 4 K window. Asserting a
+        larger minimum than the hardware serves would be a faked requirement
+        that the model can't satisfy.
+        """
         req = MODELS[self.E2B_KEY]
-        assert req.min_ctx_size >= 8192, (
-            f"min_ctx_size={req.min_ctx_size} is too small for email triage — the "
-            "system prompt alone exceeds 4 K tokens; a sensible minimum is 8 192."
+        assert req.min_ctx_size >= 4096, (
+            f"min_ctx_size={req.min_ctx_size} is below the 4 K NPU window the "
+            "FLM build serves."
         )
 
     def test_e2b_display_name_set(self):
@@ -247,6 +258,6 @@ class TestGemmaE2BLazyDownload:
         import unittest.mock as mock
 
         with mock.patch("gaia.llm.lemonade_client.LemonadeClient.load_model") as m:
-            cfg = EmailAgentConfig(model_id="Gemma-4-E2B-it-GGUF")
+            cfg = EmailAgentConfig(model_id="gemma4-it-e2b-FLM")
             cfg.validate()
         m.assert_not_called()

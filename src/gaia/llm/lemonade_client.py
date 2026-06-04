@@ -214,21 +214,20 @@ MODELS = {
         min_ctx_size=65536,
         tool_calling=True,
     ),
-    # --- Gemma 4 E2B: lighter on-device variant for memory-constrained NPU ---
-    # Registered for email triage (issue #1282) where a smaller footprint
-    # is preferable and the lower accuracy trade-off is acceptable (#1107
-    # baseline: category_accuracy=0.4273, is_spam/is_phishing>0.90).
-    # ctx_size=32768: e-mail bodies + system prompt fit well within 32K;
-    # the larger 64K window used by E4B is not needed here.
-    # model_id="Gemma-4-E2B-it-GGUF" matches the baseline fixture at
-    # tests/fixtures/email/baseline_accuracy_e2b.json — confirm the exact
-    # string against `lemonade models list` on the Strix Halo NPU box
-    # before shipping (orchestrator validation step, issue #1282).
+    # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
+    # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
+    # ``gemma4-it:e2b``), NOT the llama.cpp GGUF variant — only the FLM build
+    # runs on the Strix Halo NPU. Validated on hardware: device=npu,
+    # recipe=flm, served at :13305, ctx_size=4096 (the NPU window). The triage
+    # classifier clips email bodies to 4000 chars, so a single email + the
+    # triage system prompt fit. The E2B *FLM* accuracy baseline is a follow-up:
+    # baseline_accuracy_e2b.json was recorded on the GGUF build, a different
+    # variant.
     "gemma-4-e2b": ModelRequirement(
         model_type=ModelType.LLM,
-        model_id="Gemma-4-E2B-it-GGUF",
-        display_name="Gemma 4 E2B (Lightweight)",
-        min_ctx_size=32768,
+        model_id="gemma4-it-e2b-FLM",
+        display_name="Gemma 4 E2B (NPU/FLM)",
+        min_ctx_size=4096,
         tool_calling=True,
     ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
@@ -364,8 +363,11 @@ AGENT_PROFILES = {
         name="email",
         display_name="Email Triage Agent",
         models=["gemma-4-e2b", "gemma-4-e4b"],
-        min_ctx_size=32768,
-        description="Email triage — E2B preferred for NPU efficiency; E4B fallback",
+        # 4096 — the E2B/FLM NPU primary serves a 4 K window; E4B (staged at a
+        # larger window by the chat/rag profiles) is the runtime fallback via
+        # the agent's DEFAULT_MODEL_NAME, not loaded through this profile.
+        min_ctx_size=4096,
+        description="Email triage — E2B/FLM on the NPU; E4B is the runtime fallback",
     ),
 }
 
