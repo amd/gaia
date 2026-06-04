@@ -117,6 +117,11 @@ _PHISHING_SINGLE_PHRASES = (
 
 # Spam-keyword fallback for the case where Gmail did NOT flag SPAM but the
 # subject screams marketing.
+# NOTE: "newsletter" is intentionally omitted — company-internal newsletters
+# (e.g. all-hands recaps, digest emails from colleagues) appear with the word
+# "newsletter" in the subject and should be classified by the LLM, not killed
+# as low-priority by the heuristic. External marketing newsletters are caught
+# by the CATEGORY_PROMOTIONS label before this list fires.
 _PROMO_SUBJECT_KEYWORDS = (
     "50% off",
     "sale ends",
@@ -125,7 +130,6 @@ _PROMO_SUBJECT_KEYWORDS = (
     "deal of the day",
     "discount code",
     "coupon",
-    "newsletter",
     "this week's deals",
 )
 
@@ -141,6 +145,31 @@ _AUTOMATED_SENDER_KEYWORDS = (
     "notifications@",
     "alerts@",
     "store-news",
+)
+
+# Subject-line patterns that signal genuine urgency even from automated senders.
+# When any of these appear in the subject, the automated-sender heuristic must
+# NOT commit confident=informational — the LLM must read the body to decide.
+# These cover the primary miss class (#1266): DevOps/IT alerts with [SEV1],
+# credential-rotation advisories, and compliance deadlines sent by noreply/alerts@.
+_URGENT_SUBJECT_PATTERNS = (
+    "[sev1]",
+    "[sev0]",
+    "rotate credentials",
+    "compliance acknowledgment",
+    "compliance sign-off",
+    "owner needed",
+    "response needed",
+    "action required",
+    "requires exec review",
+    "prod incident",
+    "security advisory",
+    "respond by",
+    "due by eod",
+    "due today",
+    "within 4 hours",
+    "within 24 hours",
+    "within 1 hour",
 )
 
 
@@ -227,8 +256,22 @@ def classify_category_heuristic(
             )
 
     # 6. Automated-sender fallback — newsletters, alert bots, etc.
+    #    Exception: if the subject contains high-urgency signals (e.g. [SEV1],
+    #    "rotate credentials", "compliance due by EOD"), the heuristic MUST
+    #    NOT commit confident=informational — these are DevOps/IT alerts that
+    #    require a human to act and must be reviewed by the LLM (#1266).
     for kw in _AUTOMATED_SENDER_KEYWORDS:
         if kw in sender_lower:
+            if _subject_has_urgent_signal(subject_lower):
+                return HeuristicResult(
+                    category=CATEGORY_INFORMATIONAL,
+                    is_phishing=is_phishing,
+                    confident=False,
+                    reason=(
+                        f"sender contains automated-sender keyword '{kw}' but "
+                        "subject has urgent signal — escalating to LLM"
+                    ),
+                )
             return HeuristicResult(
                 category=CATEGORY_INFORMATIONAL,
                 is_phishing=is_phishing,
@@ -261,6 +304,17 @@ def classify_category_heuristic(
         confident=False,
         reason="no heuristic match — escalating to LLM",
     )
+
+
+def _subject_has_urgent_signal(subject_lower: str) -> bool:
+    """Return True when the subject contains a high-urgency indicator.
+
+    Used to suppress the automated-sender confident=informational path for
+    DevOps/IT alerts whose subjects unambiguously signal urgency. These cases
+    must fall through to the LLM rather than being silently classified as
+    informational (#1266).
+    """
+    return any(pattern in subject_lower for pattern in _URGENT_SUBJECT_PATTERNS)
 
 
 def _looks_phishing(subject_lower: str) -> bool:
