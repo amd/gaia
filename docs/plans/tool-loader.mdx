@@ -216,6 +216,15 @@ and the prompt-cost slope (add dummy tools, show the unfiltered prompt grows
 while the loaded one stays flat). This validates the TTFT/slope justification —
 and sets the concrete TTFT target — before more is built.
 
+**Success criteria:**
+- A reproducible harness reports tool-prompt token cost for ChatAgent on **both**
+  the text path (`_format_tools_for_prompt`) and the native path
+  (`_build_openai_tool_schemas`).
+- Prompt-cost **slope** (tokens per added tool) is quantified for both paths.
+- Baseline **first-turn TTFT** is recorded for the unfiltered agent.
+- A go/no-go note states whether the measured cost justifies the loader, and sets
+  the concrete TTFT-reduction target Part 1 must hit.
+
 ### Part 1 — Selection + dual-path filtering
 
 - Wire selection into `_compose_system_prompt`; filter **both**
@@ -230,8 +239,17 @@ and sets the concrete TTFT target — before more is built.
   Part 1 is *not* without a safety net, even though the explicit escape-hatch
   machinery lands in Part 2.
 - Default-off toggle; scope to ChatAgent `doc`.
-- **Gate:** first-turn TTFT reduction + tool-recall ~100% + no later-turn TTFT
-  regression.
+
+**Success criteria:**
+- **First-turn TTFT** drops by at least the Part-0 target with the loader on.
+- **Tool recall ~100%** — every tool the unfiltered baseline called was available
+  when the loader-on run called it (the merge gate).
+- **Task success within ~2%** of the unfiltered baseline on `gaia eval agent`.
+- **No later-turn TTFT regression** — turns 2+ stay warm-cached (selection stable).
+- **Both render paths verified** — text block *and* native `tools=` schemas
+  measurably shrink, not just one.
+- **All three off-states revert to all tools** — memory disabled, loader toggle
+  off, and embedder unavailable each expose the full registry (the last logs).
 
 ### Part 2 — Explicit escape hatch + tuning
 
@@ -239,6 +257,16 @@ and sets the concrete TTFT target — before more is built.
   `load_tools` meta-tool that native tool-calling models need (the free recovery
   from Part 1 covers only the non-tool-calling path).
 - Instrument escape-hatch activation rate as the semantic-threshold tuning dial.
+
+**Success criteria:**
+- A **native tool-calling** model recovers a semantically-missed tool via
+  `load_tools` within one extra turn (demonstrated end-to-end).
+- The **non-tool-calling** free-recovery path is verified (an unlisted tool the
+  model names still executes).
+- **Hard recall failures = 0** — with recovery in place, no task fails because a
+  needed tool was permanently unreachable.
+- **Escape-hatch activation rate** is logged per session and usable as the
+  threshold-tuning signal (rising rate ⇒ τ too strict).
 
 ### Part 3 — Skill-driven signal (gated on #887)
 
@@ -253,12 +281,26 @@ its own successful multi-step runs; each `SKILL.md` declares the exact
   but when it does it is exact — the tools come from a recorded successful run,
   not a similarity guess. It complements semantic match (high recall, lower
   precision), it does not replace it.
+- **Same retrieval mechanism, different corpus.** Skills are stored *semantically*
+  in the same `MemoryStore` as #606 memory — each procedure carries an `embedding`,
+  and `recall_skill(goal)` is a vector search over `procedures.embedding`. So this
+  tier reuses the same embedder as the semantic tier; it just searches learned
+  procedures instead of tool docs.
 - **Additive, not a reshape.** It slots in as one more input to the same
   selector: `loaded = CORE ∪ SKILL ∪ SEMANTIC ∪ escape-hatch`. Precedence is
   CORE > SKILL > SEMANTIC. Nothing in Parts 0–2 changes.
 - **Soft dependency.** Until #887 ships, this signal returns `[]` cleanly and the
   loader runs on CORE + semantic exactly as in Parts 1–2 — so Parts 1–2 must not
   assume it exists.
+
+**Success criteria:**
+- When a skill matches the goal, its `tools_required` are loaded **ahead of**
+  semantic results (verified with a fixture skill).
+- **Measurable precision lift** on tasks with a known matching skill — fewer
+  escape-hatch activations and/or higher recall than the Part 1–2 baseline.
+- **Graceful absence** — with #887 disabled/absent, the signal returns `[]` and
+  Parts 0–2 behavior is byte-for-byte unchanged (regression test).
+- **No regression** when no skill matches the goal (falls through to semantic).
 
 ## Open questions for the implementer
 
