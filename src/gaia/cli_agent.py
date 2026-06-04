@@ -142,6 +142,80 @@ def register_subparsers(agent_subparsers) -> None:
         help="Per-prompt timeout in seconds for --live mode (default: 60)",
     )
 
+    pack_p = agent_subparsers.add_parser(
+        "pack",
+        help="Build a distributable wheel from an agent package (python -m build)",
+    )
+    pack_p.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Agent package directory (default: current dir)",
+    )
+    pack_p.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help="Output directory for the wheel (default: <package>/dist)",
+    )
+
+    publish_p = agent_subparsers.add_parser(
+        "publish",
+        help="Build + publish the wheel to R2 (Hub) and PyPI (dual-publish)",
+    )
+    publish_p.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Agent package directory (default: current dir)",
+    )
+    publish_p.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help="Output directory for the built wheel (default: <package>/dist)",
+    )
+    publish_p.add_argument(
+        "--hub-url",
+        default=None,
+        help="R2 Worker origin (default: GAIA_HUB_URL or https://hub.amd-gaia.ai)",
+    )
+    publish_p.add_argument(
+        "--skip-r2",
+        action="store_true",
+        help="Publish to PyPI only (skip the R2 Hub upload)",
+    )
+    publish_p.add_argument(
+        "--skip-pypi",
+        action="store_true",
+        help="Publish to R2 only (skip the PyPI upload)",
+    )
+
+    login_p = agent_subparsers.add_parser(
+        "login",
+        help="Store publisher tokens (R2 Hub and/or PyPI) in the OS keyring",
+    )
+    login_p.add_argument(
+        "--hub-token",
+        default=None,
+        help="R2 Worker publish token (prompted securely if omitted with --hub)",
+    )
+    login_p.add_argument(
+        "--pypi-token",
+        default=None,
+        help="PyPI API token (prompted securely if omitted with --pypi)",
+    )
+    login_p.add_argument(
+        "--hub",
+        action="store_true",
+        help="Prompt for the R2 Hub token (use instead of --hub-token)",
+    )
+    login_p.add_argument(
+        "--pypi",
+        action="store_true",
+        help="Prompt for the PyPI token (use instead of --pypi-token)",
+    )
+
 
 def handle(args) -> bool:
     """Dispatch ``init`` / ``version`` / ``test`` actions.
@@ -155,6 +229,9 @@ def handle(args) -> bool:
         "init": cmd_init,
         "version": cmd_version,
         "test": cmd_test,
+        "pack": cmd_pack,
+        "publish": cmd_publish,
+        "login": cmd_login,
     }
     fn = dispatch.get(action)
     if fn is None:
@@ -665,6 +742,98 @@ def _query_with_timeout(agent, prompt: str, timeout: int):
     if thread.is_alive():
         return None, None, True
     return box.get("result"), box.get("error"), False
+
+
+# ---------------------------------------------------------------------------
+# pack / publish / login (distribution)
+# ---------------------------------------------------------------------------
+
+
+def cmd_pack(args) -> None:
+    """Build a distributable wheel from an agent package."""
+    from gaia.hub import packager
+
+    try:
+        result = packager.pack(args.path, output_dir=args.output)
+    except packager.PackagerError as exc:
+        raise AgentWorkflowError(str(exc)) from exc
+
+    print(f"Built wheel for agent '{result.agent_id}' v{result.version}")
+    print(f"  path:   {result.wheel_path}")
+    print(f"  size:   {result.size_bytes} bytes")
+    print(f"  sha256: {result.sha256}")
+    print("\nNext: 'gaia agent publish' to upload to the Hub (R2) and PyPI.")
+
+
+def cmd_publish(args) -> None:
+    """Build the wheel, then dual-publish it to R2 (Hub) and PyPI."""
+    from gaia.hub import packager, publisher
+
+    pkg_dir = Path(args.path).expanduser().resolve()
+    manifest_path = pkg_dir / "gaia-agent.yaml"
+
+    try:
+        pack_result = packager.pack(args.path, output_dir=args.output)
+    except packager.PackagerError as exc:
+        raise AgentWorkflowError(str(exc)) from exc
+
+    print(f"Built {pack_result.wheel_path.name} (sha256 {pack_result.sha256[:12]}…)")
+    print("Publishing…")
+    try:
+        result = publisher.publish(
+            pack_result,
+            manifest_path,
+            hub_url=args.hub_url,
+            skip_r2=args.skip_r2,
+            skip_pypi=args.skip_pypi,
+        )
+    except publisher.PublisherError as exc:
+        raise AgentWorkflowError(str(exc)) from exc
+
+    for target in (result.r2, result.pypi):
+        status = "skipped" if target.skipped else "PASS"
+        print(f"  [{status}] {target.target}: {target.detail}")
+    print(
+        f"\nPublished agent '{result.agent_id}' v{result.version} "
+        f"(R2 for the Hub UI, PyPI for 'pip install {pack_result.dist_name}')."
+    )
+
+
+def cmd_login(args) -> None:
+    """Store R2 Hub and/or PyPI publisher tokens in the OS keyring."""
+    import getpass
+
+    from gaia.hub import publisher
+
+    stored = []
+
+    hub_token = args.hub_token
+    if hub_token is None and args.hub:
+        hub_token = getpass.getpass("R2 Hub publish token: ")
+    if hub_token:
+        try:
+            publisher.store_token("hub", hub_token)
+        except publisher.PublisherError as exc:
+            raise AgentWorkflowError(str(exc)) from exc
+        stored.append("hub")
+
+    pypi_token = args.pypi_token
+    if pypi_token is None and args.pypi:
+        pypi_token = getpass.getpass("PyPI API token: ")
+    if pypi_token:
+        try:
+            publisher.store_token("pypi", pypi_token)
+        except publisher.PublisherError as exc:
+            raise AgentWorkflowError(str(exc)) from exc
+        stored.append("pypi")
+
+    if not stored:
+        raise AgentWorkflowError(
+            "no token provided. Pass --hub-token/--pypi-token (or --hub/--pypi "
+            "to be prompted). Tokens are stored in your OS keyring and read at "
+            "publish time."
+        )
+    print(f"Stored token(s) in the OS keyring: {', '.join(stored)}.")
 
 
 # ---------------------------------------------------------------------------
