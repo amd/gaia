@@ -6172,7 +6172,10 @@ def handle_agent_command(args):
 
     if not hasattr(args, "agent_action") or args.agent_action is None:
         print("❌ Error: No agent action specified")
-        print("Available actions: init, version, test, export, import")
+        print(
+            "Available actions: init, version, test, configure, health, status, "
+            "export, import"
+        )
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)
 

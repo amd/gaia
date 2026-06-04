@@ -142,6 +142,126 @@ def register_subparsers(agent_subparsers) -> None:
         help="Per-prompt timeout in seconds for --live mode (default: 60)",
     )
 
+    pack_p = agent_subparsers.add_parser(
+        "pack",
+        help="Build a distributable wheel from an agent package (python -m build)",
+    )
+    pack_p.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Agent package directory (default: current dir)",
+    )
+    pack_p.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help="Output directory for the wheel (default: <package>/dist)",
+    )
+
+    publish_p = agent_subparsers.add_parser(
+        "publish",
+        help="Build + publish the wheel to R2 (Hub) and PyPI (dual-publish)",
+    )
+    publish_p.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Agent package directory (default: current dir)",
+    )
+    publish_p.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help="Output directory for the built wheel (default: <package>/dist)",
+    )
+    publish_p.add_argument(
+        "--hub-url",
+        default=None,
+        help="R2 Worker origin (default: GAIA_HUB_URL or https://hub.amd-gaia.ai)",
+    )
+    publish_p.add_argument(
+        "--skip-r2",
+        action="store_true",
+        help="Publish to PyPI only (skip the R2 Hub upload)",
+    )
+    publish_p.add_argument(
+        "--skip-pypi",
+        action="store_true",
+        help="Publish to R2 only (skip the PyPI upload)",
+    )
+
+    configure_p = agent_subparsers.add_parser(
+        "configure",
+        help="Set per-agent config (model preference, settings) in ~/.gaia/agents/<id>",
+    )
+    configure_p.add_argument("id", help="Agent id to configure, e.g. 'chat'")
+    configure_p.add_argument(
+        "--model",
+        default=None,
+        help="Preferred model for this agent (stored as the 'model' setting)",
+    )
+    configure_p.add_argument(
+        "--set",
+        dest="settings",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Set an arbitrary setting (repeatable), e.g. --set temperature=0.2",
+    )
+    configure_p.add_argument(
+        "--replace",
+        action="store_true",
+        help="Replace the whole config instead of merging into the existing one",
+    )
+    configure_p.add_argument(
+        "--show",
+        action="store_true",
+        help="Print the current config and exit (no changes)",
+    )
+
+    health_p = agent_subparsers.add_parser(
+        "health",
+        help="Health check: does an installed agent load + its entry point resolve?",
+    )
+    health_p.add_argument("id", help="Agent id to health-check, e.g. 'chat'")
+
+    status_p = agent_subparsers.add_parser(
+        "status",
+        help="Show installed version, health, and config for one or all agents",
+    )
+    status_p.add_argument(
+        "id",
+        nargs="?",
+        default=None,
+        help="Agent id (omit to show every discovered agent)",
+    )
+
+    login_p = agent_subparsers.add_parser(
+        "login",
+        help="Store publisher tokens (R2 Hub and/or PyPI) in the OS keyring",
+    )
+    login_p.add_argument(
+        "--hub-token",
+        default=None,
+        help="R2 Worker publish token (prompted securely if omitted with --hub)",
+    )
+    login_p.add_argument(
+        "--pypi-token",
+        default=None,
+        help="PyPI API token (prompted securely if omitted with --pypi)",
+    )
+    login_p.add_argument(
+        "--hub",
+        action="store_true",
+        help="Prompt for the R2 Hub token (use instead of --hub-token)",
+    )
+    login_p.add_argument(
+        "--pypi",
+        action="store_true",
+        help="Prompt for the PyPI token (use instead of --pypi-token)",
+    )
+
 
 def handle(args) -> bool:
     """Dispatch ``init`` / ``version`` / ``test`` actions.
@@ -155,6 +275,12 @@ def handle(args) -> bool:
         "init": cmd_init,
         "version": cmd_version,
         "test": cmd_test,
+        "pack": cmd_pack,
+        "publish": cmd_publish,
+        "login": cmd_login,
+        "configure": cmd_configure,
+        "health": cmd_health,
+        "status": cmd_status,
     }
     fn = dispatch.get(action)
     if fn is None:
@@ -665,6 +791,217 @@ def _query_with_timeout(agent, prompt: str, timeout: int):
     if thread.is_alive():
         return None, None, True
     return box.get("result"), box.get("error"), False
+
+
+# ---------------------------------------------------------------------------
+# pack / publish / login (distribution)
+# ---------------------------------------------------------------------------
+
+
+def cmd_pack(args) -> None:
+    """Build a distributable wheel from an agent package."""
+    from gaia.hub import packager
+
+    try:
+        result = packager.pack(args.path, output_dir=args.output)
+    except packager.PackagerError as exc:
+        raise AgentWorkflowError(str(exc)) from exc
+
+    print(f"Built wheel for agent '{result.agent_id}' v{result.version}")
+    print(f"  path:   {result.wheel_path}")
+    print(f"  size:   {result.size_bytes} bytes")
+    print(f"  sha256: {result.sha256}")
+    print("\nNext: 'gaia agent publish' to upload to the Hub (R2) and PyPI.")
+
+
+def cmd_publish(args) -> None:
+    """Build the wheel, then dual-publish it to R2 (Hub) and PyPI."""
+    from gaia.hub import packager, publisher
+
+    pkg_dir = Path(args.path).expanduser().resolve()
+    manifest_path = pkg_dir / "gaia-agent.yaml"
+
+    try:
+        pack_result = packager.pack(args.path, output_dir=args.output)
+    except packager.PackagerError as exc:
+        raise AgentWorkflowError(str(exc)) from exc
+
+    print(f"Built {pack_result.wheel_path.name} (sha256 {pack_result.sha256[:12]}…)")
+    print("Publishing…")
+    try:
+        result = publisher.publish(
+            pack_result,
+            manifest_path,
+            hub_url=args.hub_url,
+            skip_r2=args.skip_r2,
+            skip_pypi=args.skip_pypi,
+        )
+    except publisher.PublisherError as exc:
+        raise AgentWorkflowError(str(exc)) from exc
+
+    for target in (result.r2, result.pypi):
+        status = "skipped" if target.skipped else "PASS"
+        print(f"  [{status}] {target.target}: {target.detail}")
+    print(
+        f"\nPublished agent '{result.agent_id}' v{result.version} "
+        f"(R2 for the Hub UI, PyPI for 'pip install {pack_result.dist_name}')."
+    )
+
+
+def cmd_login(args) -> None:
+    """Store R2 Hub and/or PyPI publisher tokens in the OS keyring."""
+    import getpass
+
+    from gaia.hub import publisher
+
+    stored = []
+
+    hub_token = args.hub_token
+    if hub_token is None and args.hub:
+        hub_token = getpass.getpass("R2 Hub publish token: ")
+    if hub_token:
+        try:
+            publisher.store_token("hub", hub_token)
+        except publisher.PublisherError as exc:
+            raise AgentWorkflowError(str(exc)) from exc
+        stored.append("hub")
+
+    pypi_token = args.pypi_token
+    if pypi_token is None and args.pypi:
+        pypi_token = getpass.getpass("PyPI API token: ")
+    if pypi_token:
+        try:
+            publisher.store_token("pypi", pypi_token)
+        except publisher.PublisherError as exc:
+            raise AgentWorkflowError(str(exc)) from exc
+        stored.append("pypi")
+
+    if not stored:
+        raise AgentWorkflowError(
+            "no token provided. Pass --hub-token/--pypi-token (or --hub/--pypi "
+            "to be prompted). Tokens are stored in your OS keyring and read at "
+            "publish time."
+        )
+    print(f"Stored token(s) in the OS keyring: {', '.join(stored)}.")
+
+
+# ---------------------------------------------------------------------------
+# configure / health / status (lifecycle — issue #465)
+# ---------------------------------------------------------------------------
+
+
+def _coerce_setting(raw: str):
+    """Parse a ``KEY=VALUE`` pair, JSON-decoding the value when possible.
+
+    ``--set temperature=0.2`` stores a float; ``--set verbose=true`` a bool;
+    ``--set model=Qwen3.5-35B-A3B-GGUF`` a string. Anything that is not valid
+    JSON is kept as the raw string.
+    """
+    import json
+
+    if "=" not in raw:
+        raise AgentWorkflowError(
+            f"--set expects KEY=VALUE, got {raw!r}. Example: --set temperature=0.2."
+        )
+    key, _, value = raw.partition("=")
+    key = key.strip()
+    if not key:
+        raise AgentWorkflowError(f"--set has an empty key in {raw!r}.")
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        parsed = value
+    return key, parsed
+
+
+def cmd_configure(args) -> None:
+    """Set per-agent config under ~/.gaia/agents/<id>/config.json."""
+    from gaia.hub import lifecycle
+
+    if args.show:
+        try:
+            current = lifecycle.read_config(args.id)
+        except lifecycle.LifecycleError as exc:
+            raise AgentWorkflowError(str(exc)) from exc
+        if not current:
+            print(f"No config set for '{args.id}'.")
+        else:
+            import json
+
+            print(json.dumps(current, indent=2, sort_keys=True))
+        return
+
+    settings = {}
+    if args.model:
+        settings[lifecycle.CONFIG_MODEL_KEY] = args.model
+    for raw in args.settings:
+        key, value = _coerce_setting(raw)
+        settings[key] = value
+
+    if not settings:
+        raise AgentWorkflowError(
+            "nothing to configure. Pass --model <name> and/or --set KEY=VALUE, "
+            "or --show to view the current config."
+        )
+
+    try:
+        merged = lifecycle.configure(args.id, settings, merge=not args.replace)
+    except lifecycle.LifecycleError as exc:
+        raise AgentWorkflowError(str(exc)) from exc
+
+    import json
+
+    print(f"Updated config for '{args.id}':")
+    print(json.dumps(merged, indent=2, sort_keys=True))
+
+
+def cmd_health(args) -> None:
+    """Run a health check against an installed agent."""
+    from gaia.hub import lifecycle
+
+    registry = _build_registry()
+    result = lifecycle.health_check(args.id, registry=registry)
+    print(f"{args.id}: {result.state}")
+    if result.detail:
+        print(f"  {result.detail}")
+    for warning in result.warnings:
+        print(f"  warning: {warning}")
+    # error/not_installed are non-zero exits so scripts can gate on it.
+    if result.state in (lifecycle.HEALTH_ERROR, lifecycle.HEALTH_NOT_INSTALLED):
+        sys.exit(1)
+
+
+def cmd_status(args) -> None:
+    """Show installed version + health + config for one or all agents."""
+    from gaia.hub import lifecycle
+
+    registry = _build_registry()
+    if args.id:
+        statuses = {args.id: lifecycle.status(args.id, registry=registry)}
+    else:
+        statuses = lifecycle.status_all(registry=registry)
+
+    if not statuses:
+        print("No agents discovered.")
+        return
+
+    width = max(len(aid) for aid in statuses)
+    print(f"{'AGENT'.ljust(width)}  VERSION    HEALTH         SOURCE")
+    for aid, st in statuses.items():
+        version = st.installed_version or "-"
+        print(
+            f"{aid.ljust(width)}  {version.ljust(9)}  "
+            f"{st.health.ljust(13)}  {st.source or '-'}"
+        )
+
+
+def _build_registry():
+    """Build and populate an AgentRegistry for health/status commands."""
+    from gaia.agents.registry import AgentRegistry
+
+    registry = AgentRegistry()
+    registry.discover()
+    return registry
 
 
 # ---------------------------------------------------------------------------

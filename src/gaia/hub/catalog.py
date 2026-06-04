@@ -323,10 +323,21 @@ STATUS_AVAILABLE = "available"
 STATUS_UPDATE_AVAILABLE = "update_available"
 
 
+def _requires_trust(language: str, security_tier: str) -> bool:
+    """Whether a catalog entry needs an explicit native-trust opt-in to install.
+
+    Native (``cpp``) agents outside the ``verified`` tier ship an unsandboxed
+    binary from a non-AMD-audited publisher; the UI prompts before installing.
+    """
+    return language == "cpp" and security_tier != "verified"
+
+
 def merge_with_registry(
     index_agents: List[Dict[str, Any]],
     registry: Any,
     installed_versions: Optional[Dict[str, str]] = None,
+    *,
+    include_deprecated: bool = False,
 ) -> List[Dict[str, Any]]:
     """Merge the remote catalog with the live registry into a unified list.
 
@@ -338,10 +349,14 @@ def merge_with_registry(
             :func:`gaia.hub.installer.list_installed`). Builtin/custom agents
             present in the registry but absent here are treated as installed
             with an unknown version.
+        include_deprecated: When False (default), deprecated agents that are not
+            already installed are excluded from the listing. Installed agents are
+            always shown so a user can still see/manage what they have.
 
     Returns:
         One dict per agent (union of registry + catalog), each carrying a
-        ``status`` and ``installed_version`` / ``latest_version``.
+        ``status``, ``installed_version`` / ``latest_version``, and a
+        ``requires_trust`` flag.
     """
     installed_versions = installed_versions or {}
 
@@ -369,15 +384,18 @@ def merge_with_registry(
         else:
             status = STATUS_AVAILABLE
 
+        language = entry.get("language", "python")
+        security_tier = entry.get("security_tier", "experimental")
         by_id[agent_id] = {
             "id": agent_id,
             "name": entry.get("name", agent_id),
             "description": entry.get("description", ""),
             "category": entry.get("category", "general"),
             "icon": entry.get("icon", ""),
-            "language": entry.get("language", "python"),
+            "language": language,
             "author": entry.get("author", ""),
-            "security_tier": entry.get("security_tier", "experimental"),
+            "security_tier": security_tier,
+            "requires_trust": _requires_trust(language, security_tier),
             "download_size_bytes": entry.get("download_size_bytes", 0),
             "requirements": entry.get("requirements", {"platforms": []}),
             "deprecated": entry.get("deprecated", False),
@@ -391,6 +409,7 @@ def merge_with_registry(
     for agent_id, reg in registered.items():
         if agent_id in by_id:
             continue
+        reg_tier = "verified" if reg.source == "builtin" else "experimental"
         by_id[agent_id] = {
             "id": agent_id,
             "name": reg.name,
@@ -399,7 +418,8 @@ def merge_with_registry(
             "icon": reg.icon,
             "language": reg.language,
             "author": "",
-            "security_tier": "verified" if reg.source == "builtin" else "experimental",
+            "security_tier": reg_tier,
+            "requires_trust": _requires_trust(reg.language, reg_tier),
             "download_size_bytes": 0,
             "requirements": {"platforms": []},
             "deprecated": False,
@@ -407,6 +427,15 @@ def merge_with_registry(
             "installed_version": installed_versions.get(agent_id),
             "status": STATUS_INSTALLED,
             "source": reg.source,
+        }
+
+    # Hide deprecated, not-yet-installed agents from the default listing. They
+    # remain installable via include_deprecated (the UI confirms before install).
+    if not include_deprecated:
+        by_id = {
+            aid: a
+            for aid, a in by_id.items()
+            if not (a["deprecated"] and a["status"] == STATUS_AVAILABLE)
         }
 
     return sorted(by_id.values(), key=lambda a: a["id"])
@@ -437,12 +466,18 @@ def build_catalog(
     cache_path: Optional[Path] = None,
     installed_versions: Optional[Dict[str, str]] = None,
     force: bool = False,
+    include_deprecated: bool = False,
 ) -> UnifiedCatalog:
     """Fetch the catalog and merge it with the registry into a unified view."""
     result = load_index(
         base_url=base_url, fetcher=fetcher, cache_path=cache_path, force=force
     )
-    merged = merge_with_registry(result.agents, registry, installed_versions)
+    merged = merge_with_registry(
+        result.agents,
+        registry,
+        installed_versions,
+        include_deprecated=include_deprecated,
+    )
     return UnifiedCatalog(
         agents=merged,
         offline=result.offline,

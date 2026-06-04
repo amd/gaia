@@ -6,6 +6,7 @@ All HTTP and pip work is mocked; no live network, no real ``uv``.
 """
 
 import hashlib
+import json
 
 import pytest
 
@@ -316,8 +317,160 @@ def test_install_cpp_artifact_extracted(tmp_path):
         base_url=BASE,
         fetcher=fetcher,
         install_root=tmp_path,
+        trust_native=True,  # experimental native agent — explicit trust required
     )
     assert result.language == "cpp"
     assert (tmp_path / "native" / "bin" / "demo").exists()
     # Native agents do not hot-register in-process.
     assert result.hot_registered is False
+
+
+# ---------------------------------------------------------------------------
+# Setup executor: progressive / resumable / parallel (#468)
+# ---------------------------------------------------------------------------
+
+
+def _sized_manifest(agent_id, size_bytes, version="1.0.0"):
+    """A manifest whose artifact declares a specific size (for ordering tests)."""
+    m = _manifest(agent_id=agent_id, version=version)
+    m["id"] = agent_id
+    m["versions"][version]["artifact"]["size_bytes"] = size_bytes
+    return m
+
+
+def test_run_setup_orders_smallest_first(tmp_path):
+    manifests = {
+        "big": _sized_manifest("big", 9000),
+        "small": _sized_manifest("small", 100),
+        "mid": _sized_manifest("mid", 500),
+    }
+    order = []
+
+    def fake_install(agent_id, **kwargs):
+        order.append(agent_id)
+        return None
+
+    result = installer.run_setup(
+        manifests,
+        max_parallel=1,  # serial so observed order == plan order
+        install_root=tmp_path,
+        state_path=tmp_path / "setup_state.json",
+        installer_fn=fake_install,
+    )
+    assert order == ["small", "mid", "big"]
+    assert result.all_ok
+    assert set(result.completed) == {"small", "mid", "big"}
+
+
+def test_run_setup_resume_skips_completed(tmp_path):
+    state_path = tmp_path / "setup_state.json"
+    # Prior run completed "a"; "b" is still pending.
+    state_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "steps": [
+                    {"agent_id": "a", "status": "completed"},
+                    {"agent_id": "b", "status": "pending"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifests = {"a": _sized_manifest("a", 100), "b": _sized_manifest("b", 200)}
+    installed = []
+
+    def fake_install(agent_id, **kwargs):
+        installed.append(agent_id)
+        return None
+
+    result = installer.run_setup(
+        manifests,
+        max_parallel=2,
+        resume=True,
+        install_root=tmp_path,
+        state_path=state_path,
+        installer_fn=fake_install,
+    )
+    # "a" was already completed → not re-installed; only "b" runs.
+    assert installed == ["b"]
+    assert result.all_ok
+
+
+def test_run_setup_respects_concurrency_bound(tmp_path):
+    import threading
+    import time
+
+    manifests = {f"agent{i}": _sized_manifest(f"agent{i}", i) for i in range(6)}
+
+    lock = threading.Lock()
+    state = {"active": 0, "peak": 0}
+
+    def fake_install(agent_id, **kwargs):
+        with lock:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        time.sleep(0.02)  # hold the slot so overlap is observable
+        with lock:
+            state["active"] -= 1
+        return None
+
+    installer.run_setup(
+        manifests,
+        max_parallel=2,
+        install_root=tmp_path,
+        state_path=tmp_path / "setup_state.json",
+        installer_fn=fake_install,
+    )
+    assert state["peak"] <= 2
+
+
+def test_run_setup_failed_step_does_not_block_others(tmp_path):
+    manifests = {
+        "good": _sized_manifest("good", 100),
+        "bad": _sized_manifest("bad", 50),
+    }
+
+    def fake_install(agent_id, **kwargs):
+        if agent_id == "bad":
+            raise installer.InstallError("boom")
+        return None
+
+    result = installer.run_setup(
+        manifests,
+        max_parallel=2,
+        install_root=tmp_path,
+        state_path=tmp_path / "setup_state.json",
+        installer_fn=fake_install,
+    )
+    assert "good" in result.completed
+    assert "bad" in result.failed
+    assert not result.all_ok
+
+
+def test_run_setup_persists_state_file(tmp_path):
+    state_path = tmp_path / "setup_state.json"
+    manifests = {"a": _sized_manifest("a", 100)}
+
+    installer.run_setup(
+        manifests,
+        install_root=tmp_path,
+        state_path=state_path,
+        installer_fn=lambda agent_id, **kwargs: None,
+    )
+    assert state_path.exists()
+    saved = installer.read_setup_state(state_path)
+    assert saved["status"] == "completed"
+    assert saved["steps"][0]["agent_id"] == "a"
+    assert saved["steps"][0]["status"] == "completed"
+
+
+def test_run_setup_rejects_bad_concurrency(tmp_path):
+    with pytest.raises(InstallError):
+        installer.run_setup(
+            {"a": _sized_manifest("a", 1)},
+            max_parallel=0,
+            install_root=tmp_path,
+            state_path=tmp_path / "s.json",
+            installer_fn=lambda agent_id, **kwargs: None,
+        )

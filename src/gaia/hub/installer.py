@@ -36,7 +36,7 @@ import tempfile
 import threading
 import zipfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -57,6 +57,14 @@ BACKUP_DIRNAME = ".backup"
 
 # Where Python wheels get installed (``uv pip install --target``).
 SITE_PACKAGES_DIRNAME = "site-packages"
+
+# The only security tier whose native agents install without an explicit trust
+# opt-in. ``community`` / ``experimental`` C++ agents require ``trust_native``.
+VERIFIED_TIER = "verified"
+
+# Least-privileged default when a manifest omits its tier (mirrors the manifest
+# parser: an unknown package is treated as untrusted).
+DEFAULT_SECURITY_TIER = "experimental"
 
 # Injectable pip runner: takes the full ``uv pip install`` argument list (after
 # ``uv pip install``) and runs it, raising InstallError on failure.
@@ -86,6 +94,16 @@ class CompatibilityError(InstallError):
 
 class InstallInProgressError(InstallError):
     """An install for this agent id is already running (maps to HTTP 409)."""
+
+
+class TrustRequiredError(InstallError):
+    """A native (C++) non-verified agent needs explicit trust to install.
+
+    Native agents run as unsandboxed binaries on the user's machine, so a
+    ``community``/``experimental`` C++ package is only installed when the caller
+    explicitly opts in (``trust_native=True`` / the UI's *Trust & Install*
+    confirmation). Maps to HTTP 403 at the router boundary.
+    """
 
 
 class NotInstalledError(InstallError):
@@ -438,6 +456,43 @@ def _hot_register(agent_id: str, install_dir: Path, language: str, registry) -> 
 
 
 # ---------------------------------------------------------------------------
+# Security tier / native-agent trust
+# ---------------------------------------------------------------------------
+
+
+def requires_native_trust(manifest: Dict[str, Any]) -> bool:
+    """Whether installing *manifest* needs an explicit native-trust opt-in.
+
+    True for native (``language: cpp``) agents that are not in the ``verified``
+    tier — they ship an unsandboxed binary from a non-AMD-audited publisher.
+    """
+    language = manifest.get("language", "python")
+    tier = manifest.get("security_tier", DEFAULT_SECURITY_TIER)
+    return language == "cpp" and tier != VERIFIED_TIER
+
+
+def ensure_native_trust(
+    agent_id: str, manifest: Dict[str, Any], *, trust_native: bool
+) -> None:
+    """Raise :class:`TrustRequiredError` if native trust is needed but absent.
+
+    No-op for Python agents and ``verified`` native agents. Called both by the
+    router (synchronous 403) and :func:`install` (defense in depth).
+    """
+    if trust_native or not requires_native_trust(manifest):
+        return
+    tier = manifest.get("security_tier", DEFAULT_SECURITY_TIER)
+    raise TrustRequiredError(
+        f"'{agent_id}' is a native (C++) agent in the '{tier}' security tier. "
+        f"Native agents run as unsandboxed binaries on your machine, so this one "
+        f"is not installed automatically. Re-install with explicit trust "
+        f"(trust_native=true, or the UI's 'Trust & Install' confirmation) only if "
+        f"you trust its publisher. See "
+        f"https://amd-gaia.ai/docs/spec/agent-hub-restructure."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public: install
 # ---------------------------------------------------------------------------
 
@@ -475,6 +530,7 @@ def install(
     install_root: Optional[Path] = None,
     registry: Any = None,
     skip_compatibility_check: bool = False,
+    trust_native: bool = False,
 ) -> InstallResult:
     """Download, verify, and install an agent from the hub.
 
@@ -487,10 +543,12 @@ def install(
         install_root: Install root; defaults to ``~/.gaia/agents``.
         registry: Live :class:`AgentRegistry` to hot-register into.
         skip_compatibility_check: Skip the platform/disk gate (tests/forced).
+        trust_native: Explicit opt-in to install a non-verified native (C++)
+            agent. Required for ``community``/``experimental`` C++ packages.
 
     Raises:
         InstallInProgressError, ChecksumError, DiskSpaceError,
-        CompatibilityError, InstallError.
+        CompatibilityError, TrustRequiredError, InstallError.
     """
     fetcher = fetcher or catalog_mod.fetch_bytes
     run_pip = run_pip or _default_run_pip
@@ -507,6 +565,21 @@ def install(
                     agent_id, base_url=base_url, fetcher=fetcher
                 )
             language = manifest.get("language", "python")
+
+            # Native-agent trust gate — refuse non-verified C++ packages unless
+            # the caller explicitly opted in (defense in depth; the router also
+            # enforces this synchronously for a clean 403).
+            ensure_native_trust(agent_id, manifest, trust_native=trust_native)
+
+            # Deprecation is non-fatal but must be loud: a deprecated agent may
+            # be unmaintained or superseded.
+            if manifest.get("deprecated"):
+                logger.warning(
+                    "installer: '%s' is deprecated and may be unmaintained or "
+                    "superseded; installing anyway",
+                    agent_id,
+                )
+
             resolved_version, artifact = _resolve_version(manifest, version)
 
             # --- compatibility / disk gate ---
@@ -771,3 +844,256 @@ def _deregister(agent_id: str, registry: Any) -> None:
             registry._agents.pop(agent_id, None)
     except Exception as exc:  # noqa: BLE001
         logger.warning("installer: could not deregister %s: %s", agent_id, exc)
+
+
+# ---------------------------------------------------------------------------
+# Setup executor: progressive, resumable, parallel multi-agent install (#468)
+# ---------------------------------------------------------------------------
+#
+# ``run_setup`` installs several agents in one pass with three properties the
+# single-agent ``install`` does not provide on its own:
+#
+# * **Progressive** — steps run smallest-download-first so a minimal agent is
+#   usable while larger ones keep downloading.
+# * **Resumable** — every step transition is persisted to a JSON state file
+#   (``~/.gaia/setup_state.json``). A crashed/interrupted run re-reads it and
+#   skips already-``completed`` steps instead of re-downloading them.
+# * **Parallel** — downloads run with *bounded* concurrency (independent agents
+#   are safe to fetch at once); a failed step does not block the others.
+
+# Step lifecycle states for the resumable setup state file.
+STEP_PENDING = "pending"
+STEP_RUNNING = "running"
+STEP_COMPLETED = "completed"
+STEP_FAILED = "failed"
+
+# Default parallel-download bound. Conservative: enough to overlap a small fast
+# download with a large slow one without saturating a typical home connection.
+DEFAULT_MAX_PARALLEL = 2
+
+
+def default_setup_state_path(install_root: Optional[Path] = None) -> Path:
+    """Path of the resumable setup state file.
+
+    Lives next to the install root's parent (``~/.gaia/setup_state.json``) so it
+    survives across the per-agent install dirs it coordinates.
+    """
+    root = install_root or default_install_root()
+    return root.parent / "setup_state.json"
+
+
+@dataclass
+class SetupStep:
+    """One agent install within a :func:`run_setup` plan."""
+
+    agent_id: str
+    version: Optional[str] = None
+    size_bytes: int = 0
+    status: str = STEP_PENDING
+    error: Optional[str] = None
+    completed_at: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "agent_id": self.agent_id,
+            "version": self.version,
+            "size_bytes": self.size_bytes,
+            "status": self.status,
+            "error": self.error,
+            "completed_at": self.completed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SetupStep":
+        return cls(
+            agent_id=data["agent_id"],
+            version=data.get("version"),
+            size_bytes=data.get("size_bytes", 0),
+            status=data.get("status", STEP_PENDING),
+            error=data.get("error"),
+            completed_at=data.get("completed_at"),
+        )
+
+
+@dataclass
+class SetupResult:
+    """Outcome of :func:`run_setup`."""
+
+    steps: List[SetupStep] = field(default_factory=list)
+
+    @property
+    def completed(self) -> List[str]:
+        return [s.agent_id for s in self.steps if s.status == STEP_COMPLETED]
+
+    @property
+    def failed(self) -> List[str]:
+        return [s.agent_id for s in self.steps if s.status == STEP_FAILED]
+
+    @property
+    def all_ok(self) -> bool:
+        return all(s.status == STEP_COMPLETED for s in self.steps)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "steps": [s.to_dict() for s in self.steps],
+            "completed": self.completed,
+            "failed": self.failed,
+            "all_ok": self.all_ok,
+        }
+
+
+def _artifact_size(manifest: Dict[str, Any], version: Optional[str]) -> int:
+    """Best-effort download size for ordering (0 if it can't be resolved)."""
+    try:
+        _, artifact = _resolve_version(manifest, version)
+        return int(artifact.get("size_bytes", 0) or 0)
+    except InstallError:
+        return 0
+
+
+def read_setup_state(path: Path) -> Optional[Dict[str, Any]]:
+    """Read the resumable setup state file, or ``None`` if absent/corrupt."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("installer: unreadable setup state %s: %s", path, exc)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_setup_state(path: Path, steps: List[SetupStep]) -> None:
+    payload = {
+        "status": (
+            STEP_COMPLETED
+            if all(s.status == STEP_COMPLETED for s in steps)
+            else STEP_RUNNING
+        ),
+        "steps": [s.to_dict() for s in steps],
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError as exc:
+        # A state-write failure must not abort an otherwise-fine install, but it
+        # does break resume — so it is logged loudly, not swallowed silently.
+        logger.warning("installer: could not write setup state %s: %s", path, exc)
+
+
+def run_setup(
+    manifests: Dict[str, Dict[str, Any]],
+    *,
+    versions: Optional[Dict[str, Optional[str]]] = None,
+    max_parallel: int = DEFAULT_MAX_PARALLEL,
+    resume: bool = True,
+    state_path: Optional[Path] = None,
+    install_root: Optional[Path] = None,
+    fetcher: Optional[catalog_mod.Fetcher] = None,
+    run_pip: Optional[PipRunner] = None,
+    registry: Any = None,
+    skip_compatibility_check: bool = False,
+    installer_fn: Optional[Callable[..., InstallResult]] = None,
+) -> SetupResult:
+    """Install several agents progressively, resumably, and in parallel.
+
+    Args:
+        manifests: ``{agent_id: manifest}`` for every agent to install. Passing
+            manifests in keeps this function offline-testable (no catalog fetch).
+        versions: Optional ``{agent_id: version}`` overrides (default: latest).
+        max_parallel: Bound on concurrent installs (must be >= 1).
+        resume: When True, completed steps recorded in *state_path* are skipped.
+        state_path: Resumable state file (default: ``~/.gaia/setup_state.json``).
+        install_root: Install root passed through to each :func:`install`.
+        fetcher / run_pip / registry / skip_compatibility_check: forwarded to
+            :func:`install`.
+        installer_fn: Injectable install callable (defaults to :func:`install`);
+            tests use it to assert the concurrency bound without real downloads.
+
+    Returns:
+        A :class:`SetupResult` listing each step's final status. A failed step
+        does not abort the others (independent agents stay independent).
+    """
+    if max_parallel < 1:
+        raise InstallError("max_parallel must be >= 1.")
+    versions = versions or {}
+    install_fn = installer_fn or install
+    state_path = state_path or default_setup_state_path(install_root)
+
+    # Build the plan: smallest download first so a minimal agent is usable while
+    # larger ones keep going (progressive capability unlock, #468).
+    steps = [
+        SetupStep(
+            agent_id=aid,
+            version=versions.get(aid),
+            size_bytes=_artifact_size(manifest, versions.get(aid)),
+        )
+        for aid, manifest in manifests.items()
+    ]
+    steps.sort(key=lambda s: (s.size_bytes, s.agent_id))
+
+    # Resume: mark steps already completed in a prior run so we skip them.
+    if resume:
+        prior = read_setup_state(state_path)
+        if prior:
+            done = {
+                s["agent_id"]
+                for s in prior.get("steps", [])
+                if s.get("status") == STEP_COMPLETED
+            }
+            for step in steps:
+                if step.agent_id in done:
+                    step.status = STEP_COMPLETED
+
+    _write_setup_state(state_path, steps)
+
+    state_lock = threading.Lock()
+
+    def _persist() -> None:
+        with state_lock:
+            _write_setup_state(state_path, steps)
+
+    def _run_step(step: SetupStep) -> None:
+        if step.status == STEP_COMPLETED:
+            logger.info("installer: setup skipping completed step %s", step.agent_id)
+            return
+        with state_lock:
+            step.status = STEP_RUNNING
+        _persist()
+        try:
+            install_fn(
+                step.agent_id,
+                version=step.version,
+                manifest=manifests[step.agent_id],
+                fetcher=fetcher,
+                run_pip=run_pip,
+                install_root=install_root,
+                registry=registry,
+                skip_compatibility_check=skip_compatibility_check,
+            )
+        except Exception as exc:  # noqa: BLE001 - recorded per-step; others go on
+            with state_lock:
+                step.status = STEP_FAILED
+                step.error = str(exc)
+            _persist()
+            logger.warning("installer: setup step %s failed: %s", step.agent_id, exc)
+            return
+        with state_lock:
+            step.status = STEP_COMPLETED
+            step.completed_at = datetime.now(timezone.utc).isoformat()
+        _persist()
+
+    pending = [s for s in steps if s.status != STEP_COMPLETED]
+    if pending:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=max_parallel) as pool:
+            list(pool.map(_run_step, pending))
+
+    _persist()
+    return SetupResult(steps=steps)
+
+
+def get_setup_status(install_root: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """Return the latest persisted setup state (for the polling endpoint)."""
+    return read_setup_state(default_setup_state_path(install_root))

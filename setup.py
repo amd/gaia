@@ -240,24 +240,31 @@ setup(
             "mypy",
             "bandit",
         ],
-        # Standalone AMD production agents (issue #1102). Each agent ships as a
-        # separate ``gaia-agent-<id>`` wheel that depends on this framework
-        # wheel; ``amd-gaia[agents]`` installs all migrated agents at once.
-        # For editable development install the package directly, e.g.
-        # ``pip install -e hub/agents/python/sd``.
-        "summarize": ["gaia-agent-summarize>=0.1.0"],
-        "sd": ["gaia-agent-sd>=0.1.0"],
-        "fileio": ["gaia-agent-fileio>=0.1.0"],
-        "docker-agent": ["gaia-agent-docker>=0.1.0"],
-        "jira-agent": ["gaia-agent-jira>=0.1.0"],
-        "blender-agent": ["gaia-agent-blender>=0.1.0"],
+        # Agent Hub packaging/publishing toolchain (issues #1093, #1179):
+        # 'gaia agent pack' shells out to 'python -m build', 'gaia agent publish'
+        # to 'twine upload'. Kept out of [dev] so the unit suite stays lean.
+        # install with 'pip install "amd-gaia[publish]"' to package an agent.
+        "publish": [
+            "build>=1.0.0",
+            "twine>=5.0.0",
+        ],
+        # Standalone AMD production agents (issues #1102, #1179). Each agent
+        # ships as a separate 'gaia-agent-<id>' wheel that depends on this
+        # framework wheel; 'amd-gaia[agents]' installs all migrated agents at
+        # once. Add an entry here when each agent's wheel is first published.
+        "agent-summarize": ["gaia-agent-summarize"],
+        "agent-sd": ["gaia-agent-sd"],
+        "agent-fileio": ["gaia-agent-fileio"],
+        "agent-docker": ["gaia-agent-docker"],
+        "agent-jira": ["gaia-agent-jira"],
+        "agent-blender": ["gaia-agent-blender"],
         "agents": [
-            "gaia-agent-summarize>=0.1.0",
-            "gaia-agent-sd>=0.1.0",
-            "gaia-agent-fileio>=0.1.0",
-            "gaia-agent-docker>=0.1.0",
-            "gaia-agent-jira>=0.1.0",
-            "gaia-agent-blender>=0.1.0",
+            "gaia-agent-summarize",
+            "gaia-agent-sd",
+            "gaia-agent-fileio",
+            "gaia-agent-docker",
+            "gaia-agent-jira",
+            "gaia-agent-blender",
         ],
     },
     classifiers=[
