@@ -10,7 +10,6 @@ script elsewhere) so the launcher can exec it exactly as it would a binary:
 ``<shim> --stdio``.
 """
 
-import os
 import platform
 import stat
 import sys
