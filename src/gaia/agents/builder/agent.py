@@ -177,8 +177,11 @@ class BuilderAgent(Agent):
                     Valid options: "rag" (document Q&A), "file_search" (fuzzy file
                     search), "file_io" (read/write/edit files), "shell" (sandboxed
                     shell), "screenshot" (screen capture), "sd" (image generation),
-                    "vlm" (vision LLM). Combine freely; they are added to the
-                    class's base list alongside Agent.
+                    "vlm" (vision LLM), "code_index" (semantic code search),
+                    "filesystem" (file system navigation), "scratchpad" (SQL scratch
+                    tables for data analysis), "browser" (web search and page fetch).
+                    Combine freely; they are added to the class's base list alongside
+                    Agent.
 
             Returns:
                 Confirmation message with the path to the created agent.py.
@@ -230,6 +233,7 @@ class BuilderAgent(Agent):
         self.console.print_processing_start(user_input, steps_limit, self.model_id)
 
         final_answer: Optional[str] = None
+        created_ok = False
         steps_taken = 0
 
         while steps_taken < steps_limit and final_answer is None:
@@ -287,6 +291,18 @@ class BuilderAgent(Agent):
                     if isinstance(tool_result, dict)
                     else str(tool_result)
                 )
+                # Fail loudly: if create_agent returned an error, don't let the
+                # LLM fabricate a success message — end immediately with an honest answer.
+                if tool_name == "create_agent" and str(tool_result).startswith(
+                    "Error:"
+                ):
+                    final_answer = (
+                        f"I was unable to create the agent: {tool_result}\n\n"
+                        "Please check the name is valid and try again."
+                    )
+                    break
+                if tool_name == "create_agent":
+                    created_ok = True
                 messages.append(
                     {
                         "role": "user",
@@ -295,16 +311,45 @@ class BuilderAgent(Agent):
                 )
                 # Continue loop so the LLM can summarize the result
             else:
-                final_answer = (
-                    parsed.get("answer")
-                    or response.strip()
-                    or ("I wasn't able to generate a response. Please try again.")
-                )
+                # No tool call was extracted. If creation already succeeded this
+                # is a post-success summary — return it without triggering the
+                # fabrication check (which misfires on ✅ in a real summary).
+                if created_ok:
+                    candidate = parsed.get("answer") or response.strip()
+                    final_answer = candidate or "Agent created successfully."
+                # Otherwise check whether the model hallucinated success markers.
+                elif any(
+                    m in (parsed.get("answer") or response.strip())
+                    for m in ("Agent Created", "✅", "File location")
+                ):
+                    # The model wrote a fake success — push a corrective turn and
+                    # loop again (steps_limit guards infinite recursion).
+                    logger.warning(
+                        "BuilderAgent: fabricated success detected without tool call; "
+                        "injecting corrective user turn"
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You did not actually call create_agent. "
+                                "Output ONLY the bare JSON tool call, no prose, "
+                                "no code fences."
+                            ),
+                        }
+                    )
+                    # Do not set final_answer — the loop will continue
+                else:
+                    final_answer = (
+                        parsed.get("answer")
+                        or response.strip()
+                        or "I wasn't able to generate a response. Please try again."
+                    )
 
         if final_answer is None:
             final_answer = (
-                "I've used the maximum number of steps. "
-                "Check ~/.gaia/agents/ for any agents that were created."
+                "I was unable to create the agent after several attempts. "
+                "Please try again with a clear agent name."
             )
 
         self.console.print_final_answer(final_answer, streaming=self.streaming)

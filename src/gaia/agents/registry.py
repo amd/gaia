@@ -427,6 +427,33 @@ class AgentRegistry:
         self._lemonade_models: Optional[List[str]] = None  # cache
         self._lemonade_models_last_fail: Optional[float] = None  # monotonic timestamp
         self._lock = threading.Lock()
+        # Records agent IDs whose load failed during discover() / register_from_dir().
+        # Populated by _record_load_error(); read by get_load_error() and Stage D.
+        self._load_errors: Dict[str, str] = {}
+
+    # ------------------------------------------------------------------
+    # Load-error tracking
+    # ------------------------------------------------------------------
+
+    def _record_load_error(self, agent_id: str, reason: str) -> None:
+        """Record a concise load-failure reason for *agent_id*.
+
+        Kept in ``_load_errors`` so Stage D (chat helpers) can surface a
+        helpful message when the user requests a broken agent.  The existing
+        discovery try/except is unchanged — this is additive only.
+        """
+        with self._lock:
+            self._load_errors[agent_id] = reason
+
+    def get_load_error(self, agent_id: str) -> Optional[str]:
+        """Return the recorded load-error reason for *agent_id*, or None.
+
+        Errors are keyed by the agent's directory name (e.g. 'my-bot'),
+        which matches the resolved agent id.  A caller that passes a type
+        string that was normalised differently will get None gracefully.
+        None also means the agent loaded fine or was never attempted.
+        """
+        return self._load_errors.get(agent_id)
 
     # ------------------------------------------------------------------
     # Legacy ID resolution
@@ -471,6 +498,7 @@ class AgentRegistry:
                     logger.warning(
                         "registry: Failed to load agent from %s: %s", agent_dir, e
                     )
+                    self._record_load_error(agent_dir.name, f"{type(e).__name__}: {e}")
         else:
             logger.info("registry: No custom agent directory found at %s", agents_dir)
 
@@ -1306,6 +1334,7 @@ class AgentRegistry:
             logger.warning(
                 "registry: Failed to hot-load agent from %s: %s", agent_dir, exc
             )
+            self._record_load_error(agent_dir.name, f"{type(exc).__name__}: {exc}")
             raise
 
     # ------------------------------------------------------------------

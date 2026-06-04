@@ -577,6 +577,25 @@ def _disconnect_cached_agent(entry) -> None:
             logger.warning("MCP disconnect failed during cache eviction: %s", exc)
 
 
+def _agent_unavailable_message(requested: str, registry) -> str:
+    """Return a user-friendly error message for an agent that could not be loaded.
+
+    Mirrors the fail-loudly precedent at _chat_helpers.py around line 589 — no
+    silent swap to chat, just a clear message the user can act on.
+    """
+    reason_suffix = ""
+    if registry is not None:
+        reason = registry.get_load_error(requested)
+        if reason:
+            reason_suffix = f": {reason}"
+
+    return (
+        f"I couldn't load the agent **'{requested}'**. "
+        f"It may have failed to install or contains an error{reason_suffix}. "
+        f"Try re-creating it, or pick another agent from the selector."
+    )
+
+
 def _canonical_agent_type(agent_type: str) -> str:
     """Resolve legacy agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``).
 
@@ -1125,11 +1144,12 @@ async def _get_chat_response(
         registry = _agent_registry
         if agent_type != "chat" and registry and not registry.get(agent_type):
             logger.warning(
-                "chat: Session %s requested unknown agent_type '%s', falling back to chat",
+                "chat: Session %s requested unknown agent_type '%s'; "
+                "returning unavailable-agent error",
                 session_id[:8],
                 agent_type,
             )
-            agent_type = "chat"
+            return _agent_unavailable_message(agent_type, registry)
 
         if agent_type != stored_agent_type:
             db.update_session(session_id, agent_type=agent_type)
@@ -1211,39 +1231,22 @@ async def _get_chat_response(
             # Non-chat agent: create via registry
             registry = _agent_registry
             if registry is None or registry.get(agent_type) is None:
-                # Registry unavailable or agent_type unknown (e.g. stale client state).
-                # Fall back to chat agent rather than permanently breaking the session.
+                # Registry unavailable or agent_type unknown — return a user-friendly
+                # error rather than silently falling back to a ChatAgent.
                 if registry is None:
                     logger.warning(
-                        "chat: Agent registry not initialized; falling back to chat for session %s",
+                        "chat: Agent registry not initialized for session %s; "
+                        "returning unavailable-agent error",
                         session_id[:8],
                     )
                 else:
                     logger.warning(
-                        "chat: Unknown agent_type '%s' for session %s; falling back to chat",
+                        "chat: Unknown agent_type '%s' for session %s; "
+                        "returning unavailable-agent error",
                         agent_type,
                         session_id[:8],
                     )
-                agent_type = "chat"
-                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-                _session_kwargs = _session_agent_kwargs(
-                    rag_file_paths=rag_file_paths,
-                    library_paths=library_paths,
-                    allowed=allowed,
-                    session_id=session_id,
-                )
-                config = ChatAgentConfig(
-                    model_id=model_id,
-                    max_steps=10,
-                    silent_mode=True,
-                    debug=False,
-                    **_session_kwargs,
-                )
-                _stamp_builtin_chat_identity(config)
-                agent = ChatAgent(config)
-                _store_agent(session_id, model_id, document_ids, agent, agent_type)
-                _register_agent_memory_ops(agent)
+                return _agent_unavailable_message(agent_type, registry)
             else:
                 logger.info(
                     "chat: Creating new %s agent for session %s",
@@ -1492,11 +1495,14 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         registry = _agent_registry
         if agent_type != "chat" and registry and not registry.get(agent_type):
             logger.warning(
-                "chat: Session %s requested unknown agent_type '%s', falling back to chat (streaming)",
+                "chat: Session %s requested unknown agent_type '%s' (streaming); "
+                "returning unavailable-agent error",
                 session_id[:8],
                 agent_type,
             )
-            agent_type = "chat"
+            error_msg = _agent_unavailable_message(agent_type, registry)
+            yield f"data: {json.dumps({'type': 'answer', 'content': error_msg})}\n\n"
+            return
 
         if agent_type != stored_agent_type:
             db.update_session(session_id, agent_type=agent_type)
@@ -1683,46 +1689,25 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     # -- Cache miss: non-chat agent via registry --
                     registry = _agent_registry
                     if registry is None or registry.get(agent_type) is None:
-                        # Registry unavailable or agent_type unknown (e.g. stale client
-                        # state). Fall back to chat to avoid breaking the session.
+                        # Registry unavailable or agent_type unknown — emit a
+                        # user-friendly error rather than silently falling back to chat.
                         if registry is None:
                             logger.warning(
-                                "chat: Agent registry not initialized; falling back to chat for session %s",
+                                "chat: Agent registry not initialized for session %s (streaming); "
+                                "returning unavailable-agent error",
                                 session_id[:8],
                             )
                         else:
                             logger.warning(
-                                "chat: Unknown agent_type '%s' for session %s; falling back to chat",
+                                "chat: Unknown agent_type '%s' for session %s (streaming); "
+                                "returning unavailable-agent error",
                                 agent_type,
                                 session_id[:8],
                             )
-                        _fallback_type = "chat"
-                        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-                        config = ChatAgentConfig(
-                            model_id=model_id,
-                            max_steps=10,
-                            streaming=True,
-                            silent_mode=False,
-                            debug=False,
-                            device=device,
-                            min_context_size=device_ctx,
-                            **_session_agent_kwargs(
-                                rag_file_paths=[],
-                                library_paths=library_paths,
-                                allowed=allowed,
-                                session_id=session_id,
-                            ),
-                        )
-                        _stamp_builtin_chat_identity(config)
-                        agent = ChatAgent(config)
-                        agent.console = sse_handler
-                        _register_agent_memory_ops(agent)
-                        if rag_file_paths and agent.rag:
-                            _index_rag_with_progress(agent, rag_file_paths, sse_handler)
-                        _store_agent(
-                            session_id, model_id, document_ids, agent, _fallback_type
-                        )
+                        error_msg = _agent_unavailable_message(agent_type, registry)
+                        sse_handler._emit({"type": "answer", "content": error_msg})
+                        result_holder["answer"] = error_msg
+                        return
                     else:
                         logger.info(
                             "chat: Creating new %s agent for session %s",
