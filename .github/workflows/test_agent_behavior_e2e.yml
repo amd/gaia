@@ -10,6 +10,9 @@ on:
       - 'src/gaia/agents/base/agent.py'
       - 'src/gaia/eval/behavior_harness.py'
 
+permissions:
+  contents: read
+
 jobs:
   behavior-e2e:
     runs-on: [self-hosted, strix-halo]
