@@ -240,6 +240,7 @@
             "pages": [
               "spec/agent-base",
               "spec/tool-decorator",
+              "spec/tool-loader",
               "spec/console",
               "spec/file-change-handler"
             ]
