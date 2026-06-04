@@ -359,16 +359,6 @@ AGENT_PROFILES = {
         min_ctx_size=32768,
         description="Stable Diffusion image generation with LLM helper",
     ),
-    "email": AgentProfile(
-        name="email",
-        display_name="Email Triage Agent",
-        models=["gemma-4-e2b", "gemma-4-e4b"],
-        # 4096 — the E2B/FLM NPU primary serves a 4 K window; E4B (staged at a
-        # larger window by the chat/rag profiles) is the runtime fallback via
-        # the agent's DEFAULT_MODEL_NAME, not loaded through this profile.
-        min_ctx_size=4096,
-        description="Email triage — E2B/FLM on the NPU; E4B is the runtime fallback",
-    ),
 }
 
 

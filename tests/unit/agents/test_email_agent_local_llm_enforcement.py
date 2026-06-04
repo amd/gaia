@@ -222,30 +222,46 @@ class TestGemmaE2BLazyDownload:
     ``import gaia.llm.lemonade_client`` MUST NOT pull multi-GB weights.
     """
 
-    def test_importing_lemonade_client_does_not_call_load_model(self, monkeypatch):
-        """MODELS catalog import must be side-effect-free.
+    def test_importing_lemonade_client_does_no_network_or_subprocess(self):
+        """Importing the module MUST cross no network/subprocess boundary.
 
-        No network call, no subprocess launch, no file download may happen
-        at module import time just because the E2B entry exists in MODELS.
+        Guards the #1282 AC "no large download in the critical install path":
+        merely declaring the E2B entry in ``MODELS`` must not pull weights or
+        probe the server at import time. We patch at the *real* chokepoints a
+        download/server-spawn must cross — ``requests`` (the HTTP adapter every
+        ``requests.get``/``post`` in this module funnels through) and
+        ``subprocess`` (``Popen``/``run`` for the server) — BEFORE re-importing,
+        so the assertion fails loudly if a future import-time side effect tries
+        to reach out. Patching the module's own ``load_model`` here would be
+        vacuous: ``importlib`` builds a brand-new class object the patch never
+        touches.
         """
+        import importlib
+        import subprocess
         import sys
-
-        # Force reimport to check fresh-module side effects; swap out the
-        # network-touching load_model with a sentinel that fails loudly.
         import unittest.mock as mock
 
-        with mock.patch("gaia.llm.lemonade_client.LemonadeClient.load_model") as m:
-            # Re-import path — pick up any module-level code that might fire.
-            mod_name = "gaia.llm.lemonade_client"
-            saved = sys.modules.pop(mod_name, None)
-            try:
-                import importlib
+        import requests
 
+        mod_name = "gaia.llm.lemonade_client"
+        saved = sys.modules.pop(mod_name, None)
+        try:
+            with (
+                mock.patch.object(requests.adapters.HTTPAdapter, "send") as mock_http,
+                mock.patch.object(subprocess, "Popen") as mock_popen,
+                mock.patch.object(subprocess, "run") as mock_run,
+            ):
                 importlib.import_module(mod_name)
-            finally:
-                if saved is not None:
-                    sys.modules[mod_name] = saved
-            m.assert_not_called()
+                mock_http.assert_not_called()
+                mock_popen.assert_not_called()
+                mock_run.assert_not_called()
+        finally:
+            # Restore the original module object so later tests (and the rest
+            # of the session) keep the same class identity / patched state.
+            if saved is not None:
+                sys.modules[mod_name] = saved
+            else:
+                importlib.import_module(mod_name)
 
     def test_email_agent_config_construction_does_not_call_load_model(
         self, monkeypatch
