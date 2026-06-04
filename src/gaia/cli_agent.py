@@ -281,30 +281,27 @@ def _scaffold_python(pkg_dir: Path, names: _Names) -> None:
     )
 
 
-def _require_formatters():
-    """Import black + isort in-process; fail loudly with an actionable message."""
+def _format_python_source(source: str) -> str:
+    """Return *source* formatted with isort (black profile) then black.
+
+    Best-effort: the scaffold templates are already black/isort-clean, so
+    formatting is a cosmetic nicety, not a correctness requirement. When black
+    and isort are not installed (they live in the ``[dev]`` extra, absent from
+    a bare ``amd-gaia`` install), return the source unchanged rather than
+    failing — ``gaia agent init`` must work without the dev toolchain.
+    """
     try:
         import black
         import isort
-    except ImportError as exc:
-        raise AgentWorkflowError(
-            "the 'gaia agent' developer workflow needs black and isort — "
-            "install them with 'pip install \"amd-gaia[dev]\"'."
-        ) from exc
-    return black, isort
-
-
-def _format_python_source(source: str) -> str:
-    """Return *source* formatted with isort (black profile) then black."""
-    black, isort = _require_formatters()
+    except ImportError:
+        return source
     sorted_src = isort.code(source, profile="black")
     try:
         return black.format_str(sorted_src, mode=black.Mode())
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        # black raises on a syntax error in the generated source.
-        raise AgentWorkflowError(
-            f"could not format generated Python source: {exc}."
-        ) from exc
+    except Exception:  # pylint: disable=broad-exception-caught
+        # black raises only on a syntax error in the generated source; the
+        # templates are valid, so fall back to the isort-sorted text.
+        return sorted_src
 
 
 def _scaffold_cpp(pkg_dir: Path, names: _Names) -> None:
@@ -540,8 +537,21 @@ def _lint_cpp(pkg_dir: Path, parsed, failures: List[str]) -> None:
 
 
 def _lint_formatters(py_files: List[Path], failures: List[str]) -> None:
-    """Check black + isort cleanliness in-process (defaults, no subprocess)."""
-    black, isort = _require_formatters()
+    """Check black + isort cleanliness in-process (defaults, no subprocess).
+
+    Best-effort: black/isort live in the ``[dev]`` extra. When they are not
+    installed, skip the formatting check with a note instead of failing — the
+    other --lint gates (manifest, structure, syntax, imports) still run.
+    """
+    try:
+        import black
+        import isort
+    except ImportError:
+        print(
+            "  note: skipped black/isort check (not installed; "
+            "install with 'pip install \"amd-gaia[dev]\"')."
+        )
+        return
     mode = black.Mode()
     black_bad: List[str] = []
     isort_bad: List[str] = []
