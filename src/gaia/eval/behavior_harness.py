@@ -268,17 +268,14 @@ class BehaviorHarness:
         return data.get("content", "")
 
     def _agent_listed(self, agent_id: str) -> bool:
-        """Return True if the agent appears in ``GET /api/agents``."""
-        try:
-            data = self._get("/api/agents")
-            agents = data.get("agents", [])
-            return any(a.get("id") == agent_id for a in agents)
-        except Exception:
-            logger.warning(
-                "_agent_listed: /api/agents request failed",
-                exc_info=True,
-            )
-            return False
+        """Return True if the agent appears in ``GET /api/agents``.
+
+        Raises on network / HTTP errors so the outer run_scenario handler
+        records Verdict.error rather than silently downgrading true_success.
+        """
+        data = self._get("/api/agents")
+        agents = data.get("agents", [])
+        return any(a.get("id") == agent_id for a in agents)
 
     def run_scenario(
         self,
