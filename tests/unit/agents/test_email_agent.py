@@ -152,6 +152,7 @@ class TestToolRegistry:
         "label_message_batch",
         "move_to_label_batch",
         # Reply / send / forward
+        "compose_reply",
         "draft_reply",
         "draft_forward",
         "send_draft",
