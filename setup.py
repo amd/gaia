@@ -51,8 +51,6 @@ setup(
         "gaia.agents",
         "gaia.agents.base",
         "gaia.agents.tools",
-        "gaia.agents.chat",
-        "gaia.agents.chat.tools",
         "gaia.agents.builder",
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
@@ -250,6 +248,7 @@ setup(
         "agent-connectors-demo": ["gaia-agent-connectors-demo"],
         "agent-analyst": ["gaia-agent-analyst"],
         "agent-browser": ["gaia-agent-browser"],
+        "agent-chat": ["gaia-agent-chat"],
         "agents": [
             "gaia-agent-summarize",
             "gaia-agent-sd",
@@ -262,6 +261,7 @@ setup(
             "gaia-agent-connectors-demo",
             "gaia-agent-analyst",
             "gaia-agent-browser",
+            "gaia-agent-chat",
         ],
     },
     classifiers=[

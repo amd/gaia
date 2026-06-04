@@ -242,7 +242,7 @@ jobs:
             ### 3. Security Review (CRITICAL)
             Review for these vulnerabilities:
             - 🔒 SQL injection vulnerabilities
-            - 🔒 Command injection (especially in shell tools, Bash usage — see `src/gaia/agents/chat/tools/shell_tools.py` for sandboxed pattern)
+            - 🔒 Command injection (especially in shell tools, Bash usage — see `src/gaia/agents/tools/shell_tools.py` for sandboxed pattern)
             - 🔒 XSS vulnerabilities (web UIs, HTML generation — check `src/gaia/ui/` and `src/gaia/apps/webui/`)
             - 🔒 Secrets exposure (API keys, tokens in code/logs)
             - 🔒 Path traversal vulnerabilities (flag any user-supplied path without `pathlib` safety)

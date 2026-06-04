@@ -10,7 +10,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); skip the
+# whole module when a framework-only env lacks it.
+pytest.importorskip("gaia_agent_chat")
+
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 
 class TestChatAgent:

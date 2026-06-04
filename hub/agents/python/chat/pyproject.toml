@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaia-agent-chat"
+version = "0.1.0"
+description = "GAIA chat agent — conversation, document Q&A (RAG), and file-system profiles"
+authors = [{ name = "AMD" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["amd-gaia>=0.20.0"]
+
+[project.entry-points."gaia.agent"]
+chat = "gaia_agent_chat:build_chat"
+doc = "gaia_agent_chat:build_doc"
+file = "gaia_agent_chat:build_file"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["gaia_agent_chat*"]

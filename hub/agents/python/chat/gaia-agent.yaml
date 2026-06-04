@@ -1,0 +1,32 @@
+id: chat
+name: Chat
+version: 0.1.0
+description: "GAIA chat agent — conversation, document Q&A (RAG), and file-system profiles"
+author: AMD
+license: MIT
+
+category: conversation
+tags: [chat, general, personality, rag, files]
+icon: message-circle
+tools_count: 0
+
+language: python
+min_gaia_version: "0.20.0"
+models: []
+
+python:
+  entry_module: gaia_agent_chat
+  entry_class: ChatAgent
+  dependencies:
+    - "amd-gaia>=0.20.0"
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+interfaces:
+  tui: true
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: true

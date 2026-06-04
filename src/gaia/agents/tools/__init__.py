@@ -9,6 +9,7 @@ This package contains tool mixins that can be used across multiple agents.
 from .browser_tools import BrowserToolsMixin
 from .code_index_tools import CodeIndexToolsMixin
 from .file_io_tools import FileIOToolsMixin
+from .file_monitor_tools import FileToolsMixin
 from .file_tools import FileSearchToolsMixin
 from .filesystem_tools import FileSystemToolsMixin
 from .rag_tools import RAGToolsMixin
@@ -21,6 +22,7 @@ __all__ = [
     "CodeIndexToolsMixin",
     "FileIOToolsMixin",
     "FileSearchToolsMixin",
+    "FileToolsMixin",
     "FileSystemToolsMixin",
     "RAGToolsMixin",
     "ScratchpadToolsMixin",

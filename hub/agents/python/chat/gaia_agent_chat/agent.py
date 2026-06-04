@@ -21,8 +21,8 @@ from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.chat.session import SessionManager
-from gaia.agents.chat.tools import FileToolsMixin
+from gaia_agent_chat.session import SessionManager
+from gaia.agents.tools import FileToolsMixin
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
