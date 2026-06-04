@@ -61,18 +61,17 @@ _MANIFEST_FINGERPRINT_KEYS = frozenset(
 # "-lite" / ``gaia-lite`` aliases — those no longer register their own card
 # (#1162) but remain reserved so a custom agent can't claim the old ID and
 # shadow the alias resolution in ``_LEGACY_ID_ALIASES``.
+# Only ids that resolve to a framework *builtin* belong here. data/web (and
+# their -lite aliases) migrated to standalone hub wheels (#1102), so they are
+# no longer reserved builtins — they register via the gaia.agent entry point.
 _RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
     {
         "chat",
         "doc",
         "file",
-        "data",
-        "web",
         "chat-lite",
         "doc-lite",
         "file-lite",
-        "data-lite",
-        "web-lite",
         "gaia-lite",
         "builder",
         "email",
@@ -321,6 +320,38 @@ def _select_tier_model(tiers: List[ModelTier], tier_name: str) -> Optional[str]:
     return None
 
 
+# Platform-conditional ~4B preset for the shared "lite" tier (#1162). macOS
+# prefers Qwen (OpenAI tool-call format); Linux/Windows prefer Gemma.
+def lite_models() -> List[str]:
+    """Return the ordered ~4B model preference list for the ``lite`` tier."""
+    if platform.system() == "Darwin":
+        return ["Qwen3.5-4B-GGUF", "Gemma-4-E4B-it-GGUF"]
+    return ["Gemma-4-E4B-it-GGUF", "Qwen3.5-4B-GGUF"]
+
+
+LITE_MIN_MEMORY_GB = 5.0
+
+
+def build_model_tiers(full_label: str) -> List[ModelTier]:
+    """Build the full+lite tier pair shared by the consolidated agents (#1162).
+
+    The ``full`` tier carries no model list — the agent's own ``__init__``
+    default governs — so full-size behaviour is unchanged. The ``lite`` tier
+    pins the ~4B preset. Promoted to module level so standalone hub agent
+    packages (``hub/agents/python/<id>/``) can declare the same tiers in their
+    ``build_registration()`` without re-deriving the preset list.
+    """
+    return [
+        ModelTier(name="full", label=full_label, models=[], default=True),
+        ModelTier(
+            name="lite",
+            label="Lite (~4B)",
+            models=lite_models(),
+            min_memory_gb=LITE_MIN_MEMORY_GB,
+        ),
+    ]
+
+
 @dataclass
 class AgentRegistration:
     """Metadata and factory for a registered agent."""
@@ -529,28 +560,9 @@ class AgentRegistry:
         # cards. The lite model list is platform-conditional:
         #   macOS: Qwen3.5-4B-GGUF (tool-calling label, OpenAI format)
         #   Linux/Windows: Gemma-4-E4B-it-GGUF (tool-calling label)
-        if platform.system() == "Darwin":
-            _LITE_MODELS = ["Qwen3.5-4B-GGUF", "Gemma-4-E4B-it-GGUF"]
-        else:
-            _LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Qwen3.5-4B-GGUF"]
-        _LITE_MIN_MEMORY_GB = 5.0
-
-        def _model_tiers(full_label: str) -> List[ModelTier]:
-            """Build the full+lite tier pair shared by the consolidated agents.
-
-            The ``full`` tier carries no model list — the agent's own
-            ``__init__`` default governs — so the existing full-size behaviour
-            is unchanged. The ``lite`` tier pins the ~4B preset.
-            """
-            return [
-                ModelTier(name="full", label=full_label, models=[], default=True),
-                ModelTier(
-                    name="lite",
-                    label="Lite (~4B)",
-                    models=list(_LITE_MODELS),
-                    min_memory_gb=_LITE_MIN_MEMORY_GB,
-                ),
-            ]
+        # Shared full+lite tier builder, promoted to module level so hub agent
+        # packages reuse the identical preset (#1102).
+        _model_tiers = build_model_tiers
 
         def _make_chat_factory(profile, extra=None, tiers=None):
             """ChatAgent factory that honours a ``model_tier`` kwarg (#1162)."""
@@ -572,44 +584,6 @@ class AgentRegistry:
                     filtered.setdefault(k, v)
                 config = ChatAgentConfig(**filtered)
                 return ChatAgent(config=config)
-
-            return factory
-
-        def _make_analyst_factory(tiers=None):
-            """AnalystAgent factory that honours a ``model_tier`` kwarg (#1162)."""
-            _tiers = list(tiers or [])
-
-            def factory(**kwargs):
-                tier = kwargs.pop("model_tier", None)
-                if tier:
-                    preset = _select_tier_model(_tiers, tier)
-                    if preset:
-                        kwargs.setdefault("model_id", preset)
-                from gaia.agents.analyst.agent import AnalystAgent, AnalystAgentConfig
-
-                valid_fields = {f.name for f in dataclasses.fields(AnalystAgentConfig)}
-                filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-                config = AnalystAgentConfig(**filtered)
-                return AnalystAgent(config=config)
-
-            return factory
-
-        def _make_browser_factory(tiers=None):
-            """BrowserAgent factory that honours a ``model_tier`` kwarg (#1162)."""
-            _tiers = list(tiers or [])
-
-            def factory(**kwargs):
-                tier = kwargs.pop("model_tier", None)
-                if tier:
-                    preset = _select_tier_model(_tiers, tier)
-                    if preset:
-                        kwargs.setdefault("model_id", preset)
-                from gaia.agents.browser.agent import BrowserAgent, BrowserAgentConfig
-
-                valid_fields = {f.name for f in dataclasses.fields(BrowserAgentConfig)}
-                filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-                config = BrowserAgentConfig(**filtered)
-                return BrowserAgent(config=config)
 
             return factory
 
@@ -711,63 +685,10 @@ class AgentRegistry:
             "registry: Registered built-in agent: file (ChatAgent, profile=file)"
         )
 
-        # --- Data Agent (data analysis with scratchpad) ---
-        _data_tiers = _model_tiers("Full (~35B)")
-        self._register(
-            AgentRegistration(
-                id="data",
-                name="Analyst Agent",
-                description="Data analysis — CSV, Excel, structured queries and tables",
-                source="builtin",
-                conversation_starters=[
-                    "Analyze my spending data",
-                    "What are the trends in this CSV?",
-                    "Who is the top performer?",
-                ],
-                factory=_wrap_factory_with_namespaced_id(
-                    _make_analyst_factory(tiers=_data_tiers), "builtin:data"
-                ),
-                agent_dir=None,
-                models=[],
-                required_connections=[],
-                namespaced_agent_id="builtin:data",
-                category="productivity",
-                tags=["data", "csv", "excel", "analysis"],
-                icon="table",
-                tools_count=10,
-                model_tiers=_data_tiers,
-            )
-        )
-        logger.info("registry: Registered built-in agent: data (AnalystAgent)")
-
-        # --- Web Agent (web research) ---
-        _web_tiers = _model_tiers("Full (~35B)")
-        self._register(
-            AgentRegistration(
-                id="web",
-                name="Browser Agent",
-                description="Web research — search, fetch pages, and download files",
-                source="builtin",
-                conversation_starters=[
-                    "Search the web for...",
-                    "What's the latest on...",
-                    "Fetch this URL for me",
-                ],
-                factory=_wrap_factory_with_namespaced_id(
-                    _make_browser_factory(tiers=_web_tiers), "builtin:web"
-                ),
-                agent_dir=None,
-                models=[],
-                required_connections=[],
-                namespaced_agent_id="builtin:web",
-                category="research",
-                tags=["web", "search", "browser", "download"],
-                icon="globe",
-                tools_count=10,
-                model_tiers=_web_tiers,
-            )
-        )
-        logger.info("registry: Registered built-in agent: web (BrowserAgent)")
+        # AnalystAgent (id="data") and BrowserAgent (id="web") ship as the
+        # standalone ``gaia-agent-analyst`` / ``gaia-agent-browser`` wheels
+        # (#1102), discovered via the ``gaia.agent`` entry point in
+        # ``_discover_installed_agents`` — no built-in registration here.
 
         # The former ``chat-lite``/``doc-lite``/``file-lite``/``data-lite``/
         # ``web-lite``/``gaia-lite`` registrations are consolidated into the

@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for AnalystAgent (gaia.agents.analyst).
+"""Unit tests for AnalystAgent (gaia_agent_analyst).
 
 AnalystAgent isolates its tool set via ``_TOOL_REGISTRY.clear()`` +
 ``_snapshot_tools()``, so its instance registry contains exactly the
@@ -16,7 +16,7 @@ from gaia.testing import temp_directory
 
 class TestAnalystAgentImport(unittest.TestCase):
     def test_can_import(self):
-        from gaia.agents.analyst import AnalystAgent, AnalystAgentConfig
+        from gaia_agent_analyst import AnalystAgent, AnalystAgentConfig
 
         self.assertIsNotNone(AnalystAgent)
         self.assertIsNotNone(AnalystAgentConfig)
@@ -24,7 +24,7 @@ class TestAnalystAgentImport(unittest.TestCase):
 
 class TestAnalystAgentConfig(unittest.TestCase):
     def test_defaults(self):
-        from gaia.agents.analyst import AnalystAgentConfig
+        from gaia_agent_analyst import AnalystAgentConfig
 
         cfg = AnalystAgentConfig()
         self.assertFalse(cfg.use_claude)
@@ -35,7 +35,7 @@ class TestAnalystAgentConfig(unittest.TestCase):
 
 class TestAnalystAgentInit(unittest.TestCase):
     def _make(self, tmp_dir):
-        from gaia.agents.analyst import AnalystAgent, AnalystAgentConfig
+        from gaia_agent_analyst import AnalystAgent, AnalystAgentConfig
 
         cfg = AnalystAgentConfig(scratchpad_db_path=str(tmp_dir / "scratchpad.db"))
         return AnalystAgent(cfg)

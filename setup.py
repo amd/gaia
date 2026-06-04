@@ -49,9 +49,7 @@ setup(
         "gaia.mcp.client.transports",
         "gaia.mcp.servers",
         "gaia.agents",
-        "gaia.agents.analyst",
         "gaia.agents.base",
-        "gaia.agents.browser",
         "gaia.agents.tools",
         "gaia.agents.chat",
         "gaia.agents.chat.tools",
@@ -250,6 +248,8 @@ setup(
         "agent-emr": ["gaia-agent-emr"],
         "agent-code": ["gaia-agent-code"],
         "agent-connectors-demo": ["gaia-agent-connectors-demo"],
+        "agent-analyst": ["gaia-agent-analyst"],
+        "agent-browser": ["gaia-agent-browser"],
         "agents": [
             "gaia-agent-summarize",
             "gaia-agent-sd",
@@ -260,6 +260,8 @@ setup(
             "gaia-agent-emr",
             "gaia-agent-code",
             "gaia-agent-connectors-demo",
+            "gaia-agent-analyst",
+            "gaia-agent-browser",
         ],
     },
     classifiers=[
