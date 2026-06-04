@@ -449,7 +449,10 @@ class AgentRegistry:
     def get_load_error(self, agent_id: str) -> Optional[str]:
         """Return the recorded load-error reason for *agent_id*, or None.
 
-        None means either the agent loaded fine or was never attempted.
+        Errors are keyed by the agent's directory name (e.g. 'my-bot'),
+        which matches the resolved agent id.  A caller that passes a type
+        string that was normalised differently will get None gracefully.
+        None also means the agent loaded fine or was never attempted.
         """
         return self._load_errors.get(agent_id)
 

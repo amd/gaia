@@ -233,6 +233,7 @@ class BuilderAgent(Agent):
         self.console.print_processing_start(user_input, steps_limit, self.model_id)
 
         final_answer: Optional[str] = None
+        created_ok = False
         steps_taken = 0
 
         while steps_taken < steps_limit and final_answer is None:
@@ -300,6 +301,8 @@ class BuilderAgent(Agent):
                         "Please check the name is valid and try again."
                     )
                     break
+                if tool_name == "create_agent":
+                    created_ok = True
                 messages.append(
                     {
                         "role": "user",
@@ -308,11 +311,17 @@ class BuilderAgent(Agent):
                 )
                 # Continue loop so the LLM can summarize the result
             else:
-                # No tool call was extracted. Check whether the model hallucinated
-                # success markers without actually running create_agent.
-                _FABRICATION_MARKERS = ("Agent Created", "✅", "File location")
-                candidate = parsed.get("answer") or response.strip()
-                if any(m in candidate for m in _FABRICATION_MARKERS):
+                # No tool call was extracted. If creation already succeeded this
+                # is a post-success summary — return it without triggering the
+                # fabrication check (which misfires on ✅ in a real summary).
+                if created_ok:
+                    candidate = parsed.get("answer") or response.strip()
+                    final_answer = candidate or "Agent created successfully."
+                # Otherwise check whether the model hallucinated success markers.
+                elif any(
+                    m in (parsed.get("answer") or response.strip())
+                    for m in ("Agent Created", "✅", "File location")
+                ):
                     # The model wrote a fake success — push a corrective turn and
                     # loop again (steps_limit guards infinite recursion).
                     logger.warning(
@@ -332,7 +341,8 @@ class BuilderAgent(Agent):
                     # Do not set final_answer — the loop will continue
                 else:
                     final_answer = (
-                        candidate
+                        parsed.get("answer")
+                        or response.strip()
                         or "I wasn't able to generate a response. Please try again."
                     )
 
