@@ -32,20 +32,25 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email import action_store  # noqa: E402
-from gaia.agents.email.tools.calendar_tools import (  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email import action_store  # noqa: E402
+from gaia_agent_email.tools.calendar_tools import (  # noqa: E402
     list_calendar_events_impl,
 )
-from gaia.agents.email.tools.delete_tools import (  # noqa: E402
+from gaia_agent_email.tools.delete_tools import (  # noqa: E402
     permanent_delete_impl,
     restore_message_impl,
     trash_message_impl,
 )
-from gaia.agents.email.tools.organize_tools import (  # noqa: E402
+from gaia_agent_email.tools.organize_tools import (  # noqa: E402
     archive_message_impl,
     label_message_impl,
 )
-from gaia.agents.email.tools.read_tools import (  # noqa: E402
+from gaia_agent_email.tools.read_tools import (  # noqa: E402
     UNTRUSTED_BODY_CLOSE,
     UNTRUSTED_BODY_OPEN,
     extract_sender_email,
@@ -53,9 +58,10 @@ from gaia.agents.email.tools.read_tools import (  # noqa: E402
     pre_scan_inbox_impl,
     triage_inbox_impl,
 )
-from gaia.agents.email.tools.reply_tools import (  # noqa: E402
+from gaia_agent_email.tools.reply_tools import (  # noqa: E402
     draft_reply_impl,
 )
+
 from gaia.database.mixin import DatabaseMixin  # noqa: E402
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeCalendarBackend,
@@ -370,8 +376,8 @@ def _make_email_agent(fake_gmail, fake_calendar, tmp_path):
     """
     from unittest.mock import MagicMock, patch
 
-    from gaia.agents.email.agent import EmailTriageAgent
-    from gaia.agents.email.config import EmailAgentConfig
+    from gaia_agent_email.agent import EmailTriageAgent
+    from gaia_agent_email.config import EmailAgentConfig
 
     cfg = EmailAgentConfig(
         gmail_backend=fake_gmail,
@@ -638,8 +644,8 @@ class TestBatchThresholdEnforcement:
     ):
         from unittest.mock import MagicMock, patch
 
-        from gaia.agents.email.agent import EmailTriageAgent
-        from gaia.agents.email.config import EmailAgentConfig
+        from gaia_agent_email.agent import EmailTriageAgent
+        from gaia_agent_email.config import EmailAgentConfig
 
         cfg = EmailAgentConfig(
             gmail_backend=fake_gmail,
@@ -687,7 +693,7 @@ class TestSendNowAuditTrail:
     """
 
     def test_send_now_writes_to_email_drafts(self, fake_gmail, db):
-        from gaia.agents.email.tools.reply_tools import send_now_impl
+        from gaia_agent_email.tools.reply_tools import send_now_impl
 
         result = send_now_impl(
             fake_gmail,
@@ -710,7 +716,7 @@ class TestMoveToLabelBehavior:
     """
 
     def test_move_adds_label_and_archives(self, fake_gmail, db):
-        from gaia.agents.email.tools.organize_tools import move_to_label_impl
+        from gaia_agent_email.tools.organize_tools import move_to_label_impl
 
         new_label = fake_gmail.create_label(name="archive-target")
         msg_id = list(fake_gmail._messages.keys())[0]
@@ -721,7 +727,7 @@ class TestMoveToLabelBehavior:
         assert "INBOX" not in post["labelIds"]
 
     def test_move_records_action_with_prior_labels(self, fake_gmail, db):
-        from gaia.agents.email.tools.organize_tools import move_to_label_impl
+        from gaia_agent_email.tools.organize_tools import move_to_label_impl
 
         new_label = fake_gmail.create_label(name="archive-target-2")
         msg_id = list(fake_gmail._messages.keys())[0]
@@ -888,7 +894,7 @@ class TestCoerceIds:
     """
 
     def test_coerce_ids(self):
-        from gaia.agents.email.tools.organize_tools import _coerce_ids
+        from gaia_agent_email.tools.organize_tools import _coerce_ids
 
         # None → empty list.
         assert _coerce_ids(None) == []

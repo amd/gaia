@@ -21,9 +21,9 @@ import json
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gaia.agents.base.tools import tool
-from gaia.agents.email.gmail_backend import decode_message_body
-from gaia.agents.email.tools.llm_triage import make_llm_classifier
-from gaia.agents.email.tools.triage_heuristics import (
+from gaia_agent_email.gmail_backend import decode_message_body
+from gaia_agent_email.tools.llm_triage import make_llm_classifier
+from gaia_agent_email.tools.triage_heuristics import (
     CATEGORY_ACTIONABLE,
     CATEGORY_INFORMATIONAL,
     CATEGORY_LOW_PRIORITY,
@@ -31,7 +31,7 @@ from gaia.agents.email.tools.triage_heuristics import (
     classify_category_heuristic,
     group_by_category,
 )
-from gaia.agents.email.verbose import (
+from gaia_agent_email.verbose import (
     log_tool_call,
     log_triage_decision,
     log_triage_dispatch,
@@ -263,7 +263,7 @@ def summarize_thread_impl(
     """
     # Deferred import: ``summarize_tools`` imports from this module, so a
     # top-level import would create a cycle.
-    from gaia.agents.email.tools.summarize_tools import (
+    from gaia_agent_email.tools.summarize_tools import (
         _THREAD_SYSTEM_PROMPT,
         DEFAULT_SUMMARY_CHAR_LIMIT,
         EmailSummarizeError,
@@ -796,7 +796,7 @@ class ReadToolsMixin:
             """
             try:
                 # Deferred import avoids a module-load cycle with summarize_tools.
-                from gaia.agents.email.tools.summarize_tools import (
+                from gaia_agent_email.tools.summarize_tools import (
                     EmailSummarizeError,
                 )
 

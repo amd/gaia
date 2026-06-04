@@ -33,11 +33,17 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email.tools.calendar_tools import (  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.tools.calendar_tools import (  # noqa: E402
     NoEventDateTimeError,
     create_event_from_email_impl,
     extract_event_details,
 )
+
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeCalendarBackend,
     FakeGmailBackend,
@@ -258,8 +264,8 @@ def _make_email_agent(fake_gmail, fake_calendar, tmp_path):
     """
     from unittest.mock import MagicMock, patch
 
-    from gaia.agents.email.agent import EmailTriageAgent
-    from gaia.agents.email.config import EmailAgentConfig
+    from gaia_agent_email.agent import EmailTriageAgent
+    from gaia_agent_email.config import EmailAgentConfig
 
     cfg = EmailAgentConfig(
         gmail_backend=fake_gmail,

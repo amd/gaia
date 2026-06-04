@@ -36,13 +36,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email.tools.triage_heuristics import (  # noqa: E402
+from gaia_agent_email.tools.triage_heuristics import (  # noqa: E402
     ALL_CATEGORIES,
     CATEGORY_ACTIONABLE,
     CATEGORY_INFORMATIONAL,
     CATEGORY_LOW_PRIORITY,
     CATEGORY_URGENT,
 )
+
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     mbox_message_to_gmail_payload,
 )

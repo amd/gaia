@@ -23,13 +23,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email.agent import EmailTriageAgent  # noqa: E402
-from gaia.agents.email.config import EmailAgentConfig  # noqa: E402
-from gaia.agents.email.outlook_scopes import (  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
+from gaia_agent_email.config import EmailAgentConfig  # noqa: E402
+from gaia_agent_email.outlook_scopes import (  # noqa: E402
     OUTLOOK_CALENDAR_SCOPES,
     OUTLOOK_MAIL_SCOPES,
 )
-from gaia.agents.email.scopes import AGENT_NAMESPACED_ID, ALL_SCOPES  # noqa: E402
+from gaia_agent_email.scopes import AGENT_NAMESPACED_ID, ALL_SCOPES  # noqa: E402
+
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeCalendarBackend,
     FakeGmailBackend,
@@ -248,7 +254,7 @@ class TestAC3LocalLLMOnly:
     def test_remote_base_url_rejected_at_construction(
         self, fake_gmail, fake_calendar, tmp_path
     ):
-        from gaia.agents.email.config import ConfigurationError
+        from gaia_agent_email.config import ConfigurationError
 
         cfg = EmailAgentConfig(
             base_url="https://api.openai.com/v1",

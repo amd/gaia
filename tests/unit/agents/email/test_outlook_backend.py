@@ -29,11 +29,16 @@ from typing import Callable, List, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-import pytest
 
-from gaia.agents.email.gmail_backend import GmailBackend, decode_message_body
-from gaia.agents.email.outlook_backend import LiveOutlookBackend, _get_outlook_token
-from gaia.agents.email.tools.read_tools import list_inbox_impl, triage_inbox_impl
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.gmail_backend import GmailBackend, decode_message_body
+from gaia_agent_email.outlook_backend import LiveOutlookBackend, _get_outlook_token
+from gaia_agent_email.tools.read_tools import list_inbox_impl, triage_inbox_impl
+
 from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 
 # ---------------------------------------------------------------------------
@@ -551,7 +556,7 @@ class TestTokenResolver:
             return {"access_token": "TOK-123", "scopes": list(required_scopes)}
 
         monkeypatch.setattr(
-            "gaia.agents.email.outlook_backend.get_credential_sync",
+            "gaia_agent_email.outlook_backend.get_credential_sync",
             fake_get_credential_sync,
         )
         token = _get_outlook_token()
@@ -575,7 +580,7 @@ class TestTokenResolver:
             )
 
         monkeypatch.setattr(
-            "gaia.agents.email.outlook_backend.get_credential_sync",
+            "gaia_agent_email.outlook_backend.get_credential_sync",
             fake_get_credential_sync,
         )
         with pytest.raises(AuthRequiredError) as exc:

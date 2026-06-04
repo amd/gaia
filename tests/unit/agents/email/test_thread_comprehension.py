@@ -31,18 +31,24 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email.tools.read_tools import (  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.tools.read_tools import (  # noqa: E402
     UNTRUSTED_BODY_CLOSE,
     UNTRUSTED_BODY_OPEN,
     ReadToolsMixin,
     _format_thread_for_summary,
     summarize_thread_impl,
 )
-from gaia.agents.email.tools.summarize_tools import (  # noqa: E402
+from gaia_agent_email.tools.summarize_tools import (  # noqa: E402
     _THREAD_SYSTEM_PROMPT,
     DEFAULT_SUMMARY_CHAR_LIMIT,
     EmailSummarizeError,
 )
+
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 THREAD_ID = "thread-decision-001"

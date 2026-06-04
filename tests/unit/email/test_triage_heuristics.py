@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Tests for ``gaia.agents.email.tools.triage_heuristics``.
+Tests for ``gaia_agent_email.tools.triage_heuristics``.
 
 The heuristic was lifted (and re-mapped) from PR #916's classifier. The
 critical behaviour that this test pins down:
@@ -24,9 +24,12 @@ and every email goes to the LLM regardless of how obvious it is.
 
 from __future__ import annotations
 
-import pytest
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
 
-from gaia.agents.email.tools.triage_heuristics import (
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.tools.triage_heuristics import (
     ALL_CATEGORIES,
     CATEGORY_ACTIONABLE,
     CATEGORY_INFORMATIONAL,

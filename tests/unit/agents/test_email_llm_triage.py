@@ -13,12 +13,18 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email.tools.llm_triage import (  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.tools.llm_triage import (  # noqa: E402
     LLMTriageError,
     classify_email_llm,
     make_llm_classifier,
 )
-from gaia.agents.email.tools.read_tools import triage_inbox_impl  # noqa: E402
+from gaia_agent_email.tools.read_tools import triage_inbox_impl  # noqa: E402
+
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 STUB_INBOX = _REPO_ROOT / "tests" / "fixtures" / "email" / "_stub_inbox.mbox"
@@ -109,7 +115,7 @@ class TestClassifyEmailLLM:
     def test_body_is_wrapped_in_untrusted_delimiters(self):
         # Prompt-injection boundary: the body must sit INSIDE the agent's
         # untrusted-input fence the system prompt is trained to treat as data.
-        from gaia.agents.email.tools.read_tools import (
+        from gaia_agent_email.tools.read_tools import (
             UNTRUSTED_BODY_CLOSE,
             UNTRUSTED_BODY_OPEN,
         )

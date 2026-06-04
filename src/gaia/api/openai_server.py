@@ -28,7 +28,6 @@ from fastapi.responses import StreamingResponse
 from gaia.agents.base.api_agent import ApiAgent
 
 from .agent_registry import registry
-from .email_routes import router as email_router
 from .schemas import (
     ChatCompletionChoice,
     ChatCompletionRequest,
@@ -96,7 +95,17 @@ app.add_middleware(
 )
 
 # Email Triage Agent REST surface (#1229): POST /v1/email/{triage,draft,send}.
-app.include_router(email_router)
+# Ships with the standalone ``gaia-agent-email`` wheel (#1102); mount it only
+# when that wheel is installed so the core API server still starts without it.
+try:
+    from gaia_agent_email.api_routes import router as email_router
+
+    app.include_router(email_router)
+except ImportError:
+    logger.info(
+        "Email REST routes unavailable: install the email agent "
+        "(`pip install gaia-agent-email`) to enable POST /v1/email/*."
+    )
 
 
 # Raw request logging middleware (debug mode only)

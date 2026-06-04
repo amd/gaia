@@ -13,6 +13,10 @@ from unittest.mock import patch
 
 import pytest
 
+# Some tests patch ``gaia_agent_email.cli.main``, which ships as the standalone
+# gaia-agent-email wheel (#1102); skip when a framework-only env lacks it.
+pytest.importorskip("gaia_agent_email")
+
 
 class TestDispatch:
     """End-to-end dispatch tests — patch ``email_main`` and assert it's called."""
@@ -57,7 +61,7 @@ class TestDispatch:
             assert getattr(args, "use_chatgpt", False) is False
 
     def test_handle_email_command_passes_args_to_email_main(self):
-        """``handle_email_command`` should defer to ``gaia.agents.email.cli.main``
+        """``handle_email_command`` should defer to ``gaia_agent_email.cli.main``
         without the cloud-LLM flags."""
         import argparse
 
@@ -73,7 +77,7 @@ class TestDispatch:
             base_url=None,
         )
 
-        with patch("gaia.agents.email.cli.main") as email_main:
+        with patch("gaia_agent_email.cli.main") as email_main:
 
             async def _fake(args):
                 return 0
