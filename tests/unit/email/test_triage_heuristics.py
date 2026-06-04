@@ -284,3 +284,125 @@ class TestGroupByCategory:
         items = [{"category": CATEGORY_URGENT}]  # no id
         out = group_by_category(items)
         assert out["total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Automated-sender urgent-subject override (#1266)
+#
+# The heuristic was committing confident=True / informational for emails from
+# `alerts@` / `noreply@` senders, even when the subject line carried
+# unambiguous urgent signals ([SEV1], "rotate credentials within N hours",
+# "compliance acknowledgment due by EOD"). These must escalate to the LLM
+# rather than being silently swallowed as informational.
+# ---------------------------------------------------------------------------
+
+
+class TestAutomatedSenderUrgentSubjectEscalation:
+    """Automated-sender keyword heuristic must NOT fire confident=True
+    when the subject contains high-urgency indicators. The LLM must read
+    the body to make the final call."""
+
+    def test_sev1_subject_from_alerts_sender_escalates(self):
+        """[SEV1] in the subject from an automated sender must NOT be
+        committed as informational — it must escalate to the LLM."""
+        result = classify_category_heuristic(
+            subject="[SEV1] API latency above SLA - owner needed",
+            sender="DevOps Bot <alerts@acme-corp.example.com>",
+            label_ids=["INBOX"],
+        )
+        assert (
+            result.confident is False
+        ), f"[SEV1] subject from alerts@ should escalate; got confident=True: {result!r}"
+
+    def test_rotate_credentials_subject_from_noreply_escalates(self):
+        """'rotate credentials within N hours' from noreply@ must escalate."""
+        result = classify_category_heuristic(
+            subject="Security advisory: rotate credentials within 4 hours",
+            sender="IT Systems <noreply@acme-corp.example.com>",
+            label_ids=["INBOX"],
+        )
+        assert (
+            result.confident is False
+        ), f"'rotate credentials' subject should escalate; got confident=True: {result!r}"
+
+    def test_compliance_eod_from_automated_sender_escalates(self):
+        """'compliance acknowledgment due by EOD' from automated sender must escalate."""
+        result = classify_category_heuristic(
+            subject="Compliance acknowledgment due by EOD",
+            sender="DevOps Bot <alerts@acme-corp.example.com>",
+            label_ids=["INBOX"],
+        )
+        assert (
+            result.confident is False
+        ), f"'compliance ... EOD' should escalate; got confident=True: {result!r}"
+
+    def test_plain_automated_notification_without_urgency_stays_informational(self):
+        """Non-urgent automated notifications (e.g., build passed) still get
+        the informational confident heuristic — only urgent subjects escape."""
+        result = classify_category_heuristic(
+            subject="Build #4219 passed — all tests green",
+            sender="CI Bot <noreply@ci.example.com>",
+            label_ids=["INBOX"],
+        )
+        # A plain passing-build message has no urgency keywords; the heuristic
+        # CAN commit confidently to informational here.
+        assert result.category == CATEGORY_INFORMATIONAL
+        assert result.confident is True
+
+    def test_incident_prod_down_from_alerts_escalates(self):
+        """'incident' / 'prod ... down' subjects from alerts@ must escalate."""
+        result = classify_category_heuristic(
+            subject="Prod incident report requires exec review",
+            sender="DevOps Bot <alerts@acme-corp.example.com>",
+            label_ids=["INBOX"],
+        )
+        assert (
+            result.confident is False
+        ), f"'prod incident ... requires exec review' should escalate; got: {result!r}"
+
+
+# ---------------------------------------------------------------------------
+# Newsletter keyword false-positive fix (#1266)
+#
+# The `newsletter` keyword in _PROMO_SUBJECT_KEYWORDS was firing confident
+# low-priority on legitimate company newsletter/digest subjects like
+# "All-hands recap and recording - newsletter" or "Benefits enrollment
+# reminder - newsletter" sent by real colleagues, which the ground truth
+# labels as informational. The keyword is too broad — removing it from the
+# promo list means these fall through to the LLM, which can distinguish
+# a marketing newsletter from a company one.
+# ---------------------------------------------------------------------------
+
+
+class TestNewsletterKeywordFalsePositive:
+    def test_company_allhands_with_newsletter_in_subject_escalates(self):
+        """'All-hands recap and recording - newsletter' from a real colleague
+        should NOT be confidently committed to low priority — it should
+        escalate so the LLM can determine it's an informational company update."""
+        result = classify_category_heuristic(
+            subject="All-hands recap and recording - newsletter",
+            sender="HR Team <hr@acme-corp.example.com>",
+            label_ids=["INBOX"],
+        )
+        # The heuristic should NOT commit confidently to low priority here.
+        # Either it escalates (confident=False) or it stays low priority but
+        # with a non-newsletter-keyword reason (label-based is fine). The key
+        # requirement is: a human-sender company update with 'newsletter' in
+        # its subject MUST NOT be confidently killed as low-priority by the
+        # newsletter keyword alone.
+        if result.confident and result.category == CATEGORY_LOW_PRIORITY:
+            assert "newsletter" not in result.reason.lower(), (
+                "'newsletter' keyword should not confidently kill a company-sent "
+                f"digest: {result!r}"
+            )
+
+    def test_marketing_newsletter_from_external_sender_stays_low_priority(self):
+        """A genuine external marketing newsletter should still be low priority."""
+        result = classify_category_heuristic(
+            subject="This week's newsletter: 5 tips for productivity",
+            sender="marketing@external-company.example.com",
+            label_ids=["INBOX", LABEL_CATEGORY_PROMOTIONS],
+        )
+        # CATEGORY_PROMOTIONS label guarantees low priority regardless of subject.
+        assert result.category == CATEGORY_LOW_PRIORITY
+        assert result.confident is True
