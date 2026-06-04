@@ -7,13 +7,9 @@ chat client into _process_query_impl, then asserts create_agent fires and the
 agent.py file is written to a temp HOME directory.
 """
 
-import json
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from gaia.agents.builder.agent import BuilderAgent, BuilderAgentConfig
 

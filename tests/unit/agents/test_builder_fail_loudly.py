@@ -10,12 +10,8 @@ Validates that the builder:
   - Never passes a fabricated success to the user
 """
 
-import json
 from pathlib import Path
-from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from gaia.agents.builder.agent import BuilderAgent, BuilderAgentConfig
 

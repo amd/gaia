@@ -8,8 +8,6 @@ error message rather than silently falling back to chat.
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from gaia.ui._chat_helpers import _agent_unavailable_message
 
 

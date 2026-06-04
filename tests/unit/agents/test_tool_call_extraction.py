@@ -10,7 +10,7 @@ Stage A of issue #1428: verify the base parser's decision logic:
 """
 
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
