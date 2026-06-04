@@ -36,7 +36,7 @@ Design notes
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Union, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -274,7 +274,7 @@ def parse_request(data: dict) -> EmailTriageRequest:
     REST and MCP boundaries so a malformed payload fails loudly with an
     actionable message naming the offending field.
     """
-    return EmailTriageRequest.model_validate(data)
+    return cast(EmailTriageRequest, EmailTriageRequest.model_validate(data))
 
 
 def parse_response(data: dict) -> EmailTriageResponse:
@@ -282,7 +282,7 @@ def parse_response(data: dict) -> EmailTriageResponse:
 
     Same fail-loudly contract as :func:`parse_request`.
     """
-    return EmailTriageResponse.model_validate(data)
+    return cast(EmailTriageResponse, EmailTriageResponse.model_validate(data))
 
 
 __all__ = [
