@@ -966,6 +966,15 @@ class AgentRegistry:
     # Installed Python agent discovery
     # ------------------------------------------------------------------
 
+    def discover_installed_agents(self) -> None:
+        """Re-scan entry points for installed agent wheels (public hot-reload hook).
+
+        Called by the Agent Hub installer after ``uv pip install --target`` so a
+        freshly installed agent appears in the live registry without a server
+        restart. Idempotent — already-registered ids are skipped.
+        """
+        self._discover_installed_agents()
+
     def _discover_installed_agents(self) -> None:
         """Register installed Python agents exposed by standalone wheels.
 
