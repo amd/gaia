@@ -56,9 +56,11 @@ _MANIFEST_FINGERPRINT_KEYS = frozenset(
 )
 
 
-# Reserved agent IDs that custom agents (under ~/.gaia/agents/) must not
-# claim. Loaded lazily by ``_RESERVED_BUILTIN_IDS`` so the list stays in sync
-# with what ``_register_builtin_agents`` actually registers.
+# Reserved agent IDs that custom agents (under ~/.gaia/agents/) must not claim.
+# Covers the built-ins ``_register_builtin_agents`` registers plus the legacy
+# "-lite" / ``gaia-lite`` aliases — those no longer register their own card
+# (#1162) but remain reserved so a custom agent can't claim the old ID and
+# shadow the alias resolution in ``_LEGACY_ID_ALIASES``.
 _RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
     {
         "chat",
@@ -282,6 +284,45 @@ DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
 
 
 @dataclass
+class ModelTier:
+    """A selectable model size for an agent (#1162).
+
+    Each agent exposes one entry per size — ``full`` (the agent's default
+    model) and ``lite`` (a ~4B model for faster responses on lower-end
+    hardware). The Agent UI renders these as a model-size selector on the
+    agent card instead of shipping a separate "… Lite" card per agent.
+
+    Attributes:
+        name: Stable tier key — ``"full"`` or ``"lite"``.
+        label: Human-readable label for the selector (e.g. ``"Lite (~4B)"``).
+        models: Ordered model-preference list for this tier. Empty means
+            "use the agent's own default model" (the registry leaves
+            ``model_id`` unset so the agent's ``__init__`` governs).
+        min_memory_gb: Minimum recommended free RAM (GB) for this tier, or
+            ``None`` when the tier declares no requirement.
+        default: Whether this tier is the default selection.
+    """
+
+    name: str
+    label: str
+    models: List[str] = field(default_factory=list)
+    min_memory_gb: Optional[float] = None
+    default: bool = False
+
+
+def _select_tier_model(tiers: List[ModelTier], tier_name: str) -> Optional[str]:
+    """Return the preferred model for *tier_name*, or ``None``.
+
+    ``None`` when the tier is unknown or declares no models (the agent's
+    own default model should govern in that case).
+    """
+    for tier in tiers:
+        if tier.name == tier_name and tier.models:
+            return tier.models[0]
+    return None
+
+
+@dataclass
 class AgentRegistration:
     """Metadata and factory for a registered agent."""
 
@@ -337,6 +378,11 @@ class AgentRegistration:
             dataclasses.replace(dc) for dc in DEFAULT_DEVICE_CONFIGS
         ]
     )
+    # Model-size tiers (issue #1162). Agents that support a "full" vs "lite"
+    # (~4B) model selection declare both here; the Agent UI renders a single
+    # card with a size selector instead of duplicate "… Lite" cards. Empty for
+    # agents that expose only one model size.
+    model_tiers: List[ModelTier] = field(default_factory=list)
 
 
 class AgentRegistry:
@@ -346,11 +392,36 @@ class AgentRegistry:
     and the ``~/.gaia/agents/`` directory for custom agents.
     """
 
-    # Legacy agent IDs that were renamed. Existing UI sessions store the old
-    # ID in ``sessions.agent_type`` in the ChatDatabase; silently resolving
-    # the alias keeps those sessions working without a DB migration. All
-    # lookups (``get``, ``create_agent``, ``resolve_model``) honour the map.
-    _LEGACY_ID_ALIASES: Dict[str, str] = {}
+    # Legacy agent IDs that were consolidated (issue #1162). Each agent used to
+    # ship a separate "-lite" registration; they are now a model *tier* of the
+    # single base agent. Existing UI sessions store the old ID in
+    # ``sessions.agent_type`` in the ChatDatabase; resolving the alias keeps
+    # those sessions working without a DB migration. All lookups (``get``,
+    # ``create_agent``, ``resolve_model``) honour the map.
+    #
+    # ``gaia-lite`` historically aliased ``doc-lite`` (doc profile, ~4B model),
+    # so it resolves to ``doc`` with the lite tier.
+    _LEGACY_ID_ALIASES: Dict[str, str] = {
+        "chat-lite": "chat",
+        "doc-lite": "doc",
+        "file-lite": "file",
+        "data-lite": "data",
+        "web-lite": "web",
+        "gaia-lite": "doc",
+    }
+
+    # Model tier implied by each legacy "-lite" alias. ``create_agent`` and
+    # ``resolve_model`` use this to select the ~4B preset for a session stored
+    # under the old ID, so consolidating the registrations doesn't silently
+    # promote those sessions back to the full-size model.
+    _LEGACY_ID_TIERS: Dict[str, str] = {
+        "chat-lite": "lite",
+        "doc-lite": "lite",
+        "file-lite": "lite",
+        "data-lite": "lite",
+        "web-lite": "lite",
+        "gaia-lite": "lite",
+    }
 
     def __init__(self):
         self._agents: Dict[str, AgentRegistration] = {}
@@ -366,9 +437,9 @@ class AgentRegistry:
         """Return the current canonical ID for *agent_id*, resolving aliases.
 
         Returns the input unchanged when no alias exists so callers can use
-        the result as a stable cache key — two requests for ``chat-lite`` and
-        ``gaia-lite`` both produce ``gaia-lite``, so the per-session agent
-        cache doesn't thrash when a client mixes the old and new names.
+        the result as a stable cache key — both ``chat`` and the legacy
+        ``chat-lite`` resolve to ``chat``, so the per-session agent cache
+        doesn't thrash when a client mixes the old and new names.
         """
         if agent_id in self._agents:
             return agent_id
@@ -424,16 +495,99 @@ class AgentRegistry:
     def _register_builtin_agents(self) -> None:
         """Register built-in agents (ChatAgent, BuilderAgent, etc.)."""
 
+        # --- Model-size tiers (issue #1162) ---
+        # Each conversation/analysis agent exposes a "full" (its own default
+        # model) and a "lite" (~4B) tier. The Agent UI renders a SINGLE card
+        # per agent with a model-size selector instead of duplicate "… Lite"
+        # cards. The lite model list is platform-conditional:
+        #   macOS: Qwen3.5-4B-GGUF (tool-calling label, OpenAI format)
+        #   Linux/Windows: Gemma-4-E4B-it-GGUF (tool-calling label)
+        if platform.system() == "Darwin":
+            _LITE_MODELS = ["Qwen3.5-4B-GGUF", "Gemma-4-E4B-it-GGUF"]
+        else:
+            _LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Qwen3.5-4B-GGUF"]
+        _LITE_MIN_MEMORY_GB = 5.0
+
+        def _model_tiers(full_label: str) -> List[ModelTier]:
+            """Build the full+lite tier pair shared by the consolidated agents.
+
+            The ``full`` tier carries no model list — the agent's own
+            ``__init__`` default governs — so the existing full-size behaviour
+            is unchanged. The ``lite`` tier pins the ~4B preset.
+            """
+            return [
+                ModelTier(name="full", label=full_label, models=[], default=True),
+                ModelTier(
+                    name="lite",
+                    label="Lite (~4B)",
+                    models=list(_LITE_MODELS),
+                    min_memory_gb=_LITE_MIN_MEMORY_GB,
+                ),
+            ]
+
+        def _make_chat_factory(profile, extra=None, tiers=None):
+            """ChatAgent factory that honours a ``model_tier`` kwarg (#1162)."""
+            _extra = dict(extra or {})
+            _tiers = list(tiers or [])
+
+            def factory(**kwargs):
+                tier = kwargs.pop("model_tier", None)
+                if tier:
+                    preset = _select_tier_model(_tiers, tier)
+                    if preset:
+                        kwargs.setdefault("model_id", preset)
+                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+                valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
+                filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
+                filtered.setdefault("prompt_profile", profile)
+                for k, v in _extra.items():
+                    filtered.setdefault(k, v)
+                config = ChatAgentConfig(**filtered)
+                return ChatAgent(config=config)
+
+            return factory
+
+        def _make_analyst_factory(tiers=None):
+            """AnalystAgent factory that honours a ``model_tier`` kwarg (#1162)."""
+            _tiers = list(tiers or [])
+
+            def factory(**kwargs):
+                tier = kwargs.pop("model_tier", None)
+                if tier:
+                    preset = _select_tier_model(_tiers, tier)
+                    if preset:
+                        kwargs.setdefault("model_id", preset)
+                from gaia.agents.analyst.agent import AnalystAgent, AnalystAgentConfig
+
+                valid_fields = {f.name for f in dataclasses.fields(AnalystAgentConfig)}
+                filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
+                config = AnalystAgentConfig(**filtered)
+                return AnalystAgent(config=config)
+
+            return factory
+
+        def _make_browser_factory(tiers=None):
+            """BrowserAgent factory that honours a ``model_tier`` kwarg (#1162)."""
+            _tiers = list(tiers or [])
+
+            def factory(**kwargs):
+                tier = kwargs.pop("model_tier", None)
+                if tier:
+                    preset = _select_tier_model(_tiers, tier)
+                    if preset:
+                        kwargs.setdefault("model_id", preset)
+                from gaia.agents.browser.agent import BrowserAgent, BrowserAgentConfig
+
+                valid_fields = {f.name for f in dataclasses.fields(BrowserAgentConfig)}
+                filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
+                config = BrowserAgentConfig(**filtered)
+                return BrowserAgent(config=config)
+
+            return factory
+
         # --- Chat Agent (conversation-only, lean prompt) ---
-        def chat_factory(**kwargs):
-            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
-            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-            filtered.setdefault("prompt_profile", "chat")
-            config = ChatAgentConfig(**filtered)
-            return ChatAgent(config=config)
-
+        _chat_tiers = _model_tiers("Full")
         self._register(
             AgentRegistration(
                 id="chat",
@@ -445,7 +599,9 @@ class AgentRegistry:
                     "Tell me about yourself",
                     "What's new today?",
                 ],
-                factory=_wrap_factory_with_namespaced_id(chat_factory, "builtin:chat"),
+                factory=_wrap_factory_with_namespaced_id(
+                    _make_chat_factory("chat", tiers=_chat_tiers), "builtin:chat"
+                ),
                 agent_dir=None,
                 models=[],
                 required_connections=[],
@@ -458,6 +614,7 @@ class AgentRegistry:
                 tags=["chat", "general", "personality"],
                 icon="message-circle",
                 tools_count=0,
+                model_tiers=_chat_tiers,
             )
         )
         logger.info(
@@ -465,15 +622,7 @@ class AgentRegistry:
         )
 
         # --- Doc Agent (document Q&A with RAG) ---
-        def doc_factory(**kwargs):
-            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
-            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-            filtered.setdefault("prompt_profile", "doc")
-            config = ChatAgentConfig(**filtered)
-            return ChatAgent(config=config)
-
+        _doc_tiers = _model_tiers("Full")
         self._register(
             AgentRegistration(
                 id="doc",
@@ -485,7 +634,9 @@ class AgentRegistry:
                     "Summarize this document",
                     "What does the report say about...",
                 ],
-                factory=_wrap_factory_with_namespaced_id(doc_factory, "builtin:doc"),
+                factory=_wrap_factory_with_namespaced_id(
+                    _make_chat_factory("doc", tiers=_doc_tiers), "builtin:doc"
+                ),
                 agent_dir=None,
                 models=[],
                 required_connections=[],
@@ -494,21 +645,13 @@ class AgentRegistry:
                 tags=["rag", "files", "search", "mcp"],
                 icon="file-text",
                 tools_count=15,
+                model_tiers=_doc_tiers,
             )
         )
         logger.info("registry: Registered built-in agent: doc (ChatAgent, profile=doc)")
 
         # --- File Agent (file system operations) ---
-        def file_factory(**kwargs):
-            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-            valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
-            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-            filtered.setdefault("prompt_profile", "file")
-            filtered.setdefault("enable_filesystem", True)
-            config = ChatAgentConfig(**filtered)
-            return ChatAgent(config=config)
-
+        _file_tiers = _model_tiers("Full")
         self._register(
             AgentRegistration(
                 id="file",
@@ -520,7 +663,12 @@ class AgentRegistry:
                     "What's in my Documents folder?",
                     "Show me the project structure",
                 ],
-                factory=_wrap_factory_with_namespaced_id(file_factory, "builtin:file"),
+                factory=_wrap_factory_with_namespaced_id(
+                    _make_chat_factory(
+                        "file", extra={"enable_filesystem": True}, tiers=_file_tiers
+                    ),
+                    "builtin:file",
+                ),
                 agent_dir=None,
                 models=[],
                 required_connections=[],
@@ -529,6 +677,7 @@ class AgentRegistry:
                 tags=["files", "search", "filesystem", "shell"],
                 icon="folder-search",
                 tools_count=10,
+                model_tiers=_file_tiers,
             )
         )
         logger.info(
@@ -536,14 +685,7 @@ class AgentRegistry:
         )
 
         # --- Data Agent (data analysis with scratchpad) ---
-        def data_factory(**kwargs):
-            from gaia.agents.analyst.agent import AnalystAgent, AnalystAgentConfig
-
-            valid_fields = {f.name for f in dataclasses.fields(AnalystAgentConfig)}
-            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-            config = AnalystAgentConfig(**filtered)
-            return AnalystAgent(config=config)
-
+        _data_tiers = _model_tiers("Full (~35B)")
         self._register(
             AgentRegistration(
                 id="data",
@@ -555,7 +697,9 @@ class AgentRegistry:
                     "What are the trends in this CSV?",
                     "Who is the top performer?",
                 ],
-                factory=_wrap_factory_with_namespaced_id(data_factory, "builtin:data"),
+                factory=_wrap_factory_with_namespaced_id(
+                    _make_analyst_factory(tiers=_data_tiers), "builtin:data"
+                ),
                 agent_dir=None,
                 models=[],
                 required_connections=[],
@@ -564,19 +708,13 @@ class AgentRegistry:
                 tags=["data", "csv", "excel", "analysis"],
                 icon="table",
                 tools_count=10,
+                model_tiers=_data_tiers,
             )
         )
         logger.info("registry: Registered built-in agent: data (AnalystAgent)")
 
         # --- Web Agent (web research) ---
-        def web_factory(**kwargs):
-            from gaia.agents.browser.agent import BrowserAgent, BrowserAgentConfig
-
-            valid_fields = {f.name for f in dataclasses.fields(BrowserAgentConfig)}
-            filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-            config = BrowserAgentConfig(**filtered)
-            return BrowserAgent(config=config)
-
+        _web_tiers = _model_tiers("Full (~35B)")
         self._register(
             AgentRegistration(
                 id="web",
@@ -588,7 +726,9 @@ class AgentRegistry:
                     "What's the latest on...",
                     "Fetch this URL for me",
                 ],
-                factory=_wrap_factory_with_namespaced_id(web_factory, "builtin:web"),
+                factory=_wrap_factory_with_namespaced_id(
+                    _make_browser_factory(tiers=_web_tiers), "builtin:web"
+                ),
                 agent_dir=None,
                 models=[],
                 required_connections=[],
@@ -597,226 +737,15 @@ class AgentRegistry:
                 tags=["web", "search", "browser", "download"],
                 icon="globe",
                 tools_count=10,
+                model_tiers=_web_tiers,
             )
         )
         logger.info("registry: Registered built-in agent: web (BrowserAgent)")
 
-        # --- Lite variants of all 5 agents ---
-        # Each agent (chat, doc, file, data, web) has a "-lite" variant that
-        # uses a smaller ~4B model for faster responses on lower-end hardware.
-        # Platform-conditional model list:
-        #   macOS: Qwen3.5-4B-GGUF (tool-calling label, OpenAI format)
-        #   Linux/Windows: Gemma-4-E4B-it-GGUF (tool-calling label)
-        if platform.system() == "Darwin":
-            _LITE_MODELS = ["Qwen3.5-4B-GGUF", "Gemma-4-E4B-it-GGUF"]
-        else:
-            _LITE_MODELS = ["Gemma-4-E4B-it-GGUF", "Qwen3.5-4B-GGUF"]
-        _LITE_MIN_MEMORY_GB = 5.0
-
-        _LITE_AGENTS = [
-            {
-                "id": "chat-lite",
-                "name": "Chat Lite",
-                "description": "Fast general conversation on a lightweight ~4B model",
-                "profile": "chat",
-                "starters": [
-                    "What can you help me with?",
-                    "Tell me about yourself",
-                ],
-                "extra_config": {},
-            },
-            {
-                "id": "doc-lite",
-                "name": "Doc Agent Lite",
-                "description": "Document Q&A with RAG on a lightweight ~4B model",
-                "profile": "doc",
-                "starters": [
-                    "Search my documents for...",
-                    "Summarize this document",
-                ],
-                "extra_config": {},
-            },
-            {
-                "id": "file-lite",
-                "name": "File Agent Lite",
-                "description": "File system navigation and search on a lightweight ~4B model",
-                "profile": "file",
-                "starters": [
-                    "Find files related to...",
-                    "What's in my Documents folder?",
-                ],
-                "extra_config": {"enable_filesystem": True},
-            },
-            {
-                "id": "data-lite",
-                "name": "Data Agent Lite",
-                "description": "Data analysis and CSV processing on a lightweight ~4B model",
-                "profile": "data",
-                "starters": [
-                    "Analyze my spending data",
-                    "What are the trends in this CSV?",
-                ],
-                "extra_config": {"enable_scratchpad": True},
-            },
-            {
-                "id": "web-lite",
-                "name": "Web Agent Lite",
-                "description": "Web research and page fetching on a lightweight ~4B model",
-                "profile": "web",
-                "starters": [
-                    "Search the web for...",
-                    "Fetch this URL for me",
-                ],
-                "extra_config": {"enable_browser": True},
-            },
-        ]
-
-        # Hub metadata for lite variants — mirrors their full-size counterparts.
-        _LITE_HUB_META = {
-            "chat-lite": {
-                "category": "conversation",
-                "tags": ["chat", "general", "lightweight"],
-                "icon": "message-circle",
-                "tools_count": 0,
-            },
-            "doc-lite": {
-                "category": "documents",
-                "tags": ["rag", "files", "lightweight"],
-                "icon": "file-text",
-                "tools_count": 15,
-            },
-            "file-lite": {
-                "category": "productivity",
-                "tags": ["files", "search", "lightweight"],
-                "icon": "folder-search",
-                "tools_count": 10,
-            },
-            "data-lite": {
-                "category": "productivity",
-                "tags": ["data", "csv", "lightweight"],
-                "icon": "table",
-                "tools_count": 10,
-            },
-            "web-lite": {
-                "category": "research",
-                "tags": ["web", "search", "lightweight"],
-                "icon": "globe",
-                "tools_count": 10,
-            },
-        }
-
-        for agent_def in _LITE_AGENTS:
-            aid = agent_def["id"]
-            profile = agent_def["profile"]
-            extra = agent_def["extra_config"]
-
-            def _make_lite_factory(_profile, _extra):
-                def factory(**kwargs):
-                    if _profile == "data":
-                        from gaia.agents.analyst.agent import (
-                            AnalystAgent,
-                            AnalystAgentConfig,
-                        )
-
-                        valid_fields = {
-                            f.name for f in dataclasses.fields(AnalystAgentConfig)
-                        }
-                        filtered = {
-                            k: v for k, v in kwargs.items() if k in valid_fields
-                        }
-                        filtered.setdefault("model_id", _LITE_MODELS[0])
-                        config = AnalystAgentConfig(**filtered)
-                        return AnalystAgent(config=config)
-
-                    if _profile == "web":
-                        from gaia.agents.browser.agent import (
-                            BrowserAgent,
-                            BrowserAgentConfig,
-                        )
-
-                        valid_fields = {
-                            f.name for f in dataclasses.fields(BrowserAgentConfig)
-                        }
-                        filtered = {
-                            k: v for k, v in kwargs.items() if k in valid_fields
-                        }
-                        filtered.setdefault("model_id", _LITE_MODELS[0])
-                        config = BrowserAgentConfig(**filtered)
-                        return BrowserAgent(config=config)
-
-                    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-                    valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
-                    filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-                    filtered.setdefault("model_id", _LITE_MODELS[0])
-                    filtered.setdefault("prompt_profile", _profile)
-                    for k, v in _extra.items():
-                        filtered.setdefault(k, v)
-                    config = ChatAgentConfig(**filtered)
-                    return ChatAgent(config=config)
-
-                return factory
-
-            hub = _LITE_HUB_META.get(aid, {})
-            self._register(
-                AgentRegistration(
-                    id=aid,
-                    name=agent_def["name"],
-                    description=agent_def["description"],
-                    source="builtin",
-                    conversation_starters=agent_def["starters"],
-                    factory=_wrap_factory_with_namespaced_id(
-                        _make_lite_factory(profile, extra), f"builtin:{aid}"
-                    ),
-                    agent_dir=None,
-                    models=_LITE_MODELS,
-                    min_memory_gb=_LITE_MIN_MEMORY_GB,
-                    required_connections=[],
-                    namespaced_agent_id=f"builtin:{aid}",
-                    category=hub.get("category", "general"),
-                    tags=hub.get("tags", []),
-                    icon=hub.get("icon", ""),
-                    tools_count=hub.get("tools_count", 0),
-                )
-            )
-            logger.info(
-                "registry: Registered built-in agent: %s (ChatAgent, profile=%s, lite)",
-                aid,
-                profile,
-            )
-
-        # Keep gaia-lite as a legacy alias for backward compatibility
-        self._register(
-            AgentRegistration(
-                id="gaia-lite",
-                name="Gaia Lite",
-                description=(
-                    "Lightweight GAIA agent — same features as the default Chat "
-                    "Agent but runs on a ~4B model. Equivalent to doc-lite."
-                ),
-                source="builtin",
-                conversation_starters=[
-                    "What can you help me with?",
-                    "Summarize this document",
-                ],
-                factory=_wrap_factory_with_namespaced_id(
-                    _make_lite_factory("doc", {}), "builtin:gaia-lite"
-                ),
-                agent_dir=None,
-                models=_LITE_MODELS,
-                min_memory_gb=_LITE_MIN_MEMORY_GB,
-                required_connections=[],
-                namespaced_agent_id="builtin:gaia-lite",
-                category="documents",
-                tags=["lightweight", "fast", "rag"],
-                icon="zap",
-                tools_count=15,
-            )
-        )
-        logger.info(
-            "registry: Registered built-in agent: gaia-lite (legacy, primary %s)",
-            _LITE_MODELS[0],
-        )
+        # The former ``chat-lite``/``doc-lite``/``file-lite``/``data-lite``/
+        # ``web-lite``/``gaia-lite`` registrations are consolidated into the
+        # ``lite`` model tier of the agents above (#1162). The old IDs resolve
+        # through ``_LEGACY_ID_ALIASES`` so existing sessions keep working.
 
         # --- ConnectorsDemoAgent ---
         # Demo agent that uses Google + GitHub connectors end-to-end so
@@ -1468,10 +1397,14 @@ class AgentRegistry:
     def create_agent(self, agent_id: str, **kwargs) -> Any:
         """Create an agent instance by ID.
 
+        A legacy ``-lite`` alias (e.g. ``chat-lite``) resolves to its base
+        agent and selects the ``lite`` model tier — unless the caller already
+        pinned a ``model_tier`` or ``model_id`` (#1162).
+
         Raises:
             ValueError: If *agent_id* is not registered.
         """
-        # Route through get() so legacy aliases (e.g. chat-lite → gaia-lite)
+        # Route through get() so legacy aliases (e.g. chat-lite → chat)
         # resolve consistently with lookups.
         reg = self.get(agent_id)
         if reg is None:
@@ -1479,8 +1412,14 @@ class AgentRegistry:
                 f"Unknown agent ID: '{agent_id}'. "
                 f"Available: {list(self._agents.keys())}"
             )
+        tier = self._LEGACY_ID_TIERS.get(agent_id)
+        if tier and "model_tier" not in kwargs and "model_id" not in kwargs:
+            kwargs["model_tier"] = tier
         logger.info(
-            "registry: Creating agent '%s' (resolved id='%s')", agent_id, reg.id
+            "registry: Creating agent '%s' (resolved id='%s'%s)",
+            agent_id,
+            reg.id,
+            f", tier='{tier}'" if tier else "",
         )
         return reg.factory(**kwargs)
 
@@ -1505,16 +1444,29 @@ class AgentRegistry:
         """
         # Use get() not _agents.get() so alias → canonical mapping applies.
         # Otherwise a session stored with agent_type="chat-lite" would fall
-        # through to the default 35B model instead of the 4B preset, silently
-        # regressing the whole reason gaia-lite exists.
+        # through to the default model instead of the 4B preset, silently
+        # regressing the whole reason the lite tier exists.
         reg = self.get(agent_id)
-        if not reg or not reg.models:
+        if not reg:
+            return None
+
+        # A legacy "-lite" alias resolves to the base agent, which carries no
+        # top-level ``models`` preference — pull the preset from the matching
+        # model tier instead so the ~4B model still wins (#1162).
+        preferred_models = reg.models
+        tier_name = self._LEGACY_ID_TIERS.get(agent_id)
+        if tier_name:
+            tier = next((t for t in reg.model_tiers if t.name == tier_name), None)
+            if tier and tier.models:
+                preferred_models = tier.models
+
+        if not preferred_models:
             return None
 
         if available_models is None:
             available_models = self._get_available_models()
 
-        for model in reg.models:
+        for model in preferred_models:
             if model in available_models:
                 logger.info(
                     "registry: Agent %s: preferred model %s available",

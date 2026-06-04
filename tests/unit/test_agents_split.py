@@ -67,6 +67,9 @@ def test_registry_uses_specialized_browser_and_analyst_agents(tmp_path):
 
 
 def test_registry_uses_specialized_lite_browser_and_analyst_agents(tmp_path):
+    # #1162: the "-lite" IDs are now legacy aliases for the base web/data
+    # agents on the "lite" model tier, not separate registrations. The lite
+    # model preset is read from the base agent's ``model_tiers``.
     from gaia.agents.analyst.agent import AnalystAgent
     from gaia.agents.browser.agent import BrowserAgent
     from gaia.agents.registry import AgentRegistry
@@ -74,14 +77,19 @@ def test_registry_uses_specialized_lite_browser_and_analyst_agents(tmp_path):
     registry = AgentRegistry()
     registry._register_builtin_agents()
 
-    lite_model = registry.get("web-lite").models[0]
+    def _lite_model(agent_id):
+        tiers = registry.get(agent_id).model_tiers
+        lite = next(t for t in tiers if t.name == "lite")
+        return lite.models[0]
+
+    lite_model = _lite_model("web")
     web = registry.create_agent("web-lite")
     assert isinstance(web, BrowserAgent)
     assert web.config.model_id == lite_model
     assert {"fetch_page", "search_web", "download_file"} <= set(web.get_tools_info())
     web.close()
 
-    lite_model = registry.get("data-lite").models[0]
+    lite_model = _lite_model("data")
     data = registry.create_agent(
         "data-lite", scratchpad_db_path=str(tmp_path / "scratchpad.db")
     )

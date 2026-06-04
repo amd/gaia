@@ -212,6 +212,11 @@ class AgentInfo(BaseModel):
     # Multi-device support (issue #1220): declared device configurations.
     # Each entry is a serialized ``DeviceConfig`` from the registry.
     device_configs: List[dict] = Field(default_factory=list)
+    # Model-size tiers (issue #1162): "full" vs "lite" (~4B). Each entry is a
+    # serialized ``ModelTier``. The frontend renders a single agent card with a
+    # model-size selector instead of duplicate "… Lite" cards. Empty for agents
+    # that expose only one model size.
+    model_tiers: List[dict] = Field(default_factory=list)
 
 
 class AgentListResponse(BaseModel):
