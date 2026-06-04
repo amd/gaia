@@ -9,7 +9,7 @@ title: "Dynamic Tool Loader"
 <Note>
 **Component:** Per-turn tool visibility for agents (issue [#688](https://github.com/amd/gaia/issues/688))
 **Module:** `gaia.agents.base.tool_loader`
-**Status:** Design — supersedes the original issue-body spec. Read this first.
+**Status:** Proposed — pending maintainer sign-off. Supersedes the issue-body spec once approved; read this first.
 **Target agent (v1):** `ChatAgent` (`doc` profile), behind a default-off toggle.
 </Note>
 
@@ -55,11 +55,12 @@ review failures on the prior attempts (#811 / #922 / #957 / #958).
 ├──────────────────────────────────────────────────────────┤
 │ SEMANTIC  — primary mechanism.                           │
 │   embed(conversation) → cosine vs. embedded tool docs    │
-│   open the bundles whose tools score ≥ τ.                │
+│   score tool docs ≥ τ → open matched tools' bundles.     │
 ├──────────────────────────────────────────────────────────┤
-│ ESCAPE HATCH  — reactive safety net for semantic misses. │
-│   model calls a tool semantic didn't surface → it still  │
-│   executes (full registry), and its bundle is re-shown.  │
+│ ESCAPE HATCH  — safety net for semantic misses.          │
+│   recovery is PATH-DEPENDENT (see "Escape hatch"):       │
+│   non-tool-calling → unlisted tool still executes;       │
+│   native tool-calling → explicit load_tools meta-tool.   │
 └──────────────────────────────────────────────────────────┘
         loaded = CORE ∪ SEMANTIC ∪ (escape-hatch additions)
 ```
@@ -112,7 +113,7 @@ implementer must internalize:
 | Filter `_format_tools_for_prompt` | There are **two** render paths | Must also filter the native path or tool-calling models get **zero** benefit. |
 | Three tiers incl. skill (#887) | #887 not landed; #606 memory **has** | Drop the skill tier from v1. Reuse `MemoryMixin._embed_text` — it exists and is already in ChatAgent. |
 | Tidy hook into `_compose_system_prompt` | System prompt is **cached** (`_system_prompt_cache`) and takes no user turn | Must recompute when selection changes and thread the user message in. |
-| Embedder unavailable → raise | Memory v2 **disables itself for the session** on embedder failure | Mirror that: embedder down → disable dynamic loading for the session, fall back to full registry, log loudly. |
+| Embedder unavailable → default raise, opt-in degrade | Memory v2 **disables itself for the session** on embedder failure | Mirror memory v2: embedder down → disable dynamic loading for the session, fall back to full registry, log loudly. |
 
 ### The two render paths (most important correction)
 
@@ -134,7 +135,7 @@ agent. The KPI set is **benefit gated by no-harm**:
 
 | KPI | Type | Target |
 |---|---|---|
-| **First-turn TTFT reduction** | Headline (user-felt) | Materially lower vs. unfiltered baseline |
+| **First-turn TTFT reduction** | Headline (user-felt) | Materially lower vs. unfiltered baseline; concrete target set from the Part-0 measurement |
 | **Prompt-cost slope** (tokens per added tool) | Architectural | ≈ flat — adding N tools ≈ 0 extra prompt cost |
 | **Tool recall** (turns where every needed tool was available) | Hard guardrail | ~100% — the merge gate |
 | **Task success rate** | Outcome guardrail | Within ~2% of unfiltered baseline |
@@ -168,30 +169,38 @@ Two rules follow:
    param, not the prompt body, so there the only lever is **set stability** (rule
    1), not ordering.
 
-## Two-part build
+## Phased build
 
-Ship in two reviewable parts so each layer earns its place with data — not one
-1,000-line drop like the prior attempts.
+Ship in distinct reviewable phases so each layer earns its place with data — not
+one 1,000-line drop like the prior attempts.
+
+### Part 0 — Measure first (do this before any loader code)
+
+Measure the *real* tool-prompt cost on ChatAgent across **both** render paths,
+and the prompt-cost slope (add dummy tools, show the unfiltered prompt grows
+while the loaded one stays flat). This validates the TTFT/slope justification —
+and sets the concrete TTFT target — before more is built.
 
 ### Part 1 — Selection + dual-path filtering
 
-- **Part 0 (do this first):** measure the *real* tool-prompt cost on ChatAgent
-  across **both** render paths, and the prompt-cost slope (add dummy tools, show
-  the unfiltered prompt grows while the loaded one stays flat). This validates the
-  TTFT/slope justification before more is built.
 - Wire selection into `_compose_system_prompt`; filter **both**
   `_format_tools_for_prompt` and `_build_openai_tool_schemas`.
 - `CORE` always-on + semantic via `_embed_text`; bundles as cohesion groups.
 - Fix the caching seam: recompute when selection changes; tool block last.
 - Embedder down → session-disable fallback (mirror memory v2), logged.
+- **Leave `_execute_tool` on the full registry.** This alone gives the free
+  non-tool-calling recovery (an unlisted tool the model names still runs) — so
+  Part 1 is *not* without a safety net, even though the explicit escape-hatch
+  machinery lands in Part 2.
 - Default-off toggle; scope to ChatAgent `doc`.
 - **Gate:** first-turn TTFT reduction + tool-recall ~100% + no later-turn TTFT
   regression.
 
-### Part 2 — Reactive escape hatch + tuning
+### Part 2 — Explicit escape hatch + tuning
 
-- Keep `_execute_tool` on the full registry (recovery is then ≈ free); add bundle
-  re-surfacing + a discoverability menu of bundle names.
+- Add bundle re-surfacing + a discoverability menu of bundle names, and the
+  `load_tools` meta-tool that native tool-calling models need (the free recovery
+  from Part 1 covers only the non-tool-calling path).
 - Instrument escape-hatch activation rate as the semantic-threshold tuning dial.
 
 ## Open questions for the implementer
@@ -205,7 +214,13 @@ These are intentionally **not** decided — propose them in your design sketch:
 2. **Similarity threshold τ** and how many tools/bundles to load before a cap.
 3. **Selection stability policy** — select once per session, or re-select on a
    detected topic shift? What triggers a re-selection without thrashing the cache?
-4. **Part-0 methodology** — exact harness for measuring TTFT and slope (extend
+4. **Query construction** — what text gets embedded as the match query: the
+   current user turn only, the last N chars of the conversation, or a blend? This
+   directly drives recall.
+5. **Config / toggle location** — where the default-off switch and any tunables
+   live (e.g. `~/.gaia/config.toml [agent.tool_loader]`, env var, or constructor
+   arg).
+6. **Part-0 methodology** — exact harness for measuring TTFT and slope (extend
    `gaia eval agent`, or a standalone bench?).
 
 ## Current state of the code
