@@ -56,7 +56,6 @@ setup(
         "gaia.agents.builder",
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
-        "gaia.agents.routing",
         "gaia.governance",
         "gaia.sd",
         "gaia.vlm",
@@ -270,6 +269,8 @@ setup(
         "agent-analyst": ["gaia-agent-analyst"],
         "agent-browser": ["gaia-agent-browser"],
         "agent-email": ["gaia-agent-email"],
+        "agent-docqa": ["gaia-agent-docqa"],
+        "agent-routing": ["gaia-agent-routing"],
         "agents": [
             "gaia-agent-summarize",
             "gaia-agent-sd",
@@ -283,6 +284,8 @@ setup(
             "gaia-agent-analyst",
             "gaia-agent-browser",
             "gaia-agent-email",
+            "gaia-agent-docqa",
+            "gaia-agent-routing",
         ],
     },
     classifiers=[
