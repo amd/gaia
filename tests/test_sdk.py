@@ -1313,9 +1313,15 @@ class TestSpecializedAgents:
 class TestCodeToolMixins:
     """Test all code mixins."""
 
+    @pytest.fixture(autouse=True)
+    def _require_code_pkg(self):
+        # CodeAgent ships as the standalone gaia-agent-code wheel (#1397, #1102);
+        # skip when it isn't installed.
+        pytest.importorskip("gaia_agent_code")
+
     def test_cli_tools_mixin_exists(self):
         """Verify CLIToolsMixin can be imported."""
-        from gaia.agents.code.tools.cli_tools import CLIToolsMixin
+        from gaia_agent_code.tools.cli_tools import CLIToolsMixin
 
         assert CLIToolsMixin is not None
         # Check for CLI registration method
@@ -1325,7 +1331,7 @@ class TestCodeToolMixins:
 
     def test_code_tools_mixin_exists(self):
         """Verify CodeToolsMixin can be imported."""
-        from gaia.agents.code.tools.code_tools import CodeToolsMixin
+        from gaia_agent_code.tools.code_tools import CodeToolsMixin
 
         assert CodeToolsMixin is not None
         # Check for registration method
@@ -1345,7 +1351,7 @@ class TestCodeToolMixins:
 
     def test_validation_tools_mixin_exists(self):
         """Verify ValidationToolsMixin can be imported."""
-        from gaia.agents.code.tools.validation_tools import ValidationToolsMixin
+        from gaia_agent_code.tools.validation_tools import ValidationToolsMixin
 
         assert ValidationToolsMixin is not None
         # Check for registration method
@@ -1355,7 +1361,7 @@ class TestCodeToolMixins:
 
     def test_error_fixing_mixin_exists(self):
         """Verify ErrorFixingMixin can be imported."""
-        from gaia.agents.code.tools.error_fixing import ErrorFixingMixin
+        from gaia_agent_code.tools.error_fixing import ErrorFixingMixin
 
         assert ErrorFixingMixin is not None
         # Check for registration method
@@ -1365,7 +1371,7 @@ class TestCodeToolMixins:
 
     def test_testing_mixin_exists(self):
         """Verify TestingMixin can be imported."""
-        from gaia.agents.code.tools.testing import TestingMixin
+        from gaia_agent_code.tools.testing import TestingMixin
 
         assert TestingMixin is not None
         # Check for registration method
@@ -1376,7 +1382,7 @@ class TestCodeToolMixins:
     def test_prisma_tools_mixin_exists(self):
         """Verify PrismaToolsMixin can be imported."""
         try:
-            from gaia.agents.code.tools.prisma_tools import PrismaToolsMixin
+            from gaia_agent_code.tools.prisma_tools import PrismaToolsMixin
 
             assert PrismaToolsMixin is not None
             # Check for Prisma-related tools
@@ -1390,7 +1396,7 @@ class TestCodeToolMixins:
     def test_typescript_tools_mixin_exists(self):
         """Verify TypeScriptToolsMixin can be imported."""
         try:
-            from gaia.agents.code.tools.typescript_tools import TypeScriptToolsMixin
+            from gaia_agent_code.tools.typescript_tools import TypeScriptToolsMixin
 
             assert TypeScriptToolsMixin is not None
             # Check for TypeScript-related tools
@@ -1404,7 +1410,7 @@ class TestCodeToolMixins:
     def test_web_tools_mixin_exists(self):
         """Verify WebToolsMixin can be imported."""
         try:
-            from gaia.agents.code.tools.web_dev_tools import WebToolsMixin
+            from gaia_agent_code.tools.web_dev_tools import WebToolsMixin
 
             assert WebToolsMixin is not None
             # Check for web-related tools
@@ -1417,9 +1423,10 @@ class TestCodeToolMixins:
 
     def test_code_mixins_can_be_combined(self):
         """Verify multiple code mixins can be combined."""
+        from gaia_agent_code.tools.cli_tools import CLIToolsMixin
+
         from gaia.agents.base.agent import Agent
         from gaia.agents.base.console import SilentConsole
-        from gaia.agents.code.tools.cli_tools import CLIToolsMixin
         from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
         class CombinedCodeAgent(Agent, CLIToolsMixin, FileIOToolsMixin):
@@ -1538,28 +1545,36 @@ class TestTalkIntegration:
 class TestCodeAgentIntegration:
     """Test Code Agent integration."""
 
+    @pytest.fixture(autouse=True)
+    def _require_code_pkg(self):
+        # CodeAgent ships as the standalone gaia-agent-code wheel (#1397, #1102);
+        # skip when it isn't installed.
+        pytest.importorskip("gaia_agent_code")
+
     def test_code_agent_exists(self):
         """Verify CodeAgent can be imported."""
-        from gaia.agents.code.agent import CodeAgent
+        from gaia_agent_code.agent import CodeAgent
 
         assert CodeAgent is not None
 
     def test_code_agent_has_all_mixins(self):
         """Verify CodeAgent includes all code mixins."""
-        from gaia.agents.code.agent import CodeAgent
-        from gaia.agents.code.tools.cli_tools import CLIToolsMixin
+        from gaia_agent_code.agent import CodeAgent
+        from gaia_agent_code.tools.cli_tools import CLIToolsMixin
+
         from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
         # Should inherit from required mixins
         assert issubclass(CodeAgent, CLIToolsMixin)
         assert issubclass(CodeAgent, FileIOToolsMixin)
 
-    @patch("gaia.agents.code.agent.CodeAgent._create_console")
+    @patch("gaia_agent_code.agent.CodeAgent._create_console")
     def test_code_agent_can_be_instantiated(self, mock_console):
         """Verify CodeAgent can be instantiated."""
+        from gaia_agent_code.agent import CodeAgent
+        from gaia_agent_code.tools.cli_tools import CLIToolsMixin
+
         from gaia.agents.base.console import SilentConsole
-        from gaia.agents.code.agent import CodeAgent
-        from gaia.agents.code.tools.cli_tools import CLIToolsMixin
         from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
         mock_console.return_value = SilentConsole()

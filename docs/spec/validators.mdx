@@ -7,8 +7,8 @@ title: "Code Validators"
 </Info>
 
 <Note>
-**Module:** `gaia.agents.code.validators`
-**Import:** `from gaia.agents.code.validators import SyntaxValidator, ASTAnalyzer, AntipatternChecker`
+**Module:** `gaia_agent_code.validators`
+**Import:** `from gaia_agent_code.validators import SyntaxValidator, ASTAnalyzer, AntipatternChecker`
 </Note>
 ---
 
@@ -551,10 +551,10 @@ class RequirementsValidator:
         """
 ```
 
-Registered and re-exported from `gaia.agents.code.validators`:
+Registered and re-exported from `gaia_agent_code.validators`:
 
 ```python
-from gaia.agents.code.validators import (
+from gaia_agent_code.validators import (
     SyntaxValidator,
     ASTAnalyzer,
     AntipatternChecker,
@@ -698,7 +698,7 @@ def check(self, _file_path: Path, content: str) -> Dict[str, Any]:
 
 ```python
 import pytest
-from gaia.agents.code.validators import SyntaxValidator, ASTAnalyzer, AntipatternChecker
+from gaia_agent_code.validators import SyntaxValidator, ASTAnalyzer, AntipatternChecker
 from pathlib import Path
 
 # SyntaxValidator Tests
@@ -797,7 +797,7 @@ def test_antipattern_checker_too_many_parameters():
 ### Example 1: Basic Validation
 
 ```python
-from gaia.agents.code.validators import SyntaxValidator
+from gaia_agent_code.validators import SyntaxValidator
 
 validator = SyntaxValidator()
 
@@ -814,7 +814,7 @@ print(result.errors)  # ["Line 1: EOL while scanning string literal"]
 ### Example 2: AST Analysis
 
 ```python
-from gaia.agents.code.validators import ASTAnalyzer
+from gaia_agent_code.validators import ASTAnalyzer
 
 analyzer = ASTAnalyzer()
 
@@ -848,7 +848,7 @@ for symbol in result.symbols:
 ### Example 3: Anti-pattern Detection
 
 ```python
-from gaia.agents.code.validators import AntipatternChecker
+from gaia_agent_code.validators import AntipatternChecker
 from pathlib import Path
 
 checker = AntipatternChecker()
@@ -884,7 +884,7 @@ for warning in result["warnings"]:
 ### Example 4: Integrated Validation
 
 ```python
-from gaia.agents.code.validators import SyntaxValidator, ASTAnalyzer, AntipatternChecker
+from gaia_agent_code.validators import SyntaxValidator, ASTAnalyzer, AntipatternChecker
 from pathlib import Path
 
 def validate_code(code: str) -> dict:

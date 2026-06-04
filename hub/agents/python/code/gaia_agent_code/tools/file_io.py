@@ -14,7 +14,7 @@ import warnings
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin  # noqa: F401
 
 warnings.warn(
-    "gaia.agents.code.tools.file_io is deprecated; import from "
+    "gaia_agent_code.tools.file_io is deprecated; import from "
     "gaia.agents.tools.file_io_tools instead.",
     DeprecationWarning,
     stacklevel=2,

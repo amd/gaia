@@ -56,14 +56,6 @@ setup(
         "gaia.agents.chat",
         "gaia.agents.chat.tools",
         "gaia.agents.builder",
-        "gaia.agents.code",
-        "gaia.agents.code.orchestration",
-        "gaia.agents.code.orchestration.factories",
-        "gaia.agents.code.orchestration.steps",
-        "gaia.agents.code.orchestration.workflows",
-        "gaia.agents.code.prompts",
-        "gaia.agents.code.tools",
-        "gaia.agents.code.validators",
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
         "gaia.agents.routing",
@@ -257,6 +249,7 @@ setup(
         "agent-jira": ["gaia-agent-jira"],
         "agent-blender": ["gaia-agent-blender"],
         "agent-emr": ["gaia-agent-emr"],
+        "agent-code": ["gaia-agent-code"],
         "agents": [
             "gaia-agent-summarize",
             "gaia-agent-sd",
@@ -265,6 +258,7 @@ setup(
             "gaia-agent-jira",
             "gaia-agent-blender",
             "gaia-agent-emr",
+            "gaia-agent-code",
         ],
     },
     classifiers=[
@@ -283,7 +277,6 @@ setup(
             "gaia = gaia.cli:main",
             "gaia-cli = gaia.cli:main",
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
-            "gaia-code = gaia.agents.code.cli:main",
         ]
     },
     python_requires=">=3.10",

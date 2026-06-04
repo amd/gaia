@@ -7,11 +7,10 @@ import textwrap
 from pathlib import Path
 
 import pytest
-
-from gaia.agents.code.validators.antipattern_checker import AntipatternChecker
-from gaia.agents.code.validators.ast_analyzer import ASTAnalyzer
-from gaia.agents.code.validators.requirements_validator import RequirementsValidator
-from gaia.agents.code.validators.syntax_validator import SyntaxValidator
+from gaia_agent_code.validators.antipattern_checker import AntipatternChecker
+from gaia_agent_code.validators.ast_analyzer import ASTAnalyzer
+from gaia_agent_code.validators.requirements_validator import RequirementsValidator
+from gaia_agent_code.validators.syntax_validator import SyntaxValidator
 
 # ===================================================================
 # SyntaxValidator

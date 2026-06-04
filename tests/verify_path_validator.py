@@ -7,12 +7,12 @@ import sys
 # Add src to path
 sys.path.append(os.path.join(os.getcwd(), "src"))
 
-# DockerAgent moved to the external ``gaia_agent_docker`` wheel (#1102) and is
-# no longer importable from the framework; its path-validation is covered by
-# that package's own tests. The chat/code/rag cases below still exercise the
-# shared PathValidator contract here.
+# DockerAgent and CodeAgent moved to the external ``gaia_agent_docker`` /
+# ``gaia_agent_code`` wheels (#1102, #1397) and are no longer importable from
+# the framework; their path-validation is covered by those packages' own tests
+# (e.g. ``hub/agents/python/code/tests/test_file_io_guardrails.py``). The
+# chat/rag cases below still exercise the shared PathValidator contract here.
 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-from gaia.agents.code.agent import CodeAgent
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.security import PathValidator
 
@@ -60,20 +60,6 @@ def test_chat_agent():
     print("ChatAgent disallowed path check passed")
 
 
-def test_code_agent():
-    print("\n--- Testing CodeAgent ---")
-    agent = CodeAgent(allowed_paths=[os.getcwd()])
-
-    # Test read_file tool
-    # Mock validator
-    agent.path_validator.is_path_allowed = lambda path, prompt_user=True: False
-
-    read_file_fn = _TOOL_REGISTRY["read_file"]["function"]
-    result = read_file_fn(os.path.join(os.getcwd(), "README.md"))
-    assert result["status"] == "error" and "Access denied" in result["error"]
-    print("CodeAgent disallowed path check passed")
-
-
 def test_rag_sdk():
     print("\n--- Testing RAGSDK ---")
     config = RAGConfig(allowed_paths=[os.getcwd()])
@@ -93,6 +79,5 @@ def test_rag_sdk():
 if __name__ == "__main__":
     test_path_validator_direct()
     test_chat_agent()
-    test_code_agent()
     test_rag_sdk()
     print("\nAll tests passed!")

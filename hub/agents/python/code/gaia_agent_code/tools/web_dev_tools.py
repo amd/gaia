@@ -18,8 +18,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.base.tools import tool
-from gaia.agents.code.prompts.code_patterns import (
+from gaia_agent_code.prompts.code_patterns import (
     API_ROUTE_DYNAMIC_DELETE,
     API_ROUTE_DYNAMIC_GET,
     API_ROUTE_DYNAMIC_PATCH,
@@ -46,6 +45,8 @@ from gaia.agents.code.prompts.code_patterns import (
     generate_zod_schema,
     pluralize,
 )
+
+from gaia.agents.base.tools import tool
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +320,7 @@ class WebToolsMixin:
                 # Safety net: Ensure Prisma singleton exists before creating routes
                 singleton_path = project_path / "src" / "lib" / "prisma.ts"
                 if not singleton_path.exists():
-                    from gaia.agents.code.tools.prisma_tools import (
+                    from gaia_agent_code.tools.prisma_tools import (
                         PRISMA_SINGLETON_TEMPLATE,
                     )
 
@@ -874,7 +875,7 @@ export function {component_name}({{ }}: {component_name}Props) {{
             Returns:
                 Dictionary with success status and created files
             """
-            from gaia.agents.code.prompts.code_patterns import TEST_SETUP, VITEST_CONFIG
+            from gaia_agent_code.prompts.code_patterns import TEST_SETUP, VITEST_CONFIG
 
             try:
                 project_path = Path(project_dir)
@@ -1677,7 +1678,7 @@ model {model_name} {{
             Returns:
                 Dictionary with success status and generated files
             """
-            from gaia.agents.code.prompts.code_patterns import (
+            from gaia_agent_code.prompts.code_patterns import (
                 generate_routes_test_content,
                 generate_style_test_content,
             )

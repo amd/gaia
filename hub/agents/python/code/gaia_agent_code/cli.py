@@ -94,7 +94,7 @@ def cmd_run(args):
 
     # Check if code agent is available
     try:
-        from gaia.agents.code.agent import CodeAgent  # noqa: F401
+        from gaia_agent_code.agent import CodeAgent  # noqa: F401
 
         CODE_AVAILABLE = True
     except ImportError:
@@ -347,7 +347,7 @@ def cmd_index(argv):
 
     if action == "chat":
         try:
-            from gaia.agents.code.agent import CodeAgent
+            from gaia_agent_code.agent import CodeAgent
         except ImportError:
             print(
                 "code_index dependencies missing. "

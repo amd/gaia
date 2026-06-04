@@ -463,9 +463,10 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 |--------|-------------|---------|
 | `gaia` / `gaia-cli` | `gaia.cli:main` | Main CLI — all `gaia <subcommand>` |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge binary |
-| `gaia-code` | `gaia.agents.code.cli:main` | CodeAgent standalone entry (NOT `gaia code`) |
 
 The `gaia-emr` console script now ships with the standalone `gaia-agent-emr` hub package (`hub/agents/python/emr/`), not the core wheel.
+
+`gaia-code` is no longer a core `console_scripts` entry — it ships with the standalone `gaia-agent-code` wheel (`hub/agents/python/code/`, entry point `gaia_agent_code.cli:main`).
 
 ## Architecture
 
@@ -587,7 +588,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia perf-vis` - Visualize performance results
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):
-- `gaia-code` - CodeAgent entry (`src/gaia/agents/code/cli.py`)
+- `gaia-code` - CodeAgent entry, from the `gaia-agent-code` wheel (`hub/agents/python/code/gaia_agent_code/cli.py`)
 - `gaia-emr` - Medical intake entry (ships with the `gaia-agent-emr` hub package, `hub/agents/python/emr/gaia_agent_emr/cli.py`)
 - `gaia-mcp` - Standalone MCP bridge binary
 

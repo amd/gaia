@@ -25,8 +25,9 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from gaia_agent_code.agent import CodeAgent
+
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.code.agent import CodeAgent
 
 
 class TestCodeAgent(unittest.TestCase):
