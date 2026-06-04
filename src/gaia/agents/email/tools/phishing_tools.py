@@ -61,8 +61,9 @@ def _resolve_quarantine_label_id(gmail) -> str:
     for label in gmail.list_labels():
         if label.get("name") == QUARANTINE_LABEL_NAME:
             return label["id"]
-    # Label does not exist — create it.
-    new_label = gmail.create_label(QUARANTINE_LABEL_NAME)
+    # Label does not exist — create it. The backend Protocol declares
+    # ``create_label(self, *, name: str)`` (keyword-only); call it as such.
+    new_label = gmail.create_label(name=QUARANTINE_LABEL_NAME)
     return new_label["id"]
 
 
@@ -250,6 +251,10 @@ class PhishingToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
+                return _envelope_err(str(exc))
+            except RuntimeError as exc:
+                # Expired-undo-window / unknown-action_id is actionable —
+                # surface the message instead of a generic tool error.
                 return _envelope_err(str(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
