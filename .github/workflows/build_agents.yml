@@ -11,6 +11,8 @@
 # into a single bundle for downstream publishing (R2 / PyPI are handled by other
 # Agent Hub issues — this workflow only produces and uploads the artifacts).
 #
+# Static triplets: Windows uses the built-in x64-windows-static; Linux/macOS use
+# the overlay triplets in cpp/triplets/ (no built-in *-static there).
 # Manifests + the packaging script: cpp/agents/, cpp/packaging/package_agents.py
 # Issue: https://github.com/amd/gaia/issues/1094
 
@@ -100,7 +102,10 @@ jobs:
             echo "::error::VCPKG_INSTALLATION_ROOT is not set on this runner"
             exit 1
           fi
-          "${VCPKG_INSTALLATION_ROOT}/vcpkg" install "openssl:${{ matrix.triplet }}"
+          # Linux/macOS have no built-in *-static triplet; cpp/triplets supplies
+          # them as overlays (Windows still uses its built-in x64-windows-static).
+          "${VCPKG_INSTALLATION_ROOT}/vcpkg" install "openssl:${{ matrix.triplet }}" \
+            --overlay-triplets="${GITHUB_WORKSPACE}/cpp/triplets"
 
       - name: Configure CMake (static)
         shell: bash
@@ -115,6 +120,7 @@ jobs:
             -DGAIA_BUILD_BENCHMARKS=OFF \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
+            -DVCPKG_OVERLAY_TRIPLETS="${GITHUB_WORKSPACE}/cpp/triplets" \
             -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build (Release)
