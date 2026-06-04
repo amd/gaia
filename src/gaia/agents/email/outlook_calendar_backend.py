@@ -245,6 +245,9 @@ class LiveOutlookCalendarBackend:
         time_max: Optional[str] = None,
         max_results: int = 25,
     ) -> Dict[str, Any]:
+        # ``calendar_id`` is implicit in Graph's ``/me`` endpoints — kept in the
+        # signature for Protocol parity with the Google backend.
+        # pylint: disable=unused-argument
         # When BOTH bounds are present, use calendarView — it expands recurring
         # series into instances within the window (the analogue of Google's
         # ``singleEvents=true``). Otherwise list raw events ordered by start.
@@ -267,6 +270,9 @@ class LiveOutlookCalendarBackend:
     def get_event(
         self, *, calendar_id: str = "primary", event_id: str
     ) -> Dict[str, Any]:
+        # ``calendar_id`` is implicit in Graph's ``/me`` endpoints — kept in the
+        # signature for Protocol parity with the Google backend.
+        # pylint: disable=unused-argument
         data = self._get(f"/me/events/{event_id}")
         return graph_event_to_google(data)
 
@@ -281,8 +287,10 @@ class LiveOutlookCalendarBackend:
         response_status: str,
     ) -> Dict[str, Any]:
         # Graph RSVP is an action on the invitee's own copy of the event
-        # (the authenticated ``/me``), so ``attendee_email`` is unused here —
-        # kept in the signature for Protocol parity with the Google backend.
+        # (the authenticated ``/me``), so ``attendee_email`` and ``calendar_id``
+        # are unused here — kept in the signature for Protocol parity with the
+        # Google backend.
+        # pylint: disable=unused-argument
         action = _RSVP_ACTION.get((response_status or "").strip().lower())
         if action is None:
             raise ConnectorsError(
@@ -304,6 +312,9 @@ class LiveOutlookCalendarBackend:
         location: Optional[str] = None,
         description: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # ``calendar_id`` is implicit in Graph's ``/me`` endpoints — kept in the
+        # signature for Protocol parity with the Google backend.
+        # pylint: disable=unused-argument
         body: Dict[str, Any] = {
             "subject": summary,
             "start": _graph_endpoint(start),
