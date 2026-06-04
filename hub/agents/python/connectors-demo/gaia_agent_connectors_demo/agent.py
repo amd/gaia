@@ -55,8 +55,11 @@ logger = get_logger(__name__)
 
 
 # Public namespace this agent uses for grant-ledger lookups. Must agree
-# with the registration in ``gaia.agents.registry``.
-AGENT_NAMESPACED_ID = "builtin:connectors-demo"
+# with the registration's ``namespaced_agent_id`` in
+# ``gaia_agent_connectors_demo.build_registration``. The agent now ships as a
+# standalone hub wheel (#1102), so it is discovered as an ``installed:`` agent
+# rather than a framework ``builtin:``.
+AGENT_NAMESPACED_ID = "installed:connectors-demo"
 
 # OAuth scopes the four tools need. Declared in one place so the
 # REQUIRED_CONNECTORS block and the per-tool calls can't drift apart.

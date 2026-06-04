@@ -107,7 +107,12 @@ class TestBuiltinRegistration:
     # gaia-lite were collapsed into a "lite" model TIER of the single base
     # agent. The old IDs survive only as legacy aliases.
 
-    _BASE_AGENTS = ["chat", "doc", "file", "data", "web"]
+    # chat/doc/file are ChatAgent profiles still resident in the framework
+    # wheel. data (AnalystAgent) and web (BrowserAgent) now ship as the
+    # standalone gaia-agent-analyst / gaia-agent-browser wheels (#1102); their
+    # full+lite tiers are verified in those packages' own tests, so the
+    # framework-only suite asserts tiers on the resident profiles only.
+    _BASE_AGENTS = ["chat", "doc", "file"]
     _LEGACY_LITE_IDS = [
         "chat-lite",
         "doc-lite",
@@ -155,9 +160,14 @@ class TestBuiltinRegistration:
             "gaia-lite": "doc",
         }
         for legacy, base in expected.items():
+            # canonical_id is a pure alias mapping — holds whether or not the
+            # base agent's wheel is installed.
             assert registry.canonical_id(legacy) == base
-            reg = registry.get(legacy)
-            assert reg is not None and reg.id == base
+            # data/web ship as standalone wheels (#1102); only assert the
+            # registration resolves when the base agent is actually registered.
+            if base in {r.id for r in registry.list()}:
+                reg = registry.get(legacy)
+                assert reg is not None and reg.id == base
 
     def test_legacy_chat_lite_create_agent_uses_lite_tier(self):
         """``create_agent('chat-lite')`` builds chat with the ~4B preset."""

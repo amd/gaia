@@ -214,6 +214,28 @@ MODELS = {
         min_ctx_size=65536,
         tool_calling=True,
     ),
+    # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
+    # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
+    # ``gemma4-it:e2b``), NOT the llama.cpp GGUF variant — only the FLM build
+    # runs on the Strix Halo NPU. Validated on hardware: device=npu,
+    # recipe=flm, served at :13305, ctx_size=4096 (the NPU window). The triage
+    # classifier clips email bodies to 4000 chars, so a single email + the
+    # triage system prompt fit. The E2B *FLM* accuracy baseline is a follow-up:
+    # baseline_accuracy_e2b.json was recorded on the GGUF build, a different
+    # variant.
+    # tool_calling=False: unlike the GGUF builds (native tool calls via
+    # --jinja), the FLM/NPU server 500-errors on an OpenAI ``tools`` payload
+    # ("type must be string, but is object" — verified on hardware). The agent
+    # therefore uses the embedded-JSON tool path for this model. Email triage
+    # itself parses a JSON object from a plain completion (no native tool
+    # calls), so triage is unaffected.
+    "gemma-4-e2b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="gemma4-it-e2b-FLM",
+        display_name="Gemma 4 E2B (NPU/FLM)",
+        min_ctx_size=4096,
+        tool_calling=False,
+    ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
     "qwen3.5-35b": ModelRequirement(
         model_type=ModelType.LLM,

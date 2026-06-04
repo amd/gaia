@@ -73,6 +73,27 @@ jobs:
     uses: ./.github/workflows/test_chat_agent.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
+  # Test Connectors Demo Agent (standalone hub wheel, #1102)
+  test-connectors-demo:
+    name: Connectors Demo Agent Tests
+    needs: lint
+    uses: ./.github/workflows/test_connectors_demo.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+  # Test Analyst Agent (standalone hub wheel, #1102)
+  test-analyst-agent:
+    name: Analyst Agent Tests
+    needs: lint
+    uses: ./.github/workflows/test_analyst_agent.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+  # Test Browser Agent (standalone hub wheel, #1102)
+  test-browser-agent:
+    name: Browser Agent Tests
+    needs: lint
+    uses: ./.github/workflows/test_browser_agent.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
   # Test Security features
   test-security:
     name: Security Tests
@@ -84,7 +105,7 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [lint, unit-tests, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-security]
+    needs: [lint, unit-tests, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-connectors-demo, test-analyst-agent, test-browser-agent, test-security]
     # Run always except when workflow or any dependency is cancelled (e.g., by cancel-in-progress)
     if: >-
       ${{ always() && !cancelled() &&

@@ -170,7 +170,7 @@ A connector lets users:
 Declare what your agent needs by setting `REQUIRED_CONNECTORS` on the
 class, and call `get_credential_sync(connector_id, agent_id, required_scopes=[...])`
 from inside a tool to get a usable token. The
-[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/src/gaia/agents/connectors_demo/agent.py)
+[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/hub/agents/python/connectors-demo/gaia_agent_connectors_demo/agent.py)
 is a working reference for both `oauth_pkce` (Google) and `mcp_server`
 (GitHub) connectors.
 

@@ -801,48 +801,39 @@ async def async_main(action, **kwargs):
             except Exception:  # pylint: disable=broad-except
                 pass
     elif action in ("browse", "analyze"):
-        if action == "browse":
-            from gaia.agents.browser.agent import BrowserAgent, BrowserAgentConfig
+        # BrowserAgent (id="web") and AnalystAgent (id="data") ship as the
+        # standalone gaia-agent-browser / gaia-agent-analyst wheels (#1102);
+        # resolve them through the registry so the framework doesn't hard-import
+        # the external packages.
+        from gaia.agents.registry import AgentRegistry
 
-            agent = BrowserAgent(
-                BrowserAgentConfig(
-                    use_claude=kwargs.get("use_claude", False),
-                    use_chatgpt=kwargs.get("use_chatgpt", False),
-                    claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
-                    base_url=kwargs.get("base_url"),
-                    model_id=kwargs.get("model", None),
-                    max_steps=kwargs.get("max_steps", 100),
-                    streaming=kwargs.get("stream", False),
-                    show_prompts=kwargs.get("show_prompts", False),
-                    show_stats=kwargs.get("show_stats", False),
-                    silent_mode=not (
-                        kwargs.get("debug", False) or kwargs.get("list_tools", False)
-                    ),
-                    debug=kwargs.get("debug", False),
-                    allowed_paths=kwargs.get("allowed_paths", None),
-                )
+        agent_id = "web" if action == "browse" else "data"
+        wheel = "gaia-agent-browser" if action == "browse" else "gaia-agent-analyst"
+        agent_config_kwargs = dict(
+            use_claude=kwargs.get("use_claude", False),
+            use_chatgpt=kwargs.get("use_chatgpt", False),
+            claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
+            base_url=kwargs.get("base_url"),
+            model_id=kwargs.get("model", None),
+            max_steps=kwargs.get("max_steps", 100),
+            streaming=kwargs.get("stream", False),
+            show_prompts=kwargs.get("show_prompts", False),
+            show_stats=kwargs.get("show_stats", False),
+            silent_mode=not (
+                kwargs.get("debug", False) or kwargs.get("list_tools", False)
+            ),
+            debug=kwargs.get("debug", False),
+            allowed_paths=kwargs.get("allowed_paths", None),
+        )
+        registry = AgentRegistry()
+        registry.discover()
+        if registry.get(agent_id) is None:
+            raise RuntimeError(
+                f"The '{action}' agent is not installed. Install it with "
+                f'`pip install {wheel}` (or `pip install "amd-gaia[agents]"` '
+                f"for all agents), then re-run `gaia {action}`."
             )
-        else:
-            from gaia.agents.analyst.agent import AnalystAgent, AnalystAgentConfig
-
-            agent = AnalystAgent(
-                AnalystAgentConfig(
-                    use_claude=kwargs.get("use_claude", False),
-                    use_chatgpt=kwargs.get("use_chatgpt", False),
-                    claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
-                    base_url=kwargs.get("base_url"),
-                    model_id=kwargs.get("model", None),
-                    max_steps=kwargs.get("max_steps", 100),
-                    streaming=kwargs.get("stream", False),
-                    show_prompts=kwargs.get("show_prompts", False),
-                    show_stats=kwargs.get("show_stats", False),
-                    silent_mode=not (
-                        kwargs.get("debug", False) or kwargs.get("list_tools", False)
-                    ),
-                    debug=kwargs.get("debug", False),
-                    allowed_paths=kwargs.get("allowed_paths", None),
-                )
-            )
+        agent = registry.create_agent(agent_id, **agent_config_kwargs)
 
         try:
             if kwargs.get("list_tools", False):
@@ -1764,6 +1755,24 @@ def build_parser():
         help=(
             "Debug mode — adds full prompt + LLM response logging to "
             "verbose output. Sensitive payloads in logs."
+        ),
+    )
+    email_parser.add_argument(
+        "--spec",
+        action="store_true",
+        help=(
+            "Generate the HTML endpoint spec page, write it to disk, and open "
+            "it in a browser. No LLM or Lemonade required."
+        ),
+    )
+    email_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to write the HTML spec (default: ~/.gaia/email/endpoint-spec.html). "
+            "Only used with --spec."
         ),
     )
 
@@ -4575,6 +4584,15 @@ def handle_email_command(args):
         args: Parsed command line arguments for the email command
     """
     log = get_logger(__name__)
+
+    # --spec: generate the HTML endpoint spec and open it in a browser.
+    # No LLM, no Lemonade — short-circuit before any server check.
+    if getattr(args, "spec", False):
+        from gaia.agents.email.spec_html import write_and_open_spec
+
+        dest = write_and_open_spec(getattr(args, "output", None))
+        print(dest)
+        sys.exit(0)
 
     # Initialize Lemonade — local LLM only. The email agent's config will
     # also reject any non-local base_url at construction time, but the
