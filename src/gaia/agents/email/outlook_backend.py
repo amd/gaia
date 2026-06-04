@@ -527,6 +527,7 @@ class LiveOutlookBackend:
         # Master categories require a ``color`` (preset enum); ``preset0`` is a
         # safe default. ``label_list_visibility`` has no Outlook analogue and is
         # ignored — kept in the signature for Protocol parity with Gmail.
+        # pylint: disable=unused-argument
         created = self._post(
             "/me/outlook/masterCategories",
             json_body={"displayName": name, "color": "preset0"},

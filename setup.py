@@ -42,6 +42,7 @@ setup(
         "gaia.apps.summarize.templates",
         "gaia.eval",
         "gaia.installer",
+        "gaia.hub",
         "gaia.rag",
         "gaia.mcp",
         "gaia.mcp.client",

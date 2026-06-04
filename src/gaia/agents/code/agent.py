@@ -21,7 +21,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.api_agent import ApiAgent
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.code_index.tools.mixin import CodeIndexToolsMixin
+from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.security import PathValidator
 
 from .orchestration import (

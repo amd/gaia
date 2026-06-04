@@ -4,9 +4,12 @@ from dataclasses import dataclass
 from typing import Optional
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.chat.tools import ShellToolsMixin
-from gaia.agents.code.tools.file_io import FileIOToolsMixin
-from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin
+from gaia.agents.tools import (
+    FileIOToolsMixin,
+    FileSearchToolsMixin,
+    ScreenshotToolsMixin,
+    ShellToolsMixin,
+)
 from gaia.mcp.mixin import MCPClientMixin
 
 

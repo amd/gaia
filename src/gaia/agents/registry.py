@@ -31,11 +31,11 @@ AGENT_ENTRY_POINT_GROUP = "gaia.agents"
 # Consumed by BuilderAgent's template (src/gaia/agents/builder/template.py) to
 # scaffold tool-mixin imports and base classes when generating agent.py files.
 KNOWN_TOOLS: Dict[str, tuple] = {
-    "rag": ("gaia.agents.chat.tools.rag_tools", "RAGToolsMixin"),
-    "code_index": ("gaia.agents.code_index.tools.mixin", "CodeIndexToolsMixin"),
+    "rag": ("gaia.agents.tools.rag_tools", "RAGToolsMixin"),
+    "code_index": ("gaia.agents.tools.code_index_tools", "CodeIndexToolsMixin"),
     "file_search": ("gaia.agents.tools.file_tools", "FileSearchToolsMixin"),
-    "file_io": ("gaia.agents.code.tools.file_io", "FileIOToolsMixin"),
-    "shell": ("gaia.agents.chat.tools.shell_tools", "ShellToolsMixin"),
+    "file_io": ("gaia.agents.tools.file_io_tools", "FileIOToolsMixin"),
+    "shell": ("gaia.agents.tools.shell_tools", "ShellToolsMixin"),
     "screenshot": ("gaia.agents.tools.screenshot_tools", "ScreenshotToolsMixin"),
     "filesystem": ("gaia.agents.tools.filesystem_tools", "FileSystemToolsMixin"),
     "scratchpad": ("gaia.agents.tools.scratchpad_tools", "ScratchpadToolsMixin"),

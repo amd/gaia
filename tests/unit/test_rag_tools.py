@@ -3,11 +3,11 @@
 """
 Tests for RAG tools helper functions (extract_page_from_chunk).
 
-Tests the pure functions in gaia.agents.chat.tools.rag_tools that were
+Tests the pure functions in gaia.agents.tools.rag_tools that were
 modified in the Agent UI PR to improve nil-RAG handling and page extraction.
 """
 
-from gaia.agents.chat.tools.rag_tools import extract_page_from_chunk
+from gaia.agents.tools.rag_tools import extract_page_from_chunk
 
 
 class TestExtractPageFromChunk:

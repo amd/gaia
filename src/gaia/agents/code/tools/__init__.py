@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Tool mixins for Code Agent."""
 
+# Focused mixins (retained)
+from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+
 from .code_formatting import CodeFormattingMixin
 
 # Consolidated mixins (new architecture)
@@ -10,9 +13,6 @@ from .error_fixing import ErrorFixingMixin
 
 # External service tools
 from .external_tools import ExternalToolsMixin
-
-# Focused mixins (retained)
-from .file_io import FileIOToolsMixin
 from .project_management import ProjectManagementMixin
 from .testing import TestingMixin
 from .typescript_tools import TypeScriptToolsMixin
