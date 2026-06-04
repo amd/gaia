@@ -8,6 +8,27 @@ icon: "folder-tree"
 **Tracking issue:** [#1102](https://github.com/amd/gaia/issues/1102) · **Milestone:** v0.22.0 — Agent Hub Platform [OSS] · **Status:** In Progress
 </Note>
 
+## Migration status
+
+Step 1 (mixin promotion) and the registry's installed-agent discovery are
+landed. Production agents are migrating to `hub/agents/python/<id>/` in batches.
+
+| Agent(s) | Status | Package |
+|----------|--------|---------|
+| `summarize`, `sd`, `docker`, `jira`, `fileio`, `blender`, `emr` | ✅ Migrated | `gaia-agent-<id>` under `hub/agents/python/` |
+| `chat` (chat/doc/file profiles + lite), `analyst` (data), `browser` (web), `docqa`, `email`, `code`, `routing`, `connectors-demo` | ⏳ Pending | still in `src/gaia/agents/` |
+
+The pending set is deferred because of deeper coupling: `chat`/`doc`/`file`
+sit on the Agent UI hot path (13+ callsites), `email` has a large API/MCP/eval
+surface, `code`↔`routing` are interdependent, and `docqa` depends on
+`chat.tools`. They migrate once their callsites are rewired through the
+registry. `gaia-code` stays as a core console script until `code` moves.
+
+Migrated agents install as standalone wheels (`pip install gaia-agent-<id>` or
+`pip install -e hub/agents/python/<id>`) and are discovered via the `gaia.agent`
+entry-point group. The core `amd-gaia` wheel no longer ships them; in-core
+callsites lazy-import each agent and fail loudly when the wheel is absent.
+
 ## Problem
 
 Production agents (chat, code, jira, blender, etc.) currently live inside `src/gaia/agents/` and ship as part of the core `amd-gaia` wheel. This couples every agent to the framework's release cycle, prevents independent versioning, and gives third-party contributors no pattern to follow — their agents would have to live inside the AMD source tree.

@@ -28,7 +28,8 @@ from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
 
-# Optional imports
+# Optional imports — degrades to BLENDER_AVAILABLE = False when the blender
+# agent (or the Blender MCP client) is not installed.
 try:
     from gaia.agents.blender.agent import BlenderAgent
     from gaia.mcp.blender_mcp_client import MCPClient

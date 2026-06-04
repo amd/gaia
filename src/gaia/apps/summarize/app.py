@@ -11,9 +11,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from gaia.agents.summarize.agent import SummarizerAgent
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
+
+
+def _load_summarizer_agent_class():
+    """Import SummarizerAgent from its standalone package, or fail loudly.
+
+    The summarize agent ships as the separate ``gaia-agent-summarize`` wheel
+    (issue #1102); it is no longer part of the core ``amd-gaia`` wheel.
+    """
+    try:
+        from gaia_agent_summarize.agent import SummarizerAgent
+    except ImportError as e:
+        raise ImportError(
+            "The summarize agent is not installed. Install it with "
+            "`pip install gaia-agent-summarize` (or `pip install amd-gaia[agents]` "
+            "for all AMD agents). See https://amd-gaia.ai/docs/guides/summarize."
+        ) from e
+    return SummarizerAgent
 
 
 # Utility functions for email validation (used by CLI and other tools)
@@ -61,7 +77,8 @@ class SummarizerApp:
     def __init__(self, config: Optional[SummaryConfig] = None):
         self.config = config or SummaryConfig()
         self.log = get_logger(__name__)
-        self.agent = SummarizerAgent(
+        summarizer_agent_class = _load_summarizer_agent_class()
+        self.agent = summarizer_agent_class(
             model=self.config.model,
             max_tokens=self.config.max_tokens,
             styles=self.config.styles,

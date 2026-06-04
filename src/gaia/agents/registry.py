@@ -25,7 +25,12 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Entry-point groups scanned for installed agent wheels. The hub packaging
+# format (docs/spec/agent-hub-restructure.mdx) declares agents under
+# ``gaia.agent`` (singular); the original group was ``gaia.agents`` (plural).
+# Both are scanned so packages using either form are discovered.
 AGENT_ENTRY_POINT_GROUP = "gaia.agents"
+AGENT_ENTRY_POINT_GROUPS = ("gaia.agents", "gaia.agent")
 
 # KNOWN_TOOLS maps tool name -> (module_path, class_name) for lazy import.
 # Consumed by BuilderAgent's template (src/gaia/agents/builder/template.py) to
@@ -137,6 +142,31 @@ def _accepted_init_params(klass: type) -> Optional[set[str]]:
     if inspected_levels == 0:
         return set()
     return None if all_inspected_levels_have_var_keyword else accepted
+
+
+def class_factory(agent_class: type) -> Callable[..., Any]:
+    """Return a kwarg-filtering factory for a plain ``Agent`` subclass.
+
+    Standalone agent packages (``hub/agents/python/<id>/``) call this from
+    their ``build_registration()`` to wire a registry factory without
+    re-implementing the kwarg-filtering dance. Session-level kwargs injected
+    by the registry/UI host (``namespaced_agent_id``, ``allowed_paths``,
+    ``model_id`` …) are filtered down to the parameters the constructor
+    actually accepts — unless the constructor declares ``**kwargs``, in which
+    case every kwarg is forwarded as-is.
+
+    For agents constructed from a config dataclass (``Agent(config=Cfg(...))``)
+    write a small explicit factory instead; this helper is for the common
+    ``Agent(**kwargs)`` shape.
+    """
+    accepted = _accepted_init_params(agent_class)
+
+    def factory(**kwargs):
+        if accepted is None:
+            return agent_class(**kwargs)
+        return agent_class(**{k: v for k, v in kwargs.items() if k in accepted})
+
+    return factory
 
 
 def _wrap_factory_with_namespaced_id(
@@ -375,7 +405,7 @@ class AgentRegistry:
             logger.info("registry: No custom agent directory found at %s", agents_dir)
 
         # 3. Discover installed Python agents exposed by standalone wheels
-        self._discover_entry_point_agents()
+        self._discover_installed_agents()
 
         # 4. Discover native (C++/binary) agents from agent-manifest.json
         self._discover_native_agents()
@@ -936,11 +966,25 @@ class AgentRegistry:
     # Installed Python agent discovery
     # ------------------------------------------------------------------
 
-    def _discover_entry_point_agents(self) -> None:
-        """Register installed Python agents from the ``gaia.agents`` group."""
-        agent_entry_points = importlib.metadata.entry_points(
-            group=AGENT_ENTRY_POINT_GROUP
-        )
+    def _discover_installed_agents(self) -> None:
+        """Register installed Python agents exposed by standalone wheels.
+
+        Scans the ``gaia.agent`` / ``gaia.agents`` entry-point groups. Each
+        entry point loads either an :class:`AgentRegistration`, a zero-argument
+        callable returning one (the ``build_registration()`` convention used by
+        ``hub/agents/python/<id>/``), or an ``Agent`` subclass. This is how the
+        framework-only core wheel finds the production agents once they ship as
+        separate ``gaia-agent-<id>`` packages (issue #1102).
+        """
+        seen_entry_points: set = set()
+        agent_entry_points = []
+        for group in AGENT_ENTRY_POINT_GROUPS:
+            for ep in importlib.metadata.entry_points(group=group):
+                key = (ep.name, ep.value)
+                if key in seen_entry_points:
+                    continue
+                seen_entry_points.add(key)
+                agent_entry_points.append(ep)
 
         registered = 0
         for entry_point in agent_entry_points:
@@ -972,12 +1016,23 @@ class AgentRegistry:
         self, entry_point: importlib.metadata.EntryPoint
     ) -> AgentRegistration:
         loaded = entry_point.load()
-        registration = loaded() if callable(loaded) else loaded
+
+        # Spec form (docs/spec/agent-hub-restructure.mdx): the entry point may
+        # target the Agent subclass directly, e.g.
+        # ``chat = "gaia_agent_chat.agent:ChatAgent"``. Build a registration
+        # from its class attributes in that case.
+        from gaia.agents.base.agent import Agent as BaseAgent
+
+        if isinstance(loaded, type) and issubclass(loaded, BaseAgent):
+            registration = self._registration_from_class(loaded, entry_point.name)
+        else:
+            registration = loaded() if callable(loaded) else loaded
+
         if not isinstance(registration, AgentRegistration):
             raise TypeError(
-                f"{AGENT_ENTRY_POINT_GROUP} entry point {entry_point.name!r} "
-                "must load an AgentRegistration or a zero-argument callable "
-                "returning one"
+                f"agent entry point {entry_point.name!r} must load an "
+                "AgentRegistration, a zero-argument callable returning one, or "
+                "an Agent subclass"
             )
         namespaced_id = f"installed:{registration.id}"
         registration = dataclasses.replace(
@@ -989,6 +1044,43 @@ class AgentRegistry:
             ),
         )
         return registration
+
+    def _registration_from_class(
+        self, agent_class: type, entry_point_name: str
+    ) -> AgentRegistration:
+        """Build an :class:`AgentRegistration` from an Agent subclass.
+
+        Reads identity + hub-display metadata from class attributes
+        (``AGENT_ID``, ``AGENT_NAME``, ``AGENT_DESCRIPTION``,
+        ``CONVERSATION_STARTERS``, ``AGENT_CATEGORY`` …) — the same attributes
+        custom agents under ``~/.gaia/agents/`` declare. Falls back to the
+        entry-point name for the id when ``AGENT_ID`` is absent.
+        """
+        agent_id = getattr(agent_class, "AGENT_ID", "") or entry_point_name
+        agent_name = getattr(agent_class, "AGENT_NAME", "") or agent_id
+        return AgentRegistration(
+            id=agent_id,
+            name=agent_name,
+            description=getattr(agent_class, "AGENT_DESCRIPTION", "") or "",
+            source="installed",
+            conversation_starters=list(
+                getattr(agent_class, "CONVERSATION_STARTERS", []) or []
+            ),
+            factory=class_factory(agent_class),
+            agent_dir=None,
+            models=list(getattr(agent_class, "AGENT_MODELS", []) or []),
+            required_connections=list(
+                getattr(agent_class, "REQUIRED_CONNECTORS", []) or []
+            ),
+            consumes_mcp_servers=bool(
+                getattr(agent_class, "CONSUMES_MCP_SERVERS", False)
+            ),
+            namespaced_agent_id=f"installed:{agent_id}",
+            category=getattr(agent_class, "AGENT_CATEGORY", "general") or "general",
+            tags=list(getattr(agent_class, "AGENT_TAGS", []) or []),
+            icon=getattr(agent_class, "AGENT_ICON", "") or "",
+            tools_count=getattr(agent_class, "AGENT_TOOLS_COUNT", 0) or 0,
+        )
 
     # ------------------------------------------------------------------
     # Native (C++/binary) agent discovery
