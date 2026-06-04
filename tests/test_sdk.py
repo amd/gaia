@@ -1269,12 +1269,12 @@ class TestSpecializedAgents:
     def test_docker_agent_exists(self):
         """Verify DockerAgent can be imported."""
         try:
-            from gaia.agents.docker.agent import DockerAgent
+            from gaia_agent_docker.agent import DockerAgent
 
             assert DockerAgent is not None
         except ImportError:
-            # Docker agent may not be implemented yet
-            pytest.skip("DockerAgent not yet implemented")
+            # Docker agent ships as the standalone gaia-agent-docker wheel (#1102)
+            pytest.skip("gaia-agent-docker not installed")
 
     def test_jira_agent_exists(self):
         """Verify JiraAgent can be imported."""

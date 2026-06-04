@@ -58,7 +58,6 @@ setup(
         "gaia.agents.chat",
         "gaia.agents.chat.tools",
         "gaia.agents.builder",
-        "gaia.agents.docker",
         "gaia.agents.emr",
         "gaia.agents.emr.dashboard",
         "gaia.agents.jira",
@@ -252,10 +251,12 @@ setup(
         "summarize": ["gaia-agent-summarize>=0.1.0"],
         "sd": ["gaia-agent-sd>=0.1.0"],
         "fileio": ["gaia-agent-fileio>=0.1.0"],
+        "docker-agent": ["gaia-agent-docker>=0.1.0"],
         "agents": [
             "gaia-agent-summarize>=0.1.0",
             "gaia-agent-sd>=0.1.0",
             "gaia-agent-fileio>=0.1.0",
+            "gaia-agent-docker>=0.1.0",
         ],
     },
     classifiers=[

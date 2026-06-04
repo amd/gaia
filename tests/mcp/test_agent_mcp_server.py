@@ -42,7 +42,7 @@ from gaia.mcp.agent_mcp_server import AgentMCPServer
 
 # Try importing agents - they may or may not exist
 try:
-    from gaia.agents.docker.agent import DockerAgent
+    from gaia_agent_docker.agent import DockerAgent
 
     HAS_DOCKER_AGENT = True
 except ImportError:

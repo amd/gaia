@@ -319,8 +319,9 @@ class TestBlenderAgentFormat:
 
 class TestDockerAgentFormat:
     def test_docker_no_duplicate_format(self):
+        pytest.importorskip("gaia_agent_docker")
         with patch("gaia.agents.base.agent.AgentSDK"):
-            from gaia.agents.docker.agent import DockerAgent
+            from gaia_agent_docker.agent import DockerAgent
 
             agent = DockerAgent(skip_lemonade=True, silent_mode=True)
         prompt = agent._get_system_prompt()
