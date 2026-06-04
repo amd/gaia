@@ -420,7 +420,8 @@
               "plans/cua",
               "plans/docker-containers",
               "plans/mcp-docs",
-              "plans/desktop-installer"
+              "plans/desktop-installer",
+              "plans/tool-loader"
             ]
           },
           {
