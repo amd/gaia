@@ -240,7 +240,6 @@
             "pages": [
               "spec/agent-base",
               "spec/tool-decorator",
-              "spec/tool-loader",
               "spec/console",
               "spec/file-change-handler"
             ]
@@ -421,7 +420,8 @@
               "plans/cua",
               "plans/docker-containers",
               "plans/mcp-docs",
-              "plans/desktop-installer"
+              "plans/desktop-installer",
+              "plans/tool-loader"
             ]
           },
           {
