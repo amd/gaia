@@ -355,7 +355,7 @@ def check_imports() -> CheckResult:
         # Specialized Agents
         ("from", "gaia.agents.chat", "ChatAgent", "Chat agent", False),
         ("from", "gaia.agents.code", "CodeAgent", "Code agent", False),
-        ("from", "gaia.agents.jira", "JiraAgent", "Jira agent", False),
+        ("from", "gaia_agent_jira", "JiraAgent", "Jira agent", True),
         ("from", "gaia_agent_docker", "DockerAgent", "Docker agent", True),
         ("from", "gaia.agents.blender", "BlenderAgent", "Blender agent", False),
         (

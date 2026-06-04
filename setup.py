@@ -60,7 +60,6 @@ setup(
         "gaia.agents.builder",
         "gaia.agents.emr",
         "gaia.agents.emr.dashboard",
-        "gaia.agents.jira",
         "gaia.agents.code",
         "gaia.agents.code.orchestration",
         "gaia.agents.code.orchestration.factories",
@@ -252,11 +251,13 @@ setup(
         "sd": ["gaia-agent-sd>=0.1.0"],
         "fileio": ["gaia-agent-fileio>=0.1.0"],
         "docker-agent": ["gaia-agent-docker>=0.1.0"],
+        "jira-agent": ["gaia-agent-jira>=0.1.0"],
         "agents": [
             "gaia-agent-summarize>=0.1.0",
             "gaia-agent-sd>=0.1.0",
             "gaia-agent-fileio>=0.1.0",
             "gaia-agent-docker>=0.1.0",
+            "gaia-agent-jira>=0.1.0",
         ],
     },
     classifiers=[

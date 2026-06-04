@@ -332,8 +332,9 @@ class TestDockerAgentFormat:
 
 class TestJiraAgentFormat:
     def test_jira_no_duplicate_format(self):
+        pytest.importorskip("gaia_agent_jira")
         with patch("gaia.agents.base.agent.AgentSDK"):
-            from gaia.agents.jira.agent import JiraAgent
+            from gaia_agent_jira.agent import JiraAgent
 
             agent = JiraAgent(skip_lemonade=True, silent_mode=True)
         prompt = agent._get_system_prompt()

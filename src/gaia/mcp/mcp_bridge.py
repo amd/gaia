@@ -182,7 +182,7 @@ class GAIAMCPBridge:
                 logger.warning(f"Summarize agent not available: {e}")
             # Jira agent - THE KEY ADDITION
             try:
-                from gaia.agents.jira.agent import JiraAgent
+                from gaia_agent_jira.agent import JiraAgent
 
                 self.agents["jira"] = {
                     "class": JiraAgent,

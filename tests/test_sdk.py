@@ -1278,7 +1278,8 @@ class TestSpecializedAgents:
 
     def test_jira_agent_exists(self):
         """Verify JiraAgent can be imported."""
-        from gaia.agents.jira.agent import JiraAgent
+        pytest.importorskip("gaia_agent_jira")
+        from gaia_agent_jira.agent import JiraAgent
 
         assert JiraAgent is not None
 
@@ -1290,10 +1291,12 @@ class TestSpecializedAgents:
 
     def test_specialized_agents_inherit_from_base(self):
         """Verify all specialized agents inherit from Agent base class."""
+        pytest.importorskip("gaia_agent_jira")
+        from gaia_agent_jira.agent import JiraAgent
+
         from gaia.agents.base.agent import Agent
         from gaia.agents.blender.agent import BlenderAgent
         from gaia.agents.chat.agent import ChatAgent
-        from gaia.agents.jira.agent import JiraAgent
 
         assert issubclass(ChatAgent, Agent)
         assert issubclass(JiraAgent, Agent)
@@ -1491,7 +1494,7 @@ class TestApplications:
             assert JiraApp is not None
         except ImportError:
             # Jira app may be integrated with agent
-            from gaia.agents.jira.agent import JiraAgent
+            from gaia_agent_jira.agent import JiraAgent
 
             assert JiraAgent is not None
 
