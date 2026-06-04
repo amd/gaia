@@ -723,7 +723,7 @@ jobs:
 
       - name: Attempt auto-fix
         id: claude   # referenced by the Notify step's CLAUDE_OUTCOME below
-        uses: anthropics/claude-code-action@36a69b6a90b850823f86de06fdfd56264772ad98  # v1.0.134
+        uses: anthropics/claude-code-action@70a6e5256e9e2366a1ed5c041904a982ba3a328f  # v1.0.135
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1158,7 +1158,7 @@ jobs:
         # continue-on-error: a rate-limit / expired-token / outage failure here is
         # caught by the "Verify and validate release notes" step (which fails the job)
         # and the "Notify on failure" step opens a tracking issue.
-        uses: anthropics/claude-code-action@36a69b6a90b850823f86de06fdfd56264772ad98  # v1.0.134
+        uses: anthropics/claude-code-action@70a6e5256e9e2366a1ed5c041904a982ba3a328f  # v1.0.135
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
