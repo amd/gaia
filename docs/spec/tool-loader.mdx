@@ -102,6 +102,35 @@ the non-tool-calling path. Restricting it re-introduces the catastrophic failure
 mode — "the model wanted a real tool and was refused."
 </Warning>
 
+## When memory is off, all tools load (the legacy path)
+
+Semantic selection rides on the memory subsystem's embedder
+(`MemoryMixin._embed_text`), and **memory is a user-controlled setting** — users
+can turn it off deliberately. Dynamic tool loading must inherit that switch
+cleanly:
+
+<Warning>
+**When memory is disabled, the loader reverts to the legacy behavior: every
+registered tool is exposed, exactly as before this feature existed.** No semantic
+selection, no filtering. This is a *documented off-state*, not a degradation — the
+user chose it, and the agent must behave identically to a build without the tool
+loader.
+</Warning>
+
+This collapses three distinct conditions onto the **same** safe behavior — load
+everything — so a user can never lose access to a tool by toggling memory:
+
+| Condition | Who triggers it | Tool-loader behavior |
+|---|---|---|
+| **Memory disabled by the user** | Deliberate user setting | Legacy path: expose **all** registered tools. No-op loader. |
+| **Loader's own toggle off** (default in v1) | Deliberate (default-off) | Legacy path: expose **all** registered tools. |
+| **Embedder unavailable** (Lemonade down, model missing) | Failure | Disable loading for the session, expose **all** tools, **log loudly**. |
+
+The distinction matters for messaging, not mechanism: the user-disabled and
+toggle-off cases are silent and expected; the embedder-failure case logs an
+actionable error (it's a fault, not a choice). All three land on "all tools
+available," so the old method is always the floor the loader degrades to.
+
 ## Correcting the original spec
 
 The issue-body spec drifted from the code. These are the corrections an
@@ -188,6 +217,8 @@ and sets the concrete TTFT target — before more is built.
 - `CORE` always-on + semantic via `_embed_text`; bundles as cohesion groups.
 - Fix the caching seam: recompute when selection changes; tool block last.
 - Embedder down → session-disable fallback (mirror memory v2), logged.
+- **Memory disabled or loader toggle off → expose all tools (legacy path).**
+  See [When memory is off](#when-memory-is-off-all-tools-load-the-legacy-path).
 - **Leave `_execute_tool` on the full registry.** This alone gives the free
   non-tool-calling recovery (an unlisted tool the model names still runs) — so
   Part 1 is *not* without a safety net, even though the explicit escape-hatch
@@ -236,7 +267,10 @@ not a finished base.
 
 - **#606 (memory v2)** — *landed.* Provides `MemoryMixin._embed_text`
   (`nomic-embed-text-v2-moe-GGUF`, 768-dim) already mixed into ChatAgent. Hard
-  dependency for semantic selection; no new infra needed.
+  dependency for semantic selection; no new infra needed. Note memory is
+  **user-controllable** — when the user turns it off, the loader reverts to the
+  legacy all-tools path (see
+  [When memory is off](#when-memory-is-off-all-tools-load-the-legacy-path)).
 - **#887 (procedural memory / skills)** — *not landed.* The original spec's
   skill tier is **dropped from v1**; it can return as an additional selection
   signal later without reshaping this design.
