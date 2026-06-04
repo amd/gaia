@@ -939,9 +939,11 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             log.info(f"Using remote Lemonade server: {base_url}")
             print(f"Remote Lemonade server: {base_url}")
 
-        log.info(f"Starting GAIA Agent UI on http://localhost:{port}")
-        print(f"Starting GAIA Agent UI on http://localhost:{port}")
-        print(f"   Open your browser to http://localhost:{port}")
+        # Advertise 127.0.0.1 to match the bind host below — on Windows
+        # "localhost" can resolve to IPv6 ::1 and fail against this IPv4 listener.
+        log.info(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
+        print(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
+        print(f"   Open your browser to http://127.0.0.1:{port}")
         print("   Press Ctrl+C to stop")
         print()
         if not base_url:
