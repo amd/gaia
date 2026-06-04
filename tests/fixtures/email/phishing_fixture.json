@@ -1,0 +1,541 @@
+[
+  {
+    "id": "phish_001",
+    "subject": "URGENT: Verify your account - click here to avoid suspension",
+    "sender": "security-alert@micros0ft-support.net",
+    "body": "Your Microsoft account has been flagged for unusual activity. Click the link below immediately to verify your account and avoid permanent suspension. http://micros0ft-verify-now.tk/login",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_002",
+    "subject": "Your account has been suspended - verify your account to restore access",
+    "sender": "support@paypa1-secure.com",
+    "body": "We have detected suspicious activity on your PayPal account. Your account has been temporarily suspended. Click here to verify your account and restore access before it is permanently closed.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_003",
+    "subject": "Your password expires in 24 hours - click to update",
+    "sender": "it-security@company-helpdesk.tk",
+    "body": "Your corporate password will expire in 24 hours. Click here to update your password and maintain access to all company systems. Failure to act will result in account lockout.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_004",
+    "subject": "Action required: verify your account immediately",
+    "sender": "noreply@amaz0n-security.net",
+    "body": "We have noticed unusual sign-in attempts on your Amazon account. To protect your account, please verify your identity by clicking the secure link below within 24 hours or your account will be locked.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_005",
+    "subject": "We detected unusual sign-in activity on your account",
+    "sender": "security@g00gle-accounts.tk",
+    "body": "Someone tried to sign into your Google account from an unrecognized device. If this was not you, your account may be compromised. Please verify your identity immediately.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_006",
+    "subject": "Your account has been compromised - immediate action required",
+    "sender": "security-team@bankofamerica-secure.xyz",
+    "body": "We have detected that your Bank of America account has been compromised. Cybercriminals have gained access to your personal information. Please click the link below to secure your account immediately.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_007",
+    "subject": "Urgent action required: verify your account now to avoid suspension",
+    "sender": "helpdesk@dropbox-security-alert.com",
+    "body": "Your Dropbox account has been flagged for a potential security breach. Please verify your account credentials by clicking here. If we do not receive confirmation within 48 hours, your account will be suspended.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_008",
+    "subject": "Suspicious sign-in detected - verify your account",
+    "sender": "alerts@linkedln-security.com",
+    "body": "We detected a suspicious login attempt on your LinkedIn account from an unknown IP address. If this was not you, click below to verify your account and change your password immediately.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_009",
+    "subject": "Your account has been temporarily suspended - click to verify",
+    "sender": "support@netflixbilling-update.com",
+    "body": "Your Netflix account has been temporarily suspended due to a billing issue. Please click below to verify your payment information and restore your account. Ignore this message and your account will be permanently closed.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_010",
+    "subject": "Password expires tonight - click link to keep access",
+    "sender": "admin@corporate-itsupport.xyz",
+    "body": "Your Active Directory password expires at midnight tonight. Click the secure link to update your password now and avoid being locked out of your workstation and email. This is your final reminder.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_011",
+    "subject": "ALERT: We detected unusual sign-in activity - verify now",
+    "sender": "security@apple-id-verification.net",
+    "body": "We detected unusual sign-in activity on your Apple ID from an iPhone 14 in Moscow, Russia. If you did not authorize this, your account may be at risk. Verify your identity to secure your account.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_012",
+    "subject": "Verify your account - your account will be closed in 48 hours",
+    "sender": "billing@paypals-service.com",
+    "body": "Your PayPal account is scheduled for closure. To prevent this, you must verify your account details by clicking on the link provided. Once verified, your account will continue to function normally.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_013",
+    "subject": "Urgent: your account has been compromised - secure it now",
+    "sender": "security-notice@wellsfargo-secure-alert.com",
+    "body": "We have evidence that your Wells Fargo account credentials have been stolen. Hackers may have gained access to your funds. Please click below to immediately secure your account and transfer your balance to a protected account.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_014",
+    "subject": "Your Microsoft account will be suspended - verify your account",
+    "sender": "no-reply@microsoft-account-team.tk",
+    "body": "Your Microsoft account does not meet current security requirements. To avoid having your account permanently suspended and losing access to all Microsoft services, please verify your account now.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_015",
+    "subject": "DHL package held - urgent action required to verify your account",
+    "sender": "tracking@dhl-delivery-alert.xyz",
+    "body": "Your DHL package #DE123456789 is being held at customs. You must verify your identity and pay a small customs fee to release your package. Click below and complete the verification process within 24 hours.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_016",
+    "subject": "Suspicious activity detected - verify your account immediately",
+    "sender": "security@steam-support-alert.com",
+    "body": "We have detected suspicious activity on your Steam account. Someone may be trying to access your games and wallet balance. To secure your account, please verify your identity by clicking the link below.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_017",
+    "subject": "Your account has been compromised - verify your identity link below",
+    "sender": "service@chase-bank-security.net",
+    "body": "JPMorgan Chase Bank security team has detected unauthorized access to your account. Your account has been compromised. Please verify your identity immediately to prevent further unauthorized transactions.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_018",
+    "subject": "IRS Tax Refund: verify your account to receive $4,217.00",
+    "sender": "refund@irs-gov-refunds.com",
+    "body": "The IRS has processed your tax return and you are eligible for a refund of $4,217.00. To receive your refund, you must verify your account and banking details by clicking the link below. This offer expires in 72 hours.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_019",
+    "subject": "Facebook account suspended - verify your account to recover",
+    "sender": "support@facebook-help-center.xyz",
+    "body": "Your Facebook account has been suspended for violating our community standards. To appeal this decision and verify your account ownership, please click the link below. If you do not verify within 24 hours, your account will be permanently deleted.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_020",
+    "subject": "Unusual sign-in activity detected - click link to verify your account",
+    "sender": "security-team@twitter-security-alert.net",
+    "body": "We noticed a sign-in to your Twitter/X account from a new device in an unusual location. If this was not you, your account may have been compromised. Please verify your account security immediately.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_021",
+    "subject": "Your Outlook account password expires - click here to renew",
+    "sender": "helpdesk@outlook-renewal-alert.com",
+    "body": "Your Outlook 365 account password is set to expire. As a member of your organization, you must renew your password by clicking the secure link below. Failure to act will result in loss of email access.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_022",
+    "subject": "Suspicious transaction detected - verify your account to cancel",
+    "sender": "fraud-alert@citibank-secure.net",
+    "body": "Our fraud detection system has identified a suspicious transaction of $1,499.99 on your Citibank account. To cancel this transaction and verify your account security, please click the link below immediately.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_023",
+    "subject": "Your account has been compromised by hackers - act now",
+    "sender": "security@adobe-account-service.xyz",
+    "body": "Adobe Creative Cloud security team has detected unauthorized access to your account. Your account has been compromised and your subscription may be at risk. Please verify your account and change your password immediately.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_024",
+    "subject": "URGENT: Verify your bank account - transaction blocked",
+    "sender": "alerts@hsbc-verification-service.com",
+    "body": "A recent transaction on your HSBC account has been blocked due to unusual activity. To verify your account and authorize legitimate transactions, please click the secure verification link below within 12 hours.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_025",
+    "subject": "Your account has been compromised - immediate verification required",
+    "sender": "security-alert@gmail-account-team.net",
+    "body": "Google security systems have detected that your Gmail account may have been compromised. We have temporarily restricted access to your account. Please click below to verify your identity and restore full access to your account.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_026",
+    "subject": "Verify your account - click here to confirm your information",
+    "sender": "support@uber-account-verify.com",
+    "body": "We need you to verify your Uber account information to continue using our services. Please click on the secure link below and confirm your details. This is required for all users under our new security policy.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_027",
+    "subject": "Unusual sign-in activity: your account has been locked",
+    "sender": "noreply@docusign-security-alert.net",
+    "body": "We detected unusual sign-in activity on your DocuSign account and have locked it as a precaution. To unlock your account and verify your identity, please follow the secure link below and complete the verification process.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_028",
+    "subject": "Urgent action required: verify your account before it expires",
+    "sender": "support@coinbase-security-verify.com",
+    "body": "Your Coinbase account requires immediate verification to comply with new regulatory requirements. If you do not verify your account within 48 hours, your cryptocurrency holdings will be frozen and you will be unable to access your funds.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_029",
+    "subject": "Your account has been compromised - reset password now",
+    "sender": "account-security@instagram-team.xyz",
+    "body": "We have detected suspicious login attempts on your Instagram account from multiple locations. Your account has been compromised. Please immediately verify your identity and secure your account before your data is stolen.",
+    "is_phishing": true
+  },
+  {
+    "id": "phish_030",
+    "subject": "Action needed: suspended account - verify your account to restore",
+    "sender": "billing@spotify-account-service.net",
+    "body": "Your Spotify Premium account has been suspended due to a billing issue. To restore your account and continue enjoying unlimited music, please click the link below to verify your payment information.",
+    "is_phishing": true
+  },
+  {
+    "id": "ham_001",
+    "subject": "Please verify your email address to complete signup",
+    "sender": "no-reply@github.com",
+    "body": "Thanks for signing up for GitHub! Please verify your email address by clicking the button below. If you did not sign up for a GitHub account, please ignore this email.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_002",
+    "subject": "Reset your password",
+    "sender": "noreply@slack.com",
+    "body": "Someone requested a password reset for your Slack account associated with this email address. If you requested this, click the button below to reset your password. If you didn't make this request, ignore this email.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_003",
+    "subject": "Your order has been shipped - tracking available",
+    "sender": "auto-confirm@amazon.com",
+    "body": "Your order #123-4567890-1234567 has been shipped and is on its way to you. Estimated delivery: Thursday, June 5. Track your package using the tracking number UPS1Z123456.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_004",
+    "subject": "Calendar invitation: Q2 planning meeting",
+    "sender": "calendar-notification@google.com",
+    "body": "Alice Smith has invited you to: Q2 Planning Meeting on Thursday, June 5, 2026 at 10:00 AM PDT. Please accept or decline this invitation by clicking the link in your calendar app.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_005",
+    "subject": "Confirm your email address for your new account",
+    "sender": "no-reply@dropbox.com",
+    "body": "Welcome to Dropbox! To get started, please confirm your email address. Click the button below to confirm. This link will expire in 48 hours. If you did not create a Dropbox account, you can ignore this email.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_006",
+    "subject": "Your account password has been changed",
+    "sender": "security@microsoft.com",
+    "body": "The password for your Microsoft account was recently changed. If you made this change, no further action is required. If you didn't change your password, please secure your account immediately by going to account.microsoft.com.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_007",
+    "subject": "Two-factor authentication setup confirmation",
+    "sender": "security@apple.com",
+    "body": "Two-factor authentication has been enabled for your Apple ID. This setting will be in effect starting today. If you did not make this change, please go to appleid.apple.com and update your security settings.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_008",
+    "subject": "Your monthly invoice is ready",
+    "sender": "invoices@stripe.com",
+    "body": "Your invoice for June 2026 is now available. Total amount: $29.00 USD. You can view and download your invoice from your Stripe dashboard. Payment will be automatically charged to your card on file.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_009",
+    "subject": "Welcome to the team! Here's what to do first",
+    "sender": "hr@acmecorp.com",
+    "body": "Welcome aboard! We're so excited to have you join the ACME Corp team. Your first day is Monday, June 8. Please check your company email for your onboarding schedule and IT setup instructions.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_010",
+    "subject": "Your Uber receipt for last night's ride",
+    "sender": "receipts@uber.com",
+    "body": "Thanks for riding with Uber! Your total was $12.40. Route: Home to Downtown. Driver: Michael B. 5.0 stars. You can view your receipt and trip details in the Uber app.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_011",
+    "subject": "Re: Project Alpha - weekly status update",
+    "sender": "bob.johnson@acmecorp.com",
+    "body": "Hi team, here's this week's status update for Project Alpha. We completed the design review on Wednesday and are on track for the beta release next Friday. Action items are listed in the attached doc.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_012",
+    "subject": "Your subscription renewal confirmation",
+    "sender": "billing@netflix.com",
+    "body": "Your Netflix subscription has been renewed for another month. Amount charged: $15.49 to Visa ending in 4242. Your next billing date is July 5, 2026. Thank you for being a Netflix member.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_013",
+    "subject": "New login to your account from Chrome on Windows",
+    "sender": "security-noreply@google.com",
+    "body": "A new sign-in to your Google Account was detected. Windows, Chrome browser, United States. If this was you, you don't need to do anything. If not, go to your Google Account and check your security settings.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_014",
+    "subject": "Your package is out for delivery today",
+    "sender": "tracking-updates@ups.com",
+    "body": "Good news! Your package is scheduled for delivery today by 8:00 PM. No signature required. Track in real time using the UPS My Choice app. If you have any issues, visit ups.com.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_015",
+    "subject": "Verify your email to activate two-factor authentication",
+    "sender": "no-reply@twitter.com",
+    "body": "You've requested to set up two-factor authentication on your X (formerly Twitter) account. To verify your email address and activate this security feature, click the button below. Link expires in 24 hours.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_016",
+    "subject": "Annual performance review scheduled for next week",
+    "sender": "hr-noreply@megacorp.com",
+    "body": "Your annual performance review has been scheduled for Friday, June 12 at 2:00 PM. Your manager, Sarah Chen, will meet with you to discuss your accomplishments and goals for next year. Please complete the self-assessment form linked in HR portal before the meeting.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_017",
+    "subject": "GitHub Actions workflow failed - PR #1234",
+    "sender": "notifications@github.com",
+    "body": "A GitHub Actions workflow run has failed for your pull request #1234 in acme/backend-service. The 'lint' check failed. Click to view the workflow run and investigate the failure.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_018",
+    "subject": "Meeting notes from yesterday's design review",
+    "sender": "alice@designteam.com",
+    "body": "Hi everyone, please find attached the meeting notes from yesterday's design review. We covered the mobile navigation patterns and agreed on the new color system. Action items are highlighted in yellow. Next meeting is scheduled for Monday.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_019",
+    "subject": "Jira issue assigned to you: PROJ-456",
+    "sender": "jira@atlassian.com",
+    "body": "You have been assigned a new issue in JIRA. Project: Backend API, Issue: PROJ-456, Summary: Fix authentication timeout bug, Priority: High, Assignee: You. Click the link to view the full issue.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_020",
+    "subject": "Your LinkedIn connection request was accepted",
+    "sender": "invitations@linkedin.com",
+    "body": "Great news! Jane Doe has accepted your LinkedIn connection request. Jane is a Senior Engineer at TechCorp. You can now message Jane and see her full profile. Start a conversation!",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_021",
+    "subject": "Password reset request for your account",
+    "sender": "noreply@notion.so",
+    "body": "A password reset was requested for the account associated with this email address on Notion. If you requested this, click the link below. If you didn't, you can safely ignore this email — your password will not be changed.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_022",
+    "subject": "Verify your email to complete purchase",
+    "sender": "noreply@etsy.com",
+    "body": "To complete your Etsy purchase and ensure delivery, please verify your email address by clicking the button below. This is a one-time verification step. Your order will be processed once your email is confirmed.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_023",
+    "subject": "Zoom meeting scheduled: Team standup - daily",
+    "sender": "no-reply@zoom.us",
+    "body": "You have been added to a recurring Zoom meeting. Topic: Daily Team Standup, Time: Every weekday at 9:00 AM Pacific Time, Meeting ID: 123 456 7890. Join from PC, Mac, iOS or Android.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_024",
+    "subject": "Your domain renewal is coming up",
+    "sender": "noreply@namecheap.com",
+    "body": "Your domain mywebsite.com will expire in 30 days on July 5, 2026. To avoid disruption to your website and email, please renew your domain before it expires. Log in to your Namecheap account to renew.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_025",
+    "subject": "Confirm your email for the beta program",
+    "sender": "beta-invites@figma.com",
+    "body": "You've been invited to join Figma's exclusive beta program for new features. Please verify your email address to confirm your spot in the program. Click the link below to accept your invitation and get started.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_026",
+    "subject": "Security alert: new device login successful",
+    "sender": "security@github.com",
+    "body": "A new device has signed in to your GitHub account. Device: MacBook Pro, Location: San Francisco, CA. Time: June 4, 2026, 9:32 AM PDT. If this was you, no action needed. If not, immediately go to Settings > Security to review access.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_027",
+    "subject": "Verify your email address for 2FA enrollment",
+    "sender": "security-notifications@okta.com",
+    "body": "Your organization is requiring you to enroll in multi-factor authentication. Please verify your email address as a second factor by clicking the button below. Contact your IT administrator if you have any questions.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_028",
+    "subject": "Your Airbnb booking is confirmed - Paris, June 15-20",
+    "sender": "automated@airbnb.com",
+    "body": "Your booking is confirmed! Apartment in Montmartre, Paris. Check-in: June 15, 3:00 PM. Check-out: June 20, 11:00 AM. Host: Marie D. 4.9 stars. You'll receive check-in details 24 hours before arrival.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_029",
+    "subject": "Weekly digest: 5 new pull requests need your review",
+    "sender": "notifications@github.com",
+    "body": "You have 5 pull requests waiting for your review across 3 repositories. The oldest has been open for 2 days. Visit github.com/notifications to see your pending reviews and take action.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_030",
+    "subject": "Action required: complete your onboarding by Friday",
+    "sender": "onboarding@workday.com",
+    "body": "Welcome! You have outstanding onboarding tasks that must be completed by Friday, June 6. Tasks remaining: Direct deposit setup, W-4 tax form, Emergency contact information. Log in to Workday to complete these items.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_031",
+    "subject": "DocuSign: please review and sign the NDA",
+    "sender": "dse_na4@docusign.net",
+    "body": "ACME Corp has sent you a DocuSign document to review and sign: Mutual Non-Disclosure Agreement. Please review the document and complete your signature at your earliest convenience. This request will expire in 15 days.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_032",
+    "subject": "Verify your email for your new Coinbase account",
+    "sender": "no-reply@coinbase.com",
+    "body": "Welcome to Coinbase! Before you can start buying and selling crypto, we need to verify your email address. Click the button below to confirm and get started. This link will expire in 24 hours.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_033",
+    "subject": "Your AWS bill for May 2026 is available",
+    "sender": "billing@amazon.com",
+    "body": "Your AWS bill for May 2026 is now available. Total charges: $247.83. Your payment method will be charged on June 5, 2026. Log in to the AWS Console to view a detailed breakdown of your usage.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_034",
+    "subject": "Reminder: team retrospective tomorrow at 2pm",
+    "sender": "carol@mycompany.com",
+    "body": "Just a reminder that we have our sprint retrospective tomorrow at 2pm in Conference Room B (or join via Zoom). Please come prepared to share what went well and what we can improve. See you there!",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_035",
+    "subject": "New comment on your GitHub issue: #789",
+    "sender": "notifications@github.com",
+    "body": "Dave Williams commented on issue #789 in acme/frontend: 'I've investigated the bug and believe it's related to the race condition in the state manager. Working on a fix now.' Click to view the full comment thread.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_036",
+    "subject": "Your Spotify playlist was updated by a collaborator",
+    "sender": "no-reply@spotify.com",
+    "body": "Your collaborative playlist 'Road Trip 2026' has been updated. Emma added 3 new songs: Hotel California, Bohemian Rhapsody, Mr. Brightside. Open Spotify to listen to the updated playlist.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_037",
+    "subject": "Onboarding task: verify your work email",
+    "sender": "it-support@enterprise.com",
+    "body": "As part of your new employee onboarding, please verify your work email address by clicking the link below. This is required to activate your company account and grant access to internal systems.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_038",
+    "subject": "Password change confirmation",
+    "sender": "noreply@atlassian.com",
+    "body": "Your Atlassian account password was successfully changed. If you made this change, you're all set. If you didn't change your password, please reset it immediately and contact support. Your account may be at risk.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_039",
+    "subject": "Interview scheduled: Software Engineer position at TechCorp",
+    "sender": "recruiting@techcorp.com",
+    "body": "We're excited to schedule your technical interview for the Software Engineer position at TechCorp! Your interview is scheduled for Monday, June 8 at 11:00 AM via video call. Please confirm your availability by replying to this email.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_040",
+    "subject": "Action required: update your billing information",
+    "sender": "billing@heroku.com",
+    "body": "Your credit card on file for your Heroku account is expiring soon. To avoid service interruption, please update your billing information in the Heroku Dashboard before July 1, 2026. Your apps will continue running normally until then.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_041",
+    "subject": "LinkedIn: you have 3 new messages",
+    "sender": "messages-noreply@linkedin.com",
+    "body": "You have 3 unread messages from your LinkedIn connections. Check them out: 1 message from John Smith, 1 from TechCorp Recruiter, 1 from your connection Angela Brown. Log in to LinkedIn to read and reply.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_042",
+    "subject": "Slack: you have 12 unread messages",
+    "sender": "notifications@slack.com",
+    "body": "You have 12 unread messages across 4 channels and 2 direct messages on your Slack workspace. Channels with activity: #general, #engineering, #deployments, #random. Log in to Slack to catch up.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_hard_001",
+    "subject": "Your FirstService Residential community newsletter",
+    "sender": "news@firstservice.com",
+    "body": "Here is your monthly FirstService Residential community update. This month: pool hours have been extended for summer, the annual HOA meeting is scheduled for June 20, and landscaping improvements begin next week. Questions? Contact your community manager.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_hard_002",
+    "subject": "First Alert smoke detector battery reminder",
+    "sender": "alerts@firstalert.com",
+    "body": "This is your seasonal reminder from First Alert to test your smoke and carbon monoxide detectors and replace the batteries. Working detectors save lives. Visit our site for a quick testing guide and to register your devices for warranty coverage.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_hard_003",
+    "subject": "Your Uberflip content hub weekly analytics",
+    "sender": "reports@uberflip.com",
+    "body": "Your Uberflip content marketing analytics for the week are ready. Your top-performing hub had 1,240 visits and a 4.2 minute average session. Your most-clicked CTA drove 87 conversions. Log in to your Uberflip dashboard to see the full report.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_hard_004",
+    "subject": "Service appointment confirmed at Chase Ford",
+    "sender": "service@chaseford.com",
+    "body": "Your service appointment at Chase Ford is confirmed for Thursday, June 5 at 9:00 AM. Our team will perform your scheduled oil change and tire rotation. A loaner vehicle has been reserved. Reply to reschedule or call our service desk.",
+    "is_phishing": false
+  },
+  {
+    "id": "ham_hard_005",
+    "subject": "Your Applewood Farms CSA box ships this week",
+    "sender": "orders@applewoodfarms.com",
+    "body": "Good news! Your Applewood Farms CSA produce box ships this week. This week's harvest includes heirloom tomatoes, fresh basil, summer squash, and strawberries. Your delivery is scheduled for Friday. Thank you for supporting local farming!",
+    "is_phishing": false
+  }
+]
