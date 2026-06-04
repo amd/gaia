@@ -28,10 +28,13 @@ from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
 
-# Optional imports
+# Optional imports. The blender agent ships as the standalone
+# gaia-agent-blender wheel (#1102); this block degrades to BLENDER_AVAILABLE
+# = False when it (or the Blender MCP client) is not installed.
 try:
     from gaia_agent_blender.agent import BlenderAgent
 
+    # pylint: disable-next=ungrouped-imports
     from gaia.mcp.blender_mcp_client import MCPClient
 
     BLENDER_AVAILABLE = True
