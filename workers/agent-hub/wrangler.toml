@@ -1,0 +1,29 @@
+# Cloudflare Worker config for the GAIA Agent Hub publish/distribution API.
+#
+# Deploy needs (provided by the maintainer — see README.md):
+#   1. An R2 bucket whose name matches `bucket_name` below.
+#   2. A `PUBLISH_TOKENS` secret (JSON map of token -> publisher). Set with:
+#        wrangler secret put PUBLISH_TOKENS
+#
+# Local development uses Miniflare's simulated R2 (no real bucket needed):
+#   npm run dev          # wrangler dev, in-memory R2
+#   npm test             # vitest against an in-memory R2 fake
+
+name = "agent-hub"
+main = "src/index.ts"
+compatibility_date = "2025-01-29"
+
+# The route the publish/catalog API is served under in production.
+# routes = [{ pattern = "hub.amd-gaia.ai/*", zone_name = "amd-gaia.ai" }]
+
+# Production R2 binding. `binding` is the name the Worker code reads
+# (env.BUCKET); `bucket_name` is the real bucket the maintainer creates.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "gaia-agent-hub"
+preview_bucket_name = "gaia-agent-hub-preview"
+
+[vars]
+# Reject artifacts larger than this many bytes (default 250 MiB). Override per
+# environment. The PUBLISH_TOKENS secret is set separately via `wrangler secret`.
+MAX_ARTIFACT_BYTES = "262144000"
