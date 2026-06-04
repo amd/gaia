@@ -76,7 +76,6 @@ _RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
         "gaia-lite",
         "builder",
         "email",
-        "connectors-demo",
     }
 )
 
@@ -747,68 +746,9 @@ class AgentRegistry:
         # ``lite`` model tier of the agents above (#1162). The old IDs resolve
         # through ``_LEGACY_ID_ALIASES`` so existing sessions keep working.
 
-        # --- ConnectorsDemoAgent ---
-        # Demo agent that uses Google + GitHub connectors end-to-end so
-        # the per-agent grant flow has a real consumer to validate it.
-        # Visible in the AgentUI dropdown — users can select it to test
-        # their connector setup.
-        try:
-            from gaia.agents.connectors_demo.agent import (
-                ConnectorsDemoAgent,
-                ConnectorsDemoAgentConfig,
-            )
-
-            def connectors_demo_factory(**kwargs):
-                valid_fields = {
-                    f.name for f in dataclasses.fields(ConnectorsDemoAgentConfig)
-                }
-                config = ConnectorsDemoAgentConfig(
-                    **{k: v for k, v in kwargs.items() if k in valid_fields}
-                )
-                return ConnectorsDemoAgent(config=config)
-
-            self._register(
-                AgentRegistration(
-                    id="connectors-demo",
-                    name="Connectors Demo",
-                    description=(
-                        "Demonstrates the connectors framework — pulls real "
-                        "data from your connected Google account and GitHub PAT."
-                    ),
-                    source="builtin",
-                    conversation_starters=[
-                        "What's in my inbox?",
-                        "What's on my calendar today?",
-                        "List my recent Drive files",
-                        "List my GitHub repositories",
-                    ],
-                    factory=_wrap_factory_with_namespaced_id(
-                        connectors_demo_factory, "builtin:connectors-demo"
-                    ),
-                    agent_dir=None,
-                    models=[],
-                    # #962 fix — pre-existing bug: this previously listed
-                    # bare provider strings (``["google", "mcp-github"]``)
-                    # but ``AgentRegistration.required_connections`` is
-                    # typed as ``List[ConnectorRequirement]`` and the UI
-                    # router calls ``.provider``/``.scopes``/``.reason``
-                    # on the items. Bare strings silently broke
-                    # ``_reg_to_info`` in agents.py. Convert to the
-                    # canonical objects so the registry stays consistent.
-                    required_connections=list(ConnectorsDemoAgent.REQUIRED_CONNECTORS),
-                    namespaced_agent_id="builtin:connectors-demo",
-                    category="productivity",
-                    tags=["google", "gmail", "github", "calendar"],
-                    icon="plug",
-                    tools_count=4,
-                )
-            )
-            logger.info(
-                "registry: Registered built-in agent: connectors-demo "
-                "(ConnectorsDemoAgent)"
-            )
-        except ImportError as e:
-            logger.debug("registry: ConnectorsDemoAgent not available, skipping: %s", e)
+        # ConnectorsDemoAgent ships as the standalone ``gaia-agent-connectors-demo``
+        # wheel (#1102) and is discovered via the ``gaia.agent`` entry point in
+        # ``_discover_installed_agents`` — no built-in registration here.
 
         # --- EmailTriageAgent (#962) ---
         # First concrete email provider for the Email Triage Agent
