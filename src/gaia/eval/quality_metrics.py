@@ -40,7 +40,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from gaia.eval.config import MODEL_PRICING
 
@@ -263,7 +263,7 @@ def categorization_export(
     predicted_categories: dict[str, str],
     ground_truth: dict[str, dict],
     *,
-    axis_positive_categories: set[str] = NEEDS_ATTENTION_CATEGORIES,
+    axis_positive_categories: Optional[set[str]] = None,
     axis_label: str = "needs_attention",
 ) -> dict[str, Any]:
     """Per-email categorization export with FP/FN flags on a binary axis.
@@ -279,6 +279,8 @@ def categorization_export(
     included (metadata rows are skipped). Raises ``ValueError`` if the positive
     set is empty — an axis with no positive class can't have FP/FN semantics.
     """
+    if axis_positive_categories is None:
+        axis_positive_categories = NEEDS_ATTENTION_CATEGORIES
     positives = {c.strip().lower() for c in axis_positive_categories}
     if not positives:
         raise ValueError(
