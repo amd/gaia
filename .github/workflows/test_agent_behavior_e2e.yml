@@ -38,4 +38,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: behavior-e2e-artifacts
-          path: /tmp/gaia-behavior-e2e-*/
+          path: /tmp/pytest-*/test_builder_creates_agent_file*/**/artifacts/
