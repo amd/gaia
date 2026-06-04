@@ -66,7 +66,7 @@ if _stubbed_modules:
     for _gaia_mod in (
         "gaia.rag.sdk",
         "gaia.agents.chat.agent",
-        "gaia.agents.chat.tools.rag_tools",
+        "gaia.agents.tools.rag_tools",
     ):
         sys.modules.pop(_gaia_mod, None)
 

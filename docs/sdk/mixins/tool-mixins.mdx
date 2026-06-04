@@ -48,12 +48,12 @@ class MyAgent(Agent, FileToolsMixin):
 
 ## 9.2 RAG Tools Mixin
 
-**Import:** `from gaia.agents.chat.tools.rag_tools import RAGToolsMixin`
+**Import:** `from gaia.agents.tools.rag_tools import RAGToolsMixin`
 **Detailed Spec:** [RAGToolsMixin](/spec/rag-tools-mixin)
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
+from gaia.agents.tools.rag_tools import RAGToolsMixin
 
 class MyAgent(Agent, RAGToolsMixin):
     """Agent with document Q&A tools."""
@@ -82,12 +82,12 @@ class MyAgent(Agent, RAGToolsMixin):
 
 ## 9.3 Shell Commands Mixin
 
-**Import:** `from gaia.agents.chat.tools.shell_tools import ShellToolsMixin`
+**Import:** `from gaia.agents.tools.shell_tools import ShellToolsMixin`
 **Detailed Spec:** [ShellToolsMixin](/spec/shell-tools-mixin)
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.chat.tools.shell_tools import ShellToolsMixin
+from gaia.agents.tools.shell_tools import ShellToolsMixin
 
 class MyAgent(Agent, ShellToolsMixin):
     """Agent that can execute shell commands."""

@@ -581,7 +581,7 @@ class TestCreateAgentImplTools:
         assert not result.startswith("Error:"), result
         src = (tmp_path / ".gaia" / "agents" / "research-bot" / "agent.py").read_text()
         ast.parse(src)
-        assert "from gaia.agents.chat.tools.rag_tools import RAGToolsMixin" in src
+        assert "from gaia.agents.tools.rag_tools import RAGToolsMixin" in src
         # Agent must come first in the base list (GAIA convention).
         assert "class ResearchBotAgent(Agent, RAGToolsMixin):" in src
         assert "self.register_rag_tools()" in src

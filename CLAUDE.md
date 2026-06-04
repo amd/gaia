@@ -519,11 +519,11 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 
 | Tool name | Mixin | Purpose |
 |-----------|-------|---------|
-| `rag` | `gaia.agents.chat.tools.rag_tools.RAGToolsMixin` | Document retrieval |
-| `code_index` | `gaia.agents.code_index.tools.mixin.CodeIndexToolsMixin` | Semantic code search (FAISS) |
+| `rag` | `gaia.agents.tools.rag_tools.RAGToolsMixin` | Document retrieval |
+| `code_index` | `gaia.agents.tools.code_index_tools.CodeIndexToolsMixin` | Semantic code search (FAISS) |
 | `file_search` | `gaia.agents.tools.file_tools.FileSearchToolsMixin` | Fuzzy/glob file search |
-| `file_io` | `gaia.agents.code.tools.file_io.FileIOToolsMixin` | Read/write/edit files |
-| `shell` | `gaia.agents.chat.tools.shell_tools.ShellToolsMixin` | Sandboxed shell commands |
+| `file_io` | `gaia.agents.tools.file_io_tools.FileIOToolsMixin` | Read/write/edit files |
+| `shell` | `gaia.agents.tools.shell_tools.ShellToolsMixin` | Sandboxed shell commands |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | Screen capture |
 | `filesystem` | `gaia.agents.tools.filesystem_tools.FileSystemToolsMixin` | File system navigation |
 | `scratchpad` | `gaia.agents.tools.scratchpad_tools.ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |

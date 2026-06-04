@@ -816,7 +816,7 @@ def interactive_mode(agent: ChatAgent):
                             chunk = agent.rag.chunks[chunk_idx]
 
                             # Extract page number from chunk (with lookback)
-                            from gaia.agents.chat.tools.rag_tools import (
+                            from gaia.agents.tools.rag_tools import (
                                 extract_page_from_chunk,
                             )
 

@@ -22,12 +22,17 @@ from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.chat.session import SessionManager
-from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
-from gaia.agents.code.tools.file_io import FileIOToolsMixin
-from gaia.agents.tools import BrowserToolsMixin  # Web browsing and search
+from gaia.agents.chat.tools import FileToolsMixin
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
-from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
+from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    BrowserToolsMixin,
+    FileIOToolsMixin,
+    FileSearchToolsMixin,
+    RAGToolsMixin,
+    ScreenshotToolsMixin,
+    ShellToolsMixin,
+)
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
