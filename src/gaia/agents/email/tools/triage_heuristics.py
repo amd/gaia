@@ -35,6 +35,7 @@ the LLM's reading of the body and are intentionally not heuristic-gated.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Iterable, List
 
@@ -334,6 +335,237 @@ def _looks_phishing(subject_lower: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Multi-signal phishing detector (#1271)
+#
+# ``detect_phishing`` augments the subject-only ``_looks_phishing`` with
+# sender-domain and body signals for use by the block/quarantine tool and
+# the precision CI gate.  The design is precision-first: each signal is
+# high-specificity and conservative.  Recall is secondary — it is better
+# to miss a phishing message than to flag a legit onboarding email.
+# ---------------------------------------------------------------------------
+
+# Sender-domain analysis constants.
+# ---------------------------------------------------------------------------
+# Registrable SLDs (second-level domains) known to belong to legitimate
+# organisations.  A sender whose SLD exactly matches one of these is
+# *never* flagged by the domain signal, regardless of TLD.
+_LEGIT_SENDER_SLDS: frozenset[str] = frozenset(
+    {
+        "github",
+        "slack",
+        "amazon",
+        "google",
+        "dropbox",
+        "microsoft",
+        "apple",
+        "stripe",
+        "uber",
+        "netflix",
+        "ups",
+        "twitter",
+        "linkedin",
+        "notion",
+        "etsy",
+        "zoom",
+        "namecheap",
+        "figma",
+        "okta",
+        "airbnb",
+        "workday",
+        "docusign",
+        "coinbase",
+        "heroku",
+        "atlassian",
+        "spotify",
+        "fedex",
+        "usps",
+        "dhl",
+        "paypal",
+    }
+)
+
+# TLDs that are routinely abused by phishing campaigns but rarely used by
+# legitimate large-scale senders.  Flagged when the SLD is NOT in the
+# allowlist above.
+_SUSPICIOUS_TLDS: frozenset[str] = frozenset({"tk", "xyz", "ml", "ga", "cf"})
+
+# Brand keywords that should appear in the SLD of a legitimate sender but,
+# when found inside a *non-canonical* domain (e.g. as a substring of a
+# longer SLD), indicate impersonation.
+_IMPERSONATION_BRANDS: tuple[str, ...] = (
+    "paypal",
+    "paypa",
+    "microsoft",
+    "micros0ft",
+    "amazon",
+    "amaz0n",
+    "google",
+    "g00gle",
+    "apple",
+    "netflix",
+    "facebook",
+    "twitter",
+    "instagram",
+    "linkedin",
+    "linkedln",  # common typo impersonation
+    "adobe",
+    "spotify",
+    "steam",
+    "coinbase",
+    "docusign",
+    "chase",
+    "citibank",
+    "wellsfargo",
+    "dhl",
+    "irs",
+    "uber",
+    "dropbox",
+    "outlook",
+    "hsbc",
+    "bankofamerica",
+    "citibank",
+)
+
+# Body-level keyword pairs (same structure as subject pairs).  Each tuple
+# fires when BOTH terms appear in the body.  Precision-trap cases like
+# "verify your email" + "click" appear in legitimate onboarding mail but
+# "verify your account" + "banking" is almost always credential-harvesting.
+_PHISHING_BODY_KEYWORD_PAIRS: tuple[tuple[str, str], ...] = (
+    ("verify your account", "banking"),
+    ("verify your account", "transfer"),
+    ("transfer to a protected account", "compromised"),
+    ("your funds will be frozen", "verify"),
+    ("cryptocurrency", "frozen"),
+    ("your balance", "transfer to a protected"),
+    ("security deposit", "click here"),
+)
+
+# Body-level single phrases that are high-signal on their own.
+_PHISHING_BODY_SINGLE_PHRASES: tuple[str, ...] = (
+    "transfer to a protected account",
+    "your funds will be frozen",
+    "cryptocurrency holdings will be frozen",
+)
+
+# Suffix patterns in a domain's SLD that strongly suggest impersonation.
+# Only fires when a brand keyword is also present in the full domain.
+_IMPERSONATION_SLD_SUFFIXES: tuple[str, ...] = (
+    "alert",
+    "secure",
+    "verify",
+    "service",
+    "support",
+    "team",
+    "helpdesk",
+)
+
+# Number-substitution pattern: a letter-digit-letter run in a domain word
+# (e.g. ``amaz0n``, ``micros0ft``, ``g00gle``).
+_NUM_SUB_RE = re.compile(r"[a-z][01][a-z]")
+
+
+def _suspicious_sender_domain(sender_lower: str) -> bool:
+    """Return True when the sender domain shows impersonation signals.
+
+    Three-tier check (all precision-first):
+
+    1. If the SLD is in the trusted allowlist → never flag.
+    2. If TLD is in the suspicious set → flag (unknown org using a spam TLD).
+    3. For .com / .net / .org: flag only when a brand keyword appears in the
+       full domain AND (the SLD contains a digit-substitution OR a suspicious
+       suffix pattern).
+
+    Ham that would otherwise be flagged (e.g. docusign.net, coinbase.com) is
+    protected by the allowlist on the SLD.
+    """
+    match = re.search(r"@([\w.\-]+)", sender_lower)
+    if not match:
+        return False
+    full_domain = match.group(1)
+    parts = full_domain.split(".")
+    # Need at least two labels for a meaningful SLD / TLD split.
+    if len(parts) < 2:
+        return False
+    sld = parts[-2]
+    tld = parts[-1]
+
+    # Tier 1: trusted allowlist.
+    if sld in _LEGIT_SENDER_SLDS:
+        return False
+
+    # Tier 2: suspicious TLD regardless of SLD.
+    if tld in _SUSPICIOUS_TLDS:
+        return True
+
+    # Tier 3: common TLD (.com / .net) — require brand + impersonation signal.
+    domain_no_hyphens = full_domain.replace("-", "")
+    has_brand = any(brand in domain_no_hyphens for brand in _IMPERSONATION_BRANDS)
+    if not has_brand:
+        return False
+
+    # Digit substitution in the SLD (e.g. amaz0n, micros0ft).
+    if _NUM_SUB_RE.search(sld):
+        return True
+
+    # Suspicious suffix appended to brand name in the SLD
+    # (e.g. dropbox-security-alert → sld = 'dropbox-security-alert').
+    return any(
+        sld.endswith(sfx) or ("-" + sfx) in sld for sfx in _IMPERSONATION_SLD_SUFFIXES
+    )
+
+
+def _looks_phishing_body(body_lower: str) -> bool:
+    """High-signal body-only phishing indicators.
+
+    Only fires on phrases that are vanishingly rare in legitimate mail
+    (e.g. "transfer to a protected account", "funds will be frozen") or
+    paired indicators that together identify credential-harvesting.
+    """
+    for phrase in _PHISHING_BODY_SINGLE_PHRASES:
+        if phrase in body_lower:
+            return True
+    for required, also in _PHISHING_BODY_KEYWORD_PAIRS:
+        if required in body_lower and also in body_lower:
+            return True
+    return False
+
+
+def detect_phishing(
+    subject: str,
+    sender: str,
+    body: str,
+) -> bool:
+    """Multi-signal phishing detector for the block/quarantine tool and CI gate.
+
+    Evaluates three independent channels — subject keyword pairs, suspicious
+    sender domain, and body-level signals — and returns ``True`` when any one
+    channel fires.  Each channel is conservative (precision-first).
+
+    This function is deterministic and LLM-free.  The existing
+    ``_looks_phishing(subject_lower)`` is the subject channel (called inside
+    ``classify_category_heuristic``); ``detect_phishing`` is the complete
+    multi-signal variant intended for the quarantine tool.
+
+    Args:
+        subject: The decoded message subject (any case; normalised internally).
+        sender:  The raw ``From`` header value (any case; normalised internally).
+        body:    The decoded plain-text body (any case; normalised internally).
+
+    Returns:
+        ``True`` if any phishing signal fires; ``False`` otherwise.
+    """
+    subject_lower = (subject or "").lower()
+    sender_lower = (sender or "").lower()
+    body_lower = (body or "").lower()
+
+    return (
+        _looks_phishing(subject_lower)
+        or _suspicious_sender_domain(sender_lower)
+        or _looks_phishing_body(body_lower)
+    )
+
+
 def group_by_category(triage_results: list[dict]) -> dict:
     """Group an iterable of triage results into category buckets.
 
@@ -378,6 +610,7 @@ __all__ = [
     "CATEGORY_LOW_PRIORITY",
     "HeuristicResult",
     "classify_category_heuristic",
+    "detect_phishing",
     "group_by_category",
     # System label ID constants — exported so callers can match without
     # repeating string literals.

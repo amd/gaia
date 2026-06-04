@@ -62,6 +62,10 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "accept_invite",
     "decline_invite",
     "create_event_from_email",
+    # Phishing quarantine (#1271) — mutates message state (removes from INBOX
+    # and applies a quarantine label). Reversible via unquarantine_message but
+    # must not auto-execute without explicit user confirmation.
+    "quarantine_phishing_message",
 }
 
 
