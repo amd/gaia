@@ -138,9 +138,11 @@ class _FakeSendBackend:
     def __init__(self) -> None:
         self._seq = 0
 
-    def send_message(
+    def send_message(  # pylint: disable=unused-argument
         self, *, to: str, subject: str, body: str, headers: Dict[str, str] = None
     ) -> Dict[str, Any]:
+        # body/headers mirror LiveGmailBackend.send_message for parity; this
+        # test seam only needs to echo a Gmail-shaped id back.
         self._seq += 1
         return {"id": f"mcp_fake_{self._seq}", "to": to, "subject": subject}
 
