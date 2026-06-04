@@ -1,0 +1,39 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Packaging manifest for the native (C++) Wi-Fi troubleshooter agent. Built
+# from cpp/examples/wifi_agent.cpp by .github/workflows/build_agents.yml.
+id: wifi
+name: Wi-Fi Troubleshooter
+version: 0.1.0
+description: "Run a full network diagnostic chain and auto-apply fixes via PowerShell."
+author: AMD
+license: MIT
+
+category: system
+tags: [wifi, network, diagnostics, windows]
+icon: wifi
+
+language: cpp
+min_gaia_version: "0.18.0"
+models: [Qwen3-4B-Instruct-2507-GGUF]
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64]
+
+cpp:
+  static_linked: true
+  binaries:
+    win-x64: wifi-win-x64.exe
+
+permissions:
+  - shell:execute
+  - network:read
+
+interfaces:
+  tui: true
+  cli: false
+  pipe: false
+  api_server: false
+  mcp_server: false
