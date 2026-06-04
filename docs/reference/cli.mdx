@@ -359,7 +359,62 @@ On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tr
 
 ### Agent Command
 
-Manage custom agents installed under `~/.gaia/agents/`. Supports exporting every custom agent into a single `.zip` bundle and importing a bundle produced on another machine.
+Author, version, validate, and share GAIA agents.
+
+#### Developer workflow: `init`, `version`, `test`
+
+Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/python/summarize/`).
+
+```bash
+gaia agent init <name> [--language python|cpp] [--output DIR] [--force]
+gaia agent version <patch|minor|major> [--path DIR]
+gaia agent test [--lint | --live] [--path DIR] [--timeout SECONDS]
+```
+
+**`init`** scaffolds a package directory named after `<name>`:
+
+- **Python:** `gaia-agent.yaml`, `pyproject.toml` (with the `gaia.agent` entry point), a `gaia_agent_<id>/` package (`__init__.py` + `agent.py` skeleton), `tests/test_agent.py`, and `README.md`.
+- **C++:** `gaia-agent.yaml`, `CMakeLists.txt`, `src/agent.cpp`, `tests/`, and `README.md`.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `name` | string | Agent id/name — lowercase, hyphens allowed (positional, required) |
+| `--language` | choice | `python` (default) or `cpp` |
+| `--output, -o` | string | Parent directory to create the package in (default: current dir) |
+| `--force` | flag | Overwrite an existing package directory |
+
+**`version`** bumps the SemVer in `gaia-agent.yaml` and keeps `pyproject.toml` / `__init__.py` in sync.
+
+**`test`** runs quality gates in two modes:
+
+| Mode | LLM required? | Checks |
+|------|:-------------:|--------|
+| `--lint` (default) | No (CI-safe) | Manifest valid + complete, package structure, Python sources parse + imports resolve, `black` + `isort` clean (Python); manifest + structure (C++) |
+| `--live` | Yes (Lemonade Server) | Agent answers each declared `conversation_starter` within `--timeout` without crashing |
+
+The publish workflow requires `--lint` to pass; `--live` is recommended but not enforced.
+
+**Examples:**
+
+<CodeGroup>
+```bash Scaffold and validate
+gaia agent init my-agent
+cd my-agent
+gaia agent test --lint
+```
+
+```bash Bump version
+gaia agent version patch    # 0.1.0 -> 0.1.1
+```
+
+```bash Live smoke test
+gaia agent test --live --timeout 90
+```
+</CodeGroup>
+
+#### Sharing: `export`, `import`
+
+Export every custom agent installed under `~/.gaia/agents/` into a single `.zip` bundle, and import a bundle produced on another machine.
 
 ```bash
 gaia agent export [--output PATH]

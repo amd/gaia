@@ -2677,11 +2677,17 @@ Examples:
     # Agent command (export/import custom agent bundles)
     agent_parser = subparsers.add_parser(
         "agent",
-        help="Manage custom agents (export/import bundles)",
+        help="Author and manage agents (init/version/test, export/import)",
     )
     agent_subparsers = agent_parser.add_subparsers(
         dest="agent_action", help="Agent action to perform"
     )
+
+    # Developer workflow (init / version / test) lives in gaia.cli_agent to keep
+    # this file lean. It adds its subcommands to the same 'agent' group.
+    from gaia import cli_agent
+
+    cli_agent.register_subparsers(agent_subparsers)
 
     # Agent export command
     agent_export_parser = agent_subparsers.add_parser(
@@ -6150,9 +6156,15 @@ def handle_agent_command(args):
     Args:
         args: Parsed command-line arguments
     """
+    # Developer-workflow actions (init / version / test) handled in cli_agent.
+    from gaia import cli_agent
+
+    if cli_agent.handle(args):
+        return
+
     if not hasattr(args, "agent_action") or args.agent_action is None:
         print("❌ Error: No agent action specified")
-        print("Available actions: export, import")
+        print("Available actions: init, version, test, export, import")
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)
 
