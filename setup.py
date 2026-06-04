@@ -53,15 +53,9 @@ setup(
         "gaia.agents.base",
         "gaia.agents.browser",
         "gaia.agents.tools",
-        "gaia.agents.blender",
-        "gaia.agents.blender.core",
         "gaia.agents.chat",
         "gaia.agents.chat.tools",
         "gaia.agents.builder",
-        "gaia.agents.docker",
-        "gaia.agents.emr",
-        "gaia.agents.emr.dashboard",
-        "gaia.agents.jira",
         "gaia.agents.code",
         "gaia.agents.code.orchestration",
         "gaia.agents.code.orchestration.factories",
@@ -73,7 +67,6 @@ setup(
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
         "gaia.agents.routing",
-        "gaia.agents.sd",
         "gaia.governance",
         "gaia.sd",
         "gaia.vlm",
@@ -245,6 +238,27 @@ setup(
             "mypy",
             "bandit",
         ],
+        # Standalone AMD production agents (issue #1102). Each agent ships as a
+        # separate ``gaia-agent-<id>`` wheel that depends on this framework
+        # wheel; ``amd-gaia[agents]`` installs all migrated agents at once.
+        # For editable development install the package directly, e.g.
+        # ``pip install -e hub/agents/python/summarize``.
+        "summarize": ["gaia-agent-summarize>=0.1.0"],
+        "sd": ["gaia-agent-sd>=0.1.0"],
+        "docker-agent": ["gaia-agent-docker>=0.1.0"],
+        "jira-agent": ["gaia-agent-jira>=0.1.0"],
+        "fileio": ["gaia-agent-fileio>=0.1.0"],
+        "emr": ["gaia-agent-emr>=0.1.0"],
+        "blender-agent": ["gaia-agent-blender>=0.1.0"],
+        "agents": [
+            "gaia-agent-summarize>=0.1.0",
+            "gaia-agent-sd>=0.1.0",
+            "gaia-agent-docker>=0.1.0",
+            "gaia-agent-jira>=0.1.0",
+            "gaia-agent-fileio>=0.1.0",
+            "gaia-agent-emr>=0.1.0",
+            "gaia-agent-blender>=0.1.0",
+        ],
     },
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -262,7 +276,8 @@ setup(
             "gaia = gaia.cli:main",
             "gaia-cli = gaia.cli:main",
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
-            "gaia-emr = gaia.agents.emr.cli:main",
+            # gaia-emr moved to the standalone gaia-agent-emr wheel (#1102).
+            # gaia-code remains until the code agent is migrated out of core.
             "gaia-code = gaia.agents.code.cli:main",
         ]
     },

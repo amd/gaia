@@ -9,7 +9,7 @@ sys.path.append(os.path.join(os.getcwd(), "src"))
 
 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 from gaia.agents.code.agent import CodeAgent
-from gaia.agents.docker.agent import DockerAgent
+from gaia_agent_docker.agent import DockerAgent
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.security import PathValidator
 
