@@ -7,9 +7,9 @@ import re
 from unittest.mock import MagicMock, patch
 
 import pytest
+from gaia_agent_blender.agent import BlenderAgent
 
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.blender.agent import BlenderAgent
 from gaia.llm.base_client import LLMClient
 from gaia.mcp.blender_mcp_client import MCPClient
 

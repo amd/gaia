@@ -310,7 +310,8 @@ class TestBuilderAgentFormat:
 
 class TestBlenderAgentFormat:
     def test_blender_no_duplicate_format(self):
-        from gaia.agents.blender.agent import BlenderAgent
+        pytest.importorskip("gaia_agent_blender")
+        from gaia_agent_blender.agent import BlenderAgent
 
         prompt = BlenderAgent._get_system_prompt(None)
         assert "==== JSON RESPONSE FORMAT ====" not in prompt

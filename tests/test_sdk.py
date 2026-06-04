@@ -1285,17 +1285,19 @@ class TestSpecializedAgents:
 
     def test_blender_agent_exists(self):
         """Verify BlenderAgent can be imported."""
-        from gaia.agents.blender.agent import BlenderAgent
+        pytest.importorskip("gaia_agent_blender")
+        from gaia_agent_blender.agent import BlenderAgent
 
         assert BlenderAgent is not None
 
     def test_specialized_agents_inherit_from_base(self):
         """Verify all specialized agents inherit from Agent base class."""
+        pytest.importorskip("gaia_agent_blender")
         pytest.importorskip("gaia_agent_jira")
+        from gaia_agent_blender.agent import BlenderAgent
         from gaia_agent_jira.agent import JiraAgent
 
         from gaia.agents.base.agent import Agent
-        from gaia.agents.blender.agent import BlenderAgent
         from gaia.agents.chat.agent import ChatAgent
 
         assert issubclass(ChatAgent, Agent)

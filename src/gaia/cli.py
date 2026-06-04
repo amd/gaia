@@ -31,7 +31,8 @@ from gaia.version import version
 # Optional imports — degrades to BLENDER_AVAILABLE = False when the blender
 # agent (or the Blender MCP client) is not installed.
 try:
-    from gaia.agents.blender.agent import BlenderAgent
+    from gaia_agent_blender.agent import BlenderAgent
+
     from gaia.mcp.blender_mcp_client import MCPClient
 
     BLENDER_AVAILABLE = True

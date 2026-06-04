@@ -5,8 +5,8 @@ import json
 import logging
 
 import pytest
+from gaia_agent_blender.agent_simple import BlenderAgentSimple
 
-from gaia.agents.blender.agent_simple import BlenderAgentSimple
 from gaia.llm import create_client
 from gaia.llm.base_client import LLMClient
 from gaia.mcp.blender_mcp_client import MCPClient

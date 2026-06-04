@@ -53,8 +53,6 @@ setup(
         "gaia.agents.base",
         "gaia.agents.browser",
         "gaia.agents.tools",
-        "gaia.agents.blender",
-        "gaia.agents.blender.core",
         "gaia.agents.chat",
         "gaia.agents.chat.tools",
         "gaia.agents.builder",
@@ -252,12 +250,14 @@ setup(
         "fileio": ["gaia-agent-fileio>=0.1.0"],
         "docker-agent": ["gaia-agent-docker>=0.1.0"],
         "jira-agent": ["gaia-agent-jira>=0.1.0"],
+        "blender-agent": ["gaia-agent-blender>=0.1.0"],
         "agents": [
             "gaia-agent-summarize>=0.1.0",
             "gaia-agent-sd>=0.1.0",
             "gaia-agent-fileio>=0.1.0",
             "gaia-agent-docker>=0.1.0",
             "gaia-agent-jira>=0.1.0",
+            "gaia-agent-blender>=0.1.0",
         ],
     },
     classifiers=[
