@@ -110,6 +110,9 @@ def quarantine_phishing_impl(
         quarantine_label_id = _resolve_quarantine_label_id(gmail)
 
         # Gmail calls first (ordering invariant).
+        # Non-atomic: if add_label succeeds but archive_message raises, the
+        # message keeps the quarantine label in INBOX and no undo row is written
+        # (manual label removal needed). The message is never lost.
         gmail.add_label(message_id, quarantine_label_id)
         gmail.archive_message(message_id)
 

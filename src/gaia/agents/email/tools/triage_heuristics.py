@@ -178,6 +178,7 @@ def classify_category_heuristic(
     subject: str,
     sender: str,
     label_ids: Iterable[str],
+    body: str = "",
 ) -> HeuristicResult:
     """Classify a single message using fast keyword + label-ID rules.
 
@@ -190,6 +191,10 @@ def classify_category_heuristic(
         label_ids: System label IDs from ``labelIds`` on the message
             payload. User-defined labels (opaque ``Label_*`` ids) are
             ignored — they cannot be classified by name.
+        body: Plain-text body or snippet (any length; empty string
+            disables body-level signals). Callers that have already decoded
+            the full body should pass it; callers in the fast bulk-triage
+            path may pass ``msg["snippet"]`` to avoid an extra decode.
 
     Returns:
         A :class:`HeuristicResult`. When ``confident=False`` the caller
@@ -202,7 +207,9 @@ def classify_category_heuristic(
 
     # Phishing is a *signal* layered on top of every category, never a
     # category itself — compute once up front so spam/phishing can co-fire.
-    is_phishing = _looks_phishing(subject_lower)
+    # detect_phishing covers subject + sender-domain + body; the body channel
+    # uses whatever text the caller provides (snippet or full decode).
+    is_phishing = detect_phishing(subject, sender, body)
 
     # 1. Spam — confident, label-driven. Gmail's spam classifier is more
     #    accurate than anything we'd build ad-hoc.
@@ -568,16 +575,16 @@ def detect_phishing(
     sender: str,
     body: str,
 ) -> bool:
-    """Multi-signal phishing detector for the block/quarantine tool and CI gate.
+    """Multi-signal phishing detector used by both the heuristic triage path and
+    the quarantine tool.
 
     Evaluates three independent channels — subject keyword pairs, suspicious
     sender domain, and body-level signals — and returns ``True`` when any one
     channel fires.  Each channel is conservative (precision-first).
 
-    This function is deterministic and LLM-free.  The existing
-    ``_looks_phishing(subject_lower)`` is the subject channel (called inside
-    ``classify_category_heuristic``); ``detect_phishing`` is the complete
-    multi-signal variant intended for the quarantine tool.
+    ``classify_category_heuristic`` calls this function to set ``is_phishing``
+    on every triage result; the quarantine tool calls it again before acting.
+    The function is deterministic and LLM-free.
 
     Args:
         subject: The decoded message subject (any case; normalised internally).

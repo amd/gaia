@@ -3,7 +3,7 @@
 """
 Precision gate for phishing detection.
 
-Runs ``_looks_phishing_full`` (which evaluates subject + sender + body
+Runs ``detect_phishing`` (which evaluates subject + sender + body
 signals) against the synthetic phishing/ham fixture and enforces a hard
 precision gate of >= 90%.
 
@@ -11,7 +11,7 @@ This is a LOCAL, DETERMINISTIC test — no LLM, no Lemonade.
 
 Fixture: tests/fixtures/email/phishing_fixture.json
   - 30 phishing examples (clear credential-harvesting / account-takeover attempts)
-  - 42 ham examples (legit "verify your email", password-reset, shipping,
+  - 47 ham examples (legit "verify your email", password-reset, shipping,
     calendar invites, onboarding) — the precision trap: many look phishy
     on the surface
 
