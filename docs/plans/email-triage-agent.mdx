@@ -256,7 +256,7 @@ primitives. Summary table:
 | Agent UI React component + routing pattern | Various | `src/gaia/apps/webui/src/components/` | **Exists** — Email panel follows component pattern, ~150 LOC |
 | CLI subcommand pattern | `jira`, `docker`, `code` subparsers | `src/gaia/cli.py:981+` | **Exists** — mirror for `gaia email` |
 | OAuth pattern reference | `JiraAgent` | `src/gaia/agents/jira/agent.py` | **Reference** — env-var auth; email agent adopts same pattern at MVT |
-| DB-backed agent reference | `MedicalIntakeAgent` | `src/gaia/agents/emr/agent.py` | **Reference** — DatabaseMixin + @tool + FileWatcherMixin composition |
+| DB-backed agent reference | `MedicalIntakeAgent` | `hub/agents/python/emr/gaia_agent_emr/agent.py` | **Reference** — DatabaseMixin + @tool + FileWatcherMixin composition |
 | MCP-native agent reference | `DockerAgent` | `src/gaia/agents/docker/agent.py` | **Reference** — MCPAgent mixin composition |
 
 **Doesn't exist yet (risks — see §22.4 for in-flight PRs, §27.3 for workarounds):**

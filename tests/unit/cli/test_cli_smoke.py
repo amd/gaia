@@ -182,7 +182,7 @@ def test_console_script_minimum_count() -> None:
     """
     assert len(_CONSOLE_SCRIPTS) >= 3, (
         f"Console-script discovery returned only {len(_CONSOLE_SCRIPTS)} entries; "
-        f"expected >= 3 (gaia-mcp, gaia-emr, gaia-code). "
+        f"expected >= 3 (gaia, gaia-mcp, gaia-code). "
         f"Is the package installed? Run `pip install -e .`\n"
         f"Found: {_CONSOLE_SCRIPTS}"
     )

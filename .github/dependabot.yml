@@ -100,7 +100,7 @@ updates:
 
   # JavaScript - EMR Dashboard Electron wrapper
   - package-ecosystem: "npm"
-    directory: "/src/gaia/agents/emr/dashboard/electron"
+    directory: "/hub/agents/python/emr/gaia_agent_emr/dashboard/electron"
     schedule:
       interval: "weekly"
       day: "monday"

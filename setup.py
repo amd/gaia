@@ -56,8 +56,6 @@ setup(
         "gaia.agents.chat",
         "gaia.agents.chat.tools",
         "gaia.agents.builder",
-        "gaia.agents.emr",
-        "gaia.agents.emr.dashboard",
         "gaia.agents.code",
         "gaia.agents.code.orchestration",
         "gaia.agents.code.orchestration.factories",
@@ -258,6 +256,7 @@ setup(
         "agent-docker": ["gaia-agent-docker"],
         "agent-jira": ["gaia-agent-jira"],
         "agent-blender": ["gaia-agent-blender"],
+        "agent-emr": ["gaia-agent-emr"],
         "agents": [
             "gaia-agent-summarize",
             "gaia-agent-sd",
@@ -265,6 +264,7 @@ setup(
             "gaia-agent-docker",
             "gaia-agent-jira",
             "gaia-agent-blender",
+            "gaia-agent-emr",
         ],
     },
     classifiers=[
@@ -283,7 +283,6 @@ setup(
             "gaia = gaia.cli:main",
             "gaia-cli = gaia.cli:main",
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
-            "gaia-emr = gaia.agents.emr.cli:main",
             "gaia-code = gaia.agents.code.cli:main",
         ]
     },

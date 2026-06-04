@@ -10,7 +10,7 @@ on:
     paths:
       - 'src/gaia/electron/**'
       - 'src/gaia/apps/*/webui/**'
-      - 'src/gaia/agents/emr/dashboard/electron/**'
+      - 'hub/agents/python/emr/gaia_agent_emr/dashboard/electron/**'
       - 'tests/electron/**'
       - '.github/workflows/test_electron.yml'
   pull_request:
@@ -19,7 +19,7 @@ on:
     paths:
       - 'src/gaia/electron/**'
       - 'src/gaia/apps/*/webui/**'
-      - 'src/gaia/agents/emr/dashboard/electron/**'
+      - 'hub/agents/python/emr/gaia_agent_emr/dashboard/electron/**'
       - 'tests/electron/**'
       - '.github/workflows/test_electron.yml'
   merge_group:
@@ -203,7 +203,7 @@ jobs:
             path: src/gaia/apps/example/webui
             has_package_script: true
           - name: emr-dashboard
-            path: src/gaia/agents/emr/dashboard/electron
+            path: hub/agents/python/emr/gaia_agent_emr/dashboard/electron
             has_package_script: false
 
     steps:
@@ -295,7 +295,7 @@ jobs:
           - name: example-app
             path: src/gaia/apps/example/webui
           - name: emr-dashboard
-            path: src/gaia/agents/emr/dashboard/electron
+            path: hub/agents/python/emr/gaia_agent_emr/dashboard/electron
 
     steps:
       - uses: actions/checkout@v6

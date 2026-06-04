@@ -42,7 +42,7 @@ except ImportError:
     StreamingResponse = None  # type: ignore[assignment]
     StaticFiles = None  # type: ignore[assignment]
 
-from gaia.agents.emr.agent import MedicalIntakeAgent
+from gaia_agent_emr.agent import MedicalIntakeAgent
 
 logger = logging.getLogger(__name__)
 
