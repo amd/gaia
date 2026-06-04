@@ -18,13 +18,14 @@ NOTE on route ordering: this router MUST be included *before*
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from gaia.hub import catalog as catalog_mod
 from gaia.hub import installer as installer_mod
+from gaia.hub import lifecycle as lifecycle_mod
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -62,6 +63,22 @@ class InstallRequest(BaseModel):
     # Explicit opt-in to install a non-verified native (C++) agent. The UI sets
     # this after the user accepts the "Trust & Install" confirmation.
     trust_native: bool = False
+
+
+class ConfigRequest(BaseModel):
+    """Body for ``POST /api/agents/{id}/config``."""
+
+    config: Dict[str, Any]
+    # Replace the whole config instead of merging into the existing one.
+    replace: bool = False
+
+
+class SetupRequest(BaseModel):
+    """Body for ``POST /api/agents/setup`` (progressive multi-agent install)."""
+
+    ids: List[str]
+    max_parallel: int = installer_mod.DEFAULT_MAX_PARALLEL
+    resume: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -217,3 +234,101 @@ async def rollback_agent(agent_id: str, request: Request):
     except installer_mod.InstallError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"id": agent_id, "status": "rolled_back", "version": restored.version}
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: configure / health / status (issue #465)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/agents/{agent_id}/config")
+async def get_agent_config(agent_id: str):
+    """Return the persisted per-agent config (``{}`` if none)."""
+    try:
+        config = lifecycle_mod.read_config(agent_id)
+    except lifecycle_mod.LifecycleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"id": agent_id, "config": config}
+
+
+@router.post(
+    "/api/agents/{agent_id}/config",
+    dependencies=[Depends(_require_localhost), Depends(_require_ui_header)],
+)
+async def set_agent_config(agent_id: str, body: ConfigRequest):
+    """Persist per-agent config (model preference, settings). Merges by default."""
+    try:
+        merged = lifecycle_mod.configure(agent_id, body.config, merge=not body.replace)
+    except lifecycle_mod.LifecycleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"id": agent_id, "config": merged}
+
+
+@router.get("/api/agents/{agent_id}/health")
+async def agent_health(agent_id: str, request: Request):
+    """Health check: does the installed agent load + its entry point resolve?"""
+    registry = _registry(request)
+    return lifecycle_mod.health_check(agent_id, registry=registry).to_dict()
+
+
+@router.get("/api/agents/{agent_id}/status")
+async def agent_status(agent_id: str, request: Request):
+    """Aggregated status: installed version, health, config summary."""
+    registry = _registry(request)
+    return lifecycle_mod.status(agent_id, registry=registry).to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Setup executor: progressive, resumable, parallel multi-agent install (#468)
+# ---------------------------------------------------------------------------
+
+
+def _run_setup(ids: List[str], registry, *, max_parallel: int, resume: bool) -> None:
+    """Background setup worker. Per-agent progress is in install-status."""
+    try:
+        manifests = {aid: catalog_mod.fetch_manifest(aid) for aid in ids}
+    except catalog_mod.CatalogError as exc:
+        logger.warning("hub: setup could not resolve manifests: %s", exc)
+        return
+    try:
+        installer_mod.run_setup(
+            manifests,
+            max_parallel=max_parallel,
+            resume=resume,
+            registry=registry,
+        )
+    except installer_mod.InstallError as exc:
+        logger.warning("hub: setup failed: %s", exc)
+    except Exception:  # noqa: BLE001 - record then swallow in the worker
+        logger.exception("hub: unexpected error during setup")
+
+
+@router.post(
+    "/api/agents/setup",
+    status_code=202,
+    dependencies=[Depends(_require_localhost), Depends(_require_ui_header)],
+)
+async def start_setup(
+    request: Request, body: SetupRequest, background_tasks: BackgroundTasks
+):
+    """Start a progressive multi-agent install; poll setup-status for progress."""
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No agent ids provided.")
+    registry = _registry(request)
+    background_tasks.add_task(
+        _run_setup,
+        body.ids,
+        registry,
+        max_parallel=body.max_parallel,
+        resume=body.resume,
+    )
+    return {"ids": body.ids, "status": "queued"}
+
+
+@router.get("/api/agents/setup-status")
+async def setup_status():
+    """Poll the resumable setup state (per-step progress for a multi-install)."""
+    state = installer_mod.get_setup_status()
+    if state is None:
+        raise HTTPException(status_code=404, detail="No setup in progress.")
+    return state
