@@ -316,6 +316,7 @@ def test_install_cpp_artifact_extracted(tmp_path):
         base_url=BASE,
         fetcher=fetcher,
         install_root=tmp_path,
+        trust_native=True,  # experimental native agent — explicit trust required
     )
     assert result.language == "cpp"
     assert (tmp_path / "native" / "bin" / "demo").exists()

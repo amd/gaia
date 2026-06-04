@@ -149,6 +149,50 @@ describe('AgentHubGrid tabs', () => {
         });
     });
 
+    it('prompts for trust before installing a non-verified native agent', async () => {
+        const user = userEvent.setup();
+        const nativeCatalog: AgentCatalogResponse = {
+            offline: false,
+            agents: [
+                agent({
+                    id: 'edge',
+                    name: 'Edge Native',
+                    source: 'installed',
+                    status: 'available',
+                    language: 'cpp',
+                    security_tier: 'community',
+                    requires_trust: true,
+                    compatibility: { level: 'compatible' },
+                }),
+            ],
+        };
+        mockedApi.listCatalog.mockResolvedValue(nativeCatalog);
+        mockedApi.installAgent.mockResolvedValue({ agent_id: 'edge', state: 'downloading', progress: 10 });
+
+        render(
+            <AgentHubGrid
+                agents={INSTALLED}
+                activeAgentId="chat"
+                onSelect={() => {}}
+                onStartChat={() => {}}
+            />,
+        );
+        await user.click(screen.getByRole('tab', { name: /Available/ }));
+        await screen.findByText('Edge Native');
+
+        // Clicking Install opens the confirmation dialog (no install yet).
+        const card = screen.getByText('Edge Native').closest('.agent-hub-card')!;
+        await user.click(card.querySelector('.btn-install') as HTMLButtonElement);
+        await screen.findByRole('alertdialog');
+        expect(mockedApi.installAgent).not.toHaveBeenCalled();
+
+        // Confirming installs with trust_native.
+        await user.click(screen.getByRole('button', { name: /Trust & Install/ }));
+        await waitFor(() =>
+            expect(mockedApi.installAgent).toHaveBeenCalledWith('edge', expect.anything(), true),
+        );
+    });
+
     it('shows the offline banner when the catalog is cached', async () => {
         const user = userEvent.setup();
         mockedApi.listCatalog.mockResolvedValue({ ...CATALOG, offline: true });

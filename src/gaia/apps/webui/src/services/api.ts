@@ -132,13 +132,22 @@ export async function listCatalog(): Promise<AgentCatalogResponse> {
  * Kick off an agent install (download → verify → install → hot-register).
  * Returns the initial install status; poll ``getInstallStatus`` for progress.
  * The optional ``device`` selects the per-device package variant when the
- * agent ships more than one.
+ * agent ships more than one. ``trustNative`` must be set to install a
+ * non-verified native (C++) agent — the backend refuses (403) otherwise.
  */
-export async function installAgent(agentId: string, device?: string): Promise<InstallStatus> {
+export async function installAgent(
+    agentId: string,
+    device?: string,
+    trustNative?: boolean,
+): Promise<InstallStatus> {
     return apiFetch(
         'POST',
         '/agents/install',
-        { id: agentId, ...(device ? { device } : {}) },
+        {
+            id: agentId,
+            ...(device ? { device } : {}),
+            ...(trustNative ? { trust_native: true } : {}),
+        },
         { 'x-gaia-ui': '1' },
     );
 }

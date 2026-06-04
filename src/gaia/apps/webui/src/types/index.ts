@@ -89,6 +89,12 @@ export interface AgentInfo {
     download_size_bytes?: number;
     /** Trust tier: AMD-verified, community-published, or experimental opt-in. */
     security_tier?: 'verified' | 'community' | 'experimental';
+    /**
+     * True when installing this agent needs an explicit native-trust opt-in —
+     * a non-verified native (C++) package that runs unsandboxed. The Hub shows
+     * a "Trust & Install" confirmation before sending ``trust_native``.
+     */
+    requires_trust?: boolean;
     /** Optional remote avatar image URL from the catalog. */
     avatar_url?: string;
     /** True when the publisher has deprecated this agent. */

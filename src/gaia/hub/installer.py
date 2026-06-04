@@ -58,6 +58,14 @@ BACKUP_DIRNAME = ".backup"
 # Where Python wheels get installed (``uv pip install --target``).
 SITE_PACKAGES_DIRNAME = "site-packages"
 
+# The only security tier whose native agents install without an explicit trust
+# opt-in. ``community`` / ``experimental`` C++ agents require ``trust_native``.
+VERIFIED_TIER = "verified"
+
+# Least-privileged default when a manifest omits its tier (mirrors the manifest
+# parser: an unknown package is treated as untrusted).
+DEFAULT_SECURITY_TIER = "experimental"
+
 # Injectable pip runner: takes the full ``uv pip install`` argument list (after
 # ``uv pip install``) and runs it, raising InstallError on failure.
 PipRunner = Callable[[List[str]], None]
@@ -86,6 +94,16 @@ class CompatibilityError(InstallError):
 
 class InstallInProgressError(InstallError):
     """An install for this agent id is already running (maps to HTTP 409)."""
+
+
+class TrustRequiredError(InstallError):
+    """A native (C++) non-verified agent needs explicit trust to install.
+
+    Native agents run as unsandboxed binaries on the user's machine, so a
+    ``community``/``experimental`` C++ package is only installed when the caller
+    explicitly opts in (``trust_native=True`` / the UI's *Trust & Install*
+    confirmation). Maps to HTTP 403 at the router boundary.
+    """
 
 
 class NotInstalledError(InstallError):
@@ -438,6 +456,43 @@ def _hot_register(agent_id: str, install_dir: Path, language: str, registry) -> 
 
 
 # ---------------------------------------------------------------------------
+# Security tier / native-agent trust
+# ---------------------------------------------------------------------------
+
+
+def requires_native_trust(manifest: Dict[str, Any]) -> bool:
+    """Whether installing *manifest* needs an explicit native-trust opt-in.
+
+    True for native (``language: cpp``) agents that are not in the ``verified``
+    tier — they ship an unsandboxed binary from a non-AMD-audited publisher.
+    """
+    language = manifest.get("language", "python")
+    tier = manifest.get("security_tier", DEFAULT_SECURITY_TIER)
+    return language == "cpp" and tier != VERIFIED_TIER
+
+
+def ensure_native_trust(
+    agent_id: str, manifest: Dict[str, Any], *, trust_native: bool
+) -> None:
+    """Raise :class:`TrustRequiredError` if native trust is needed but absent.
+
+    No-op for Python agents and ``verified`` native agents. Called both by the
+    router (synchronous 403) and :func:`install` (defense in depth).
+    """
+    if trust_native or not requires_native_trust(manifest):
+        return
+    tier = manifest.get("security_tier", DEFAULT_SECURITY_TIER)
+    raise TrustRequiredError(
+        f"'{agent_id}' is a native (C++) agent in the '{tier}' security tier. "
+        f"Native agents run as unsandboxed binaries on your machine, so this one "
+        f"is not installed automatically. Re-install with explicit trust "
+        f"(trust_native=true, or the UI's 'Trust & Install' confirmation) only if "
+        f"you trust its publisher. See "
+        f"https://amd-gaia.ai/docs/spec/agent-hub-restructure."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public: install
 # ---------------------------------------------------------------------------
 
@@ -475,6 +530,7 @@ def install(
     install_root: Optional[Path] = None,
     registry: Any = None,
     skip_compatibility_check: bool = False,
+    trust_native: bool = False,
 ) -> InstallResult:
     """Download, verify, and install an agent from the hub.
 
@@ -487,10 +543,12 @@ def install(
         install_root: Install root; defaults to ``~/.gaia/agents``.
         registry: Live :class:`AgentRegistry` to hot-register into.
         skip_compatibility_check: Skip the platform/disk gate (tests/forced).
+        trust_native: Explicit opt-in to install a non-verified native (C++)
+            agent. Required for ``community``/``experimental`` C++ packages.
 
     Raises:
         InstallInProgressError, ChecksumError, DiskSpaceError,
-        CompatibilityError, InstallError.
+        CompatibilityError, TrustRequiredError, InstallError.
     """
     fetcher = fetcher or catalog_mod.fetch_bytes
     run_pip = run_pip or _default_run_pip
@@ -507,6 +565,21 @@ def install(
                     agent_id, base_url=base_url, fetcher=fetcher
                 )
             language = manifest.get("language", "python")
+
+            # Native-agent trust gate — refuse non-verified C++ packages unless
+            # the caller explicitly opted in (defense in depth; the router also
+            # enforces this synchronously for a clean 403).
+            ensure_native_trust(agent_id, manifest, trust_native=trust_native)
+
+            # Deprecation is non-fatal but must be loud: a deprecated agent may
+            # be unmaintained or superseded.
+            if manifest.get("deprecated"):
+                logger.warning(
+                    "installer: '%s' is deprecated and may be unmaintained or "
+                    "superseded; installing anyway",
+                    agent_id,
+                )
+
             resolved_version, artifact = _resolve_version(manifest, version)
 
             # --- compatibility / disk gate ---

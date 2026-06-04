@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { Cpu, Wrench, Shield, CheckCircle2, AlertTriangle, Download, Trash2, ArrowUpCircle, X, RefreshCw } from 'lucide-react';
+import { Cpu, Wrench, Shield, CheckCircle2, AlertTriangle, Download, Trash2, ArrowUpCircle, X, RefreshCw, FlaskConical } from 'lucide-react';
 import { getAgentIcon } from './agentIcons';
 import type { AgentInfo, InstallStatus } from '../types';
 import { useChatStore } from '../stores/chatStore';
@@ -17,6 +17,24 @@ function sourceBadge(source: string) {
     if (source === 'native') return <span className="agent-badge agent-badge-native">Native</span>;
     if (source === 'installed') return <span className="agent-badge agent-badge-installed">Installed</span>;
     return <span className="agent-badge agent-badge-custom">Custom</span>;
+}
+
+const TIER_META: Record<string, { Icon: typeof Shield; label: string }> = {
+    verified: { Icon: CheckCircle2, label: 'Verified' },
+    community: { Icon: Shield, label: 'Community' },
+    experimental: { Icon: FlaskConical, label: 'Experimental' },
+};
+
+/** Security-tier badge: checkmark (verified), shield (community), flask (experimental). */
+function tierBadge(tier?: string) {
+    const meta = tier ? TIER_META[tier] : undefined;
+    if (!meta) return null;
+    const { Icon, label } = meta;
+    return (
+        <span className={`agent-badge agent-badge-tier-${tier}`} title={`${label} security tier`}>
+            <Icon size={10} /> {label}
+        </span>
+    );
 }
 
 const DEVICE_LABELS: Record<string, string> = { cpu: 'CPU', gpu: 'GPU', npu: 'NPU' };
@@ -145,10 +163,12 @@ export function AgentHubCard({
                         {agent.version && !isAvailable && (
                             <span className="agent-badge agent-badge-version">v{agent.version}</span>
                         )}
-                        {agent.security_tier && agent.security_tier !== 'verified' && (
-                            <span className={`agent-badge agent-badge-tier-${agent.security_tier}`}>{agent.security_tier}</span>
+                        {tierBadge(agent.security_tier)}
+                        {agent.deprecated && (
+                            <span className="agent-badge agent-badge-deprecated" title="Deprecated by the publisher — may be unmaintained">
+                                <AlertTriangle size={10} /> Deprecated
+                            </span>
                         )}
-                        {agent.deprecated && <span className="agent-badge agent-badge-deprecated">Deprecated</span>}
                         {agent.language && agent.language !== 'python' && (
                             <span className="agent-badge agent-badge-native">{agent.language.toUpperCase()}</span>
                         )}

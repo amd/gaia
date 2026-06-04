@@ -93,13 +93,61 @@ def test_install_returns_202_and_schedules(client, monkeypatch):
 
     def fake_install(agent_id, **kwargs):
         called["id"] = agent_id
+        called["trust_native"] = kwargs.get("trust_native")
 
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {"id": "demo", "language": "python"},
+    )
     monkeypatch.setattr(installer_mod, "install", fake_install)
-    resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
+    resp = client.post(
+        "/api/agents/install", json={"id": "demo", "trust_native": True}, headers=UI
+    )
     assert resp.status_code == 202
     assert resp.json()["status"] == "queued"
     # BackgroundTasks run after the response in TestClient.
     assert called.get("id") == "demo"
+    assert called.get("trust_native") is True
+
+
+def test_install_native_non_verified_refused_403(client, monkeypatch):
+    # A community native agent without trust_native is refused synchronously.
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {
+            "id": "native",
+            "language": "cpp",
+            "security_tier": "community",
+        },
+    )
+    resp = client.post("/api/agents/install", json={"id": "native"}, headers=UI)
+    assert resp.status_code == 403
+    assert "trust" in resp.json()["detail"].lower()
+
+
+def test_install_native_non_verified_allowed_with_trust(client, monkeypatch):
+    called = {}
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {
+            "id": "native",
+            "language": "cpp",
+            "security_tier": "community",
+        },
+    )
+    monkeypatch.setattr(
+        installer_mod, "install", lambda agent_id, **k: called.update(id=agent_id)
+    )
+    resp = client.post(
+        "/api/agents/install",
+        json={"id": "native", "trust_native": True},
+        headers=UI,
+    )
+    assert resp.status_code == 202
+    assert called.get("id") == "native"
 
 
 def test_install_duplicate_returns_409(client, monkeypatch):

@@ -59,6 +59,9 @@ class InstallRequest(BaseModel):
 
     id: str
     version: Optional[str] = None
+    # Explicit opt-in to install a non-verified native (C++) agent. The UI sets
+    # this after the user accepts the "Trust & Install" confirmation.
+    trust_native: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -67,11 +70,14 @@ class InstallRequest(BaseModel):
 
 
 @router.get("/api/agents/catalog")
-async def get_catalog(request: Request, refresh: bool = False):
+async def get_catalog(
+    request: Request, refresh: bool = False, include_deprecated: bool = False
+):
     """Unified agent catalog: remote hub merged with the local registry.
 
     ``offline=true`` in the response means the live hub was unreachable and the
-    list came from the on-disk cache.
+    list came from the on-disk cache. Deprecated, not-yet-installed agents are
+    hidden unless ``include_deprecated=true``.
     """
     registry = _registry(request)
     try:
@@ -79,6 +85,7 @@ async def get_catalog(request: Request, refresh: bool = False):
             registry,
             installed_versions=installer_mod.installed_versions(),
             force=refresh,
+            include_deprecated=include_deprecated,
         )
     except catalog_mod.CatalogError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -90,10 +97,23 @@ async def get_catalog(request: Request, refresh: bool = False):
 # ---------------------------------------------------------------------------
 
 
-def _run_install(agent_id: str, version: Optional[str], registry) -> None:
+def _run_install(
+    agent_id: str,
+    version: Optional[str],
+    registry,
+    *,
+    trust_native: bool,
+    manifest: Optional[dict],
+) -> None:
     """Background install worker. Errors are recorded in install progress."""
     try:
-        installer_mod.install(agent_id, version=version, registry=registry)
+        installer_mod.install(
+            agent_id,
+            version=version,
+            registry=registry,
+            trust_native=trust_native,
+            manifest=manifest,
+        )
     except installer_mod.InstallError as exc:
         logger.warning("hub: install of %s failed: %s", agent_id, exc)
     except Exception:  # noqa: BLE001 - record then swallow in the worker
@@ -119,11 +139,32 @@ async def install_agent(
             status_code=409,
             detail=f"An install for '{body.id}' is already in progress.",
         )
+
+    # Resolve the manifest up front so native-agent trust is enforced
+    # synchronously (a clean 403) instead of failing in the background task.
+    try:
+        manifest = catalog_mod.fetch_manifest(body.id)
+    except catalog_mod.CatalogError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    try:
+        installer_mod.ensure_native_trust(
+            body.id, manifest, trust_native=body.trust_native
+        )
+    except installer_mod.TrustRequiredError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     installer_mod.clear_progress(body.id)
     installer_mod._set_progress(  # noqa: SLF001 - seed state for the poller
         body.id, status="queued", phase="queued", percent=0, version=body.version
     )
-    background_tasks.add_task(_run_install, body.id, body.version, registry)
+    background_tasks.add_task(
+        _run_install,
+        body.id,
+        body.version,
+        registry,
+        trust_native=body.trust_native,
+        manifest=manifest,
+    )
     return {"id": body.id, "status": "queued"}
 
 

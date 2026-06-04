@@ -266,4 +266,53 @@ describe("POST /publish — input validation", () => {
     expect(res.status).toBe(413);
     expect(((await res.json()) as any).error.code).toBe("artifact_too_large");
   });
+
+  it("rejects an unknown security_tier on publish (400)", async () => {
+    const env = makeEnv();
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ security_tier: "gold" }),
+      artifact: "wheel-bytes",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_manifest");
+    // Nothing written for a rejected publish.
+    expect(env.bucket.keys()).toEqual([]);
+  });
+});
+
+describe("POST /publish — security tier & deprecation", () => {
+  it("records the security_tier in the per-agent manifest and index", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "exp", security_tier: "experimental" }),
+      artifact: "wheel",
+      filename: "gaia_agent_exp-0.1.0-py3-none-any.whl",
+    });
+    const manifest = (await (await env.bucket.get("agents/exp/manifest.json"))!.json()) as AgentManifest;
+    expect(manifest.security_tier).toBe("experimental");
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    expect(index.agents.find((a) => a.id === "exp")!.security_tier).toBe("experimental");
+  });
+
+  it("records deprecated state through to the index", async () => {
+    const env = makeEnv();
+    const deprecatedYaml = sampleManifest({ id: "old" }) + "deprecated: true\n";
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: deprecatedYaml,
+      artifact: "wheel",
+      filename: "gaia_agent_old-0.1.0-py3-none-any.whl",
+    });
+    expect(res.status).toBe(201);
+
+    const manifest = (await (await env.bucket.get("agents/old/manifest.json"))!.json()) as AgentManifest;
+    expect(manifest.deprecated).toBe(true);
+    expect(manifest.versions["0.1.0"].deprecated).toBe(true);
+
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    expect(index.agents.find((a) => a.id === "old")!.deprecated).toBe(true);
+  });
 });
