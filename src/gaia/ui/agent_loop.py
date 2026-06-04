@@ -328,10 +328,11 @@ class AgentLoop:
 
         def _run_agent() -> None:
             try:
-                import gaia.ui._chat_helpers as _helpers
+                # Run the heavier sync work inline (we're in a thread).
+                # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+                from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
-                # Run the heavier sync work inline (we're in a thread)
-                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+                import gaia.ui._chat_helpers as _helpers
 
                 # Reuse cached agent if available; build fresh if not.
                 # We bypass the full _stream_chat_response pipeline to avoid

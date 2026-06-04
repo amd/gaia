@@ -1,10 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-File Tools Mixin for Chat Agent.
+File monitoring tool mixin (shared framework tool).
 
-Provides directory monitoring for auto-indexing.
-NOTE: File search is handled by shell_tools.run_shell_command for flexibility.
+Provides directory monitoring for auto-indexing. Promoted from the chat agent
+to ``gaia.agents.tools`` (#1102) so agents consume it without depending on the
+chat package. NOTE: file search is handled by
+``shell_tools.run_shell_command`` for flexibility.
 """
 
 import logging

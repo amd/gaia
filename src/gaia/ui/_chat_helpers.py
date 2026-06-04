@@ -37,8 +37,8 @@ from .sse_handler import (
 logger = logging.getLogger(__name__)
 
 
-def _stamp_builtin_chat_identity(config) -> None:
-    """Inject ``namespaced_agent_id="builtin:chat"`` into a ``ChatAgentConfig``
+def _stamp_chat_identity(config) -> None:
+    """Inject ``namespaced_agent_id="installed:chat"`` into a ``ChatAgentConfig``
     BEFORE ``ChatAgent(config)`` is constructed.
 
     Must be applied to the *config*, not to the instance after construction.
@@ -53,15 +53,16 @@ def _stamp_builtin_chat_identity(config) -> None:
     ``ChatAgent.__init__`` reads ``config.namespaced_agent_id`` at its top
     and sets ``self._gaia_namespaced_agent_id`` from it before invoking
     ``super().__init__``. This helper just centralises the
-    ``"builtin:chat"`` literal so every direct-construction site in this
-    module uses the same value and a fifth caller can't forget.
+    ``"installed:chat"`` literal so every direct-construction site in this
+    module uses the same value the registry assigns the gaia-agent-chat wheel
+    (#1102) and a fifth caller can't forget.
 
     Idempotent — only sets the field if it is still its default ``None``,
     so callers that already set a custom namespaced id (e.g. a future
     custom-Chat wrapper) are not clobbered.
     """
     if getattr(config, "namespaced_agent_id", None) is None:
-        config.namespaced_agent_id = "builtin:chat"
+        config.namespaced_agent_id = "installed:chat"
 
 
 def _register_agent_memory_ops(agent) -> None:
@@ -1227,7 +1228,7 @@ async def _get_chat_response(
                 agent_type,
             )
         elif agent_type == "chat":
-            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+            from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
             logger.info(
                 "chat: Creating new chat agent (ChatAgent) for session %s",
@@ -1248,7 +1249,7 @@ async def _get_chat_response(
                 min_context_size=device_ctx,
                 **_session_kwargs,
             )
-            _stamp_builtin_chat_identity(config)
+            _stamp_chat_identity(config)
             agent = ChatAgent(config)
             _store_agent(session_id, model_id, document_ids, agent, agent_type)
             _register_agent_memory_ops(agent)
@@ -1636,7 +1637,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 elif agent_type == "chat":
                     # -- Cache miss: ChatAgent --
-                    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+                    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
                     logger.info(
                         "chat: Creating new chat agent (ChatAgent) for session %s",
@@ -1659,7 +1660,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         **_session_kwargs,
                     )
 
-                    _stamp_builtin_chat_identity(config)
+                    _stamp_chat_identity(config)
                     t_construct = _time.monotonic()
                     agent = ChatAgent(config)
                     logger.info(

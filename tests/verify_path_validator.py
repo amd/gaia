@@ -12,7 +12,9 @@ sys.path.append(os.path.join(os.getcwd(), "src"))
 # the framework; their path-validation is covered by those packages' own tests
 # (e.g. ``hub/agents/python/code/tests/test_file_io_guardrails.py``). The
 # chat/rag cases below still exercise the shared PathValidator contract here.
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.security import PathValidator
 
