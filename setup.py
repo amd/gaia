@@ -251,9 +251,11 @@ setup(
         # ``pip install -e hub/agents/python/sd``.
         "summarize": ["gaia-agent-summarize>=0.1.0"],
         "sd": ["gaia-agent-sd>=0.1.0"],
+        "fileio": ["gaia-agent-fileio>=0.1.0"],
         "agents": [
             "gaia-agent-summarize>=0.1.0",
             "gaia-agent-sd>=0.1.0",
+            "gaia-agent-fileio>=0.1.0",
         ],
     },
     classifiers=[

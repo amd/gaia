@@ -1,0 +1,36 @@
+id: fileio
+name: File I/O
+version: 0.1.0
+description: "Read, write, and edit files on the local filesystem"
+author: AMD
+license: MIT
+
+category: productivity
+tags: [files, io, edit]
+icon: file
+tools_count: 0
+
+language: python
+min_gaia_version: "0.20.0"
+models: [Qwen3.5-35B-A3B-GGUF]
+
+python:
+  entry_module: gaia_agent_fileio
+  entry_class: FileIOAgent
+  dependencies:
+    - "amd-gaia>=0.20.0"
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+permissions:
+  - filesystem:read
+  - filesystem:write
+
+interfaces:
+  tui: false
+  cli: false
+  pipe: true
+  api_server: true
+  mcp_server: true
