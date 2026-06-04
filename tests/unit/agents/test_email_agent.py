@@ -25,6 +25,10 @@ if str(_REPO_ROOT) not in sys.path:
 
 from gaia.agents.email.agent import EmailTriageAgent  # noqa: E402
 from gaia.agents.email.config import EmailAgentConfig  # noqa: E402
+from gaia.agents.email.outlook_scopes import (  # noqa: E402
+    OUTLOOK_CALENDAR_SCOPES,
+    OUTLOOK_MAIL_SCOPES,
+)
 from gaia.agents.email.scopes import AGENT_NAMESPACED_ID, ALL_SCOPES  # noqa: E402
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeCalendarBackend,
@@ -76,13 +80,23 @@ class TestConstruction:
         assert AGENT_NAMESPACED_ID == "builtin:email"
 
     def test_required_connectors_well_formed(self):
-        reqs = EmailTriageAgent.REQUIRED_CONNECTORS
-        assert len(reqs) == 1
-        google = reqs[0]
-        assert google.connector_id == "google"
+        # Two providers are declared: Google (Gmail #962 + Calendar) and
+        # Microsoft (Outlook.com mailbox #1275 + calendar #1276). They coexist —
+        # the active mail/calendar backend is chosen by ``config.mail_provider``
+        # / ``config.calendar_provider``.
+        reqs = {c.connector_id: c for c in EmailTriageAgent.REQUIRED_CONNECTORS}
+        assert set(reqs) == {"google", "microsoft"}
+
+        google = reqs["google"]
         # Tuple form (frozen dataclass normalizes).
         assert google.scopes == ALL_SCOPES
         assert google.reason  # non-empty
+
+        microsoft = reqs["microsoft"]
+        # Mail (#1275) + calendar (#1276) scopes, mirroring how the Google
+        # requirement bundles Gmail + Calendar in ALL_SCOPES.
+        assert microsoft.scopes == OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES
+        assert microsoft.reason  # non-empty
 
     def test_response_mode_is_conversational(self, agent):
         assert agent.response_mode == "conversational"
@@ -134,6 +148,7 @@ class TestToolRegistry:
         "add_star_batch",
         "remove_star_batch",
         "archive_message_batch",
+        "undo_archive_batch",
         "label_message_batch",
         "move_to_label_batch",
         # Reply / send / forward
@@ -151,6 +166,11 @@ class TestToolRegistry:
         "accept_invite",
         "decline_invite",
         "create_event_from_email",
+        "detect_meeting_request",
+        "detect_calendar_conflicts",
+        # Summarize (#1267, #1268)
+        "summarize_message",
+        "summarize_thread",
         # Session preferences (in-memory; wiped on agent restart)
         "set_priority_sender",
         "set_low_priority_sender",

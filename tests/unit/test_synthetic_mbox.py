@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import mailbox
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -18,6 +19,10 @@ EMAIL_DIR = Path("tests/fixtures/email")
 MBOX_PATH = EMAIL_DIR / "synthetic_inbox.mbox"
 GT_PATH = EMAIL_DIR / "ground_truth.json"
 GEN_SCRIPT = EMAIL_DIR / "generate_mbox.py"
+
+# ground_truth.json is keyed by the Gmail-derived id (sha256(Message-ID)[:16]),
+# a 16-char lowercase hex string, so it aligns 1:1 with FakeGmailBackend.
+_GMAIL_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 def _ensure_generated() -> None:
@@ -34,8 +39,15 @@ def mbox_obj() -> mailbox.mbox:
 
 @pytest.fixture(scope="module")
 def gt() -> dict:
+    """Full ground_truth.json including the ``_meta`` block."""
     _ensure_generated()
     return json.loads(GT_PATH.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def labels(gt: dict) -> dict:
+    """Just the per-message entries (``_meta`` and other ``_`` keys dropped)."""
+    return {k: v for k, v in gt.items() if not k.startswith("_")}
 
 
 def test_fixture_files_exist() -> None:
@@ -49,27 +61,29 @@ def test_mbox_under_1mb() -> None:
     assert MBOX_PATH.stat().st_size < 1024 * 1024
 
 
-def test_message_count_matches_target(mbox_obj: mailbox.mbox, gt: dict) -> None:
+def test_message_count_matches_target(mbox_obj: mailbox.mbox, labels: dict) -> None:
     msg_ids = [msg.get("Message-ID") for msg in mbox_obj if msg.get("Message-ID")]
     assert len(msg_ids) == sum(TARGET_COUNTS.values())
-    assert len(gt) == sum(TARGET_COUNTS.values())
+    assert len(labels) == sum(TARGET_COUNTS.values())
 
 
-def test_category_coverage_and_counts(gt: dict) -> None:
-    category_counts = Counter(meta["category"] for meta in gt.values())
+def test_category_coverage_and_counts(labels: dict) -> None:
+    # Categories use the production taxonomy strings: the low bucket is
+    # "low priority" (space), NOT "low_priority".
+    category_counts = Counter(meta["category"] for meta in labels.values())
     assert category_counts["urgent"] >= 20
     assert category_counts["actionable"] >= 45
     assert category_counts["informational"] >= 55
-    assert category_counts["low_priority"] >= 30
+    assert category_counts["low priority"] >= 30
 
-    spam_count = sum(1 for meta in gt.values() if meta["is_spam"])
-    phishing_count = sum(1 for meta in gt.values() if meta["is_phishing"])
+    spam_count = sum(1 for meta in labels.values() if meta["is_spam"])
+    phishing_count = sum(1 for meta in labels.values() if meta["is_phishing"])
     assert spam_count >= 20
     assert phishing_count >= 8
 
 
-def test_ambiguous_messages_have_rationale(gt: dict) -> None:
-    ambiguous = [meta for meta in gt.values() if meta["ambiguous"]]
+def test_ambiguous_messages_have_rationale(labels: dict) -> None:
+    ambiguous = [meta for meta in labels.values() if meta["ambiguous"]]
     assert len(ambiguous) >= 15
     assert all(a["rationale"].strip() for a in ambiguous)
 
@@ -113,8 +127,8 @@ def test_attachments_and_multipart_coverage(mbox_obj: mailbox.mbox) -> None:
     assert inline_count >= 4
 
 
-def test_persona_recurrence_range(gt: dict) -> None:
-    counts = Counter(meta["sender_persona"] for meta in gt.values())
+def test_persona_recurrence_range(labels: dict) -> None:
+    counts = Counter(meta["sender_persona"] for meta in labels.values())
     recurring = [
         "sarah_chen",
         "alex_kumar",
@@ -131,7 +145,7 @@ def test_persona_recurrence_range(gt: dict) -> None:
         assert 3 <= counts[key] <= 80
 
 
-def test_ground_truth_required_fields(gt: dict) -> None:
+def test_ground_truth_required_fields(labels: dict) -> None:
     required = {
         "category",
         "priority",
@@ -144,9 +158,18 @@ def test_ground_truth_required_fields(gt: dict) -> None:
         "rationale",
         "sender_persona",
     }
-    for message_id, meta in gt.items():
-        assert message_id.startswith("<") and message_id.endswith(">")
+    for message_id, meta in labels.items():
+        # Keys are Gmail-derived ids (16-char hex), NOT raw RFC Message-IDs.
+        assert _GMAIL_ID_RE.match(message_id), f"non-gmail-id key: {message_id!r}"
         assert required.issubset(meta.keys())
+
+
+def test_meta_block_present(gt: dict) -> None:
+    assert "_meta" in gt
+    meta = gt["_meta"]
+    assert meta["fixture"] == "synthetic_inbox.mbox"
+    assert meta["fixture_kind"] == "synthetic"
+    assert meta["taxonomy"] == ["urgent", "actionable", "informational", "low priority"]
 
 
 def test_generator_determinism_verify_mode() -> None:

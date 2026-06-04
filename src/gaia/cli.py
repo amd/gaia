@@ -2295,6 +2295,74 @@ Examples:
         "Results are tagged with the device for cross-device comparison.",
     )
 
+    # Email-triage throughput benchmark subcommand: gaia eval benchmark [OPTIONS] (#1233)
+    benchmark_eval_parser = eval_subparsers.add_parser(
+        "benchmark",
+        help="Email-triage throughput benchmark (TTFT / tok-per-sec / latency)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Benchmark the primary on-device model over the committed corpus
+  gaia eval benchmark --model Gemma-4-E4B-it-GGUF --limit 50
+
+  # Repeat 3 times for variance + compare against a saved baseline
+  gaia eval benchmark --experiments 3 --compare eval/results/bench_baseline.json
+
+  # Save this run as the throughput baseline
+  gaia eval benchmark --save-baseline
+        """,
+    )
+    benchmark_eval_parser.add_argument(
+        "--model",
+        default="Gemma-4-E4B-it-GGUF",
+        help="Lemonade model id to benchmark (default: Gemma-4-E4B-it-GGUF).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Target message count steered to the agent's triage call "
+        "(default: 50). The committed stub corpus is smaller, so the "
+        "effective count is min(limit, corpus size).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--experiments",
+        type=int,
+        default=1,
+        help="Repeat count per model for variance analysis (default: 1).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--mbox-path",
+        default=None,
+        help="MBOX corpus to triage (default: the committed stub fixture).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--ground-truth",
+        default=None,
+        help="Ground-truth JSON for quality scoring (default: the fixture's).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--backend",
+        default=None,
+        help="Lemonade base URL (default: the agent's configured base URL).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory to write scorecard.json / summary.md (optional).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--compare",
+        metavar="PATH",
+        default=None,
+        help="Compare this run's throughput against a saved baseline scorecard.",
+    )
+    benchmark_eval_parser.add_argument(
+        "--save-baseline",
+        action="store_true",
+        help="Save this run's scorecard as the throughput baseline.",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -3929,6 +3997,124 @@ Let me know your answer!
                     encoding="utf-8",
                 )
                 print(f"[BASELINE] Saved baseline → {baseline_path}")
+            return
+
+        # Email-triage throughput benchmark: gaia eval benchmark (#1233)
+        if getattr(args, "eval_command", None) == "benchmark":
+            import tempfile
+
+            from gaia.eval.benchmark import (
+                THROUGHPUT_BAR_TPS,
+                THROUGHPUT_STRETCH_TPS,
+                load_ground_truth,
+                run_benchmark,
+                summarize_benchmark,
+            )
+            from gaia.eval.runner import REPO_ROOT, RESULTS_DIR
+
+            fixtures = REPO_ROOT / "tests" / "fixtures" / "email"
+            mbox_path = args.mbox_path or str(fixtures / "_stub_inbox.mbox")
+            gt_path = args.ground_truth or str(fixtures / "ground_truth.json")
+            ground_truth = (
+                load_ground_truth(gt_path) if Path(gt_path).exists() else None
+            )
+            if ground_truth is None:
+                print(
+                    f"[WARN] ground truth not found at {gt_path}; "
+                    "quality scoring skipped"
+                )
+
+            with tempfile.TemporaryDirectory(prefix="gaia-bench-") as tmp:
+                results = run_benchmark(
+                    args.model,
+                    mbox_path=mbox_path,
+                    limit=args.limit,
+                    experiments=args.experiments,
+                    base_url=args.backend,
+                    ground_truth=ground_truth,
+                    db_path=str(Path(tmp) / "state.db"),
+                )
+
+            run_id = f"bench-{args.model.replace('/', '-').lower()}"
+            summary = summarize_benchmark(results, run_id=run_id)
+            perf = summary["scorecard"]["performance"]
+            tps = perf.get("avg_tokens_per_second")
+            ttft = perf.get("avg_time_to_first_token")
+            bar_ok = isinstance(tps, (int, float)) and tps >= THROUGHPUT_BAR_TPS
+
+            print(f"\n{'=' * 60}")
+            print(f"  Email-Triage Throughput Benchmark — {args.model}")
+            print(f"{'=' * 60}")
+            print(
+                f"  Experiments:  {args.experiments}  " f"(limit {args.limit} emails)"
+            )
+            print(
+                f"  Throughput:   {tps} tok/s  "
+                f"(bar ≥{THROUGHPUT_BAR_TPS}, stretch {THROUGHPUT_STRETCH_TPS})"
+            )
+            print(f"  TTFT:         {ttft} s")
+            if results and isinstance(results[0].get("quality"), dict):
+                print(f"  Category acc: {results[0]['quality']['category_accuracy']}")
+            print(
+                f"  Committed bar (≥{THROUGHPUT_BAR_TPS} tok/s): "
+                f"{'PASS' if bar_ok else 'MISS'} (non-gating demo)"
+            )
+            print(f"{'=' * 60}\n")
+
+            # Variance report across repeated experiments.
+            if args.experiments > 1:
+                from gaia.eval.statistics import (
+                    compare_runs_by_model,
+                    print_comparison_report,
+                )
+
+                for report in compare_runs_by_model(results).values():
+                    print_comparison_report(report)
+
+            if args.output_dir:
+                from gaia.eval.scorecard import write_summary_md
+
+                outdir = Path(args.output_dir)
+                outdir.mkdir(parents=True, exist_ok=True)
+                (outdir / "scorecard.json").write_text(
+                    json.dumps(summary["scorecard"], indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                (outdir / "summary.md").write_text(
+                    write_summary_md(summary["scorecard"]), encoding="utf-8"
+                )
+                (outdir / "variance.json").write_text(
+                    json.dumps(summary["variance"], indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(
+                    f"[OUT] wrote scorecard.json / summary.md / variance.json "
+                    f"→ {outdir}"
+                )
+
+            if getattr(args, "save_baseline", False):
+                RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+                baseline_path = RESULTS_DIR / "bench_baseline.json"
+                baseline_path.write_text(
+                    json.dumps(summary["scorecard"], indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(f"[BASELINE] saved throughput baseline → {baseline_path}")
+
+            if args.compare:
+                cmp_path = Path(args.compare)
+                if not cmp_path.exists():
+                    print(f"[ERROR] baseline not found: {cmp_path}")
+                    sys.exit(1)
+                base = json.loads(cmp_path.read_text(encoding="utf-8"))
+                base_tps = base.get("performance", {}).get("avg_tokens_per_second")
+                if isinstance(base_tps, (int, float)) and isinstance(tps, (int, float)):
+                    print(
+                        f"[COMPARE] throughput {tps} vs baseline {base_tps} "
+                        f"tok/s (Δ{round(tps - base_tps, 1):+})  [non-gating]"
+                    )
+                else:
+                    print("[COMPARE] insufficient throughput data to compare")
             return
 
         # Bare "gaia eval" without subcommand - show help

@@ -39,12 +39,11 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.email import action_store
-from gaia.agents.email.calendar_backend import (
-    LiveCalendarBackend,
-    _get_calendar_token,
-)
 from gaia.agents.email.config import EmailAgentConfig
-from gaia.agents.email.gmail_backend import LiveGmailBackend, _get_gmail_token
+from gaia.agents.email.outlook_scopes import (
+    OUTLOOK_CALENDAR_SCOPES,
+    OUTLOOK_MAIL_SCOPES,
+)
 from gaia.agents.email.scopes import (
     AGENT_NAMESPACED_ID,
     ALL_SCOPES,
@@ -58,6 +57,7 @@ from gaia.agents.email.tools.preference_tools import (
 )
 from gaia.agents.email.tools.read_tools import ReadToolsMixin
 from gaia.agents.email.tools.reply_tools import ReplyToolsMixin
+from gaia.agents.email.tools.summarize_tools import SummarizeToolsMixin
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
@@ -137,6 +137,7 @@ class EmailTriageAgent(
     ReadToolsMixin,
     OrganizeToolsMixin,
     ReplyToolsMixin,
+    SummarizeToolsMixin,
     DeleteToolsMixin,
     CalendarToolsMixin,
     PreferenceToolsMixin,
@@ -167,6 +168,12 @@ class EmailTriageAgent(
         "Show me today's calendar",
     ]
 
+    # Declares BOTH mailbox providers so the user can connect either Google or
+    # a personal Microsoft account and have the agent grant-checked correctly.
+    # ``mail_provider`` (config) selects which one the live backend talks to;
+    # the requirements list is provider-superset so the AgentUI offers both
+    # tiles. Gmail (#962) and Outlook (#1275) coexist — neither breaks the
+    # other.
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = [
         ConnectorRequirement(
             connector_id="google",
@@ -174,6 +181,15 @@ class EmailTriageAgent(
             reason=(
                 "Read and organize Gmail messages, send drafts on your "
                 "behalf, and respond to Google Calendar invites."
+            ),
+        ),
+        ConnectorRequirement(
+            connector_id="microsoft",
+            scopes=OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES,
+            reason=(
+                "Read and organize your personal Outlook.com mailbox, send "
+                "messages on your behalf, and read/respond to your Outlook "
+                "calendar via Microsoft Graph."
             ),
         ),
     ]
@@ -191,10 +207,16 @@ class EmailTriageAgent(
         self.config = config
 
         # Backend resolution. Production binds to live; eval injects fakes.
-        self._gmail = config.gmail_backend or LiveGmailBackend(_get_gmail_token)
-        self._calendar = config.calendar_backend or LiveCalendarBackend(
-            _get_calendar_token
-        )
+        # ``resolve_mail_backend`` picks Gmail vs Outlook from
+        # ``config.mail_provider`` (#1275) — the tools treat either as a
+        # ``GmailBackend``. The attribute stays ``self._gmail`` for tool-mixin
+        # compatibility regardless of the underlying provider.
+        self._gmail = config.resolve_mail_backend()
+        # ``resolve_calendar_backend`` picks Google vs Outlook from
+        # ``config.calendar_provider`` (#1276) — the tools treat either as a
+        # ``CalendarBackend``. An injected backend (eval/test seam) wins inside
+        # the resolver.
+        self._calendar = config.resolve_calendar_backend()
 
         # I3 — batch-organize counters. Reset per process_query() call by
         # ``_reset_organize_counter``. Per-turn isolation is sufficient
@@ -244,6 +266,13 @@ class EmailTriageAgent(
     def _get_system_prompt(self) -> str:
         return _SYSTEM_PROMPT
 
+    def process_query(self, *args, **kwargs):
+        # Zero the batch-organize counter per turn so a long-lived instance
+        # can't carry a prior turn's count into the batch-confirm threshold.
+        # Only the batch counter resets here; session preferences persist.
+        self._reset_organize_counter()
+        return super().process_query(*args, **kwargs)
+
     def _register_tools(self) -> None:
         # Mirror BuilderAgent / ConnectorsDemoAgent: clear the
         # module-level registry before registering this agent's tools so
@@ -254,6 +283,7 @@ class EmailTriageAgent(
         self._register_read_tools()
         self._register_organize_tools()
         self._register_reply_tools()
+        self._register_summarize_tools()
         self._register_delete_tools()
         self._register_calendar_tools()
         self._register_preference_tools()

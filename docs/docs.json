@@ -89,6 +89,7 @@
                 "pages": [
                   "connectors/index",
                   "connectors/google",
+                  "connectors/microsoft",
                   "connectors/github",
                   "security/connections",
                   "security/connectors"
@@ -314,6 +315,7 @@
               "spec/docker-agent",
               "spec/jira-agent",
               "spec/blender-agent",
+              "spec/email-contract",
               "spec/summarizer-app",
               "spec/component-status"
             ]

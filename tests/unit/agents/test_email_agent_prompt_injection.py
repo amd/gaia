@@ -150,6 +150,45 @@ class TestI3BatchThreshold:
         assert agent._organize_op_count == 0
         assert agent._organize_distinct_senders == set()
 
+    def test_counter_resets_across_process_query_calls(self, agent):
+        """Issue #1106 — cold-run correctness.
+
+        The batch-organize counter must be zeroed at the START of every
+        ``process_query`` call, not just once at construction. Otherwise a
+        long-lived agent instance carries stale per-turn state into the next
+        turn and the batch-confirm threshold misfires.
+
+        We don't run the LLM loop: ``_process_query_impl`` is stubbed to
+        record the counter value it observes on entry and to simulate the
+        organize mutations that a real turn would accumulate. The first turn
+        pushes the counter well past the batch threshold; the second turn
+        must still see a zeroed counter on entry.
+        """
+        seen_op_counts: list[int] = []
+        seen_sender_sets: list[set[str]] = []
+
+        def fake_impl(user_input, max_steps=None, trace=False, filename=None):
+            # Capture the per-turn state the agent loop would actually see.
+            seen_op_counts.append(agent._organize_op_count)
+            seen_sender_sets.append(set(agent._organize_distinct_senders))
+            # Simulate a turn that trips the batch threshold (6 ops / 4 senders).
+            for sender in ("a", "b", "c", "d"):
+                agent._record_organize_op(f"m-{sender}", sender)
+            agent._record_organize_op("m-extra-1", "a")
+            agent._record_organize_op("m-extra-2", "b")
+            assert agent._organize_batch_threshold_exceeded() is True
+            return {"status": "completed", "result": "ok"}
+
+        with patch.object(agent, "_process_query_impl", side_effect=fake_impl):
+            agent.process_query("triage my inbox")
+            # After turn 1 the within-run mutations are still on the instance.
+            assert agent._organize_op_count > agent.ORGANIZE_BATCH_OP_THRESHOLD
+            agent.process_query("triage my inbox again")
+
+        # Both turns must have STARTED from a zeroed counter.
+        assert seen_op_counts == [0, 0]
+        assert seen_sender_sets == [set(), set()]
+
 
 # ---------------------------------------------------------------------------
 # I4 — attack-scenario fixtures from the stub mbox

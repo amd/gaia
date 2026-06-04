@@ -8,6 +8,7 @@ events queued for Server-Sent Events delivery to the frontend.
 """
 
 import queue
+import re
 import time
 
 import pytest
@@ -17,6 +18,7 @@ from gaia.ui.sse_handler import (
     SSEOutputHandler,
     _fix_double_escaped,
     _format_tool_args,
+    _strip_balanced_json_blobs,
     _summarize_tool_result,
     _tool_description,
 )
@@ -1830,6 +1832,60 @@ class TestStructuredRenderInjection:
         assert events[0]["content"].startswith("```email_pre_scan\n")
         assert events[0]["content"].rstrip().endswith("```")
 
+    # --- De-dup: explicit-tool path where the LLM also echoes the card ----
+
+    def test_echoed_fence_rendered_once(self, handler):
+        """Explicit-tool path: the model echoes the same fenced card the
+        handler already buffered. The card must appear exactly once."""
+        import json as _json
+
+        inner = self._make_envelope()["data"]
+        echoed = f"```email_pre_scan\n{_json.dumps(inner)}\n```"
+        handler.print_tool_usage("pre_scan_inbox")
+        _drain(handler)
+        handler.pretty_print_json(self._make_envelope(), title="Result")
+        _drain(handler)
+        handler.print_final_answer(f"Here is your inbox.\n\n{echoed}")
+        events = _drain(handler)
+        content = events[0]["content"]
+        # Exactly one fenced card (the authoritative buffered one).
+        assert content.count("```email_pre_scan") == 1
+        assert content.startswith("```email_pre_scan\n")
+        # The LLM prose survives.
+        assert "Here is your inbox." in content
+
+    def test_echoed_bare_envelope_stripped(self, handler):
+        """The model echoes the raw envelope object as prose (no fence). The
+        balanced-brace strip removes it so only the buffered card renders."""
+        import json as _json
+
+        echoed = _json.dumps(self._make_envelope())  # full {"ok":..,"data":..}
+        handler.print_tool_usage("pre_scan_inbox")
+        _drain(handler)
+        handler.pretty_print_json(self._make_envelope(), title="Result")
+        _drain(handler)
+        handler.print_final_answer(f"Summary below.\n\n{echoed}")
+        events = _drain(handler)
+        content = events[0]["content"]
+        assert content.count("```email_pre_scan") == 1
+        # The bare echo (a field unique to the envelope) is gone.
+        assert "informational_count" not in content.split("```", 3)[-1]
+        assert "Summary below." in content
+
+    def test_inline_path_fence_not_stripped(self, handler):
+        """Regression: inline single-step path has an EMPTY buffer, so the
+        strip must not run — the model's own legitimate fence renders once."""
+        import json as _json
+
+        inner = self._make_envelope()["data"]
+        legit = f"```email_pre_scan\n{_json.dumps(inner)}\n```"
+        assert handler._pending_render_payloads == []  # nothing buffered
+        handler.print_final_answer(f"{legit}\n\nDone.")
+        events = _drain(handler)
+        content = events[0]["content"]
+        assert content.count("```email_pre_scan") == 1
+        assert "Done." in content
+
     def test_other_tool_results_do_not_inject_fence(self, handler):
         """Only ``pre_scan_inbox`` triggers injection — other tools pass through."""
         handler.print_tool_usage("triage_inbox")
@@ -1882,3 +1938,37 @@ class TestStructuredRenderInjection:
         events = _drain(handler)
         assert events[0]["content"] == "Second turn — no card."
         assert "email_pre_scan" not in events[0]["content"]
+
+
+class TestStripBalancedJsonBlobs:
+    """Direct tests for the brace-/string-aware JSON blob remover."""
+
+    KIND_RE = re.compile(r'"kind"\s*:\s*"email_pre_scan"')
+
+    def test_removes_matching_object(self):
+        text = 'Before {"kind": "email_pre_scan", "n": 1} after'
+        out = _strip_balanced_json_blobs(text, self.KIND_RE)
+        assert "kind" not in out
+        assert "Before" in out and "after" in out
+
+    def test_removes_nested_matching_object(self):
+        text = 'x {"ok": true, "data": {"kind": "email_pre_scan", "n": 2}} y'
+        out = _strip_balanced_json_blobs(text, self.KIND_RE)
+        assert "email_pre_scan" not in out
+        assert out.startswith("x ") and out.endswith(" y")
+
+    def test_leaves_unrelated_objects(self):
+        text = 'Use {"foo": "bar"} and {"baz": 1} please'
+        out = _strip_balanced_json_blobs(text, self.KIND_RE)
+        assert out == text  # nothing matched the needle
+
+    def test_string_aware_does_not_miscount_braces(self):
+        # A '}' inside a JSON string must not end the object early.
+        text = '{"note": "a } brace", "kind": "email_pre_scan"} tail'
+        out = _strip_balanced_json_blobs(text, self.KIND_RE)
+        assert out.strip() == "tail"
+
+    def test_unbalanced_object_left_intact(self):
+        text = 'oops {"kind": "email_pre_scan", "n": 1 and no close'
+        out = _strip_balanced_json_blobs(text, self.KIND_RE)
+        assert out == text  # incomplete object is not removed

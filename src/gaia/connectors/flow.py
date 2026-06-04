@@ -105,11 +105,17 @@ _pending: dict[str, _PendingFlow] = {}
 
 def _decode_email_from_id_token(id_token: str) -> Optional[str]:
     """
-    Extract the ``email`` claim from a Google id_token payload.
+    Extract the user's email from an id_token payload.
 
-    Best-effort — base64url-decode the middle segment, parse JSON, return
-    the ``email`` field. Production validation is deferred to the
-    userinfo endpoint; this is a quick path for the success page.
+    Best-effort — base64url-decode the middle segment, parse JSON, check
+    claims in priority order:
+      1. ``email`` — present in Google id_tokens and most OIDC providers.
+      2. ``preferred_username`` — Microsoft identity platform (personal
+         Outlook.com accounts and Azure AD work/school accounts).
+      3. ``upn`` — legacy Microsoft on-premises claim.
+
+    Production validation is deferred to the userinfo endpoint; this is a
+    quick path for display on the OAuth success page.
     """
     try:
         _, payload_b64, _ = id_token.split(".")
@@ -121,7 +127,9 @@ def _decode_email_from_id_token(id_token: str) -> Optional[str]:
         payload = json.loads(base64.urlsafe_b64decode(padded).decode("ascii"))
     except (ValueError, UnicodeDecodeError):
         return None
-    email = payload.get("email")
+    email = (
+        payload.get("email") or payload.get("preferred_username") or payload.get("upn")
+    )
     return email if isinstance(email, str) else None
 
 
