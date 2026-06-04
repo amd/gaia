@@ -17,8 +17,7 @@ import json
 from unittest.mock import patch
 
 import httpx
-
-from gaia.agents.connectors_demo.agent import (
+from gaia_agent_connectors_demo.agent import (
     AGENT_NAMESPACED_ID,
     SCOPE_CALENDAR_READ,
     SCOPE_DRIVE_READ,
@@ -31,6 +30,7 @@ from gaia.agents.connectors_demo.agent import (
     _github_my_repos_impl,
     _gmail_recent_subjects_impl,
 )
+
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -169,7 +169,7 @@ class TestGmailRecentSubjects:
         ]
         with (
             patch(
-                "gaia.agents.connectors_demo.agent._gmail_token",
+                "gaia_agent_connectors_demo.agent._gmail_token",
                 return_value="tok-xyz",
             ),
             patch("httpx.get", side_effect=_stub_gmail_response(fake_messages)),
@@ -182,7 +182,7 @@ class TestGmailRecentSubjects:
 
     def test_grant_failure_returns_actionable_error(self):
         with patch(
-            "gaia.agents.connectors_demo.agent._gmail_token",
+            "gaia_agent_connectors_demo.agent._gmail_token",
             side_effect=AuthRequiredError(
                 AuthRequiredError.Reason.AGENT_NOT_GRANTED,
                 provider="google",
@@ -199,7 +199,7 @@ class TestGmailRecentSubjects:
         # Token resolves, but Gmail returns 401.
         with (
             patch(
-                "gaia.agents.connectors_demo.agent._gmail_token",
+                "gaia_agent_connectors_demo.agent._gmail_token",
                 return_value="tok",
             ),
             patch(
@@ -239,7 +239,7 @@ class TestCalendarToday:
         )
         with (
             patch(
-                "gaia.agents.connectors_demo.agent._calendar_token",
+                "gaia_agent_connectors_demo.agent._calendar_token",
                 return_value="tok",
             ),
             patch("httpx.get", return_value=fake_response),
@@ -276,7 +276,7 @@ class TestDriveRecentFiles:
         )
         with (
             patch(
-                "gaia.agents.connectors_demo.agent._drive_token",
+                "gaia_agent_connectors_demo.agent._drive_token",
                 return_value="tok",
             ),
             patch("httpx.get", return_value=fake_response),
@@ -307,7 +307,7 @@ class TestGithubMyRepos:
         )
         with (
             patch(
-                "gaia.agents.connectors_demo.agent._github_pat",
+                "gaia_agent_connectors_demo.agent._github_pat",
                 return_value="ghp_x",
             ),
             patch("httpx.get", return_value=fake_response),
@@ -318,7 +318,7 @@ class TestGithubMyRepos:
 
     def test_pat_missing_returns_connector_error(self):
         with patch(
-            "gaia.agents.connectors_demo.agent._github_pat",
+            "gaia_agent_connectors_demo.agent._github_pat",
             side_effect=ConnectorsError(
                 "GitHub MCP credential resolved but GITHUB_TOKEN was empty."
             ),
@@ -382,22 +382,22 @@ class TestToolJsonShape:
         # If a future change makes a dict non-serializable (e.g. nested
         # datetime), this test catches it before it ships.
         with patch(
-            "gaia.agents.connectors_demo.agent._gmail_token",
+            "gaia_agent_connectors_demo.agent._gmail_token",
             side_effect=ConnectorsError("offline"),
         ):
             assert json.dumps(_gmail_recent_subjects_impl(limit=1))
         with patch(
-            "gaia.agents.connectors_demo.agent._calendar_token",
+            "gaia_agent_connectors_demo.agent._calendar_token",
             side_effect=ConnectorsError("offline"),
         ):
             assert json.dumps(_calendar_today_impl())
         with patch(
-            "gaia.agents.connectors_demo.agent._drive_token",
+            "gaia_agent_connectors_demo.agent._drive_token",
             side_effect=ConnectorsError("offline"),
         ):
             assert json.dumps(_drive_recent_files_impl(limit=1))
         with patch(
-            "gaia.agents.connectors_demo.agent._github_pat",
+            "gaia_agent_connectors_demo.agent._github_pat",
             side_effect=ConnectorsError("offline"),
         ):
             assert json.dumps(_github_my_repos_impl(limit=1))

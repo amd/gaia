@@ -71,7 +71,6 @@ setup(
         "gaia.connectors",
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
-        "gaia.agents.connectors_demo",
         "gaia.agents.email",
         "gaia.agents.email.tools",
     ],
@@ -250,6 +249,7 @@ setup(
         "agent-blender": ["gaia-agent-blender"],
         "agent-emr": ["gaia-agent-emr"],
         "agent-code": ["gaia-agent-code"],
+        "agent-connectors-demo": ["gaia-agent-connectors-demo"],
         "agents": [
             "gaia-agent-summarize",
             "gaia-agent-sd",
@@ -259,6 +259,7 @@ setup(
             "gaia-agent-blender",
             "gaia-agent-emr",
             "gaia-agent-code",
+            "gaia-agent-connectors-demo",
         ],
     },
     classifiers=[
