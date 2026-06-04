@@ -1269,35 +1269,31 @@ class TestSpecializedAgents:
     def test_docker_agent_exists(self):
         """Verify DockerAgent can be imported."""
         try:
-            from gaia_agent_docker.agent import DockerAgent
+            from gaia.agents.docker.agent import DockerAgent
 
             assert DockerAgent is not None
         except ImportError:
-            # Docker agent ships as the standalone gaia-agent-docker wheel (#1102)
-            pytest.skip("gaia-agent-docker not installed")
+            # Docker agent may not be implemented yet
+            pytest.skip("DockerAgent not yet implemented")
 
     def test_jira_agent_exists(self):
         """Verify JiraAgent can be imported."""
-        pytest.importorskip("gaia_agent_jira")
-        from gaia_agent_jira.agent import JiraAgent
+        from gaia.agents.jira.agent import JiraAgent
 
         assert JiraAgent is not None
 
     def test_blender_agent_exists(self):
         """Verify BlenderAgent can be imported."""
-        pytest.importorskip("gaia_agent_blender")
-        from gaia_agent_blender.agent import BlenderAgent
+        from gaia.agents.blender.agent import BlenderAgent
 
         assert BlenderAgent is not None
 
     def test_specialized_agents_inherit_from_base(self):
         """Verify all specialized agents inherit from Agent base class."""
-        pytest.importorskip("gaia_agent_blender")
-        pytest.importorskip("gaia_agent_jira")
         from gaia.agents.base.agent import Agent
+        from gaia.agents.blender.agent import BlenderAgent
         from gaia.agents.chat.agent import ChatAgent
-        from gaia_agent_blender.agent import BlenderAgent
-        from gaia_agent_jira.agent import JiraAgent
+        from gaia.agents.jira.agent import JiraAgent
 
         assert issubclass(ChatAgent, Agent)
         assert issubclass(JiraAgent, Agent)
@@ -1495,7 +1491,7 @@ class TestApplications:
             assert JiraApp is not None
         except ImportError:
             # Jira app may be integrated with agent
-            from gaia_agent_jira.agent import JiraAgent
+            from gaia.agents.jira.agent import JiraAgent
 
             assert JiraAgent is not None
 

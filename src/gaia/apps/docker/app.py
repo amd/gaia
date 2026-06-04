@@ -15,24 +15,9 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from gaia.agents.docker.agent import DEFAULT_MODEL, DockerAgent
+
 logger = logging.getLogger(__name__)
-
-
-def _load_docker_agent():
-    """Import the docker agent from its standalone package, or fail loudly.
-
-    The docker agent ships as the separate ``gaia-agent-docker`` wheel
-    (issue #1102); it is no longer part of the core ``amd-gaia`` wheel.
-    """
-    try:
-        from gaia_agent_docker.agent import DEFAULT_MODEL, DockerAgent
-    except ImportError as e:
-        raise ImportError(
-            "The docker agent is not installed. Install it with "
-            "`pip install gaia-agent-docker` (or `pip install amd-gaia[agents]` "
-            "for all AMD agents). See https://amd-gaia.ai/docs/guides/docker."
-        ) from e
-    return DockerAgent, DEFAULT_MODEL
 
 
 @dataclass
@@ -69,15 +54,14 @@ class DockerApp:
             model: LLM model to use (optional)
             base_url: Base URL for local LLM server (defaults to LEMONADE_BASE_URL env var)
         """
-        docker_agent_class, default_model = _load_docker_agent()
         self.directory = directory
         self.verbose = verbose
         self.debug = debug
-        self.model = model or default_model
+        self.model = model or DEFAULT_MODEL
         self.base_url = base_url
 
         # Create agent with debug settings
-        self.agent = docker_agent_class(
+        self.agent = DockerAgent(
             model_id=self.model,
             base_url=self.base_url,
             debug_prompts=False,

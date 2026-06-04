@@ -1,16 +1,12 @@
 import sys
 from importlib import import_module
 
-import pytest
-
 
 def test_instantiate_new_agents():
-    # fileio ships as the standalone gaia-agent-fileio wheel (#1102).
-    pytest.importorskip("gaia_agent_fileio")
     # Import without triggering heavy optional deps by relying on skip_lemonade
     chat_mod = import_module("gaia.agents.chat.lite_agent")
     docqa_mod = import_module("gaia.agents.docqa.agent")
-    fileio_mod = import_module("gaia_agent_fileio.agent")
+    fileio_mod = import_module("gaia.agents.fileio.agent")
 
     chat = chat_mod.ChatAgentLite()
     assert chat is not None
@@ -131,13 +127,11 @@ def test_get_mcp_status_report_does_not_raise(tmp_path):
     ``AttributeError: '<Agent>' object has no attribute '_mcp_manager'``
     because ``Agent.__init__`` doesn't chain ``super().__init__()``.
     """
-    pytest.importorskip("gaia_agent_fileio")
-    from gaia_agent_fileio.agent import FileIOAgent
-
     from gaia.agents.analyst.agent import AnalystAgent, AnalystAgentConfig
     from gaia.agents.browser.agent import BrowserAgent
     from gaia.agents.chat.lite_agent import ChatAgentLite
     from gaia.agents.docqa.agent import DocumentQAAgent
+    from gaia.agents.fileio.agent import FileIOAgent
 
     agents = [
         BrowserAgent(),

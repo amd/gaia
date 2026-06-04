@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.sd import SDToolsMixin
+from gaia.agents.sd import SDToolsMixin
 
 
 @pytest.fixture

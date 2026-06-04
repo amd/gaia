@@ -6,6 +6,7 @@ Docker MCP Server Launcher
 Starts an MCP server for the Docker agent
 """
 
+from gaia.agents.docker.agent import DockerAgent
 from gaia.mcp.agent_mcp_server import MCP_DEFAULT_HOST, MCP_DEFAULT_PORT, AgentMCPServer
 
 
@@ -26,15 +27,6 @@ def start_docker_mcp(
         model_id: LLM model ID to use
         silent_mode: Suppress agent console output (default: True for MCP)
     """
-    try:
-        from gaia_agent_docker.agent import DockerAgent
-    except ImportError as e:
-        raise ImportError(
-            "The docker agent is not installed. Install it with "
-            "`pip install gaia-agent-docker` (or `pip install amd-gaia[agents]` "
-            "for all AMD agents)."
-        ) from e
-
     # Prepare agent parameters
     agent_params = {
         "silent_mode": silent_mode,

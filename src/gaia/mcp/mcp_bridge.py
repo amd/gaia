@@ -26,6 +26,9 @@ sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 
+from gaia.agents.blender.agent import (  # pylint: disable=wrong-import-position
+    BlenderAgent,
+)
 from gaia.llm import create_client  # pylint: disable=wrong-import-position
 from gaia.logger import get_logger  # pylint: disable=wrong-import-position
 
@@ -157,8 +160,6 @@ class GAIAMCPBridge:
 
             # Blender agent
             try:
-                from gaia_agent_blender.agent import BlenderAgent
-
                 self.agents["blender"] = {
                     "class": BlenderAgent,
                     "description": "3D content creation",
@@ -181,7 +182,7 @@ class GAIAMCPBridge:
                 logger.warning(f"Summarize agent not available: {e}")
             # Jira agent - THE KEY ADDITION
             try:
-                from gaia_agent_jira.agent import JiraAgent
+                from gaia.agents.jira.agent import JiraAgent
 
                 self.agents["jira"] = {
                     "class": JiraAgent,

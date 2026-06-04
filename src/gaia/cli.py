@@ -28,13 +28,10 @@ from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
 
-# Optional imports. The blender agent ships as the standalone
-# gaia-agent-blender wheel (#1102); this block degrades to BLENDER_AVAILABLE
-# = False when it (or the Blender MCP client) is not installed.
+# Optional imports — degrades to BLENDER_AVAILABLE = False when the blender
+# agent (or the Blender MCP client) is not installed.
 try:
-    from gaia_agent_blender.agent import BlenderAgent
-
-    # pylint: disable-next=ungrouped-imports
+    from gaia.agents.blender.agent import BlenderAgent
     from gaia.mcp.blender_mcp_client import MCPClient
 
     BLENDER_AVAILABLE = True
@@ -4800,14 +4797,7 @@ def handle_sd_command(args):
         print("  gaia sd -i")
         return
 
-    try:
-        from gaia_agent_sd import SDAgent, SDAgentConfig
-    except ImportError as e:
-        raise ImportError(
-            "The sd agent is not installed. Install it with "
-            "`pip install gaia-agent-sd` (or `pip install amd-gaia[agents]` for "
-            "all AMD agents). See https://amd-gaia.ai/docs/guides/sd."
-        ) from e
+    from gaia.agents.sd import SDAgent, SDAgentConfig
 
     # Ensure Lemonade is ready with proper context size for SD agent
     # SD agent needs 8K context for image + story workflow

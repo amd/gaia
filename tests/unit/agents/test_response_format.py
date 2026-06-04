@@ -310,8 +310,7 @@ class TestBuilderAgentFormat:
 
 class TestBlenderAgentFormat:
     def test_blender_no_duplicate_format(self):
-        pytest.importorskip("gaia_agent_blender")
-        from gaia_agent_blender.agent import BlenderAgent
+        from gaia.agents.blender.agent import BlenderAgent
 
         prompt = BlenderAgent._get_system_prompt(None)
         assert "==== JSON RESPONSE FORMAT ====" not in prompt
@@ -320,9 +319,8 @@ class TestBlenderAgentFormat:
 
 class TestDockerAgentFormat:
     def test_docker_no_duplicate_format(self):
-        pytest.importorskip("gaia_agent_docker")
         with patch("gaia.agents.base.agent.AgentSDK"):
-            from gaia_agent_docker.agent import DockerAgent
+            from gaia.agents.docker.agent import DockerAgent
 
             agent = DockerAgent(skip_lemonade=True, silent_mode=True)
         prompt = agent._get_system_prompt()
@@ -333,9 +331,8 @@ class TestDockerAgentFormat:
 
 class TestJiraAgentFormat:
     def test_jira_no_duplicate_format(self):
-        pytest.importorskip("gaia_agent_jira")
         with patch("gaia.agents.base.agent.AgentSDK"):
-            from gaia_agent_jira.agent import JiraAgent
+            from gaia.agents.jira.agent import JiraAgent
 
             agent = JiraAgent(skip_lemonade=True, silent_mode=True)
         prompt = agent._get_system_prompt()
@@ -346,8 +343,7 @@ class TestJiraAgentFormat:
 
 class TestSDAgentFormat:
     def test_sd_no_duplicate_format(self):
-        pytest.importorskip("gaia_agent_sd")
-        from gaia_agent_sd.agent import SDAgent
+        from gaia.agents.sd.agent import SDAgent
 
         prompt = SDAgent._get_system_prompt(None)
         assert "DYNAMIC PARAMETER PLACEHOLDERS" not in prompt
