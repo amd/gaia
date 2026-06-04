@@ -10,11 +10,7 @@ location.
 
 import warnings
 
-from gaia.agents.tools.code_index_tools import (  # noqa: F401
-    _CODE_INDEX_AVAILABLE,
-    _MISSING_DEPS_MSG,
-    CodeIndexToolsMixin,
-)
+from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin  # noqa: F401
 
 warnings.warn(
     "gaia.agents.code_index.tools.mixin is deprecated; import from "

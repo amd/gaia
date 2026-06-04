@@ -10,8 +10,14 @@ location.
 
 import warnings
 
-from gaia.agents.tools import shell_tools as _shell_tools
-from gaia.agents.tools.shell_tools import *  # noqa: F401,F403
+from gaia.agents.tools.shell_tools import (  # noqa: F401
+    ALLOWED_COMMANDS,
+    DANGEROUS_PS_PATTERNS,
+    DANGEROUS_SHELL_OPERATORS,
+    SAFE_GIT_COMMANDS,
+    SAFE_PS_CMDLET_PREFIXES,
+    ShellToolsMixin,
+)
 
 warnings.warn(
     "gaia.agents.chat.tools.shell_tools is deprecated; import from "
@@ -20,8 +26,11 @@ warnings.warn(
     stacklevel=2,
 )
 
-__all__ = getattr(
-    _shell_tools,
-    "__all__",
-    [name for name in dir(_shell_tools) if not name.startswith("_")],
-)
+__all__ = [
+    "ALLOWED_COMMANDS",
+    "DANGEROUS_PS_PATTERNS",
+    "DANGEROUS_SHELL_OPERATORS",
+    "SAFE_GIT_COMMANDS",
+    "SAFE_PS_CMDLET_PREFIXES",
+    "ShellToolsMixin",
+]
