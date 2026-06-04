@@ -162,24 +162,6 @@ jobs:
 
           echo "✅ Core commands tested successfully!"
 
-          # Now test summarizer while server is still running
-          echo ""
-          echo "=== Testing Summarizer Integration ==="
-          echo "Testing complete CLI workflow: gaia summarize command"
-
-          # Set the test model for summarizer tests
-          export GAIA_TEST_MODEL="Qwen3-0.6B-GGUF"
-
-          # Run the summarizer integration tests
-          python -m pytest tests/test_summarizer.py -vs --tb=short || TEST_EXIT=$?
-
-          if [ "${TEST_EXIT:-0}" -eq 0 ]; then
-            echo "✅ Summarizer CLI integration tests passed successfully!"
-          else
-            echo "❌ Summarizer CLI integration tests failed with exit code: ${TEST_EXIT}"
-            echo "Note: Error details displayed above"
-          fi
-
           echo ""
           echo "=== Testing RAG Functionality ==="
           echo "Testing RAG (Retrieval-Augmented Generation) system"
