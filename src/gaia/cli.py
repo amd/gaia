@@ -830,7 +830,7 @@ async def async_main(action, **kwargs):
         if registry.get(agent_id) is None:
             raise RuntimeError(
                 f"The '{action}' agent is not installed. Install it with "
-                f'`pip install {wheel}` (or `pip install "amd-gaia[agents]"` '
+                f'`uv pip install {wheel}` (or `uv pip install "amd-gaia[agents]"` '
                 f"for all agents), then re-run `gaia {action}`."
             )
         agent = registry.create_agent(agent_id, **agent_config_kwargs)
@@ -4834,7 +4834,7 @@ def handle_sd_command(args):
     except ImportError as e:
         raise ImportError(
             "The sd agent is not installed. Install it with "
-            "`pip install gaia-agent-sd` (or `pip install amd-gaia[agents]` for "
+            '`uv pip install gaia-agent-sd` (or `uv pip install "amd-gaia[agents]"` for '
             "all AMD agents). See https://amd-gaia.ai/docs/guides/sd."
         ) from e
 
