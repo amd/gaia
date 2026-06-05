@@ -255,9 +255,13 @@ def _model_table(model: Type[BaseModel], title: str) -> str:
         desc = (info.description or "").strip()
         type_label = _type_label(info)
         badge = _required_badge(info)
+        # Show the wire field name (the alias) when one is set — e.g. EmailMessage
+        # serializes ``from_`` as ``from``. Documenting the Python attr name would
+        # make a reader build an invalid payload.
+        wire_name = info.alias or name
         rows.append(
             f"<tr>"
-            f"<td>{_esc(name)}{badge}</td>"
+            f"<td>{_esc(wire_name)}{badge}</td>"
             f"<td>{_esc(type_label)}</td>"
             f"<td>{_esc(desc)}</td>"
             f"</tr>"
@@ -337,6 +341,17 @@ def render_endpoint_spec_html() -> str:
         f"a structured EmailTriageResponse — category, spam/phishing signals, "
         f"a plain-text summary, extracted action items, and an optional draft reply. "
         f"No mail is read or sent; this analyses only the payload in the request.</p>"
+        f"<h3>Query parameters</h3>"
+        f"<table><thead><tr><th>Param</th><th>Values</th><th>Description</th></tr></thead>"
+        f"<tbody><tr>"
+        f"<td>engine</td>"
+        f"<td>heuristic | llm</td>"
+        f"<td><b>heuristic</b> (default) is deterministic and uses no LLM. "
+        f"<b>llm</b> re-classifies a not-confident category and summarizes with the "
+        f"local Lemonade model (#1107/#1452); an LLM or transport failure returns "
+        f"HTTP 502 rather than silently degrading to the heuristic path. Any other "
+        f"value returns HTTP 422.</td>"
+        f"</tr></tbody></table>"
         f"<h3>Request envelope</h3>"
         f"{_model_table(EmailTriageRequest, 'EmailTriageRequest')}"
         f"<h3>Payload shapes</h3>"

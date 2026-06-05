@@ -303,6 +303,35 @@ def test_send_section_derived_from_route_models():
 
 
 # ---------------------------------------------------------------------------
+# Aliased fields render the WIRE name, not the Python attr name — a reader
+# copying the table must build a valid payload (EmailMessage.from_ -> "from").
+# ---------------------------------------------------------------------------
+
+
+def test_aliased_field_renders_wire_name_not_python_attr():
+    # EmailMessage.from_ has alias="from"; the table must show "from".
+    assert EmailMessage.model_fields["from_"].alias == "from"
+    html = _html()
+    assert '<td>from<span class="required-badge">' in html
+    # The Python attr name must NOT appear as a rendered field cell.
+    assert "<td>from_<" not in html
+
+
+# ---------------------------------------------------------------------------
+# The triage ?engine= query param (heuristic|llm, #1452) must be documented —
+# it is a first-class feature; a reader can't discover it from the body alone.
+# ---------------------------------------------------------------------------
+
+
+def test_triage_engine_query_param_documented():
+    html = _html()
+    assert "Query parameters" in html
+    assert "engine" in html
+    assert "heuristic" in html
+    assert "llm" in html
+
+
+# ---------------------------------------------------------------------------
 # write_and_open_spec — the single shared write/open helper used by the CLI.
 # ---------------------------------------------------------------------------
 
