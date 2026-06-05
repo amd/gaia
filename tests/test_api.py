@@ -1311,6 +1311,138 @@ class TestEmailTriageEndpoint:
         assert resp.status_code == 422
 
 
+class _FakeTriageChat:
+    """Stands in for the agent's ``AgentSDK`` on the engine='llm' path.
+
+    Returns a category JSON for the classification prompt and a planted-token
+    summary for the summarization prompt — distinguished by the system
+    prompt's role line — so the LLM triage path runs with no Lemonade server.
+    """
+
+    PLANTED = "violet-otter-92"
+
+    def __init__(self):
+        self.calls = []
+
+    def send_messages(self, messages, system_prompt=None, **kwargs):
+        from types import SimpleNamespace
+
+        sp = system_prompt or ""
+        self.calls.append(sp)
+        low = sp.lower()
+        if "classification" in low:
+            text = '{"category": "urgent", "confidence": 0.95, "reasoning": "t"}'
+        elif "summar" in low:
+            text = f"Summary mentioning {self.PLANTED}."
+        else:
+            text = ""
+        return SimpleNamespace(text=text)
+
+
+class TestEmailTriageLLMEngine:
+    """POST /v1/email/triage?engine=llm — the LLM path (#1107/#1452).
+
+    A fake chat is injected via the ``get_triage_chat`` dependency, so the LLM
+    path is exercised with no Lemonade server.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        from gaia.api.email_routes import get_triage_chat
+
+        self._dep = get_triage_chat
+        self.fake = _FakeTriageChat()
+        # The dependency returns a zero-arg factory; override it to hand back
+        # a factory that yields our fake chat.
+        app.dependency_overrides[get_triage_chat] = lambda: (lambda: self.fake)
+        self.client = TestClient(app)
+        yield
+        app.dependency_overrides.pop(get_triage_chat, None)
+
+    def test_llm_engine_drives_category_and_summary(self):
+        """A heuristic-unconfident email gets its category from the model and
+        its summary from the model (planted token echoed)."""
+        from gaia.agents.email.contract import parse_response
+
+        payload = _single_email_payload(
+            subject="Question about the project",
+            body="Hey, wondering about the timeline. Token violet-otter-92.",
+            sender_email="bob@example.com",
+        )
+        resp = self.client.post("/v1/email/triage?engine=llm", json=payload)
+        assert resp.status_code == 200, resp.text
+        parsed = parse_response(resp.json())
+        # Category came from the fake classifier (the heuristic was unconfident).
+        assert parsed.result.category.value == "urgent"
+        # Summary came from the fake summarizer.
+        assert _FakeTriageChat.PLANTED in parsed.result.summary
+        # Both the classification and summarization prompts hit the model.
+        assert any("classification" in c.lower() for c in self.fake.calls)
+        assert any("summar" in c.lower() for c in self.fake.calls)
+
+    def test_default_engine_is_heuristic_and_never_calls_the_model(self):
+        resp = self.client.post(
+            "/v1/email/triage", json=_single_email_payload(sender_email="b@x.com")
+        )
+        assert resp.status_code == 200, resp.text
+        assert self.fake.calls == [], "default engine must not invoke the LLM"
+
+    def test_invalid_engine_value_is_422(self):
+        resp = self.client.post(
+            "/v1/email/triage?engine=bogus", json=_single_email_payload()
+        )
+        assert resp.status_code == 422
+
+    def test_llm_failure_returns_502_never_silent_fallback(self):
+        """A model/transport failure surfaces as 502 — the endpoint never
+        silently degrades to the heuristic path."""
+        from gaia.api.email_routes import get_triage_chat
+
+        class _BoomChat:
+            def send_messages(self, messages, system_prompt=None, **kwargs):
+                raise RuntimeError("lemonade unreachable")
+
+        app.dependency_overrides[get_triage_chat] = lambda: (lambda: _BoomChat())
+        try:
+            resp = self.client.post(
+                "/v1/email/triage?engine=llm",
+                json=_single_email_payload(sender_email="bob@example.com"),
+            )
+            assert resp.status_code == 502, resp.text
+        finally:
+            app.dependency_overrides[get_triage_chat] = lambda: (lambda: self.fake)
+
+
+def test_triage_llm_chat_is_local_only_ac3(monkeypatch):
+    """AC3: the engine='llm' chat client is built local-only — never with
+    ``use_claude`` / ``use_chatgpt``, never a cloud ``base_url``."""
+    if not API_AVAILABLE:
+        pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+    from gaia.api import email_routes
+
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    email_routes._llm_chat = None
+    captured = {}
+
+    class _CaptureSDK:
+        def __init__(self, config):
+            captured["config"] = config
+
+    monkeypatch.setattr("gaia.chat.sdk.AgentSDK", _CaptureSDK)
+    try:
+        email_routes._get_llm_chat()
+    finally:
+        email_routes._llm_chat = None
+
+    cfg = captured["config"]
+    assert cfg.use_claude is False
+    assert cfg.use_chatgpt is False
+    # None → AgentSDK resolves the local Lemonade default; never a cloud host.
+    assert cfg.base_url is None
+
+
 class TestEmailSendConfirmationGate:
     """POST /v1/email/send — the send path MUST reject when confirmation is
     absent (#1264). This is the security-critical acceptance criterion.

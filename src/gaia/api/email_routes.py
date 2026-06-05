@@ -44,12 +44,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import re
 import secrets
 import threading
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -121,24 +122,33 @@ def _split_sentences(text: str) -> List[str]:
 
 class EmailTriageService:
     """Convert contract inputs (or raw Gmail-API messages) into a contract
-    :class:`EmailTriageResult` deterministically.
+    :class:`EmailTriageResult`.
 
-    No LLM is invoked: category comes from the agent's heuristic
-    categorizer, and the summary / action items / draft proposal are derived
-    from the message text with explicit rules. This keeps the REST surface
-    fast, offline-testable, and aligned with the agent's pre-LLM fast path.
+    Two engines, same contract:
+
+    - ``chat=None`` (default) — deterministic: category from the agent's
+      heuristic categorizer, summary / action items / draft from explicit
+      rules. Fast, offline-testable, the agent's pre-LLM fast path.
+    - ``chat`` set — LLM engine (#1107/#1452): the heuristic still runs, but
+      a not-confident category is re-classified by the model and the summary
+      is model-generated. ``chat`` is the agent's ``AgentSDK`` (local Lemonade
+      only, AC3). LLM failures surface — never a silent fall back to rules.
+
+    Phishing/spam/action-item/draft logic is shared by both engines.
     """
 
     # -- Public: contract path ---------------------------------------------
 
-    def triage_request(self, request: EmailTriageRequest) -> EmailTriageResponse:
+    def triage_request(
+        self, request: EmailTriageRequest, *, chat: Any = None
+    ) -> EmailTriageResponse:
         """Triage a contract request envelope into a contract response."""
         payload = request.payload
         if isinstance(payload, SingleEmailInput):
-            result = self._triage_single(payload)
+            result = self._triage_single(payload, chat=chat)
             kind = "single"
         elif isinstance(payload, ThreadInput):
-            result = self._triage_thread(payload)
+            result = self._triage_thread(payload, chat=chat)
             kind = "thread"
         else:  # pragma: no cover - discriminated union guarantees one of the two
             raise HTTPException(
@@ -178,7 +188,9 @@ class EmailTriageService:
 
     # -- Internal -----------------------------------------------------------
 
-    def _triage_single(self, payload: SingleEmailInput) -> EmailTriageResult:
+    def _triage_single(
+        self, payload: SingleEmailInput, *, chat: Any = None
+    ) -> EmailTriageResult:
         msg = payload.message
         return self._build_result(
             subject=msg.subject,
@@ -187,9 +199,12 @@ class EmailTriageService:
             label_ids=[],
             principal=payload.principal,
             reply_to=msg.from_,
+            chat=chat,
         )
 
-    def _triage_thread(self, payload: ThreadInput) -> EmailTriageResult:
+    def _triage_thread(
+        self, payload: ThreadInput, *, chat: Any = None
+    ) -> EmailTriageResult:
         # Summarize the whole thread; categorize on the LAST inbound message
         # (the one awaiting the principal's attention), reply to its sender.
         messages: List[EmailMessage] = payload.messages
@@ -205,6 +220,7 @@ class EmailTriageService:
             principal=payload.principal,
             reply_to=last.from_,
             summary_prefix=f"Thread of {len(messages)} messages. ",
+            chat=chat,
         )
         return result
 
@@ -218,12 +234,29 @@ class EmailTriageService:
         principal: EmailAddress,
         reply_to: Optional[EmailAddress],
         summary_prefix: str = "",
+        chat: Any = None,
     ) -> EmailTriageResult:
         heuristic = classify_category_heuristic(
             subject=subject, sender=sender_raw, label_ids=label_ids
         )
         category = EmailCategory(heuristic.category)
-        summary = summary_prefix + self._summarize(subject, body)
+        if chat is not None:
+            # LLM engine (#1107 escalation): re-classify only when the
+            # heuristic is not confident, but always summarize with the model.
+            # Failures propagate (no silent fall back to the rule path).
+            from gaia.agents.email.tools.llm_triage import classify_email_llm
+            from gaia.agents.email.tools.summarize_tools import summarize_email_llm
+
+            if not heuristic.confident:
+                llm = classify_email_llm(
+                    chat, subject=subject, sender=sender_raw, body=body
+                )
+                category = EmailCategory(llm["category"])
+            summary = summary_prefix + summarize_email_llm(
+                chat, subject=subject, sender=sender_raw, body=body
+            )
+        else:
+            summary = summary_prefix + self._summarize(subject, body)
         action_items = self._extract_action_items(body)
         draft = self._build_draft(
             subject=subject,
@@ -502,9 +535,53 @@ class EmailSendResponse(_Strict):
 
 _service = EmailTriageService()
 
+# Lazily-built, process-wide chat client for the engine="llm" triage path.
+_llm_chat: Any = None
+_llm_chat_lock = threading.Lock()
+
+
+def _get_llm_chat() -> Any:
+    """Build (once) the LOCAL Lemonade chat client for engine='llm' triage.
+
+    AC3: the resolved ``base_url`` is validated against the email agent's
+    local-only allowlist, so email bodies are never sent to a cloud LLM. The
+    client is never configured with ``use_claude`` / ``use_chatgpt``.
+    """
+    global _llm_chat
+    if _llm_chat is not None:
+        return _llm_chat
+    with _llm_chat_lock:
+        if _llm_chat is None:
+            from gaia.agents.email.config import EmailAgentConfig
+            from gaia.chat.sdk import AgentConfig, AgentSDK
+            from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+            base_url = os.environ.get("LEMONADE_BASE_URL") or None
+            EmailAgentConfig(base_url=base_url).validate()  # AC3 local-only guard
+            _llm_chat = AgentSDK(
+                AgentConfig(
+                    model=DEFAULT_MODEL_NAME, base_url=base_url, max_tokens=2048
+                )
+            )
+    return _llm_chat
+
+
+def get_triage_chat():
+    """FastAPI dependency: a zero-arg factory for the engine='llm' chat client.
+
+    Returning the factory (not the client) keeps the default heuristic path
+    from constructing a Lemonade client it never uses. Tests override this to
+    inject a fake chat.
+    """
+    return _get_llm_chat
+
 
 @router.post("/triage", response_model=EmailTriageResponse)
-async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
+async def triage_email(
+    request: EmailTriageRequest,
+    engine: str = "heuristic",
+    chat_factory=Depends(get_triage_chat),
+) -> EmailTriageResponse:
     """Triage a single email or a full thread.
 
     Accepts the FROZEN #1262 ``EmailTriageRequest`` (a single-email or
@@ -512,8 +589,31 @@ async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
     ``EmailTriageResponse`` — category, spam/phishing signals, a plain-text
     summary, extracted action items, and an optional draft-reply proposal.
     No mail is read or sent; this analyzes only the payload in the request.
+
+    ``engine`` (query param) selects the triage engine:
+
+    - ``"heuristic"`` (default) — deterministic, no LLM (the frozen-contract
+      default; byte-unchanged behavior).
+    - ``"llm"`` — re-classify a not-confident category and summarize with the
+      LOCAL Lemonade model (#1107/#1452). An LLM/transport failure returns
+      502 rather than silently degrading to the heuristic path.
     """
-    return _service.triage_request(request)
+    from gaia.agents.email.tools.llm_triage import LLMTriageError
+    from gaia.agents.email.tools.summarize_tools import EmailSummarizeError
+
+    if engine not in ("heuristic", "llm"):
+        raise HTTPException(
+            status_code=422,
+            detail="query param 'engine' must be 'heuristic' (default) or 'llm'.",
+        )
+    chat = chat_factory() if engine == "llm" else None
+    try:
+        return _service.triage_request(request, chat=chat)
+    except (LLMTriageError, EmailSummarizeError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM triage failed (engine='llm'): {exc}",
+        ) from exc
 
 
 @router.post("/draft", response_model=EmailDraftResponse)
@@ -555,13 +655,19 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
             ),
         )
 
-    # Gate passed — resolve the backend now (AFTER the gate) and send. Gmail's
-    # send takes a single 'to' header string.
-    backend = resolve_send_backend()
+    # Gate passed — resolve and run the backend in a thread so sync connector
+    # calls (get_access_token_sync → asyncio.run) don't conflict with the
+    # running event loop.
+    import anyio
+
     to_header = ", ".join(_format_address(a) for a in request.to)
-    result = backend.send_message(
-        to=to_header, subject=request.subject, body=request.body
-    )
+
+    def _do_send() -> dict:
+        return resolve_send_backend().send_message(
+            to=to_header, subject=request.subject, body=request.body
+        )
+
+    result = await anyio.to_thread.run_sync(_do_send)
     sent_id = result.get("id") or ""
     if not sent_id:
         raise HTTPException(
@@ -590,6 +696,7 @@ __all__ = [
     "ConfirmationStore",
     "confirmation_store",
     "get_send_backend",
+    "get_triage_chat",
     "EmailDraftRequest",
     "EmailDraftResponse",
     "EmailSendRequest",
