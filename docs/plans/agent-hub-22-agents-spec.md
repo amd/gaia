@@ -51,7 +51,7 @@ The core thesis: **we are not building 22 agents — we are building 7 shared in
 │  SHARED INFRASTRUCTURE LAYER (build once, reused everywhere)        │
 │                                                                    │
 │  L1 Memory      L2 Web Search   L3 Connectors   L4 VLM/Media       │
-│  L5 Filesystem  L6 Notifications L7 Autonomy + Graduated Trust      │
+│  L5 Filesystem  L6 Notifications L7 Autonomy   L8 Task/To-Do Store  │
 └───────────────┬───────────────────────────────────────────────────┘
                 │ import gaia
 ┌───────────────▼───────────────────────────────────────────────────┐
@@ -81,7 +81,7 @@ hub/agents/python/email/
 └── README.md
 ```
 
-**The thin-layer principle in numbers:** the framework + shared layers are ~thousands of LOC each; a new agent on top is typically **150–500 LOC of glue** plus a manifest and prompt. If an agent needs more than that, it usually means a missing shared capability that should be promoted to L1–L7.
+**The thin-layer principle in numbers:** the framework + shared layers are ~thousands of LOC each; a new agent on top is typically **150–500 LOC of glue** plus a manifest and prompt. If an agent needs more than that, it usually means a missing shared capability that should be promoted to L1–L8.
 
 ### 2.3 Packaging & interface standard (mandatory for all 22)
 
@@ -128,7 +128,7 @@ Every agent MUST implement three lifecycle hooks (added to the base `Agent` as p
 
 ---
 
-## 3. Shared Infrastructure Layers (L1–L7)
+## 3. Shared Infrastructure Layers (L1–L8)
 
 Each layer is an **epic**. Agents cannot ship reliably until their required layers exist. The dependency-aware build order is L1→L7 but several are already partially shipped.
 
@@ -208,6 +208,20 @@ Each layer is an **epic**. Agents cannot ship reliably until their required laye
 | AH-L7.4 | Lifecycle hooks on base Agent (`on_first_run`, `on_heartbeat`, `propose`) | M | **new** |
 | AH-L7.5 | Background service + system tray | L | #643 |
 
+### L8 — Task & To-Do Store (core)
+**Status:** New. A cross-agent task store — the single place where "things to do" live, written and read by *many* agents, not owned by one. Distinct from `GoalStore` (agent-inferred goals awaiting approval) and from L1 memory (preferences/patterns): L8 is the user's actual to-do list.
+
+Why it's a core layer, not an agent: a todo manager is only useful if it's *unified*. The email agent files "reply to Acme by Friday," the calendar agent files "prep for the 2pm," the finance agent files "electric bill due the 14th," travel files "check in 24h before the flight," maintenance files "furnace filter due," and the morning brief reads them all back as one prioritized list. Fragmented per-agent task lists defeat the purpose, so the store is framework infrastructure that agents compose by name.
+
+| Issue | Scope | Est. | Status |
+|-------|-------|------|--------|
+| AH-L8.1 | `TaskStore` backend — namespaced SQLite tasks (title, due_at, priority, status, tags, `source_agent`, `source_ref`), shared single source of truth | M | **new** |
+| AH-L8.2 | `TaskToolsMixin` (`tasks` in `KNOWN_TOOLS`) — `add_task`/`list_tasks`/`complete_task`/`update_task`; any agent composes it | S | **new** |
+| AH-L8.3 | Cross-agent wiring — email/calendar/finance/travel/maintenance write tasks with `source_ref` back to the originating item; dedup on re-sync | M | **new** |
+| AH-L8.4 | User-facing surface — unified Tasks panel in Agent UI + tasks section in the morning brief (no separate agent; the store *is* the product) | M | **new** |
+
+The `source_ref` link (task → the email/event/bill that created it) is what makes the list actionable: completing "reply to Acme" can open the thread; "electric bill due" links the statement. Tasks the user adds by hand live in the same store, unsourced.
+
 ---
 
 ## 4. The 22 Agents
@@ -238,7 +252,7 @@ Each agent below lists its **Hub id**, **required layers**, **unique tools**, **
 #### A6. `email` — Email Companion
 - **Layers:** L1, L3, L6, L7 · **Unique tools:** `triage`, `draft_reply`, `digest` · **Memory:** sender importance, reply style, classification rules · **Triggers:** new mail → classify + draft (graduated: propose → auto after 200 approvals) · **Effort:** M · **Existing:** Email Agent & Platform Foundations milestone
 
-#### A7. `crm` — Personal CRM & Relationship Agent
+#### A7. `crm` — Personal CRM & Contacts Agent
 - **Layers:** L1, L3 (email+calendar+contacts) · **Unique tools:** `build_profile`, `relationship_health`, `draft_followup` · **Memory:** contact profiles, interaction history, per-person tone · **Triggers:** dormant contact / upcoming occasion → propose outreach · **Effort:** M · **Existing:** #704
 
 #### A8. `family` — Family Command Center
@@ -261,7 +275,7 @@ Each agent below lists its **Hub id**, **required layers**, **unique tools**, **
 ### Wave 4 — Ship with VLM/Multimodal (v0.25)
 
 #### A13. `photo` — Photo & Memory Agent
-- **Layers:** L1, L4 · **Unique tools:** `index_photos`, `face_group`, `media_search`, `highlight_reel`, `dedup` · **Memory:** people, events, favorites · **Triggers:** new photos → organize + propose albums · **Effort:** M (depends on L4.1)
+- **Layers:** L1, L4 · **Unique tools:** `index_photos`, `face_group`, `media_search`, `highlight_reel`, `dedup` (detect **and** delete duplicate/near-duplicate photos — confirm before deleting, keep-best heuristic) · **Memory:** people, events, favorites · **Triggers:** new photos → organize + propose albums; large duplicate cluster → propose cleanup · **Effort:** M (depends on L4.1)
 
 #### A14. `meeting` — Meeting Companion
 - **Layers:** L1, L3 (calendar), L6 + Whisper · **Unique tools:** `transcribe`, `diarize`, `extract_actions`, `meeting_prep` · **Memory:** past meetings, attendees, action items · **Triggers:** meeting starts → transcribe; ends → minutes + actions · **Effort:** M · **Existing:** #700
@@ -605,6 +619,7 @@ interfaces:
 | EPIC-L5 | Filesystem & System Discovery | P1 |
 | EPIC-L6 | Proactive Notifications | P0 |
 | EPIC-L7 | Autonomy Engine & Graduated Trust | P0 |
+| EPIC-L8 | Task & To-Do Store (cross-agent, core) | P0 |
 | EPIC-W1..W5 | One epic per wave grouping the agent packages | P1 |
 
 ### Layer issues (detail)
@@ -651,6 +666,12 @@ interfaces:
 - AH-L7.4 Base-Agent lifecycle hooks (`on_first_run`/`on_heartbeat`/`propose`) — M — new
 - AH-L7.5 Background service + system tray — L — ref #643
 
+**L8 — Task & To-Do Store** (EPIC-L8)
+- AH-L8.1 `TaskStore` backend (namespaced SQLite; title/due/priority/status/tags/source) — M — new
+- AH-L8.2 `TaskToolsMixin` (`tasks` in `KNOWN_TOOLS`) — S — new
+- AH-L8.3 Cross-agent wiring (email/calendar/finance/travel/maintenance write tasks w/ `source_ref`) — M — new
+- AH-L8.4 Unified Tasks panel (Agent UI) + tasks in morning brief — M — new
+
 ### Agent package issues
 
 Each agent gets **one tracking issue** with a fixed sub-task checklist (manifest, agent class, prompt, tools, memory schema, triggers, tests + eval scenarios, README, Hub publish). Template:
@@ -683,24 +704,24 @@ Layer deps below split **memory tier** (essential/enhance/optional) from **datas
 | AH-A2 | files | 1 | S | enhance | fileindex | L5 |
 | AH-A3 | smarthome | 1 | S | enhance | — | L6, HA-MCP |
 | AH-A4 | code | 1 | S | essential | records (code-index) | L5 |
-| AH-A5 | morning | 1 | M | essential | — | L2, L6, L7 |
-| AH-A6 | email | 2 | M | essential | — | L3, L6, L7 |
+| AH-A5 | morning | 1 | M | essential | — | L2, L6, L7, L8 |
+| AH-A6 | email | 2 | M | essential | — | L3, L6, L7, L8 |
 | AH-A7 | crm | 2 | M | essential | records (contacts) | L3 |
-| AH-A8 | family | 2 | L | essential | records | L3, L4, L6 |
+| AH-A8 | family | 2 | L | essential | records | L3, L4, L6, L8 |
 | AH-A9 | writing | 3 | M | essential | — | — |
 | AH-A10 | journal | 3 | S | essential | timeseries | L6, L7 |
 | AH-A11 | habit | 3 | S | essential | timeseries | L3, L6, L7 |
 | AH-A12 | health | 3 | M | enhance | timeseries | L4, L6 |
 | AH-A13 | photo | 4 | M | enhance | media | L4 |
 | AH-A14 | meeting | 4 | M | enhance | archive | L3, L6 |
-| AH-A15 | finance | 4 | M | enhance | ledger | L4, L6 |
+| AH-A15 | finance | 4 | M | enhance | ledger | L4, L6, L8 |
 | AH-A16 | freelance | 4 | M | enhance | ledger | L3, L4, L6 |
 | AH-A17 | learning | 5 | M | essential | records (flashcards) | L2, L7 |
 | AH-A18 | deals | 5 | S | enhance | timeseries (prices) | L2, L6, L7 |
-| AH-A19 | travel | 5 | M | essential | — | L2, L3, L6 |
+| AH-A19 | travel | 5 | M | essential | — | L2, L3, L6, L8 |
 | AH-A20 | security | 5 | M | enhance | records (identities) | L2, L5, L6 |
 | AH-A21 | presentation | 5 | M | optional | — | L5 |
-| AH-A22 | maintenance | 5 | M | enhance | records (inventory) | L2, L4, L6, L7 |
+| AH-A22 | maintenance | 5 | M | enhance | records (inventory) | L2, L4, L6, L7, L8 |
 
 **Memory tier counts:** essential = 10 (code, morning, email, crm, family, writing, journal, habit, learning, travel) · enhance = 11 · optional = 1 (presentation). Only the 10 essential agents gate on the full L1 engine; the 12 others can ship with light/no L1 and a domain datastore.
 
@@ -725,11 +746,11 @@ Layer deps below split **memory tier** (essential/enhance/optional) from **datas
 
 | Group | Count | Net-new | Duplicates open issue | Conditional |
 |-------|-------|---------|----------------------|-------------|
-| Program + layer + wave epics | 13 | 13 | 0 | 0 |
-| Layer issues (AH-L*) | 26 | 13 | 12 | 1 (L3.2 / closed #963) |
+| Program + layer + wave epics | 14 | 14 | 0 | 0 |
+| Layer issues (AH-L*) | 30 | 17 | 12 | 1 (L3.2 / closed #963) |
 | Agent issues (AH-A1–22) | 22 | 22 | 0 | 0 |
 | Cross-cutting (AH-X1–12) | 12 | 12¹ | 0 | 0 |
-| **Total** | **73** | **~60** | **12** | **1** |
+| **Total** | **78** | **~65** | **12** | **1** |
 
 ¹ X10/X11/X12 are net-new *umbrella* issues that link existing distribution issues (#1095/#1178/#1097/#1092/#1094) as children — they coordinate, they don't duplicate.
 
@@ -755,7 +776,7 @@ Layer deps below split **memory tier** (essential/enhance/optional) from **datas
 | Hub platform (v0.29) slips | Med | High | **Hard blocker** — agents are Hub-native, so a platform slip blocks all 22. Mitigate by treating A1 (`knowledge`) as the platform's own acceptance test: build the Hub and A1 together so the platform is proven before scaling to the other 21. Keep Wave 0 ruthlessly minimal (manifest + registry + `gaia agent init/test/publish` only; R2/Arena can follow). |
 | L7 autonomy late → "autonomous" claim unmet | Med | High | Ship agents in supervised mode first (propose-only); autonomy is an upgrade, not a prerequisite for value |
 | Tool-calling unreliable on small models | High | High | Fine-tuning flywheel (v0.23) + ToolLoader bundles; declare honest `min` model per agent |
-| 22 agents → maintenance bankruptcy | Med | Med | Thin-layer model + shared eval harness; community owns the long tail via Hub once L1–L7 are stable |
+| 22 agents → maintenance bankruptcy | Med | Med | Thin-layer model + shared eval harness; community owns the long tail via Hub once L1–L8 are stable |
 | Connector OAuth complexity blocks Wave 2 | Med | High | L3 is the single hardest layer; start it in parallel with Wave 1 |
 | Permission/security gaps across 22 agents | Med | High | AH-X6 least-privilege audit gate before any agent is `verified` |
 
@@ -769,7 +790,7 @@ Layer deps below split **memory tier** (essential/enhance/optional) from **datas
 - Every agent implements the proactive contract (`on_first_run` proposes, never a blank box).
 - Every agent has passing unit tests + committed eval baselines.
 - A user can install any agent with `gaia agent install <id>` and get a useful proposed action within 60 seconds.
-- Shared layers L1–L7 are reused (no agent re-implements web search, connectors, memory, or notifications).
+- Shared layers L1–L8 are reused (no agent re-implements web search, connectors, memory, notifications, or the task store).
 - At least one agent ships a **C++ supersession** proving the Python→native upgrade path leaves id/manifest/interfaces unchanged.
 
 ---
