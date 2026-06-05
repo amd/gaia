@@ -1875,6 +1875,9 @@ class InitCommand:
                 self.console.print(
                     "    [cyan]gaia chat --watch ./docs[/cyan]             Auto-index a folder of docs"
                 )
+                self.console.print(
+                    "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
+                )
             elif self.profile == "npu":
                 self.console.print(
                     "    [cyan]gaia chat --device npu[/cyan]             Chat using Ryzen AI NPU"
@@ -1907,6 +1910,9 @@ class InitCommand:
                 # Default commands for other profiles
                 self.console.print(
                     "    [cyan]gaia chat[/cyan]              Start interactive chat"
+                )
+                self.console.print(
+                    "    [cyan]gaia chat --ui[/cyan]         Launch the Agent UI (browser-based)"
                 )
                 self.console.print(
                     "    [cyan]gaia llm 'Hello'[/cyan]       Quick LLM query"
@@ -1942,6 +1948,9 @@ class InitCommand:
                 self._print(
                     "    gaia chat --watch ./docs             # Auto-index a folder of docs"
                 )
+                self._print(
+                    "    gaia chat --ui                       # Launch the Agent UI (browser-based)"
+                )
             elif self.profile == "npu":
                 self._print(
                     "    gaia chat --device npu             # Chat using Ryzen AI NPU"
@@ -1972,6 +1981,9 @@ class InitCommand:
             else:
                 # Default commands for other profiles
                 self._print("    gaia chat              # Start interactive chat")
+                self._print(
+                    "    gaia chat --ui         # Launch the Agent UI (browser-based)"
+                )
                 self._print("    gaia llm 'Hello'       # Quick LLM query")
                 self._print("    gaia talk              # Voice interaction")
             self._print("")
