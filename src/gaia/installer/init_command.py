@@ -385,42 +385,51 @@ class InitCommand:
 
         extras_str = ",".join(pip_extras)
 
-        # Detect editable vs package install
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "show", "amd-gaia"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            editable = False
-            location = ""
+        # Package-manager frontends to try, most-preferred first. The standalone
+        # ``uv`` binary leads because uv-created venvs ship neither ``pip`` nor
+        # the ``uv`` module, so ``python -m uv`` / ``python -m pip`` both fail
+        # there; the standalone binary honours the active VIRTUAL_ENV instead.
+        frontends = [
+            ["uv", "pip"],
+            [sys.executable, "-m", "uv", "pip"],
+            [sys.executable, "-m", "pip"],
+        ]
+
+        # Detect editable vs package install using whichever frontend responds.
+        editable = False
+        location = ""
+        for frontend in frontends:
+            try:
+                result = subprocess.run(
+                    frontend + ["show", "amd-gaia"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except (FileNotFoundError, OSError):
+                continue
+            if result.returncode != 0:
+                continue
             for line in result.stdout.splitlines():
                 if line.startswith("Editable project location:"):
                     editable = True
                     location = line.split(":", 1)[1].strip()
                     break
-        except Exception:
-            editable = False
-            location = ""
+            break
 
         if editable and location:
             install_spec = f'uv pip install -e ".[{extras_str}]"'
-            install_args = ["-e", f"{location}[{extras_str}]"]
+            install_args = ["install", "-e", f"{location}[{extras_str}]"]
         else:
-            install_spec = f'pip install "amd-gaia[{extras_str}]"'
-            install_args = [f"amd-gaia[{extras_str}]"]
+            install_spec = f'uv pip install "amd-gaia[{extras_str}]"'
+            install_args = ["install", f"amd-gaia[{extras_str}]"]
 
         self._print_success(f"Installing extras: {extras_str}")
 
-        # Try uv pip first, fall back to regular pip
-        for pip_cmd in [
-            [sys.executable, "-m", "uv", "pip", "install"] + install_args,
-            [sys.executable, "-m", "pip", "install"] + install_args,
-        ]:
+        for frontend in frontends:
             try:
                 result = subprocess.run(
-                    pip_cmd,
+                    frontend + install_args,
                     capture_output=True,
                     text=True,
                     timeout=300,
@@ -429,7 +438,7 @@ class InitCommand:
                 if result.returncode == 0:
                     self._print_success(f"Installed [{extras_str}] dependencies")
                     return True
-            except FileNotFoundError:
+            except (FileNotFoundError, OSError):
                 continue
             except subprocess.TimeoutExpired:
                 self._print_warning(
@@ -441,7 +450,7 @@ class InitCommand:
 
         self._print_warning(
             f"Could not install [{extras_str}] extras automatically. "
-            f"Please run: pip install {install_spec}"
+            f"Please run: {install_spec}"
         )
         return True  # Warn but don't fail
 
