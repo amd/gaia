@@ -968,7 +968,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print("   Install them with:\n")
         print('     uv pip install -e ".[ui]"')
         print("\n   Or if you installed from PyPI:\n")
-        print("     pip install amd-gaia[ui]")
+        print('     uv pip install "amd-gaia[ui]"')
         print()
         sys.exit(1)
     except OSError as e:
