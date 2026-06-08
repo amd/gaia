@@ -30,15 +30,26 @@ except ImportError:
     except ImportError:
         PdfReader = None
 
+# Not just ImportError: a broken native dependency (e.g. torchcodec/FFmpeg
+# pulled in by sentence-transformers, or an arch-mismatched faiss build) raises
+# RuntimeError/OSError at import. Treat that the same as "not installed" so a
+# bad install can't crash every module that transitively imports RAG; the loud,
+# actionable error is deferred to RAGSDK._check_dependencies() at point of use.
+# Capture the reason so that error can tell "not installed" from "installed but
+# broken" instead of misdirecting the user to reinstall a package they have.
+_SENTENCE_TRANSFORMERS_IMPORT_ERROR = None
 try:
     from sentence_transformers import SentenceTransformer
-except ImportError:
+except Exception as _e:  # pylint: disable=broad-except
     SentenceTransformer = None
+    _SENTENCE_TRANSFORMERS_IMPORT_ERROR = _e
 
+_FAISS_IMPORT_ERROR = None
 try:
     import faiss
-except ImportError:
+except Exception as _e:  # pylint: disable=broad-except
     faiss = None
+    _FAISS_IMPORT_ERROR = _e
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
@@ -225,6 +236,23 @@ class RAGSDK:
                 f"Or install packages directly:\n"
                 f"  uv pip install {' '.join(missing)}\n"
             )
+            # A package that is installed but failed to import (broken native
+            # deps) needs a different fix than a missing one — name the cause.
+            broken = []
+            if SentenceTransformer is None and _SENTENCE_TRANSFORMERS_IMPORT_ERROR:
+                broken.append(
+                    f"  sentence-transformers: {_SENTENCE_TRANSFORMERS_IMPORT_ERROR}"
+                )
+            if faiss is None and _FAISS_IMPORT_ERROR:
+                broken.append(f"  faiss: {_FAISS_IMPORT_ERROR}")
+            if broken:
+                error_msg += (
+                    "\nThe package(s) below are installed but failed to load — "
+                    "reinstalling won't help until the underlying error is fixed "
+                    "(e.g. a missing FFmpeg for torchcodec):\n"
+                    + "\n".join(broken)
+                    + "\n"
+                )
             raise ImportError(error_msg)
 
     def _safe_open(self, file_path: str, mode="rb"):
