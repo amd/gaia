@@ -980,6 +980,18 @@ class TestBuilderSurface:
             for marker in ("Agent Created", "✅", "File location"):
                 assert marker not in result, f"{marker!r} leaked into confirmation"
 
+    def test_confirmation_path_is_backtick_wrapped(self, tmp_path, monkeypatch):
+        """The created path is wrapped in inline-code backticks so markdown
+        rendering can't eat path separators (e.g. Windows `\\.gaia`)."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        for name, enable_mcp in (("Backtick X", False), ("Mcp Backtick X", True)):
+            agent_dir = "mcp-backtick-x" if enable_mcp else "backtick-x"
+            result = _create_agent_impl(name, enable_mcp=enable_mcp)
+            py_path = tmp_path / ".gaia" / "agents" / agent_dir / "agent.py"
+            assert f"`{py_path}`" in result, result
+            # The agent-id substring still appears (path text unchanged).
+            assert agent_dir in result
+
 
 # ---------------------------------------------------------------------------
 # Alpha framing: Builder intro + scaffolded-agent caveat

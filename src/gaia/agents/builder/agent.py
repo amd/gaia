@@ -535,7 +535,7 @@ def _create_agent_impl(
         return (
             f"Done! I've created your '{display_name}' as a simple starter agent "
             f"with MCP support:\n\n"
-            f"  {py_path}\n\n"
+            f"  `{py_path}`\n\n"
             "It's already loaded — you'll see it in the agent selector in the GAIA UI. "
             "Its personality and conversation starters are tailored to what you described.\n\n"
             "To connect MCP servers, edit mcp_servers.json in the same directory, "
@@ -550,7 +550,7 @@ def _create_agent_impl(
         )
     return (
         f"Done! I've created your '{display_name}' as a simple starter agent:\n\n"
-        f"  {py_path}\n\n"
+        f"  `{py_path}`\n\n"
         "It's already loaded — you'll see it in the agent selector in the GAIA UI. "
         "Its personality and conversation starters are tailored to what you described.\n\n"
         "This is a starter template, and the agent builder is an alpha feature. Your new "
