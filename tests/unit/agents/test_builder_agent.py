@@ -867,10 +867,10 @@ class TestBuilderSurface:
         agent.chat = MagicMock()
         agent.chat.send_messages.return_value = mock_resp
 
-        # The stray 'tools' kwarg trips a TypeError inside the tool, but
-        # _execute_tool catches it (agent.py:1741) and returns a
-        # {"status": "error", ...} dict. The new dict-error check in
-        # _process_query_impl then surfaces it as an honest failure, not a crash.
+        # The stray 'tools' kwarg trips a TypeError inside the tool, but the base
+        # Agent._execute_tool catches it and returns a {"status": "error", ...} dict.
+        # The dict-error check in _process_query_impl then surfaces it as an honest
+        # failure, not a crash.
         result = agent._process_query_impl("create a Stray agent with RAG")
 
         answer = result["answer"]
