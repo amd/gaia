@@ -675,7 +675,7 @@ def _lint_formatters(py_files: List[Path], failures: List[str]) -> None:
     except ImportError:
         print(
             "  note: skipped black/isort check (not installed; "
-            "install with 'pip install \"amd-gaia[dev]\"')."
+            "install with 'uv pip install \"amd-gaia[dev]\"')."
         )
         return
     mode = black.Mode()

@@ -31,7 +31,7 @@ def start_docker_mcp(
     except ImportError as e:
         raise ImportError(
             "The docker agent is not installed. Install it with "
-            "`pip install gaia-agent-docker` (or `pip install amd-gaia[agents]` "
+            '`uv pip install gaia-agent-docker` (or `uv pip install "amd-gaia[agents]"` '
             "for all AMD agents)."
         ) from e
 
