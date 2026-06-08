@@ -1,8 +1,10 @@
 # NOTE: This workflow activates once #1297 (Strix Halo self-hosted runner) lands.
 # Until then it is validated out-of-band on Strix Halo class hardware.
-# The strix-halo runner is Windows, so every run step uses PowerShell — the
-# established convention on the sjlab lab runners (see build_cpp.yml). Bash
-# syntax (&&, \ line-continuation) is NOT available there.
+# The strix-halo runner is Windows. Python/uv setup goes through the
+# ./.github/actions/setup-venv composite action (the lab-runner convention,
+# see build_cpp.yml) which installs uv, creates .venv and puts it on PATH.
+# Inline `run:` steps use PowerShell — bash syntax (&&, \ continuation) is not
+# available there.
 name: Agent Behavior E2E
 
 on:
@@ -22,18 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Python
-        shell: powershell
-        run: |
-          uv venv
-          if ($LASTEXITCODE -ne 0) { throw "uv venv failed" }
-          uv pip install -e ".[dev]"
-          if ($LASTEXITCODE -ne 0) { throw "uv pip install failed" }
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          install-package: ".[dev]"
 
       - name: Ensure Lemonade
         shell: powershell
         run: |
-          uv run gaia init --skip-lemonade
+          gaia init --skip-lemonade
           if ($LASTEXITCODE -ne 0) { throw "gaia init failed" }
 
       - name: Run behavior E2E harness
@@ -41,7 +40,7 @@ jobs:
         env:
           LEMONADE_BASE_URL: http://localhost:13305/api/v1
         run: |
-          uv run python -m pytest tests/integration/eval/test_behavior_e2e.py `
+          python -m pytest tests/integration/eval/test_behavior_e2e.py `
             -m real_model -v --tb=short `
             --basetemp="${{ runner.temp }}\pytest-behavior"
           if ($LASTEXITCODE -ne 0) { throw "behavior E2E harness failed" }
