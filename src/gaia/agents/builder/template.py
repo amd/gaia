@@ -30,6 +30,19 @@ TEMPLATE_STARTERS = [
     "Which animal is your favourite and why?",
 ]
 
+# Appended to every scaffolded agent's authored system prompt so the agent
+# itself sets honest expectations: it's a starter template, not a finished agent
+# with real tools. The Builder is an alpha feature.
+STARTER_CAVEAT = (
+    "\n\n---\n"
+    "You are a starter template scaffolded by the GAIA Agent Builder (an alpha "
+    "feature). You can talk about your topic from what you already know, but you do "
+    "not yet have tools to take real actions — you cannot actually fetch, browse, or "
+    "parse live data. In your first reply, briefly tell the user you're a starting "
+    "point they can extend with tools or MCP servers "
+    "(https://amd-gaia.ai/docs/guides/custom-agent), then help as best you can."
+)
+
 
 def default_system_prompt(agent_name: str, description: str) -> str:
     """Minimal, purpose-derived system prompt used when none is supplied.
@@ -69,6 +82,7 @@ def _build_header(class_name: str, agent_id: str, flavor: str) -> List[str]:
     """Top-of-file comments shared by every template."""
     return [
         f"# {class_name} -- Custom GAIA Agent{flavor}",
+        "# Alpha: scaffolded by the Gaia Builder — a starter template you extend yourself.",
         f"# Location: ~/.gaia/agents/{agent_id}/agent.py",
         "# Docs: https://amd-gaia.ai/docs/sdk/core/agent-system",
         "#        https://amd-gaia.ai/docs/sdk/patterns",

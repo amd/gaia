@@ -385,9 +385,11 @@ class TestCreateAgentImpl:
 
         assert result["status"] == "success"
         assert mocked_answer in result["result"]
-        # The built agent ran on ITS authored persona, not a placeholder.
-        assert result["system_prompt"] == authored_prompt
-        assert agent.system_prompt == authored_prompt
+        # The built agent ran on ITS authored persona, not a placeholder. The
+        # composed system prompt is the authored persona + the starter caveat.
+        assert authored_prompt in result["system_prompt"]
+        assert "starter template" in result["system_prompt"].lower()
+        assert authored_prompt in agent.system_prompt
         assert result.get("error_count", 0) == 0
         assert "zoo" not in result["result"].lower()
 
@@ -950,15 +952,59 @@ class TestBuilderSurface:
         ), f"Expected failure indicator in answer, got: {answer!r}"
 
     def test_confirmation_mentions_starter_and_docs_link(self, tmp_path, monkeypatch):
-        """Successful _create_agent_impl result contains starter framing + docs link."""
+        """Successful result contains alpha/starter framing, honest 'won't/own'
+        caveat, and the docs link — for both the non-MCP and MCP confirmations."""
         monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        result = _create_agent_impl(
-            "Docs Test Agent",
-            description="Tests the confirmation message.",
+        for name, enable_mcp in (
+            ("Docs Test Agent", False),
+            ("Mcp Docs Test Agent", True),
+        ):
+            result = _create_agent_impl(
+                name,
+                description="Tests the confirmation message.",
+                enable_mcp=enable_mcp,
+            )
+            assert not result.startswith("Error:"), result
+            lowered = result.lower()
+            assert "starter" in lowered
+            assert "alpha" in lowered
+            assert "won't" in lowered
+            assert "own" in lowered
+            assert "amd-gaia.ai/docs/guides/custom-agent" in result
+
+    def test_confirmation_has_no_fabrication_markers(self, tmp_path, monkeypatch):
+        """Neither confirmation introduces the fabrication-guard substrings."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        for name, enable_mcp in (("Plain X", False), ("Mcp X", True)):
+            result = _create_agent_impl(name, enable_mcp=enable_mcp)
+            for marker in ("Agent Created", "✅", "File location"):
+                assert marker not in result, f"{marker!r} leaked into confirmation"
+
+
+# ---------------------------------------------------------------------------
+# Alpha framing: Builder intro + scaffolded-agent caveat
+# ---------------------------------------------------------------------------
+
+
+class TestBuilderAlphaFraming:
+    def test_builder_system_prompt_states_alpha_and_template(self):
+        from gaia.agents.builder.system_prompt import BUILDER_SYSTEM_PROMPT
+
+        lowered = BUILDER_SYSTEM_PROMPT.lower()
+        assert "alpha" in lowered
+        assert "template" in lowered
+
+    def test_generated_prompt_has_starter_caveat(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Caveat Agent",
+            description="Demonstrates the caveat.",
+            system_prompt="You are Caveat Agent, an expert on testing.",
         )
-        assert not result.startswith("Error:"), result
-        assert "starter" in result.lower()
-        assert "amd-gaia.ai/docs/guides/custom-agent" in result
+        py_path = tmp_path / ".gaia" / "agents" / "caveat" / "agent.py"
+        source = py_path.read_text(encoding="utf-8").lower()
+        assert "starter template" in source
+        assert "alpha" in source
 
 
 # ---------------------------------------------------------------------------

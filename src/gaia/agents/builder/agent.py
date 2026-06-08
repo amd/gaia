@@ -406,6 +406,7 @@ def _create_agent_impl(
 ) -> str:
     """Core implementation of the create_agent tool, separated for testability."""
     from gaia.agents.builder.template import (
+        STARTER_CAVEAT,
         default_conversation_starters,
         default_system_prompt,
         generate_agent_source,
@@ -454,6 +455,8 @@ def _create_agent_impl(
     desc = (
         description.strip() if description.strip() else f"Custom agent: {display_name}"
     )
+    # Tag the description as an alpha starter template (shows on the Hub card).
+    desc = f"{desc} (alpha template)"
     # No silent zoo: derive a generic-but-correct persona from the described
     # purpose when the Builder doesn't author one (CLAUDE.md: no silent fallbacks).
     effective_prompt = (
@@ -461,6 +464,9 @@ def _create_agent_impl(
         if system_prompt and system_prompt.strip()
         else default_system_prompt(display_name, desc)
     )
+    # Append the honest starter-template caveat so the scaffolded agent itself
+    # sets expectations: it can converse but has no real tools yet.
+    effective_prompt = effective_prompt + STARTER_CAVEAT
     effective_starters = [
         s.strip()
         for s in (conversation_starters or [])
@@ -534,8 +540,9 @@ def _create_agent_impl(
             '  {\n    "mcpServers": {\n      "time": {\n'
             '        "command": "uvx",\n        "args": ["mcp-server-time"]\n'
             "      }\n    }\n  }\n\n"
-            "This is a starter setup. To give it capabilities like document Q&A, "
-            "file access, or web search, see the custom-agent guide: "
+            "This is a starter template, and the agent builder is an alpha feature. Your new "
+            "agent can chat about its topic, but it won't fetch data or perform that task on its "
+            "own until you add tools or MCP — the custom-agent guide shows how: "
             "https://amd-gaia.ai/docs/guides/custom-agent"
         )
     return (
@@ -543,7 +550,8 @@ def _create_agent_impl(
         f"  {py_path}\n\n"
         "It's already loaded — you'll see it in the agent selector in the GAIA UI. "
         "Its personality and conversation starters are tailored to what you described.\n\n"
-        "This is a starter setup. To give it capabilities like document Q&A, file access, "
-        "or web search, see the custom-agent guide: "
+        "This is a starter template, and the agent builder is an alpha feature. Your new "
+        "agent can chat about its topic, but it won't fetch data or perform that task on its "
+        "own until you add tools or MCP — the custom-agent guide shows how: "
         "https://amd-gaia.ai/docs/guides/custom-agent"
     )
