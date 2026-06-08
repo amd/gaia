@@ -142,6 +142,7 @@ class PinnedIPAdapter(HTTPAdapter):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._pinned_cache: Dict[Tuple[str, int], str] = {}
+        self._warned_https_sni = False
 
     def _resolve_first_ip(self, host: str, port: int) -> str:
         key = (host, port)

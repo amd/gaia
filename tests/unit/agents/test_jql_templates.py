@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Unit tests for the JQL template builder (gaia.agents.jira.jql_templates).
+"""Unit tests for the JQL template builder (gaia_agent_jira.jql_templates).
 
 ``generate_jql_from_templates`` turns natural language into a JQL string that is
 later sent to Atlassian. Because part of the input is user-supplied free text,
@@ -18,7 +18,7 @@ All tests are pure-function tests — no network, no Atlassian, no LLM.
 
 from __future__ import annotations
 
-from gaia.agents.jira.jql_templates import (
+from gaia_agent_jira.jql_templates import (
     COMPOSITE_PATTERNS,
     JQL_TEMPLATES,
     LABEL_MAPPINGS,

@@ -25,9 +25,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.docker.agent import DockerAgent
+from gaia_agent_docker.agent import DockerAgent
 
-DOCKER_MODULE = "gaia.agents.docker.agent.subprocess.run"
+DOCKER_MODULE = "gaia_agent_docker.agent.subprocess.run"
 
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = ""):
