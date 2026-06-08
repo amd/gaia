@@ -363,8 +363,9 @@ class TestCreateAgentImpl:
         monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
         with patch("gaia.ui._chat_helpers.get_agent_registry", return_value=None):
             result = _create_agent_impl("NoReg Agent")
-        # "NoReg" is a single token the user typed deliberately; with the
-        # space-guarded splitter it is preserved rather than broken into "No Reg".
+        # The input "NoReg Agent" already contains a space, so _split_camel_case
+        # short-circuits and leaves "NoReg" intact, producing agent-id "noreg"
+        # (not the old "no-reg").
         assert "noreg" in result
 
     def test_reserved_name_gaia_blocked(self, tmp_path, monkeypatch):
@@ -866,8 +867,10 @@ class TestBuilderSurface:
         agent.chat = MagicMock()
         agent.chat.send_messages.return_value = mock_resp
 
-        # _execute_tool will raise TypeError because 'tools' is not in the signature;
-        # the loop should surface this as an honest failure, not crash.
+        # The stray 'tools' kwarg trips a TypeError inside the tool, but
+        # _execute_tool catches it (agent.py:1741) and returns a
+        # {"status": "error", ...} dict. The new dict-error check in
+        # _process_query_impl then surfaces it as an honest failure, not a crash.
         result = agent._process_query_impl("create a Stray agent with RAG")
 
         answer = result["answer"]
