@@ -36,6 +36,11 @@ function isGaiaBackendProcess(pid, deps = {}) {
   const spawnSync = deps.spawnSync || realSpawnSync;
   const platform = deps.platform || process.platform;
 
+  // Defense-in-depth: pid is interpolated into shell/CIM-filter args below.
+  // Production callers parseInt it, but reject anything non-integer here so a
+  // future caller can't inject through the PowerShell -Filter / ps -p args.
+  if (!Number.isInteger(pid)) return false;
+
   try {
     if (platform === "linux") {
       const procCmd = `/proc/${pid}/cmdline`;
@@ -48,6 +53,7 @@ function isGaiaBackendProcess(pid, deps = {}) {
     if (platform === "darwin") {
       const out = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
         encoding: "utf8",
+        timeout: 5000,
       });
       return commandLooksLikeBackend(out && out.stdout ? out.stdout : "");
     }
@@ -61,7 +67,8 @@ function isGaiaBackendProcess(pid, deps = {}) {
           "-Command",
           `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
         ],
-        { encoding: "utf8" }
+        // timeout: a hung PowerShell on the recovery path must not block app startup.
+        { encoding: "utf8", timeout: 5000 }
       );
       return commandLooksLikeBackend(out && out.stdout ? out.stdout : "");
     }
