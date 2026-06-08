@@ -950,6 +950,9 @@ class TestBuilderSurface:
             kw in answer.lower()
             for kw in ("error", "unable", "fail", "could not", "unexpected")
         ), f"Expected failure indicator in answer, got: {answer!r}"
+        # Must NOT leak a raw error-dict repr into the user-facing message.
+        assert "{'status'" not in answer, f"raw dict leaked: {answer!r}"
+        assert "status': 'error'" not in answer, f"raw dict leaked: {answer!r}"
 
     def test_confirmation_mentions_starter_and_docs_link(self, tmp_path, monkeypatch):
         """Successful result contains alpha/starter framing, honest 'won't/own'

@@ -310,8 +310,18 @@ class BuilderAgent(Agent):
                     )
                     or str(tool_result).startswith("Error:")
                 ):
+                    # Extract a clean detail so a raw dict never leaks into the
+                    # user-facing message. _execute_tool uses "error" for most
+                    # error returns and "error_brief" for the exception path.
+                    detail = (
+                        tool_result.get("error")
+                        or tool_result.get("error_brief")
+                        or str(tool_result)
+                        if isinstance(tool_result, dict)
+                        else tool_result
+                    )
                     final_answer = (
-                        f"I was unable to create the agent: {tool_result}\n\n"
+                        f"I was unable to create the agent: {detail}\n\n"
                         "Please check the name is valid and try again."
                     )
                     break
@@ -468,6 +478,9 @@ def _create_agent_impl(
     )
     # Append the honest starter-template caveat so the scaffolded agent itself
     # sets expectations: it can converse but has no real tools yet.
+    # Caveat is unconditional because the Builder attaches no tools today. If
+    # tool-mixin re-exposure is added to this path later, gate it so a
+    # tool-equipped agent doesn't keep disclaiming "no tools yet".
     effective_prompt = effective_prompt + STARTER_CAVEAT
     effective_starters = [
         s.strip()

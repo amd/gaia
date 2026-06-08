@@ -62,10 +62,15 @@ def default_system_prompt(agent_name: str, description: str) -> str:
 
 
 def default_conversation_starters(agent_name: str) -> List[str]:
-    """Generic, on-topic starter chips used when none are supplied."""
+    """Generic, on-topic starter chips used when none are supplied.
+
+    Returns three to honor the "2-3 starters" contract in the create_agent tool
+    docstring and the Builder system prompt.
+    """
     return [
         f"What can {agent_name} help me with?",
         "Show me an example of what you can do.",
+        "How should I get started?",
     ]
 
 
