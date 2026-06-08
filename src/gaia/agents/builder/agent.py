@@ -173,7 +173,6 @@ class BuilderAgent(Agent):
             name: str,
             description: str = "",
             enable_mcp: bool = False,
-            tools: Optional[List[str]] = None,
             system_prompt: str = "",
             conversation_starters: Optional[List[str]] = None,
         ) -> str:
@@ -183,15 +182,6 @@ class BuilderAgent(Agent):
                 name: Human-readable agent name, e.g. "Widget Agent".
                 description: One-sentence description of what the agent does.
                 enable_mcp: If True, scaffold MCP support with a local mcp_servers.json.
-                tools: Optional list of built-in tool mixin names to include.
-                    Valid options: "rag" (document Q&A), "file_search" (fuzzy file
-                    search), "file_io" (read/write/edit files), "shell" (sandboxed
-                    shell), "screenshot" (screen capture), "sd" (image generation),
-                    "vlm" (vision LLM), "code_index" (semantic code search),
-                    "filesystem" (file system navigation), "scratchpad" (SQL scratch
-                    tables for data analysis), "browser" (web search and page fetch).
-                    Combine freely; they are added to the class's base list alongside
-                    Agent.
                 system_prompt: The generated agent's own system prompt — its
                     personality and instructions, tailored to what the user asked it
                     to do. Author this from the described purpose. If omitted, a
@@ -208,7 +198,6 @@ class BuilderAgent(Agent):
                 name,
                 description,
                 enable_mcp=enable_mcp,
-                tools=tools,
                 system_prompt=system_prompt,
                 conversation_starters=conversation_starters,
             )
@@ -412,7 +401,6 @@ def _create_agent_impl(
     name: str,
     description: str = "",
     enable_mcp: bool = False,
-    tools: Optional[List[str]] = None,
     system_prompt: str = "",
     conversation_starters: Optional[List[str]] = None,
 ) -> str:
@@ -487,7 +475,6 @@ def _create_agent_impl(
             starters=effective_starters,
             system_prompt=effective_prompt,
             enable_mcp=enable_mcp,
-            tools=tools,
         )
     except ValueError as exc:
         return f"Error: {exc}"
