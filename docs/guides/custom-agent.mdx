@@ -39,7 +39,7 @@ The fastest way to create an agent is to use the built-in **Gaia Builder Agent**
         block here pointing at /assets/img/custom-agent/builder-entry-point.png. */}
   </Step>
   <Step title="Follow the prompts">
-    The Builder Agent will greet you, ask for a name, and create your agent automatically.
+    The Builder (an **alpha** feature) greets you, asks what to name the agent and what it should do, and asks whether you want MCP support — then scaffolds a starter agent with a personality and conversation starters tailored to your description.
 
     {/* TODO(screenshot): Capture the Builder Agent conversation creating a new agent.
         Save to docs/assets/img/custom-agent/builder-conversation.png and add a Frame
@@ -54,8 +54,7 @@ The fastest way to create an agent is to use the built-in **Gaia Builder Agent**
   </Step>
 </Steps>
 
-The builder creates a fully working agent scaffold in `~/.gaia/agents/<your-agent-name>/agent.py`.
-Open that file to customize the instructions and add tools.
+The Builder creates a **starter template** at `~/.gaia/agents/<your-agent-name>/agent.py` — a tailored persona and conversation starters (plus MCP wiring if you asked for it). It's a starting point you extend, not a turnkey agent: it won't fetch data or perform complex tasks on its own until you add tools. Open the file to refine the instructions and add capabilities (see [Python Agent](#python-agent) below).
 
 <Tip>
   Need your agent to read real data — Gmail, GitHub, your calendar? Skip ahead to [Using GAIA connectors](#using-gaia-connectors).

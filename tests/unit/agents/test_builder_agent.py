@@ -1006,6 +1006,19 @@ class TestBuilderAlphaFraming:
         assert "starter template" in source
         assert "alpha" in source
 
+    def test_generated_template_flags_caveat_for_removal(self, tmp_path, monkeypatch):
+        """The generated source tells the user to delete the appended caveat once
+        the agent has real tools, so it stops disclaiming abilities it now has."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Removable Caveat Agent",
+            description="Demonstrates the removal hint.",
+            system_prompt="You are Removable Caveat Agent.",
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "removable-caveat" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        assert "Delete that trailing block once your agent has real tools" in source
+
     def test_alpha_tag_only_on_description_not_docstring(self, tmp_path, monkeypatch):
         """The (alpha template) tag lands on AGENT_DESCRIPTION (Hub card) only —
         the class docstring (IDE tooltips / help()) stays clean."""
