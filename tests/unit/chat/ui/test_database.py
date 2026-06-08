@@ -84,6 +84,16 @@ class TestSessions:
         result = db.update_session(session["id"])
         assert result["title"] == "Keep"
 
+    def test_update_session_model(self, db):
+        # Multi-device (#1220): a device switch rewrites the session model so
+        # the rebuilt agent loads the device's model (release blocker B1).
+        session = db.create_session(model="Gemma-4-E4B-it-GGUF")
+        updated = db.update_session(
+            session["id"], device="npu", model="gemma4-it-e2b-FLM"
+        )
+        assert updated["device"] == "npu"
+        assert updated["model"] == "gemma4-it-e2b-FLM"
+
     def test_update_session_not_found(self, db):
         result = db.update_session("nonexistent", title="Nope")
         assert result is None
@@ -109,6 +119,57 @@ class TestSessions:
         db.touch_session(session["id"])
         refreshed = db.get_session(session["id"])
         assert refreshed["updated_at"] >= original_updated
+
+    def test_create_session_default_mail_provider(self, db):
+        session = db.create_session()
+        assert session["mail_provider"] == "google"
+
+    def test_create_session_with_mail_provider(self, db):
+        session = db.create_session(mail_provider="microsoft")
+        assert session["mail_provider"] == "microsoft"
+        # Round-trips through a fresh read.
+        assert db.get_session(session["id"])["mail_provider"] == "microsoft"
+
+    def test_update_session_mail_provider(self, db):
+        session = db.create_session()  # defaults to google
+        updated = db.update_session(session["id"], mail_provider="microsoft")
+        assert updated["mail_provider"] == "microsoft"
+
+
+class TestMailProviderMigration:
+    """The mail_provider column must be added to pre-existing DBs that were
+    created before the email-provider selector landed (additive migration,
+    mirroring the device/agent_type precedent)."""
+
+    def test_migration_adds_mail_provider_column(self, tmp_path):
+        db_path = str(tmp_path / "old.db")
+        # Hand-roll a sessions table from before the mail_provider column.
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, "
+            "created_at TEXT, updated_at TEXT, model TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO sessions (id, title, created_at, updated_at, model) "
+            "VALUES ('s1', 'Old', '2025-01-01', '2025-01-01', 'm')"
+        )
+        conn.commit()
+        conn.close()
+
+        # Opening through ChatDatabase runs the additive migration.
+        database = ChatDatabase(db_path)
+        try:
+            cols = [
+                r[1]
+                for r in database._conn.execute(
+                    "PRAGMA table_info(sessions)"
+                ).fetchall()
+            ]
+            assert "mail_provider" in cols
+            # The pre-existing row defaults to google, never NULL.
+            assert database.get_session("s1")["mail_provider"] == "google"
+        finally:
+            database.close()
 
 
 class TestMessages:

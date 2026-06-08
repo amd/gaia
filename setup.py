@@ -42,38 +42,21 @@ setup(
         "gaia.apps.summarize.templates",
         "gaia.eval",
         "gaia.installer",
+        "gaia.hub",
         "gaia.rag",
         "gaia.mcp",
         "gaia.mcp.client",
         "gaia.mcp.client.transports",
         "gaia.mcp.servers",
         "gaia.agents",
-        "gaia.agents.analyst",
         "gaia.agents.base",
-        "gaia.agents.browser",
         "gaia.agents.tools",
-        "gaia.agents.blender",
-        "gaia.agents.blender.core",
         "gaia.agents.chat",
         "gaia.agents.chat.tools",
         "gaia.agents.builder",
-        "gaia.agents.docker",
-        "gaia.agents.emr",
-        "gaia.agents.emr.dashboard",
-        "gaia.agents.jira",
-        "gaia.agents.code",
-        "gaia.agents.code.orchestration",
-        "gaia.agents.code.orchestration.factories",
-        "gaia.agents.code.orchestration.steps",
-        "gaia.agents.code.orchestration.workflows",
-        "gaia.agents.code.prompts",
-        "gaia.agents.code.tools",
-        "gaia.agents.code.validators",
         "gaia.agents.code_index",
         "gaia.agents.code_index.tools",
         "gaia.agents.routing",
-        "gaia.agents.sd",
-        "gaia.agents.summarize",
         "gaia.governance",
         "gaia.sd",
         "gaia.vlm",
@@ -86,7 +69,6 @@ setup(
         "gaia.connectors",
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
-        "gaia.agents.connectors_demo",
         "gaia.agents.email",
         "gaia.agents.email.tools",
     ],
@@ -127,6 +109,10 @@ setup(
         "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
+        # Required by the `gaia-mcp` bridge (base console_script), which parses
+        # multipart uploads via python_multipart at import time. Base — not an
+        # extra — so a plain `pip install amd-gaia` ships a working gaia-mcp.
+        "python-multipart>=0.0.9",
     ],
     extras_require={
         "image": [
@@ -155,6 +141,7 @@ setup(
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
             "pypdf",
+            "python-pptx>=0.6.21",
             "sentence-transformers",
             "safetensors",
             # torch is pinned lower-bound only. The "audio" extra caps
@@ -181,6 +168,7 @@ setup(
         ],
         "dev": [
             "pytest",
+            "pytest-cov",
             "pytest-benchmark",
             "pytest-mock",
             "pytest-asyncio",
@@ -231,6 +219,7 @@ setup(
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
             "pypdf",
+            "python-pptx>=0.6.21",
             "sentence-transformers",
         ],
         "lint": [
@@ -241,6 +230,42 @@ setup(
             "autoflake",
             "mypy",
             "bandit",
+        ],
+        # Agent Hub packaging/publishing toolchain (issues #1093, #1179):
+        # 'gaia agent pack' shells out to 'python -m build', 'gaia agent publish'
+        # to 'twine upload'. Kept out of [dev] so the unit suite stays lean.
+        # install with 'pip install "amd-gaia[publish]"' to package an agent.
+        "publish": [
+            "build>=1.0.0",
+            "twine>=5.0.0",
+        ],
+        # Standalone AMD production agents (issues #1102, #1179). Each agent
+        # ships as a separate 'gaia-agent-<id>' wheel that depends on this
+        # framework wheel; 'amd-gaia[agents]' installs all migrated agents at
+        # once. Add an entry here when each agent's wheel is first published.
+        "agent-summarize": ["gaia-agent-summarize"],
+        "agent-sd": ["gaia-agent-sd"],
+        "agent-fileio": ["gaia-agent-fileio"],
+        "agent-docker": ["gaia-agent-docker"],
+        "agent-jira": ["gaia-agent-jira"],
+        "agent-blender": ["gaia-agent-blender"],
+        "agent-emr": ["gaia-agent-emr"],
+        "agent-code": ["gaia-agent-code"],
+        "agent-connectors-demo": ["gaia-agent-connectors-demo"],
+        "agent-analyst": ["gaia-agent-analyst"],
+        "agent-browser": ["gaia-agent-browser"],
+        "agents": [
+            "gaia-agent-summarize",
+            "gaia-agent-sd",
+            "gaia-agent-fileio",
+            "gaia-agent-docker",
+            "gaia-agent-jira",
+            "gaia-agent-blender",
+            "gaia-agent-emr",
+            "gaia-agent-code",
+            "gaia-agent-connectors-demo",
+            "gaia-agent-analyst",
+            "gaia-agent-browser",
         ],
     },
     classifiers=[
@@ -259,8 +284,6 @@ setup(
             "gaia = gaia.cli:main",
             "gaia-cli = gaia.cli:main",
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
-            "gaia-emr = gaia.agents.emr.cli:main",
-            "gaia-code = gaia.agents.code.cli:main",
         ]
     },
     python_requires=">=3.10",

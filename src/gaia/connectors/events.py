@@ -14,6 +14,7 @@ duck-typed throughout. The router does not need to inherit anything.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional, Protocol, runtime_checkable
 
@@ -56,3 +57,36 @@ async def emit(event_type: str, payload: dict) -> None:
     """Emit an event through the currently-registered emitter."""
     if _active_emitter is not None:
         await _active_emitter.emit(event_type, payload)
+
+
+def _log_emit_result(task: "asyncio.Task") -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("connections-event emit task failed: %r", exc)
+
+
+def emit_change(event_type: str, payload: dict) -> None:
+    """Fire-and-forget synchronous wrapper around :func:`emit`.
+
+    Lets synchronous callers (``api.py``, the CLI) trigger an event without
+    being async themselves. Inside the UI server (a running event loop) the
+    coroutine is scheduled on that loop and fanned out to SSE subscribers; in a
+    bare process (the CLI) it is run to completion against the registered
+    emitter — the no-op logging emitter unless an SSE one was registered.
+    Failures are logged, never silently swallowed.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        task = loop.create_task(emit(event_type, payload))
+        task.add_done_callback(_log_emit_result)
+    else:
+        try:
+            asyncio.run(emit(event_type, payload))
+        except Exception:  # defensive: a notification must not break the write
+            logger.exception("emit_change failed for %s", event_type)

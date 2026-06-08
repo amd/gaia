@@ -42,7 +42,7 @@ class VLMToolsMixin:
     - answer_question_about_image: Answer specific questions about an image
 
     Attributes:
-        vlm_model: VLM model to use (default: Qwen3-VL-4B-Instruct-GGUF)
+        vlm_model: VLM model to use (default: Gemma-4-E4B-it-GGUF)
         vlm_client: VLMClient instance for API calls
     """
 

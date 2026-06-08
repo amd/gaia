@@ -8,8 +8,8 @@ title: "Code Agent Models"
 
 <Note>
 **Component:** Code Agent Data Models (7 models)
-**Module:** `gaia.agents.code.models`
-**Import:** `from gaia.agents.code.models import CodeSymbol, ParsedCode, ProjectPlan, ValidationResult, ExecutionResult, ProjectStructure, WorkflowPlan`
+**Module:** `gaia_agent_code.models`
+**Import:** `from gaia_agent_code.models import CodeSymbol, ParsedCode, ProjectPlan, ValidationResult, ExecutionResult, ProjectStructure, WorkflowPlan`
 </Note>
 ---
 
@@ -173,7 +173,7 @@ class LintIssue:
 ### Example 1: Code Symbol Extraction
 
 ```python
-from gaia.agents.code.models import CodeSymbol, ParsedCode
+from gaia_agent_code.models import CodeSymbol, ParsedCode
 
 # Parse Python code
 code = '''
@@ -213,7 +213,7 @@ print(f"Found {len(parsed.symbols)} symbols")
 ### Example 2: Validation Workflow
 
 ```python
-from gaia.agents.code.models import ValidationResult
+from gaia_agent_code.models import ValidationResult
 
 # Validate generated code
 result = ValidationResult(
@@ -233,7 +233,7 @@ if result.file_modified:
 ### Example 3: Project Creation
 
 ```python
-from gaia.agents.code.models import ProjectPlan, ModuleSpec, TestSpec
+from gaia_agent_code.models import ProjectPlan, ModuleSpec, TestSpec
 
 # Create project plan
 plan = ProjectPlan(

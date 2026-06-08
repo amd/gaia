@@ -55,6 +55,7 @@ from .routers import connectors as connectors_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
 from .routers import goals as goals_router_mod
+from .routers import hub as hub_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
 from .routers import sessions as sessions_router_mod
@@ -106,8 +107,10 @@ class TunnelAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        # Only gate /api/* routes
-        if not path.startswith("/api/"):
+        # Gate /api/* routes and the /v1/connections forwarded-grant surface
+        # (#1292) — the latter carries OAuth secrets, so remote/tunnel access
+        # must present a valid token just like /api/*.
+        if not (path.startswith("/api/") or path.startswith("/v1/")):
             return await call_next(request)
 
         # Always allow exempt paths (health check, etc.)
@@ -345,6 +348,15 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await monitor.start()
         logger.info("Document file monitor started (30s polling interval)")
 
+        # ── Connector activation watcher (issue #1226) ──────────────────
+        # CLI/SDK activation writes land in the activations ledger from a
+        # separate process; poll it and emit connector.activation.changed so
+        # an open Settings tab reflects them live without a manual refresh.
+        from gaia.connectors.activation_watcher import start_watcher
+
+        start_watcher()
+        logger.info("Connector activation watcher started")
+
         # ── Connections (issue #915) ────────────────────────────────────
         # Eager tripwire sweep so a rotated OAuth client_id surfaces in
         # the server logs at boot (and clears stale entries) BEFORE any
@@ -405,6 +417,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await queue.shutdown()
         await monitor.stop()
         logger.info("Document file monitor stopped")
+        from gaia.connectors.activation_watcher import stop_watcher
+
+        await stop_watcher()
+        logger.info("Connector activation watcher stopped")
         db.close()
         logger.info("Database connection closed")
         memory_router_mod.close_store()
@@ -481,6 +497,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # ── Include Routers ──────────────────────────────────────────────────
     app.include_router(system_router_mod.router)
+    # Hub routes (catalog/install/...) MUST precede the agents router: that
+    # router has a greedy GET /api/agents/{agent_id:path} that would otherwise
+    # capture /api/agents/catalog and /api/agents/{id}/install-status.
+    app.include_router(hub_router_mod.router)
     app.include_router(agents_router_mod.router)
     app.include_router(sessions_router_mod.router)
     app.include_router(chat_router_mod.router)
@@ -492,6 +512,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(mcp_router_mod.router)
     # Issue #915 — OAuth connections (Settings page + agent grants).
     app.include_router(connectors_router_mod.router)
+    # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).
+    app.include_router(connectors_router_mod.forwarded_router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.

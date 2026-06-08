@@ -102,10 +102,113 @@ class TestBuiltinPath:
         registry = AgentRegistry()
         registry._register_builtin_agents()
         registered = {r.id for r in registry.list()}
-        # Every reserved id is actually registered. (If we ever drop one,
-        # the reserved set must drop with it — otherwise custom agents are
-        # blocked from a name that no longer belongs to anyone.)
-        assert _RESERVED_BUILTIN_IDS <= registered
+        # Every reserved id must still belong to a real built-in: either it is
+        # registered directly, or it is a legacy "-lite"/gaia-lite alias that
+        # resolves to a registered agent (#1162 — lite variants are now a model
+        # tier, not a separate card, but stay reserved so a custom agent can't
+        # claim the old id and shadow alias resolution).
+        for reserved in _RESERVED_BUILTIN_IDS:
+            resolved = AgentRegistry._LEGACY_ID_ALIASES.get(reserved, reserved)
+            assert resolved in registered, (
+                f"Reserved id {reserved!r} resolves to {resolved!r}, which is "
+                f"not a registered built-in — drop it from _RESERVED_BUILTIN_IDS "
+                f"or restore the agent/alias."
+            )
+
+
+CUSTOM_MCP_CONSUMER_TEMPLATE = textwrap.dedent("""
+    from typing import ClassVar
+    from gaia.agents.base.agent import Agent
+
+
+    class DynamicMcpAgent(Agent):
+        AGENT_ID = "{agent_id}"
+        AGENT_NAME = "Dynamic MCP"
+        AGENT_DESCRIPTION = "test fixture"
+        CONVERSATION_STARTERS = []
+        CONSUMES_MCP_SERVERS: ClassVar[bool] = True
+
+        def __init__(self, **kwargs):
+            pass
+
+        def _register_tools(self):
+            pass
+
+        def get_system_prompt(self) -> str:
+            return "fake"
+
+        def step(self, *a, **k):
+            return {{}}
+    """)
+
+
+class TestConsumesMcpServers:
+    """``CONSUMES_MCP_SERVERS`` widens the Settings "Active for" panel beyond
+    static ``REQUIRED_CONNECTORS`` declarants to agents that load MCP servers
+    dynamically (e.g. the chat agent)."""
+
+    def test_base_default_is_false(self):
+        assert Agent.CONSUMES_MCP_SERVERS is False
+        assert isinstance(Agent.CONSUMES_MCP_SERVERS, bool)
+
+    def test_builtin_chat_consumes_mcp_servers(self):
+        registry = AgentRegistry()
+        registry._register_builtin_agents()
+        chat = registry.get("chat")
+        assert chat is not None
+        assert chat.consumes_mcp_servers is True
+
+    def test_builtin_chat_registration_matches_class(self):
+        # The lazy factory cannot import the chat module at discovery time, so
+        # the registration hardcodes the flag. Guard it against the class-level
+        # source of truth drifting apart.
+        from gaia.agents.chat.agent import ChatAgent
+
+        registry = AgentRegistry()
+        registry._register_builtin_agents()
+        chat = registry.get("chat")
+        assert ChatAgent.CONSUMES_MCP_SERVERS is True
+        assert chat.consumes_mcp_servers == ChatAgent.CONSUMES_MCP_SERVERS
+
+    def test_other_builtins_do_not_consume_mcp_servers(self):
+        registry = AgentRegistry()
+        registry._register_builtin_agents()
+        for reg in registry.list():
+            if reg.id == "chat":
+                continue
+            assert reg.consumes_mcp_servers is False, (
+                f"Built-in agent {reg.id} unexpectedly sets "
+                "consumes_mcp_servers=True"
+            )
+
+    def test_custom_agent_flag_round_trips(self, tmp_path, monkeypatch):
+        agent_dir = tmp_path / ".gaia" / "agents" / "dyn-mcp"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.py").write_text(
+            CUSTOM_MCP_CONSUMER_TEMPLATE.format(agent_id="dyn_mcp")
+        )
+        monkeypatch.setattr("gaia.agents.registry.Path.home", lambda: tmp_path)
+
+        registry = AgentRegistry()
+        registry.discover()
+        reg = registry.get("dyn_mcp")
+        assert reg is not None
+        assert reg.consumes_mcp_servers is True
+
+    def test_custom_agent_defaults_false(self, tmp_path, monkeypatch):
+        # The REQUIRED_CONNECTORS fixture does not set the flag — it must
+        # default to False (least privilege; the panel won't list it for
+        # connectors it doesn't declare).
+        agent_dir = tmp_path / ".gaia" / "agents" / "inbox-zero"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "agent.py").write_text(
+            CUSTOM_AGENT_TEMPLATE.format(agent_id="inbox_zero")
+        )
+        monkeypatch.setattr("gaia.agents.registry.Path.home", lambda: tmp_path)
+
+        registry = AgentRegistry()
+        registry.discover()
+        assert registry.get("inbox_zero").consumes_mcp_servers is False
 
 
 class TestCustomAgentPath:
@@ -240,6 +343,18 @@ class TestAgentInfoSerialization:
         )
         assert info.required_connections == []
         assert info.namespaced_agent_id == ""
+        assert info.consumes_mcp_servers is False
+
+    def test_consumes_mcp_servers_round_trips(self):
+        info = AgentInfo(
+            id="chat",
+            name="Chat",
+            description="x",
+            source="builtin",
+            consumes_mcp_servers=True,
+        )
+        round_tripped = AgentInfo.model_validate_json(info.model_dump_json())
+        assert round_tripped.consumes_mcp_servers is True
 
     def test_invalid_source_rejected(self):
         with pytest.raises(ValidationError):

@@ -62,7 +62,7 @@ This happens once when you index documents:
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
-    A(["PDF Document"]) --> B(["EXTRACT TEXT"])
+    A(["PDF / PPTX Document"]) --> B(["EXTRACT TEXT"])
     B --> C(["SPLIT INTO CHUNKS"])
     C --> D(["GENERATE EMBEDDINGS"])
     D --> E[("STORE IN FAISS")]
@@ -206,7 +206,7 @@ config = RAGConfig(chunk_size=500)  # 500 tokens ≈ 375 words ≈ 2-3 paragraph
 | chunk_size | Roughly equals | Best for |
 |------------|----------------|----------|
 | `256` | ~1 paragraph | FAQs, short Q&A pairs, definitions |
-| `512` | ~2-3 paragraphs | General documents, manuals (default) |
+| `500` | ~2-3 paragraphs | General documents, manuals (default) |
 | `1024` | ~4-6 paragraphs | Technical papers, code with context |
 | `2048` | ~1-2 pages | Long-form analysis, narratives |
 

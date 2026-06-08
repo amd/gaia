@@ -1,0 +1,224 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+import Layout from '../../layouts/Layout.astro';
+import Header from '../../components/Header.astro';
+import Footer from '../../components/Footer.astro';
+import AgentCard from '../../components/AgentCard.astro';
+import {
+  getCatalog,
+  distinct,
+  categoryLabel,
+  languageLabel,
+  securityTierLabel,
+} from '../../data/catalog';
+
+const agents = await getCatalog();
+const categories = distinct(agents, 'category');
+const languages = distinct(agents, 'language');
+const tiers = ['verified', 'community', 'experimental'];
+const activeCount = agents.filter((a) => !a.deprecated).length;
+---
+
+<Layout
+  title="Agent Hub — gaia"
+  description="Browse and discover local AI agents for gaia. Search by category, language, and security tier — install in one command."
+>
+  <Header />
+  <main id="main-content" class="pt-16">
+    <!-- Hero -->
+    <section class="border-b border-gaia-border/50 px-4 py-16 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-7xl">
+        <p class="mb-3 text-xs font-semibold uppercase tracking-wider text-gaia-accent">Agent Hub</p>
+        <h1 class="mb-4 text-3xl font-bold text-white sm:text-4xl lg:text-5xl">
+          Discover agents that run on your PC.
+        </h1>
+        <p class="max-w-2xl text-lg leading-relaxed text-gaia-muted">
+          Browse {activeCount} local AI agents — chat, code, data, vision, and more. Every agent
+          runs entirely on your machine. Install any of them with one command.
+        </p>
+
+        <!-- Search -->
+        <div class="mt-8 max-w-xl">
+          <label for="hub-search" class="sr-only">Search agents</label>
+          <div class="relative">
+            <svg
+              class="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gaia-muted"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              id="hub-search"
+              type="search"
+              placeholder="Search agents by name, description, or tag…"
+              autocomplete="off"
+              class="w-full rounded-lg border border-gaia-border bg-gaia-card/60 py-3 pl-10 pr-4 text-sm text-gaia-text placeholder:text-gaia-muted focus:border-gaia-accent focus:outline-none"
+            />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Filters + grid -->
+    <section class="px-4 py-12 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-7xl">
+        <div class="grid grid-cols-1 gap-10 lg:grid-cols-[220px_1fr]">
+          <!-- Filter sidebar -->
+          <aside class="lg:sticky lg:top-24 lg:self-start">
+            <div class="flex items-center justify-between">
+              <h2 class="text-sm font-semibold uppercase tracking-wide text-white">Filters</h2>
+              <button
+                id="clear-filters"
+                class="text-xs text-gaia-muted underline decoration-gaia-border underline-offset-2 transition-colors hover:text-white"
+              >
+                Clear
+              </button>
+            </div>
+
+            <div class="mt-5 space-y-6">
+              <fieldset>
+                <legend class="mb-2 text-xs font-semibold uppercase tracking-wider text-gaia-muted">Category</legend>
+                <div class="space-y-1.5">
+                  {categories.map((c) => (
+                    <label class="flex cursor-pointer items-center gap-2 text-sm text-gaia-text">
+                      <input type="checkbox" class="hub-filter accent-gaia-accent" data-filter="category" value={c} />
+                      {categoryLabel(c)}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend class="mb-2 text-xs font-semibold uppercase tracking-wider text-gaia-muted">Language</legend>
+                <div class="space-y-1.5">
+                  {languages.map((l) => (
+                    <label class="flex cursor-pointer items-center gap-2 text-sm text-gaia-text">
+                      <input type="checkbox" class="hub-filter accent-gaia-accent" data-filter="language" value={l} />
+                      {languageLabel(l as any)}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend class="mb-2 text-xs font-semibold uppercase tracking-wider text-gaia-muted">Security tier</legend>
+                <div class="space-y-1.5">
+                  {tiers.map((t) => (
+                    <label class="flex cursor-pointer items-center gap-2 text-sm text-gaia-text">
+                      <input type="checkbox" class="hub-filter accent-gaia-accent" data-filter="security-tier" value={t} />
+                      {securityTierLabel(t as any)}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend class="mb-2 text-xs font-semibold uppercase tracking-wider text-gaia-muted">Status</legend>
+                <label class="flex cursor-pointer items-center gap-2 text-sm text-gaia-text">
+                  <input type="checkbox" id="show-deprecated" class="accent-gaia-accent" />
+                  Show deprecated
+                </label>
+              </fieldset>
+            </div>
+          </aside>
+
+          <!-- Results -->
+          <div>
+            <p id="result-count" class="mb-5 text-sm text-gaia-muted" aria-live="polite"></p>
+            <div id="agent-grid" class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {agents.map((agent) => <AgentCard agent={agent} />)}
+            </div>
+            <div id="empty-state" class="hidden rounded-xl border border-dashed border-gaia-border py-16 text-center">
+              <p class="text-gaia-muted">No agents match your filters.</p>
+              <button
+                id="empty-clear"
+                class="mt-3 text-sm text-gaia-accent underline underline-offset-2 hover:text-gaia-accent-hover"
+              >
+                Clear filters
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <Footer />
+</Layout>
+
+<script is:inline>
+  const search = document.getElementById('hub-search');
+  const grid = document.getElementById('agent-grid');
+  const cards = Array.from(grid.querySelectorAll('.agent-card'));
+  const filters = Array.from(document.querySelectorAll('.hub-filter'));
+  const showDeprecated = document.getElementById('show-deprecated');
+  const resultCount = document.getElementById('result-count');
+  const emptyState = document.getElementById('empty-state');
+
+  function selectedValues(filterName) {
+    return filters
+      .filter((f) => f.dataset.filter === filterName && f.checked)
+      .map((f) => f.value);
+  }
+
+  function applyFilters() {
+    const query = (search.value || '').trim().toLowerCase();
+    const cats = selectedValues('category');
+    const langs = selectedValues('language');
+    const tiers = selectedValues('security-tier');
+    const includeDeprecated = showDeprecated.checked;
+    let visible = 0;
+
+    cards.forEach((card) => {
+      const d = card.dataset;
+      const matchesQuery =
+        !query ||
+        d.name.includes(query) ||
+        d.description.includes(query) ||
+        d.tags.includes(query) ||
+        d.id.includes(query);
+      const matchesCat = cats.length === 0 || cats.includes(d.category);
+      const matchesLang = langs.length === 0 || langs.includes(d.language);
+      const matchesTier = tiers.length === 0 || tiers.includes(d.securityTier);
+      const matchesDeprecated = includeDeprecated || d.deprecated !== 'true';
+
+      const show = matchesQuery && matchesCat && matchesLang && matchesTier && matchesDeprecated;
+      card.classList.toggle('hidden', !show);
+      if (show) visible++;
+    });
+
+    resultCount.textContent = visible === 1 ? '1 agent' : `${visible} agents`;
+    emptyState.classList.toggle('hidden', visible !== 0);
+    grid.classList.toggle('hidden', visible === 0);
+  }
+
+  function clearAll() {
+    search.value = '';
+    filters.forEach((f) => (f.checked = false));
+    showDeprecated.checked = false;
+    applyFilters();
+  }
+
+  search.addEventListener('input', applyFilters);
+  filters.forEach((f) => f.addEventListener('change', applyFilters));
+  showDeprecated.addEventListener('change', applyFilters);
+  document.getElementById('clear-filters').addEventListener('click', clearAll);
+  document.getElementById('empty-clear').addEventListener('click', clearAll);
+
+  // Support deep-linking: ?category=conversation and ?q=search-term
+  const params = new URLSearchParams(window.location.search);
+  const presetCat = params.get('category');
+  if (presetCat) {
+    const box = filters.find((f) => f.dataset.filter === 'category' && f.value === presetCat);
+    if (box) box.checked = true;
+  }
+  const presetQuery = params.get('q');
+  if (presetQuery) search.value = presetQuery;
+
+  applyFilters();
+</script>

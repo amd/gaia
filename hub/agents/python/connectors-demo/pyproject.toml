@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaia-agent-connectors-demo"
+version = "0.1.0"
+description = "GAIA connectors demo agent — Google + GitHub connector showcase"
+authors = [{ name = "AMD" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["amd-gaia>=0.20.0"]
+
+[project.entry-points."gaia.agent"]
+connectors-demo = "gaia_agent_connectors_demo:build_registration"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["gaia_agent_connectors_demo*"]

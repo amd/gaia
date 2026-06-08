@@ -30,7 +30,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union, cast
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -297,7 +297,7 @@ _V2_INDEX_SQL = [
 class MemoryStore:
     """Pure SQLite storage for agent memory. No agent dependencies."""
 
-    def __init__(self, db_path: Path = None):
+    def __init__(self, db_path: Path | None = None):
         """Open/create DB at db_path. Default: ~/.gaia/memory.db
 
         Uses WAL mode. Thread-safe via threading.Lock.
@@ -503,8 +503,8 @@ class MemoryStore:
 
     def get_history(
         self,
-        session_id: str = None,
-        context: str = None,
+        session_id: str | None = None,
+        context: str | None = None,
         limit: int = 20,
     ) -> List[Dict]:
         """Retrieve recent conversation turns, ordered oldest-first."""
@@ -554,7 +554,7 @@ class MemoryStore:
     def search_conversations(
         self,
         query: str,
-        context: str = None,
+        context: str | None = None,
         limit: int = 10,
     ) -> List[Dict]:
         """FTS5 keyword search across conversation content.
@@ -623,7 +623,7 @@ class MemoryStore:
     def get_recent_conversations(
         self,
         days: int = 7,
-        context: str = None,
+        context: str | None = None,
         limit: int = 50,
     ) -> List[Dict]:
         """Get conversations from the last N days (timestamp-based).
@@ -674,14 +674,14 @@ class MemoryStore:
         self,
         category: str,
         content: str,
-        domain: str = None,
-        metadata: dict = None,
+        domain: str | None = None,
+        metadata: dict | None = None,
         confidence: float = 0.5,
-        due_at: str = None,
+        due_at: str | None = None,
         source: str = "tool",
         context: str = "global",
         sensitive: bool = False,
-        entity: str = None,
+        entity: str | None = None,
     ) -> str:
         """Store a knowledge entry with deduplication.
 
@@ -823,7 +823,7 @@ class MemoryStore:
         return knowledge_id
 
     def _find_similar_locked(
-        self, content: str, category: str, context: str, entity: str = None
+        self, content: str, category: str, context: str, entity: str | None = None
     ) -> Optional[str]:
         """Find existing knowledge with >80% word overlap in same category+context+entity.
 
@@ -877,7 +877,7 @@ class MemoryStore:
                         overlap,
                         existing_id,
                     )
-                    return existing_id
+                    return cast(str, existing_id)
         except sqlite3.OperationalError as e:
             logger.debug("[MemoryStore] FTS5 dedup search error: %s", e)
 
@@ -921,13 +921,13 @@ class MemoryStore:
     def search(
         self,
         query: str,
-        category: str = None,
-        context: str = None,
-        entity: str = None,
+        category: str | None = None,
+        context: str | None = None,
+        entity: str | None = None,
         include_sensitive: bool = False,
         top_k: int = 5,
-        time_from: str = None,
-        time_to: str = None,
+        time_from: str | None = None,
+        time_to: str | None = None,
     ) -> List[Dict]:
         """FTS5 search. AND semantics, OR fallback. BM25 ranking.
 
@@ -1066,7 +1066,11 @@ class MemoryStore:
     # ==================================================================
 
     def get_by_category(
-        self, category: str, context: str = None, domain: str = None, limit: int = 10
+        self,
+        category: str,
+        context: str | None = None,
+        domain: str | None = None,
+        limit: int = 10,
     ) -> List[Dict]:
         """Get active knowledge entries by category, optionally filtered by context and domain."""
         conditions = ["category = ?", "superseded_by IS NULL"]
@@ -1160,7 +1164,7 @@ class MemoryStore:
         self,
         within_days: int = 7,
         include_overdue: bool = True,
-        context: str = None,
+        context: str | None = None,
         limit: int = 10,
     ) -> List[Dict]:
         """Get time-sensitive items due within N days (or overdue).
@@ -1216,16 +1220,16 @@ class MemoryStore:
     def update(
         self,
         knowledge_id: str,
-        content: str = None,
-        category: str = None,
-        domain: str = None,
-        metadata: dict = None,
-        context: str = None,
-        sensitive: bool = None,
-        entity: str = None,
-        due_at: str = None,
-        reminded_at: str = None,
-        superseded_by: str = None,
+        content: str | None = None,
+        category: str | None = None,
+        domain: str | None = None,
+        metadata: dict | None = None,
+        context: str | None = None,
+        sensitive: bool | None = None,
+        entity: str | None = None,
+        due_at: str | None = None,
+        reminded_at: str | None = None,
+        superseded_by: str | None = None,
     ) -> bool:
         """Update an existing knowledge entry. Only provided fields are changed.
 
@@ -1389,13 +1393,13 @@ class MemoryStore:
 
     def get_items_with_embeddings(
         self,
-        category: str = None,
-        context: str = None,
-        entity: str = None,
+        category: str | None = None,
+        context: str | None = None,
+        entity: str | None = None,
         include_sensitive: bool = False,
         top_k: int = 100,
-        time_from: str = None,
-        time_to: str = None,
+        time_from: str | None = None,
+        time_to: str | None = None,
     ) -> List[Dict]:
         """Return active knowledge items that have stored embeddings.
 
@@ -1516,7 +1520,7 @@ class MemoryStore:
         return {"backfilled": backfilled, "total_without": total_without}
 
     def get_items_for_reconciliation(
-        self, context: str = None, limit: int = 100
+        self, context: str | None = None, limit: int = 100
     ) -> List[Dict]:
         """Get active knowledge items with embeddings for pairwise comparison.
 
@@ -1620,8 +1624,8 @@ class MemoryStore:
         args: dict,
         result_summary: str,
         success: bool,
-        error: str = None,
-        duration_ms: int = None,
+        error: str | None = None,
+        duration_ms: int | None = None,
     ) -> None:
         """Log a tool call to tool_history."""
         now = _now_iso()
@@ -1661,7 +1665,9 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def get_tool_errors(self, tool_name: str = None, limit: int = 10) -> List[Dict]:
+    def get_tool_errors(
+        self, tool_name: str | None = None, limit: int = 10
+    ) -> List[Dict]:
         """Get recent failed tool calls, newest first."""
         if tool_name is not None:
             sql = """
@@ -1672,7 +1678,7 @@ class MemoryStore:
                 ORDER BY timestamp DESC
                 LIMIT ?
             """
-            params = (tool_name, limit)
+            params: tuple[Any, ...] = (tool_name, limit)
         else:
             sql = """
                 SELECT id, session_id, tool_name, args, result_summary,
@@ -1890,10 +1896,10 @@ class MemoryStore:
     def get_all_knowledge(
         self,
         category: Optional[Union[str, List[str]]] = None,
-        context: str = None,
-        entity: str = None,
-        sensitive: bool = None,
-        search: str = None,
+        context: str | None = None,
+        entity: str | None = None,
+        sensitive: bool | None = None,
+        search: str | None = None,
         sort_by: str = "updated_at",
         order: str = "desc",
         offset: int = 0,
@@ -2103,7 +2109,7 @@ class MemoryStore:
             error_map = {r[0]: r[1] for r in error_rows}
 
         # Build timeline for each day in range
-        all_days = set()
+        all_days: set[str] = set()
         all_days.update(conv_map.keys())
         all_days.update(tool_map.keys())
         all_days.update(knowledge_map.keys())

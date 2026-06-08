@@ -120,10 +120,10 @@ GAIA ships with ready-to-use tool mixins. To enable them, inherit the mixin and 
 
 | Tool | Mixin | Register call |
 |------|-------|---------------|
-| `rag` | `gaia.agents.chat.tools.rag_tools.RAGToolsMixin` | `self.register_rag_tools()` |
+| `rag` | `gaia.agents.tools.rag_tools.RAGToolsMixin` | `self.register_rag_tools()` |
 | `file_search` | `gaia.agents.tools.file_tools.FileSearchToolsMixin` | `self.register_file_search_tools()` |
-| `file_io` | `gaia.agents.code.tools.file_io.FileIOToolsMixin` | `self.register_file_io_tools()` |
-| `shell` | `gaia.agents.chat.tools.shell_tools.ShellToolsMixin` | `self.register_shell_tools()` |
+| `file_io` | `gaia.agents.tools.file_io_tools.FileIOToolsMixin` | `self.register_file_io_tools()` |
+| `shell` | `gaia.agents.tools.shell_tools.ShellToolsMixin` | `self.register_shell_tools()` |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | `self.register_screenshot_tools()` |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | `self.register_sd_tools()` |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | `self.register_vlm_tools()` |
@@ -138,7 +138,7 @@ If your agent needs a specific model, set `model_id` in `__init__()`:
 
 ```python
 def __init__(self, **kwargs):
-    kwargs.setdefault("model_id", "Qwen3-0.6B-GGUF")
+    kwargs.setdefault("model_id", "Gemma-4-E4B-it-GGUF")
     super().__init__(**kwargs)
 ```
 
@@ -170,7 +170,7 @@ A connector lets users:
 Declare what your agent needs by setting `REQUIRED_CONNECTORS` on the
 class, and call `get_credential_sync(connector_id, agent_id, required_scopes=[...])`
 from inside a tool to get a usable token. The
-[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/src/gaia/agents/connectors_demo/agent.py)
+[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/hub/agents/python/connectors-demo/gaia_agent_connectors_demo/agent.py)
 is a working reference for both `oauth_pkce` (Google) and `mcp_server`
 (GitHub) connectors.
 
@@ -291,7 +291,7 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.console import AgentConsole
     from gaia.agents.base.tools import _TOOL_REGISTRY
-    from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
+    from gaia.agents.tools.rag_tools import RAGToolsMixin
     from gaia.agents.tools.file_tools import FileSearchToolsMixin
 
 
@@ -327,8 +327,8 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.console import AgentConsole
     from gaia.agents.base.tools import _TOOL_REGISTRY
-    from gaia.agents.chat.tools.shell_tools import ShellToolsMixin
-    from gaia.agents.code.tools.file_io import FileIOToolsMixin
+    from gaia.agents.tools.shell_tools import ShellToolsMixin
+    from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
 
     class CodeReviewAgent(Agent, FileIOToolsMixin, ShellToolsMixin):

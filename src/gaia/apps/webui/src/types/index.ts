@@ -28,6 +28,15 @@ export interface DeviceConfig {
     ctx_size: number;
 }
 
+/** Selectable model size for an agent (issue #1162): "full" vs "lite" (~4B). */
+export interface ModelTier {
+    name: string;        // "full" | "lite"
+    label: string;       // e.g. "Lite (~4B)"
+    models: string[];    // preferred models; empty = agent's own default
+    min_memory_gb?: number | null;
+    default?: boolean;
+}
+
 export interface AgentInfo {
     id: string;
     name: string;
@@ -44,6 +53,14 @@ export interface AgentInfo {
      */
     required_connections?: ConnectorRequirement[];
     /**
+     * True when the agent loads MCP servers dynamically at runtime (e.g. the
+     * chat agent) and gates their tools through the activation ledger. The
+     * Settings → Connectors "Active for" panel lists such agents as
+     * activatable for `mcp_server` connectors even without a matching
+     * `required_connections` entry.
+     */
+    consumes_mcp_servers?: boolean;
+    /**
      * Opaque grant-ledger key. Built-ins are `builtin:<id>`, custom agents
      * are `custom:<sha256-prefix>:<id>`, installed agents are
      * `installed:<id>`, and native agents are `native:<id>`. Pass this to
@@ -58,6 +75,101 @@ export interface AgentInfo {
     language?: string;
     /** Per-device model/backend/recipe configurations declared by the agent. */
     device_configs?: DeviceConfig[];
+    /**
+     * Model-size tiers (issue #1162). Agents that support a "full" vs "lite"
+     * (~4B) model selection declare both; the card renders a size selector
+     * instead of shipping a separate "… Lite" card. Empty/undefined = single
+     * model size.
+     */
+    model_tiers?: ModelTier[];
+
+    // ── Agent Hub catalog/install fields (issue #1097) ──────────────────────
+    // Populated by GET /api/agents/catalog (#1096). Locally-registered agents
+    // returned by GET /api/agents leave these undefined; the Hub merges catalog
+    // data in by id so installed cards can show versions and update badges.
+
+    /**
+     * Lifecycle status from the catalog. ``installed`` = present locally,
+     * ``available`` = downloadable from the Hub, ``update_available`` = a newer
+     * version exists than the installed one, ``installing`` = an install is in
+     * flight. Undefined for local-only agents (treated as ``installed``).
+     */
+    status?: AgentCardState;
+    /** Installed version (semver), when known. */
+    version?: string;
+    /** Latest version offered by the catalog — set when newer than ``version``. */
+    latest_version?: string;
+    /** Per-agent compatibility verdict from the backend's system check. */
+    compatibility?: AgentCompatibility;
+    /** Download size of the agent package in bytes (Available cards). */
+    download_size_bytes?: number;
+    /** Trust tier: AMD-verified, community-published, or experimental opt-in. */
+    security_tier?: 'verified' | 'community' | 'experimental';
+    /**
+     * True when installing this agent needs an explicit native-trust opt-in —
+     * a non-verified native (C++) package that runs unsandboxed. The Hub shows
+     * a "Trust & Install" confirmation before sending ``trust_native``.
+     */
+    requires_trust?: boolean;
+    /** Optional remote avatar image URL from the catalog. */
+    avatar_url?: string;
+    /** True when the publisher has deprecated this agent. */
+    deprecated?: boolean;
+}
+
+/** Derived card state for the Agent Hub (issue #1097). */
+export type AgentCardState =
+    | 'installed'
+    | 'available'
+    | 'update_available'
+    | 'installing';
+
+/**
+ * Per-agent compatibility verdict (issue #1096/#1097).
+ *
+ * ``level`` drives the green/yellow/red indicator: ``compatible`` (green),
+ * ``warning`` (yellow — runnable but a requirement is marginal), and
+ * ``incompatible`` (red — Install is disabled). ``reasons`` explains any
+ * non-green verdict for the tooltip.
+ */
+export interface AgentCompatibility {
+    level: 'compatible' | 'warning' | 'incompatible';
+    reasons?: string[];
+}
+
+/**
+ * Wire-level install state machine from the backend (issue #1096), distinct
+ * from the derived card-state enum. Polled via GET /api/agents/{id}/install-status.
+ */
+export type AgentInstallState =
+    | 'downloading'
+    | 'verifying'
+    | 'installing'
+    | 'installed'
+    | 'failed';
+
+/** Install progress snapshot returned by the install-status endpoint. */
+export interface InstallStatus {
+    agent_id: string;
+    state: AgentInstallState;
+    /** 0–100 overall progress. */
+    progress: number;
+    /** Populated only when ``state === 'failed'``. */
+    error?: string | null;
+}
+
+/**
+ * Response from GET /api/agents/catalog (issue #1096).
+ *
+ * ``offline`` is ``true`` when the backend served a cached copy because R2 was
+ * unreachable — the UI surfaces a "Showing cached catalog" banner rather than
+ * silently presenting stale data as fresh (CLAUDE.md: no silent fallbacks).
+ */
+export interface AgentCatalogResponse {
+    agents: AgentInfo[];
+    offline: boolean;
+    /** ISO timestamp the cached catalog was last refreshed (when offline). */
+    cached_at?: string | null;
 }
 
 export interface DiskAgentInfo {

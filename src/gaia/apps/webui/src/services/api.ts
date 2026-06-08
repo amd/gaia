@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo, AgentCatalogResponse, InstallStatus } from '../types';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -114,6 +114,67 @@ export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number
 
 export async function listDiskAgents(): Promise<{ agents: DiskAgentInfo[]; total: number }> {
     return apiFetch('GET', '/agents/disk', undefined, { 'x-gaia-ui': '1' });
+}
+
+// -- Agent Hub: catalog + install lifecycle (issue #1097, backend #1096) --------
+
+/**
+ * Fetch the merged Agent Hub catalog (R2 index + local registry + per-agent
+ * compatibility). Returns ``offline: true`` when the backend served a cached
+ * copy because the remote index was unreachable — the Hub renders a stale-cache
+ * banner instead of presenting old data as fresh.
+ */
+export async function listCatalog(): Promise<AgentCatalogResponse> {
+    return apiFetch('GET', '/agents/catalog', undefined, { 'x-gaia-ui': '1' });
+}
+
+/**
+ * Kick off an agent install (download → verify → install → hot-register).
+ * Returns the initial install status; poll ``getInstallStatus`` for progress.
+ * The optional ``device`` selects the per-device package variant when the
+ * agent ships more than one. ``trustNative`` must be set to install a
+ * non-verified native (C++) agent — the backend refuses (403) otherwise.
+ */
+export async function installAgent(
+    agentId: string,
+    device?: string,
+    trustNative?: boolean,
+): Promise<InstallStatus> {
+    return apiFetch(
+        'POST',
+        '/agents/install',
+        {
+            id: agentId,
+            ...(device ? { device } : {}),
+            ...(trustNative ? { trust_native: true } : {}),
+        },
+        { 'x-gaia-ui': '1' },
+    );
+}
+
+/** Poll install progress for an in-flight install. */
+export async function getInstallStatus(agentId: string): Promise<InstallStatus> {
+    return apiFetch('GET', `/agents/${encodeURIComponent(agentId)}/install-status`);
+}
+
+/** Uninstall an installed agent (also used to abort an in-flight install). */
+export async function uninstallAgent(agentId: string): Promise<void> {
+    await apiFetch<unknown>(
+        'DELETE',
+        `/agents/${encodeURIComponent(agentId)}`,
+        undefined,
+        { 'x-gaia-ui': '1' },
+    );
+}
+
+/** Roll an agent back to the previous version from its ``.backup/`` snapshot. */
+export async function rollbackAgent(agentId: string): Promise<InstallStatus> {
+    return apiFetch(
+        'POST',
+        `/agents/${encodeURIComponent(agentId)}/rollback`,
+        {},
+        { 'x-gaia-ui': '1' },
+    );
 }
 
 // -- Connections (issue #915) ---------------------------------------------------

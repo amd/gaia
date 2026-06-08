@@ -214,6 +214,28 @@ MODELS = {
         min_ctx_size=65536,
         tool_calling=True,
     ),
+    # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
+    # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
+    # ``gemma4-it:e2b``), NOT the llama.cpp GGUF variant — only the FLM build
+    # runs on the Strix Halo NPU. Validated on hardware: device=npu,
+    # recipe=flm, served at :13305, ctx_size=4096 (the NPU window). The triage
+    # classifier clips email bodies to 4000 chars, so a single email + the
+    # triage system prompt fit. The E2B *FLM* accuracy baseline is a follow-up:
+    # baseline_accuracy_e2b.json was recorded on the GGUF build, a different
+    # variant.
+    # tool_calling=False: unlike the GGUF builds (native tool calls via
+    # --jinja), the FLM/NPU server 500-errors on an OpenAI ``tools`` payload
+    # ("type must be string, but is object" — verified on hardware). The agent
+    # therefore uses the embedded-JSON tool path for this model. Email triage
+    # itself parses a JSON object from a plain completion (no native tool
+    # calls), so triage is unaffected.
+    "gemma-4-e2b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="gemma4-it-e2b-FLM",
+        display_name="Gemma 4 E2B (NPU/FLM)",
+        min_ctx_size=4096,
+        tool_calling=False,
+    ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
     "qwen3.5-35b": ModelRequirement(
         model_type=ModelType.LLM,
@@ -609,6 +631,14 @@ def _prompt_user_for_delete(model_name: str) -> bool:
     Returns:
         True if user confirms, False if user declines
     """
+    # Check if we're in an interactive terminal — mirror the guard on
+    # _prompt_user_for_download / _prompt_user_for_repair. Without it this
+    # would call input() in a non-interactive backend (FastAPI lifespan
+    # threadpool, no TTY) and raise EOFError, dead-ending first boot (#1293).
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        # Non-interactive environment - auto-proceed with the recovery.
+        return True
+
     # Get model storage paths
     if sys.platform == "win32":
         lemonade_cache = os.path.expandvars("%LOCALAPPDATA%\\lemonade\\")
@@ -1222,9 +1252,23 @@ class LemonadeClient:
             ]
         )
 
+    # Phrases Lemonade uses ONLY for genuinely corrupt/incomplete downloads.
+    _CORRUPT_DOWNLOAD_PHRASES = (
+        "download validation failed",
+        "files are incomplete",
+        "files are missing",
+        "incomplete or missing",
+        "corrupted download",
+    )
+
     def _is_corrupt_download_error(self, error: Union[str, Dict, Exception]) -> bool:
         """
         Check if an error indicates a corrupt or incomplete model download.
+
+        ``llama-server failed to start`` is deliberately NOT a signal here:
+        Lemonade emits it for many non-corruption failures (resource limits,
+        ctx_size, backend startup, port conflicts), so matching it routed
+        ordinary load failures into the destructive delete + re-download path.
 
         Args:
             error: Error as string, dict, or exception
@@ -1235,17 +1279,7 @@ class LemonadeClient:
         error_info = self._extract_error_info(error)
         error_message = (error_info.get("message") or "").lower()
 
-        return any(
-            phrase in error_message
-            for phrase in [
-                "download validation failed",
-                "files are incomplete",
-                "files are missing",
-                "incomplete or missing",
-                "corrupted download",
-                "llama-server failed to start",  # Often indicates corrupt model files
-            ]
-        )
+        return any(phrase in error_message for phrase in self._CORRUPT_DOWNLOAD_PHRASES)
 
     def _execute_with_auto_download(
         self, api_call: Callable, model: str, auto_download: bool = True
@@ -2714,6 +2748,46 @@ class LemonadeClient:
             # Log but don't fail - let the actual request fail with proper error
             self.log.debug(f"Could not pre-check model status: {e}")
 
+    def _consume_pull_stream(self, model_name: str, phase: str) -> bool:
+        """Drive ``pull_model_stream`` to completion, logging progress at INFO.
+
+        Used by the corrupt-download auto-heal path so a non-interactive boot
+        (whose log the UI tails) shows download movement instead of looking
+        frozen. ``phase`` is a short label like "resume" or "fresh download".
+
+        Returns:
+            True if the stream reported completion.
+
+        Raises:
+            LemonadeClientError: if the stream emits an ``error`` event.
+        """
+        download_complete = False
+        last_logged_percent = -10  # Log at 0%, 10%, 20%, ...
+        for event in self.pull_model_stream(model_name=model_name):
+            event_type = event.get("event")
+            if event_type == "progress":
+                percent = event.get("percent", 0)
+                if percent >= last_logged_percent + 10:
+                    bytes_dl = event.get("bytes_downloaded", 0)
+                    bytes_total = event.get("bytes_total", 0)
+                    if bytes_total > 0:
+                        gb_dl = bytes_dl / (1024**3)
+                        gb_total = bytes_total / (1024**3)
+                        self.log.info(
+                            f"   {_emoji('📥', '[PROGRESS]')} {phase}: "
+                            f"{percent}% ({gb_dl:.1f}/{gb_total:.1f} GB)"
+                        )
+                    else:
+                        self.log.info(
+                            f"   {_emoji('📥', '[PROGRESS]')} {phase}: {percent}%"
+                        )
+                    last_logged_percent = percent
+            elif event_type == "complete":
+                download_complete = True
+            elif event_type == "error":
+                raise LemonadeClientError(event.get("error", "Unknown"))
+        return download_complete
+
     def load_model(
         self,
         model_name: str,
@@ -2783,29 +2857,29 @@ class LemonadeClient:
                     f"{_emoji('⚠️', '[INCOMPLETE]')} Model '{model_name}' has incomplete "
                     f"or corrupted files"
                 )
+                self.log.debug(
+                    f"Corrupt-download classified from load error: {original_error}. "
+                    f"Repairing (resume, then one delete + re-download if needed)."
+                )
 
-                # Prompt user for confirmation to resume download
-                if not _prompt_user_for_repair(model_name):
+                # Honor `prompt`: a non-interactive caller (boot init in the
+                # FastAPI lifespan threadpool) passes prompt=False — never call
+                # input() there. Auto-proceed through the bounded recovery
+                # instead of dead-ending on EOFError (#1293).
+                if prompt and not _prompt_user_for_repair(model_name):
                     raise ModelDownloadCancelledError(
                         f"User declined to repair incomplete model: {model_name}"
                     )
 
                 # Try to resume download first (Lemonade handles partial files)
                 self.log.info(
-                    f"{_emoji('📥', '[RESUME]')} Attempting to resume download..."
+                    f"{_emoji('📥', '[RESUME]')} Resuming download to repair "
+                    f"'{model_name}'..."
                 )
 
                 try:
                     # First attempt: resume download
-                    download_complete = False
-                    for event in self.pull_model_stream(model_name=model_name):
-                        event_type = event.get("event")
-                        if event_type == "complete":
-                            download_complete = True
-                        elif event_type == "error":
-                            raise LemonadeClientError(event.get("error", "Unknown"))
-
-                    if download_complete:
+                    if self._consume_pull_stream(model_name, "resume"):
                         # Retry loading
                         response = self._send_request(
                             "post", url, request_data, timeout=timeout
@@ -2821,32 +2895,26 @@ class LemonadeClient:
                         f"{_emoji('⚠️', '[RETRY]')} Resume failed: {resume_error}"
                     )
 
-                    # Prompt user before deleting
-                    if not _prompt_user_for_delete(model_name):
+                    # Honor `prompt` before the destructive delete too.
+                    if prompt and not _prompt_user_for_delete(model_name):
                         raise LemonadeClientError(
                             f"Resume download failed for '{model_name}'. "
                             f"You can manually delete the model and try again."
                         )
 
-                    # Second attempt: delete and re-download from scratch
+                    # Second (and final) attempt: delete and re-download from
+                    # scratch. Bounded to ONE delete + re-download — no loops.
                     try:
                         self.log.info(
-                            f"{_emoji('🗑️', '[DELETE]')} Deleting corrupt model..."
+                            f"{_emoji('🗑️', '[DELETE]')} Resume failed; deleting "
+                            f"corrupt '{model_name}' and re-downloading once..."
                         )
                         self.delete_model(model_name)
 
                         self.log.info(
                             f"{_emoji('📥', '[FRESH]')} Starting fresh download..."
                         )
-                        download_complete = False
-                        for event in self.pull_model_stream(model_name=model_name):
-                            event_type = event.get("event")
-                            if event_type == "complete":
-                                download_complete = True
-                            elif event_type == "error":
-                                raise LemonadeClientError(event.get("error", "Unknown"))
-
-                        if download_complete:
+                        if self._consume_pull_stream(model_name, "fresh download"):
                             # Retry loading
                             response = self._send_request(
                                 "post", url, request_data, timeout=timeout
@@ -2857,14 +2925,24 @@ class LemonadeClient:
                             self.model = model_name
                             return response
 
+                        # Stream ended without a completion event — treat the
+                        # bounded recovery as exhausted (fall through to raise).
+                        raise LemonadeClientError(
+                            f"Fresh download did not complete for '{model_name}'"
+                        )
+
                     except Exception as fresh_error:
                         self.log.error(
                             f"{_emoji('❌', '[FAIL]')} Fresh download also failed: {fresh_error}"
                         )
                         raise LemonadeClientError(
-                            f"Failed to repair model '{model_name}' after both resume and fresh download attempts. "
-                            f"Please check your network connection and disk space, then try again."
-                        )
+                            f"Failed to repair model '{model_name}' after resume and one "
+                            f"delete + re-download attempt ({fresh_error}). "
+                            f"Try the Force-redownload action in the Agent UI, or manually "
+                            f"delete the model and re-run. "
+                            f"Check the Lemonade server log for details "
+                            f"(typical path: ~/.cache/lemonade/server.log)."
+                        ) from fresh_error
 
             # Check if this is a "model not found" error and auto_download is enabled
             if not (auto_download and self._is_model_error(e)):

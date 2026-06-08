@@ -77,6 +77,11 @@ jobs:
           echo "GAIA CLI installed successfully!"
 
       - name: Start Lemonade Server and Test Core Commands
+        env:
+          # Authenticate HF model pulls — unauthenticated requests get 429-throttled
+          # on shared CI runners, which kills Lemonade startup (matches the Windows job).
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
           echo "=== Starting Lemonade Server ==="
 
@@ -157,24 +162,6 @@ jobs:
 
           echo "✅ Core commands tested successfully!"
 
-          # Now test summarizer while server is still running
-          echo ""
-          echo "=== Testing Summarizer Integration ==="
-          echo "Testing complete CLI workflow: gaia summarize command"
-
-          # Set the test model for summarizer tests
-          export GAIA_TEST_MODEL="Qwen3-0.6B-GGUF"
-
-          # Run the summarizer integration tests
-          python -m pytest tests/test_summarizer.py -vs --tb=short || TEST_EXIT=$?
-
-          if [ "${TEST_EXIT:-0}" -eq 0 ]; then
-            echo "✅ Summarizer CLI integration tests passed successfully!"
-          else
-            echo "❌ Summarizer CLI integration tests failed with exit code: ${TEST_EXIT}"
-            echo "Note: Error details displayed above"
-          fi
-
           echo ""
           echo "=== Testing RAG Functionality ==="
           echo "Testing RAG (Retrieval-Augmented Generation) system"
@@ -209,11 +196,11 @@ jobs:
           kill $LEMONADE_PID 2>/dev/null || true
           sleep 5
 
-          # Report failures — summarizer/RAG tests may fail when the agent's
-          # default model isn't available (only Qwen3-0.6B-GGUF is pulled in CI).
+          # Report failures — RAG tests may fail when the agent's default model
+          # isn't available (only Qwen3-0.6B-GGUF is pulled in CI).
           # Surface as a GHA warning so failures are visible without blocking the job.
           FIRST_FAILURE=0
-          for code in "${TEST_EXIT:-0}" "${RAG_TEST_EXIT:-0}" "${LEMONADE_TEST_EXIT:-0}"; do
+          for code in "${RAG_TEST_EXIT:-0}" "${LEMONADE_TEST_EXIT:-0}"; do
             if [ "$code" -ne 0 ] && [ "$FIRST_FAILURE" -eq 0 ]; then
               FIRST_FAILURE=$code
             fi

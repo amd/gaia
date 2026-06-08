@@ -19,6 +19,10 @@ interface ChatState {
     detectedDevices: string[];
     setDetectedDevices: (devices: string[]) => void;
 
+    // Model-size tier selection (issue #1162): "full" | "lite"
+    activeModelTier: string;
+    setActiveModelTier: (tier: string) => void;
+
     // Sessions
     sessions: Session[];
     currentSessionId: string | null;
@@ -118,6 +122,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     },
     detectedDevices: ['gpu'],
     setDetectedDevices: (devices) => set({ detectedDevices: devices }),
+
+    // Model-size tier selection (#1162)
+    activeModelTier: (() => {
+        try { return localStorage.getItem('gaia-active-model-tier') || 'full'; }
+        catch { return 'full'; }
+    })(),
+    setActiveModelTier: (tier) => {
+        try { localStorage.setItem('gaia-active-model-tier', tier); } catch { /* noop */ }
+        set({ activeModelTier: tier });
+    },
 
     // Sessions
     sessions: [],
@@ -259,8 +273,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     pendingPrompt: null,
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
-    setShowSettings: (show) => set({ showSettings: show }),
-    setShowMemoryDashboard: (show) => set({ showMemoryDashboard: show }),
+    setShowSettings: (show) =>
+        set(show ? { showSettings: true, showMemoryDashboard: false } : { showSettings: false }),
+    setShowMemoryDashboard: (show) =>
+        set(show ? { showMemoryDashboard: true, showSettings: false } : { showMemoryDashboard: false }),
     toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>

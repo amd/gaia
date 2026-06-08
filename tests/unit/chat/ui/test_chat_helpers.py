@@ -365,11 +365,11 @@ class TestCanonicalAgentType:
 
         class FakeRegistry:
             def canonical_id(self, agent_id: str) -> str:
-                return {"chat-lite": "gaia-lite"}.get(agent_id, agent_id)
+                return {"chat-lite": "chat"}.get(agent_id, agent_id)
 
         set_agent_registry(FakeRegistry())
         try:
-            assert _canonical_agent_type("chat-lite") == "gaia-lite"
+            assert _canonical_agent_type("chat-lite") == "chat"
             assert _canonical_agent_type("unknown") == "unknown"
         finally:
             set_agent_registry(None)

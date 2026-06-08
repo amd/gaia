@@ -46,7 +46,7 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
 
     # Try parsing entire response as JSON first
     try:
-        return json.loads(text)
+        return json.loads(text)  # type: ignore[no-any-return]
     except json.JSONDecodeError:
         pass
 
@@ -67,7 +67,7 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
                 brace_count -= 1
                 if brace_count == 0:
                     json_str = text[start : i + 1]
-                    return json.loads(json_str)
+                    return json.loads(json_str)  # type: ignore[no-any-return]
 
         logger.debug(f"Failed to find matching brace in text: {text[:200]}...")
         return None
@@ -122,7 +122,7 @@ def pdf_page_to_image(
         # Render at specified scale for better quality
         mat = fitz.Matrix(scale, scale)
         pix = pdf_page.get_pixmap(matrix=mat)
-        return pix.tobytes("png")
+        return pix.tobytes("png")  # type: ignore[no-any-return]
 
     except ImportError:
         logger.error("PyMuPDF required for PDF processing: pip install pymupdf")

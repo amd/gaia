@@ -84,16 +84,17 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
     },
     {
         label: 'Microsoft Office',
-        extensions: new Set(['.doc', '.docx', '.ppt', '.pptx', '.xls']),
+        extensions: new Set(['.doc', '.docx', '.ppt', '.xls']),
         message:
-            'Word, PowerPoint, and legacy Excel (.xls) files are not yet ' +
-            'supported — GAIA does not currently ship parsers for these ' +
-            'formats.',
+            'Word, legacy PowerPoint (.ppt), and legacy Excel (.xls) files are ' +
+            'not yet supported — GAIA does not currently ship parsers for these ' +
+            'formats. Modern PowerPoint (.pptx) is supported.',
         alternatives: [
-            'Save as PDF from Word or PowerPoint, then index the PDF',
+            'Save modern PowerPoint as .pptx — GAIA indexes .pptx directly',
+            'Save Word as PDF, then index the PDF',
             'Re-save legacy .xls workbooks as .xlsx — GAIA supports modern Excel files',
         ],
-        featureTitle: 'Support Microsoft Office (docx, pptx, xls) indexing',
+        featureTitle: 'Support Microsoft Office (doc, docx, ppt, xls) indexing',
     },
 ];
 
@@ -116,10 +117,11 @@ export function getUnsupportedCategory(extension: string): FileTypeCategory | nu
  * ``src/gaia/ui/utils.py``. Only list extensions that have a real extractor
  * in ``src/gaia/rag/sdk.py::_extract_text_from_file`` — listing one without
  * a backend handler causes the RAG pipeline to index binary garbage.
- * .doc/.docx/.ppt/.pptx and legacy .xls are intentionally excluded.
+ * .pptx IS supported (python-pptx ships with GAIA); .doc/.docx/.ppt and
+ * legacy .xls are intentionally excluded.
  */
 export const SUPPORTED_EXTENSIONS = new Set([
-    '.pdf', '.txt', '.md', '.csv', '.json', '.xlsx',
+    '.pdf', '.pptx', '.txt', '.md', '.csv', '.json', '.xlsx',
     '.html', '.htm', '.xml', '.svg',
     '.yaml', '.yml', '.py', '.js', '.ts', '.java', '.c', '.cpp',
     '.h', '.rs', '.go', '.rb', '.sh', '.bat', '.ps1', '.log',
@@ -260,7 +262,7 @@ export function UploadErrorToast({ filename, error, onDismiss, timeout = 15000 }
         Icon = AlertTriangle;
     } else if (isFileTypeError) {
         title = `File type not supported: ${ext}`;
-        detail = 'This file format cannot be indexed. Supported: PDF, TXT, MD, CSV, JSON, XLSX, HTML, XML, YAML, and 30+ code file formats.';
+        detail = 'This file format cannot be indexed. Supported: PDF, PPTX, TXT, MD, CSV, JSON, XLSX, HTML, XML, YAML, and 30+ code file formats.';
         issueUrl = featureRequestUrl(`Support ${ext} file indexing`);
         Icon = AlertTriangle;
     } else if (isConnectionError) {

@@ -183,11 +183,30 @@ The registry scans `~/.gaia/agents/*/gaia-agent.yaml` directly. Each manifest pr
 ## Phase 4: Backend Install/Catalog API
 
 - **`GET /api/agents/catalog`** — R2 index + local registry merge + per-agent compatibility check
-- **`POST /api/agents/install`** — system check → download → verify → install → hot-register
+- **`POST /api/agents/install`** — system check → native-trust gate → download → verify → install → hot-register
 - **`DELETE /api/agents/{id}`** — uninstall
 - **`POST /api/agents/{id}/rollback`** — restore from `.backup/`
 - **Progress polling:** `GET /api/agents/{id}/install-status`
 - **Compatibility:** Platform, RAM, disk, GPU/NPU, context size checks with green/yellow/red UI indicators
+
+### Security tiers, native trust & deprecation (#1100)
+
+Implemented in `src/gaia/hub/installer.py`, `catalog.py`, and `ui/routers/hub.py`:
+
+- **Tiers surfaced in the catalog.** Each `GET /api/agents/catalog` entry carries
+  `security_tier` (`verified` | `community` | `experimental`) and a derived
+  `requires_trust` flag — `true` for non-verified **native (C++)** agents that run
+  unsandboxed.
+- **Native-agent trust gate.** `POST /api/agents/install` accepts `trust_native: bool`.
+  Installing a non-verified native agent without it is **refused with `403`** and an
+  actionable error; the Hub shows a *Trust & Install* confirmation that sets the flag.
+  The installer enforces the same rule (`TrustRequiredError`) as defense in depth.
+- **Deprecation.** Deprecated agents are recorded in the R2 manifest (Worker) and
+  **excluded from the default catalog listing** unless `include_deprecated=true`.
+  Installing one still works but logs a loud warning. The Hub renders a *Deprecated*
+  warning badge.
+- **Hub badges.** Verified = checkmark, community = shield, experimental = flask;
+  plus a tier filter dropdown on both Hub tabs.
 
 ---
 

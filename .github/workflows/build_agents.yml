@@ -1,0 +1,233 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Cross-compile matrix + static-binary packaging for the native (C++) Agent Hub
+# agents in cpp/. Each matrix leg builds the C++ example agents with static
+# linking (BUILD_SHARED_LIBS=OFF + vcpkg *-static triplet + static MSVC runtime)
+# so the artifacts have no runtime DLL/.so dependency, then packages each agent
+# into dist/<id>/ (binary + gaia-agent.yaml + checksums.sha256) and uploads it.
+#
+# On a version tag (v*), a release job consolidates every platform's artifacts
+# into a single bundle for downstream publishing (R2 / PyPI are handled by other
+# Agent Hub issues — this workflow only produces and uploads the artifacts).
+#
+# Static triplets: Windows uses the built-in x64-windows-static; Linux/macOS use
+# the overlay triplets in cpp/triplets/ (no built-in *-static there).
+# Manifests + the packaging script: cpp/agents/, cpp/packaging/package_agents.py
+# Issue: https://github.com/amd/gaia/issues/1094
+
+name: Agent Binaries (C++)
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+    paths:
+      - 'cpp/**'
+      - '.github/workflows/build_agents.yml'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'cpp/**'
+      - '.github/workflows/build_agents.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Package (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win-x64
+            triplet: x64-windows-static
+          - os: ubuntu-latest
+            platform: linux-x64
+            triplet: x64-linux-static
+          - os: macos-latest
+            platform: darwin-arm64
+            triplet: arm64-osx-static
+
+    env:
+      # vcpkg binary cache so static OpenSSL is built once and reused across runs.
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install packaging deps
+        run: python -m pip install --upgrade pyyaml
+
+      - name: Prepare vcpkg binary cache dir
+        shell: bash
+        run: mkdir -p "${VCPKG_DEFAULT_BINARY_CACHE}"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('cpp/vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ matrix.triplet }}-
+
+      - name: Restore FetchContent cache
+        uses: actions/cache@v5
+        with:
+          path: cpp/build/_deps
+          key: fetchcontent-agents-${{ matrix.platform }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+
+      - name: Install static OpenSSL via vcpkg (${{ matrix.triplet }})
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${VCPKG_INSTALLATION_ROOT:-}" ]; then
+            echo "::error::VCPKG_INSTALLATION_ROOT is not set on this runner"
+            exit 1
+          fi
+          # Linux/macOS have no built-in *-static triplet; cpp/triplets supplies
+          # them as overlays (Windows still uses its built-in x64-windows-static).
+          "${VCPKG_INSTALLATION_ROOT}/vcpkg" install "openssl:${{ matrix.triplet }}" \
+            --overlay-triplets="${GITHUB_WORKSPACE}/cpp/triplets"
+
+      - name: Configure CMake (static)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -B cpp/build -S cpp \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGAIA_BUILD_TESTS=OFF \
+            -DGAIA_BUILD_EXAMPLES=ON \
+            -DGAIA_BUILD_INTEGRATION_TESTS=OFF \
+            -DGAIA_BUILD_BENCHMARKS=OFF \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
+            -DVCPKG_OVERLAY_TRIPLETS="${GITHUB_WORKSPACE}/cpp/triplets" \
+            -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build (Release)
+        run: cmake --build cpp/build --config Release --parallel
+
+      - name: Package agents for ${{ matrix.platform }}
+        run: >-
+          python cpp/packaging/package_agents.py
+          --platform ${{ matrix.platform }}
+          --build-dir cpp/build
+          --agents-dir cpp/agents
+          --out dist
+
+      - name: Show packaged artifacts
+        shell: bash
+        run: |
+          echo "=== dist/ (${{ matrix.platform }}) ==="
+          find dist -type f | sort
+          echo
+          echo "=== checksums ==="
+          find dist -name checksums.sha256 -exec cat {} +
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: cpp-agents-${{ matrix.platform }}
+          path: dist/
+          if-no-files-found: error
+
+  # On a version tag, consolidate every platform's dist/ into one bundle so a
+  # downstream job (R2 / PyPI — other issues) has a single artifact to publish.
+  release-bundle:
+    name: Consolidate release bundle
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+    steps:
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cpp-agents-*
+          path: artifacts
+
+      - name: Merge into release bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundle
+          # Each artifact is artifacts/cpp-agents-<platform>/<id>/...; merge by id
+          # so a single bundle/<id>/ holds every platform's binary + the manifest.
+          # The per-leg checksums.sha256 files collide (same path per id), so drop
+          # them here and regenerate complete per-agent + aggregate checksums from
+          # the merged binaries below.
+          for leg in artifacts/cpp-agents-*; do
+            [ -d "$leg" ] || continue
+            cp -r "$leg"/* bundle/
+          done
+          find bundle -name checksums.sha256 -delete
+
+          : > bundle/CHECKSUMS.sha256
+          for agent_dir in bundle/*/; do
+            [ -d "$agent_dir" ] || continue
+            ( cd "$agent_dir"
+              # Hash every shipped binary (everything except yaml/checksum files).
+              : > checksums.sha256
+              for f in *; do
+                case "$f" in
+                  *.yaml|*.sha256) continue ;;
+                esac
+                [ -f "$f" ] || continue
+                sha256sum "$f" >> checksums.sha256
+              done
+            )
+            agent_id="$(basename "$agent_dir")"
+            sed "s|\$| (${agent_id})|" "${agent_dir}checksums.sha256" >> bundle/CHECKSUMS.sha256
+          done
+
+          echo "=== release bundle ==="
+          find bundle -type f | sort
+          echo "=== aggregated checksums ==="
+          cat bundle/CHECKSUMS.sha256
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: gaia-cpp-agents-${{ github.ref_name }}
+          path: bundle/
+          if-no-files-found: error
+
+  agents-build-summary:
+    name: Agent Binaries Summary
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: always() && !cancelled()
+    steps:
+      - name: Check results
+        run: |
+          echo "=== Agent Binaries (C++) Summary ==="
+          echo "Build/package matrix: ${{ needs.build.result }}"
+          if [[ "${{ needs.build.result }}" == "skipped" ]]; then
+            echo "Matrix skipped (draft PR — add 'ready_for_ci' label to run)"
+            exit 0
+          fi
+          if [[ "${{ needs.build.result }}" != "success" ]]; then
+            echo "One or more matrix legs failed"
+            exit 1
+          fi
+          echo "All platform legs packaged successfully"

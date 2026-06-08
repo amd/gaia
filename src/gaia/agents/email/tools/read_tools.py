@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Read tools mixin for ``EmailTriageAgent``.
 
-Tools: ``list_inbox``, ``get_message``, ``get_thread``, ``search_messages``,
-``list_labels``, ``triage_inbox``, ``pre_scan_inbox``.
+Tools: ``list_inbox``, ``get_message``, ``get_thread``, ``summarize_thread``,
+``search_messages``, ``list_labels``, ``triage_inbox``, ``pre_scan_inbox``.
 
 Each tool returns a JSON string with the canonical envelope::
 
@@ -18,10 +18,11 @@ module because every read tool that returns body bytes needs to honor it.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gaia.agents.base.tools import tool
 from gaia.agents.email.gmail_backend import decode_message_body
+from gaia.agents.email.tools.llm_triage import make_llm_classifier
 from gaia.agents.email.tools.triage_heuristics import (
     CATEGORY_ACTIONABLE,
     CATEGORY_INFORMATIONAL,
@@ -44,6 +45,16 @@ log = get_logger(__name__)
 # a ``...[truncated]`` marker. Prevents context blow-up and limits the
 # attack surface for indirect prompt injection.
 DEFAULT_BODY_LIMIT_CHARS = 4000
+
+# Combined body budget for a whole-thread transcript (#1268). Bounds the prompt
+# so a long thread can't overflow a local model's context window. When a thread
+# exceeds it, the per-message budget shrinks so every message stays represented
+# rather than dropping the oldest (which would defeat full-thread comprehension).
+DEFAULT_THREAD_TRANSCRIPT_CHARS = 24000
+
+# Floor so that, even in a very long thread, each message still carries enough
+# body to be meaningful after the proportional shrink above.
+THREAD_MIN_PER_MESSAGE_CHARS = 200
 
 # Wrapper used to delimit untrusted email body content. The system prompt
 # (see ``agent.py``) tells the LLM that anything inside this wrapper is
@@ -139,6 +150,194 @@ def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, 
         out = [_format_message_for_llm(m) for m in thread.get("messages", [])]
         st["result_summary"] = {"thread_id": thread_id, "count": len(out)}
         return {"thread_id": thread_id, "messages": out}
+
+
+def _thread_message_sort_key(msg: Dict[str, Any]) -> int:
+    """Chronological sort key for a raw thread message.
+
+    Gmail ``threads.get`` returns messages oldest-first, but we sort
+    defensively by ``internalDate`` (millis since epoch) so a misordered
+    backend can't make the LLM read the conversation out of sequence.
+    """
+    try:
+        return int(msg.get("internalDate", "0"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _format_thread_for_summary(
+    messages: List[Dict[str, Any]],
+    *,
+    per_message_body_limit: int,
+    max_total_transcript_chars: Optional[int] = DEFAULT_THREAD_TRANSCRIPT_CHARS,
+) -> str:
+    """Render an oldest-first transcript of the FULL thread for the LLM.
+
+    Every message is numbered and labelled with From/Date, and each body is
+    wrapped in the untrusted-input delimiters — so the model comprehends the
+    whole conversation (early decisions included), never just the latest reply,
+    yet still treats body text as data, never instructions.
+
+    ``max_total_transcript_chars`` steers the COMBINED body budget toward that
+    target so a long thread doesn't balloon the prompt (50 messages × the
+    per-message limit could otherwise reach hundreds of KB). When the total
+    would exceed it, we shrink the per-message budget so every message stays
+    represented — we do NOT drop the oldest messages, because the whole point of
+    thread summarization is that an early decision survives. It is a soft
+    target, not a hard ceiling: ``THREAD_MIN_PER_MESSAGE_CHARS`` is a per-message
+    floor, so a thread with very many messages can still exceed the target
+    (floor × count) rather than starve each message below readability.
+    ``None`` disables the cap entirely.
+    """
+    ordered = sorted(messages, key=_thread_message_sort_key)
+    effective_body_limit = per_message_body_limit
+    if max_total_transcript_chars and ordered:
+        # Keep every message present; divide the total body budget across them
+        # (with a small floor so each still carries enough to be meaningful).
+        fair_share = max(
+            THREAD_MIN_PER_MESSAGE_CHARS, max_total_transcript_chars // len(ordered)
+        )
+        if effective_body_limit <= 0 or fair_share < effective_body_limit:
+            effective_body_limit = fair_share
+    blocks: List[str] = []
+    for idx, msg in enumerate(ordered, start=1):
+        payload = msg.get("payload") or {}
+        headers = {
+            (h.get("name") or "").lower(): h.get("value", "")
+            for h in payload.get("headers", [])
+        }
+        body, _attachments = decode_message_body(payload)
+        body = (body or "").strip()
+        if effective_body_limit > 0 and len(body) > effective_body_limit:
+            body = body[:effective_body_limit] + "\n...[truncated]"
+        blocks.append(
+            f"--- Message {idx} of {len(ordered)} ---\n"
+            f"From: {headers.get('from', '')}\n"
+            f"Date: {headers.get('date', '')}\n"
+            f"{wrap_untrusted_body(body)}"
+        )
+    return "\n\n".join(blocks)
+
+
+def _build_thread_user_prompt(subject: str, transcript: str) -> str:
+    """Build the user-turn prompt for whole-thread summarization.
+
+    Unlike the single-email prompt, this does NOT clip the body to a single
+    message's budget — the transcript is the FULL conversation and each
+    message body is already individually wrapped + truncated by
+    ``_format_thread_for_summary``. Re-clipping here would drop later
+    messages and defeat full-thread comprehension.
+    """
+    return (
+        "Summarize this email thread as a whole. Reflect decisions, asks, and "
+        "outcomes from EVERY message — including earlier messages the latest "
+        "reply does not repeat.\n\n"
+        f"Subject: {subject}\n"
+        f"Thread (oldest first):\n{transcript}\n"
+    )
+
+
+def summarize_thread_impl(
+    gmail,
+    chat,
+    *,
+    thread_id: str,
+    max_chars: Optional[int] = None,
+    per_message_body_limit: int = DEFAULT_BODY_LIMIT_CHARS,
+    max_total_transcript_chars: Optional[int] = DEFAULT_THREAD_TRANSCRIPT_CHARS,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    """Summarize a whole email thread, comprehending the FULL conversation.
+
+    Reads every message via ``get_thread``, renders them oldest-first into a
+    single transcript, and summarizes that transcript — so a decision made in
+    an early message that the latest reply doesn't repeat is still reflected.
+
+    Reuses the per-email summarization contract (#1267) — the shared system
+    prompt, the empty-output guard, the word-boundary length bound, and the
+    ``EmailSummarizeError`` type — so the bounded, fail-loud behavior is
+    identical: an empty thread or an LLM failure raises rather than silently
+    collapsing to a latest-only summary (repo "No Silent Fallbacks" rule). The
+    user-turn prompt is thread-shaped (no single-email body clip) so the whole
+    conversation reaches the model.
+    """
+    # Deferred import: ``summarize_tools`` imports from this module, so a
+    # top-level import would create a cycle.
+    from gaia.agents.email.tools.summarize_tools import (
+        _THREAD_SYSTEM_PROMPT,
+        DEFAULT_SUMMARY_CHAR_LIMIT,
+        EmailSummarizeError,
+        _bound_to_length,
+    )
+
+    if max_chars is None:
+        max_chars = DEFAULT_SUMMARY_CHAR_LIMIT
+
+    with log_tool_call("summarize_thread", {"thread_id": thread_id}, debug=debug) as st:
+        if chat is None:
+            # message_id field reused to carry the thread_id throughout this path.
+            raise EmailSummarizeError(
+                f"summarize_thread has no LLM connection for thread "
+                f"{thread_id!r}; the agent's chat client is not initialized",
+                message_id=thread_id,
+            )
+        thread = gmail.get_thread(thread_id)
+        messages = thread.get("messages", []) or []
+        if not messages:
+            raise EmailSummarizeError(
+                f"thread {thread_id!r} has no messages to summarize",
+                message_id=thread_id,
+            )
+
+        ordered = sorted(messages, key=_thread_message_sort_key)
+        first_headers = {
+            (h.get("name") or "").lower(): h.get("value", "")
+            for h in (ordered[0].get("payload") or {}).get("headers", [])
+        }
+        subject = first_headers.get("subject", "")
+        transcript = _format_thread_for_summary(
+            ordered,
+            per_message_body_limit=per_message_body_limit,
+            max_total_transcript_chars=max_total_transcript_chars,
+        )
+
+        prompt = _build_thread_user_prompt(subject, transcript)
+        try:
+            response = chat.send_messages(
+                [{"role": "user", "content": prompt}],
+                system_prompt=_THREAD_SYSTEM_PROMPT,
+                temperature=0.0,
+            )
+        except Exception as exc:  # LLM/transport failure — surface, never default
+            raise EmailSummarizeError(
+                f"LLM thread summarization call failed for thread {thread_id!r}: "
+                f"{type(exc).__name__}: {exc}",
+                message_id=thread_id,
+            ) from exc
+
+        text = getattr(response, "text", None)
+        if text is None:
+            text = response if isinstance(response, str) else ""
+        text = str(text).strip()
+        if not text:
+            raise EmailSummarizeError(
+                f"LLM thread summarization returned an empty summary for thread "
+                f"{thread_id!r}",
+                message_id=thread_id,
+            )
+        summary = _bound_to_length(text, max_chars)
+
+        st["result_summary"] = {
+            "thread_id": thread_id,
+            "message_count": len(ordered),
+            "chars": len(summary),
+        }
+        return {
+            "thread_id": thread_id,
+            "subject": subject,
+            "message_count": len(ordered),
+            "summary": summary,
+        }
 
 
 def search_messages_impl(
@@ -243,19 +442,30 @@ def triage_inbox_impl(
     max_messages: int = 25,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
+    classifier: Optional[Callable[..., Mapping[str, Any]]] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Triage the inbox using heuristic fast path + LLM fallback.
 
     For each message: fetch metadata, run the heuristic. If the heuristic
     is confident, record its category as the triage decision. Otherwise
-    flag the message for LLM follow-up — the LLM tool call happens in the
-    agent's planning loop, not in this tool body (the heuristic alone is
-    cheap; LLM round-trips are expensive and are sequenced by the agent).
+    (and always for ``urgent`` vs ``actionable``, which depend on body
+    content) the message needs LLM follow-up.
 
-    When ``force_llm`` is True, every message is flagged for LLM
-    follow-up regardless of heuristic confidence — used for benchmarking
-    to measure true inference cost across all emails.
+    LLM follow-up (#1107): when ``classifier`` is provided, a heuristic
+    ``confident=False`` message has its body read and classified by the
+    LLM via ``classifier(subject=, sender=, body=, message_id=)`` →
+    ``{category, confidence, reasoning}``. The result is recorded with
+    ``confident=True`` and ``source="llm"``. If the classifier raises
+    (LLM unreachable, unparseable output, or an out-of-taxonomy category)
+    the exception propagates — we never silently default to
+    ``informational``. When ``classifier`` is None, the message is left
+    flagged (``confident=False``) for a caller that sequences LLM calls
+    itself — preserving the heuristic-only path.
+
+    When ``force_llm`` is True, every message is routed to the classifier
+    (if provided) regardless of heuristic confidence — used for
+    benchmarking to measure true inference cost across all emails.
 
     When ``session_preferences`` is provided, sender-based overrides
     (priority / low-priority) are layered on top of the heuristic before
@@ -281,6 +491,7 @@ def triage_inbox_impl(
                 subject=payload_headers.get("subject", ""),
                 sender=payload_headers.get("from", ""),
                 label_ids=msg.get("labelIds", []),
+                body=msg.get("snippet", ""),
             )
             log_triage_dispatch(
                 message_id=msg["id"],
@@ -302,7 +513,28 @@ def triage_inbox_impl(
                     if force_llm and heuristic.confident
                     else heuristic.reason
                 ),
+                "source": "heuristic",
             }
+
+            # LLM follow-up (#1107): re-classify when the heuristic is not
+            # confident (or force_llm), if a classifier is wired in. Raises on
+            # failure — never silently defaults the category.
+            if classifier is not None and (not heuristic.confident or force_llm):
+                body_text, _ = decode_message_body(msg.get("payload") or {})
+                llm = classifier(
+                    subject=decision["subject"],
+                    sender=decision["from"],
+                    body=body_text,
+                    message_id=msg["id"],
+                )
+                decision["category"] = llm["category"]
+                decision["confident"] = True
+                decision["source"] = "llm"
+                if llm.get("reasoning"):
+                    decision["rationale"] = llm["reasoning"]
+                if llm.get("confidence") is not None:
+                    decision["llm_confidence"] = llm["confidence"]
+
             decision = _apply_session_preferences(decision, prefs)
             log_triage_decision(
                 message_id=msg["id"],
@@ -544,6 +776,47 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
+        def summarize_thread(thread_id: str) -> str:
+            """Summarize an entire email thread, not just its latest message.
+
+            Reads every message in the thread and produces one concise,
+            length-bounded summary that reflects decisions, asks, and outcomes
+            across the WHOLE conversation — including earlier messages the most
+            recent reply does not restate. Use this when the user asks what a
+            thread or conversation is about, to catch up on a thread, or to
+            summarize a multi-message exchange (prefer ``summarize_message`` for
+            a single message).
+
+            Args:
+                thread_id: The id of the thread to summarize.
+
+            Returns:
+                JSON envelope ``{"ok": true, "data": {"thread_id", "subject",
+                "message_count", "summary"}}`` — ``summary`` is a short,
+                length-bounded string covering the full thread.
+            """
+            try:
+                # Deferred import avoids a module-load cycle with summarize_tools.
+                from gaia.agents.email.tools.summarize_tools import (
+                    EmailSummarizeError,
+                )
+
+                chat = getattr(agent, "chat", None)
+                return _envelope_ok(
+                    summarize_thread_impl(
+                        gmail,
+                        chat,
+                        thread_id=thread_id,
+                        debug=debug_flag,
+                    )
+                )
+            except (ConnectorsError, EmailSummarizeError) as exc:
+                return _envelope_err(str(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
         def search_messages(query: str, max_results: int = 25) -> str:
             """Search the user's mailbox.
 
@@ -594,6 +867,10 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(1, min(int(max_messages or 25), 100))
+                # Wire LLM follow-up (#1107) for heuristic-uncertain messages.
+                # Built at call time so agent.chat is initialized.
+                chat = getattr(agent, "chat", None)
+                classifier = make_llm_classifier(chat) if chat is not None else None
                 return _envelope_ok(
                     triage_inbox_impl(
                         gmail,
@@ -602,6 +879,7 @@ class ReadToolsMixin:
                             agent, "_session_preferences", None
                         ),
                         force_llm=bool(getattr(agent.config, "force_llm", False)),
+                        classifier=classifier,
                         debug=debug_flag,
                     )
                 )

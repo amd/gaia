@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 try:
     import winreg  # Windows only
 except ImportError:
-    winreg = None  # Linux / macOS
+    winreg = None  # type: ignore[assignment]  # Linux / macOS
 
 logger = logging.getLogger(__name__)
 

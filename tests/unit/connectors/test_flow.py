@@ -33,6 +33,7 @@ from gaia.connectors.errors import (
 )
 from gaia.connectors.flow import (
     _SUCCESS_HTML,
+    _decode_email_from_id_token,
     cancel_flow,
     complete_authorization,
     start_authorization,
@@ -273,3 +274,47 @@ class TestBrowserOpenNonBlocking:
         )
 
         await cancel_flow(results[0]["flow_id"])
+
+
+class TestDecodeEmailFromIdToken:
+    """Unit tests for _decode_email_from_id_token — the multi-provider claim
+    fallback added in the provider-aware forward-connection fix."""
+
+    # Pre-built tokens (header.base64url(payload).sig).
+    _GOOGLE_TOKEN = "header.eyJlbWFpbCI6ICJhbGljZUBnbWFpbC5jb20ifQ.sig"
+    _MS_PREFERRED_USERNAME = (
+        "header.eyJwcmVmZXJyZWRfdXNlcm5hbWUiOiAiYm9iQG91dGxvb2suY29tIn0.sig"
+    )
+    _BOTH_CLAIMS = (
+        "header"
+        ".eyJlbWFpbCI6ICJhbGljZUBnbWFpbC5jb20iLCAicHJlZmVycmVkX3VzZXJuYW1lIjogImJvYkBvdXRsb29rLmNvbSJ9"
+        ".sig"
+    )
+    _UPN_ONLY = "header.eyJ1cG4iOiAiY2Fyb2xAY29ycC5jb20ifQ.sig"
+    _NO_EMAIL = "header.eyJzdWIiOiAieHl6In0.sig"
+    _BAD_TOKEN = "not.a.jwt.at.all"
+
+    def test_google_email_claim(self):
+        assert _decode_email_from_id_token(self._GOOGLE_TOKEN) == "alice@gmail.com"
+
+    def test_microsoft_preferred_username_fallback(self):
+        assert (
+            _decode_email_from_id_token(self._MS_PREFERRED_USERNAME)
+            == "bob@outlook.com"
+        )
+
+    def test_email_takes_priority_over_preferred_username(self):
+        # When both claims present, ``email`` wins.
+        assert _decode_email_from_id_token(self._BOTH_CLAIMS) == "alice@gmail.com"
+
+    def test_upn_fallback(self):
+        assert _decode_email_from_id_token(self._UPN_ONLY) == "carol@corp.com"
+
+    def test_no_email_claim_returns_none(self):
+        assert _decode_email_from_id_token(self._NO_EMAIL) is None
+
+    def test_malformed_token_returns_none(self):
+        assert _decode_email_from_id_token(self._BAD_TOKEN) is None
+
+    def test_empty_string_returns_none(self):
+        assert _decode_email_from_id_token("") is None

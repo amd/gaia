@@ -63,7 +63,7 @@ async def main():
 
     # 3. Fetch a short-lived access token (refresh is automatic).
     token = await conn.get_access_token(
-        connector_id="google",
+        provider="google",
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         agent_id="my-agent",
     )
@@ -81,6 +81,86 @@ asyncio.run(main())
 | `AGENT_NOT_GRANTED` | This agent has no per-agent scope grant. |
 | `CONNECTION_MISSING_SCOPES` | Grant exists but covers fewer scopes. |
 | `REAUTH_REQUIRED` | OAuth client ID was rotated. |
+
+## Forwarded connections (no re-auth)
+
+When a host app has **already** authenticated the user (its own OAuth flow),
+it can FORWARD that connection to GAIA instead of triggering a second consent
+screen. GAIA persists the forwarded grant and refreshes **as the host app's
+client** — credential forwarding, not a GAIA-run OAuth flow.
+
+The host app forwards three things: the OAuth client it was issued under
+(`client_id` + `client_secret`) and the user's long-lived `refresh_token`.
+
+```python
+import gaia.connectors as conn
+
+summary = conn.import_forwarded_connection(
+    provider="google",
+    client_id="<host-app-client-id>.apps.googleusercontent.com",
+    client_secret="<host-app-client-secret>",
+    refresh_token="<user-refresh-token>",
+    scopes=[
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar.events",
+    ],
+    account_email="alice@example.com",   # display-only in v1
+    grant_agents=["builtin:email"],       # agents that may use it
+)
+# summary carries metadata only — never the refresh token or client secret.
+```
+
+### REST: `POST /v1/connections/{provider}`
+
+The same ingestion is exposed over REST by the Agent UI server (which binds
+`localhost` by default and gates remote/tunnel access behind a token).
+Mutating routes require the `X-Gaia-UI: 1` header.
+
+```bash
+curl -X POST http://localhost:4200/v1/connections/google \
+  -H "X-Gaia-UI: 1" -H "Content-Type: application/json" \
+  -d '{
+        "client_id": "<host-app-client-id>",
+        "client_secret": "<host-app-client-secret>",
+        "refresh_token": "<user-refresh-token>",
+        "scopes": ["https://www.googleapis.com/auth/gmail.modify",
+                   "https://www.googleapis.com/auth/gmail.send",
+                   "https://www.googleapis.com/auth/calendar.events"],
+        "account_email": "alice@example.com",
+        "grant_agents": ["builtin:email"]
+      }'
+```
+
+| Method / path | Purpose |
+|---|---|
+| `POST /v1/connections/{provider}` | Persist a forwarded grant (201). No browser step. |
+| `GET /v1/connections` | List connections — **metadata only, secrets omitted**. |
+| `GET /v1/connections/{provider}` | One connection's metadata (404 if absent). |
+| `DELETE /v1/connections/{provider}` | Revoke: clears token, client, grants, caches. |
+
+After a successful POST the agent resolves the connection ambiently — the
+triage request carries **no credentials**; `get_access_token` reads the
+persisted grant and refreshes transparently.
+
+<Warning>
+**The host app's initial consent must request the UNION of every scope both
+it and GAIA need.** GAIA refreshes with the forwarded `refresh_token` and
+**cannot widen scope at refresh time** — a refresh only ever returns the
+scopes the original consent granted. If the forwarded `scopes` don't cover
+what the target agent needs (for the Email agent: `gmail.modify`,
+`gmail.send`, and a calendar scope), the import **fails loudly** with
+`ScopeMismatchError` (HTTP 403 + `missing_scopes`) rather than silently
+under-provisioning. Re-consent by the host app — with the wider scope set —
+is the only fix.
+</Warning>
+
+<Note>
+GAIA refuses to persist tokens to an insecure keyring backend (plaintext /
+weak file-backed stores). On such a backend the import fails loudly with an
+actionable error pointing at the system credential-store setup. Forwarded
+secrets are never written to `~/.gaia/` and never echoed in any response.
+</Note>
 
 ## SDK use — MCP server
 
@@ -170,7 +250,7 @@ class GmailAgent(Agent):
     @tool(description="List the 5 newest Gmail subjects")
     def _list_recent_subjects(self) -> list[str]:
         token = get_access_token_sync(
-            connector_id="google",
+            provider="google",
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         )
         import requests
@@ -187,6 +267,16 @@ class GmailAgent(Agent):
 The Agent UI consent dialog renders `reason` in plain language. After
 the user grants the scopes, subsequent `get_access_token_sync` calls
 return fresh tokens transparently.
+
+If instead your agent loads MCP servers dynamically at runtime (from
+`~/.gaia/mcp_servers.json`) rather than declaring specific connectors, set
+`CONSUMES_MCP_SERVERS = True` so the Settings → Connectors "Active for"
+panel lists it for every `mcp_server` connector:
+
+```python
+class MyAgent(Agent):
+    CONSUMES_MCP_SERVERS: ClassVar[bool] = True
+```
 
 ## Per-agent activation (MCP servers only)
 
@@ -246,6 +336,21 @@ gaia connectors activations list mcp-github
 gaia connectors activations deactivate mcp-github builtin:chat
 ```
 
+### Which agents appear in the "Active for" panel
+
+For an `mcp_server` connector the panel lists agents from **two** sources:
+
+1. Agents that declare the connector in `REQUIRED_CONNECTORS` (static).
+2. Agents that set `CONSUMES_MCP_SERVERS = True` — they load MCP servers
+   dynamically at runtime (from `~/.gaia/mcp_servers.json`) and gate the
+   tools through this same activation ledger, so they can use **any** MCP
+   connector once activated. `builtin:chat` is the canonical example.
+
+Category (2) agents declare no scopes of their own, so one-click activation
+auto-grants the canonical `use` scope. The registry surfaces the flag on
+each agent as `consumes_mcp_servers`. OAuth connectors have no activatable
+agents — the panel is hidden for them entirely.
+
 The HTTP router exposes:
 
 ```text
@@ -255,13 +360,20 @@ DELETE /api/connectors/{id}/activations/{agent_id}
 ```
 
 Both mutating routes reject non-`mcp_server` connectors with `400 Bad
-Request` (after the standard `X-Gaia-UI` CSRF check). SSE event
-`connector.activation.changed` is emitted on every successful PUT /
-DELETE so the Agent UI tile refreshes within ~1 s when another caller
-(CLI, SDK) changes the state. Disconnecting a connector wipes both
-grants **and** activations for that connector — re-adding the same
-`connector_id` must not silently inherit the previous user's
-tool-visibility decisions.
+Request` (after the standard `X-Gaia-UI` CSRF check).
+
+Every activation change emits the SSE event `connector.activation.changed`
+(`{connector_id, agent_id, active}`) so an open Agent UI Settings tab
+refreshes the "Active for" state without a manual reload. The emit is
+centralized in `api.activate` / `api.deactivate`, so HTTP, SDK, and CLI
+callers all notify through one path. Because the CLI runs in a separate
+process from the UI server, the server also runs a background watcher on
+`activations.json` that emits the same event (within ~1 s) when an
+out-of-process writer changes the ledger.
+
+Disconnecting a connector wipes both grants **and** activations for that
+connector — re-adding the same `connector_id` must not silently inherit
+the previous user's tool-visibility decisions.
 
 ## Where things live
 

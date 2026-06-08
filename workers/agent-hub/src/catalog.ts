@@ -1,0 +1,132 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+/**
+ * Build per-agent manifests and the top-level catalog index.
+ */
+
+import { compareSemver } from "./manifest";
+import {
+  listAgentIds,
+  readAgentManifest,
+  writeIndex,
+} from "./storage";
+import type {
+  AgentManifest,
+  ArtifactInfo,
+  CatalogIndex,
+  IndexEntry,
+  ParsedManifest,
+  VersionEntry,
+} from "./types";
+
+/** Pick the highest SemVer among a set of version strings. */
+export function latestVersion(versions: string[]): string {
+  return versions.reduce((best, v) => (compareSemver(v, best) > 0 ? v : best));
+}
+
+/**
+ * Produce an updated per-agent manifest with `newVersion` added.
+ *
+ * Caller must have already enforced immutability (the version must not exist).
+ * The aggregate metadata (name/description/...) is refreshed from the manifest
+ * of whatever version becomes `latest_version`, so the catalog reflects the
+ * newest release's display fields.
+ */
+export function upsertVersion(
+  existing: AgentManifest | null,
+  manifest: ParsedManifest,
+  version: VersionEntry
+): AgentManifest {
+  const versions: Record<string, VersionEntry> = {
+    ...(existing?.versions ?? {}),
+    [version.version]: version,
+  };
+  const latest = latestVersion(Object.keys(versions));
+
+  // Display metadata tracks the latest version. If the just-published version
+  // is the new latest, use its (freshly parsed) fields; otherwise keep what the
+  // existing manifest had for the older display metadata.
+  const useNew = latest === manifest.version;
+  const base = useNew ? manifest : null;
+
+  return {
+    id: manifest.id,
+    name: base?.name ?? existing?.name ?? manifest.name,
+    description: base?.description ?? existing?.description ?? manifest.description,
+    author: existing?.author ?? manifest.author,
+    license: base?.license ?? existing?.license ?? manifest.license,
+    language: base?.language ?? existing?.language ?? manifest.language,
+    category: base?.category ?? existing?.category ?? manifest.category,
+    tags: base?.tags ?? existing?.tags ?? manifest.tags,
+    icon: base?.icon ?? existing?.icon ?? manifest.icon,
+    security_tier: base?.security_tier ?? existing?.security_tier ?? manifest.security_tier,
+    min_gaia_version: base?.min_gaia_version ?? existing?.min_gaia_version,
+    models: base?.models ?? existing?.models ?? manifest.models,
+    requirements: base?.requirements ?? existing?.requirements ?? manifest.requirements,
+    interfaces: base?.interfaces ?? existing?.interfaces ?? manifest.interfaces,
+    latest_version: latest,
+    deprecated: versions[latest].deprecated,
+    versions,
+  };
+}
+
+/** Build the lightweight catalog entry for one agent manifest. */
+export function toIndexEntry(agent: AgentManifest): IndexEntry {
+  const latest = agent.versions[agent.latest_version];
+  return {
+    id: agent.id,
+    name: agent.name,
+    description: agent.description,
+    category: agent.category,
+    latest_version: agent.latest_version,
+    icon: agent.icon,
+    language: agent.language,
+    author: agent.author,
+    security_tier: agent.security_tier,
+    download_size_bytes: latest?.artifact.size_bytes ?? 0,
+    requirements: { platforms: agent.requirements.platforms ?? [] },
+    deprecated: agent.deprecated,
+  };
+}
+
+/**
+ * Rebuild `index.json` from every per-agent manifest currently in the bucket.
+ * Returns the catalog that was written (handy for tests/responses).
+ */
+export async function rebuildIndex(
+  bucket: R2Bucket,
+  now: Date = new Date()
+): Promise<CatalogIndex> {
+  const ids = await listAgentIds(bucket);
+  const entries: IndexEntry[] = [];
+  for (const id of ids) {
+    const agent = await readAgentManifest(bucket, id);
+    if (agent) entries.push(toIndexEntry(agent));
+  }
+  entries.sort((a, b) => a.id.localeCompare(b.id));
+
+  const index: CatalogIndex = {
+    schema_version: 1,
+    generated_at: now.toISOString(),
+    agents: entries,
+  };
+  await writeIndex(bucket, index);
+  return index;
+}
+
+/** Build a {@link VersionEntry} from a parsed manifest + stored artifact. */
+export function makeVersionEntry(
+  manifest: ParsedManifest,
+  artifact: ArtifactInfo,
+  publisher: string,
+  publishedAt: string
+): VersionEntry {
+  return {
+    version: manifest.version,
+    published_at: publishedAt,
+    publisher,
+    deprecated: manifest.deprecated,
+    artifact,
+  };
+}

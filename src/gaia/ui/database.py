@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at TEXT DEFAULT (datetime('now')),
     model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
     system_prompt TEXT,
-    device TEXT DEFAULT 'gpu'
+    device TEXT DEFAULT 'gpu',
+    mail_provider TEXT DEFAULT 'google'
 );
 
 -- Many-to-many: which docs are attached to which session
@@ -84,7 +85,7 @@ CREATE INDEX IF NOT EXISTS idx_session_docs ON session_documents(session_id);
 class ChatDatabase:
     """SQLite database for Agent UI sessions, messages, and documents."""
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str | None = None):
         """Initialize database connection.
 
         Args:
@@ -224,6 +225,25 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for device column: %s", e)
 
+        # Add mail_provider column for per-session email-backend selection
+        # (Gmail vs Outlook). See EmailAgentConfig.mail_provider.
+        try:
+            sess_cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+            ]
+            if "mail_provider" not in sess_cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN mail_provider TEXT DEFAULT 'google'"
+                )
+                self._conn.execute(
+                    "UPDATE sessions SET mail_provider = 'google' WHERE mail_provider IS NULL"
+                )
+                self._conn.commit()
+                logger.info("Migrated sessions table: added mail_provider column")
+        except Exception as e:
+            logger.debug("Migration check for mail_provider column: %s", e)
+
     def close(self):
         """Close database connection."""
         if self._conn:
@@ -251,14 +271,15 @@ class ChatDatabase:
 
     def create_session(
         self,
-        title: str = None,
-        model: str = None,
-        system_prompt: str = None,
-        document_ids: List[str] = None,
+        title: str | None = None,
+        model: str | None = None,
+        system_prompt: str | None = None,
+        document_ids: List[str] | None = None,
         private: bool = False,
-        agent_type: str = None,
-        device: str = None,
-    ) -> Dict[str, Any]:
+        agent_type: str | None = None,
+        device: str | None = None,
+        mail_provider: str | None = None,
+    ) -> Optional[Dict[str, Any]]:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
@@ -266,11 +287,12 @@ class ChatDatabase:
         title = title or "New Chat"
         agent_type = agent_type or "chat"
         device = device or "gpu"
+        mail_provider = mail_provider or "google"
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private, agent_type, device)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private, agent_type, device, mail_provider)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     title,
@@ -281,6 +303,7 @@ class ChatDatabase:
                     1 if private else 0,
                     agent_type,
                     device,
+                    mail_provider,
                 ),
             )
 
@@ -348,25 +371,30 @@ class ChatDatabase:
         """Count total sessions."""
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*) as cnt FROM sessions").fetchone()
-            return row["cnt"]
+            return int(row["cnt"])
 
     def update_session(
         self,
         session_id: str,
-        title: str = None,
-        system_prompt: str = None,
-        document_ids: list = None,
-        private: bool = None,
-        agent_type: str = None,
-        device: str = None,
+        title: str | None = None,
+        system_prompt: str | None = None,
+        document_ids: list | None = None,
+        private: bool | None = None,
+        agent_type: str | None = None,
+        device: str | None = None,
+        model: str | None = None,
+        mail_provider: str | None = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title, system prompt, agent_type, device, private flag, and/or document_ids."""
-        updates = []
-        params = []
+        """Update session title, system prompt, agent_type, device, model, mail_provider, private flag, and/or document_ids."""
+        updates: list[str] = []
+        params: list[Any] = []
 
         if title is not None:
             updates.append("title = ?")
             params.append(title)
+        if model is not None:
+            updates.append("model = ?")
+            params.append(model)
         if system_prompt is not None:
             updates.append("system_prompt = ?")
             params.append(system_prompt)
@@ -379,6 +407,9 @@ class ChatDatabase:
         if device is not None:
             updates.append("device = ?")
             params.append(device)
+        if mail_provider is not None:
+            updates.append("mail_provider = ?")
+            params.append(mail_provider)
 
         updates.append("updated_at = ?")
         params.append(self._now())
@@ -432,11 +463,11 @@ class ChatDatabase:
         session_id: str,
         role: str,
         content: str,
-        rag_sources: List[Dict] = None,
-        agent_steps: List[Dict] = None,
-        tokens_prompt: int = None,
-        tokens_completion: int = None,
-        inference_stats: Dict = None,
+        rag_sources: List[Dict] | None = None,
+        agent_steps: List[Dict] | None = None,
+        tokens_prompt: int | None = None,
+        tokens_completion: int | None = None,
+        inference_stats: Dict | None = None,
     ) -> int:
         """Add a message to a session. Returns message ID."""
         sources_json = json.dumps(rag_sources) if rag_sources else None
@@ -469,7 +500,7 @@ class ChatDatabase:
             )
             msg_id = cursor.lastrowid
 
-        return msg_id
+        return msg_id or 0
 
     def get_messages(
         self, session_id: str, limit: int = 100, offset: int = 0
@@ -566,7 +597,7 @@ class ChatDatabase:
                 "SELECT COUNT(*) as cnt FROM messages WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
-            return row["cnt"]
+            return int(row["cnt"])
 
     # ── Documents ───────────────────────────────────────────────────────
 
@@ -578,7 +609,7 @@ class ChatDatabase:
         file_size: int = 0,
         chunk_count: int = 0,
         file_mtime: Optional[float] = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Add a document to the library. Returns existing doc if hash matches.
 
         Uses a single lock acquisition for the check-then-insert pattern
@@ -733,7 +764,7 @@ class ChatDatabase:
     # ── Document Status ────────────────────────────────────────────
 
     def update_document_status(
-        self, doc_id: str, status: str, chunk_count: int = None
+        self, doc_id: str, status: str, chunk_count: int | None = None
     ) -> bool:
         """Update a document's indexing status and optionally its chunk count.
 
@@ -824,7 +855,7 @@ class ChatDatabase:
 
     # ── Settings ──────────────────────────────────────────────────────
 
-    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+    def get_setting(self, key: str, default: str | None = None) -> Optional[str]:
         """Get a setting value by key."""
         with self._lock:
             row = self._conn.execute(

@@ -431,6 +431,8 @@ def _build_create_kwargs(
     custom_model: str | None,
     model_id: str | None,
     streaming: bool = False,
+    device: str | None = None,
+    min_context_size: int | None = None,
 ) -> dict:
     """Return the kwargs dict for registry.create_agent().
 
@@ -441,11 +443,20 @@ def _build_create_kwargs(
 
     Note: if registry.resolve_model() already promoted model_id before this
     call, it is forwarded as-is via branch 2 (resolve_model result ≠ default).
+
+    ``device``/``min_context_size`` flow through to the agent's config so the
+    requested device is validated at runtime. Agent factories filter unknown
+    kwargs via ``dataclasses.fields``, so this is safe for agents whose config
+    doesn't declare them.
     """
     suffix = " (streaming)" if streaming else ""
     kwargs: dict = {"silent_mode": not streaming, "debug": False}
     if streaming:
         kwargs["streaming"] = True
+    if device is not None:
+        kwargs["device"] = device
+    if min_context_size is not None:
+        kwargs["min_context_size"] = min_context_size
 
     if custom_model:
         kwargs["model_id"] = custom_model
@@ -476,6 +487,73 @@ def _effective_model(agent, fallback: str | None) -> str | None:
     return effective if effective is not None else fallback
 
 
+def resolve_device_model(
+    agent_type: str, device: str | None, registry=None
+) -> tuple[str | None, int | None]:
+    """Resolve the (model, ctx_size) an agent should use on *device*.
+
+    The Agent UI device dropdown writes ``session["device"]``; resolving the
+    model here is what makes selecting "NPU" actually switch models instead of
+    rebuilding on the GPU model. Public (no underscore) because the sessions
+    router also calls it to rewrite the session model on a device switch.
+
+    Looks up the registered agent's ``device_configs`` and returns the model
+    and context size of the entry matching *device*.  Falls back to the
+    built-in ``DEFAULT_DEVICE_CONFIGS`` when the agent isn't registered or
+    declares none (e.g. the direct-construction ``chat`` path).  Returns
+    ``(None, None)`` when *device* is falsy or no entry matches, so callers
+    leave the existing model untouched.
+    """
+    if not device:
+        return None, None
+    registry = registry if registry is not None else _agent_registry
+    device_configs = None
+    if registry is not None:
+        reg = registry.get(agent_type)
+        if reg is not None:
+            device_configs = getattr(reg, "device_configs", None)
+    if not device_configs:
+        from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+        device_configs = DEFAULT_DEVICE_CONFIGS
+    for dc in device_configs:
+        if getattr(dc, "device", None) == device:
+            return dc.model, getattr(dc, "ctx_size", None)
+    return None, None
+
+
+def _apply_device_model(
+    session: dict,
+    agent_type: str,
+    model_id: str | None,
+    custom_model: str | None,
+    registry=None,
+) -> tuple[str | None, int | None]:
+    """Apply the session's device choice to the model + context window.
+
+    Returns ``(model_id, device_ctx)``. The device config drives the model when
+    the current model is the generic default (so built-in Gemma agents switch
+    correctly) OR the user picked a non-GPU device explicitly (a pinned model
+    can't run there) — so an agent that declares its own model isn't clobbered
+    on the default GPU. Skipped when the user pinned a ``custom_model``.
+    """
+    device = session.get("device")
+    if custom_model or not device:
+        return model_id, None
+    dev_model, dev_ctx = resolve_device_model(agent_type, device, registry)
+    if not dev_model:
+        return model_id, None
+    is_default_model = model_id in (None, _DB_DEFAULT_MODEL)
+    device_is_explicit = device != "gpu"
+    if dev_model == model_id or is_default_model or device_is_explicit:
+        if dev_model != model_id:
+            logger.info(
+                "chat: device=%s -> model %s (was %s)", device, dev_model, model_id
+            )
+        return dev_model, dev_ctx
+    return model_id, None
+
+
 def get_cached_mcp_status() -> list[dict]:
     """Return the last known MCP server connection status from any cached agent."""
     with _mcp_status_lock:
@@ -497,6 +575,25 @@ def _disconnect_cached_agent(entry) -> None:
             # WARNING because a leaked MCP subprocess is observable
             # (orphaned process, stuck port) and worth surfacing.
             logger.warning("MCP disconnect failed during cache eviction: %s", exc)
+
+
+def _agent_unavailable_message(requested: str, registry) -> str:
+    """Return a user-friendly error message for an agent that could not be loaded.
+
+    Mirrors the fail-loudly precedent at _chat_helpers.py around line 589 — no
+    silent swap to chat, just a clear message the user can act on.
+    """
+    reason_suffix = ""
+    if registry is not None:
+        reason = registry.get_load_error(requested)
+        if reason:
+            reason_suffix = f": {reason}"
+
+    return (
+        f"I couldn't load the agent **'{requested}'**. "
+        f"It may have failed to install or contains an error{reason_suffix}. "
+        f"Try re-creating it, or pick another agent from the selector."
+    )
 
 
 def _canonical_agent_type(agent_type: str) -> str:
@@ -944,9 +1041,10 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
         with model_load_lock:
             # Re-check after acquiring the lock: another thread may have
             # already loaded the expected model with sufficient context.
+            resident_chat_models = []
             resp2 = httpx.get(f"{base_url}/health", timeout=5.0, headers=_auth)
             if resp2.status_code == 200:
-                models2 = [
+                resident_chat_models = [
                     m
                     for m in resp2.json().get("all_models_loaded", [])
                     if m.get("type") in ("llm", "vlm")
@@ -955,14 +1053,28 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                     (m.get("model_name") or "").lower() == expected_lower
                     and (m.get("recipe_options", {}).get("ctx_size") or 0)
                     >= DEFAULT_CONTEXT_SIZE
-                    for m in models2
+                    for m in resident_chat_models
                 ):
                     logger.debug(
                         "Expected model loaded with sufficient ctx by concurrent "
                         "thread; skipping load"
                     )
                     return
-            LemonadeClient(verbose=False).load_model(
+
+            client = LemonadeClient(verbose=False)
+            # Lemonade does not evict the resident model on a new /load, so
+            # loading a different model (or the same model at a larger ctx)
+            # leaves the previous one resident — a silent double-load that
+            # wastes memory and can degrade output. Unload the wrong/stale chat
+            # model first, mirroring gaia/rag/sdk.py before an embedder swap.
+            if resident_chat_models:
+                try:
+                    client.unload_model()
+                except Exception as unload_exc:
+                    logger.debug(
+                        "Pre-flight unload before reload failed: %s", unload_exc
+                    )
+            client.load_model(
                 model_id,
                 ctx_size=DEFAULT_CONTEXT_SIZE,
                 prompt=False,
@@ -1032,11 +1144,12 @@ async def _get_chat_response(
         registry = _agent_registry
         if agent_type != "chat" and registry and not registry.get(agent_type):
             logger.warning(
-                "chat: Session %s requested unknown agent_type '%s', falling back to chat",
+                "chat: Session %s requested unknown agent_type '%s'; "
+                "returning unavailable-agent error",
                 session_id[:8],
                 agent_type,
             )
-            agent_type = "chat"
+            return _agent_unavailable_message(agent_type, registry)
 
         if agent_type != stored_agent_type:
             db.update_session(session_id, agent_type=agent_type)
@@ -1060,6 +1173,12 @@ async def _get_chat_response(
                     model_id,
                 )
                 model_id = preferred
+
+        # The UI device dropdown drives the model + ctx window.
+        device = session.get("device")
+        model_id, device_ctx = _apply_device_model(
+            session, agent_type, model_id, custom_model, registry
+        )
 
         # ── Agent cache ──────────────────────────────────────────────────────
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
@@ -1100,6 +1219,8 @@ async def _get_chat_response(
                 max_steps=10,
                 silent_mode=True,
                 debug=False,
+                device=device,
+                min_context_size=device_ctx,
                 **_session_kwargs,
             )
             _stamp_builtin_chat_identity(config)
@@ -1110,39 +1231,22 @@ async def _get_chat_response(
             # Non-chat agent: create via registry
             registry = _agent_registry
             if registry is None or registry.get(agent_type) is None:
-                # Registry unavailable or agent_type unknown (e.g. stale client state).
-                # Fall back to chat agent rather than permanently breaking the session.
+                # Registry unavailable or agent_type unknown — return a user-friendly
+                # error rather than silently falling back to a ChatAgent.
                 if registry is None:
                     logger.warning(
-                        "chat: Agent registry not initialized; falling back to chat for session %s",
+                        "chat: Agent registry not initialized for session %s; "
+                        "returning unavailable-agent error",
                         session_id[:8],
                     )
                 else:
                     logger.warning(
-                        "chat: Unknown agent_type '%s' for session %s; falling back to chat",
+                        "chat: Unknown agent_type '%s' for session %s; "
+                        "returning unavailable-agent error",
                         agent_type,
                         session_id[:8],
                     )
-                agent_type = "chat"
-                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-                _session_kwargs = _session_agent_kwargs(
-                    rag_file_paths=rag_file_paths,
-                    library_paths=library_paths,
-                    allowed=allowed,
-                    session_id=session_id,
-                )
-                config = ChatAgentConfig(
-                    model_id=model_id,
-                    max_steps=10,
-                    silent_mode=True,
-                    debug=False,
-                    **_session_kwargs,
-                )
-                _stamp_builtin_chat_identity(config)
-                agent = ChatAgent(config)
-                _store_agent(session_id, model_id, document_ids, agent, agent_type)
-                _register_agent_memory_ops(agent)
+                return _agent_unavailable_message(agent_type, registry)
             else:
                 logger.info(
                     "chat: Creating new %s agent for session %s",
@@ -1166,7 +1270,10 @@ async def _get_chat_response(
                 agent = registry.create_agent(
                     agent_type,
                     **_build_create_kwargs(
-                        custom_model=custom_model, model_id=model_id
+                        custom_model=custom_model,
+                        model_id=model_id,
+                        device=device,
+                        min_context_size=device_ctx,
                     ),
                     **_session_agent_kwargs(
                         rag_file_paths=rag_file_paths,
@@ -1174,6 +1281,10 @@ async def _get_chat_response(
                         allowed=allowed,
                         session_id=session_id,
                     ),
+                    # Forwarded only here (not via _session_agent_kwargs, which
+                    # also feeds the strict ChatAgentConfig). Non-email factories
+                    # drop it via dataclasses.fields filtering.
+                    mail_provider=session.get("mail_provider") or "google",
                 )
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
@@ -1384,11 +1495,14 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         registry = _agent_registry
         if agent_type != "chat" and registry and not registry.get(agent_type):
             logger.warning(
-                "chat: Session %s requested unknown agent_type '%s', falling back to chat (streaming)",
+                "chat: Session %s requested unknown agent_type '%s' (streaming); "
+                "returning unavailable-agent error",
                 session_id[:8],
                 agent_type,
             )
-            agent_type = "chat"
+            error_msg = _agent_unavailable_message(agent_type, registry)
+            yield f"data: {json.dumps({'type': 'answer', 'content': error_msg})}\n\n"
+            return
 
         if agent_type != stored_agent_type:
             db.update_session(session_id, agent_type=agent_type)
@@ -1416,6 +1530,12 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     model_id,
                 )
                 model_id = preferred
+
+        # The UI device dropdown drives the model + ctx window.
+        device = session.get("device")
+        model_id, device_ctx = _apply_device_model(
+            session, agent_type, model_id, custom_model, registry
+        )
 
         # Move ALL slow work into the background thread so the SSE generator
         # can yield the thinking event immediately.
@@ -1487,6 +1607,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                         streaming=True,
                         silent_mode=False,
                         debug=False,
+                        device=device,
+                        min_context_size=device_ctx,
                         **_session_kwargs,
                     )
 
@@ -1567,44 +1689,25 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     # -- Cache miss: non-chat agent via registry --
                     registry = _agent_registry
                     if registry is None or registry.get(agent_type) is None:
-                        # Registry unavailable or agent_type unknown (e.g. stale client
-                        # state). Fall back to chat to avoid breaking the session.
+                        # Registry unavailable or agent_type unknown — emit a
+                        # user-friendly error rather than silently falling back to chat.
                         if registry is None:
                             logger.warning(
-                                "chat: Agent registry not initialized; falling back to chat for session %s",
+                                "chat: Agent registry not initialized for session %s (streaming); "
+                                "returning unavailable-agent error",
                                 session_id[:8],
                             )
                         else:
                             logger.warning(
-                                "chat: Unknown agent_type '%s' for session %s; falling back to chat",
+                                "chat: Unknown agent_type '%s' for session %s (streaming); "
+                                "returning unavailable-agent error",
                                 agent_type,
                                 session_id[:8],
                             )
-                        _fallback_type = "chat"
-                        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-                        config = ChatAgentConfig(
-                            model_id=model_id,
-                            max_steps=10,
-                            streaming=True,
-                            silent_mode=False,
-                            debug=False,
-                            **_session_agent_kwargs(
-                                rag_file_paths=[],
-                                library_paths=library_paths,
-                                allowed=allowed,
-                                session_id=session_id,
-                            ),
-                        )
-                        _stamp_builtin_chat_identity(config)
-                        agent = ChatAgent(config)
-                        agent.console = sse_handler
-                        _register_agent_memory_ops(agent)
-                        if rag_file_paths and agent.rag:
-                            _index_rag_with_progress(agent, rag_file_paths, sse_handler)
-                        _store_agent(
-                            session_id, model_id, document_ids, agent, _fallback_type
-                        )
+                        error_msg = _agent_unavailable_message(agent_type, registry)
+                        sse_handler._emit({"type": "answer", "content": error_msg})
+                        result_holder["answer"] = error_msg
+                        return
                     else:
                         logger.info(
                             "chat: Creating new %s agent for session %s",
@@ -1630,6 +1733,8 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                 custom_model=custom_model,
                                 model_id=model_id,
                                 streaming=True,
+                                device=device,
+                                min_context_size=device_ctx,
                             ),
                             **_session_agent_kwargs(
                                 rag_file_paths=[],
@@ -1637,6 +1742,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                 allowed=allowed,
                                 session_id=session_id,
                             ),
+                            # See the non-streaming path: email-only kwarg,
+                            # filtered out by non-email factories.
+                            mail_provider=session.get("mail_provider") or "google",
                         )
                         agent.console = sse_handler
                         logger.info(

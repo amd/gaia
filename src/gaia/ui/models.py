@@ -194,6 +194,11 @@ class AgentInfo(BaseModel):
     # Each entry is a serialized ``ConnectorRequirement``:
     # {connector_id: str, scopes: list[str], reason: str}.
     required_connections: List[dict] = Field(default_factory=list)
+    # True when the agent loads MCP servers dynamically at runtime (e.g. the
+    # chat agent) and gates their tools through the activation ledger. The
+    # Settings "Active for" panel lists such agents as activatable for
+    # MCP-server connectors even without a static ``required_connections`` entry.
+    consumes_mcp_servers: bool = False
     # T-X2: opaque grant-ledger key. Built-ins use ``builtin:<id>``; custom
     # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
     # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.
@@ -207,6 +212,11 @@ class AgentInfo(BaseModel):
     # Multi-device support (issue #1220): declared device configurations.
     # Each entry is a serialized ``DeviceConfig`` from the registry.
     device_configs: List[dict] = Field(default_factory=list)
+    # Model-size tiers (issue #1162): "full" vs "lite" (~4B). Each entry is a
+    # serialized ``ModelTier``. The frontend renders a single agent card with a
+    # model-size selector instead of duplicate "… Lite" cards. Empty for agents
+    # that expose only one model size.
+    model_tiers: List[dict] = Field(default_factory=list)
 
 
 class AgentListResponse(BaseModel):
@@ -246,6 +256,9 @@ class CreateSessionRequest(BaseModel):
     private: bool = False
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     device: Optional[str] = None
+    # Mailbox provider for email-backed agents. Gmail by default; "microsoft"
+    # routes the email agent to the Outlook backend (see EmailAgentConfig).
+    mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
 
 
 class UpdateSessionRequest(BaseModel):
@@ -257,6 +270,7 @@ class UpdateSessionRequest(BaseModel):
     private: Optional[bool] = None
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     device: Optional[str] = None
+    mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
 
 
 class SessionResponse(BaseModel):
@@ -273,6 +287,7 @@ class SessionResponse(BaseModel):
     private: bool = False
     agent_type: str = "chat"
     device: str = "gpu"
+    mail_provider: str = "google"
 
 
 class SessionListResponse(BaseModel):

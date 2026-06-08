@@ -45,9 +45,16 @@ def get(provider_id: str) -> OAuthProvider:
         register(provider)
         return provider
 
+    if provider_id == "microsoft":
+        from gaia.connectors.providers.microsoft import MicrosoftOAuthProvider
+
+        provider = MicrosoftOAuthProvider()
+        register(provider)
+        return provider
+
     raise KeyError(
         f"Unknown OAuth provider '{provider_id}'. Known: "
-        f"{sorted(set(_registry) | {'google'})}"
+        f"{sorted(set(_registry) | {'google', 'microsoft'})}"
     )
 
 

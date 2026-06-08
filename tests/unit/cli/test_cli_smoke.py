@@ -180,9 +180,14 @@ def test_console_script_minimum_count() -> None:
     installed (no metadata to read). Without this assert, the parametrize
     above would silently generate 0 tests — a silent fallback.
     """
-    assert len(_CONSOLE_SCRIPTS) >= 3, (
+    # Only ``gaia-mcp`` is a guaranteed framework ``gaia-*`` console script;
+    # the per-agent binaries (gaia-emr, gaia-code, …) ship with their own
+    # ``gaia-agent-<id>`` hub wheels now (#1102), so a framework-only install
+    # exposes just one. The sentinel's job is to catch an EMPTY discovery
+    # (package not installed → metadata unreadable), so the floor is >= 1.
+    assert len(_CONSOLE_SCRIPTS) >= 1, (
         f"Console-script discovery returned only {len(_CONSOLE_SCRIPTS)} entries; "
-        f"expected >= 3 (gaia-mcp, gaia-emr, gaia-code). "
+        f"expected >= 1 (at least gaia-mcp). "
         f"Is the package installed? Run `pip install -e .`\n"
         f"Found: {_CONSOLE_SCRIPTS}"
     )

@@ -148,6 +148,14 @@ class OutputHandler(ABC):
         """Stop progress indicator."""
         ...
 
+    def pause_progress(self):
+        """Pause progress indicator, remembering state for later resume. Optional — default no-op."""
+        ...
+
+    def resume_progress(self):
+        """Resume progress indicator with the last message. Optional — default no-op."""
+        ...
+
     # === Completion Methods (Required) ===
 
     @abstractmethod
@@ -398,6 +406,7 @@ class AgentConsole(OutputHandler):
         self.file_preview_filename = ""
         self.file_preview_max_lines = 15
         self._paused_preview = False  # Track if preview was paused for progress
+        self._last_progress_message = ""  # Last message passed to start_progress
         self._last_preview_update_time = 0  # Throttle preview updates
         self._preview_update_interval = 0.25  # Minimum seconds between updates
 
@@ -1231,6 +1240,18 @@ class AgentConsole(OutputHandler):
         # Print the table in a panel
         self.console.print(Panel(table, border_style="blue"))
 
+    def pause_progress(self) -> None:
+        """Stop the spinner but keep _last_progress_message so resume_progress can restart it."""
+        self.progress.stop()
+        if self.rich_available:
+            time.sleep(0.15)
+            print()
+
+    def resume_progress(self) -> None:
+        """Resume the progress indicator with the last message used by start_progress."""
+        if hasattr(self, "_last_progress_message") and self._last_progress_message:
+            self.start_progress(self._last_progress_message)
+
     def start_progress(self, message: str, show_timer: bool = False) -> None:
         """
         Start the progress indicator.
@@ -1239,6 +1260,7 @@ class AgentConsole(OutputHandler):
             message: Message to display with the indicator
             show_timer: If True, show elapsed time in progress message
         """
+        self._last_progress_message = message
         # If file preview is active, pause it temporarily
         self._paused_preview = False
         if self.file_preview_live is not None:
@@ -2173,6 +2195,12 @@ class SilentConsole(OutputHandler):
         """No-op implementation."""
 
     def stop_progress(self):
+        """No-op implementation."""
+
+    def pause_progress(self):
+        """No-op implementation."""
+
+    def resume_progress(self):
         """No-op implementation."""
 
     def print_repeated_tool_warning(self):

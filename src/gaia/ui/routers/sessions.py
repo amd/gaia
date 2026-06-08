@@ -11,8 +11,8 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from .._chat_helpers import evict_session_agent
-from ..database import ChatDatabase
+from .._chat_helpers import evict_session_agent, resolve_device_model
+from ..database import SESSION_DEFAULT_MODEL, ChatDatabase
 from ..dependencies import get_db
 from ..models import (
     AttachDocumentRequest,
@@ -61,6 +61,7 @@ async def create_session(
             private=request.private,
             agent_type=request.agent_type,
             device=request.device,
+            mail_provider=request.mail_provider,
         )
         return session_to_response(session)
     except Exception as e:
@@ -87,8 +88,31 @@ async def update_session(
     db: ChatDatabase = Depends(get_db),
 ):
     """Update session title, system prompt, or linked documents."""
-    if request.agent_type is not None or request.device is not None:
+    if (
+        request.agent_type is not None
+        or request.device is not None
+        or request.mail_provider is not None
+    ):
         evict_session_agent(session_id)
+
+    # On a device switch, rewrite the session's model to that device's
+    # registered model so the agent rebuilt after eviction loads the right
+    # model and the model dropdown reflects reality. Only rewrite when the
+    # device model differs and the session isn't pinned to a non-default model
+    # on the default GPU device — mirrors the runtime guard in ``_chat_helpers``
+    # so an agent's own model isn't clobbered.
+    device_model = None
+    if request.device is not None:
+        existing = db.get_session(session_id)
+        agent_type = request.agent_type or (existing or {}).get("agent_type") or "chat"
+        resolved, _ = resolve_device_model(agent_type, request.device)
+        if resolved:
+            current_model = (existing or {}).get("model")
+            is_default_model = current_model in (None, SESSION_DEFAULT_MODEL)
+            device_is_explicit = request.device != "gpu"
+            if resolved != current_model and (is_default_model or device_is_explicit):
+                device_model = resolved
+
     session = db.update_session(
         session_id,
         title=request.title,
@@ -97,6 +121,8 @@ async def update_session(
         private=request.private,
         agent_type=request.agent_type,
         device=request.device,
+        model=device_model,
+        mail_provider=request.mail_provider,
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

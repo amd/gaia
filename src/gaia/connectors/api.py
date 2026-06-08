@@ -25,6 +25,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
+from gaia.connectors.activation_watcher import note_local_write
 from gaia.connectors.activations import (
     activate_agent,
     deactivate_agent,
@@ -36,7 +37,10 @@ from gaia.connectors.context import current_agent_id
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectorsError,
+    ScopeMismatchError,
 )
+from gaia.connectors.events import emit_change
 from gaia.connectors.flow import (
     cancel_flow,
     complete_authorization,
@@ -61,6 +65,24 @@ from gaia.connectors.store import (
 from gaia.connectors.tokens import get_or_refresh
 
 logger = logging.getLogger(__name__)
+
+
+# Per-provider minimum scopes a forwarded grant must cover when the caller
+# passes no explicit ``required_scopes``. Authoritative validation is the
+# caller's job (the UI router resolves the union from the granted agents'
+# ``REQUIRED_CONNECTORS``); this map is a defense-in-depth default so a
+# None-path forward never demands one provider's scopes of another. Unknown
+# providers default to no requirement — the use-time gate in
+# ``get_access_token`` still enforces per-agent scope coverage at the point an
+# agent actually requests a token.
+_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
+    # Built-in Email Triage Agent (#962) mailbox union.
+    "google": (
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar.events",
+    ),
+}
 
 
 async def get_access_token(
@@ -232,6 +254,146 @@ def revoke_connection(provider: str) -> None:
     logger.info("api: revoked connection provider=%s", provider)
 
 
+def import_forwarded_connection(
+    *,
+    provider: str,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    scopes: List[str],
+    account_email: str = "",
+    grant_agents: Optional[List[str]] = None,
+    required_scopes: Optional[List[str]] = None,
+    connected_at: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Persist a connection FORWARDED by a host app that already authenticated
+    the user. No browser/consent step, no GAIA-run OAuth flow (#1292, Path A).
+
+    The host app forwards the OAuth client it was issued under (``client_id``
+    + ``client_secret``) and the user's ``refresh_token``. GAIA stores both and
+    will later refresh AS THE HOST APP'S CLIENT — the connectors refresh engine
+    is already client-neutral (the keyring-stored forwarded client beats the
+    GAIA env client, and ``client_id_hash`` is recomputed from the forwarded
+    id here).
+
+    This is the single coordination point shared with the headless CLI import
+    (#1084, not wired here). It mirrors what ``oauth_pkce.configure``'s
+    "Save & Connect" path + ``flow._exchange_code_for_tokens`` do, minus the
+    PKCE dance.
+
+    Fails loudly (no fallbacks):
+      - insecure keyring backend → ``ConnectorsError`` (via
+        ``verify_keyring_backend``);
+      - empty ``client_id`` / ``refresh_token`` → ``ConnectorsError``;
+      - forwarded scopes don't cover ``required_scopes`` → ``ScopeMismatchError``.
+        ``required_scopes is None`` falls back to the per-provider default
+        (``_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER``, empty for unknown providers);
+        an explicit ``[]`` means "require nothing" at import time. GAIA cannot
+        widen scope at refresh time, so a shortfall is unrecoverable without
+        re-consent by the host app.
+
+    Returns a metadata-only summary — NEVER the refresh token or client secret.
+    """
+    # Local imports keep the module-level dependency graph (and the lazy
+    # keyring import contract in connectors/__init__.py) unchanged.
+    from gaia.connectors.providers import _registry as _provider_registry
+    from gaia.connectors.store import (
+        save_connection,
+        save_provider_credentials,
+        verify_keyring_backend,
+    )
+    from gaia.connectors.tokens import _cache as _token_cache
+
+    # 1. Insecure-keyring tripwire BEFORE any write (AC4). Raises loudly.
+    verify_keyring_backend()
+
+    # 2. Validate the forwarded grant up front so nothing is persisted on a
+    #    bad input (the failure path must leave the keyring untouched).
+    if not client_id:
+        raise ConnectorsError(
+            f"import_forwarded_connection({provider!r}): client_id is empty. "
+            "The host app must forward the OAuth client_id it authenticated "
+            "the user under. See docs/sdk/infrastructure/connectors.mdx."
+        )
+    if not refresh_token:
+        raise ConnectorsError(
+            f"import_forwarded_connection({provider!r}): refresh_token is empty. "
+            "Forward the user's long-lived refresh_token (the host app must "
+            "request offline access). See docs/sdk/infrastructure/connectors.mdx."
+        )
+
+    # 3. Scope coverage (AC3). Forwarded scopes must be a superset of what the
+    #    agent needs — GAIA cannot add scope at refresh time. ``is not None`` so
+    #    an explicit ``[]`` means "require nothing", not "use the default".
+    if required_scopes is not None:
+        required = list(required_scopes)
+    else:
+        required = list(_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER.get(provider, ()))
+    granted = set(scopes)
+    missing = [s for s in required if s not in granted]
+    if missing:
+        raise ScopeMismatchError(
+            required=required, granted=list(scopes), provider=provider
+        )
+
+    account = account_email or DEFAULT_ACCOUNT
+
+    # 4. Persist the forwarded OAuth client → ``provider:<provider>`` slot.
+    save_provider_credentials(
+        provider, client_id=client_id, client_secret=client_secret
+    )
+
+    # 5. Evict the cached provider instance so the next ``get_provider`` reads
+    #    the forwarded client and recomputes ``client_id_hash`` from it.
+    _provider_registry.pop(provider, None)
+    prov = get_provider(provider)
+
+    # 6. Persist the connection (refresh_token + metadata) → ``<provider>:default``
+    #    keyed by the forwarded client's hash so the tripwire passes coherently.
+    save_connection(
+        provider=provider,
+        account_email=account,
+        refresh_token=refresh_token,
+        scopes=list(scopes),
+        client_id_hash=prov.client_id_hash,
+        connected_at=connected_at,
+    )
+
+    # 7. Evict any stale access-token cache entry so the next get_or_refresh
+    #    refreshes against the forwarded client. The v1 store is single-slot
+    #    (always keyed by DEFAULT_ACCOUNT), so evict both the display-account
+    #    key and the DEFAULT_ACCOUNT key the refresh path actually reads.
+    _token_cache.pop((provider, account), None)
+    _token_cache.pop((provider, DEFAULT_ACCOUNT), None)
+
+    # 8. Optionally grant the named agents the forwarded scopes so they can
+    #    resolve the connection ambiently (no credentials on the request).
+    granted_agents: List[str] = []
+    for agent_id in grant_agents or []:
+        grant_agent(provider, agent_id, list(scopes))
+        granted_agents.append(agent_id)
+
+    logger.info(
+        "api: imported forwarded connection provider=%s account=%s scopes=%d "
+        "grant_agents=%d client_id_hash=%s",
+        provider,
+        account,
+        len(scopes),
+        len(granted_agents),
+        prov.client_id_hash,
+    )
+
+    return {
+        "provider": provider,
+        "account_email": account,
+        "scopes": list(scopes),
+        "connected_at": connected_at,
+        "grant_agents": granted_agents,
+        "forwarded": True,
+    }
+
+
 def _require_mcp_server_for_activation(connector_id: str) -> None:
     """Reject activation writes for non-MCP-server connectors (#1005).
 
@@ -317,6 +479,11 @@ def activate(
             len(scopes_for_grant),
         )
     activate_agent(connector_id, agent_id)
+    emit_change(
+        "connector.activation.changed",
+        {"connector_id": connector_id, "agent_id": agent_id, "active": True},
+    )
+    note_local_write(connector_id, agent_id, True)
     logger.info(
         "api: activated connector_id=%s agent_id=%s (auto_granted=%s)",
         connector_id,
@@ -339,6 +506,11 @@ def deactivate(connector_id: str, agent_id: str) -> None:
     """
     _require_mcp_server_for_activation(connector_id)
     deactivate_agent(connector_id, agent_id)
+    emit_change(
+        "connector.activation.changed",
+        {"connector_id": connector_id, "agent_id": agent_id, "active": False},
+    )
+    note_local_write(connector_id, agent_id, False)
 
 
 def tripwire_check() -> None:
@@ -374,6 +546,7 @@ __all__ = [
     "get_access_token_sync",
     "get_connection",
     "grant_agent",
+    "import_forwarded_connection",
     "is_agent_active",
     "list_agent_activations",
     "list_agent_grants",

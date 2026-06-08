@@ -442,7 +442,6 @@ jobs:
       - name: Verify CLI entry points
         run: |
           gaia --help
-          gaia-code --help
           gaia-mcp --help
           gaia-emr --help
 

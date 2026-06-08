@@ -3,6 +3,16 @@ title: "MCP Client"
 description: "Connect GAIA agents to external MCP servers and use their tools"
 ---
 
+<Warning>
+  **CLI update (#977):** `gaia mcp add` and `gaia mcp remove` shown in this guide
+  have been removed. MCP servers are now defined as **connectors** and configured
+  with `gaia connectors configure <id> --set KEY=VALUE` (secrets are stored in the
+  OS keyring; the entry is written to `~/.gaia/mcp_servers.json`). `gaia mcp list`
+  still lists configured servers. The `gaia mcp add ...` examples below predate this
+  change and are pending a rewrite — run `gaia connectors --help` for current usage,
+  and see issue #1339.
+</Warning>
+
 **Connect your GAIA agent to any tool ecosystem with a single line of code.**
 
 - 🔌 **Universal tool integration** - Filesystem, GitHub, databases, and hundreds more

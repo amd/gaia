@@ -98,7 +98,7 @@ class AgentRegistry:
         Dynamically load agent class from module path.
 
         Args:
-            class_path: Full module path (e.g., "gaia.agents.code.agent.CodeAgent")
+            class_path: Full module path (e.g., "gaia.agents.routing.agent.RoutingAgent")
 
         Returns:
             Agent class

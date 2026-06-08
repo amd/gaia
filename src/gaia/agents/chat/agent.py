@@ -9,7 +9,7 @@ import platform
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 try:
     from watchdog.observers import Observer
@@ -22,12 +22,17 @@ from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.chat.session import SessionManager
-from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
-from gaia.agents.code.tools.file_io import FileIOToolsMixin
-from gaia.agents.tools import BrowserToolsMixin  # Web browsing and search
+from gaia.agents.chat.tools import FileToolsMixin
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
-from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
+from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    BrowserToolsMixin,
+    FileIOToolsMixin,
+    FileSearchToolsMixin,
+    RAGToolsMixin,
+    ScreenshotToolsMixin,
+    ShellToolsMixin,
+)
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
@@ -54,6 +59,10 @@ class ChatAgentConfig:
     # Execution settings
     max_steps: int = 10
     streaming: bool = False  # Use --streaming to enable
+
+    # NPU's FLM build runs at 4K, so a device config can override the 32K ctx.
+    device: Optional[str] = None
+    min_context_size: Optional[int] = None
 
     # Debug/output settings
     debug: bool = False
@@ -164,6 +173,9 @@ class ChatAgent(
     - MCP server integration
     """
 
+    # Dynamic MCP loader — registry exposes this for the Settings "Active for" panel.
+    CONSUMES_MCP_SERVERS: ClassVar[bool] = True
+
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """
         Initialize Chat Agent.
@@ -185,7 +197,11 @@ class ChatAgent(
             self._gaia_namespaced_agent_id = config.namespaced_agent_id
 
         # Initialize path validator
-        self.path_validator = PathValidator(config.allowed_paths)
+        self.path_validator = PathValidator(
+            config.allowed_paths,
+            on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda
+            on_prompt_end=lambda: self.console.resume_progress(),  # pylint: disable=unnecessary-lambda
+        )
 
         # Store config for access in other methods
         self.config = config
@@ -349,6 +365,12 @@ class ChatAgent(
             show_stats=config.show_stats,
             silent_mode=config.silent_mode,
             debug=config.debug,
+            device=config.device,
+            min_context_size=(
+                config.min_context_size
+                if config.min_context_size is not None
+                else 32768
+            ),
         )
 
         # Index initial documents (only if RAG is available)
