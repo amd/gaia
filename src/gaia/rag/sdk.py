@@ -9,7 +9,6 @@ GAIA RAG SDK - Simple PDF document retrieval and Q&A
 import errno
 import hashlib
 import hmac
-import importlib
 import json
 import os
 import re
@@ -245,7 +244,12 @@ class RAGSDK:
                     pkg == "faiss" and faiss is None
                 ):
                     try:
-                        importlib.import_module(pkg)
+                        # Use the import statement (__import__), not
+                        # importlib.import_module — the latter bypasses
+                        # builtins.__import__, so this path can't be exercised
+                        # by tests that intercept imports, and re-running the
+                        # real import is what re-surfaces the native cause.
+                        __import__(pkg)
                     except ImportError:
                         pass  # genuinely missing → covered by install instructions
                     except Exception as exc:  # pylint: disable=broad-except
