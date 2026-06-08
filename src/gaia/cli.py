@@ -714,7 +714,9 @@ async def async_main(action, **kwargs):
                 ),
                 model_id=explicit_model,
                 device=effective_device,
-                max_steps=kwargs.get("max_steps", 100),
+                # None falls through to the global default (default_max_steps,
+                # honoring $GAIA_AGENT_MAX_STEPS) resolved in Agent.__init__.
+                max_steps=kwargs.get("max_steps"),
                 streaming=kwargs.get("stream", False),
                 show_prompts=kwargs.get("show_prompts", False),
                 show_stats=kwargs.get("show_stats", False),
@@ -815,7 +817,8 @@ async def async_main(action, **kwargs):
             claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
             base_url=kwargs.get("base_url"),
             model_id=kwargs.get("model", None),
-            max_steps=kwargs.get("max_steps", 100),
+            # None → global default (default_max_steps / env) in Agent.
+            max_steps=kwargs.get("max_steps"),
             streaming=kwargs.get("stream", False),
             show_prompts=kwargs.get("show_prompts", False),
             show_stats=kwargs.get("show_stats", False),
@@ -1272,8 +1275,9 @@ def build_parser():
     parent_parser.add_argument(
         "--max-steps",
         type=int,
-        default=100,
-        help="Maximum conversation steps (default: 100)",
+        default=None,
+        help="Maximum conversation steps. Defaults to the global agent step "
+        "limit (50, or $GAIA_AGENT_MAX_STEPS if set).",
     )
     parent_parser.add_argument(
         "--list-tools",
@@ -1584,7 +1588,11 @@ def build_parser():
         help="Run a specific example (1-6), if not specified run interactive mode",
     )
     blender_parser.add_argument(
-        "--steps", type=int, default=5, help="Maximum number of steps per query"
+        "--steps",
+        type=int,
+        default=None,
+        help="Maximum number of steps per query. Defaults to the global agent "
+        "step limit (50, or $GAIA_AGENT_MAX_STEPS if set).",
     )
     blender_parser.add_argument(
         "--output-dir",

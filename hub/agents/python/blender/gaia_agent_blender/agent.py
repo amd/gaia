@@ -30,7 +30,7 @@ class BlenderAgent(Agent):
         mcp: Optional[MCPClient] = None,
         model_id: str = None,
         base_url: str = "http://localhost:13305/api/v1",
-        max_steps: int = 5,
+        max_steps: Optional[int] = None,
         debug_prompts: bool = False,
         output_dir: str = None,
         streaming: bool = False,
@@ -526,10 +526,11 @@ Examples of colored requests:
         Returns:
             Dict containing the scene creation result
         """
-        # Same process as process_query but with more steps allowed if specified
+        # When the caller doesn't override, fall back to the agent's configured
+        # max_steps (the global default unless explicitly set at construction).
         return self.process_query(
             f"Create a complete 3D scene with the following description: {scene_description}",
-            max_steps=max_steps if max_steps is not None else self.max_steps * 2,
+            max_steps=max_steps,
             trace=trace,
             filename=filename,
         )

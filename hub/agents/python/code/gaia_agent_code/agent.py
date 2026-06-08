@@ -115,8 +115,10 @@ class CodeAgent(
         self.language = language
         self.project_type = project_type
 
-        # Default to more steps for complex workflows
-        if "max_steps" not in kwargs:
+        # Default to more steps for complex workflows. Treat an explicit None
+        # (the CLI's "use the default" sentinel) the same as omitted, so this
+        # override isn't silently dropped to the global default.
+        if kwargs.get("max_steps") is None:
             kwargs["max_steps"] = 100  # Increased for complex project generation
         # Use the coding model for better code understanding
         if "model_id" not in kwargs:

@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict
 
+from gaia.agents.base.agent import default_max_steps
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.mcp_agent import MCPAgent
 from gaia.agents.base.tools import tool
@@ -22,7 +23,6 @@ from gaia.security import PathValidator
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "Qwen3.5-35B-A3B-GGUF"
-DEFAULT_MAX_STEPS = 10
 DEFAULT_PORT = 8080
 
 
@@ -45,7 +45,7 @@ class DockerAgent(MCPAgent):
 
         Args:
             **kwargs: Agent initialization parameters:
-                - max_steps: Maximum conversation steps (default: 10)
+                - max_steps: Maximum conversation steps (default: global default_max_steps())
                 - model_id: LLM model to use (default: Qwen3.5-35B-A3B-GGUF)
                 - silent_mode: Suppress console output (default: False)
                 - debug: Enable debug logging (default: False)
@@ -55,8 +55,10 @@ class DockerAgent(MCPAgent):
         if "model_id" not in kwargs:
             kwargs["model_id"] = DEFAULT_MODEL
 
-        if "max_steps" not in kwargs:
-            kwargs["max_steps"] = DEFAULT_MAX_STEPS
+        # An explicit None (the CLI's "use the default" sentinel) counts as no
+        # override and falls through to the global default.
+        if kwargs.get("max_steps") is None:
+            kwargs["max_steps"] = default_max_steps()
 
         # Security: Configure allowed paths for file operations
         # If None, allow current directory and subdirectories

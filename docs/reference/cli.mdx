@@ -96,6 +96,21 @@ gaia --ui --base-url https://your-server:13305/api/v1
   `gaia chat --ui` continues to work as an alias. The Agent UI requires an AMD Ryzen AI Max (Strix Halo) or an AMD Radeon GPU with ≥ 24 GB VRAM. If your device is not supported, a dismissible warning banner will appear in the UI.
 </Note>
 
+### Agent step limit
+
+Agents stop after a maximum number of reasoning/tool steps. The default is **50**, applied consistently across the CLI, the Agent UI, and background runs.
+
+- **Per-invocation:** pass `--max-steps <n>` to any agent command (e.g. `gaia browse --max-steps 80`). `gaia blender` uses `--steps <n>`.
+- **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
+
+```bash
+# Raise the limit for every agent in this shell
+export GAIA_AGENT_MAX_STEPS=80
+gaia browse "research the latest AMD Ryzen AI news"
+```
+
+A few agents intentionally override the default (e.g. the Code agent uses 100 for multi-file generation). An invalid `GAIA_AGENT_MAX_STEPS` value (non-integer or ≤ 0) fails fast with an actionable error rather than silently capping agents.
+
 ---
 
 ## Initialization
