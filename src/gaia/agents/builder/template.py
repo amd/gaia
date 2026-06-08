@@ -6,8 +6,10 @@ from typing import List, Optional
 
 from gaia.agents.registry import KNOWN_TOOLS
 
-# Default instructions for generated agents — a fun, educational starting point.
-# Users are expected to replace this with their own system prompt.
+# Demo-only example persona — NOT the production default. Kept so docs and
+# tutorials can show a complete, playful agent. Generated agents derive their
+# persona from the user's described purpose (see ``default_system_prompt``); a
+# thematically-wrong placeholder is worse than a generic-but-correct one.
 TEMPLATE_INSTRUCTIONS = """\
 You are a funny and enthusiastic zookeeper who has a deep passion for animals. \
 You work at the world's most amazing zoo and every response you give includes \
@@ -21,12 +23,46 @@ Feel free to replace this instructions block with your own system prompt. \
 This is where you define your agent's personality, knowledge, and behavior.\
 """
 
-# Conversation starters shown as suggestion chips in the GAIA UI.
+# Demo-only example conversation starters (see TEMPLATE_INSTRUCTIONS).
 TEMPLATE_STARTERS = [
     "Hello! What's happening at the zoo today?",
     "Tell me a fun fact about one of your animals.",
     "Which animal is your favourite and why?",
 ]
+
+
+def default_system_prompt(agent_name: str, description: str) -> str:
+    """Minimal, purpose-derived system prompt used when none is supplied.
+
+    A generic-but-correct prompt beats a thematically-wrong placeholder
+    (CLAUDE.md: no silent fallbacks).
+    """
+    desc = description.strip()
+    body = f"You are {agent_name}, a helpful AI assistant."
+    if desc:
+        body += f" {desc}"
+    return (
+        f"{body}\n\nAnswer clearly and accurately. If you are unsure, say so "
+        "rather than guessing, and keep your responses focused on the user's "
+        "request."
+    )
+
+
+def default_conversation_starters(agent_name: str) -> List[str]:
+    """Generic, on-topic starter chips used when none are supplied."""
+    return [
+        f"What can {agent_name} help me with?",
+        "Show me an example of what you can do.",
+    ]
+
+
+def _class_docstring(description: str) -> str:
+    """Return a safe one-line docstring literal built from the description.
+
+    Uses ``repr()`` so any quotes/backslashes in the description can't break the
+    generated source — consistent with the rest of this module.
+    """
+    return repr(description.strip() or "Custom GAIA agent.")
 
 
 def _build_header(class_name: str, agent_id: str, flavor: str) -> List[str]:
@@ -66,11 +102,7 @@ def _render_basic(
         "",
         "",
         f"class {class_name}(Agent):",
-        '    """One-line description of what this agent does.',
-        "",
-        "    TODO: Replace this docstring — it appears in IDE tooltips,",
-        "    `help()` output, and agent-discovery listings.",
-        '    """',
+        f"    {_class_docstring(description)}",
         "",
         *_build_class_attrs(agent_id, agent_name, description, starters),
         "",
@@ -127,7 +159,7 @@ def _render_mcp(
         "",
         "",
         f"class {class_name}(Agent, MCPClientMixin):",
-        '    """Custom MCP-enabled agent created by the Gaia Builder."""',
+        f"    {_class_docstring(description)}",
         "",
         *_build_class_attrs(agent_id, agent_name, description, starters),
         "",
@@ -219,11 +251,7 @@ def _render_with_tools(
         "",
         "",
         class_sig,
-        '    """One-line description of what this agent does.',
-        "",
-        "    TODO: Replace this docstring — it appears in IDE tooltips,",
-        "    `help()` output, and agent-discovery listings.",
-        '    """',
+        f"    {_class_docstring(description)}",
         "",
         *_build_class_attrs(agent_id, agent_name, description, starters),
         "",

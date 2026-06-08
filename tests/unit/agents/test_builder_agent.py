@@ -47,6 +47,16 @@ class TestSplitCamelCase:
     def test_numbers(self):
         assert _split_camel_case("Agent42Bot") == "Agent42 Bot"
 
+    def test_spaced_input_preserves_internal_caps(self):
+        """When the name already has spaces, internal caps are left intact."""
+        assert _split_camel_case("Daily arXiv Summary") == "Daily arXiv Summary"
+
+    def test_spaced_input_preserves_leading_lowercase_acronym(self):
+        assert _split_camel_case("iOS Helper") == "iOS Helper"
+
+    def test_spaced_input_preserves_proper_noun(self):
+        assert _split_camel_case("McKinsey Advisor") == "McKinsey Advisor"
+
 
 # ---------------------------------------------------------------------------
 # Display name normalization
@@ -353,7 +363,9 @@ class TestCreateAgentImpl:
         monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
         with patch("gaia.ui._chat_helpers.get_agent_registry", return_value=None):
             result = _create_agent_impl("NoReg Agent")
-        assert "no-reg" in result
+        # "NoReg" is a single token the user typed deliberately; with the
+        # space-guarded splitter it is preserved rather than broken into "No Reg".
+        assert "noreg" in result
 
     def test_reserved_name_gaia_blocked(self, tmp_path, monkeypatch):
         monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
@@ -415,6 +427,101 @@ class TestCreateAgentImpl:
         py_path = tmp_path / ".gaia" / "agents" / "beta" / "agent.py"
         source = py_path.read_text(encoding="utf-8")
         assert "AGENT_NAME = 'Beta Agent'" in source
+
+
+# ---------------------------------------------------------------------------
+# Persona authoring (system prompt + conversation starters, no zoo default)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateAgentPersona:
+    def test_passed_system_prompt_is_used(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        prompt = "You summarize arXiv papers into concise digests."
+        _create_agent_impl("Daily arXiv Summary", system_prompt=prompt)
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        assert prompt in source
+
+    def test_passed_starters_are_used(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        starters = ["Summarize today's arXiv papers", "Find papers on diffusion models"]
+        _create_agent_impl(
+            "Daily arXiv Summary",
+            system_prompt="Summarize arXiv papers.",
+            conversation_starters=starters,
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        for s in starters:
+            assert s in source
+
+    def test_no_zoo_persona_when_prompt_provided(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Daily arXiv Summary",
+            description="Summarizes arXiv papers daily.",
+            system_prompt="You are an arXiv summarizer.",
+            conversation_starters=["Summarize today's papers"],
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8").lower()
+        assert "zoo" not in source
+        assert "zookeeper" not in source
+
+    def test_no_zoo_persona_in_fallback(self, tmp_path, monkeypatch):
+        """Omitting system_prompt yields a description-based prompt, never the zoo."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Daily arXiv Summary", description="Summarizes arXiv papers daily."
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        lowered = source.lower()
+        assert "zoo" not in lowered
+        assert "zookeeper" not in lowered
+        # Fallback derives the persona from name + description.
+        assert "Daily arXiv Summary Agent" in source
+        assert "Summarizes arXiv papers daily." in source
+
+    def test_no_todo_docstring(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Daily arXiv Summary", description="Summarizes arXiv papers daily."
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        assert "TODO: Replace this docstring" not in source
+        assert "Summarizes arXiv papers daily." in source
+
+    def test_agent_name_preserves_capitalization(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Daily arXiv Summary")
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        assert "AGENT_NAME = 'Daily arXiv Summary Agent'" in source
+        assert "ar Xiv" not in source
+
+    def test_acceptance_scenario_with_tools_and_mcp(self, tmp_path, monkeypatch):
+        """End-to-end acceptance: arXiv agent with the full tool set + MCP."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        result = _create_agent_impl(
+            "Daily arXiv Summary",
+            description="Summarizes the day's arXiv papers.",
+            tools=["rag", "browser", "shell", "file_search"],
+            enable_mcp=True,
+            system_prompt="You are an arXiv summarizer that finds and digests papers.",
+            conversation_starters=["Summarize today's arXiv papers"],
+        )
+        assert not result.startswith("Error:"), result
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        ast.parse(source)
+        lowered = source.lower()
+        assert "zoo" not in lowered and "zookeeper" not in lowered
+        assert "TODO: Replace this docstring" not in source
+        assert "arXiv summarizer" in source
+        assert "AGENT_NAME = 'Daily arXiv Summary Agent'" in source
 
 
 # ---------------------------------------------------------------------------

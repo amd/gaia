@@ -65,14 +65,22 @@ def _name_to_class_name(name: str) -> str:
 
 
 def _split_camel_case(name: str) -> str:
-    """Split PascalCase/camelCase into space-separated words.
+    """Split single-token PascalCase/camelCase into space-separated words.
+
+    Only expands single-token input (``WidgetAgent`` → ``Widget Agent``). When
+    the name already contains a space the user typed the words deliberately, so
+    there is nothing to expand — return it unchanged to preserve intentional
+    internal caps (``Daily arXiv Summary``, ``iOS Helper``).
 
     Examples:
-        "AlphaAgent"    → "Alpha Agent"
-        "MCPAgent"      → "MCP Agent"
-        "myTool"        → "my Tool"
-        "already split" → "already split"
+        "AlphaAgent"          → "Alpha Agent"
+        "MCPAgent"            → "MCP Agent"
+        "myTool"              → "my Tool"
+        "Daily arXiv Summary" → "Daily arXiv Summary"
+        "already split"       → "already split"
     """
+    if " " in name:
+        return name
     s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", name)
     return re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", s)
 
@@ -166,6 +174,8 @@ class BuilderAgent(Agent):
             description: str = "",
             enable_mcp: bool = False,
             tools: Optional[List[str]] = None,
+            system_prompt: str = "",
+            conversation_starters: Optional[List[str]] = None,
         ) -> str:
             """Create a new custom agent in the user's GAIA agents directory.
 
@@ -182,12 +192,25 @@ class BuilderAgent(Agent):
                     tables for data analysis), "browser" (web search and page fetch).
                     Combine freely; they are added to the class's base list alongside
                     Agent.
+                system_prompt: The generated agent's own system prompt — its
+                    personality and instructions, tailored to what the user asked it
+                    to do. Author this from the described purpose. If omitted, a
+                    minimal purpose-derived prompt is generated (never a placeholder
+                    persona).
+                conversation_starters: 2-3 suggestion chips shown in the GAIA UI,
+                    matching the agent's purpose. If omitted, generic on-topic
+                    starters are generated.
 
             Returns:
                 Confirmation message with the path to the created agent.py.
             """
             result = _create_agent_impl(
-                name, description, enable_mcp=enable_mcp, tools=tools
+                name,
+                description,
+                enable_mcp=enable_mcp,
+                tools=tools,
+                system_prompt=system_prompt,
+                conversation_starters=conversation_starters,
             )
             if not result.startswith("Error:"):
                 # Notify the UI — triggers an immediate agent-list refresh
@@ -390,11 +413,13 @@ def _create_agent_impl(
     description: str = "",
     enable_mcp: bool = False,
     tools: Optional[List[str]] = None,
+    system_prompt: str = "",
+    conversation_starters: Optional[List[str]] = None,
 ) -> str:
     """Core implementation of the create_agent tool, separated for testability."""
     from gaia.agents.builder.template import (
-        TEMPLATE_INSTRUCTIONS,
-        TEMPLATE_STARTERS,
+        default_conversation_starters,
+        default_system_prompt,
         generate_agent_source,
     )
 
@@ -441,14 +466,26 @@ def _create_agent_impl(
     desc = (
         description.strip() if description.strip() else f"Custom agent: {display_name}"
     )
+    # No silent zoo: derive a generic-but-correct persona from the described
+    # purpose when the Builder doesn't author one (CLAUDE.md: no silent fallbacks).
+    effective_prompt = (
+        system_prompt.strip()
+        if system_prompt and system_prompt.strip()
+        else default_system_prompt(display_name, desc)
+    )
+    effective_starters = [
+        s.strip()
+        for s in (conversation_starters or [])
+        if isinstance(s, str) and s.strip()
+    ] or default_conversation_starters(display_name)
     try:
         source = generate_agent_source(
             agent_id=agent_id,
             agent_name=display_name,
             description=desc,
             class_name=class_name,
-            starters=TEMPLATE_STARTERS,
-            system_prompt=TEMPLATE_INSTRUCTIONS,
+            starters=effective_starters,
+            system_prompt=effective_prompt,
             enable_mcp=enable_mcp,
             tools=tools,
         )
