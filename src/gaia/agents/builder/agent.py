@@ -313,13 +313,14 @@ class BuilderAgent(Agent):
                     # Extract a clean detail so a raw dict never leaks into the
                     # user-facing message. _execute_tool uses "error" for most
                     # error returns and "error_brief" for the exception path.
-                    detail = (
-                        tool_result.get("error")
-                        or tool_result.get("error_brief")
-                        or str(tool_result)
-                        if isinstance(tool_result, dict)
-                        else tool_result
-                    )
+                    if isinstance(tool_result, dict):
+                        detail = (
+                            tool_result.get("error")
+                            or tool_result.get("error_brief")
+                            or str(tool_result)
+                        )
+                    else:
+                        detail = tool_result
                     final_answer = (
                         f"I was unable to create the agent: {detail}\n\n"
                         "Please check the name is valid and try again."

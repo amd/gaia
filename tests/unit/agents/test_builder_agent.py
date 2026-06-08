@@ -1050,7 +1050,7 @@ class TestBuilderAlphaFraming:
         )
         py_path = tmp_path / ".gaia" / "agents" / "removable-caveat" / "agent.py"
         source = py_path.read_text(encoding="utf-8")
-        assert "Delete that trailing block once your agent has real tools" in source
+        assert "Delete that trailing text once your agent has real" in source
 
     def test_alpha_tag_only_on_description_not_docstring(self, tmp_path, monkeypatch):
         """The (alpha template) tag lands on AGENT_DESCRIPTION (Hub card) only —
