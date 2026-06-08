@@ -1,5 +1,8 @@
 # NOTE: This workflow activates once #1297 (Strix Halo self-hosted runner) lands.
 # Until then it is validated out-of-band on Strix Halo class hardware.
+# The strix-halo runner is Windows, so every run step uses PowerShell — the
+# established convention on the sjlab lab runners (see build_cpp.yml). Bash
+# syntax (&&, \ line-continuation) is NOT available there.
 name: Agent Behavior E2E
 
 on:
@@ -20,22 +23,32 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup Python
+        shell: powershell
         run: |
-          uv venv && uv pip install -e ".[dev]"
+          uv venv
+          if ($LASTEXITCODE -ne 0) { throw "uv venv failed" }
+          uv pip install -e ".[dev]"
+          if ($LASTEXITCODE -ne 0) { throw "uv pip install failed" }
 
       - name: Ensure Lemonade
-        run: uv run gaia init --skip-lemonade
+        shell: powershell
+        run: |
+          uv run gaia init --skip-lemonade
+          if ($LASTEXITCODE -ne 0) { throw "gaia init failed" }
 
       - name: Run behavior E2E harness
-        run: |
-          uv run python -m pytest tests/integration/eval/test_behavior_e2e.py \
-            -m real_model -v --tb=short
+        shell: powershell
         env:
           LEMONADE_BASE_URL: http://localhost:13305/api/v1
+        run: |
+          uv run python -m pytest tests/integration/eval/test_behavior_e2e.py `
+            -m real_model -v --tb=short `
+            --basetemp="${{ runner.temp }}\pytest-behavior"
+          if ($LASTEXITCODE -ne 0) { throw "behavior E2E harness failed" }
 
       - name: Upload artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: behavior-e2e-artifacts
-          path: /tmp/pytest-*/test_builder_creates_agent_file*/**/artifacts/
+          path: ${{ runner.temp }}/pytest-behavior/**/artifacts/**
