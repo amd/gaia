@@ -503,19 +503,19 @@ class TestCreateAgentPersona:
         assert "ar Xiv" not in source
 
     def test_acceptance_scenario_with_tools_and_mcp(self, tmp_path, monkeypatch):
-        """End-to-end acceptance: arXiv agent with the full tool set + MCP."""
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        result = _create_agent_impl(
-            "Daily arXiv Summary",
+        """End-to-end acceptance: arXiv agent via generate_agent_source (tools + MCP)."""
+        from gaia.agents.builder.template import generate_agent_source
+
+        source = generate_agent_source(
+            agent_id="daily-arxiv-summary",
+            agent_name="Daily arXiv Summary Agent",
             description="Summarizes the day's arXiv papers.",
+            class_name="DailyArxivSummaryAgent",
+            starters=["Summarize today's arXiv papers"],
+            system_prompt="You are an arXiv summarizer that finds and digests papers.",
             tools=["rag", "browser", "shell", "file_search"],
             enable_mcp=True,
-            system_prompt="You are an arXiv summarizer that finds and digests papers.",
-            conversation_starters=["Summarize today's arXiv papers"],
         )
-        assert not result.startswith("Error:"), result
-        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
-        source = py_path.read_text(encoding="utf-8")
         ast.parse(source)
         lowered = source.lower()
         assert "zoo" not in lowered and "zookeeper" not in lowered
@@ -677,16 +677,27 @@ class TestCreateAgentImplMCP:
 
 
 # ---------------------------------------------------------------------------
-# tools=[...] parameter (tool-mixin composition)
+# tools=[...] parameter — tested via generate_agent_source directly
+# (tools is no longer on the Builder's surface; _create_agent_impl no longer
+#  accepts a tools= arg; tool-mixin composition lives only at the generator layer)
 # ---------------------------------------------------------------------------
 
 
 class TestCreateAgentImplTools:
-    def test_single_tool_rag_generates_mixin(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        result = _create_agent_impl("Research Bot", tools=["rag"])
-        assert not result.startswith("Error:"), result
-        src = (tmp_path / ".gaia" / "agents" / "research-bot" / "agent.py").read_text()
+    """Tool-mixin composition tests exercising generate_agent_source directly."""
+
+    def test_single_tool_rag_generates_mixin(self):
+        from gaia.agents.builder.template import generate_agent_source
+
+        src = generate_agent_source(
+            agent_id="research-bot",
+            agent_name="Research Bot Agent",
+            description="Answers questions from local docs.",
+            class_name="ResearchBotAgent",
+            starters=["Ask me anything"],
+            system_prompt="You are Research Bot.",
+            tools=["rag"],
+        )
         ast.parse(src)
         assert "from gaia.agents.tools.rag_tools import RAGToolsMixin" in src
         # Agent must come first in the base list (GAIA convention).
@@ -694,60 +705,192 @@ class TestCreateAgentImplTools:
         assert "self.register_rag_tools()" in src
         assert "_TOOL_REGISTRY.clear()" in src
 
-    def test_multiple_tools_in_mro_order(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        _create_agent_impl("Doc Editor", tools=["rag", "file_io"])
-        src = (tmp_path / ".gaia" / "agents" / "doc-editor" / "agent.py").read_text()
+    def test_multiple_tools_in_mro_order(self):
+        from gaia.agents.builder.template import generate_agent_source
+
+        src = generate_agent_source(
+            agent_id="doc-editor",
+            agent_name="Doc Editor Agent",
+            description="Edits documents.",
+            class_name="DocEditorAgent",
+            starters=["Edit my doc"],
+            system_prompt="You are Doc Editor.",
+            tools=["rag", "file_io"],
+        )
         ast.parse(src)
         assert "class DocEditorAgent(Agent, RAGToolsMixin, FileIOToolsMixin):" in src
         assert "self.register_rag_tools()" in src
         assert "self.register_file_io_tools()" in src
 
-    def test_tools_combined_with_mcp(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        _create_agent_impl("Ops Bot", tools=["file_io"], enable_mcp=True)
-        src = (tmp_path / ".gaia" / "agents" / "ops-bot" / "agent.py").read_text()
+    def test_tools_combined_with_mcp(self):
+        from gaia.agents.builder.template import generate_agent_source
+
+        src = generate_agent_source(
+            agent_id="ops-bot",
+            agent_name="Ops Bot Agent",
+            description="Runs tasks via MCP.",
+            class_name="OpsBotAgent",
+            starters=["Organize my files"],
+            system_prompt="You are Ops Bot.",
+            tools=["file_io"],
+            enable_mcp=True,
+        )
         ast.parse(src)
         # MCPClientMixin must come LAST (after other mixins, after Agent).
         assert "class OpsBotAgent(Agent, FileIOToolsMixin, MCPClientMixin):" in src
         assert "self.register_file_io_tools()" in src
         assert "self.load_mcp_servers_from_config()" in src
-        mcp_json = tmp_path / ".gaia" / "agents" / "ops-bot" / "mcp_servers.json"
-        assert mcp_json.exists()
 
-    def test_invalid_tool_returns_error(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        result = _create_agent_impl("Bad Bot", tools=["definitely-not-a-tool"])
-        assert result.startswith("Error:")
-        assert "Unknown tool" in result or "definitely-not-a-tool" in result
-        # Nothing should have been written to disk.
-        assert not (tmp_path / ".gaia" / "agents" / "bad-bot").exists()
+    def test_invalid_tool_returns_error(self):
+        import pytest
 
-    def test_all_tools_importable(self, tmp_path, monkeypatch):
+        from gaia.agents.builder.template import generate_agent_source
+
+        with pytest.raises(ValueError, match="definitely-not-a-tool"):
+            generate_agent_source(
+                agent_id="bad-bot",
+                agent_name="Bad Bot Agent",
+                description="Bad.",
+                class_name="BadBotAgent",
+                starters=["Go"],
+                system_prompt="You are Bad Bot.",
+                tools=["definitely-not-a-tool"],
+            )
+
+    def test_all_tools_importable(self):
         """Every KNOWN_TOOLS entry can be composed into a generated agent."""
+        from gaia.agents.builder.template import generate_agent_source
         from gaia.agents.registry import KNOWN_TOOLS
 
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
         for i, tool_name in enumerate(sorted(KNOWN_TOOLS.keys())):
-            _create_agent_impl(f"Tool Test {i}", tools=[tool_name])
-            agent_id = f"tool-test-{i}"
-            py_path = tmp_path / ".gaia" / "agents" / agent_id / "agent.py"
-            assert py_path.exists(), f"agent not created for tool={tool_name}"
-            ast.parse(py_path.read_text())
+            src = generate_agent_source(
+                agent_id=f"tool-test-{i}",
+                agent_name=f"Tool Test {i} Agent",
+                description=f"Tests tool {tool_name}.",
+                class_name=f"ToolTest{i}Agent",
+                starters=["Go"],
+                system_prompt=f"You test {tool_name}.",
+                tools=[tool_name],
+            )
+            ast.parse(src)
 
-    def test_no_tools_same_as_basic(self, tmp_path, monkeypatch):
+    def test_no_tools_same_as_basic(self):
         """tools=None or tools=[] produces the same output as omitting the arg."""
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        _create_agent_impl("Plain Agent")
-        src_none = (tmp_path / ".gaia" / "agents" / "plain" / "agent.py").read_text()
+        from gaia.agents.builder.template import generate_agent_source
 
-        # Clean up and recreate with tools=[]
-        import shutil
-
-        shutil.rmtree(tmp_path / ".gaia" / "agents" / "plain")
-        _create_agent_impl("Plain Agent", tools=[])
-        src_empty = (tmp_path / ".gaia" / "agents" / "plain" / "agent.py").read_text()
+        kwargs = dict(
+            agent_id="plain",
+            agent_name="Plain Agent",
+            description="A plain agent.",
+            class_name="PlainAgent",
+            starters=["Hello"],
+            system_prompt="You are Plain.",
+        )
+        src_none = generate_agent_source(**kwargs, tools=None)
+        src_empty = generate_agent_source(**kwargs, tools=[])
         assert src_none == src_empty
+
+
+# ---------------------------------------------------------------------------
+# Builder surface: tools param removed, dict-error detection, docs link
+# ---------------------------------------------------------------------------
+
+
+class TestBuilderSurface:
+    def test_create_agent_tool_has_no_tools_param(self):
+        """The registered create_agent tool must NOT have a 'tools' parameter."""
+        import inspect
+        from unittest.mock import patch
+
+        from gaia.agents.builder.agent import BuilderAgent, BuilderAgentConfig
+
+        config = BuilderAgentConfig(
+            base_url="http://localhost:9999/api/v1",
+            model_id="test-model",
+            silent_mode=True,
+        )
+        with patch("os.path.expanduser", return_value="/tmp/gaia-test"):
+            agent = BuilderAgent(config)
+
+        # _TOOL_REGISTRY stores either the raw callable or a dict with a
+        # 'function' key (the @tool decorator wraps the function).  Check both.
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        tool_entry = _TOOL_REGISTRY.get("create_agent")
+        assert tool_entry is not None, "create_agent tool not found in registry"
+
+        if isinstance(tool_entry, dict):
+            # Check the schema's parameters dict (built by the @tool decorator)
+            params = tool_entry.get("parameters", {})
+            assert "tools" not in params, (
+                f"create_agent tool schema must not have a 'tools' parameter; "
+                f"found params: {list(params)}"
+            )
+            # Also check the underlying function's signature
+            fn = tool_entry.get("function", tool_entry)
+        else:
+            fn = tool_entry
+
+        if callable(fn):
+            sig = inspect.signature(fn)
+            assert "tools" not in sig.parameters, (
+                f"create_agent function must not have a 'tools' parameter; "
+                f"found params: {list(sig.parameters)}"
+            )
+
+    def test_stray_tools_kwarg_surfaces_error(self, tmp_path):
+        """If the LLM passes tools=[...] in the tool call, an honest error is returned."""
+        from unittest.mock import MagicMock, patch
+
+        from gaia.agents.builder.agent import BuilderAgent, BuilderAgentConfig
+
+        config = BuilderAgentConfig(
+            base_url="http://localhost:9999/api/v1",
+            model_id="test-model",
+            max_steps=5,
+            streaming=False,
+            silent_mode=True,
+        )
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            agent = BuilderAgent(config)
+        agent.console = MagicMock()
+
+        # LLM emits a call with a stray tools kwarg (old schema)
+        stray_call = (
+            '{"tool": "create_agent", "tool_args": {"name": "Stray", "tools": ["rag"]}}'
+        )
+        follow_up = "Here is your agent!"  # never reached
+
+        mock_resp = MagicMock()
+        mock_resp.text = stray_call
+        agent.chat = MagicMock()
+        agent.chat.send_messages.return_value = mock_resp
+
+        # _execute_tool will raise TypeError because 'tools' is not in the signature;
+        # the loop should surface this as an honest failure, not crash.
+        result = agent._process_query_impl("create a Stray agent with RAG")
+
+        answer = result["answer"]
+        # Must not fabricate success
+        assert "✅" not in answer
+        assert "Agent Created" not in answer
+        assert "File location" not in answer
+        # Must indicate failure or inability
+        assert any(
+            kw in answer.lower()
+            for kw in ("error", "unable", "fail", "could not", "unexpected")
+        ), f"Expected failure indicator in answer, got: {answer!r}"
+
+    def test_confirmation_mentions_starter_and_docs_link(self, tmp_path, monkeypatch):
+        """Successful _create_agent_impl result contains starter framing + docs link."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        result = _create_agent_impl(
+            "Docs Test Agent",
+            description="Tests the confirmation message.",
+        )
+        assert not result.startswith("Error:"), result
+        assert "starter" in result.lower()
+        assert "amd-gaia.ai/docs/guides/custom-agent" in result
 
 
 # ---------------------------------------------------------------------------
