@@ -245,7 +245,6 @@ class BuilderAgent(Agent):
         self.console.print_processing_start(user_input, steps_limit, self.model_id)
 
         final_answer: Optional[str] = None
-        created_ok = False
         steps_taken = 0
 
         while steps_taken < steps_limit and final_answer is None:
@@ -303,34 +302,35 @@ class BuilderAgent(Agent):
                     if isinstance(tool_result, dict)
                     else str(tool_result)
                 )
-                # Fail loudly: if create_agent returned an error, don't let the
-                # LLM fabricate a success message — end immediately with an honest answer.
-                if tool_name == "create_agent" and str(tool_result).startswith(
-                    "Error:"
+                # Fail loudly: if create_agent returned an error, end immediately.
+                if tool_name == "create_agent" and (
+                    (
+                        isinstance(tool_result, dict)
+                        and tool_result.get("status") == "error"
+                    )
+                    or str(tool_result).startswith("Error:")
                 ):
                     final_answer = (
                         f"I was unable to create the agent: {tool_result}\n\n"
                         "Please check the name is valid and try again."
                     )
                     break
+                # Deterministic confirmation: return the tool result directly so
+                # the demo framing and docs link reach the user verbatim without
+                # an extra LLM summarization turn.
                 if tool_name == "create_agent":
-                    created_ok = True
+                    final_answer = result_str
+                    break
                 messages.append(
                     {
                         "role": "user",
                         "content": f"Tool '{tool_name}' returned:\n{result_str}",
                     }
                 )
-                # Continue loop so the LLM can summarize the result
+                # Continue loop so the LLM can handle other tool results
             else:
-                # No tool call was extracted. If creation already succeeded this
-                # is a post-success summary — return it without triggering the
-                # fabrication check (which misfires on ✅ in a real summary).
-                if created_ok:
-                    candidate = parsed.get("answer") or response.strip()
-                    final_answer = candidate or "Agent created successfully."
-                # Otherwise check whether the model hallucinated success markers.
-                elif any(
+                # No tool call was extracted — check for fabricated success markers.
+                if any(
                     m in (parsed.get("answer") or response.strip())
                     for m in ("Agent Created", "✅", "File location")
                 ):
