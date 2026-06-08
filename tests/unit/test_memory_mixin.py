@@ -427,6 +427,111 @@ class TestSystemContext:
         result = mixin_host.init_system_context(force=True)
         assert result["stored"] > 0
 
+    def test_collect_system_info_meta_fact_is_last_collected(self):
+        """The meta fact reflects the most recent collection, not first capture."""
+        from gaia.agents.base.system_context import collect_system_info
+
+        facts = collect_system_info()
+        meta = [f for f in facts if f["domain"] == "system:meta"]
+        assert len(meta) >= 1
+        assert "last collected on" in meta[0]["content"].lower()
+        assert "first captured" not in meta[0]["content"].lower()
+
+    # -- Version-aware refresh -------------------------------------------------
+
+    def test_changed_software_versions_detects_mismatch(self):
+        """A stored version differing from the live value is reported."""
+        from gaia.agents.base.memory import _changed_software_versions
+
+        existing = [
+            {"content": "GAIA version: 0.17.6"},
+            {"content": "Python version: 3.13.13"},
+        ]
+        with patch(
+            "gaia.agents.base.memory._live_software_versions",
+            return_value={"GAIA version": "0.20.0"},
+        ):
+            assert _changed_software_versions(existing) == ["GAIA version"]
+
+    def test_changed_software_versions_none_when_equal(self):
+        """Matching versions report no change."""
+        from gaia.agents.base.memory import _changed_software_versions
+
+        existing = [{"content": "GAIA version: 0.20.0"}]
+        with patch(
+            "gaia.agents.base.memory._live_software_versions",
+            return_value={"GAIA version": "0.20.0"},
+        ):
+            assert _changed_software_versions(existing) == []
+
+    def test_changed_software_versions_ignores_missing_label(self):
+        """A label absent from stored facts doesn't force churn."""
+        from gaia.agents.base.memory import _changed_software_versions
+
+        existing = [{"content": "Operating system: Windows"}]
+        with patch(
+            "gaia.agents.base.memory._live_software_versions",
+            return_value={"GAIA version": "0.20.0"},
+        ):
+            assert _changed_software_versions(existing) == []
+
+    def test_refresh_reason_none_when_fresh(self, mixin_host):
+        """Freshly collected, version-matched facts need no refresh."""
+        from gaia.agents.base.memory import MemoryMixin
+
+        items = mixin_host.memory_store.get_by_category(
+            "system", context="global", limit=200
+        )
+        assert MemoryMixin._system_context_refresh_reason(items) is None
+
+    def test_refresh_reason_age_trigger(self):
+        """A fact older than the threshold triggers an age-based refresh."""
+        from gaia.agents.base.memory import (
+            _SYSTEM_CONTEXT_REFRESH_DAYS,
+            MemoryMixin,
+        )
+
+        old = (
+            datetime.now() - timedelta(days=_SYSTEM_CONTEXT_REFRESH_DAYS + 1)
+        ).isoformat()
+        existing = [{"content": "GAIA version: 0.20.0", "updated_at": old}]
+        with patch(
+            "gaia.agents.base.memory._live_software_versions",
+            return_value={"GAIA version": "0.20.0"},
+        ):
+            reason = MemoryMixin._system_context_refresh_reason(existing)
+        assert reason is not None and "old" in reason
+
+    def test_version_change_triggers_refresh(self, mixin_host):
+        """A simulated version bump re-collects without force."""
+        with patch(
+            "gaia.agents.base.memory._live_software_versions",
+            return_value={"GAIA version": "999.999.999"},
+        ):
+            result = mixin_host.init_system_context()
+        assert result["stored"] > 0
+
+    def test_version_change_replaces_without_duplicate(self, mixin_host):
+        """Refresh replaces the version fact instead of adding a duplicate row."""
+        store = mixin_host.memory_store
+        with patch(
+            "gaia.agents.base.memory._live_software_versions",
+            return_value={"GAIA version": "999.999.999"},
+        ):
+            mixin_host.init_system_context()
+        items = store.get_by_category("system", context="global", limit=200)
+        gaia_facts = [i for i in items if i["content"].startswith("GAIA version:")]
+        assert len(gaia_facts) == 1
+
+    def test_force_refresh_no_duplicate_versions(self, mixin_host):
+        """Repeated force refreshes never accumulate duplicate version facts."""
+        store = mixin_host.memory_store
+        mixin_host.init_system_context(force=True)
+        mixin_host.init_system_context(force=True)
+        items = store.get_by_category("system", context="global", limit=200)
+        gaia_facts = [i for i in items if i["content"].startswith("GAIA version:")]
+        assert len(gaia_facts) == 1
+
     def test_stable_prompt_includes_system_environment(self, mixin_host):
         """System environment section appears in the stable memory prompt."""
         prompt = mixin_host.get_memory_system_prompt()
