@@ -524,27 +524,26 @@ def _create_agent_impl(
 
     if enable_mcp:
         return (
-            f"Done! I've created your '{display_name}' agent at:\n\n"
+            f"Done! I've created your '{display_name}' as a simple starter agent "
+            f"with MCP support:\n\n"
             f"  {py_path}\n\n"
-            "MCP support is wired up and ready. Edit mcp_servers.json to add your\n"
-            "servers, for example:\n\n"
+            "It's already loaded — you'll see it in the agent selector in the GAIA UI. "
+            "Its personality and conversation starters are tailored to what you described.\n\n"
+            "To connect MCP servers, edit mcp_servers.json in the same directory, "
+            "for example:\n\n"
             '  {\n    "mcpServers": {\n      "time": {\n'
             '        "command": "uvx",\n        "args": ["mcp-server-time"]\n'
             "      }\n    }\n  }\n\n"
-            "The agent is already loaded — you'll see it in the agent selector in "
-            "the GAIA UI.\n\n"
-            "To customize it, open agent.py and:\n"
-            "  - Edit `_get_system_prompt()` to change the agent's personality\n"
-            "  - Add `@tool` functions above `self.load_mcp_servers_from_config()`\n"
-            "    in `_register_tools()` to add Python tools alongside MCP tools"
+            "This is a starter setup. To give it capabilities like document Q&A, "
+            "file access, or web search, see the custom-agent guide: "
+            "https://amd-gaia.ai/docs/guides/custom-agent"
         )
     return (
-        f"Done! I've created your '{display_name}' agent at:\n\n"
+        f"Done! I've created your '{display_name}' as a simple starter agent:\n\n"
         f"  {py_path}\n\n"
-        "The agent is already loaded and ready to use — you'll see it in the "
-        "agent selector in the GAIA UI.\n\n"
-        "To customize it, open agent.py and:\n"
-        "  - Edit `_get_system_prompt()` to change the agent's personality\n"
-        "  - Add `@tool` functions in `_register_tools()` to give it capabilities\n"
-        "  - See the 'Advanced' section at the bottom for model and MCP options"
+        "It's already loaded — you'll see it in the agent selector in the GAIA UI. "
+        "Its personality and conversation starters are tailored to what you described.\n\n"
+        "This is a starter setup. To give it capabilities like document Q&A, file access, "
+        "or web search, see the custom-agent guide: "
+        "https://amd-gaia.ai/docs/guides/custom-agent"
     )
