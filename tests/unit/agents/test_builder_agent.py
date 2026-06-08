@@ -992,6 +992,24 @@ class TestBuilderSurface:
             # The agent-id substring still appears (path text unchanged).
             assert agent_dir in result
 
+    def test_mcp_confirmation_json_is_fenced(self, tmp_path, monkeypatch):
+        """The MCP confirmation renders its JSON example as a fenced ```json
+        block and references the filename as inline code, so markdown shows both
+        verbatim instead of collapsing newlines / mis-parsing the args list."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        result = _create_agent_impl("Mcp Fence Agent", enable_mcp=True)
+        assert not result.startswith("Error:"), result
+        # Fenced JSON example.
+        assert "```json" in result
+        assert "```" in result.split("```json", 1)[1]  # a closing fence follows
+        assert '"mcpServers"' in result
+        assert "mcp-server-time" in result
+        # Filename mentioned as inline code.
+        assert "`mcp_servers.json`" in result
+        # Non-MCP confirmation must NOT gain a fenced block.
+        plain = _create_agent_impl("Plain Fence Agent", enable_mcp=False)
+        assert "```" not in plain
+
 
 # ---------------------------------------------------------------------------
 # Alpha framing: Builder intro + scaffolded-agent caveat

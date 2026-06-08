@@ -538,11 +538,15 @@ def _create_agent_impl(
             f"  `{py_path}`\n\n"
             "It's already loaded — you'll see it in the agent selector in the GAIA UI. "
             "Its personality and conversation starters are tailored to what you described.\n\n"
-            "To connect MCP servers, edit mcp_servers.json in the same directory, "
+            "To connect MCP servers, edit `mcp_servers.json` in the same directory, "
             "for example:\n\n"
-            '  {\n    "mcpServers": {\n      "time": {\n'
-            '        "command": "uvx",\n        "args": ["mcp-server-time"]\n'
-            "      }\n    }\n  }\n\n"
+            "```json\n"
+            "{\n"
+            '  "mcpServers": {\n'
+            '    "time": { "command": "uvx", "args": ["mcp-server-time"] }\n'
+            "  }\n"
+            "}\n"
+            "```\n\n"
             "This is a starter template, and the agent builder is an alpha feature. Your new "
             "agent can chat about its topic, but it won't fetch data or perform that task on its "
             "own until you add tools or MCP — the custom-agent guide shows how: "
