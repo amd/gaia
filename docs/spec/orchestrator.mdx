@@ -8,8 +8,8 @@ title: "Orchestrator"
 
 <Note>
 **Component:** Orchestrator - Multi-step workflow execution engine
-**Module:** `gaia.agents.code.orchestration.orchestrator`
-**Import:** `from gaia.agents.code.orchestration.orchestrator import Orchestrator, ExecutionResult, CheckpointAssessment`
+**Module:** `gaia_agent_code.orchestration.orchestrator`
+**Import:** `from gaia_agent_code.orchestration.orchestrator import Orchestrator, ExecutionResult, CheckpointAssessment`
 </Note>
 ---
 
@@ -156,8 +156,8 @@ class Orchestrator:
 ### Example 1: Basic Workflow Execution
 
 ```python
-from gaia.agents.code.orchestration.orchestrator import Orchestrator
-from gaia.agents.code.orchestration.steps.base import UserContext
+from gaia_agent_code.orchestration.orchestrator import Orchestrator
+from gaia_agent_code.orchestration.steps.base import UserContext
 
 # Create context
 context = UserContext(
@@ -279,10 +279,10 @@ def test_execution_result_summary():
 ```toml
 [project]
 dependencies = [
-    "gaia.agents.code.orchestration.checklist_generator",
-    "gaia.agents.code.orchestration.checklist_executor",
-    "gaia.agents.code.orchestration.steps.error_handler",
-    "gaia.agents.code.orchestration.project_analyzer",
+    "gaia_agent_code.orchestration.checklist_generator",
+    "gaia_agent_code.orchestration.checklist_executor",
+    "gaia_agent_code.orchestration.steps.error_handler",
+    "gaia_agent_code.orchestration.project_analyzer",
 ]
 ```
 

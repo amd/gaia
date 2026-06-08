@@ -5,7 +5,7 @@ icon: "notes-medical"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/emr/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/emr/)
+  **Source Code:** [`hub/agents/python/emr/`](https://github.com/amd/gaia/blob/main/hub/agents/python/emr/)
 </Info>
 
 <Info>
@@ -128,7 +128,7 @@ Get a working intake agent running to understand the basic flow.
     Create `intake_agent.py` in your project folder:
 
     ```python title="intake_agent.py"
-    from gaia.agents.emr import MedicalIntakeAgent
+    from gaia_agent_emr import MedicalIntakeAgent
 
     # Create agent watching a directory
     agent = MedicalIntakeAgent(
@@ -658,7 +658,7 @@ with IntakeAgent() as agent:
 The complete `MedicalIntakeAgent` implementation is available in GAIA:
 
 ```python
-from gaia.agents.emr import MedicalIntakeAgent
+from gaia_agent_emr import MedicalIntakeAgent
 
 # All features included:
 # - Automatic file watching
@@ -678,7 +678,7 @@ agent.process_query("Show me patient #5")
 agent.process_query("What are the stats?")
 ```
 
-**Source code:** [`src/gaia/agents/emr/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/emr/agent.py)
+**Source code:** [`hub/agents/python/emr/gaia_agent_emr/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/emr/gaia_agent_emr/agent.py)
 
 ---
 

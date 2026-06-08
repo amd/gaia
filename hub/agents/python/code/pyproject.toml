@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaia-agent-code"
+version = "0.1.0"
+description = "GAIA Code agent — autonomous code generation"
+authors = [{ name = "AMD" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["amd-gaia>=0.20.0"]
+
+[project.entry-points."gaia.agent"]
+code = "gaia_agent_code:build_registration"
+
+[project.scripts]
+gaia-code = "gaia_agent_code.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["gaia_agent_code*"]

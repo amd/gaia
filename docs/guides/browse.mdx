@@ -38,4 +38,4 @@ gaia browse --model Qwen3-4B-Instruct-2507-GGUF -q "Fetch this page and list cit
 gaia browse --use-claude -q "Compare these two URLs"
 ```
 
-The Agent UI registry also exposes `web` and `web-lite`; `web-lite` uses GAIA's lightweight local model profile for shorter browser tasks.
+In the Agent UI the browser appears as a single `web` card with a model-size selector — pick **Lite (~4B)** for shorter browser tasks on lighter hardware, or **Full** for the default model. (The old `web-lite` registry ID still resolves to `web` on the lite tier for existing sessions.)

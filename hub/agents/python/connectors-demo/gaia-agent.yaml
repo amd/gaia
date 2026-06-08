@@ -1,0 +1,32 @@
+id: connectors-demo
+name: Connectors Demo
+version: 0.1.0
+description: "Demonstrates the connectors framework — pulls real data from your connected Google account and GitHub PAT"
+author: AMD
+license: MIT
+
+category: productivity
+tags: [google, gmail, github, calendar]
+icon: plug
+tools_count: 4
+
+language: python
+min_gaia_version: "0.20.0"
+models: []
+
+python:
+  entry_module: gaia_agent_connectors_demo
+  entry_class: ConnectorsDemoAgent
+  dependencies:
+    - "amd-gaia>=0.20.0"
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+interfaces:
+  tui: false
+  cli: false
+  pipe: false
+  api_server: true
+  mcp_server: false

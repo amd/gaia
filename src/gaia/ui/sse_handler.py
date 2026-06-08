@@ -88,6 +88,52 @@ _RAG_RESULT_JSON_SUB_RE = re.compile(
 _TRAILING_CODE_FENCE_RE = re.compile(r"\n?```\s*$")
 
 
+def _strip_balanced_json_blobs(text: str, needle: "re.Pattern") -> str:
+    """Remove every top-level ``{...}`` JSON object whose body matches *needle*.
+
+    Brace- and string-aware: it walks the text tracking quote/escape state so a
+    ``{`` or ``}`` inside a JSON string never miscounts depth, and it only
+    removes *complete* balanced objects. This is why it is safe to run against
+    arbitrary LLM prose — an unbalanced or non-matching object is left intact.
+    """
+    if not text:
+        return text
+    out: List[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != "{":
+            out.append(text[i])
+            i += 1
+            continue
+        depth, j, in_str, esc = 0, i, False, False
+        while j < n:
+            c = text[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+            j += 1
+        blob = text[i:j]
+        if depth == 0 and needle.search(blob):
+            i = j  # drop a complete, matching object
+            continue
+        out.append(blob)
+        i = j
+    return "".join(out)
+
+
 class SSEOutputHandler(OutputHandler):
     """
     OutputHandler that queues agent events as JSON for SSE streaming.
@@ -484,6 +530,33 @@ class SSEOutputHandler(OutputHandler):
         self._pending_render_payloads = []
         return "\n\n".join(blocks)
 
+    @classmethod
+    def _strip_echoed_render_cards(cls, answer: str) -> str:
+        """Drop any render-card copy the LLM reproduced in its prose.
+
+        The authoritative card is injected from ``_pending_render_payloads``;
+        small chat-tuned models sometimes also echo it (as a fenced
+        ```<lang>``` block or a bare envelope object), which would render the
+        card twice. Languages are derived from ``_RENDER_TOOL_TO_LANG`` so this
+        stays in sync as render tools are added.
+        """
+        if not answer:
+            return answer
+        langs = sorted(set(cls._RENDER_TOOL_TO_LANG.values()))
+        if not langs:
+            return answer
+        cache = cls.__dict__.get("_RENDER_ECHO_PATTERNS")
+        if cache is None or cache[0] != tuple(langs):
+            alt = "|".join(re.escape(lang) for lang in langs)
+            fence = re.compile(rf"```(?:{alt})\b[\s\S]*?```", re.IGNORECASE)
+            kind = re.compile(rf'"kind"\s*:\s*"(?:{alt})"')
+            cache = (tuple(langs), fence, kind)
+            cls._RENDER_ECHO_PATTERNS = cache
+        _, fence_re, kind_re = cache
+        answer = fence_re.sub("", answer)
+        answer = _strip_balanced_json_blobs(answer, kind_re)
+        return answer
+
     # === Completion Methods ===
 
     def print_final_answer(
@@ -510,6 +583,9 @@ class SSEOutputHandler(OutputHandler):
         # framing the LLM produced.
         rendered_fences = self._drain_render_payloads()
         if rendered_fences:
+            # The buffered card is authoritative — strip any copy the LLM
+            # echoed so the pre-scan card renders exactly once (#1000).
+            answer = self._strip_echoed_render_cards(answer).strip()
             answer = (rendered_fences + ("\n\n" + answer if answer else "")).strip()
         self._emit(
             {

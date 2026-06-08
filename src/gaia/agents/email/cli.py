@@ -28,6 +28,10 @@ async def main(args: Any) -> int:
     """Async main — invoked by ``gaia.cli.handle_email_command``.
 
     Returns the process exit code (0 on success, 1 on error).
+
+    Note: ``--spec`` is handled upstream in ``gaia.cli.handle_email_command``
+    (it short-circuits before this coroutine is reached), so there is no
+    spec branch here — see ``spec_html.write_and_open_spec``.
     """
     # Wire verbose/debug to the agent's logger before constructing.
     if getattr(args, "verbose", False) or getattr(args, "debug", False):

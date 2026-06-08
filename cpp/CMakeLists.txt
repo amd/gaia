@@ -3,6 +3,12 @@
 
 cmake_minimum_required(VERSION 3.14)
 
+# Select the MSVC runtime library via CMAKE_MSVC_RUNTIME_LIBRARY (the static-CRT
+# logic below). Must be set before project() to govern the runtime abstraction.
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+
 # Auto-detect or bootstrap vcpkg for optional OpenSSL support.
 # Must be included before project() so the toolchain is set in time.
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/vcpkg-auto-setup.cmake)
@@ -16,6 +22,18 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Enable C++ exception handling on MSVC (required for try/catch/throw)
 if(MSVC)
     add_compile_options(/EHsc)
+endif()
+
+# ---------------------------------------------------------------------------
+# Static-binary packaging (Agent Hub, issue #1094)
+# ---------------------------------------------------------------------------
+# When building against a vcpkg *-static triplet (e.g. x64-windows-static), the
+# produced binaries must link the C runtime statically too — otherwise the .exe
+# still depends on the MSVC runtime DLLs and is not self-contained. Detect the
+# static triplet and switch the MSVC runtime to the static (/MT) variant.
+if(MSVC AND DEFINED VCPKG_TARGET_TRIPLET AND VCPKG_TARGET_TRIPLET MATCHES "-static$")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    message(STATUS "GAIA packaging: static MSVC runtime (/MT) for ${VCPKG_TARGET_TRIPLET}")
 endif()
 
 # ---------------------------------------------------------------------------

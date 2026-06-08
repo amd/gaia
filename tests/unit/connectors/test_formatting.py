@@ -33,7 +33,7 @@ def test_format_connector_error_public_api():
     not_granted = AuthRequiredError(
         AuthRequiredError.Reason.AGENT_NOT_GRANTED,
         provider="google",
-        agent_id="builtin:connectors-demo",
+        agent_id="installed:connectors-demo",
         missing_scopes=["scope-a"],
     )
     assert "AGENT_NOT_GRANTED" in format_connector_error(not_granted)

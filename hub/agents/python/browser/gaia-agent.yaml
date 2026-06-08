@@ -1,0 +1,32 @@
+id: web
+name: Browser Agent
+version: 0.1.0
+description: "GAIA browser agent — web research (search, fetch, download)"
+author: AMD
+license: MIT
+
+category: research
+tags: [web, search, browser, download]
+icon: globe
+tools_count: 10
+
+language: python
+min_gaia_version: "0.20.0"
+models: [Qwen3.5-35B-A3B-GGUF]
+
+python:
+  entry_module: gaia_agent_browser
+  entry_class: BrowserAgent
+  dependencies:
+    - "amd-gaia>=0.20.0"
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+interfaces:
+  tui: false
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: false

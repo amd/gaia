@@ -89,6 +89,32 @@ tests automatically if no Lemonade server is running.
 
 ---
 
+## Behavior-E2E — Assert side-effects, not replies
+
+The class of bug "agent claims success but the tool never ran" (see [#1428](https://github.com/amd/gaia/issues/1428)) is invisible to:
+
+- Unit tests that mock the LLM and feed clean tool calls
+- UI render E2E tests that assert "the agent replied"
+
+The pattern to catch it: drive each tool-using agent through the real server with a real model,
+repeat each scenario N× (the failure is output-format-dependent and non-deterministic),
+and assert the tool's **side-effect actually occurred** — not merely that the agent produced a reply.
+
+- **False-success is a hard fail**: a "success" reply with no side-effect is worse than honest failure.
+- **Planted unguessable facts**: use `secrets.token_hex(4)` in the prompt so a cached or hallucinated reply cannot accidentally pass.
+- **N× repetition**: repeat ≥5 times; treat any single run with a missing side-effect as a failure.
+
+See `src/gaia/eval/behavior_harness.py` for the reusable `Scenario`/`BehaviorHarness` implementation.
+New agents plug in by adding a `Scenario` to `BUILDER_SCENARIOS` (or their own list).
+
+The live tests live in `tests/integration/eval/test_behavior_e2e.py` and are gated by
+`@pytest.mark.real_model` — they skip automatically on Mac/standard CI and only run on
+`[self-hosted, strix-halo]` runners once [#1297](https://github.com/amd/gaia/issues/1297) lands.
+The helper unit tests (`tests/unit/eval/test_behavior_harness.py`) are fully deterministic
+and run in normal CI with no model required.
+
+---
+
 ## Related Topics
 
 - [Core Agent System](./core/agent-system) - Learn about the base Agent class

@@ -28,10 +28,19 @@ from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
 
-# Optional imports
+# Optional imports — degrades to BLENDER_AVAILABLE = False when the blender
+# agent (or the Blender MCP client) is not installed.
 try:
-    from gaia.agents.blender.agent import BlenderAgent
+    # BlenderAgent now ships as the external ``gaia_agent_blender`` wheel
+    # (#1102), splitting it from the gaia.mcp import below; both must stay in
+    # this guarded optional-import block, so the gaia.mcp import is necessarily
+    # ungrouped from the top-of-file gaia imports.
+    from gaia_agent_blender.agent import BlenderAgent
+
+    # pylint: disable=ungrouped-imports
     from gaia.mcp.blender_mcp_client import MCPClient
+
+    # pylint: enable=ungrouped-imports
 
     BLENDER_AVAILABLE = True
 except ImportError:
@@ -792,48 +801,39 @@ async def async_main(action, **kwargs):
             except Exception:  # pylint: disable=broad-except
                 pass
     elif action in ("browse", "analyze"):
-        if action == "browse":
-            from gaia.agents.browser.agent import BrowserAgent, BrowserAgentConfig
+        # BrowserAgent (id="web") and AnalystAgent (id="data") ship as the
+        # standalone gaia-agent-browser / gaia-agent-analyst wheels (#1102);
+        # resolve them through the registry so the framework doesn't hard-import
+        # the external packages.
+        from gaia.agents.registry import AgentRegistry
 
-            agent = BrowserAgent(
-                BrowserAgentConfig(
-                    use_claude=kwargs.get("use_claude", False),
-                    use_chatgpt=kwargs.get("use_chatgpt", False),
-                    claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
-                    base_url=kwargs.get("base_url"),
-                    model_id=kwargs.get("model", None),
-                    max_steps=kwargs.get("max_steps", 100),
-                    streaming=kwargs.get("stream", False),
-                    show_prompts=kwargs.get("show_prompts", False),
-                    show_stats=kwargs.get("show_stats", False),
-                    silent_mode=not (
-                        kwargs.get("debug", False) or kwargs.get("list_tools", False)
-                    ),
-                    debug=kwargs.get("debug", False),
-                    allowed_paths=kwargs.get("allowed_paths", None),
-                )
+        agent_id = "web" if action == "browse" else "data"
+        wheel = "gaia-agent-browser" if action == "browse" else "gaia-agent-analyst"
+        agent_config_kwargs = dict(
+            use_claude=kwargs.get("use_claude", False),
+            use_chatgpt=kwargs.get("use_chatgpt", False),
+            claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
+            base_url=kwargs.get("base_url"),
+            model_id=kwargs.get("model", None),
+            max_steps=kwargs.get("max_steps", 100),
+            streaming=kwargs.get("stream", False),
+            show_prompts=kwargs.get("show_prompts", False),
+            show_stats=kwargs.get("show_stats", False),
+            silent_mode=not (
+                kwargs.get("debug", False) or kwargs.get("list_tools", False)
+            ),
+            debug=kwargs.get("debug", False),
+            allowed_paths=kwargs.get("allowed_paths", None),
+        )
+        registry = AgentRegistry()
+        registry.discover()
+        if registry.get(agent_id) is None:
+            raise RuntimeError(
+                f"The '{action}' agent is not installed. Install it with "
+                f'`uv pip install {wheel}` (or `uv pip install "amd-gaia[agents]"` '
+                f"for all agents), then re-run `gaia {action}`."
             )
-        else:
-            from gaia.agents.analyst.agent import AnalystAgent, AnalystAgentConfig
-
-            agent = AnalystAgent(
-                AnalystAgentConfig(
-                    use_claude=kwargs.get("use_claude", False),
-                    use_chatgpt=kwargs.get("use_chatgpt", False),
-                    claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
-                    base_url=kwargs.get("base_url"),
-                    model_id=kwargs.get("model", None),
-                    max_steps=kwargs.get("max_steps", 100),
-                    streaming=kwargs.get("stream", False),
-                    show_prompts=kwargs.get("show_prompts", False),
-                    show_stats=kwargs.get("show_stats", False),
-                    silent_mode=not (
-                        kwargs.get("debug", False) or kwargs.get("list_tools", False)
-                    ),
-                    debug=kwargs.get("debug", False),
-                    allowed_paths=kwargs.get("allowed_paths", None),
-                )
-            )
+        agent = registry.create_agent(agent_id, **agent_config_kwargs)
 
         try:
             if kwargs.get("list_tools", False):
@@ -939,9 +939,11 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             log.info(f"Using remote Lemonade server: {base_url}")
             print(f"Remote Lemonade server: {base_url}")
 
-        log.info(f"Starting GAIA Agent UI on http://localhost:{port}")
-        print(f"Starting GAIA Agent UI on http://localhost:{port}")
-        print(f"   Open your browser to http://localhost:{port}")
+        # Advertise 127.0.0.1 to match the bind host below — on Windows
+        # "localhost" can resolve to IPv6 ::1 and fail against this IPv4 listener.
+        log.info(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
+        print(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
+        print(f"   Open your browser to http://127.0.0.1:{port}")
         print("   Press Ctrl+C to stop")
         print()
         if not base_url:
@@ -968,7 +970,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print("   Install them with:\n")
         print('     uv pip install -e ".[ui]"')
         print("\n   Or if you installed from PyPI:\n")
-        print("     pip install amd-gaia[ui]")
+        print('     uv pip install "amd-gaia[ui]"')
         print()
         sys.exit(1)
     except OSError as e:
@@ -1755,6 +1757,24 @@ def build_parser():
         help=(
             "Debug mode — adds full prompt + LLM response logging to "
             "verbose output. Sensitive payloads in logs."
+        ),
+    )
+    email_parser.add_argument(
+        "--spec",
+        action="store_true",
+        help=(
+            "Generate the HTML endpoint spec page, write it to disk, and open "
+            "it in a browser. No LLM or Lemonade required."
+        ),
+    )
+    email_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to write the HTML spec (default: ~/.gaia/email/endpoint-spec.html). "
+            "Only used with --spec."
         ),
     )
 
@@ -2676,11 +2696,17 @@ Examples:
     # Agent command (export/import custom agent bundles)
     agent_parser = subparsers.add_parser(
         "agent",
-        help="Manage custom agents (export/import bundles)",
+        help="Author and manage agents (init/version/test, export/import)",
     )
     agent_subparsers = agent_parser.add_subparsers(
         dest="agent_action", help="Agent action to perform"
     )
+
+    # Developer workflow (init / version / test) lives in gaia.cli_agent to keep
+    # this file lean. It adds its subcommands to the same 'agent' group.
+    from gaia import cli_agent
+
+    cli_agent.register_subparsers(agent_subparsers)
 
     # Agent export command
     agent_export_parser = agent_subparsers.add_parser(
@@ -4561,6 +4587,15 @@ def handle_email_command(args):
     """
     log = get_logger(__name__)
 
+    # --spec: generate the HTML endpoint spec and open it in a browser.
+    # No LLM, no Lemonade — short-circuit before any server check.
+    if getattr(args, "spec", False):
+        from gaia.agents.email.spec_html import write_and_open_spec
+
+        dest = write_and_open_spec(getattr(args, "output", None))
+        print(dest)
+        sys.exit(0)
+
     # Initialize Lemonade — local LLM only. The email agent's config will
     # also reject any non-local base_url at construction time, but the
     # CLI manager check gives a friendlier "start Lemonade first" message.
@@ -4796,7 +4831,14 @@ def handle_sd_command(args):
         print("  gaia sd -i")
         return
 
-    from gaia.agents.sd import SDAgent, SDAgentConfig
+    try:
+        from gaia_agent_sd import SDAgent, SDAgentConfig
+    except ImportError as e:
+        raise ImportError(
+            "The sd agent is not installed. Install it with "
+            '`uv pip install gaia-agent-sd` (or `uv pip install "amd-gaia[agents]"` for '
+            "all AMD agents). See https://amd-gaia.ai/docs/guides/sd."
+        ) from e
 
     # Ensure Lemonade is ready with proper context size for SD agent
     # SD agent needs 8K context for image + story workflow
@@ -6149,9 +6191,18 @@ def handle_agent_command(args):
     Args:
         args: Parsed command-line arguments
     """
+    # Developer-workflow actions (init / version / test) handled in cli_agent.
+    from gaia import cli_agent
+
+    if cli_agent.handle(args):
+        return
+
     if not hasattr(args, "agent_action") or args.agent_action is None:
         print("❌ Error: No agent action specified")
-        print("Available actions: export, import")
+        print(
+            "Available actions: init, version, test, configure, health, status, "
+            "export, import"
+        )
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)
 

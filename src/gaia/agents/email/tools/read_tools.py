@@ -46,6 +46,16 @@ log = get_logger(__name__)
 # attack surface for indirect prompt injection.
 DEFAULT_BODY_LIMIT_CHARS = 4000
 
+# Combined body budget for a whole-thread transcript (#1268). Bounds the prompt
+# so a long thread can't overflow a local model's context window. When a thread
+# exceeds it, the per-message budget shrinks so every message stays represented
+# rather than dropping the oldest (which would defeat full-thread comprehension).
+DEFAULT_THREAD_TRANSCRIPT_CHARS = 24000
+
+# Floor so that, even in a very long thread, each message still carries enough
+# body to be meaningful after the proportional shrink above.
+THREAD_MIN_PER_MESSAGE_CHARS = 200
+
 # Wrapper used to delimit untrusted email body content. The system prompt
 # (see ``agent.py``) tells the LLM that anything inside this wrapper is
 # DATA, never an instruction to execute. Phase I1 / S2.M3.
@@ -156,7 +166,10 @@ def _thread_message_sort_key(msg: Dict[str, Any]) -> int:
 
 
 def _format_thread_for_summary(
-    messages: List[Dict[str, Any]], *, per_message_body_limit: int
+    messages: List[Dict[str, Any]],
+    *,
+    per_message_body_limit: int,
+    max_total_transcript_chars: Optional[int] = DEFAULT_THREAD_TRANSCRIPT_CHARS,
 ) -> str:
     """Render an oldest-first transcript of the FULL thread for the LLM.
 
@@ -164,8 +177,28 @@ def _format_thread_for_summary(
     wrapped in the untrusted-input delimiters — so the model comprehends the
     whole conversation (early decisions included), never just the latest reply,
     yet still treats body text as data, never instructions.
+
+    ``max_total_transcript_chars`` steers the COMBINED body budget toward that
+    target so a long thread doesn't balloon the prompt (50 messages × the
+    per-message limit could otherwise reach hundreds of KB). When the total
+    would exceed it, we shrink the per-message budget so every message stays
+    represented — we do NOT drop the oldest messages, because the whole point of
+    thread summarization is that an early decision survives. It is a soft
+    target, not a hard ceiling: ``THREAD_MIN_PER_MESSAGE_CHARS`` is a per-message
+    floor, so a thread with very many messages can still exceed the target
+    (floor × count) rather than starve each message below readability.
+    ``None`` disables the cap entirely.
     """
     ordered = sorted(messages, key=_thread_message_sort_key)
+    effective_body_limit = per_message_body_limit
+    if max_total_transcript_chars and ordered:
+        # Keep every message present; divide the total body budget across them
+        # (with a small floor so each still carries enough to be meaningful).
+        fair_share = max(
+            THREAD_MIN_PER_MESSAGE_CHARS, max_total_transcript_chars // len(ordered)
+        )
+        if effective_body_limit <= 0 or fair_share < effective_body_limit:
+            effective_body_limit = fair_share
     blocks: List[str] = []
     for idx, msg in enumerate(ordered, start=1):
         payload = msg.get("payload") or {}
@@ -175,8 +208,8 @@ def _format_thread_for_summary(
         }
         body, _attachments = decode_message_body(payload)
         body = (body or "").strip()
-        if per_message_body_limit and len(body) > per_message_body_limit:
-            body = body[:per_message_body_limit] + "\n...[truncated]"
+        if effective_body_limit > 0 and len(body) > effective_body_limit:
+            body = body[:effective_body_limit] + "\n...[truncated]"
         blocks.append(
             f"--- Message {idx} of {len(ordered)} ---\n"
             f"From: {headers.get('from', '')}\n"
@@ -211,6 +244,7 @@ def summarize_thread_impl(
     thread_id: str,
     max_chars: Optional[int] = None,
     per_message_body_limit: int = DEFAULT_BODY_LIMIT_CHARS,
+    max_total_transcript_chars: Optional[int] = DEFAULT_THREAD_TRANSCRIPT_CHARS,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Summarize a whole email thread, comprehending the FULL conversation.
@@ -230,7 +264,7 @@ def summarize_thread_impl(
     # Deferred import: ``summarize_tools`` imports from this module, so a
     # top-level import would create a cycle.
     from gaia.agents.email.tools.summarize_tools import (
-        _SYSTEM_PROMPT,
+        _THREAD_SYSTEM_PROMPT,
         DEFAULT_SUMMARY_CHAR_LIMIT,
         EmailSummarizeError,
         _bound_to_length,
@@ -241,6 +275,7 @@ def summarize_thread_impl(
 
     with log_tool_call("summarize_thread", {"thread_id": thread_id}, debug=debug) as st:
         if chat is None:
+            # message_id field reused to carry the thread_id throughout this path.
             raise EmailSummarizeError(
                 f"summarize_thread has no LLM connection for thread "
                 f"{thread_id!r}; the agent's chat client is not initialized",
@@ -261,14 +296,16 @@ def summarize_thread_impl(
         }
         subject = first_headers.get("subject", "")
         transcript = _format_thread_for_summary(
-            messages, per_message_body_limit=per_message_body_limit
+            ordered,
+            per_message_body_limit=per_message_body_limit,
+            max_total_transcript_chars=max_total_transcript_chars,
         )
 
         prompt = _build_thread_user_prompt(subject, transcript)
         try:
             response = chat.send_messages(
                 [{"role": "user", "content": prompt}],
-                system_prompt=_SYSTEM_PROMPT,
+                system_prompt=_THREAD_SYSTEM_PROMPT,
                 temperature=0.0,
             )
         except Exception as exc:  # LLM/transport failure — surface, never default
@@ -454,6 +491,7 @@ def triage_inbox_impl(
                 subject=payload_headers.get("subject", ""),
                 sender=payload_headers.get("from", ""),
                 label_ids=msg.get("labelIds", []),
+                body=msg.get("snippet", ""),
             )
             log_triage_dispatch(
                 message_id=msg["id"],

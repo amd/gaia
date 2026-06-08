@@ -1,0 +1,40 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Packaging manifest for the native (C++) process analyst agent. Built from
+# cpp/examples/process_agent.cpp by .github/workflows/build_agents.yml.
+id: process
+name: Process Analyst
+version: 0.1.0
+description: "PC narrator and process intelligence: detect anomalies, then act on labeled findings."
+author: AMD
+license: MIT
+
+category: system
+tags: [process, system, monitoring, windows]
+icon: activity
+
+language: cpp
+min_gaia_version: "0.18.0"
+models: [Qwen3-4B-Instruct-2507-GGUF]
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64]
+
+cpp:
+  static_linked: true
+  binaries:
+    win-x64: process-win-x64.exe
+
+permissions:
+  - process:read
+  - process:write
+  - system:read
+
+interfaces:
+  tui: true
+  cli: true
+  pipe: false
+  api_server: false
+  mcp_server: false

@@ -276,11 +276,68 @@ def _aggregate_quality(results: list[dict]) -> dict[str, Any] | None:
     return out
 
 
+def _aggregate_perf(results: list[dict]) -> dict[str, Any] | None:
+    """Roll per-run ``performance_summary`` blocks into one perf block for the gate.
+
+    Pipeline latency and peak memory take the *worst* (max) reading across runs —
+    a perf gate must catch the slowest / heaviest run, not an average that hides
+    it. TTFT and throughput are averaged across runs that harvested them. NPU is
+    the first available reading (best-effort; most runs carry none). Returns
+    ``None`` when no run carried a perf summary — the gate keys off that.
+
+    The output shape matches what :func:`performance.to_performance_summary`
+    emits, so :func:`performance.evaluate_perf_gate` scores it unchanged.
+    """
+    ttft_vals: list[float] = []
+    tps_vals: list[float] = []
+    max_pipeline_s = 0.0
+    max_peak_gb = 0.0
+    npu: dict[str, Any] | None = None
+    saw_perf = False
+
+    for r in results:
+        ps = r.get("performance_summary")
+        if not isinstance(ps, dict):
+            continue
+        saw_perf = True
+        ttft = ps.get("avg_time_to_first_token")
+        if isinstance(ttft, (int, float)) and ttft > 0:
+            ttft_vals.append(float(ttft))
+        tps = ps.get("avg_tokens_per_second")
+        if isinstance(tps, (int, float)) and tps > 0:
+            tps_vals.append(float(tps))
+        pipeline_s = ps.get("pipeline_latency_s")
+        if isinstance(pipeline_s, (int, float)):
+            max_pipeline_s = max(max_pipeline_s, float(pipeline_s))
+        peak_gb = ps.get("peak_memory_gb")
+        if isinstance(peak_gb, (int, float)):
+            max_peak_gb = max(max_peak_gb, float(peak_gb))
+        block = ps.get("npu")
+        if npu is None and isinstance(block, dict) and block.get("available"):
+            npu = block
+
+    if not saw_perf:
+        return None
+
+    return {
+        "avg_time_to_first_token": (
+            round(sum(ttft_vals) / len(ttft_vals), 4) if ttft_vals else 0.0
+        ),
+        "avg_tokens_per_second": (
+            round(sum(tps_vals) / len(tps_vals), 1) if tps_vals else 0.0
+        ),
+        "pipeline_latency_s": round(max_pipeline_s, 3),
+        "peak_memory_gb": round(max_peak_gb, 3),
+        "npu": npu or {"available": False, "utilization_percent": None},
+    }
+
+
 def summarize_benchmark(
     results: list[dict],
     *,
     run_id: str,
     thresholds: "quality_metrics.QualityThresholds | None" = None,
+    perf_thresholds: "performance.PerfThresholds | None" = None,
 ) -> dict[str, Any]:
     """Aggregate per-run results into a scorecard + per-model variance report.
 
@@ -288,9 +345,12 @@ def summarize_benchmark(
     :func:`gaia.eval.statistics.compare_runs_by_model` (variance) — no new perf
     aggregation logic. When any run scored quality, an aggregate ``quality``
     block (corpus-level confusion across runs) is added. When ``thresholds`` is
-    given, the configurable FP/FN gate runs against that aggregate and a
-    ``quality_gate`` block is added (report mode unless the manifest sets
-    ``enforce``). The gate is the machinery #1112 consumes; it never fails here.
+    given, the configurable FP/FN gate (#1278) runs against that aggregate and a
+    ``quality_gate`` block is added. When ``perf_thresholds`` is given, the
+    Strix Halo perf gate (#1277) runs against the aggregate perf block and a
+    ``perf_gate`` block is added. Both gates ship in report mode unless their
+    manifest sets ``enforce``; they are the machinery #1112 consumes and never
+    fail here.
     """
     from gaia.eval.scorecard import build_scorecard
     from gaia.eval.statistics import compare_runs_by_model
@@ -326,6 +386,25 @@ def summarize_benchmark(
         else:
             summary["quality_gate"] = quality_metrics.evaluate_gate(
                 aggregate_quality, thresholds
+            )
+
+    if perf_thresholds is not None:
+        aggregate_perf = _aggregate_perf(results)
+        if aggregate_perf is None:
+            # No perf summary in any run → nothing to gate. Surface a loud skip
+            # rather than silently inventing a pass.
+            summary["perf_gate"] = {
+                "skipped": True,
+                "reason": (
+                    "no performance_summary in any run; perf bars cannot be "
+                    "evaluated"
+                ),
+                "enforce": perf_thresholds.enforce,
+                "should_fail": False,
+            }
+        else:
+            summary["perf_gate"] = performance.evaluate_perf_gate(
+                aggregate_perf, perf_thresholds
             )
 
     return summary
@@ -447,3 +526,29 @@ def load_default_quality_thresholds() -> "quality_metrics.QualityThresholds":
     ``enforce`` switch without hardcoding a fixture path.
     """
     return quality_metrics.load_quality_thresholds(default_quality_thresholds_path())
+
+
+# Canonical location of the committed perf-gate thresholds manifest (#1277). The
+# single entry point #1112 (CI) consumes — flip 'enforce' in this file (data, not
+# code) to make CI gate on the Strix Halo bars once confirmed on hardware.
+_PERF_THRESHOLDS_MANIFEST = (
+    Path(__file__).resolve().parents[3]
+    / "tests"
+    / "fixtures"
+    / "email"
+    / "perf_gate_thresholds.json"
+)
+
+
+def default_perf_thresholds_path() -> Path:
+    """Path to the committed perf-gate thresholds manifest (#1277)."""
+    return _PERF_THRESHOLDS_MANIFEST
+
+
+def load_default_perf_thresholds() -> "performance.PerfThresholds":
+    """Load the committed perf-gate thresholds (loud if absent/malformed).
+
+    The one call CI (#1112) makes to discover the TTFT/throughput/pipeline/peak-
+    memory bars and the ``enforce`` switch without hardcoding a fixture path.
+    """
+    return performance.load_perf_thresholds(default_perf_thresholds_path())

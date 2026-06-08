@@ -102,135 +102,166 @@ class TestBuiltinRegistration:
         visible_ids = [r.id for r in registry.list() if not r.hidden]
         assert "builder" not in visible_ids
 
-    # ---- gaia-lite (Mac/low-memory ChatAgent with 4B model) ----
+    # ---- Consolidated model tiers (#1162) ----
+    # The former per-agent "-lite" registrations (chat-lite, doc-lite, …) and
+    # gaia-lite were collapsed into a "lite" model TIER of the single base
+    # agent. The old IDs survive only as legacy aliases.
 
-    def test_gaia_lite_registered(self):
+    # chat/doc/file are ChatAgent profiles still resident in the framework
+    # wheel. data (AnalystAgent) and web (BrowserAgent) now ship as the
+    # standalone gaia-agent-analyst / gaia-agent-browser wheels (#1102); their
+    # full+lite tiers are verified in those packages' own tests, so the
+    # framework-only suite asserts tiers on the resident profiles only.
+    _BASE_AGENTS = ["chat", "doc", "file"]
+    _LEGACY_LITE_IDS = [
+        "chat-lite",
+        "doc-lite",
+        "file-lite",
+        "data-lite",
+        "web-lite",
+        "gaia-lite",
+    ]
+
+    def test_no_separate_lite_registrations(self):
+        """Each agent appears ONCE — no duplicate ``-lite`` cards (#1162)."""
         registry = AgentRegistry()
         registry.discover()
-        reg = registry.get("gaia-lite")
-        assert reg is not None, "gaia-lite should be registered as a built-in"
-        assert reg.source == "builtin"
-        assert reg.hidden is False
-        assert reg.name == "Gaia Lite"
+        ids = {r.id for r in registry.list()}
+        for legacy in self._LEGACY_LITE_IDS:
+            assert legacy not in ids, f"{legacy} must no longer be its own card"
 
-    def test_gaia_lite_visible_in_list(self):
+    def test_base_agents_declare_full_and_lite_tiers(self):
         registry = AgentRegistry()
         registry.discover()
-        visible_ids = [r.id for r in registry.list() if not r.hidden]
-        assert "gaia-lite" in visible_ids
+        for agent_id in self._BASE_AGENTS:
+            reg = registry.get(agent_id)
+            assert reg is not None, agent_id
+            tier_names = [t.name for t in reg.model_tiers]
+            assert tier_names == ["full", "lite"], (agent_id, tier_names)
+            full, lite = reg.model_tiers
+            # Full tier carries no model list — the agent's own default wins.
+            assert full.models == []
+            assert full.default is True
+            # Lite tier pins the ~4B preset and a memory floor.
+            assert lite.models[0] == _EXPECTED_PRIMARY
+            assert all("4b" in m.lower() for m in lite.models), lite.models
+            assert lite.min_memory_gb == 5.0
 
-    def test_gaia_lite_prefers_4b_model(self):
-        """The UI reads ``models`` to show/validate the preferred checkpoint."""
+    def test_legacy_lite_ids_resolve_to_base_agent(self):
         registry = AgentRegistry()
         registry.discover()
-        reg = registry.get("gaia-lite")
-        assert reg.models, "gaia-lite should list preferred models"
-        # The primary preference must be a ~4B GGUF checkpoint — that's the
-        # whole reason this agent exists alongside ChatAgent. We currently
-        # ship Gemma 4 E4B as primary, with Gemma 3 4B as the fallback for
-        # catalogs that haven't picked up the Gemma 4 drop yet.
-        assert reg.models[0] == _EXPECTED_PRIMARY
-        # Case-insensitive "4B" check — Gemma 3 uses lowercase "4b" in its
-        # checkpoint name, Gemma 4 E4B uses uppercase. Both are ~4B models.
-        assert all("4b" in m.lower() for m in reg.models), reg.models
+        expected = {
+            "chat-lite": "chat",
+            "doc-lite": "doc",
+            "file-lite": "file",
+            "data-lite": "data",
+            "web-lite": "web",
+            # gaia-lite historically aliased doc-lite.
+            "gaia-lite": "doc",
+        }
+        for legacy, base in expected.items():
+            # canonical_id is a pure alias mapping — holds whether or not the
+            # base agent's wheel is installed.
+            assert registry.canonical_id(legacy) == base
+            # data/web ship as standalone wheels (#1102); only assert the
+            # registration resolves when the base agent is actually registered.
+            if base in {r.id for r in registry.list()}:
+                reg = registry.get(legacy)
+                assert reg is not None and reg.id == base
 
-    def test_gaia_lite_factory_presets_model_id(self):
-        """Factory must preset ``model_id`` so ChatAgent skips the 35B default."""
-        registry = AgentRegistry()
-        registry.discover()
-        reg = registry.get("gaia-lite")
-
-        # Mock ChatAgent to avoid needing a live LLM, but let ChatAgentConfig
-        # construct normally so we can read the resolved model_id off it.
-        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
-            reg.factory()  # no kwargs — factory must still set model_id
-        mock_agent.assert_called_once()
-        config = mock_agent.call_args.kwargs["config"]
-        assert config.model_id == _EXPECTED_PRIMARY
-
-    def test_gaia_lite_factory_respects_caller_override(self):
-        """Explicit ``model_id`` from the caller wins over the preset default."""
-        registry = AgentRegistry()
-        registry.discover()
-        reg = registry.get("gaia-lite")
-
-        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
-            reg.factory(model_id="Custom-Model-Override")
-        config = mock_agent.call_args.kwargs["config"]
-        assert config.model_id == "Custom-Model-Override"
-
-    def test_chat_and_gaia_lite_coexist(self):
-        """Creating gaia-lite must not perturb the default Chat Agent."""
-        registry = AgentRegistry()
-        registry.discover()
-        assert registry.get("chat") is not None
-        assert registry.get("gaia-lite") is not None
-        # Distinct registrations — not aliases.
-        assert registry.get("chat") is not registry.get("gaia-lite")
-        # Chat must keep an empty models preference list (unchanged default).
-        assert registry.get("chat").models == []
-
-    def test_gaia_lite_declares_memory_requirement(self):
-        """gaia-lite should declare min_memory_gb so the UI can warn."""
-        registry = AgentRegistry()
-        registry.discover()
-        reg = registry.get("gaia-lite")
-        # Gemma 4 E4B Q4 GGUF is ~2.7 GB on disk; 5 GB free is the
-        # comfortable load floor (weights + KV cache + runtime overhead).
-        assert reg.min_memory_gb == 5.0
-
-    def test_chat_lite_is_registered(self):
-        """chat-lite is now a first-class agent (not an alias)."""
-        registry = AgentRegistry()
-        registry.discover()
-        reg = registry.get("chat-lite")
-        assert reg is not None, "chat-lite should be registered"
-        assert reg.id == "chat-lite"
-
-    def test_legacy_chat_lite_create_agent_routes_to_gaia_lite(self):
-        """``create_agent('chat-lite')`` should build the renamed agent."""
+    def test_legacy_chat_lite_create_agent_uses_lite_tier(self):
+        """``create_agent('chat-lite')`` builds chat with the ~4B preset."""
         registry = AgentRegistry()
         registry.discover()
         with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
             registry.create_agent("chat-lite")
         mock_agent.assert_called_once()
         config = mock_agent.call_args.kwargs["config"]
-        # Same ~4B preset as gaia-lite — confirming the alias hit.
+        assert config.model_id == _EXPECTED_PRIMARY
+        assert config.prompt_profile == "chat"
+
+    def test_legacy_gaia_lite_create_agent_uses_doc_profile(self):
+        """gaia-lite resolves to the doc agent on the lite tier."""
+        registry = AgentRegistry()
+        registry.discover()
+        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+            registry.create_agent("gaia-lite")
+        config = mock_agent.call_args.kwargs["config"]
+        assert config.model_id == _EXPECTED_PRIMARY
+        assert config.prompt_profile == "doc"
+
+    def test_explicit_model_id_overrides_lite_tier(self):
+        """A caller-pinned ``model_id`` wins over the alias's lite preset."""
+        registry = AgentRegistry()
+        registry.discover()
+        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+            registry.create_agent("chat-lite", model_id="Custom-Model-Override")
+        config = mock_agent.call_args.kwargs["config"]
+        assert config.model_id == "Custom-Model-Override"
+
+    def test_explicit_model_tier_selects_lite_on_base_id(self):
+        """The base id + ``model_tier='lite'`` selects the ~4B preset (#1162)."""
+        registry = AgentRegistry()
+        registry.discover()
+        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+            registry.create_agent("chat", model_tier="lite")
+        config = mock_agent.call_args.kwargs["config"]
         assert config.model_id == _EXPECTED_PRIMARY
 
-    def test_legacy_chat_lite_resolve_model_returns_4b(self):
-        """``resolve_model('chat-lite')`` must honour the alias.
+    def test_base_chat_create_agent_uses_default_model(self):
+        """Plain ``chat`` (full tier) leaves model_id unset for the agent default."""
+        registry = AgentRegistry()
+        registry.discover()
+        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+            registry.create_agent("chat")
+        config = mock_agent.call_args.kwargs["config"]
+        assert config.model_id is None
 
-        Regression: before routing ``resolve_model`` through ``get()``, a
-        session stored with ``agent_type='chat-lite'`` would bypass the
-        registration lookup, return ``None``, and fall through to whatever
-        35B default was loaded — silently defeating the 4B preset that's
-        the whole reason gaia-lite exists.
+    def test_legacy_chat_lite_resolve_model_returns_4b(self):
+        """``resolve_model('chat-lite')`` must honour the alias's lite tier.
+
+        Regression: a session stored with ``agent_type='chat-lite'`` must
+        still resolve to the 4B preset even though the base ``chat`` agent
+        carries no top-level ``models`` preference (#1162).
         """
         registry = AgentRegistry()
         registry.discover()
-        # Supply an explicit model list to keep the test hermetic (no
-        # Lemonade HTTP call).
         resolved = registry.resolve_model(
             "chat-lite",
             available_models=[_EXPECTED_PRIMARY, "Something-Else"],
         )
         assert resolved == _EXPECTED_PRIMARY
 
+    def test_legacy_gaia_lite_resolve_model_returns_4b(self):
+        registry = AgentRegistry()
+        registry.discover()
+        resolved = registry.resolve_model(
+            "gaia-lite",
+            available_models=[_EXPECTED_PRIMARY, "Something-Else"],
+        )
+        assert resolved == _EXPECTED_PRIMARY
+
+    def test_base_chat_resolve_model_returns_none(self):
+        """The full tier defers to the agent default — resolve_model is None."""
+        registry = AgentRegistry()
+        registry.discover()
+        resolved = registry.resolve_model("chat", available_models=[_EXPECTED_PRIMARY])
+        assert resolved is None
+
     def test_canonical_id_maps_aliases_and_passes_through_known_ids(self):
-        """``canonical_id`` passes known IDs through unchanged."""
         registry = AgentRegistry()
         registry.discover()
         # Known IDs pass through unchanged.
-        assert registry.canonical_id("gaia-lite") == "gaia-lite"
         assert registry.canonical_id("chat") == "chat"
-        assert registry.canonical_id("chat-lite") == "chat-lite"
+        # Legacy lite IDs resolve to their base agent.
+        assert registry.canonical_id("chat-lite") == "chat"
+        assert registry.canonical_id("gaia-lite") == "doc"
         # Unknown IDs pass through so callers can surface the miss themselves
         # (``get`` returns ``None``, ``create_agent`` raises ValueError).
         assert registry.canonical_id("unknown-agent") == "unknown-agent"
 
     def test_chat_has_no_memory_requirement_by_default(self):
-        """Chat (35B default) leaves min_memory_gb unset — existing behaviour."""
+        """Chat (full tier) leaves min_memory_gb unset — existing behaviour."""
         registry = AgentRegistry()
         registry.discover()
         reg = registry.get("chat")
@@ -406,7 +437,9 @@ class TestDirectoryDiscovery:
 
 class TestEntryPointDiscovery:
     def _entry_point(self, name, loaded):
-        return SimpleNamespace(name=name, load=lambda: loaded)
+        return SimpleNamespace(
+            name=name, value=f"{name}:build_registration", load=lambda: loaded
+        )
 
     def _entry_points(self, entry_point):
         return lambda group: (
@@ -436,7 +469,7 @@ class TestEntryPointDiscovery:
         )
 
         registry = AgentRegistry()
-        registry._discover_entry_point_agents()
+        registry._discover_installed_agents()
 
         reg = registry.get("hub-chat")
         assert reg is not None
@@ -478,7 +511,7 @@ class TestEntryPointDiscovery:
 
         registry = AgentRegistry()
         registry._register(existing)
-        registry._discover_entry_point_agents()
+        registry._discover_installed_agents()
 
         assert registry.get("chat").name == "Existing Chat"
         assert registry.create_agent("chat") == "existing"
@@ -493,7 +526,7 @@ class TestEntryPointDiscovery:
 
         registry = AgentRegistry()
         with caplog.at_level("WARNING", logger="gaia.agents.registry"):
-            registry._discover_entry_point_agents()
+            registry._discover_installed_agents()
 
         assert registry.get("broken-agent") is None
         assert "Failed to load agent entry point broken-agent" in caplog.text
@@ -518,7 +551,7 @@ class TestEntryPointDiscovery:
         )
 
         registry = AgentRegistry()
-        registry._discover_entry_point_agents()
+        registry._discover_installed_agents()
 
         assert registry.get("hub-chat").namespaced_agent_id == "installed:hub-chat"
 
@@ -541,7 +574,7 @@ class TestEntryPointDiscovery:
         )
 
         registry = AgentRegistry()
-        registry._discover_entry_point_agents()
+        registry._discover_installed_agents()
 
         assert registry.get("hub-chat").source == "installed"
 
@@ -564,7 +597,7 @@ class TestEntryPointDiscovery:
         )
 
         registry = AgentRegistry()
-        registry._discover_entry_point_agents()
+        registry._discover_installed_agents()
 
         assert registry.get("direct-agent") is not None
 

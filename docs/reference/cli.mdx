@@ -359,7 +359,148 @@ On Windows, `--lemonade` also kills orphaned `llama-server.exe` and `lemonade-tr
 
 ### Agent Command
 
-Manage custom agents installed under `~/.gaia/agents/`. Supports exporting every custom agent into a single `.zip` bundle and importing a bundle produced on another machine.
+Author, version, validate, and share GAIA agents.
+
+#### Developer workflow: `init`, `version`, `test`
+
+Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/python/summarize/`).
+
+```bash
+gaia agent init <name> [--language python|cpp] [--output DIR] [--force]
+gaia agent version <patch|minor|major> [--path DIR]
+gaia agent test [--lint | --live] [--path DIR] [--timeout SECONDS]
+```
+
+**`init`** scaffolds a package directory named after `<name>`:
+
+- **Python:** `gaia-agent.yaml`, `pyproject.toml` (with the `gaia.agent` entry point), a `gaia_agent_<id>/` package (`__init__.py` + `agent.py` skeleton), `tests/test_agent.py`, and `README.md`.
+- **C++:** `gaia-agent.yaml`, `CMakeLists.txt`, `src/agent.cpp`, `tests/`, and `README.md`.
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `name` | string | Agent id/name — lowercase, hyphens allowed (positional, required) |
+| `--language` | choice | `python` (default) or `cpp` |
+| `--output, -o` | string | Parent directory to create the package in (default: current dir) |
+| `--force` | flag | Overwrite an existing package directory |
+
+**`version`** bumps the SemVer in `gaia-agent.yaml` and keeps `pyproject.toml` / `__init__.py` in sync.
+
+**`test`** runs quality gates in two modes:
+
+| Mode | LLM required? | Checks |
+|------|:-------------:|--------|
+| `--lint` (default) | No (CI-safe) | Manifest valid + complete, package structure, Python sources parse + imports resolve, `black` + `isort` clean (Python); manifest + structure (C++) |
+| `--live` | Yes (Lemonade Server) | Agent answers each declared `conversation_starter` within `--timeout` without crashing |
+
+The publish workflow requires `--lint` to pass; `--live` is recommended but not enforced.
+
+**Examples:**
+
+<CodeGroup>
+```bash Scaffold and validate
+gaia agent init my-agent
+cd my-agent
+gaia agent test --lint
+```
+
+```bash Bump version
+gaia agent version patch    # 0.1.0 -> 0.1.1
+```
+
+```bash Live smoke test
+gaia agent test --live --timeout 90
+```
+</CodeGroup>
+
+#### Lifecycle: `configure`, `health`, `status`
+
+Manage an *installed* agent: set per-agent configuration, verify it loads, and inspect its state. Configuration is persisted under `~/.gaia/agents/<id>/config.json` and survives restarts.
+
+```bash
+gaia agent configure <id> [--model NAME] [--set KEY=VALUE ...] [--replace] [--show]
+gaia agent health <id>
+gaia agent status [<id>]
+```
+
+**`configure`** writes per-agent settings (e.g. a preferred model). `--set` values are JSON-decoded when possible (`--set temperature=0.2` stores a number, `--set verbose=true` a boolean), otherwise kept as strings. Settings merge into the existing config by default; pass `--replace` to overwrite it wholesale, or `--show` to print the current config without changing it.
+
+**`health`** verifies that an installed agent actually loads — its registration resolves and its entry point imports. It reports one of `healthy`, `degraded` (loads but something optional is off, e.g. a corrupt config), `error` (a required piece fails to load), or `not_installed`, and exits non-zero for `error` / `not_installed` so scripts can gate on it.
+
+**`status`** aggregates installed version, health, config summary, and source for one agent — or every discovered agent when `<id>` is omitted.
+
+| Option | Applies to | Description |
+|--------|------------|-------------|
+| `id` | all | Agent id (positional; optional for `status`, required otherwise) |
+| `--model` | `configure` | Preferred model, stored as the `model` setting |
+| `--set KEY=VALUE` | `configure` | Set an arbitrary setting (repeatable) |
+| `--replace` | `configure` | Replace the whole config instead of merging |
+| `--show` | `configure` | Print the current config and exit |
+
+**Examples:**
+
+<CodeGroup>
+```bash Set a model preference
+gaia agent configure chat --model Qwen3.5-35B-A3B-GGUF
+```
+
+```bash Check health and status
+gaia agent health chat
+gaia agent status            # every discovered agent
+```
+</CodeGroup>
+
+#### Distribution: `pack`, `publish`, `login`
+
+Build a distributable wheel from a Python agent package, then dual-publish it to the Agent Hub (R2, the source for the Hub UI) **and** PyPI (the source for `pip install`).
+
+```bash
+gaia agent login [--hub-token TOKEN | --hub] [--pypi-token TOKEN | --pypi]
+gaia agent pack [PATH] [--output DIR]
+gaia agent publish [PATH] [--output DIR] [--hub-url URL] [--skip-r2] [--skip-pypi]
+```
+
+**`pack`** runs `python -m build --wheel` against the package's `pyproject.toml`, writing `gaia_agent_<id>-<version>-py3-none-any.whl` to `dist/` and printing its SHA-256. Python agents only — native (C++) agents ship a CMake-built binary, not a wheel.
+
+**`publish`** packs the wheel and uploads it to both targets. R2 receives a multipart POST (`gaia-agent.yaml` + wheel) authenticated with a Bearer token; PyPI receives a `twine upload` authenticated with an API token. Both enforce version immutability — bump the version with `gaia agent version` before re-publishing.
+
+**`login`** stores publisher tokens in your OS keyring. Tokens may also be supplied via the `GAIA_HUB_TOKEN` and `PYPI_TOKEN` environment variables (useful in CI), which take precedence over the keyring.
+
+| Option | Applies to | Description |
+|--------|------------|-------------|
+| `PATH` | `pack`, `publish` | Agent package directory (positional, default: current dir) |
+| `--output, -o` | `pack`, `publish` | Output directory for the wheel (default: `<package>/dist`) |
+| `--hub-url` | `publish` | R2 Worker origin (default: `GAIA_HUB_URL` or `https://hub.amd-gaia.ai`) |
+| `--skip-r2` | `publish` | Publish to PyPI only |
+| `--skip-pypi` | `publish` | Publish to R2 only |
+| `--hub-token` / `--hub` | `login` | Store the R2 Hub token (pass a value, or `--hub` to be prompted) |
+| `--pypi-token` / `--pypi` | `login` | Store the PyPI token (pass a value, or `--pypi` to be prompted) |
+
+The packaging toolchain (`build`, `twine`) ships in the `publish` extra:
+
+```bash
+pip install "amd-gaia[publish]"
+```
+
+**Examples:**
+
+<CodeGroup>
+```bash Build a wheel
+gaia agent pack hub/agents/python/summarize/
+```
+
+```bash Store tokens, then dual-publish
+gaia agent login --hub --pypi          # prompts for each token
+gaia agent publish hub/agents/python/summarize/
+```
+
+```bash Publish to PyPI only
+gaia agent publish --skip-r2
+```
+</CodeGroup>
+
+#### Sharing: `export`, `import`
+
+Export every custom agent installed under `~/.gaia/agents/` into a single `.zip` bundle, and import a bundle produced on another machine.
 
 ```bash
 gaia agent export [--output PATH]

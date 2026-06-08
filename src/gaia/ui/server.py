@@ -55,6 +55,7 @@ from .routers import connectors as connectors_router_mod
 from .routers import documents as documents_router_mod
 from .routers import files as files_router_mod
 from .routers import goals as goals_router_mod
+from .routers import hub as hub_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
 from .routers import sessions as sessions_router_mod
@@ -496,6 +497,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # ── Include Routers ──────────────────────────────────────────────────
     app.include_router(system_router_mod.router)
+    # Hub routes (catalog/install/...) MUST precede the agents router: that
+    # router has a greedy GET /api/agents/{agent_id:path} that would otherwise
+    # capture /api/agents/catalog and /api/agents/{id}/install-status.
+    app.include_router(hub_router_mod.router)
     app.include_router(agents_router_mod.router)
     app.include_router(sessions_router_mod.router)
     app.include_router(chat_router_mod.router)
