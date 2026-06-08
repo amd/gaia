@@ -10,8 +10,8 @@ same as "not installed" so it cannot crash every module that transitively
 imports RAG, while still surfacing a loud, actionable error at point of use.
 """
 
+import builtins
 import importlib
-from unittest.mock import patch
 
 import pytest
 
@@ -28,32 +28,45 @@ def _bare_sdk():
 def test_module_imports_without_optional_deps():
     """The module is importable regardless of optional-dependency health."""
     assert hasattr(sdk, "RAGSDK")
-    assert hasattr(sdk, "_SENTENCE_TRANSFORMERS_IMPORT_ERROR")
-    assert hasattr(sdk, "_FAISS_IMPORT_ERROR")
+    assert hasattr(sdk, "SentenceTransformer")
+    assert hasattr(sdk, "faiss")
 
 
-def test_broken_install_reports_actionable_cause():
+def test_broken_install_reports_actionable_cause(monkeypatch):
     """An installed-but-broken dep surfaces the captured cause, not just 'install it'."""
-    cause = RuntimeError("Could not load libtorchcodec (FFmpeg not found)")
-    with (
-        patch.object(sdk, "SentenceTransformer", None),
-        patch.object(sdk, "_SENTENCE_TRANSFORMERS_IMPORT_ERROR", cause),
-    ):
-        with pytest.raises(ImportError) as excinfo:
-            _bare_sdk()._check_dependencies()
+    monkeypatch.setattr(sdk, "SentenceTransformer", None)
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "sentence_transformers":
+            raise RuntimeError("Could not load libtorchcodec (FFmpeg not found)")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(ImportError) as excinfo:
+        _bare_sdk()._check_dependencies()
     msg = str(excinfo.value)
     assert "installed but failed to load" in msg
     assert "libtorchcodec" in msg  # the captured cause is named
 
 
-def test_genuinely_missing_dep_omits_broken_section():
+def test_genuinely_missing_dep_omits_broken_section(monkeypatch):
     """A simply-missing dep gets install instructions, not the broken-load hint."""
-    with (
-        patch.object(sdk, "SentenceTransformer", None),
-        patch.object(sdk, "_SENTENCE_TRANSFORMERS_IMPORT_ERROR", None),
-    ):
-        with pytest.raises(ImportError) as excinfo:
-            _bare_sdk()._check_dependencies()
+    monkeypatch.setattr(sdk, "SentenceTransformer", None)
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "sentence_transformers":
+            raise ImportError("No module named 'sentence_transformers'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(ImportError) as excinfo:
+        _bare_sdk()._check_dependencies()
     msg = str(excinfo.value)
     assert "sentence-transformers" in msg
     assert "installed but failed to load" not in msg

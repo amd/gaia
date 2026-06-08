@@ -9,6 +9,7 @@ GAIA RAG SDK - Simple PDF document retrieval and Q&A
 import errno
 import hashlib
 import hmac
+import importlib
 import json
 import os
 import re
@@ -35,21 +36,15 @@ except ImportError:
 # RuntimeError/OSError at import. Treat that the same as "not installed" so a
 # bad install can't crash every module that transitively imports RAG; the loud,
 # actionable error is deferred to RAGSDK._check_dependencies() at point of use.
-# Capture the reason so that error can tell "not installed" from "installed but
-# broken" instead of misdirecting the user to reinstall a package they have.
-_SENTENCE_TRANSFORMERS_IMPORT_ERROR = None
 try:
     from sentence_transformers import SentenceTransformer
-except Exception as _e:  # pylint: disable=broad-except
+except Exception:  # pylint: disable=broad-except
     SentenceTransformer = None
-    _SENTENCE_TRANSFORMERS_IMPORT_ERROR = _e
 
-_FAISS_IMPORT_ERROR = None
 try:
     import faiss
-except Exception as _e:  # pylint: disable=broad-except
+except Exception:  # pylint: disable=broad-except
     faiss = None
-    _FAISS_IMPORT_ERROR = _e
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.logger import get_logger
@@ -238,13 +233,23 @@ class RAGSDK:
             )
             # A package that is installed but failed to import (broken native
             # deps) needs a different fix than a missing one — name the cause.
+            # Re-import on this (already-failing) path to recover the reason,
+            # skipping genuinely-missing packages (ImportError) which the
+            # install instructions above already cover.
             broken = []
-            if SentenceTransformer is None and _SENTENCE_TRANSFORMERS_IMPORT_ERROR:
-                broken.append(
-                    f"  sentence-transformers: {_SENTENCE_TRANSFORMERS_IMPORT_ERROR}"
-                )
-            if faiss is None and _FAISS_IMPORT_ERROR:
-                broken.append(f"  faiss: {_FAISS_IMPORT_ERROR}")
+            for pkg, label in (
+                ("sentence_transformers", "sentence-transformers"),
+                ("faiss", "faiss"),
+            ):
+                if (pkg == "sentence_transformers" and SentenceTransformer is None) or (
+                    pkg == "faiss" and faiss is None
+                ):
+                    try:
+                        importlib.import_module(pkg)
+                    except ImportError:
+                        pass  # genuinely missing → covered by install instructions
+                    except Exception as exc:  # pylint: disable=broad-except
+                        broken.append(f"  {label}: {exc}")
             if broken:
                 error_msg += (
                     "\nThe package(s) below are installed but failed to load — "
