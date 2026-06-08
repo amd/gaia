@@ -108,6 +108,7 @@ def _render_basic(
     class_name: str,
     starters: list,
     system_prompt: str,
+    card_description: str,
 ) -> List[str]:
     return [
         *_build_header(class_name, agent_id, ""),
@@ -118,7 +119,7 @@ def _render_basic(
         f"class {class_name}(Agent):",
         f"    {_class_docstring(description)}",
         "",
-        *_build_class_attrs(agent_id, agent_name, description, starters),
+        *_build_class_attrs(agent_id, agent_name, card_description, starters),
         "",
         "    # -- System Prompt -----------------------------------------------",
         "    # This is your agent's personality and instructions.",
@@ -160,6 +161,7 @@ def _render_mcp(
     class_name: str,
     starters: list,
     system_prompt: str,
+    card_description: str,
 ) -> List[str]:
     return [
         *_build_header(class_name, agent_id, " (MCP-enabled)"),
@@ -175,7 +177,7 @@ def _render_mcp(
         f"class {class_name}(Agent, MCPClientMixin):",
         f"    {_class_docstring(description)}",
         "",
-        *_build_class_attrs(agent_id, agent_name, description, starters),
+        *_build_class_attrs(agent_id, agent_name, card_description, starters),
         "",
         "    # -- MCP Setup --------------------------------------------------",
         "    # _mcp_manager must be set BEFORE super().__init__() because",
@@ -230,6 +232,7 @@ def _render_with_tools(
     system_prompt: str,
     tools: List[str],
     enable_mcp: bool,
+    card_description: str,
 ) -> List[str]:
     """Compose a template with tool mixins (and optional MCP)."""
     # Build imports
@@ -267,7 +270,7 @@ def _render_with_tools(
         class_sig,
         f"    {_class_docstring(description)}",
         "",
-        *_build_class_attrs(agent_id, agent_name, description, starters),
+        *_build_class_attrs(agent_id, agent_name, card_description, starters),
         "",
     ]
 
@@ -341,6 +344,7 @@ def generate_agent_source(
     system_prompt: str,
     enable_mcp: bool = False,
     tools: Optional[List[str]] = None,
+    card_description: Optional[str] = None,
 ) -> str:
     """Build a syntactically-safe agent.py source string.
 
@@ -350,7 +354,8 @@ def generate_agent_source(
     Args:
         agent_id: Short slug used as the directory name and AGENT_ID.
         agent_name: Human-readable display name (e.g. "Alpha Agent").
-        description: One-sentence description of the agent.
+        description: One-sentence description of the agent. Used for the class
+            docstring (so IDE tooltips / ``help()`` stay clean).
         class_name: Python class name (e.g. "AlphaAgent").
         starters: Conversation starter strings for the UI.
         system_prompt: The agent's system prompt text.
@@ -359,10 +364,15 @@ def generate_agent_source(
             When provided, adds the corresponding mixin imports, base classes,
             and ``self.register_<tool>_tools()`` calls.  Invalid names raise
             ``ValueError``.
+        card_description: Optional text for ``AGENT_DESCRIPTION`` (the Hub-card
+            label). Defaults to ``description`` when not supplied. The Builder
+            passes a tagged variant here so the "(alpha template)" marker shows
+            on the card without polluting the class docstring.
 
     Raises:
         ValueError: If ``tools`` contains an entry not in ``KNOWN_TOOLS``.
     """
+    card_description = card_description if card_description is not None else description
     tools = list(tools or [])
     if tools:
         unknown = [t for t in tools if t not in KNOWN_TOOLS]
@@ -380,13 +390,26 @@ def generate_agent_source(
             system_prompt=system_prompt,
             tools=tools,
             enable_mcp=enable_mcp,
+            card_description=card_description,
         )
     elif enable_mcp:
         lines = _render_mcp(
-            agent_id, agent_name, description, class_name, starters, system_prompt
+            agent_id,
+            agent_name,
+            description,
+            class_name,
+            starters,
+            system_prompt,
+            card_description,
         )
     else:
         lines = _render_basic(
-            agent_id, agent_name, description, class_name, starters, system_prompt
+            agent_id,
+            agent_name,
+            description,
+            class_name,
+            starters,
+            system_prompt,
+            card_description,
         )
     return "\n".join(lines) + "\n"

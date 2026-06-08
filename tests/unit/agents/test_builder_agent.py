@@ -1006,6 +1006,54 @@ class TestBuilderAlphaFraming:
         assert "starter template" in source
         assert "alpha" in source
 
+    def test_alpha_tag_only_on_description_not_docstring(self, tmp_path, monkeypatch):
+        """The (alpha template) tag lands on AGENT_DESCRIPTION (Hub card) only —
+        the class docstring (IDE tooltips / help()) stays clean."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Tagged Agent",
+            description="Summarizes arXiv papers daily.",
+            system_prompt="You are Tagged Agent.",
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "tagged" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+
+        # Docstring (via ast) must NOT carry the tag.
+        tree = ast.parse(source)
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef))
+        docstring = ast.get_docstring(cls) or ""
+        assert docstring == "Summarizes arXiv papers daily."
+        assert "(alpha template)" not in docstring
+
+        # AGENT_DESCRIPTION line DOES carry the tag.
+        desc_line = next(
+            line for line in source.splitlines() if "AGENT_DESCRIPTION" in line
+        )
+        assert "(alpha template)" in desc_line
+        assert "Summarizes arXiv papers daily." in desc_line
+
+    def test_alpha_tag_on_description_for_mcp_variant(self, tmp_path, monkeypatch):
+        """Same split holds for the MCP-enabled render path."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Mcp Tagged Agent",
+            description="Connects to external services.",
+            system_prompt="You are Mcp Tagged Agent.",
+            enable_mcp=True,
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "mcp-tagged" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+
+        tree = ast.parse(source)
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef))
+        docstring = ast.get_docstring(cls) or ""
+        assert "(alpha template)" not in docstring
+
+        desc_line = next(
+            line for line in source.splitlines() if "AGENT_DESCRIPTION" in line
+        )
+        assert "(alpha template)" in desc_line
+
 
 # ---------------------------------------------------------------------------
 # Registry integration

@@ -455,8 +455,10 @@ def _create_agent_impl(
     desc = (
         description.strip() if description.strip() else f"Custom agent: {display_name}"
     )
-    # Tag the description as an alpha starter template (shows on the Hub card).
-    desc = f"{desc} (alpha template)"
+    # ``desc`` stays clean (used for the class docstring + fallback persona);
+    # ``card_desc`` carries the "(alpha template)" tag for AGENT_DESCRIPTION only,
+    # so the Hub card reads honestly without polluting IDE tooltips / help().
+    card_desc = f"{desc} (alpha template)"
     # No silent zoo: derive a generic-but-correct persona from the described
     # purpose when the Builder doesn't author one (CLAUDE.md: no silent fallbacks).
     effective_prompt = (
@@ -477,6 +479,7 @@ def _create_agent_impl(
             agent_id=agent_id,
             agent_name=display_name,
             description=desc,
+            card_description=card_desc,
             class_name=class_name,
             starters=effective_starters,
             system_prompt=effective_prompt,
