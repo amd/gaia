@@ -326,6 +326,71 @@ class TestCreateAgentImpl:
                 break
         assert found, "No valid Agent subclass found in generated agent.py"
 
+    def test_built_agent_runs_with_authored_persona(self, tmp_path, monkeypatch):
+        """A Builder-produced agent instantiates and runs through the real agent
+        loop on ITS authored persona — fully offline (mocked LLM, no Lemonade).
+
+        Closes the coverage gap: other tests prove the Builder *writes* a correct
+        agent.py; this one *runs* a built agent end-to-end.
+        """
+        from unittest.mock import MagicMock
+
+        authored_prompt = (
+            "You are the Daily arXiv Summary Agent. You find recent arXiv papers "
+            "and deliver concise digests (title, authors, summary, why it matters)."
+        )
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Daily arXiv Summary",
+            description="Finds and summarizes new arXiv papers each day.",
+            system_prompt=authored_prompt,
+            conversation_starters=["Summarize today's top papers on diffusion models"],
+        )
+
+        # Dynamically import the generated agent.py (mirrors
+        # test_generated_agent_importable) and grab the built class.
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        spec = importlib.util.spec_from_file_location("built_arxiv_agent", py_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        agent_cls = module.DailyArxivSummaryAgent
+
+        # Construct with skip_lemonade=True so __init__ makes no network call,
+        # and a mocked LLM so the loop never hits a real server (CI-safe).
+        # A tool-calling model_id keeps _compose_system_prompt from appending the
+        # embedded-JSON response-format template; with no registered tools the
+        # composed prompt is then exactly the authored persona.
+        agent = agent_cls(
+            model_id="Qwen3.5-35B-A3B-GGUF",
+            skip_lemonade=True,
+            silent_mode=True,
+            max_steps=1,
+        )
+
+        mocked_answer = (
+            "I summarize recent arXiv papers — e.g. Denoising Diffusion "
+            "Probabilistic Models (arXiv:2006.11239)."
+        )
+        # The base loop calls self.chat.send_messages(...) and reads .text /
+        # .stats (agent.py). A JSON {"answer": ...} response is parsed as a
+        # planning-mode final answer the loop accepts and returns as result.
+        mock_resp = MagicMock()
+        mock_resp.text = '{"answer": "' + mocked_answer + '"}'
+        mock_resp.stats = {}
+        mock_resp.tool_calls = []
+
+        with patch.object(agent.chat, "send_messages", return_value=mock_resp):
+            result = agent.process_query("What do you do?")
+
+        assert result["status"] == "success"
+        assert mocked_answer in result["result"]
+        # The built agent ran on ITS authored persona, not a placeholder.
+        assert result["system_prompt"] == authored_prompt
+        assert agent.system_prompt == authored_prompt
+        assert result.get("error_count", 0) == 0
+        assert "zoo" not in result["result"].lower()
+
     def test_cleanup_on_failure(self, tmp_path, monkeypatch):
         """If writing fails, the directory is cleaned up."""
         monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
