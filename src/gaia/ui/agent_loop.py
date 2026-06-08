@@ -355,7 +355,6 @@ class AgentLoop:
                     allowed = _helpers._compute_allowed_paths(rag_paths + lib_paths)
                     config = ChatAgentConfig(
                         model_id=model_id,
-                        max_steps=int(os.environ.get("GAIA_AGENT_MAX_STEPS", "20")),
                         streaming=False,
                         silent_mode=True,
                         debug=False,

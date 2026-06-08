@@ -68,6 +68,11 @@ class TestCodeAgent(unittest.TestCase):
         self.assertTrue(agent2.debug)
         self.assertTrue(agent2.show_prompts)
 
+        # Explicit max_steps=None is the CLI "use the default" sentinel and must
+        # NOT drop CodeAgent's 100-step override to the global default.
+        agent3 = CodeAgent(max_steps=None)
+        self.assertEqual(agent3.max_steps, 100)
+
     def test_system_prompt(self):
         """Test that system prompt is properly generated."""
         prompt = self.agent._get_system_prompt()

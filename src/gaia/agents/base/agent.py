@@ -38,6 +38,40 @@ logger = logging.getLogger(__name__)
 CHUNK_TRUNCATION_THRESHOLD = 5000
 CHUNK_TRUNCATION_SIZE = 2500
 
+# Global default for how many reasoning/tool steps an agent may take before it
+# stops and reports progress. This is the single knob for the whole fleet:
+# change DEFAULT_MAX_STEPS here, or set GAIA_AGENT_MAX_STEPS=<n> at runtime to
+# override every agent at once. Agents that genuinely need more (e.g. CodeAgent
+# for multi-file generation) override it explicitly in their own config.
+DEFAULT_MAX_STEPS = 50
+
+
+def default_max_steps() -> int:
+    """Resolve the global default agent step limit.
+
+    Reads ``GAIA_AGENT_MAX_STEPS`` at call time (not import) so the env var can
+    be set after this module is imported and still take effect. Returns
+    ``DEFAULT_MAX_STEPS`` when the var is unset; raises on a present-but-invalid
+    value so a typo surfaces immediately instead of silently capping agents.
+    """
+    raw = os.environ.get("GAIA_AGENT_MAX_STEPS")
+    if raw is None or raw == "":
+        return DEFAULT_MAX_STEPS
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {raw!r}. "
+            f"Unset it to use the default ({DEFAULT_MAX_STEPS})."
+        ) from e
+    if value <= 0:
+        raise ValueError(
+            f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {value}. "
+            f"Unset it to use the default ({DEFAULT_MAX_STEPS})."
+        )
+    return value
+
+
 # Tools that require explicit user confirmation before execution.
 # Adding a tool name here causes _execute_tool() to call
 # console.confirm_tool_execution() and block until the user responds.
@@ -242,7 +276,7 @@ Do NOT wrap conversational replies in JSON.
         claude_model: str = "claude-sonnet-4-20250514",
         base_url: Optional[str] = None,
         model_id: str = None,
-        max_steps: int = 20,
+        max_steps: Optional[int] = None,
         debug_prompts: bool = False,
         show_prompts: bool = False,
         output_dir: str = None,
@@ -266,7 +300,9 @@ Do NOT wrap conversational replies in JSON.
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-4-20250514")
             base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
             model_id: The ID of the model to use with LLM server (default for local)
-            max_steps: Maximum number of steps the agent can take before terminating
+            max_steps: Maximum number of steps the agent can take before terminating.
+                When None, falls back to the global default_max_steps() (env
+                GAIA_AGENT_MAX_STEPS, else DEFAULT_MAX_STEPS).
             debug_prompts: If True, includes prompts in the conversation history
             show_prompts: If True, displays prompts sent to LLM in console (default: False)
             output_dir: Directory for storing JSON output files (default: current directory)
@@ -292,7 +328,7 @@ Do NOT wrap conversational replies in JSON.
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
-        self.max_steps = max_steps
+        self.max_steps = max_steps if max_steps is not None else default_max_steps()
         self.debug_prompts = debug_prompts
         self.show_prompts = show_prompts  # Separate flag for displaying prompts
         self.output_dir = output_dir if output_dir else os.getcwd()

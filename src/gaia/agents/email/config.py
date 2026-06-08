@@ -16,9 +16,11 @@ API entirely.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 from urllib.parse import urlparse
+
+from gaia.agents.base.agent import default_max_steps
 
 
 class ConfigurationError(ValueError):
@@ -101,7 +103,7 @@ class EmailAgentConfig:
 
     base_url: Optional[str] = None
     model_id: Optional[str] = None
-    max_steps: int = 12
+    max_steps: int = field(default_factory=default_max_steps)
     streaming: bool = False
     debug: bool = False
     silent_mode: bool = False

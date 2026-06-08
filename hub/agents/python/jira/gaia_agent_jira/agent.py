@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.tools import tool
 
@@ -100,7 +100,7 @@ class JiraAgent(Agent):
                 - statuses: List of available status names
                 - priorities: List of available priority names
             **kwargs: Other agent initialization parameters:
-                - max_steps: Maximum conversation steps (default: 10)
+                - max_steps: Maximum conversation steps (default: global default_max_steps())
                 - model_id: LLM model to use (default: Qwen3.5-35B-A3B-GGUF)
                 - silent_mode: Suppress console output (default: False)
                 - debug: Enable debug logging (default: False)
@@ -119,9 +119,10 @@ class JiraAgent(Agent):
             }
             agent = JiraAgent(jira_config=config)
         """
-        # Increase max steps to allow for completion
-        if "max_steps" not in kwargs:
-            kwargs["max_steps"] = 10
+        # Use the global default unless the caller overrides it. An explicit
+        # None (the CLI's "use the default" sentinel) counts as no override.
+        if kwargs.get("max_steps") is None:
+            kwargs["max_steps"] = default_max_steps()
         # Use the larger coding model by default for reliable JSON parsing
         if "model_id" not in kwargs:
             kwargs["model_id"] = "Qwen3.5-35B-A3B-GGUF"
