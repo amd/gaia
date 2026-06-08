@@ -62,8 +62,10 @@ def _load_memory_settings() -> Dict:
     try:
         if _MEMORY_SETTINGS_PATH.exists():
             return json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        pass
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(
+            "failed to load memory settings from %s: %s", _MEMORY_SETTINGS_PATH, e
+        )
     return {}
 
 
