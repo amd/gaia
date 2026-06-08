@@ -25,7 +25,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia_agent_docker.agent import DockerAgent
+# The Docker agent ships as the standalone gaia-agent-docker wheel (#1102) and
+# is not installed in the base unit-test job — skip cleanly when absent, matching
+# the hub-package convention in tests/unit/agents/test_response_format.py.
+pytest.importorskip("gaia_agent_docker")
+
+from gaia_agent_docker.agent import DockerAgent  # noqa: E402
 
 DOCKER_MODULE = "gaia_agent_docker.agent.subprocess.run"
 

@@ -18,7 +18,14 @@ All tests are pure-function tests — no network, no Atlassian, no LLM.
 
 from __future__ import annotations
 
-from gaia_agent_jira.jql_templates import (
+import pytest
+
+# The Jira agent ships as the standalone gaia-agent-jira wheel (#1102) and is
+# not installed in the base unit-test job — skip cleanly when absent, matching
+# the hub-package convention in tests/unit/agents/test_response_format.py.
+pytest.importorskip("gaia_agent_jira")
+
+from gaia_agent_jira.jql_templates import (  # noqa: E402
     COMPOSITE_PATTERNS,
     JQL_TEMPLATES,
     LABEL_MAPPINGS,
