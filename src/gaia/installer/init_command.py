@@ -215,8 +215,9 @@ class InitCommand:
             console=self.console,
         )
 
-        # Context verification state (set during model loading)
-        self._ctx_verified = None
+        # Context verification state. _ctx_verified is set per-model during
+        # verification (only for LLM models with a min context size); its
+        # absence means verification was not attempted for that model.
         self._ctx_warning = None
 
     def _print(self, message: str, end: str = "\n"):
@@ -1740,10 +1741,20 @@ class InitCommand:
                         )
                         continue
 
+                    # Reset per-model context state. _test_model_inference
+                    # sets _ctx_verified only for LLM models that declare a min
+                    # context size; SD/embedding models leave verification N/A
+                    # and must not inherit a stale "unverified" flag from
+                    # __init__ or a prior model.
+                    if hasattr(self, "_ctx_verified"):
+                        delattr(self, "_ctx_verified")
+                    self._ctx_warning = None
+
                     # Test the model
                     success, error = self._test_model_inference(client, model_id)
                     if success:
-                        # Check if context was verified
+                        # Show context only when verification was attempted
+                        # (LLM models with a min_ctx requirement).
                         ctx_msg = ""
                         if hasattr(self, "_ctx_verified"):
                             if self._ctx_verified:
@@ -1757,8 +1768,6 @@ class InitCommand:
                             elif self._ctx_verified is None:
                                 # Context could not be verified
                                 ctx_msg = " [yellow]⚠️ Context unverified![/yellow]"
-
-                            delattr(self, "_ctx_verified")  # Reset for next model
 
                         self.console.print(
                             f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]{ctx_msg}"
