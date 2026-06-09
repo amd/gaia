@@ -1816,8 +1816,10 @@ class InitCommand:
                             f"     [cyan]{model_id}[/cyan]: [dim]{model_path}[/dim]"
                         )
                         if sys.platform == "win32":
+                            # PowerShell is GAIA's assumed Windows shell; cmd's
+                            # `rmdir /s /q` is not valid PowerShell syntax.
                             self.console.print(
-                                f'       [yellow]rmdir /s /q[/yellow] [cyan]"{model_path}"[/cyan]'
+                                f'       [yellow]Remove-Item -Recurse -Force[/yellow] [cyan]"{model_path}"[/cyan]'
                             )
                         else:
                             self.console.print(
