@@ -59,6 +59,7 @@ SKIP_DOMAINS = {
     "dl.acm.org",  # Blocks automated requests with CAPTCHAs
     "platform.openai.com",  # Rate-limits CI bots
     "www.npmjs.com",  # Returns 403 to automated requests
+    "fastmcp.me",  # Incomplete TLS cert chain -> urllib CERTIFICATE_VERIFY_FAILED
 }
 
 # URL patterns to skip
