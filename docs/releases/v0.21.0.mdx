@@ -1,51 +1,22 @@
 ---
 title: "v0.21.0"
-description: "The Agent Hub — browse, install, and publish GAIA agents from the UI or the terminal, with every agent now shipping as its own versioned package; a major email-agent expansion with phishing detection, Outlook.com support, and calendar awareness; and a real-model behavior eval harness."
+description: "A major email-agent expansion — phishing detection with reversible quarantine, Outlook.com mail and calendar via Microsoft Graph, full-thread reading, and calendar event creation — plus a real-model behavior eval harness and a broad security and bug-fix pass."
 ---
 
 # GAIA v0.21.0 Release Notes
 
-GAIA v0.21.0 turns the agent collection into an ecosystem. The new **Agent Hub** lets you browse a catalog of agents, install the ones you want with one click or one command, and publish your own — and every built-in agent now ships as its own independently versioned package instead of being baked into the core wheel. The email agent gets the release's second big push: it can spot phishing and quarantine it safely, work an Outlook.com inbox and calendar (not just Gmail), read whole threads, and turn a message into a calendar event. Underneath, a new behavior eval harness drives agents through a real model and asserts the tool actually ran — catching a class of "claims success but did nothing" bug that mocked tests never see.
+GAIA v0.21.0 is a feature release centered on the email agent. It can now spot phishing and quarantine it safely, work an Outlook.com inbox and calendar (not just Gmail), read whole threads instead of just the latest message, and turn a meeting request into a calendar event — all running locally on your machine. Connecting a personal Microsoft account is first-class via Microsoft Graph. Underneath the features, a new behavior eval harness drives agents through a real model and asserts the tool actually ran — catching a class of "claims success but did nothing" bug that mocked tests never see — alongside a broad security and bug-fix pass.
 
 **Why upgrade:**
-- **Agent Hub** — browse, install, configure, and roll back agents from the Agent UI's Installed/Available tabs or the `gaia agent` CLI, with a security-tier gate before any unsandboxed native agent runs.
-- **Build and publish your own agent** — `gaia agent init/version/test/pack/publish` scaffolds, validates, and dual-publishes an agent to both the Hub and PyPI (`pip install gaia-agent-<id>`).
-- **Every agent is its own package** — chat, code, email, SD, Docker, Jira, and the rest now version and ship independently of the core release, so you install only what you need.
-- **Email agent grows up** — phishing detection with reversible quarantine (measured 100% precision on the test corpus), Outlook.com mailbox + calendar via Microsoft Graph, full-thread reading, and calendar event creation from an email.
-- **Outlook.com support** — connect a personal Microsoft account (Outlook/Hotmail/Live) for mail and calendar; every existing email tool works against it unchanged.
+- **Phishing detection with safe quarantine** — multi-signal detection (subject, sender domain, body); a flagged message is labelled and archived, never deleted, confirmation-gated, and reversible. Held to a ≥90% precision gate in CI; measured 100% precision on the test corpus, so legitimate mail isn't swept up.
+- **Outlook.com support** — connect a personal Microsoft account (Outlook/Hotmail/Live) for mail and calendar via Microsoft Graph; every existing email tool works against it unchanged, and Gmail stays the default.
+- **Calendar awareness** — the email agent detects meeting requests, checks them against your existing events for conflicts, and creates events — refusing to fabricate one when there's no real date/time.
+- **Full-thread comprehension** — summaries now read the entire thread oldest-first, plus a bounded per-email summary tool, so an ask raised earlier in the thread doesn't get lost.
 - **Real-model behavior testing** — a new eval harness asserts an agent's tools actually take effect against a live model, closing the gap that let the builder silently fail ~40% of the time.
 
 ---
 
 ## What's New
-
-### Agent Hub — discover, install, and manage agents — `gaia agent`, Agent UI Hub
-
-GAIA's agents used to be a fixed set compiled into one wheel: you got what shipped, with no way to add, remove, or update an agent on its own. The Agent Hub replaces that with a real catalog. In the Agent UI, the Hub now has **Installed** and **Available** tabs — click Install on a card and a live progress bar walks through downloading, verifying, and installing, then the card flips to Installed; compatibility shows green/yellow/red before you commit, and an offline catalog surfaces a "showing cached catalog" banner instead of silently going stale (PRs [#1410](https://github.com/amd/gaia/pull/1410), [#1411](https://github.com/amd/gaia/pull/1411)).
-
-The same operations are available headless from the CLI: install/uninstall, `gaia agent configure` to set a model or per-agent options, `gaia agent health` and `gaia agent status` to confirm an agent actually loads, and a checksum-verified installer with pre-update backup so a bad update can be rolled back (PR [#1416](https://github.com/amd/gaia/pull/1416)). Multi-agent setup installs smallest-first and resumes where it left off, so a quick agent is usable while a large one keeps downloading.
-
-Safety is built into the install path: non-verified native (C++) agents are unsandboxed binaries, so installing one is gated behind an explicit trust confirmation, deprecated agents are hidden from the default catalog, and every card carries a verified/community/experimental trust badge (PR [#1414](https://github.com/amd/gaia/pull/1414)). A public web catalog to browse agents before installing is also on the way (PR [#1405](https://github.com/amd/gaia/pull/1405)).
-
----
-
-### Build and publish your own agent — `gaia agent init`
-
-Authoring an agent used to mean hand-copying an existing one and hoping it was wired correctly. The new developer workflow makes it a guided path: `gaia agent init <name> --language python|cpp` scaffolds a complete, valid package — manifest, project file, package skeleton, tests, README — that passes `gaia agent test --lint` out of the box; `gaia agent version patch|minor|major` bumps the version everywhere it appears; and `gaia agent test` validates structure, imports, and formatting without an LLM, or confirms the agent answers its starter prompts with `--live` (PR [#1412](https://github.com/amd/gaia/pull/1412)).
-
-When it's ready, `gaia agent pack` builds a wheel and `gaia agent publish` dual-publishes it to both the Hub (the source the UI and website read) and PyPI, so anyone can `pip install gaia-agent-<id>` (PRs [#1415](https://github.com/amd/gaia/pull/1415), [#1454](https://github.com/amd/gaia/pull/1454)). Tokens live in the OS keyring, with env-var overrides for CI. Three annotated reference agents — `hello-world`, `word-count`, and `doc-search` — give a copy-paste starting point at every level of complexity (PR [#1413](https://github.com/amd/gaia/pull/1413)).
-
-Agents aren't limited to Python: a native C++ agent now runs as a plain subprocess over JSON-RPC stdio — the same protocol the desktop app speaks — so native agents work from the web backend too, with a cross-platform build-and-package pipeline behind them (PRs [#1404](https://github.com/amd/gaia/pull/1404), [#1406](https://github.com/amd/gaia/pull/1406)). And any agent can expose itself five ways — interactive TUI, one-shot CLI, stdin/stdout pipe, OpenAI-compatible REST, and MCP — through a single `run_agent_cli()` call (PR [#1403](https://github.com/amd/gaia/pull/1403)).
-
----
-
-### Every agent is now its own package
-
-To make the Hub possible, every built-in agent moved out of the core wheel into its own `gaia-agent-<id>` package under `hub/agents/`: chat, code, EMR, SD, Docker, Jira, FileIO, Blender, analyst, browser, and connectors-demo (PRs [#1407](https://github.com/amd/gaia/pull/1407), [#1417](https://github.com/amd/gaia/pull/1417), [#1419](https://github.com/amd/gaia/pull/1419), [#1421](https://github.com/amd/gaia/pull/1421), [#1442](https://github.com/amd/gaia/pull/1442), [#1446](https://github.com/amd/gaia/pull/1446)). Each one now versions and ships on its own schedule rather than being chained to the framework's release cycle, and the shared tool mixins they all depend on (RAG, FileIO, Shell, code search) were promoted into the framework so agents no longer import each other (PR [#1401](https://github.com/amd/gaia/pull/1401)).
-
-The Hub also stopped showing duplicate "Lite" cards: where there used to be 13 cards for 7 agents, each agent now appears once with a **Full / Lite (~4B)** model-size selector, and the old `*-lite` IDs still resolve through an alias map (PR [#1418](https://github.com/amd/gaia/pull/1418)).
-
----
 
 ### Email agent — phishing detection, Outlook, and calendar awareness — `gaia email`
 
@@ -94,11 +65,10 @@ Mocked unit tests and UI-render tests both passed while the builder agent silent
 - **Email CI gate + nightly report-mode eval** (PR [#1362](https://github.com/amd/gaia/pull/1362)) — a unit-test PR gate, a report-mode nightly eval, and the C++ build scaffold for email.
 - **Labelled email-triage corpus + baselines** (PR [#1322](https://github.com/amd/gaia/pull/1322)) — a 220-message synthetic corpus with ground truth replaces a 10-message stub and a baseline that had been measured against the wrong model.
 - **Never-auto-send guard consolidated across surfaces** (PR [#1360](https://github.com/amd/gaia/pull/1360)) and **pre-scan cheap-counts guarantee locked** (PR [#1356](https://github.com/amd/gaia/pull/1356)).
-- **C++ agent cross-compile matrix + static packaging** (PR [#1406](https://github.com/amd/gaia/pull/1406)) — win-x64, linux-x64, and darwin-arm64 build self-contained static binaries, consolidated into one bundle on a version tag.
 - **Cleared pre-existing pylint/mypy debt blocking CI** (PR [#1402](https://github.com/amd/gaia/pull/1402)) and **fixed mcp test library shadowing + a dangling summarizer CI step** (PRs [#1443](https://github.com/amd/gaia/pull/1443), [#1445](https://github.com/amd/gaia/pull/1445)).
 - **Auto-fix opens a PR by default** (PR [#1391](https://github.com/amd/gaia/pull/1391)) instead of posting comment patches.
 - **Installer repo-root resolution locked in launcher scripts** (PR [#1395](https://github.com/amd/gaia/pull/1395)).
-- **Specs updated** — Agent Hub 22-agent enablement (PR [#1457](https://github.com/amd/gaia/pull/1457)), dynamic tool-loader (PR [#1447](https://github.com/amd/gaia/pull/1447)), legacy agent modernization (PR [#1398](https://github.com/amd/gaia/pull/1398)), and the agent skills format (PR [#1399](https://github.com/amd/gaia/pull/1399)).
+- **Specs updated** — dynamic tool-loader (PR [#1447](https://github.com/amd/gaia/pull/1447)) and the agent skills format (PR [#1399](https://github.com/amd/gaia/pull/1399)).
 
 ---
 
