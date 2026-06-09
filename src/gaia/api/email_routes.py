@@ -245,6 +245,9 @@ class EmailTriageService:
         sender = headers.get("from", "")
         label_ids = list(msg.get("labelIds", []))
         principal = EmailAddress(email=principal_email)
+        # No message_id echoed: this Gmail-API path is not a contract request,
+        # so result.message_id stays None (the contract id is set only on the
+        # SingleEmailInput / ThreadInput paths).
         return self._build_result(
             subject=subject,
             sender_raw=sender,
@@ -265,6 +268,7 @@ class EmailTriageService:
             label_ids=[],
             principal=payload.principal,
             reply_to=msg.from_,
+            message_id=msg.message_id,
         )
 
     def _triage_thread(self, payload: ThreadInput) -> EmailTriageResult:
@@ -275,6 +279,8 @@ class EmailTriageService:
         combined_body = "\n\n".join(
             f"{_format_address(m.from_)}: {m.body}" for m in messages
         )
+        # Thread id is the canonical identifier for a thread conversation;
+        # a consumer uses it to correlate and deduplicate triage results.
         result = self._build_result(
             subject=last.subject,
             sender_raw=_format_address(last.from_),
@@ -283,6 +289,7 @@ class EmailTriageService:
             principal=payload.principal,
             reply_to=last.from_,
             summary_prefix=f"Thread of {len(messages)} messages. ",
+            message_id=payload.thread_id,
         )
         return result
 
@@ -300,6 +307,7 @@ class EmailTriageService:
             principal=payload.principal,
             reply_to=msg.from_,
             chat=chat,
+            message_id=msg.message_id,
         )
 
     def _triage_thread_llm(self, payload: ThreadInput, chat: Any) -> EmailTriageResult:
@@ -317,6 +325,7 @@ class EmailTriageService:
             reply_to=last.from_,
             summary_prefix=f"Thread of {len(messages)} messages. ",
             chat=chat,
+            message_id=payload.thread_id,
         )
 
     def _build_result_llm(
@@ -330,6 +339,7 @@ class EmailTriageService:
         reply_to: Optional[EmailAddress],
         summary_prefix: str = "",
         chat: Any,
+        message_id: Optional[str] = None,
     ) -> EmailTriageResult:
         """Build a result using LLM escalation when heuristic confidence is low."""
         from gaia.agents.email.tools.llm_triage import classify_email_llm
@@ -374,6 +384,7 @@ class EmailTriageService:
             summary=summary,
             action_items=action_items,
             draft=draft,
+            message_id=message_id,
         )
 
     def _build_result(
@@ -386,6 +397,7 @@ class EmailTriageService:
         principal: EmailAddress,
         reply_to: Optional[EmailAddress],
         summary_prefix: str = "",
+        message_id: Optional[str] = None,
     ) -> EmailTriageResult:
         heuristic = classify_category_heuristic(
             subject=subject, sender=sender_raw, label_ids=label_ids
@@ -407,6 +419,7 @@ class EmailTriageService:
             summary=summary,
             action_items=action_items,
             draft=draft,
+            message_id=message_id,
         )
 
     def _summarize(self, subject: str, body: str) -> str:

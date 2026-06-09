@@ -233,7 +233,15 @@ class DraftReply(_Strict):
 
 
 class EmailTriageResult(_Strict):
-    """The structured analysis of a single email or thread."""
+    """The structured analysis of a single email or thread.
+
+    Amendment (#1539): ``message_id`` is optional and echoes the identifying id
+    of the input — ``message.message_id`` for a single email, ``thread_id`` for
+    a thread. Consuming apps use this field to correlate a result back to its
+    input and to deduplicate results across polling loops (cache by message_id).
+    The field is ``Optional`` for backward compatibility with the frozen #1262
+    shape: existing callers that omit it continue to validate without change.
+    """
 
     category: EmailCategory = Field(..., description="One of the four buckets.")
     is_spam: bool = Field(default=False, description="Spam signal (independent).")
@@ -246,6 +254,17 @@ class EmailTriageResult(_Strict):
     )
     draft: Optional[DraftReply] = Field(
         default=None, description="Proposed reply, or null when none is suggested."
+    )
+    message_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Echoes the identifying id of the triaged input: message.message_id "
+            "for a single email, ThreadInput.thread_id for a thread. Use this "
+            "field to correlate a result back to its input and to deduplicate "
+            "results across polling loops (cache by message_id). Null only when "
+            "the result is constructed without an id (e.g. the "
+            "triage_gmail_message path)."
+        ),
     )
 
 
