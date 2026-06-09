@@ -37,6 +37,7 @@ import json
 import os
 import statistics
 import sys
+import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
@@ -441,6 +442,97 @@ def parse_ttft_from_scorecard(path: str) -> Dict[str, Any]:
     }
 
 
+DEFAULT_TTFT_BASE_URL = "http://localhost:13305/api/v1"
+DEFAULT_TTFT_MODEL = "Gemma-4-E4B-it-GGUF"
+DEFAULT_TTFT_QUERY = (
+    "What does the employee handbook say about remote work? Find and read it."
+)
+
+
+def _schemas_for(
+    agent: "ChatAgent", names: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
+    """Native tool schemas for the full set, or just *names* when given."""
+    prev = agent._instance_tools
+    if names is not None:
+        assert prev is not None, "skeleton must snapshot tools before rendering"
+        agent._instance_tools = {n: prev[n] for n in names if n in prev}
+    try:
+        return agent._build_openai_tool_schemas()
+    finally:
+        agent._instance_tools = prev
+
+
+def measure_prefill_ttft(
+    agent: "ChatAgent",
+    base_url: str = DEFAULT_TTFT_BASE_URL,
+    model: str = DEFAULT_TTFT_MODEL,
+    filter_to: Optional[List[str]] = None,
+    n_trials: int = 5,
+    user_message: str = DEFAULT_TTFT_QUERY,
+) -> Dict[str, Any]:
+    """Measure cold (uncached) prompt-prefill TTFT for the tool schemas.
+
+    Sends streaming chat requests carrying the agent's native tool schemas to an
+    **already-resident** model and times the first token. A unique nonce is
+    prepended to the system message every trial to defeat llama.cpp's prefix
+    cache, so each call re-prefills the whole tool block — isolating the prefill
+    cost the tool-loader actually changes from model-load and cache-hit effects.
+    RAG is never touched, so this is immune to the embedder↔chat-model swap.
+
+    Requires a backend at *base_url* with *model* already loaded. Raises with an
+    actionable message if the backend is unreachable — no silent fallback. The
+    first request is a discarded warm-up; *n_trials* timed requests follow.
+    """
+    from openai import OpenAI
+
+    tools = _schemas_for(agent, filter_to)
+    client = OpenAI(base_url=base_url, api_key="not-needed-for-lemonade")
+
+    def _one(nonce: int) -> float:
+        # Nonce at the START of the system message busts the prefix cache so the
+        # full tool block is re-prefilled, not served from a warm cache.
+        system = f"[req-{nonce}] You are a document assistant. Use tools when needed."
+        start = time.perf_counter()
+        stream = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_message},
+            ],
+            tools=tools,  # type: ignore[arg-type] # Lemonade accepts raw dict schemas
+            stream=True,
+            max_tokens=8,
+            temperature=0,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta  # type: ignore[union-attr]
+            if delta.content is not None or delta.tool_calls is not None:
+                return time.perf_counter() - start
+        return time.perf_counter() - start
+
+    try:
+        _one(0)  # warm-up, discarded
+        samples = [_one(1000 + i) for i in range(n_trials)]
+    except Exception as exc:  # noqa: BLE001 - re-raised with guidance
+        raise RuntimeError(
+            f"prefill TTFT bench could not reach a loaded model at {base_url} "
+            f"(model={model!r}): {exc}. Start the backend and pre-load the model "
+            "(e.g. `python -m gaia.ui.server` + load the model in Lemonade), then "
+            "retry. This bench never loads/evicts models itself."
+        ) from exc
+
+    return {
+        "base_url": base_url,
+        "model": model,
+        "tool_count": len(tools),
+        "filter_to": filter_to,
+        "n_trials": n_trials,
+        "ttft": _dist(samples),
+        "samples": samples,
+    }
+
+
 def _fmt(value: Optional[float], suffix: str = "") -> str:
     """Format a number for the markdown table, or 'n/a' when None."""
     if value is None:
@@ -635,6 +727,41 @@ def _ttft_section(scorecard_path: Optional[str]) -> str:
     )
 
 
+def _run_live_ttft(profile: str, base_url: str, model: str, trials: int) -> str:
+    """Compare full-vs-subset prompt-prefill TTFT against a resident model."""
+    agent = build_doc_agent_skeleton(profile)
+    full = measure_prefill_ttft(agent, base_url=base_url, model=model, n_trials=trials)
+    subset = measure_prefill_ttft(
+        agent,
+        base_url=base_url,
+        model=model,
+        filter_to=list(FIXED_SUBSET_DEFAULT),
+        n_trials=trials,
+    )
+    fm, sm = full["ttft"], subset["ttft"]
+    delta = (fm["median"] - sm["median"]) if (fm and sm) else None
+    lines = [
+        "# #1448 Part 0 — prompt-prefill TTFT (no RAG, model resident)",
+        "",
+        f"- Backend: `{base_url}`  |  Model: `{model}`  |  Trials: {trials} "
+        "(cache-busted, first discarded)",
+        "- RAG untouched — immune to the embedder↔chat-model swap.",
+        "",
+        "| Tool prompt | Tools | TTFT median (s) | min | max |",
+        "|-------------|------:|----------------:|----:|----:|",
+        f"| full | {full['tool_count']} | {_fmt(fm['median'] if fm else None)} "
+        f"| {_fmt(fm['min'] if fm else None)} | {_fmt(fm['max'] if fm else None)} |",
+        f"| subset | {subset['tool_count']} | {_fmt(sm['median'] if sm else None)} "
+        f"| {_fmt(sm['min'] if sm else None)} | {_fmt(sm['max'] if sm else None)} |",
+        "",
+        f"**First-turn prefill saving from filtering "
+        f"{full['tool_count']}→{subset['tool_count']} tools: "
+        f"~{_fmt(delta)} s.** Later (cached) turns see ~0 — the win is on turn 1 "
+        "and any turn where the tool set changes.",
+    ]
+    return "\n".join(lines)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI: print the Part-0 markdown measurement note."""
     parser = argparse.ArgumentParser(
@@ -651,8 +778,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help="Optional gaia-eval scorecard.json to fill the TTFT section.",
     )
+    parser.add_argument(
+        "--live-ttft",
+        action="store_true",
+        help="Measure full-vs-subset prompt-prefill TTFT against a resident "
+        "model (no RAG). Requires a backend with the model already loaded.",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=DEFAULT_TTFT_BASE_URL,
+        help=f"Backend base URL for --live-ttft (default: {DEFAULT_TTFT_BASE_URL})",
+    )
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_TTFT_MODEL,
+        help=f"Resident model for --live-ttft (default: {DEFAULT_TTFT_MODEL})",
+    )
+    parser.add_argument(
+        "--trials",
+        type=int,
+        default=5,
+        help="Timed trials per tool set for --live-ttft (default: 5)",
+    )
     args = parser.parse_args(argv)
-    print(format_markdown_report(args.profile, args.scorecard))
+    if args.live_ttft:
+        print(_run_live_ttft(args.profile, args.base_url, args.model, args.trials))
+    else:
+        print(format_markdown_report(args.profile, args.scorecard))
     return 0
 
 
