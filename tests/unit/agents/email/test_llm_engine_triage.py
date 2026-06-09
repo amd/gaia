@@ -257,8 +257,10 @@ class TestTriageCloudBaseUrlRejected:
         with pytest.raises((ConfigurationError, ValueError, RuntimeError)) as exc_info:
             service._build_llm_chat(base_url="https://api.openai.com/v1")
         msg = str(exc_info.value)
-        # Must not be a generic "something went wrong" — must name the bad URL
-        assert "api.openai.com" in msg or "cloud" in msg.lower() or "AC3" in msg
+        # Must not be a generic "something went wrong" — must cite AC3 and the
+        # local-only requirement. Asserting on the AC3/local markers (not a host
+        # substring) avoids CodeQL's URL-substring-sanitization false positive.
+        assert "AC3" in msg and ("local" in msg.lower() or "allowlist" in msg.lower())
 
     def test_local_base_url_does_not_raise(self):
         from gaia.agents.email.config import EmailAgentConfig
