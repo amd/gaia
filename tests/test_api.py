@@ -1358,6 +1358,32 @@ class TestEmailTriageEndpoint:
         resp = self.client.post("/v1/email/triage", json={})
         assert resp.status_code == 422
 
+    def test_unknown_engine_value_rejected_422(self):
+        """An unknown ?engine= value is a clean 422 (FastAPI Literal), not a 500.
+
+        The endpoint is consumed by a partner app, so a bad query param must
+        be a validation error, not a server error (#1452).
+        """
+        resp = self.client.post(
+            "/v1/email/triage?engine=bogus", json=_single_email_payload()
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_default_engine_is_heuristic(self):
+        """No ?engine= param → heuristic path, 200, contract-valid result."""
+        from gaia.agents.email.contract import parse_response
+
+        resp = self.client.post("/v1/email/triage", json=_single_email_payload())
+        assert resp.status_code == 200, resp.text
+        assert parse_response(resp.json()).request_kind == "single"
+
+    def test_explicit_engine_heuristic_accepted(self):
+        """?engine=heuristic is an accepted value (200)."""
+        resp = self.client.post(
+            "/v1/email/triage?engine=heuristic", json=_single_email_payload()
+        )
+        assert resp.status_code == 200, resp.text
+
 
 class TestEmailSendConfirmationGate:
     """POST /v1/email/send — the send path MUST reject when confirmation is

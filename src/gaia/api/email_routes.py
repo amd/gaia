@@ -64,7 +64,7 @@ import hmac
 import re
 import secrets
 import threading
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
@@ -674,13 +674,14 @@ _service = EmailTriageService()
 @router.post("/triage", response_model=EmailTriageResponse)
 async def triage_email(
     request: EmailTriageRequest,
-    engine: str = Query(
+    engine: Literal["heuristic", "llm"] = Query(
         default="heuristic",
         description=(
             "Triage engine to use. "
             "'heuristic' (default) — deterministic, no LLM, zero latency added. "
             "'llm' — escalate low-confidence results via the local Lemonade model; "
-            "cloud LLM endpoints are never permitted (AC3)."
+            "cloud LLM endpoints are never permitted (AC3). An unknown value is "
+            "rejected with HTTP 422."
         ),
     ),
 ) -> EmailTriageResponse:
