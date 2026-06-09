@@ -268,32 +268,61 @@ jobs:
           cmake --build cpp/build-integration --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
 
-      - name: Verify uvx is available
+      - name: Probe windows-mcp availability
         id: uvx_check
         shell: powershell
         run: |
-          # uvx is provided by uv (installed by setup-venv). The Health and MCP
-          # integration tests require `uvx windows-mcp`; when uvx is missing they
-          # are excluded from the test run rather than failing the job (the
-          # bash/LLM/VLM/WiFi suites don't need uvx and still run).
+          # The Health and MCP integration tests connect to a `uvx windows-mcp`
+          # server. That requires BOTH uvx on PATH AND a working windows-mcp
+          # package that can actually launch. When either is missing, those
+          # tests are excluded so the bash/LLM/VLM/WiFi suites (which don't need
+          # windows-mcp) still gate the build. A simple Get-Command check isn't
+          # enough — uvx can be present while windows-mcp fails to launch — so we
+          # do a real functional probe.
           $uvx = Get-Command uvx -ErrorAction SilentlyContinue
-          if ($uvx) {
-              Write-Host "[OK] uvx found at: $($uvx.Source)"
-              "uvx_available=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          } else {
+          if (-not $uvx) {
               Write-Host "[WARN] uvx not found -- Health and MCP integration tests will be skipped"
-              Write-Host "       uvx should be available via uv (installed by setup-venv)"
-              "uvx_available=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "windows_mcp_available=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
               exit 0
           }
+          Write-Host "[OK] uvx found at: $($uvx.Source)"
 
-          # Remove any broken persistent installation that may interfere with uvx.
-          # Swallow all output/errors — the tool may not be installed and that's fine.
-          # Run via cmd /c so native stderr never reaches PowerShell's error stream
-          # (PS 5.1 -Command mode generates NativeCommandError from any native stderr).
+          # Remove any broken persistent install that may interfere with uvx.
           cmd /c "uv tool uninstall windows-mcp 2>NUL" 2>$null
           $global:LASTEXITCODE = 0
-          Write-Host "[OK] uvx ready (windows-mcp will run via temporary uvx environments)"
+
+          # Functional probe: launch `uvx windows-mcp` and confirm it starts.
+          # The server reads JSON-RPC on stdin; we send nothing and give it a
+          # few seconds to initialize, then check the process came up cleanly.
+          Write-Host "Probing 'uvx windows-mcp' launch capability..."
+          $probeOk = $false
+          try {
+              $psi = New-Object System.Diagnostics.ProcessStartInfo
+              $psi.FileName = $uvx.Source
+              $psi.Arguments = "windows-mcp"
+              $psi.RedirectStandardInput = $true
+              $psi.RedirectStandardError = $true
+              $psi.UseShellExecute = $false
+              $proc = [System.Diagnostics.Process]::Start($psi)
+              Start-Sleep -Seconds 20
+              if (-not $proc.HasExited) {
+                  $probeOk = $true
+                  $proc.Kill()
+              } else {
+                  Write-Host "windows-mcp exited early (code $($proc.ExitCode))"
+              }
+          } catch {
+              Write-Host "windows-mcp probe threw: $($_.Exception.Message)"
+          }
+          $global:LASTEXITCODE = 0
+
+          if ($probeOk) {
+              Write-Host "[OK] windows-mcp launches -- Health and MCP tests will run"
+              "windows_mcp_available=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+              Write-Host "[WARN] windows-mcp not launchable -- Health and MCP tests will be skipped"
+              "windows_mcp_available=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
 
       - name: Start Lemonade Server and run integration tests
         shell: powershell
@@ -314,12 +343,12 @@ jobs:
               $env:GAIA_CPP_TEST_MODEL = "Qwen3-4B-Instruct-2507-GGUF"
               $env:GAIA_CPP_BASE_URL   = "http://localhost:13305/api/v1"
 
-              # Health and MCP integration tests require `uvx windows-mcp`.
-              # Exclude them when uvx isn't available so the LLM/VLM/WiFi suites
-              # (which don't need uvx) still gate the build.
+              # Health and MCP integration tests require a working `uvx windows-mcp`.
+              # Exclude them when the functional probe failed so the LLM/VLM/WiFi
+              # suites (which don't need windows-mcp) still gate the build.
               $excludeArg = @()
-              if ("${{ steps.uvx_check.outputs.uvx_available }}" -ne "true") {
-                  Write-Host "=== Running C++ Integration Tests (LLM + VLM + WiFi; Health + MCP excluded - uvx unavailable) ==="
+              if ("${{ steps.uvx_check.outputs.windows_mcp_available }}" -ne "true") {
+                  Write-Host "=== Running C++ Integration Tests (LLM + VLM + WiFi; Health + MCP excluded - windows-mcp unavailable) ==="
                   $excludeArg = @("-E", "IntegrationHealthTest|IntegrationMCP")
               } else {
                   Write-Host "=== Running C++ Integration Tests (LLM + MCP + WiFi + Health + VLM) ==="
