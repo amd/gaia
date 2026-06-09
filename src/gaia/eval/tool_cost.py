@@ -25,6 +25,15 @@ absolute Gemma counts differ, but the OFF/ON ratio and the slope are what
 matter, and the real token to latency link is the TTFT measurement. Char
 counts are always reported (no tokenizer needed) and are the deterministic
 signal the CI test pins.
+
+Coupling note: this harness deliberately drives the real ``Agent`` renderers so
+it measures exactly what ships, not a reimplementation. It depends on these
+``Agent``/``ChatAgent`` internals: ``_register_tools`` (populate the registry),
+``_instance_tools`` + ``_tools_registry`` (the per-instance snapshot it swaps to
+render subsets), ``_format_tools_for_prompt`` (text path) and
+``_build_openai_tool_schemas`` (native path). If those move, update this module
+in lockstep — the pinned baseline test will flag a drift, but the attribute
+names are not part of a public API.
 """
 
 from __future__ import annotations

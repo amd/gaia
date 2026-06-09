@@ -192,7 +192,7 @@ setup(
             "keyring>=24.0.0,<26.0.0",
             # Tokenizer proxy for the tool-prompt cost harness (#1448,
             # gaia.eval.tool_cost) so the budget test can count tokens.
-            "tiktoken>=0.7.0",
+            "tiktoken>=0.7.0,<1.0.0",
         ],
         "eval": [
             "anthropic",
@@ -202,7 +202,7 @@ setup(
             "pypdf",
             "reportlab",
             # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
-            "tiktoken>=0.7.0",
+            "tiktoken>=0.7.0,<1.0.0",
         ],
         "talk": [
             "sounddevice",
