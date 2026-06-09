@@ -121,6 +121,26 @@ class HardwareRequirement:
 _SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
 
 
+# Tools that mutate external state (mark read, archive, star, …). A small
+# model that loses track of sequential state may re-issue an identical
+# mutation (same tool + same id). Unlike query dedup we key on the *args*,
+# not the result — re-issuing mark_read on the same id returns a *different*
+# result ("already read"), so a result hash would miss the repeat (#1317).
+_MUTATION_TOOLS: Tuple[str, ...] = (
+    "mark_read",
+    "mark_read_batch",
+    "mark_unread",
+    "mark_unread_batch",
+    "archive_message",
+    "archive_message_batch",
+    "add_star",
+    "add_star_batch",
+    "remove_star",
+    "remove_star_batch",
+    "trash_message",
+)
+
+
 def _repair_invalid_json_escapes(s: str) -> str:
     """Repair invalid JSON backslash escapes using pair-consumption.
 
@@ -2407,6 +2427,9 @@ Do NOT wrap conversational replies in JSON.
         query_result_cache: dict[str, int] = (
             {}
         )  # result_hash → call count (result-based dedup)
+        mutation_call_cache: dict[str, int] = (
+            {}
+        )  # (tool, normalized args) → call count (input-based dedup, #1317)
         last_error = None  # Track the last error to handle it properly
         previous_outputs = []  # Track previous tool outputs (truncated for context)
         step_results = []  # Track full tool results for parameter substitution
@@ -3529,6 +3552,12 @@ Do NOT wrap conversational replies in JSON.
                             )
                             messages.append({"role": "user", "content": dedup_msg})
 
+                    # Input-based dedup for mutation tools (#1317): catch an
+                    # identical mutation re-issue at the first repeat.
+                    self._dedup_mutation_call(
+                        tool_name, tool_args, mutation_call_cache, messages
+                    )
+
                     # Domain hooks. A returned plan switches the agent into
                     # STATE_EXECUTING_PLAN for prereq-style recovery. The
                     # base impl returns None but the hook's annotation is
@@ -3748,6 +3777,12 @@ Do NOT wrap conversational replies in JSON.
                             "OR state that the information was not found in the document."
                         )
                         messages.append({"role": "user", "content": dedup_msg})
+
+                # Input-based dedup for mutation tools (#1317): catch an
+                # identical mutation re-issue at the first repeat.
+                self._dedup_mutation_call(
+                    tool_name, tool_args, mutation_call_cache, messages
+                )
 
                 # Handle domain-specific post-processing.
                 # A returned plan switches into STATE_EXECUTING_PLAN. The
@@ -4360,6 +4395,51 @@ Do NOT wrap conversational replies in JSON.
                 "or check that the underlying service is running."
             )
         return f"Task completed with {tool_name}. No further action needed."
+
+    def _dedup_mutation_call(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        mutation_call_cache: Dict[str, int],
+        messages: List[Dict[str, Any]],
+    ) -> None:
+        """Catch a repeated identical mutation at the FIRST repeat (#1317).
+
+        Query dedup hashes the *result*; mutations must key on the *args*
+        instead — re-issuing the same mutation (e.g. ``mark_read`` on an
+        already-read id) returns a *different* result the second time, so a
+        result hash would miss the repeat. Keying on ``(tool, normalized
+        args)`` also leaves mutations on *different* ids untouched. Mirrors
+        the query-dedup corrective signal: inject a re-plan prompt rather
+        than silently dropping the call, so the model gets a chance to move
+        on instead of waiting for the slow reactive loop-detector.
+        """
+        if tool_name not in _MUTATION_TOOLS:
+            return
+        # Normalize so {"a":1,"b":2} and {"b":2,"a":1} hash identically.
+        try:
+            normalized = json.dumps(tool_args, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            normalized = str(tool_args)
+        call_key = f"{tool_name}:{normalized}"
+        mutation_call_cache[call_key] = mutation_call_cache.get(call_key, 0) + 1
+        if mutation_call_cache[call_key] >= 2:
+            logger.debug(
+                "[DEDUP] Identical mutation %s issued %d times — injecting re-plan signal",
+                tool_name,
+                mutation_call_cache[call_key],
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"[SYSTEM] You already called {tool_name} with these exact "
+                        f"arguments {mutation_call_cache[call_key]} times. The change "
+                        "is already applied — repeating it has no effect. Move on to "
+                        "the next item in your plan, or finish if nothing is left."
+                    ),
+                }
+            )
 
     def _post_process_tool_result(
         self, _tool_name: str, _tool_args: Dict[str, Any], _tool_result: Dict[str, Any]
