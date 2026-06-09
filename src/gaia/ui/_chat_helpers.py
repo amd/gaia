@@ -1216,7 +1216,6 @@ async def _get_chat_response(
             )
             config = ChatAgentConfig(
                 model_id=model_id,
-                max_steps=10,
                 silent_mode=True,
                 debug=False,
                 device=device,
@@ -1603,7 +1602,6 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     )
                     config = ChatAgentConfig(
                         model_id=model_id,
-                        max_steps=10,
                         streaming=True,
                         silent_mode=False,
                         debug=False,

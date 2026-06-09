@@ -26,10 +26,12 @@ class TestAnalystAgentConfig(unittest.TestCase):
     def test_defaults(self):
         from gaia_agent_analyst import AnalystAgentConfig
 
+        from gaia.agents.base.agent import default_max_steps
+
         cfg = AnalystAgentConfig()
         self.assertFalse(cfg.use_claude)
         self.assertIsNone(cfg.model_id)
-        self.assertEqual(cfg.max_steps, 10)
+        self.assertEqual(cfg.max_steps, default_max_steps())
         self.assertTrue(cfg.scratchpad_db_path)
 
 

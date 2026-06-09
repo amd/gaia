@@ -237,7 +237,7 @@ class LiveOutlookCalendarBackend:
         data = self._get("/me/calendars")
         return data.get("value", [])
 
-    def list_events(
+    def list_events(  # pylint: disable=unused-argument
         self,
         *,
         calendar_id: str = "primary",
@@ -267,7 +267,7 @@ class LiveOutlookCalendarBackend:
         # exactly as a Google list response.
         return {"items": items}
 
-    def get_event(
+    def get_event(  # pylint: disable=unused-argument
         self, *, calendar_id: str = "primary", event_id: str
     ) -> Dict[str, Any]:
         # ``calendar_id`` is implicit in Graph's ``/me`` endpoints — kept in the
@@ -278,7 +278,7 @@ class LiveOutlookCalendarBackend:
 
     # -- Mutate APIs --------------------------------------------------------
 
-    def update_event_rsvp(
+    def update_event_rsvp(  # pylint: disable=unused-argument
         self,
         *,
         calendar_id: str = "primary",
@@ -301,7 +301,7 @@ class LiveOutlookCalendarBackend:
         self._post(f"/me/events/{event_id}/{action}", json_body={"sendResponse": True})
         return {"id": event_id, "responseStatus": response_status}
 
-    def create_event(
+    def create_event(  # pylint: disable=unused-argument
         self,
         *,
         calendar_id: str = "primary",

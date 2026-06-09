@@ -1,5 +1,10 @@
 # NOTE: This workflow activates once #1297 (Strix Halo self-hosted runner) lands.
 # Until then it is validated out-of-band on Strix Halo class hardware.
+# The strix-halo runner is Windows. Python/uv setup goes through the
+# ./.github/actions/setup-venv composite action (the lab-runner convention,
+# see build_cpp.yml) which installs uv, creates .venv and puts it on PATH.
+# Inline `run:` steps use PowerShell — bash syntax (&&, \ continuation) is not
+# available there.
 name: Agent Behavior E2E
 
 on:
@@ -17,25 +22,32 @@ jobs:
   behavior-e2e:
     runs-on: [self-hosted, strix-halo]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Setup Python
-        run: |
-          uv venv && uv pip install -e ".[dev]"
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          install-package: ".[dev]"
 
       - name: Ensure Lemonade
-        run: uv run gaia init --skip-lemonade
+        shell: powershell
+        run: |
+          gaia init --skip-lemonade
+          if ($LASTEXITCODE -ne 0) { throw "gaia init failed" }
 
       - name: Run behavior E2E harness
-        run: |
-          uv run python -m pytest tests/integration/eval/test_behavior_e2e.py \
-            -m real_model -v --tb=short
+        shell: powershell
         env:
           LEMONADE_BASE_URL: http://localhost:13305/api/v1
+        run: |
+          python -m pytest tests/integration/eval/test_behavior_e2e.py `
+            -m real_model -v --tb=short `
+            --basetemp="${{ runner.temp }}\pytest-behavior"
+          if ($LASTEXITCODE -ne 0) { throw "behavior E2E harness failed" }
 
       - name: Upload artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: behavior-e2e-artifacts
-          path: /tmp/pytest-*/test_builder_creates_agent_file*/**/artifacts/
+          path: ${{ runner.temp }}/pytest-behavior/**/artifacts/**

@@ -13,11 +13,11 @@ import json
 import os
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import tool
 from gaia.logger import get_logger
@@ -106,7 +106,7 @@ class BuilderAgentConfig:
 
     base_url: Optional[str] = None
     model_id: Optional[str] = None
-    max_steps: int = 10
+    max_steps: int = field(default_factory=default_max_steps)
     streaming: bool = False
     debug: bool = False
     show_stats: bool = False

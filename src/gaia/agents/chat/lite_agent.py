@@ -1,7 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.tools import ScreenshotToolsMixin
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.sd.mixin import SDToolsMixin
@@ -15,7 +15,7 @@ class ChatAgentLiteConfig:
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None
     model_id: Optional[str] = None
-    max_steps: int = 10
+    max_steps: int = field(default_factory=default_max_steps)
 
 
 class ChatAgentLite(

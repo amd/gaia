@@ -30,14 +30,19 @@ except ImportError:
     except ImportError:
         PdfReader = None
 
+# Not just ImportError: a broken native dependency (e.g. torchcodec/FFmpeg
+# pulled in by sentence-transformers, or an arch-mismatched faiss build) raises
+# RuntimeError/OSError at import. Treat that the same as "not installed" so a
+# bad install can't crash every module that transitively imports RAG; the loud,
+# actionable error is deferred to RAGSDK._check_dependencies() at point of use.
 try:
     from sentence_transformers import SentenceTransformer
-except ImportError:
+except Exception:  # pylint: disable=broad-except
     SentenceTransformer = None
 
 try:
     import faiss
-except ImportError:
+except Exception:  # pylint: disable=broad-except
     faiss = None
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
@@ -225,6 +230,38 @@ class RAGSDK:
                 f"Or install packages directly:\n"
                 f"  uv pip install {' '.join(missing)}\n"
             )
+            # A package that is installed but failed to import (broken native
+            # deps) needs a different fix than a missing one — name the cause.
+            # Re-import on this (already-failing) path to recover the reason,
+            # skipping genuinely-missing packages (ImportError) which the
+            # install instructions above already cover.
+            broken = []
+            for pkg, label in (
+                ("sentence_transformers", "sentence-transformers"),
+                ("faiss", "faiss"),
+            ):
+                if (pkg == "sentence_transformers" and SentenceTransformer is None) or (
+                    pkg == "faiss" and faiss is None
+                ):
+                    try:
+                        # Use the import statement (__import__), not
+                        # importlib.import_module — the latter bypasses
+                        # builtins.__import__, so this path can't be exercised
+                        # by tests that intercept imports, and re-running the
+                        # real import is what re-surfaces the native cause.
+                        __import__(pkg)
+                    except ImportError:
+                        pass  # genuinely missing → covered by install instructions
+                    except Exception as exc:  # pylint: disable=broad-except
+                        broken.append(f"  {label}: {exc}")
+            if broken:
+                error_msg += (
+                    "\nThe package(s) below are installed but failed to load — "
+                    "reinstalling won't help until the underlying error is fixed "
+                    "(e.g. a missing FFmpeg for torchcodec):\n"
+                    + "\n".join(broken)
+                    + "\n"
+                )
             raise ImportError(error_msg)
 
     def _safe_open(self, file_path: str, mode="rb"):
@@ -450,8 +487,8 @@ class RAGSDK:
             # Force fresh load - must unload first
             try:
                 self.llm_client.unload_model()
-            except Exception:
-                pass  # Ignore if nothing to unload
+            except Exception as e:
+                self.log.warning("unload_model failed (continuing): %s", e)
 
             try:
                 self.llm_client.load_model(
