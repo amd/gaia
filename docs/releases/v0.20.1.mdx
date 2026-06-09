@@ -1,48 +1,30 @@
 ---
-title: "v0.21.0"
-description: "A major email-agent expansion — phishing detection with reversible quarantine, Outlook.com mail and calendar via Microsoft Graph, full-thread reading, and calendar event creation — plus a real-model behavior eval harness and a broad security and bug-fix pass."
+title: "v0.20.1"
+description: "Patch release: bug fixes and security hardening on top of v0.20.0 — a broken optional dependency that crashed agents at import, a clean-install gaia-mcp failure, the Windows app not reopening after auto-upgrade, a low step cap that stalled agents, plus SSRF and XSS hardening."
 ---
 
-# GAIA v0.21.0 Release Notes
+# GAIA v0.20.1 Release Notes
 
-GAIA v0.21.0 is a feature release centered on the email agent. It can now spot phishing and quarantine it safely, work an Outlook.com inbox and calendar (not just Gmail), read whole threads instead of just the latest message, and turn a meeting request into a calendar event — all running locally on your machine. Connecting a personal Microsoft account is first-class via Microsoft Graph. Underneath the features, a new behavior eval harness drives agents through a real model and asserts the tool actually ran — catching a class of "claims success but did nothing" bug that mocked tests never see — alongside a broad security and bug-fix pass.
+GAIA v0.20.1 is a patch release focused on bug fixes and security hardening on top of v0.20.0. It clears several crashes and regressions — a broken optional dependency that could take down every agent at import, `gaia-mcp` failing on a clean install, the Windows app not reopening after an auto-upgrade, and agents stopping mid-task on a step cap set too low — and tightens security with an SSRF DNS-rebind fix and a high-severity XSS dependency patch.
 
 **Why upgrade:**
-- **Phishing detection with safe quarantine** — multi-signal detection (subject, sender domain, body); a flagged message is labelled and archived, never deleted, confirmation-gated, and reversible. Held to a ≥90% precision gate in CI; measured 100% precision on the test corpus, so legitimate mail isn't swept up.
-- **Outlook.com support** — connect a personal Microsoft account (Outlook/Hotmail/Live) for mail and calendar via Microsoft Graph; every existing email tool works against it unchanged, and Gmail stays the default.
-- **Calendar awareness** — the email agent detects meeting requests, checks them against your existing events for conflicts, and creates events — refusing to fabricate one when there's no real date/time.
-- **Full-thread comprehension** — summaries now read the entire thread oldest-first, plus a bounded per-email summary tool, so an ask raised earlier in the thread doesn't get lost.
-- **Real-model behavior testing** — a new eval harness asserts an agent's tools actually take effect against a live model, closing the gap that let the builder silently fail ~40% of the time.
+- **No import-time crash from a broken optional dependency** — if the optional RAG stack was installed but a native library couldn't load, every agent died at import even when RAG was never used. The import is now guarded.
+- **`gaia-mcp` works on a clean install** — a missing base dependency made `gaia-mcp` fail with `ModuleNotFoundError` right after `pip install amd-gaia`. Fixed.
+- **Windows app reopens after auto-upgrade** — an orphaned backend held a handle on `gaia.exe` and broke the upgrade; it's now cleared first.
+- **Agents don't stall mid-task** — the per-step cap was hardcoded low in most places, so agents stopped on routine work; it's raised and centralized on one default.
+- **Security hardening** — SSRF DNS-rebind protection (the IP is now pinned across check and connect) and a patched high-severity XSS dependency in the EMR dashboard.
 
 ---
 
-## What's New
+## In Progress
 
-### Email agent — phishing detection, Outlook, and calendar awareness — `gaia email`
-
-The email agent gained the tools to handle a real inbox safely. It now flags phishing using subject, sender-domain, and body signals together, and can quarantine a flagged message — labelled and archived, never deleted, confirmation-gated, and reversible within the undo window. The detector is held to a ≥90% precision gate in CI and measured 100% precision / 96.7% recall on the test corpus, so legitimate mail isn't swept up (PR [#1434](https://github.com/amd/gaia/pull/1434)).
-
-It also reads context the way a person does: `summarize_thread` reads the entire thread oldest-first instead of just the latest message, so a decision raised three replies ago doesn't get lost (PR [#1352](https://github.com/amd/gaia/pull/1352)), and a per-email summary tool surfaces the key ask in a bounded summary (PR [#1348](https://github.com/amd/gaia/pull/1348)). Calendar awareness is new across the board: the agent detects a meeting request in an email body, checks it against your existing events for conflicts, and creates the event — and it now refuses to fabricate an event with no real date/time, asking you instead (PRs [#1350](https://github.com/amd/gaia/pull/1350), [#1353](https://github.com/amd/gaia/pull/1353), [#1355](https://github.com/amd/gaia/pull/1355)). Four-way triage categorization got sharper too, up 8.6 points on the labelled corpus (PR [#1436](https://github.com/amd/gaia/pull/1436)), and on Ryzen AI hardware the agent can run on a power-efficient on-device NPU model at ~23 tokens/sec (PR [#1433](https://github.com/amd/gaia/pull/1433)).
-
-For automation, the agent is now reachable over a REST API and over MCP (including stdio for clients like VS Code and Claude Desktop), with both surfaces returning byte-identical structured output and the same never-auto-send confirmation gate (PRs [#1351](https://github.com/amd/gaia/pull/1351), [#1357](https://github.com/amd/gaia/pull/1357)). `gaia email --spec` opens a self-contained HTML page documenting the contract offline (PR [#1432](https://github.com/amd/gaia/pull/1432)).
+This release also lands groundwork for several larger features that are **not yet complete and aren't enabled as headline capabilities**: the email agent (phishing detection, Outlook.com mail and calendar, full-thread reading), the Microsoft/Outlook connectors, and a real-model behavior eval harness. That work is in the tree and shows up in the changelog below, but it isn't ready to ship — it will be featured in a future release once it's done.
 
 ---
 
-### Outlook.com support — connect a personal Microsoft account
+## Key Changes
 
-Until now GAIA could only connect Google accounts. A new Microsoft OAuth provider adds a Microsoft tile in Settings → Connectors and grants mail and calendar access via Microsoft Graph (PR [#1347](https://github.com/amd/gaia/pull/1347)). Personal Outlook.com / Hotmail / Live mailboxes and calendars are now first-class: the Outlook backends translate Graph's data into the same shape the Gmail tools already consume, so every existing read/organize/reply tool and every calendar tool works against Outlook with no changes — Gmail stays the default (PRs [#1354](https://github.com/amd/gaia/pull/1354), [#1358](https://github.com/amd/gaia/pull/1358)).
-
-Two connector improvements help headless and embedded use: `gaia connectors configure google --client-id … --client-secret …` sets OAuth credentials from the CLI without launching the Agent UI (PR [#1346](https://github.com/amd/gaia/pull/1346)), and a host application that has already authenticated a user can forward that connection to GAIA over the API so the user isn't asked to consent twice (PR [#1321](https://github.com/amd/gaia/pull/1321)).
-
----
-
-### Behavior eval harness — prove the tool actually ran
-
-Mocked unit tests and UI-render tests both passed while the builder agent silently failed to create an agent about 40% of the time — the "agent says success but the tool never ran" failure class is invisible when the LLM is mocked. The new behavior-E2E harness drives a tool-using agent through the real server with a real model, repeats the run, and asserts the side-effect actually happened — a file on disk, a registry entry — treating a cheerful "done!" with nothing to show for it as a hard failure (PR [#1431](https://github.com/amd/gaia/pull/1431)). The eval framework also now exports per-email categorization and connector-health diagnostics behind a report-mode FP/FN gate, and pipeline latency, peak memory, and NPU utilization behind a report-mode Strix Halo performance gate (PRs [#1359](https://github.com/amd/gaia/pull/1359), [#1361](https://github.com/amd/gaia/pull/1361)).
-
----
-
-## Bug Fixes
+Every shipped change in v0.20.1 is a bug fix or security/hardening fix on top of v0.20.0.
 
 - **Builder silently created nothing ~40% of the time** (PR [#1430](https://github.com/amd/gaia/pull/1430)) — The builder returned "Agent Created!" while writing nothing to disk: the model wrapped its `create_agent` call in a fenced JSON block, and the parser skipped all fenced JSON to avoid grabbing documentation examples, so the tool never ran. Fenced tool-call extraction is now resilient, and four UI sites that swallowed tool errors now surface them.
 - **Builder MCP-only flow ignored the requested persona** (PR [#1533](https://github.com/amd/gaia/pull/1533), closes [#1532](https://github.com/amd/gaia/issues/1532)) — The MCP-only builder flow always scaffolded the built-in placeholder persona regardless of the request; it now authors the persona the user actually asked for.
@@ -161,4 +143,4 @@ Mocked unit tests and UI-render tests both passed while the builder agent silent
 - `7a56ba49` — feat(eval): email-triage throughput benchmark + reusable eval stats/metrics
 - `33db1047` — fix(ui): unload resident model before swapping in the chat load path (#1382) (#1383)
 
-Full Changelog: [v0.20.0...v0.21.0](https://github.com/amd/gaia/compare/v0.20.0...v0.21.0)
+Full Changelog: [v0.20.0...v0.20.1](https://github.com/amd/gaia/compare/v0.20.0...v0.20.1)
