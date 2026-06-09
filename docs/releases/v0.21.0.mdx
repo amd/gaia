@@ -25,7 +25,7 @@ GAIA's agents used to be a fixed set compiled into one wheel: you got what shipp
 
 The same operations are available headless from the CLI: install/uninstall, `gaia agent configure` to set a model or per-agent options, `gaia agent health` and `gaia agent status` to confirm an agent actually loads, and a checksum-verified installer with pre-update backup so a bad update can be rolled back (PR [#1416](https://github.com/amd/gaia/pull/1416)). Multi-agent setup installs smallest-first and resumes where it left off, so a quick agent is usable while a large one keeps downloading.
 
-Safety is built into the install path: non-verified native (C++) agents are unsandboxed binaries, so installing one is gated behind an explicit trust confirmation, deprecated agents are hidden from the default catalog, and every card carries a verified/community/experimental trust badge (PR [#1414](https://github.com/amd/gaia/pull/1414)). There's also a public web catalog to browse agents before installing at [`/hub`](https://amd-gaia.ai/hub) (PR [#1405](https://github.com/amd/gaia/pull/1405)).
+Safety is built into the install path: non-verified native (C++) agents are unsandboxed binaries, so installing one is gated behind an explicit trust confirmation, deprecated agents are hidden from the default catalog, and every card carries a verified/community/experimental trust badge (PR [#1414](https://github.com/amd/gaia/pull/1414)). A public web catalog to browse agents before installing is also on the way (PR [#1405](https://github.com/amd/gaia/pull/1405)).
 
 ---
 
