@@ -25,7 +25,7 @@ endpoints, mounted on the existing OpenAI-compatible FastAPI app
 Design commitments
 ------------------
 - **Reuse the frozen contract.** ``/v1/email/triage`` takes and returns the
-  exact pydantic models from ``gaia.agents.email.contract`` — no parallel
+  exact pydantic models from ``gaia_agent_email.contract`` — no parallel
   schema. A consuming app that drifts from the contract gets a 422.
 - **Reuse the agent's real categorizer.** Category / spam / phishing come
   from ``triage_heuristics.classify_category_heuristic`` — the same
@@ -53,7 +53,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from gaia.agents.email.contract import (
+from gaia_agent_email.contract import (
     ActionItem,
     DraftReply,
     EmailAddress,
@@ -65,7 +65,7 @@ from gaia.agents.email.contract import (
     SingleEmailInput,
     ThreadInput,
 )
-from gaia.agents.email.tools.triage_heuristics import classify_category_heuristic
+from gaia_agent_email.tools.triage_heuristics import classify_category_heuristic
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -155,7 +155,7 @@ class EmailTriageService:
         Used by the agent-pipeline e2e to assert the REST surface's
         summarizer agrees with what the agent's read tools fetch.
         """
-        from gaia.agents.email.gmail_backend import decode_message_body
+        from gaia_agent_email.gmail_backend import decode_message_body
 
         payload = msg.get("payload") or {}
         headers = {
@@ -413,7 +413,7 @@ def get_send_backend():
     backend as a ``Depends`` would let a backend-unavailable 503 preempt the
     403, masking the missing-confirmation rejection.)
     """
-    from gaia.agents.email.gmail_backend import LiveGmailBackend, _get_gmail_token
+    from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
     try:
         return LiveGmailBackend(_get_gmail_token)
@@ -579,7 +579,7 @@ async def email_spec() -> HTMLResponse:
     Not included in the OpenAPI schema — this is a human-readable convenience
     page, not a machine-readable contract endpoint.
     """
-    from gaia.agents.email.spec_html import render_endpoint_spec_html
+    from gaia_agent_email.spec_html import render_endpoint_spec_html
 
     return HTMLResponse(content=render_endpoint_spec_html())
 

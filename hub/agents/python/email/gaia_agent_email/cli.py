@@ -17,8 +17,8 @@ import logging
 import sys
 from typing import Any
 
-from gaia.agents.email.agent import EmailTriageAgent
-from gaia.agents.email.config import EmailAgentConfig
+from gaia_agent_email.agent import EmailTriageAgent
+from gaia_agent_email.config import EmailAgentConfig
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -35,9 +35,9 @@ async def main(args: Any) -> int:
     """
     # Wire verbose/debug to the agent's logger before constructing.
     if getattr(args, "verbose", False) or getattr(args, "debug", False):
-        logging.getLogger("gaia.agents.email").setLevel(logging.INFO)
+        logging.getLogger("gaia_agent_email").setLevel(logging.INFO)
     if getattr(args, "debug", False):
-        logging.getLogger("gaia.agents.email").setLevel(logging.DEBUG)
+        logging.getLogger("gaia_agent_email").setLevel(logging.DEBUG)
 
     config = EmailAgentConfig(
         debug=bool(getattr(args, "debug", False) or getattr(args, "verbose", False)),
