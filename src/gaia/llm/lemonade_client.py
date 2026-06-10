@@ -3063,16 +3063,23 @@ class LemonadeClient:
                 with self._downloads_lock:
                     self.active_downloads.pop(model_name, None)
 
-    def unload_model(self) -> Dict[str, Any]:
+    def unload_model(self, model_name: Optional[str] = None) -> Dict[str, Any]:
         """
-        Unload the current model from the server.
+        Unload a model from the server.
+
+        Args:
+            model_name: Unload ONLY this model — Lemonade's /unload leaves any
+                other loaded models resident. If None, unload all models
+                (global), the historical behavior other callers rely on.
 
         Returns:
             Dict containing the status of the unload operation
         """
         url = f"{self.base_url}/unload"
-        response = self._send_request("post", url)
-        self.model = None
+        data = {"model_name": model_name} if model_name else None
+        response = self._send_request("post", url, data)
+        if model_name is None or self.model == model_name:
+            self.model = None
         self.log.info(f"Model unloaded successfully: {response}")
         return response
 

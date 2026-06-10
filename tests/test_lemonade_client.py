@@ -5,6 +5,7 @@
 Unit tests for the Lemonade client API.
 """
 
+import json
 import logging
 import os
 import sys
@@ -688,6 +689,38 @@ class TestLemonadeClientMock(unittest.TestCase):
         finally:
             # Restore original log level
             logger.setLevel(original_level)
+
+    @responses.activate
+    def test_unload_model_scoped_vs_global(self):
+        """unload_model(name) targets only that model; unload_model() stays global.
+
+        Regression guard for #1544: the RAG embedder refresh must scope its
+        /unload to the embedder so the co-resident chat model is not evicted.
+        The no-arg form keeps the historical global behavior other callers rely
+        on (chat preflight, init, UI eviction).
+        """
+        unload_response = {"status": "success", "message": "unloaded"}
+
+        # Scoped: model_name is sent in the request body.
+        responses.add(
+            responses.POST, f"{API_BASE}/unload", json=unload_response, status=200
+        )
+        embed_model = "nomic-embed-text-v2-moe-GGUF"
+        result = self.client.unload_model(embed_model)
+        self.assertEqual(result, unload_response)
+        self.assertEqual(
+            json.loads(responses.calls[-1].request.body),
+            {"model_name": embed_model},
+        )
+
+        # Global (no arg): no model_name → no JSON body, unloads everything.
+        responses.reset()
+        responses.add(
+            responses.POST, f"{API_BASE}/unload", json=unload_response, status=200
+        )
+        result = self.client.unload_model()
+        self.assertEqual(result, unload_response)
+        self.assertIsNone(responses.calls[-1].request.body)
 
     @responses.activate
     def test_set_params(self):
