@@ -16,12 +16,11 @@ import asyncio
 
 import httpx
 import pytest
-import pytest_asyncio
 from fastapi import FastAPI
 
 from gaia.ui.database import ChatDatabase
 from gaia.ui.routers.schedules import get_scheduler, router
-from gaia.ui.scheduler import ScheduledTask, Scheduler, parse_interval
+from gaia.ui.scheduler import Scheduler
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
