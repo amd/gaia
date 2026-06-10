@@ -758,6 +758,23 @@
     margin-bottom: 4px;
 }
 
+/* Small "Alpha" pill on the Build-a-Custom-Agent card — mirrors the
+   experimental-tier badge look (purple, rounded). */
+.create-alpha-badge {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    background: rgba(168, 85, 247, 0.12);
+    color: var(--accent-purple, #a855f7);
+    vertical-align: middle;
+}
+
 .agent-hub-card.create-new .create-desc {
     font-size: 12px;
     color: var(--text-muted);

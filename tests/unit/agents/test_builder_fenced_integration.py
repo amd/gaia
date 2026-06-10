@@ -79,22 +79,26 @@ class TestBuilderFencedIntegration:
         assert call_args[0][0] == "create_agent"
         assert call_args[0][1]["name"] == "Zephyr Agent"
 
-    def test_fenced_call_result_is_actual_summary(self, tmp_path):
-        """The final answer must be the LLM summary, not the fabricated success text."""
+    def test_fenced_call_result_is_deterministic_confirmation(self, tmp_path):
+        """The final answer must be the tool's confirmation string directly.
+
+        The short-circuit means no second LLM summarization turn — the tool
+        result is returned verbatim without consuming the second mock response.
+        """
         agent = _make_agent(tmp_path)
         agent.console = MagicMock()
 
-        responses = iter([ZEPHYR_FENCED_RESPONSE, TOOL_SUCCESS_SUMMARY])
+        # Only one response needed — the short-circuit returns before the LLM is
+        # called a second time.
         agent.chat = MagicMock()
-        agent.chat.send_messages.side_effect = lambda **kwargs: _mock_resp(
-            next(responses)
-        )
+        agent.chat.send_messages.return_value = _mock_resp(ZEPHYR_FENCED_RESPONSE)
 
         tool_result = f"Agent 'Zephyr Agent' created at {tmp_path}/zephyr/agent.py"
         with patch.object(agent, "_execute_tool", return_value=tool_result):
             result = agent._process_query_impl("create an agent named Zephyr")
 
-        assert result["answer"] == TOOL_SUCCESS_SUMMARY
+        assert result["answer"] == tool_result
+        assert agent.chat.send_messages.call_count == 1
 
     def test_bare_call_still_fires(self, tmp_path):
         """Bare (unfenced) tool calls must still work — zero regression."""
@@ -102,12 +106,8 @@ class TestBuilderFencedIntegration:
         agent.console = MagicMock()
 
         bare_call = '{"tool": "create_agent", "tool_args": {"name": "Bare Agent"}}'
-        summary = "Your Bare Agent has been created."
-        responses = iter([bare_call, summary])
         agent.chat = MagicMock()
-        agent.chat.send_messages.side_effect = lambda **kwargs: _mock_resp(
-            next(responses)
-        )
+        agent.chat.send_messages.return_value = _mock_resp(bare_call)
 
         tool_result = "Agent 'Bare Agent' created at /tmp/bare/agent.py"
         with patch.object(
@@ -116,4 +116,4 @@ class TestBuilderFencedIntegration:
             result = agent._process_query_impl("create a bare agent")
 
         mock_exec.assert_called_once()
-        assert result["answer"] == summary
+        assert result["answer"] == tool_result
