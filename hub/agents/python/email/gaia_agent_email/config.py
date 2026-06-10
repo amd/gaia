@@ -170,7 +170,7 @@ class EmailAgentConfig:
         if provider == "google":
             if self.gmail_backend is not None:
                 return self.gmail_backend
-            from gaia.agents.email.gmail_backend import (
+            from gaia_agent_email.gmail_backend import (
                 LiveGmailBackend,
                 _get_gmail_token,
             )
@@ -179,7 +179,7 @@ class EmailAgentConfig:
         if provider == "microsoft":
             if self.outlook_backend is not None:
                 return self.outlook_backend
-            from gaia.agents.email.outlook_backend import (
+            from gaia_agent_email.outlook_backend import (
                 LiveOutlookBackend,
                 _get_outlook_token,
             )
@@ -216,14 +216,14 @@ class EmailAgentConfig:
             (self.calendar_provider or self.mail_provider or "google").strip().lower()
         )
         if provider == "google":
-            from gaia.agents.email.calendar_backend import (
+            from gaia_agent_email.calendar_backend import (
                 LiveCalendarBackend,
                 _get_calendar_token,
             )
 
             return LiveCalendarBackend(_get_calendar_token)
         if provider == "microsoft":
-            from gaia.agents.email.outlook_calendar_backend import (
+            from gaia_agent_email.outlook_calendar_backend import (
                 LiveOutlookCalendarBackend,
                 _get_outlook_calendar_token,
             )

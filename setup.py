@@ -68,8 +68,6 @@ setup(
         "gaia.connectors",
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
-        "gaia.agents.email",
-        "gaia.agents.email.tools",
     ],
     package_data={
         "gaia.eval": [
@@ -260,6 +258,7 @@ setup(
         "agent-browser": ["gaia-agent-browser"],
         "agent-docqa": ["gaia-agent-docqa"],
         "agent-routing": ["gaia-agent-routing"],
+        "agent-email": ["gaia-agent-email"],
         "agents": [
             "gaia-agent-summarize",
             "gaia-agent-sd",
@@ -274,6 +273,7 @@ setup(
             "gaia-agent-browser",
             "gaia-agent-docqa",
             "gaia-agent-routing",
+            "gaia-agent-email",
         ],
     },
     classifiers=[
