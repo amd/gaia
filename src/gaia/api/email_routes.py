@@ -223,8 +223,9 @@ class EmailTriageService:
             use_local_llm=True,
             use_claude=False,
             use_chatgpt=False,
-            # Keep tokens generous enough for the triage system prompt + body.
-            max_tokens=512,
+            # Output cap, not input — must fit the model's reasoning preamble
+            # before the JSON/summary; 512 truncated Gemma-4's thinking (502s).
+            max_tokens=2048,
         )
         return AgentSDK(sdk_cfg)
 
