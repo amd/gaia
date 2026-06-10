@@ -30,6 +30,10 @@ from typing import Any, Dict, List
 
 import pytest
 
+# EmailTriageAgent + its REST/MCP surfaces ship as the standalone
+# gaia-agent-email wheel (#1102); skip when a framework-only env lacks it.
+pytest.importorskip("gaia_agent_email")
+
 # ---------------------------------------------------------------------------
 # Shared tokenless payload — the SAME message is offered to every surface
 # without a confirmation token. Every surface must refuse it.
@@ -168,7 +172,7 @@ class TestAgentLayerGate:
 
 
 def _addr(email: str):
-    from gaia.agents.email.contract import EmailAddress
+    from gaia_agent_email.contract import EmailAddress
 
     return EmailAddress(email=email)
 
@@ -197,15 +201,13 @@ class TestRestLayerGate:
 
     def _send(self, request):
         import anyio
-
-        from gaia.api import email_routes
+        from gaia_agent_email import api_routes as email_routes
 
         return anyio.run(email_routes.send_email, request)
 
     def test_send_without_token_is_403(self):
         from fastapi import HTTPException
-
-        from gaia.api.email_routes import EmailSendRequest
+        from gaia_agent_email.api_routes import EmailSendRequest
 
         req = EmailSendRequest(to=[_addr(_TO)], subject=_SUBJECT, body=_BODY)
         with pytest.raises(HTTPException) as excinfo:
@@ -215,9 +217,8 @@ class TestRestLayerGate:
 
     def test_draft_then_send_with_token_succeeds(self, monkeypatch):
         import anyio
-
-        from gaia.api import email_routes
-        from gaia.api.email_routes import EmailDraftRequest, EmailSendRequest
+        from gaia_agent_email import api_routes as email_routes
+        from gaia_agent_email.api_routes import EmailDraftRequest, EmailSendRequest
 
         backend = _FakeRestBackend()
         monkeypatch.setattr(email_routes, "resolve_send_backend", lambda: backend)
@@ -245,9 +246,8 @@ class TestRestLayerGate:
         """A token minted for one message cannot send different content."""
         import anyio
         from fastapi import HTTPException
-
-        from gaia.api import email_routes
-        from gaia.api.email_routes import EmailDraftRequest, EmailSendRequest
+        from gaia_agent_email import api_routes as email_routes
+        from gaia_agent_email.api_routes import EmailDraftRequest, EmailSendRequest
 
         backend = _FakeRestBackend()
         monkeypatch.setattr(email_routes, "resolve_send_backend", lambda: backend)
@@ -285,7 +285,7 @@ class TestMcpLayerGate:
     covered by ``tests/mcp/test_email_mcp_stdio_parity.py``)."""
 
     def _agent(self):
-        from gaia.mcp.servers.email_mcp import EmailTriageMCPAgent
+        from gaia_agent_email.mcp_server import EmailTriageMCPAgent
 
         # skip_lemonade defaults True inside the agent; triage/draft/send are
         # deterministic and need no model.
@@ -357,10 +357,9 @@ class TestCrossSurfaceInvariant:
     def test_tokenless_send_is_refused_on_every_surface(self, monkeypatch):
         pytest.importorskip("fastapi", reason="API extra not installed ([api])")
         import anyio
-
-        from gaia.api import email_routes
-        from gaia.api.email_routes import EmailSendRequest
-        from gaia.mcp.servers.email_mcp import EmailTriageMCPAgent
+        from gaia_agent_email import api_routes as email_routes
+        from gaia_agent_email.api_routes import EmailSendRequest
+        from gaia_agent_email.mcp_server import EmailTriageMCPAgent
 
         refusals: Dict[str, bool] = {}
 

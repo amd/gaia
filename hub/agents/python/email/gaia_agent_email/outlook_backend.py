@@ -63,8 +63,8 @@ from typing import (
 
 import httpx
 
-from gaia.agents.email.outlook_scopes import OUTLOOK_MAIL_SCOPES
-from gaia.agents.email.scopes import AGENT_NAMESPACED_ID
+from gaia_agent_email.outlook_scopes import OUTLOOK_MAIL_SCOPES
+from gaia_agent_email.scopes import AGENT_NAMESPACED_ID
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import get_credential_sync
 from gaia.logger import get_logger

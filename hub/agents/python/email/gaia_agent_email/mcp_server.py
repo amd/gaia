@@ -10,7 +10,7 @@ Parity by construction
 ----------------------
 The ``triage_email`` tool calls the *same* FastAPI-free ``EmailTriageService``
 that backs ``POST /v1/email/triage``, validating the *same* frozen #1262
-contract (``gaia.agents.email.contract``). Identical service + identical
+contract (``gaia_agent_email.contract``). Identical service + identical
 contract ⇒ identical structured output. ``tests/mcp/test_email_mcp_stdio_parity``
 locks this in by comparing both surfaces byte-for-byte.
 
@@ -36,12 +36,12 @@ from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.mcp_agent import MCPAgent
-from gaia.agents.email.contract import (
+from gaia_agent_email.contract import (
     DraftReply,
     EmailAddress,
     EmailTriageRequest,
 )
-from gaia.api.email_routes import (  # read-only reuse of the REST surface
+from gaia_agent_email.api_routes import (  # read-only reuse of the REST surface
     ConfirmationStore,
     EmailTriageService,
     _format_address,
@@ -305,7 +305,7 @@ class EmailTriageMCPAgent(MCPAgent):
         """
         if os.environ.get(_FAKE_SEND_ENV):
             return _FakeSendBackend()
-        from gaia.agents.email.gmail_backend import LiveGmailBackend, _get_gmail_token
+        from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
         try:
             return LiveGmailBackend(_get_gmail_token)
