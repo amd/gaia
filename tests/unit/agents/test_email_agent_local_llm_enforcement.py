@@ -23,9 +23,13 @@ from __future__ import annotations
 
 from dataclasses import fields
 
-import pytest
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
 
-from gaia.agents.email.config import ConfigurationError, EmailAgentConfig
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
+
 from gaia.llm.lemonade_client import MODELS, ModelType
 
 

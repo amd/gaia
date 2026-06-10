@@ -22,7 +22,7 @@ import json
 import re
 from typing import Any, Callable, Mapping
 
-from gaia.agents.email.tools.triage_heuristics import ALL_CATEGORIES
+from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -114,7 +114,7 @@ def _build_user_prompt(subject: str, sender: str, body: str) -> str:
     # Local import breaks a circular dependency (read_tools imports this module)
     # while reusing the agent's single source of truth for the untrusted-input
     # delimiters the system prompt is trained to treat as data.
-    from gaia.agents.email.tools.read_tools import wrap_untrusted_body
+    from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 
     clipped = (body or "").strip()[:_BODY_CHAR_LIMIT]
     return (

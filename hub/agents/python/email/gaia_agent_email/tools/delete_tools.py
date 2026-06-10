@@ -16,8 +16,8 @@ import json
 from typing import Any, Dict
 
 from gaia.agents.base.tools import tool
-from gaia.agents.email import action_store
-from gaia.agents.email.verbose import log_tool_call
+from gaia_agent_email import action_store
+from gaia_agent_email.verbose import log_tool_call
 from gaia.connectors.errors import ConnectorsError
 from gaia.logger import get_logger
 
