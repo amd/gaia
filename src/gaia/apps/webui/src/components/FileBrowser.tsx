@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import {
     X, Search, Folder, FileText, Home, Download, Monitor, ChevronRight,
     File, FolderOpen, ArrowUp, Brain, Upload, HardDrive,
-    Table, Code
+    Table, Code, Eye
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
@@ -256,6 +256,15 @@ export function FileBrowser() {
             setPreviewFile(null);
         }
     }, [loadDirectory]);
+
+    const toggleFileSelection = useCallback((path: string) => {
+        setSelectedFiles(prev => {
+            const next = new Set(prev);
+            if (next.has(path)) next.delete(path);
+            else next.add(path);
+            return next;
+        });
+    }, []);
 
     const handleFilePreview = useCallback(async (path: string) => {
         setPreviewLoading(true);
@@ -533,7 +542,7 @@ export function FileBrowser() {
                                 <div
                                     key={entry.path}
                                     className={`fb-entry ${entry.type} ${selectedFiles.has(entry.path) ? 'selected' : ''} ${fileUnsupported ? 'unsupported' : ''}`}
-                                    onClick={() => entry.type === 'folder' ? handleEntryClick(entry) : handleFilePreview(entry.path)}
+                                    onClick={() => entry.type === 'folder' ? handleEntryClick(entry) : toggleFileSelection(entry.path)}
                                     onDoubleClick={() => entry.type === 'folder' ? handleEntryClick(entry) : undefined}
                                     title={fileUnsupported ? `${unsupportedCat?.label || 'This'} file type cannot be indexed` : entry.path}
                                 >
@@ -541,14 +550,7 @@ export function FileBrowser() {
                                         type="checkbox"
                                         className="fb-entry-checkbox"
                                         checked={selectedFiles.has(entry.path)}
-                                        onChange={() => {
-                                            setSelectedFiles(prev => {
-                                                const next = new Set(prev);
-                                                if (next.has(entry.path)) next.delete(entry.path);
-                                                else next.add(entry.path);
-                                                return next;
-                                            });
-                                        }}
+                                        onChange={() => toggleFileSelection(entry.path)}
                                         onClick={(e) => e.stopPropagation()}
                                         aria-label={`Select ${entry.name}`}
                                     />
@@ -561,6 +563,16 @@ export function FileBrowser() {
                                     )}
                                     <span className="fb-entry-size">{entry.type === 'file' ? formatSize(entry.size) : ''}</span>
                                     <span className="fb-entry-date">{formatDate(entry.modified)}</span>
+                                    {entry.type === 'file' && (
+                                        <button
+                                            className="fb-entry-preview-btn"
+                                            onClick={(e) => { e.stopPropagation(); handleFilePreview(entry.path); }}
+                                            title="Preview file"
+                                            aria-label={`Preview ${entry.name}`}
+                                        >
+                                            <Eye size={14} />
+                                        </button>
+                                    )}
                                 </div>
                                 );
                             })}

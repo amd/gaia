@@ -305,6 +305,36 @@
     flex-shrink: 0;
 }
 
+/* Per-row preview button (secondary affordance — row click selects) */
+.fb-entry-preview-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 3px;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity var(--duration-fast) var(--ease), background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+
+.fb-entry:hover .fb-entry-preview-btn {
+    opacity: 1;
+}
+
+.fb-entry-preview-btn:hover {
+    background: var(--bg-hover);
+    color: var(--amd-red);
+}
+
+.fb-entry-preview-btn:focus-visible {
+    opacity: 1;
+    outline: 1px solid var(--amd-red);
+}
+
 /* Preview Panel */
 .fb-preview {
     width: 280px;
