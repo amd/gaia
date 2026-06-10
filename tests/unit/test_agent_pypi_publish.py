@@ -83,11 +83,13 @@ def test_pyproject_declares_gaia_agent_entry_point(packages):
 
 
 def test_publish_workflow_exists_and_uses_pypi_action():
-    """The CI workflow publishes via gh-action-pypi-publish with the token secret."""
+    """The CI workflow publishes via gh-action-pypi-publish using OIDC."""
     assert WORKFLOW.exists(), "publish_agents.yml workflow is missing"
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "pypa/gh-action-pypi-publish" in text
-    assert "secrets.PYPI_API_TOKEN" in text
+    # OIDC trusted publishing — no stored token (#1570). The action mints a
+    # short-lived id-token PyPI exchanges for an upload token.
+    assert "id-token: write" in text
     # PyPI-native immutability rather than custom overwrite logic (#1179).
     assert "skip-existing: true" in text
     # Matrix is generated from the helper, not a hand-maintained second list.
