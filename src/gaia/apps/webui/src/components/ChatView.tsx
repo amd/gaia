@@ -1674,8 +1674,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             <button
                                 className="create-agent-btn"
                                 onClick={onCreateAgent}
-                                title="Build a custom agent"
-                                aria-label="Build a custom agent"
+                                title="Build a custom agent template"
+                                aria-label="Build a custom agent template"
                             >
                                 <Plus size={10} />
                             </button>

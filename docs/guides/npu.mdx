@@ -19,6 +19,12 @@ GAIA supports running agents on your AMD Ryzen AI NPU via the [FastFlowLM (FLM)]
 Ryzen AI 7000/8000/200-series chips have XDNA1 NPUs which are not supported by FastFlowLM. Use `--device gpu` instead.
 </Warning>
 
+## Linux
+
+NPU inference works on Linux the same way — run `gaia init --profile npu` and Lemonade Server installs the FLM backend automatically.
+
+If Lemonade detects that your system needs additional setup (for example, the `amdxdna` kernel driver on older kernels), it will point you to the [Lemonade Linux FLM guide](https://lemonade-server.ai/flm_npu_linux.html) with distro-specific steps. Follow them, then re-run `gaia init --profile npu`.
+
 ## Setup
 
 Initialize GAIA with the NPU profile:
