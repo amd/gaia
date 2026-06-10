@@ -338,6 +338,54 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await agent_loop.start(db=db, app_state=app.state)
         logger.info("AgentLoop started")
 
+        # ── Task scheduler (user-defined recurring tasks) ────────────────
+        # Salvaged from #517. Scheduled tasks are explicit user automations
+        # (cron analogy), so they run standalone rather than through the
+        # GoalStore approval workflow — but they share AgentLoop's tunnel
+        # gate (no background runs while a public tunnel is active).
+        from gaia.ui.scheduler import Scheduler
+
+        _sched_timeout = float(os.environ.get("GAIA_SCHEDULE_TIMEOUT", "300"))
+
+        async def _schedule_executor(prompt: str) -> str:
+            """Execute a scheduled prompt through a fresh ChatAgent.
+
+            Constructs the agent inline rather than via the chat router's
+            session cache: `_get_cached_agent` is a lookup keyed to live
+            interactive sessions (SSE/doc plumbing); background runs are
+            fresh-context by design.
+            """
+            tunnel = getattr(app.state, "tunnel", None)
+            allow_tunnel = os.environ.get(
+                "GAIA_AUTONOMOUS_ALLOW_TUNNEL", ""
+            ).lower() in ("1", "true", "yes")
+            if tunnel and tunnel.active and not allow_tunnel:
+                raise RuntimeError(
+                    "Scheduled run suspended: public tunnel is active. "
+                    "Stop the tunnel or set GAIA_AUTONOMOUS_ALLOW_TUNNEL=1."
+                )
+
+            def _run() -> str:
+                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+                config = ChatAgentConfig(max_steps=5, silent_mode=True, debug=False)
+                agent = ChatAgent(config)
+                result = agent.process_query(prompt)
+                if isinstance(result, dict):
+                    val = result.get("result")
+                    return val if val is not None else result.get("answer", "")
+                return str(result) if result else ""
+
+            loop = asyncio.get_running_loop()
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, _run), timeout=_sched_timeout
+            )
+
+        scheduler = Scheduler(db=db, executor=_schedule_executor)
+        app.state.scheduler = scheduler
+        await scheduler.start()
+        logger.info("Task scheduler started (timeout=%ss)", _sched_timeout)
+
         # Start document file monitor for auto re-indexing
         monitor = DocumentMonitor(
             db=db,
@@ -413,6 +461,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         yield
 
         # Shutdown
+        await scheduler.shutdown()
+        logger.info("Task scheduler stopped")
         await agent_loop.stop()
         logger.info("AgentLoop stopped")
         await queue.shutdown()
