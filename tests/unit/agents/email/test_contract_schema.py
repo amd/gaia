@@ -12,16 +12,19 @@ These tests freeze the request/response contract shared by the REST surface
 - Invalid payloads are rejected LOUDLY (pydantic ValidationError / ValueError),
   never silently coerced.
 
-The schema lives in ``gaia.agents.email.contract`` — dependency-light (pydantic
+The schema lives in ``gaia_agent_email.contract`` — dependency-light (pydantic
 only) so both API surfaces can import it without dragging Gmail backends in.
 """
 
 from __future__ import annotations
 
-import pytest
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
 from pydantic import ValidationError
 
-from gaia.agents.email.contract import (
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
     DraftReply,
@@ -32,7 +35,7 @@ from gaia.agents.email.contract import (
     EmailTriageResult,
     parse_request,
 )
-from gaia.agents.email.tools.triage_heuristics import ALL_CATEGORIES
+from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
 
 # ---------------------------------------------------------------------------
 # Sample payloads (the frozen contract examples — kept in sync with the .mdx)
@@ -140,10 +143,10 @@ def test_contract_import_is_backend_free():
     import sys
 
     code = (
-        "import sys, gaia.agents.email.contract;"
+        "import sys, gaia_agent_email.contract;"
         "heavy=[m for m in sys.modules if 'gmail_backend' in m "
         "or 'connectors' in m or 'calendar_backend' in m "
-        "or m=='gaia.agents.email.agent'];"
+        "or m=='gaia_agent_email.agent'];"
         "assert not heavy, heavy;"
         "print('ok')"
     )

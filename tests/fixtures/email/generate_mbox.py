@@ -29,20 +29,26 @@ from pathlib import Path
 from typing import Any
 
 # Keep the corpus runnable standalone (``python generate_mbox.py``) even
-# when launched from this directory by putting the repo root on the path,
-# then import the *production* category taxonomy so generated labels can
-# never drift from what the agent emits and the eval scores against.
+# when launched from this directory by putting the repo root (for
+# ``tests.fixtures``) AND the standalone ``gaia_agent_email`` hub package on
+# the path — the category taxonomy moved into that wheel (#1102) and is not
+# reachable from the repo root alone. We import the *production* taxonomy so
+# generated labels can never drift from what the agent emits and scores against.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+_HUB_EMAIL = _REPO_ROOT / "hub" / "agents" / "python" / "email"
+if _HUB_EMAIL.is_dir() and str(_HUB_EMAIL) not in sys.path:
+    sys.path.insert(0, str(_HUB_EMAIL))
 
-from gaia.agents.email.tools.triage_heuristics import (  # noqa: E402
+from gaia_agent_email.tools.triage_heuristics import (  # noqa: E402
     ALL_CATEGORIES,
     CATEGORY_ACTIONABLE,
     CATEGORY_INFORMATIONAL,
     CATEGORY_LOW_PRIORITY,
     CATEGORY_URGENT,
 )
+
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     mbox_message_to_gmail_payload,
 )

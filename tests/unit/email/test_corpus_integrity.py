@@ -8,7 +8,7 @@ service:
 - The corpus is exactly the reconciled size (220 messages).
 - Every ground-truth label is one of the four v0.20 taxonomy categories
   (urgent / actionable / informational / "low priority") — exact strings,
-  matching ``gaia.agents.email.tools.triage_heuristics.ALL_CATEGORIES``.
+  matching ``gaia_agent_email.tools.triage_heuristics.ALL_CATEGORIES``.
 - The realized per-category counts sum to the total (no message is
   unlabelled or double-counted).
 - Every ground-truth entry is schema-well-formed (required fields present
@@ -26,9 +26,13 @@ import json
 import tempfile
 from pathlib import Path
 
-import pytest
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
 
-from gaia.agents.email.tools.triage_heuristics import ALL_CATEGORIES
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
+
 from tests.fixtures.email import generate_mbox as gen
 
 # Required ground-truth fields and their expected python types.

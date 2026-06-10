@@ -71,11 +71,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email.agent import EmailTriageAgent  # noqa: E402
-from gaia.agents.email.config import EmailAgentConfig  # noqa: E402
-from gaia.agents.email.tools.llm_triage import make_llm_classifier  # noqa: E402
-from gaia.agents.email.tools.read_tools import triage_inbox_impl  # noqa: E402
-from gaia.agents.email.tools.triage_heuristics import ALL_CATEGORIES  # noqa: E402
+from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
+from gaia_agent_email.config import EmailAgentConfig  # noqa: E402
+from gaia_agent_email.tools.llm_triage import make_llm_classifier  # noqa: E402
+from gaia_agent_email.tools.read_tools import triage_inbox_impl  # noqa: E402
+from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES  # noqa: E402
+
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 FIXTURES_DIR = Path(__file__).resolve().parent

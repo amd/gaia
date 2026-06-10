@@ -32,26 +32,32 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-# EmailTriageService lives in gaia.api.email_routes, which imports FastAPI.
+# EmailTriageService lives in gaia_agent_email.api_routes, which imports FastAPI.
 # FastAPI ships in the [api]/[ui] extras, NOT [dev] — skip the whole module
 # (rather than error at collection) when it is unavailable, matching how the
 # rest of the API tests degrade on a [dev]-only runner.
 pytest.importorskip("fastapi")
 
-from gaia.agents.email import action_store  # noqa: E402
-from gaia.agents.email.agent import EmailTriageAgent  # noqa: E402
-from gaia.agents.email.config import EmailAgentConfig  # noqa: E402
-from gaia.agents.email.tools.read_tools import (  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email import action_store  # noqa: E402
+from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
+from gaia_agent_email.api_routes import EmailTriageService  # noqa: E402
+from gaia_agent_email.config import EmailAgentConfig  # noqa: E402
+from gaia_agent_email.tools.read_tools import (  # noqa: E402
     get_message_impl,
     pre_scan_inbox_impl,
     triage_inbox_impl,
 )
-from gaia.agents.email.tools.reply_tools import (  # noqa: E402
+from gaia_agent_email.tools.reply_tools import (  # noqa: E402
     draft_reply_impl,
     send_now_impl,
 )
-from gaia.agents.email.tools.triage_heuristics import ALL_CATEGORIES  # noqa: E402
-from gaia.api.email_routes import EmailTriageService  # noqa: E402
+from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES  # noqa: E402
+
 from gaia.database.mixin import DatabaseMixin  # noqa: E402
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeCalendarBackend,
@@ -127,7 +133,7 @@ class TestEmailPipelineE2E:
     def test_summarize_stage_produces_contract_result_per_message(self, fake_gmail):
         """Feed each fetched message through the REST service's summarizer and
         assert it yields a contract-valid EmailTriageResult."""
-        from gaia.agents.email.contract import EmailTriageResult
+        from gaia_agent_email.contract import EmailTriageResult
 
         service = EmailTriageService()
         listing = fake_gmail.list_messages(label_ids=["INBOX"], max_results=5)
@@ -193,7 +199,7 @@ class TestEmailPipelineE2E:
 
     def test_full_pipeline_one_run(self, fake_gmail, db):
         """Single run touching every stage in order, asserting each contract."""
-        from gaia.agents.email.contract import EmailTriageResult
+        from gaia_agent_email.contract import EmailTriageResult
 
         service = EmailTriageService()
 

@@ -31,6 +31,10 @@ import uuid
 
 import pytest
 
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+pytest.importorskip("gaia_agent_email")
+
 pytestmark = [pytest.mark.gmail_live, pytest.mark.integration]
 
 
@@ -46,7 +50,7 @@ def live_gmail_account_email() -> str:
 
 @pytest.fixture
 def live_backend(live_gmail_account_email):
-    from gaia.agents.email.gmail_backend import LiveGmailBackend, _get_gmail_token
+    from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
     backend = LiveGmailBackend(_get_gmail_token)
     yield backend
