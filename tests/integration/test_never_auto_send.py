@@ -201,7 +201,6 @@ class TestRestLayerGate:
 
     def _send(self, request):
         import anyio
-
         from gaia_agent_email import api_routes as email_routes
 
         return anyio.run(email_routes.send_email, request)
@@ -218,9 +217,8 @@ class TestRestLayerGate:
 
     def test_draft_then_send_with_token_succeeds(self, monkeypatch):
         import anyio
-        from gaia_agent_email.api_routes import EmailDraftRequest, EmailSendRequest
-
         from gaia_agent_email import api_routes as email_routes
+        from gaia_agent_email.api_routes import EmailDraftRequest, EmailSendRequest
 
         backend = _FakeRestBackend()
         monkeypatch.setattr(email_routes, "resolve_send_backend", lambda: backend)
@@ -248,9 +246,8 @@ class TestRestLayerGate:
         """A token minted for one message cannot send different content."""
         import anyio
         from fastapi import HTTPException
-        from gaia_agent_email.api_routes import EmailDraftRequest, EmailSendRequest
-
         from gaia_agent_email import api_routes as email_routes
+        from gaia_agent_email.api_routes import EmailDraftRequest, EmailSendRequest
 
         backend = _FakeRestBackend()
         monkeypatch.setattr(email_routes, "resolve_send_backend", lambda: backend)
@@ -360,10 +357,9 @@ class TestCrossSurfaceInvariant:
     def test_tokenless_send_is_refused_on_every_surface(self, monkeypatch):
         pytest.importorskip("fastapi", reason="API extra not installed ([api])")
         import anyio
+        from gaia_agent_email import api_routes as email_routes
         from gaia_agent_email.api_routes import EmailSendRequest
         from gaia_agent_email.mcp_server import EmailTriageMCPAgent
-
-        from gaia_agent_email import api_routes as email_routes
 
         refusals: Dict[str, bool] = {}
 

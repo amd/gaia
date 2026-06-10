@@ -1384,6 +1384,7 @@ class TestEmailSendConfirmationGate:
         if str(repo_root) not in sys.path:
             sys.path.insert(0, str(repo_root))
         from gaia_agent_email import api_routes as email_routes
+
         from tests.fixtures.email.fake_gmail import FakeGmailBackend
 
         self.fake_backend = FakeGmailBackend()
