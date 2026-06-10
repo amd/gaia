@@ -30,10 +30,16 @@ if str(_REPO_ROOT) not in sys.path:
 
 pytestmark = pytest.mark.integration
 
-from gaia.agents.email.agent import EmailTriageAgent  # noqa: E402
-from gaia.agents.email.config import EmailAgentConfig  # noqa: E402
-from gaia.agents.email.tools.llm_triage import make_llm_classifier  # noqa: E402
-from gaia.agents.email.tools.read_tools import triage_inbox_impl  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
+from gaia_agent_email.config import EmailAgentConfig  # noqa: E402
+from gaia_agent_email.tools.llm_triage import make_llm_classifier  # noqa: E402
+from gaia_agent_email.tools.read_tools import triage_inbox_impl  # noqa: E402
+
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 # The committed baseline (baseline_accuracy.json) was recorded with this model

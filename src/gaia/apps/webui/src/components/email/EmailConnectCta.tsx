@@ -26,7 +26,7 @@ import './EmailConnectCta.css';
 /** Match the canonical prefixes the connectors framework emits. The
  *  prefixes are stable (see ``connectors/formatting.py``); fuzzy
  *  fallbacks like "Open Settings → Connectors → Google" handle the
- *  agent-specific override message for ``builtin:email``.
+ *  agent-specific override message for ``installed:email``.
  */
 export function isAuthRequiredMessage(content: string): boolean {
     if (!content) return false;
@@ -34,7 +34,7 @@ export function isAuthRequiredMessage(content: string): boolean {
     if (content.includes('AGENT_NOT_GRANTED:')) return true;
     if (content.includes('AUTH_REQUIRED:')) return true;
     // Agent-specific override (``_AGENT_GRANT_MIGRATION_MESSAGES`` for
-    // builtin:email). Lowercased substring check so wording tweaks
+    // installed:email). Lowercased substring check so wording tweaks
     // upstream don't silently break the detection.
     const lower = content.toLowerCase();
     if (

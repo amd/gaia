@@ -62,7 +62,7 @@ def _forward_body(**overrides):
         "refresh_token": FWD_REFRESH,
         "scopes": FULL_SCOPES,
         "account_email": "alice@example.com",
-        "grant_agents": ["builtin:email"],
+        "grant_agents": ["installed:email"],
     }
     body.update(overrides)
     return body
@@ -89,6 +89,15 @@ class TestForwardPost:
         assert resp.status_code == 403
 
     def test_scope_shortfall_fails_loudly(self, ui_api_client):
+        # The email agent ships as the standalone gaia-agent-email wheel (#1102)
+        # and is registered via entry-point discovery only when that wheel is
+        # installed. The connector test jobs install gaia core but not the wheel,
+        # so inject the email agent's registry entry directly — this keeps the
+        # router's scope-resolution check deterministic and independent of which
+        # agent wheels happen to be installed in the test env.
+        ui_api_client.app.state.agent_registry = _make_fake_registry(
+            provider="google", scopes=FULL_SCOPES, nsid="installed:email"
+        )
         resp = ui_api_client.post(
             "/v1/connections/google",
             json=_forward_body(scopes=["https://www.googleapis.com/auth/gmail.modify"]),
@@ -181,7 +190,7 @@ class TestAgentActsAfterForward:
         from gaia.connectors.api import get_access_token
 
         token = await get_access_token(
-            provider="google", scopes=FULL_SCOPES, agent_id="builtin:email"
+            provider="google", scopes=FULL_SCOPES, agent_id="installed:email"
         )
         assert token == "STUB-ACCESS"
         assert FWD_CLIENT_ID in captured["body"]
