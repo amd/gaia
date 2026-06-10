@@ -1196,7 +1196,8 @@ class TestErrorResponseFormat:
 # EMAIL AGENT REST SURFACE (#1229) — TestClient, no external server / Lemonade
 # =============================================================================
 #
-# These exercise the /v1/email/* endpoints added by src/gaia/api/email_routes.py.
+# These exercise the /v1/email/* endpoints exposed by the gaia-agent-email
+# wheel (gaia_agent_email.api_routes), mounted conditionally by openai_server.
 # The triage endpoint accepts / returns the FROZEN #1262 contract
 # (gaia_agent_email.contract). The send endpoint enforces the confirmation
 # gate (#1264) at the API boundary: a send without a valid confirmation token

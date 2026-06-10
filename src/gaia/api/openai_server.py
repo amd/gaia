@@ -98,14 +98,19 @@ app.add_middleware(
 # Ships with the standalone ``gaia-agent-email`` wheel (#1102); mount it only
 # when that wheel is installed so the core API server still starts without it.
 try:
-    from gaia_agent_email.api_routes import router as email_router
-
-    app.include_router(email_router)
+    import gaia_agent_email  # noqa: F401 — wheel-presence check only
 except ImportError:
     logger.info(
         "Email REST routes unavailable: install the email agent "
         "(`pip install gaia-agent-email`) to enable POST /v1/email/*."
     )
+else:
+    # Wheel is installed — import the router for real OUTSIDE the presence
+    # check so a genuine broken import inside the wheel fails loudly rather
+    # than being swallowed as "not installed" (no-silent-fallback rule).
+    from gaia_agent_email.api_routes import router as email_router
+
+    app.include_router(email_router)
 
 
 # Raw request logging middleware (debug mode only)

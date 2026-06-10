@@ -77,4 +77,7 @@ jobs:
             tests/unit/agents/test_email_llm_triage.py \
             tests/unit/test_email_cli.py \
             tests/integration/test_never_auto_send.py \
+            tests/integration/test_email_rest_api_e2e.py \
+            tests/test_api.py::TestEmailTriageEndpoint \
+            tests/test_api.py::TestEmailSendConfirmationGate \
             -v --tb=short
