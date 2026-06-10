@@ -586,3 +586,78 @@ class TestStats:
         assert stats["documents"] == 1
         assert stats["total_chunks"] == 10
         assert stats["total_size_bytes"] == 1024
+
+
+class TestScheduledTaskStorage:
+    """Schedule persistence via public ChatDatabase API (PR #517 salvage)."""
+
+    def _task_row(self, **overrides):
+        row = {
+            "id": "t-1",
+            "name": "morning-brief",
+            "interval_seconds": 3600,
+            "prompt": "Summarize my inbox",
+            "status": "active",
+            "created_at": "2026-06-09T00:00:00+00:00",
+            "next_run_at": None,
+            "run_count": 0,
+            "error_count": 0,
+            "session_id": None,
+            "schedule_config": None,
+        }
+        row.update(overrides)
+        return row
+
+    def test_create_and_list_scheduled_tasks(self, db):
+        db.create_scheduled_task(self._task_row())
+        rows = db.list_scheduled_tasks()
+        assert len(rows) == 1
+        assert rows[0]["name"] == "morning-brief"
+        assert rows[0]["interval_seconds"] == 3600
+
+    def test_duplicate_name_raises(self, db):
+        db.create_scheduled_task(self._task_row())
+        with pytest.raises(sqlite3.IntegrityError):
+            db.create_scheduled_task(self._task_row(id="t-2"))
+
+    def test_update_scheduled_task(self, db):
+        db.create_scheduled_task(self._task_row())
+        db.update_scheduled_task(
+            "t-1",
+            status="paused",
+            run_count=3,
+            last_run_at="2026-06-09T01:00:00+00:00",
+            next_run_at=None,
+            last_result="ok",
+            error_count=0,
+            session_id="s-9",
+            schedule_config=None,
+        )
+        rows = db.list_scheduled_tasks()
+        assert rows[0]["status"] == "paused"
+        assert rows[0]["run_count"] == 3
+        assert rows[0]["session_id"] == "s-9"
+
+    def test_delete_scheduled_task_cascades_results(self, db):
+        db.create_scheduled_task(self._task_row())
+        db.store_schedule_result(
+            "r-1", "t-1", "2026-06-09T01:00:00+00:00", result="done", error=None
+        )
+        db.delete_scheduled_task("t-1")
+        assert db.list_scheduled_tasks() == []
+        assert db.get_schedule_results("t-1") == []
+
+    def test_store_and_get_results_ordered_desc(self, db):
+        db.create_scheduled_task(self._task_row())
+        db.store_schedule_result("r-1", "t-1", "2026-06-09T01:00:00+00:00", "first", None)
+        db.store_schedule_result("r-2", "t-1", "2026-06-09T02:00:00+00:00", "second", None)
+        results = db.get_schedule_results("t-1", limit=10)
+        assert [r["result"] for r in results] == ["second", "first"]
+
+    def test_get_results_respects_limit(self, db):
+        db.create_scheduled_task(self._task_row())
+        for i in range(5):
+            db.store_schedule_result(
+                f"r-{i}", "t-1", f"2026-06-09T0{i}:00:00+00:00", str(i), None
+            )
+        assert len(db.get_schedule_results("t-1", limit=2)) == 2
