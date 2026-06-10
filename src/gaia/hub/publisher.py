@@ -89,7 +89,7 @@ def _keyring():
     except ImportError as exc:
         raise PublisherError(
             "the 'keyring' package is required to store/read publisher tokens. "
-            "Install it with 'pip install \"amd-gaia[dev]\"', or pass tokens via "
+            "Install it with 'uv pip install \"amd-gaia[dev]\"', or pass tokens via "
             f"the {HUB_TOKEN_ENV} / {PYPI_TOKEN_ENV} environment variables."
         ) from exc
     return keyring
@@ -353,7 +353,7 @@ def _publish_pypi(wheel: Path, twine_runner) -> TargetResult:
         )
     raise PublisherError(
         f"twine upload failed (exit {rc}) for {wheel.name}:\n{output.strip()}\n"
-        f"Ensure twine is installed ('pip install \"amd-gaia[publish]\"') and "
+        f"Ensure twine is installed ('uv pip install \"amd-gaia[publish]\"') and "
         f"the token is valid."
     )
 

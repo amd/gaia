@@ -55,6 +55,95 @@ class TestApiUnitValidation:
         self.client = TestClient(app)
 
     # -------------------------------------------------------------------------
+    # Non-streaming happy path (mocked agent backend — no Lemonade required)
+    # -------------------------------------------------------------------------
+
+    def test_basic_completion_with_mocked_agent(self, mocker):
+        """Non-streaming POST returns a schema-valid OpenAI completion.
+
+        The agent/Lemonade backend is mocked: registry.get_agent yields a stub
+        whose process_query returns a canned result dict, so the handler's
+        non-streaming branch runs end-to-end without a live LLM server.
+        """
+        # Stub agent: NOT an ApiAgent, so the handler uses the len//4 token
+        # estimate path (deterministic, no tokenizer needed).
+        fake_agent = mocker.MagicMock()
+        fake_agent.process_query.return_value = {
+            "status": "success",
+            "result": "def hello():\n    return 'hello world'",
+        }
+
+        from gaia.api.openai_server import registry as server_registry
+
+        mocker.patch.object(server_registry, "get_agent", return_value=fake_agent)
+
+        payload = {
+            "model": "gaia-code",
+            "messages": [
+                {"role": "user", "content": "Write a hello world function in Python"}
+            ],
+            "stream": False,
+        }
+        response = self.client.post("/v1/chat/completions", json=payload)
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+
+        # Top-level OpenAI-compatible structure.
+        assert data["object"] == "chat.completion"
+        assert data["id"].startswith("chatcmpl-")
+        assert isinstance(data["created"], int)
+        assert data["model"] == "gaia-code"
+
+        # The agent was invoked with the extracted user message.
+        fake_agent.process_query.assert_called_once()
+        call_args, _ = fake_agent.process_query.call_args
+        assert call_args[0] == "Write a hello world function in Python"
+
+        # Choices.
+        assert len(data["choices"]) == 1
+        choice = data["choices"][0]
+        assert choice["index"] == 0
+        assert choice["message"]["role"] == "assistant"
+        assert choice["message"]["content"] == (
+            "def hello():\n    return 'hello world'"
+        )
+        assert choice["finish_reason"] == "stop"
+
+        # Usage accounting.
+        usage = data["usage"]
+        assert usage["prompt_tokens"] > 0
+        assert usage["completion_tokens"] > 0
+        assert usage["total_tokens"] == (
+            usage["prompt_tokens"] + usage["completion_tokens"]
+        )
+
+    def test_completion_uses_last_user_message(self, mocker):
+        """The handler passes the LAST user message (not system/assistant) to the agent."""
+        fake_agent = mocker.MagicMock()
+        fake_agent.process_query.return_value = {"result": "ok"}
+
+        from gaia.api.openai_server import registry as server_registry
+
+        mocker.patch.object(server_registry, "get_agent", return_value=fake_agent)
+
+        payload = {
+            "model": "gaia-code",
+            "messages": [
+                {"role": "system", "content": "You are helpful"},
+                {"role": "user", "content": "first question"},
+                {"role": "assistant", "content": "an earlier answer"},
+                {"role": "user", "content": "second question"},
+            ],
+            "stream": False,
+        }
+        response = self.client.post("/v1/chat/completions", json=payload)
+
+        assert response.status_code == 200, response.text
+        call_args, _ = fake_agent.process_query.call_args
+        assert call_args[0] == "second question"
+
+    # -------------------------------------------------------------------------
     # Model Validation Tests
     # -------------------------------------------------------------------------
 
@@ -307,47 +396,6 @@ class TestApiUnitValidation:
 @pytest.mark.integration
 class TestChatCompletionsNonStreaming:
     """Test POST /v1/chat/completions without streaming"""
-
-    @pytest.mark.skip(reason="Skipped: API server returns 500 - see issue for fix")
-    def test_basic_completion_with_code_agent(self, api_server, api_client):
-        """Test that gaia-code returns valid OpenAI-compatible completion"""
-        payload = {
-            "model": "gaia-code",
-            "messages": [
-                {"role": "user", "content": "Write a hello world function in Python"}
-            ],
-            "stream": False,
-        }
-        response = api_client.post(f"{api_server}/v1/chat/completions", json=payload)
-
-        assert response.status_code == 200
-        data = response.json()
-
-        # Verify OpenAI-compatible structure
-        assert data["object"] == "chat.completion"
-        assert "id" in data
-        assert data["id"].startswith("chatcmpl-")
-        assert "created" in data
-        assert isinstance(data["created"], int)
-        assert data["model"] == "gaia-code"
-
-        # Verify choices
-        assert "choices" in data
-        assert len(data["choices"]) == 1
-        choice = data["choices"][0]
-        assert choice["index"] == 0
-        assert choice["message"]["role"] == "assistant"
-        assert isinstance(choice["message"]["content"], str)
-        assert len(choice["message"]["content"]) > 0
-        assert choice["finish_reason"] in ["stop", "length"]
-
-        # Verify token usage
-        assert "usage" in data
-        assert data["usage"]["prompt_tokens"] > 0
-        assert data["usage"]["completion_tokens"] > 0
-        assert data["usage"]["total_tokens"] == (
-            data["usage"]["prompt_tokens"] + data["usage"]["completion_tokens"]
-        )
 
     def test_invalid_model_returns_404(self, api_server, api_client):
         """Test that invalid model returns 404 error"""

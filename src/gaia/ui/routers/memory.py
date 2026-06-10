@@ -1017,7 +1017,9 @@ def _do_system_context_refresh() -> Dict:
     from gaia.agents.base.system_context import collect_system_info
 
     store = _get_store()
-    store.delete_by_source("system")
+    # delete_by_category matches the startup auto-refresh and the
+    # `gaia memory bootstrap --system` / --reset-system paths.
+    store.delete_by_category("system")
 
     facts = collect_system_info()
     stored = 0
@@ -1047,7 +1049,7 @@ def _do_system_context_refresh() -> Dict:
 def refresh_system_context() -> Dict:
     """Re-collect OS, hardware, installed apps, and version facts.
 
-    Deletes stale source='system' entries and stores fresh ones.
+    Deletes stale category='system' entries and stores fresh ones.
     No LLM required — runs in a few seconds.
 
     Returns ``{stored: int, skipped: bool}``.

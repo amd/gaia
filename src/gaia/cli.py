@@ -722,7 +722,9 @@ async def async_main(action, **kwargs):
                 ),
                 model_id=explicit_model,
                 device=effective_device,
-                max_steps=kwargs.get("max_steps", 100),
+                # None falls through to the global default (default_max_steps,
+                # honoring $GAIA_AGENT_MAX_STEPS) resolved in Agent.__init__.
+                max_steps=kwargs.get("max_steps"),
                 streaming=kwargs.get("stream", False),
                 show_prompts=kwargs.get("show_prompts", False),
                 show_stats=kwargs.get("show_stats", False),
@@ -823,7 +825,8 @@ async def async_main(action, **kwargs):
             claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
             base_url=kwargs.get("base_url"),
             model_id=kwargs.get("model", None),
-            max_steps=kwargs.get("max_steps", 100),
+            # None → global default (default_max_steps / env) in Agent.
+            max_steps=kwargs.get("max_steps"),
             streaming=kwargs.get("stream", False),
             show_prompts=kwargs.get("show_prompts", False),
             show_stats=kwargs.get("show_stats", False),
@@ -838,7 +841,7 @@ async def async_main(action, **kwargs):
         if registry.get(agent_id) is None:
             raise RuntimeError(
                 f"The '{action}' agent is not installed. Install it with "
-                f'`pip install {wheel}` (or `pip install "amd-gaia[agents]"` '
+                f'`uv pip install {wheel}` (or `uv pip install "amd-gaia[agents]"` '
                 f"for all agents), then re-run `gaia {action}`."
             )
         agent = registry.create_agent(agent_id, **agent_config_kwargs)
@@ -947,9 +950,11 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             log.info(f"Using remote Lemonade server: {base_url}")
             print(f"Remote Lemonade server: {base_url}")
 
-        log.info(f"Starting GAIA Agent UI on http://localhost:{port}")
-        print(f"Starting GAIA Agent UI on http://localhost:{port}")
-        print(f"   Open your browser to http://localhost:{port}")
+        # Advertise 127.0.0.1 to match the bind host below — on Windows
+        # "localhost" can resolve to IPv6 ::1 and fail against this IPv4 listener.
+        log.info(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
+        print(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
+        print(f"   Open your browser to http://127.0.0.1:{port}")
         print("   Press Ctrl+C to stop")
         print()
         if not base_url:
@@ -976,7 +981,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print("   Install them with:\n")
         print('     uv pip install -e ".[ui]"')
         print("\n   Or if you installed from PyPI:\n")
-        print("     pip install amd-gaia[ui]")
+        print('     uv pip install "amd-gaia[ui]"')
         print()
         sys.exit(1)
     except OSError as e:
@@ -1288,8 +1293,9 @@ def build_parser():
     parent_parser.add_argument(
         "--max-steps",
         type=int,
-        default=100,
-        help="Maximum conversation steps (default: 100)",
+        default=None,
+        help="Maximum conversation steps. Defaults to the global agent step "
+        "limit (50, or $GAIA_AGENT_MAX_STEPS if set).",
     )
     parent_parser.add_argument(
         "--list-tools",
@@ -1600,7 +1606,11 @@ def build_parser():
         help="Run a specific example (1-6), if not specified run interactive mode",
     )
     blender_parser.add_argument(
-        "--steps", type=int, default=5, help="Maximum number of steps per query"
+        "--steps",
+        type=int,
+        default=None,
+        help="Maximum number of steps per query. Defaults to the global agent "
+        "step limit (50, or $GAIA_AGENT_MAX_STEPS if set).",
     )
     blender_parser.add_argument(
         "--output-dir",
@@ -4850,7 +4860,7 @@ def handle_sd_command(args):
     except ImportError as e:
         raise ImportError(
             "The sd agent is not installed. Install it with "
-            "`pip install gaia-agent-sd` (or `pip install amd-gaia[agents]` for "
+            '`uv pip install gaia-agent-sd` (or `uv pip install "amd-gaia[agents]"` for '
             "all AMD agents). See https://amd-gaia.ai/docs/guides/sd."
         ) from e
 

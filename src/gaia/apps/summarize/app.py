@@ -26,7 +26,7 @@ def _load_summarizer_agent_class():
     except ImportError as e:
         raise ImportError(
             "The summarize agent is not installed. Install it with "
-            "`pip install gaia-agent-summarize` (or `pip install amd-gaia[agents]` "
+            '`uv pip install gaia-agent-summarize` (or `uv pip install "amd-gaia[agents]"` '
             "for all AMD agents). See https://amd-gaia.ai/docs/guides/summarize."
         ) from e
     return SummarizerAgent

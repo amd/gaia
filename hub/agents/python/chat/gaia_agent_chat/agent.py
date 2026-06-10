@@ -16,7 +16,7 @@ try:
 except ImportError:
     Observer = None
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
@@ -57,7 +57,7 @@ class ChatAgentConfig:
     model_id: Optional[str] = None  # None = use default model (Gemma)
 
     # Execution settings
-    max_steps: int = 10
+    max_steps: int = field(default_factory=default_max_steps)
     streaming: bool = False  # Use --streaming to enable
 
     # NPU's FLM build runs at 4K, so a device config can override the 32K ctx.

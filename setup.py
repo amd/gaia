@@ -107,6 +107,10 @@ setup(
         "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
+        # Required by the `gaia-mcp` bridge (base console_script), which parses
+        # multipart uploads via python_multipart at import time. Base — not an
+        # extra — so a plain `pip install amd-gaia` ships a working gaia-mcp.
+        "python-multipart>=0.0.9",
     ],
     extras_require={
         "image": [
@@ -188,6 +192,9 @@ setup(
             "httpx>=0.27.0,<0.29.0",
             "respx>=0.21.0,<0.24.0",
             "keyring>=24.0.0,<26.0.0",
+            # Tokenizer proxy for the tool-prompt cost harness (#1448,
+            # gaia.eval.tool_cost) so the budget test can count tokens.
+            "tiktoken>=0.7.0,<1.0.0",
         ],
         "eval": [
             "anthropic",
@@ -196,6 +203,8 @@ setup(
             "numpy>=2.0,<2.3.0",
             "pypdf",
             "reportlab",
+            # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
+            "tiktoken>=0.7.0,<1.0.0",
         ],
         "talk": [
             "sounddevice",

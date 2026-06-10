@@ -185,8 +185,8 @@ def pack(
         raise PackagerError(
             f"wheel build failed for agent {parsed.id!r} (exit {rc}).\n"
             f"{output.strip()}\n"
-            f"Ensure the build backend is installed ('pip install \"amd-gaia"
-            f"[publish]\"' or 'pip install build') and that pyproject.toml is "
+            f"Ensure the build backend is installed ('uv pip install \"amd-gaia"
+            f"[publish]\"' or 'uv pip install build') and that pyproject.toml is "
             f"valid, then re-run 'gaia agent pack'."
         )
 
@@ -246,6 +246,6 @@ def _default_runner(cmd: List[str], cwd: Path):
     except FileNotFoundError as exc:
         return 1, (
             f"could not run {cmd[0]!r}: {exc}. Install the Python build "
-            f"frontend with 'pip install \"amd-gaia[publish]\"'."
+            f"frontend with 'uv pip install \"amd-gaia[publish]\"'."
         )
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")

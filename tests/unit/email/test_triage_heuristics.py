@@ -40,6 +40,7 @@ from gaia.agents.email.tools.triage_heuristics import (
     LABEL_SPAM,
     LABEL_STARRED,
     classify_category_heuristic,
+    detect_phishing,
     group_by_category,
 )
 
@@ -406,3 +407,117 @@ class TestNewsletterKeywordFalsePositive:
         # CATEGORY_PROMOTIONS label guarantees low priority regardless of subject.
         assert result.category == CATEGORY_LOW_PRIORITY
         assert result.confident is True
+
+
+# ---------------------------------------------------------------------------
+# Multi-signal phishing detector (#1271)
+#
+# ``detect_phishing`` combines subject keyword pairs, suspicious sender-domain
+# analysis, and high-signal body phrases. These tests pin the precision-first
+# behaviour — especially the short-brand token-boundary rule that prevents
+# "irs"/"uber" from firing inside legitimate domains like firstservice.com.
+# ---------------------------------------------------------------------------
+
+
+class TestDetectPhishingSubjectChannel:
+    def test_subject_keyword_pair_flags(self):
+        assert detect_phishing(
+            subject="Verify your account immediately - click here",
+            sender="security@bank.example",
+            body="Please log in.",
+        )
+
+    def test_benign_subject_does_not_flag(self):
+        assert not detect_phishing(
+            subject="Re: lunch tomorrow?",
+            sender="alice@company.example",
+            body="Want to grab lunch at noon?",
+        )
+
+
+class TestDetectPhishingSenderDomainChannel:
+    def test_number_substitution_domain_flags(self):
+        # amaz0n with a 0-for-o substitution.
+        assert detect_phishing(
+            subject="Account notice",
+            sender="noreply@amaz0n-security.net",
+            body="Review your account.",
+        )
+
+    def test_suspicious_tld_flags(self):
+        # Unknown org on a .tk domain.
+        assert detect_phishing(
+            subject="Hello",
+            sender="x@company-helpdesk.tk",
+            body="Update needed.",
+        )
+
+    def test_brand_plus_alert_suffix_flags(self):
+        assert detect_phishing(
+            subject="Notice",
+            sender="helpdesk@dropbox-security-alert.com",
+            body="Security breach.",
+        )
+
+    def test_legit_allowlisted_sld_never_flags(self):
+        # docusign.net is allowlisted even though the TLD is .net.
+        assert not detect_phishing(
+            subject="Please review and sign the NDA",
+            sender="dse_na4@docusign.net",
+            body="Review the document.",
+        )
+
+
+class TestDetectPhishingShortBrandTokenBoundary:
+    """Short brands (<= 4 chars) must match only on a word-token boundary,
+    never as a raw substring — otherwise they fire inside unrelated words."""
+
+    def test_irs_does_not_fire_inside_firstservice(self):
+        # 'firstservice' contains the substring 'irs' (f-IRS-t...) but is a
+        # legitimate property-management company — must NOT flag.
+        assert not detect_phishing(
+            subject="Your community newsletter",
+            sender="news@firstservice.com",
+            body="Monthly community update.",
+        )
+
+    def test_irs_does_not_fire_inside_firstalert(self):
+        assert not detect_phishing(
+            subject="Battery reminder",
+            sender="alerts@firstalert.com",
+            body="Test your smoke detectors.",
+        )
+
+    def test_uber_does_not_fire_inside_uberflip(self):
+        assert not detect_phishing(
+            subject="Weekly analytics",
+            sender="reports@uberflip.com",
+            body="Your content hub analytics are ready.",
+        )
+
+    def test_irs_fires_as_standalone_token(self):
+        # 'irs-gov-refunds' has 'irs' as a standalone token → flag.
+        assert detect_phishing(
+            subject="Tax refund available",
+            sender="refund@irs-gov-refunds.com",
+            body="Verify your account and banking details to receive your refund.",
+        )
+
+
+class TestDetectPhishingBodyChannel:
+    def test_body_pair_flags_even_with_clean_subject_and_sender(self):
+        # Subject + sender are unremarkable; only the body betrays it.
+        assert detect_phishing(
+            subject="Important notice",
+            sender="info@some-host.com",
+            body="To receive your refund you must verify your account and "
+            "provide your banking details.",
+        )
+
+    def test_high_signal_body_phrase_flags(self):
+        assert detect_phishing(
+            subject="Security notice",
+            sender="info@some-host.com",
+            body="Hackers have your credentials. Transfer to a protected "
+            "account immediately.",
+        )
