@@ -1383,7 +1383,7 @@ class TestEmailSendConfirmationGate:
         repo_root = Path(__file__).resolve().parent.parent
         if str(repo_root) not in sys.path:
             sys.path.insert(0, str(repo_root))
-        from gaia.api import email_routes
+        from gaia_agent_email import api_routes as email_routes
         from tests.fixtures.email.fake_gmail import FakeGmailBackend
 
         self.fake_backend = FakeGmailBackend()
@@ -1512,7 +1512,7 @@ class TestEmailSendConfirmationGate:
         resolved: a no-token send returns 403 even when the backend is
         unavailable (would otherwise 503). The gate must never be masked by
         backend health."""
-        from gaia.api import email_routes
+        from gaia_agent_email import api_routes as email_routes
 
         def _boom():
             raise AssertionError("backend resolved before the gate — gate bypassed")

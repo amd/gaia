@@ -202,7 +202,7 @@ class TestRestLayerGate:
     def _send(self, request):
         import anyio
 
-        from gaia.api import email_routes
+        from gaia_agent_email import api_routes as email_routes
 
         return anyio.run(email_routes.send_email, request)
 
@@ -220,7 +220,7 @@ class TestRestLayerGate:
         import anyio
         from gaia_agent_email.api_routes import EmailDraftRequest, EmailSendRequest
 
-        from gaia.api import email_routes
+        from gaia_agent_email import api_routes as email_routes
 
         backend = _FakeRestBackend()
         monkeypatch.setattr(email_routes, "resolve_send_backend", lambda: backend)
@@ -250,7 +250,7 @@ class TestRestLayerGate:
         from fastapi import HTTPException
         from gaia_agent_email.api_routes import EmailDraftRequest, EmailSendRequest
 
-        from gaia.api import email_routes
+        from gaia_agent_email import api_routes as email_routes
 
         backend = _FakeRestBackend()
         monkeypatch.setattr(email_routes, "resolve_send_backend", lambda: backend)
@@ -363,7 +363,7 @@ class TestCrossSurfaceInvariant:
         from gaia_agent_email.api_routes import EmailSendRequest
         from gaia_agent_email.mcp_server import EmailTriageMCPAgent
 
-        from gaia.api import email_routes
+        from gaia_agent_email import api_routes as email_routes
 
         refusals: Dict[str, bool] = {}
 

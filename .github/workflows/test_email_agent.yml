@@ -54,7 +54,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system -e .[dev]
+          # [api] adds fastapi/uvicorn — the email REST-spec tests
+          # (test_spec_html.py) import the contract's api_routes module.
+          uv pip install --system -e .[dev,api]
           # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102)
           uv pip install --system -e hub/agents/python/email
 
@@ -74,4 +76,5 @@ jobs:
             tests/unit/agents/test_email_agent_tools.py \
             tests/unit/agents/test_email_llm_triage.py \
             tests/unit/test_email_cli.py \
+            tests/integration/test_never_auto_send.py \
             -v --tb=short
