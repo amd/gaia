@@ -286,25 +286,16 @@ runs:
 
             Reconcile-LemonadeVersion -Expected $expected
 
-            # An MSI version change swaps the server exe but leaves the
-            # versioned llama.cpp backend cached under ``%USERPROFILE%\.cache\
-            # lemonade\bin`` (lemonade ``path_utils.cpp`` get_cache_dir /
-            # get_downloaded_bin_dir). A *downgraded* server then can't spawn
-            # the stale newer backend -- the load fails with ``llama-server
-            # failed to start``. Wipe the backend cache so the pinned version
-            # reinstalls a matching one. GGUF weights live in the separate
-            # HuggingFace hub cache (``%USERPROFILE%\.cache\huggingface\hub``)
-            # and are untouched, so only the small backend is re-fetched, never
-            # the models. Runs whenever the action reconciles (a drifted *or*
-            # missing install); a version-matched runner skips this block
-            # entirely and pays nothing.
+            # A reconcile swaps the server exe but leaves the versioned llama.cpp
+            # backend cached; a downgraded server can't spawn the stale one
+            # ("llama-server failed to start"), so wipe it for a matching reinstall.
+            # Models live in the HF hub cache, not here, so only the backend re-downloads.
             $cacheRoots = @(
                 "$env:USERPROFILE\.cache\lemonade",
                 "C:\windows\system32\config\systemprofile\.cache\lemonade"
             )
             if ($env:LEMONADE_CACHE_DIR) { $cacheRoots += $env:LEMONADE_CACHE_DIR }
-            # Case-insensitive dedup (Windows paths) while preserving original
-            # casing for the log line -- Select-Object -Unique alone is case-sensitive.
+            # Case-insensitive dedup (Windows paths); Select-Object -Unique is case-sensitive.
             $seenRoots = @{}
             foreach ($root in ($cacheRoots | Where-Object { $_ })) {
                 $rootKey = $root.ToLowerInvariant()
@@ -313,10 +304,7 @@ runs:
                 $backendDir = Join-Path $root "bin"
                 if (Test-Path $backendDir) {
                     Write-Host "Reconcile: clearing stale llama.cpp backend cache at $backendDir"
-                    # Fail loud: a swallowed wipe (e.g. a DLL locked by a stray
-                    # llama-server) would leave the stale backend in place and
-                    # the next load would fail with the same "llama-server
-                    # failed to start" -- with no signal pointing back here.
+                    # Fail loud: a swallowed wipe leaves the stale backend and the load fails the same opaque way.
                     try {
                         Remove-Item $backendDir -Recurse -Force -ErrorAction Stop
                     } catch {
