@@ -487,7 +487,7 @@ class TestTokenResolver:
         assert token == "CAL-TOK-123"
         # Uses the microsoft connector + the email agent's namespaced id.
         assert captured["connector_id"] == "microsoft"
-        assert captured["agent_id"] == "builtin:email"
+        assert captured["agent_id"] == "installed:email"
         # Requests the Graph Calendars scope (NOT the mail scope).
         assert any("graph.microsoft.com/Calendars" in s for s in captured["scopes"])
 

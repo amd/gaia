@@ -62,7 +62,7 @@ def _forward_body(**overrides):
         "refresh_token": FWD_REFRESH,
         "scopes": FULL_SCOPES,
         "account_email": "alice@example.com",
-        "grant_agents": ["builtin:email"],
+        "grant_agents": ["installed:email"],
     }
     body.update(overrides)
     return body
@@ -181,7 +181,7 @@ class TestAgentActsAfterForward:
         from gaia.connectors.api import get_access_token
 
         token = await get_access_token(
-            provider="google", scopes=FULL_SCOPES, agent_id="builtin:email"
+            provider="google", scopes=FULL_SCOPES, agent_id="installed:email"
         )
         assert token == "STUB-ACCESS"
         assert FWD_CLIENT_ID in captured["body"]

@@ -41,7 +41,6 @@ if str(_REPO_ROOT) not in sys.path:
 
 # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
 # skip when a framework-only env lacks it.
-import pytest  # noqa: E402
 
 pytest.importorskip("gaia_agent_email")  # noqa: E402
 from gaia_agent_email.tools import read_tools  # noqa: E402

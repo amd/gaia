@@ -35,9 +35,6 @@ import os
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
-from gaia.agents.base.agent import Agent
-from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia_agent_email import action_store
 from gaia_agent_email.config import EmailAgentConfig
 from gaia_agent_email.outlook_scopes import (
@@ -59,6 +56,10 @@ from gaia_agent_email.tools.preference_tools import (
 from gaia_agent_email.tools.read_tools import ReadToolsMixin
 from gaia_agent_email.tools.reply_tools import ReplyToolsMixin
 from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
+
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME

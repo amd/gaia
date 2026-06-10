@@ -25,7 +25,6 @@ if str(_REPO_ROOT) not in sys.path:
 
 # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
 # skip when a framework-only env lacks it.
-import pytest  # noqa: E402
 
 pytest.importorskip("gaia_agent_email")  # noqa: E402
 from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
@@ -83,7 +82,7 @@ class TestConstruction:
         assert agent.AGENT_NAME == "Email Triage"
 
     def test_namespaced_id_constant(self):
-        assert AGENT_NAMESPACED_ID == "builtin:email"
+        assert AGENT_NAMESPACED_ID == "installed:email"
 
     def test_required_connectors_well_formed(self):
         # Two providers are declared: Google (Gmail #962 + Calendar) and
@@ -277,7 +276,9 @@ class TestRegistryIntegration:
         from gaia.agents.registry import AgentRegistry
 
         reg = AgentRegistry()
-        reg._register_builtin_agents()
+        # email ships as the standalone gaia-agent-email wheel (#1102); it is
+        # registered via entry-point discovery, not as a built-in.
+        reg.discover()
         assert "email" in {r.id for r in reg.list()}
 
         with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:

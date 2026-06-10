@@ -563,7 +563,7 @@ class TestTokenResolver:
         assert token == "TOK-123"
         # Uses the microsoft connector + the email agent's namespaced id.
         assert captured["connector_id"] == "microsoft"
-        assert captured["agent_id"] == "builtin:email"
+        assert captured["agent_id"] == "installed:email"
         # Requests at least Mail.Read / Mail.ReadWrite (the Graph mail scopes).
         assert any("graph.microsoft.com/Mail" in s for s in captured["scopes"])
 
