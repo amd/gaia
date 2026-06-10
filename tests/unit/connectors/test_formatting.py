@@ -79,7 +79,7 @@ def test_format_connector_error_email_agent_grant_migration():
     err = AuthRequiredError(
         AuthRequiredError.Reason.AGENT_NOT_GRANTED,
         provider="google",
-        agent_id="builtin:email",
+        agent_id="installed:email",
         missing_scopes=["https://www.googleapis.com/auth/gmail.modify"],
     )
     msg = format_connector_error(err)

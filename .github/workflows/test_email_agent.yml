@@ -1,0 +1,83 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Tests the GAIA Email agent, which ships as the standalone gaia-agent-email
+# wheel (#1102).
+
+name: Email Agent Tests
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+    paths:
+      - 'hub/agents/python/email/**'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/agents/tools/**'
+      - 'setup.py'
+      - '.github/workflows/test_email_agent.yml'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'hub/agents/python/email/**'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/agents/tools/**'
+      - 'setup.py'
+      - '.github/workflows/test_email_agent.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-email-agent:
+    name: Test Email Agent
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          # [api] adds fastapi/uvicorn — the email REST-spec tests
+          # (test_spec_html.py) import the contract's api_routes module.
+          uv pip install --system -e .[dev,api]
+          # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102)
+          uv pip install --system -e hub/agents/python/email
+
+      - name: Run Email Agent Tests
+        run: |
+          # Hub package smoke tests + the repo-side email unit suite, which
+          # importorskips without the wheel and runs here with it installed.
+          python -m pytest \
+            hub/agents/python/email/tests/ \
+            tests/unit/agents/email/ \
+            tests/unit/email/ \
+            tests/unit/agents/test_email_agent.py \
+            tests/unit/agents/test_email_agent_confirmation.py \
+            tests/unit/agents/test_email_agent_local_llm_enforcement.py \
+            tests/unit/agents/test_email_agent_prompt_injection.py \
+            tests/unit/agents/test_email_agent_soft_delete.py \
+            tests/unit/agents/test_email_agent_tools.py \
+            tests/unit/agents/test_email_llm_triage.py \
+            tests/unit/test_email_cli.py \
+            tests/integration/test_never_auto_send.py \
+            tests/integration/test_email_rest_api_e2e.py \
+            tests/test_api.py::TestEmailTriageEndpoint \
+            tests/test_api.py::TestEmailSendConfirmationGate \
+            -v --tb=short

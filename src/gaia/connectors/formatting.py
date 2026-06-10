@@ -37,7 +37,7 @@ from gaia.connectors.errors import (
 # first organize/trash/send tool call raises ``AGENT_NOT_GRANTED`` and we
 # want them to see exactly how to fix it).
 _AGENT_GRANT_MIGRATION_MESSAGES: Dict[str, str] = {
-    "builtin:email": (
+    "installed:email": (
         "Email agent needs additional Google permissions "
         "(gmail.modify, gmail.send, calendar.events). "
         "Open Settings → Connectors → Google → Reconnect to grant the "

@@ -12,9 +12,9 @@ from __future__ import annotations
 
 # Public namespace this agent uses for grant-ledger lookups. MUST agree with
 # the registration in ``gaia.agents.registry`` (the registry uses
-# ``builtin:email`` for built-in agents). The same string is used as the key
+# ``installed:email`` for built-in agents). The same string is used as the key
 # for the email-agent grant-migration message in ``gaia.connectors.formatting``.
-AGENT_NAMESPACED_ID = "builtin:email"
+AGENT_NAMESPACED_ID = "installed:email"
 
 
 # ---------------------------------------------------------------------------

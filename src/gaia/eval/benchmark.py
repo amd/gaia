@@ -452,9 +452,19 @@ def run_benchmark(
         if agent_factory is not None:
             agent = agent_factory()
         else:
-            # Lazy import: keep `import gaia.eval.benchmark` free of the agent stack.
-            from gaia.agents.email.agent import EmailTriageAgent
-            from gaia.agents.email.config import EmailAgentConfig
+            # Lazy import: keep `import gaia.eval.benchmark` free of the agent
+            # stack. EmailTriageAgent ships as the standalone gaia-agent-email
+            # wheel (#1102).
+            try:
+                from gaia_agent_email.agent import EmailTriageAgent
+                from gaia_agent_email.config import EmailAgentConfig
+            except ImportError as exc:
+                raise RuntimeError(
+                    "The email throughput benchmark needs the email agent. "
+                    "Install it with `pip install gaia-agent-email` (or "
+                    '`pip install "amd-gaia[agents]"`). '
+                    f"Original import error: {exc}"
+                ) from exc
 
             try:
                 from tests.fixtures.email.fake_gmail import FakeGmailBackend
