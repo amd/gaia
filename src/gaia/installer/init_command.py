@@ -144,6 +144,12 @@ class InitCommand:
     4. Verify setup
     """
 
+    # Per-model context verification state, set dynamically during model
+    # verification. Declared here (without assignment) so its *absence* on the
+    # instance keeps meaning "verification not attempted" while satisfying the
+    # pylint attribute-defined-outside-init check.
+    _ctx_verified: "Optional[int]"
+
     def __init__(
         self,
         profile: str = "chat",
