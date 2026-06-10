@@ -175,7 +175,7 @@ class ForwardConnectionRequest(BaseModel):
     ``refresh_token`` / ``client_secret`` are secret INPUTS — they are never
     echoed back in any response. ``account_email`` is display-only in v1
     (the keyring slot is single-account per provider). ``grant_agents`` is
-    the list of namespaced agent ids (e.g. ``builtin:email``) to grant the
+    the list of namespaced agent ids (e.g. ``installed:email``) to grant the
     forwarded scopes so they can resolve the connection ambiently.
     """
 
