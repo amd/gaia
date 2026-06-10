@@ -993,7 +993,9 @@ class ChatDatabase:
                 (result_id, task_id, executed_at, result, error),
             )
 
-    def get_schedule_results(self, task_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_schedule_results(
+        self, task_id: str, limit: int = 20
+    ) -> List[Dict[str, Any]]:
         """Get past execution results for a task, newest first."""
         with self._lock:
             rows = self._conn.execute(

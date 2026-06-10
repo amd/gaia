@@ -649,8 +649,12 @@ class TestScheduledTaskStorage:
 
     def test_store_and_get_results_ordered_desc(self, db):
         db.create_scheduled_task(self._task_row())
-        db.store_schedule_result("r-1", "t-1", "2026-06-09T01:00:00+00:00", "first", None)
-        db.store_schedule_result("r-2", "t-1", "2026-06-09T02:00:00+00:00", "second", None)
+        db.store_schedule_result(
+            "r-1", "t-1", "2026-06-09T01:00:00+00:00", "first", None
+        )
+        db.store_schedule_result(
+            "r-2", "t-1", "2026-06-09T02:00:00+00:00", "second", None
+        )
         results = db.get_schedule_results("t-1", limit=10)
         assert [r["result"] for r in results] == ["second", "first"]
 
