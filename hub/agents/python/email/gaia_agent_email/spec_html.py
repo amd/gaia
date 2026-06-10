@@ -20,7 +20,7 @@ from typing import Any, List, Optional, Tuple, Type, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
-from gaia.agents.email.contract import (
+from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
     DraftReply,
@@ -355,7 +355,7 @@ def render_endpoint_spec_html() -> str:
     # lazily here to keep this module's load surface free of FastAPI and to
     # avoid any import-order coupling with email_routes (which imports this
     # module lazily for its GET /spec page).
-    from gaia.api.email_routes import (
+    from gaia_agent_email.api_routes import (
         EmailDraftRequest,
         EmailDraftResponse,
         EmailSendRequest,
@@ -402,7 +402,7 @@ def render_endpoint_spec_html() -> str:
 </h1>
 <p class="subtitle">
   REST endpoint specification derived from the frozen #1262 contract
-  (<code>gaia.agents.email.contract</code>).
+  (<code>gaia_agent_email.contract</code>).
   Field descriptions are sourced directly from the pydantic models and stay
   in sync with the contract automatically.
 </p>
