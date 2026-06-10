@@ -1,0 +1,146 @@
+---
+title: "v0.20.1"
+description: "Patch release: bug fixes and security hardening on top of v0.20.0 — a broken optional dependency that crashed agents at import, a clean-install gaia-mcp failure, the Windows app not reopening after auto-upgrade, a low step cap that stalled agents, plus SSRF and XSS hardening."
+---
+
+# GAIA v0.20.1 Release Notes
+
+GAIA v0.20.1 is a patch release focused on bug fixes and security hardening on top of v0.20.0. It clears several crashes and regressions — a broken optional dependency that could take down every agent at import, `gaia-mcp` failing on a clean install, the Windows app not reopening after an auto-upgrade, and agents stopping mid-task on a step cap set too low — and tightens security with an SSRF DNS-rebind fix and a high-severity XSS dependency patch.
+
+**Why upgrade:**
+- **No import-time crash from a broken optional dependency** — if the optional RAG stack was installed but a native library couldn't load, every agent died at import even when RAG was never used. The import is now guarded.
+- **`gaia-mcp` works on a clean install** — a missing base dependency made `gaia-mcp` fail with `ModuleNotFoundError` right after `pip install amd-gaia`. Fixed.
+- **Windows app reopens after auto-upgrade** — an orphaned backend held a handle on `gaia.exe` and broke the upgrade; it's now cleared first.
+- **Agents don't stall mid-task** — the per-step cap was hardcoded low in most places, so agents stopped on routine work; it's raised and centralized on one default.
+- **Security hardening** — SSRF DNS-rebind protection (the IP is now pinned across check and connect) and a patched high-severity XSS dependency in the EMR dashboard.
+
+---
+
+## In Progress
+
+This release also lands groundwork for several larger features that are **not yet complete and aren't enabled as headline capabilities**: the email agent (phishing detection, Outlook.com mail and calendar, full-thread reading), the Microsoft/Outlook connectors, and a real-model behavior eval harness. That work is in the tree and shows up in the changelog below, but it isn't ready to ship — it will be featured in a future release once it's done.
+
+---
+
+## Key Changes
+
+Every shipped change in v0.20.1 is a bug fix or security/hardening fix on top of v0.20.0.
+
+- **Builder silently created nothing ~40% of the time** (PR [#1430](https://github.com/amd/gaia/pull/1430)) — The builder returned "Agent Created!" while writing nothing to disk: the model wrapped its `create_agent` call in a fenced JSON block, and the parser skipped all fenced JSON to avoid grabbing documentation examples, so the tool never ran. Fenced tool-call extraction is now resilient, and four UI sites that swallowed tool errors now surface them.
+- **Builder MCP-only flow ignored the requested persona** (PR [#1533](https://github.com/amd/gaia/pull/1533), closes [#1532](https://github.com/amd/gaia/issues/1532)) — The MCP-only builder flow always scaffolded the built-in placeholder persona regardless of the request; it now authors the persona the user actually asked for.
+- **A broken native dependency crashed every agent at import** (PR [#1534](https://github.com/amd/gaia/pull/1534)) — If the optional RAG stack was installed but a native library (e.g. an arch-mismatched faiss, or FFmpeg via sentence-transformers) couldn't load, `gaia chat` and every other agent died at import time even when RAG was never used. The import is now guarded.
+- **SSRF DNS-rebind hardening** (PR [#1299](https://github.com/amd/gaia/pull/1299)) — The pre-flight IP allow-check and the actual TCP connect did separate DNS lookups, so a host could answer the check with a public IP and the connect with an internal one. The resolved IP is now pinned and validated through a single authority.
+- **Agents ran out of steps mid-task** (PR [#1389](https://github.com/amd/gaia/pull/1389)) — The per-step cap was hardcoded low in most places (10, sometimes 5–6) while the CLI used 100, so the browser and other agents would stop on routine work and ask to be re-run with `--max-steps`. The cap is raised and centralized on one global default.
+- **Windows app wouldn't open after auto-upgrade** (PR [#1392](https://github.com/amd/gaia/pull/1392)) — A previous backend left a handle open on `gaia.exe`, so the upgrade's `uv pip install --refresh` failed with `os error 32`. The orphaned backend is now killed before upgrade.
+- **Memory reported the old version after upgrade** (PR [#1390](https://github.com/amd/gaia/pull/1390)) — System-context refresh was a pure 7-day age check with no upgrade trigger, so the memory system kept reporting the pre-upgrade version. It now refreshes on install/upgrade.
+- **`gaia-mcp` crashed on a clean install** (PR [#1380](https://github.com/amd/gaia/pull/1380)) — `python-multipart` was declared only in the `api`/`ui` extras, so a bare `pip install amd-gaia` left `gaia-mcp` failing with `ModuleNotFoundError`. It's now a base dependency.
+- **`gaia init` failed in uv venvs with doubled text** (PR [#1527](https://github.com/amd/gaia/pull/1527)) — Inside a uv-created venv, `gaia init` printed a garbled `pip install pip install "amd-gaia"` warning and silently skipped the `[rag]` extra. Both are fixed.
+- **Agent UI advertised an unreachable URL on Windows** (PR [#1519](https://github.com/amd/gaia/pull/1519), closes [#1471](https://github.com/amd/gaia/issues/1471)) — `gaia chat --ui` binds to `127.0.0.1` but advertised `localhost`, which can resolve to IPv6 `::1` first on Windows and fail to reach the IPv4-only listener. Advertised URLs now match the bind address.
+- **Two LLMs left resident when building an agent** (PR [#1383](https://github.com/amd/gaia/pull/1383)) — Clicking "Build a Custom Agent" loaded the larger model without evicting the pre-loaded chat model, leaving both resident. The resident model is now unloaded before the swap.
+- **High-severity XSS in the EMR dashboard dependency** (PR [#1453](https://github.com/amd/gaia/pull/1453), closes [#1420](https://github.com/amd/gaia/issues/1420)) — `@remix-run/router` was pulled in transitively at a version exposed to a high-severity open-redirect XSS advisory; bumped to the patched release.
+
+---
+
+## Tooling, Testing & CI
+
+- **Behavior-E2E in CI on a self-hosted Strix Halo runner** (PRs [#1535](https://github.com/amd/gaia/pull/1535), [#1431](https://github.com/amd/gaia/pull/1431)) — the real-model behavior harness runs its steps in PowerShell on the Windows Strix Halo runner.
+- **Email CI gate + nightly report-mode eval** (PR [#1362](https://github.com/amd/gaia/pull/1362)) — a unit-test PR gate, a report-mode nightly eval, and the C++ build scaffold for email.
+- **Labelled email-triage corpus + baselines** (PR [#1322](https://github.com/amd/gaia/pull/1322)) — a 220-message synthetic corpus with ground truth replaces a 10-message stub and a baseline that had been measured against the wrong model.
+- **Never-auto-send guard consolidated across surfaces** (PR [#1360](https://github.com/amd/gaia/pull/1360)) and **pre-scan cheap-counts guarantee locked** (PR [#1356](https://github.com/amd/gaia/pull/1356)).
+- **Cleared pre-existing pylint/mypy debt blocking CI** (PR [#1402](https://github.com/amd/gaia/pull/1402)) and **fixed mcp test library shadowing + a dangling summarizer CI step** (PRs [#1443](https://github.com/amd/gaia/pull/1443), [#1445](https://github.com/amd/gaia/pull/1445)).
+- **Auto-fix opens a PR by default** (PR [#1391](https://github.com/amd/gaia/pull/1391)) instead of posting comment patches.
+- **Installer repo-root resolution locked in launcher scripts** (PR [#1395](https://github.com/amd/gaia/pull/1395)).
+- **Specs updated** — dynamic tool-loader (PR [#1447](https://github.com/amd/gaia/pull/1447)) and the agent skills format (PR [#1399](https://github.com/amd/gaia/pull/1399)).
+
+---
+
+## Full Changelog
+
+**84 commits** since v0.20.0:
+
+- `568bfc57` — feat(hub): publish agent wheels to PyPI (dual R2 + PyPI) (#1179) (#1454)
+- `31c0371f` — test(installer): lock repo-root resolution in bash launcher scripts (#1395)
+- `dcc3d69f` — fix(builder): MCP-only flow with reliable persona authoring (#1532) (#1533)
+- `aab8f41e` — ci(behavior-e2e): run steps in PowerShell on the Windows strix-halo runner (#1535)
+- `cec000eb` — chore(deps-dev): bump electron from 42.3.0 to 42.3.3 in /src/gaia/apps/jira/webui in the jira-app-dependencies group across 1 directory (#1424)
+- `bf0d3e52` — chore(deps-dev): bump electron from 42.3.0 to 42.3.3 in /src/gaia/apps/example/webui in the example-app-dependencies group across 1 directory (#1423)
+- `56fd1eb9` — chore(deps): bump electron from 42.2.0 to 42.3.3 in /hub/agents/python/emr/gaia_agent_emr/dashboard/electron in the emr-dashboard-dependencies group across 1 directory (#1422)
+- `de7c501a` — fix(rag): don't let a broken native dep crash every agent import (#1534)
+- `8303a1a2` — fix(security,agents): harden SSRF DNS-rebind, fail loudly, cover untested modules (#1299)
+- `0721f9fe` — fix(agents): raise step limit and centralize on one global default (#1389)
+- `020960fa` — fix(ui): kill orphaned backend before upgrade to free gaia.exe on Windows (#1392)
+- `5a2e6420` — fix(memory): refresh system version facts on upgrade (#1390)
+- `bbf7062a` — fix(deps): make python-multipart a base dependency for gaia-mcp (#1380)
+- `5e6f0315` — fix(init): make extras install work in uv venvs and fix doubled pip text (#1527)
+- `f7fbd316` — fix(cli): advertise 127.0.0.1 for Agent UI to match bind host (#1519)
+- `f1533ee2` — chore(deps): bump the github-actions group across 1 directory with 4 updates (#1530)
+- `c477e8e8` — chore(deps): bump the agent-ui-dependencies group across 1 directory with 15 updates (#1531)
+- `0c197ef3` — docs(plans): add Agent Hub 22-agent enablement spec (#1457)
+- `cc1e32eb` — fix(deps): bump @remix-run/router to patch XSS in emr dashboard (#1420) (#1453)
+- `a81dd838` — docs(spec): consolidate and correct the dynamic tool-loader spec (#688) (#1447)
+- `91b476e0` — test(eval): behavior-E2E harness — assert tool side-effects against real model (#1431)
+- `1bc4f0ea` — test+ci: fix tests/unit/mcp library shadowing and dangling summarizer CI invocation (#1443)
+- `dba18bb3` — ci: remove stale summarizer step from Windows and Linux workflows (#1445)
+- `468c8714` — feat(email): phishing detection + reversible quarantine, CI-gated ≥90% precision (#1271) (#1434)
+- `53cdb152` — refactor(agents): migrate analyst + browser to hub (#1102) (#1446)
+- `bc0eb0a7` — feat(email): sharpen 4-way categorization (+8.6pp accuracy) (#1266) (#1436)
+- `c8b9aefe` — feat(email): on-device E2B (NPU/FLM) model integration (#1282) (#1433)
+- `e3a67dde` — fix(agents): resilient fenced tool-call extraction + builder fail-loudly (#1430)
+- `30d56543` — refactor(agents): migrate connectors-demo to hub (#1102) (#1442)
+- `3cb3caf5` — feat(email): browser-openable HTML endpoint spec (#1263) (#1432)
+- `d5e606aa` — refactor(agents): migrate code to hub (#1397, #1102) (#1421)
+- `9d31f42a` — refactor(agents): migrate emr to hub (#1397, #1102) (#1419)
+- `dfe2bbbd` — refactor(agents): consolidate regular/lite variants into single agents with model tier (#1162) (#1418)
+- `c07e13c6` — refactor(agents): migrate sd/docker/jira/fileio/blender to hub/ (#1397, #1102) (#1417)
+- `9fc6446f` — feat(hub): agent lifecycle (configure/health/status) + resumable parallel installs (#465, #468) (#1416)
+- `40aefc6e` — feat(hub): gaia agent pack + dual-publish to R2 and PyPI (#1093, #1179) (#1415)
+- `fb285b03` — feat(hub): security tiers, deprecation, and native-agent trust (#1100) (#1414)
+- `2ed01603` — feat(agents): example reference agents for the Agent Hub (#546) (#1413)
+- `63aa0b9c` — feat(cli): gaia agent init/version/test developer workflow (#1098, #1099) (#1412)
+- `9ac90f93` — feat(hub): backend catalog + install/uninstall/rollback API (#1096) (#1411)
+- `542102a4` — feat(webui): Agent Hub Installed/Available tabs + install flow (#1097) (#1410)
+- `8b206e74` — feat(hub): R2 bucket structure + Cloudflare Worker publish API (#1095) (#1409)
+- `5fb7f0d2` — refactor(agents): hub/agents restructure foundation + summarize reference (#1102) (#1407)
+- `7b384a74` — chore(deps-dev): bump electron from 42.2.0 to 42.3.0 in /src/gaia/apps/example/webui in the example-app-dependencies group (#1312)
+- `d037146a` — chore(deps-dev): bump electron from 42.2.0 to 42.3.0 in /src/gaia/apps/jira/webui in the jira-app-dependencies group (#1311)
+- `09938387` — ci(cpp): cross-compile matrix + static binary packaging for C++ agents (#1094) (#1406)
+- `dc39106e` — docs(spec): legacy agent modernization for Agent Hub (#1397) (#1398)
+- `ca7f5c84` — feat(website): Agent Hub browse/discover pages (#1178) (#1405)
+- `dd5c5912` — feat(hub): native C++ agent subprocess launcher (JSON-RPC stdio) (#1092) (#1404)
+- `d12332a9` — feat(agents): framework generic server — 5-interface standard for agents (#1101) (#1403)
+- `b8803cf2` — refactor(agents): promote shared tool mixins to framework (#1396) (#1401)
+- `1a625841` — feat(hub): gaia-agent.yaml manifest parser and validator (#1091) (#1400)
+- `bbc6f0ee` — docs(spec): agent skills format and integration (#285) (#1399)
+- `f2e5c7e4` — fix(lint): clear pre-existing pylint/mypy debt blocking CI (#1402)
+- `6b316f80` — ci(claude): make auto-fix open a PR by default instead of comment patches (#1391)
+- `831d63eb` — fix(ui): render pre-scan card once + plumb mail_provider for Outlook routing (#1387)
+- `39cda801` — fix(email): bound thread transcript + thread-specific summary prompt (#1268 follow-up) (#1378)
+- `c13598c8` — ci(email): unit-test PR gate + report-mode nightly eval + C++ build scaffold (#1362)
+- `dda03ebe` — feat(eval): perf metrics export + report-mode Strix Halo perf gate (#1361)
+- `49b1e44d` — test(email): consolidated cross-surface never-auto-send guard (#1360)
+- `947a11e7` — test(email): lock pre-scan cheap-counts guarantee (#1356)
+- `0c0cf7cf` — feat(email): create calendar events from email context (#1355)
+- `790160a4` — feat(email): Outlook.com personal calendar connector (MS Graph) (#1358)
+- `8607002b` — fix(connectors): provider-aware forwarded-connection scope validation (#1381)
+- `d6ed8052` — feat(mcp): add stdio transport to AgentMCPServer + email REST/MCP parity (#1357)
+- `3475bc43` — feat(email): calendar conflict detection (#1353)
+- `505e9fd9` — feat(email): Outlook.com personal mailbox connector via MS Graph (#1354)
+- `b7cd29e9` — feat(email): full-thread reading & comprehension (#1352)
+- `50a1f54e` — test(email): add summarize_message to EXPECTED_TOOLS allowlist
+- `465f86d0` — chore(email): remove per-issue plan docs from email-agent branch
+- `74c03ea7` — feat(email): per-email summarization tool (#1348)
+- `17303487` — fix(email): reset batch-organize counter across process_query calls (#1345)
+- `de652ba5` — feat(eval): quality & connection metrics export + report-mode FP/FN gate (#1359)
+- `b6f8e660` — feat(email): REST API surface for the agent (single email in, structured out) (#1351)
+- `53b2a490` — feat(email): detect meeting requests in email body (#1350)
+- `00451288` — feat(connectors): Microsoft OAuth provider for MS Graph (consumers tenant) (#1347)
+- `7d82f106` — feat(email): reversible batch archive (20+ emails in one action) (#1349)
+- `d5581478` — feat(connectors): configure OAuth creds via CLI flags (no Agent UI) (#1346)
+- `b596ed65` — feat(eval): labelled email-triage corpus + Gemma-4 categorization baselines (#1322)
+- `2829d265` — feat(connectors): forward a pre-authenticated provider connection via API (no re-auth) (#1321)
+- `a9aa01c0` — feat(email): request/response contract schema (single email + thread) (#1320)
+- `49b3e53e` — feat(email): LLM-assisted triage classification for low-confidence messages
+- `7a56ba49` — feat(eval): email-triage throughput benchmark + reusable eval stats/metrics
+- `33db1047` — fix(ui): unload resident model before swapping in the chat load path (#1382) (#1383)
+
+Full Changelog: [v0.20.0...v0.20.1](https://github.com/amd/gaia/compare/v0.20.0...v0.20.1)

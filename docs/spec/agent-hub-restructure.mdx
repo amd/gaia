@@ -155,7 +155,12 @@ Replace ~16 direct agent imports in `cli.py`, `ui/_chat_helpers.py`, `ui/agent_l
 `src/gaia/agents/base/server.py` wraps any Agent into REST API + MCP server. Enables `gaia agent run <id> --api` and `--mcp`.
 </Step>
 <Step title="Add CI/CD workflow">
-`.github/workflows/build_agents.yml` — matrix-builds all agent wheels + C++ binaries, runs `gaia agent test --lint`, publishes to R2 + PyPI on tag.
+`.github/workflows/build_agents.yml` matrix-builds the C++ agent binaries;
+`.github/workflows/publish_agents.yml` matrix-builds every Python agent wheel
+(matrix derived from `setup.py`'s `agents` extra via
+`util/list_agent_packages.py`) and publishes it to PyPI on a `v*` tag using
+`pypa/gh-action-pypi-publish` with `skip-existing: true` (PyPI-native version
+immutability). R2 publishing is handled at author time by `gaia agent publish`.
 </Step>
 <Step title="Relocate tests">
 Move agent-specific tests to `hub/agents/python/{id}/tests/`. Framework tests stay in `tests/`.
