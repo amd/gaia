@@ -9,6 +9,7 @@ import { compareSemver } from "./manifest";
 import {
   listAgentIds,
   readAgentManifest,
+  readReadme,
   writeIndex,
 } from "./storage";
 import type {
@@ -63,17 +64,26 @@ export function upsertVersion(
     security_tier: base?.security_tier ?? existing?.security_tier ?? manifest.security_tier,
     min_gaia_version: base?.min_gaia_version ?? existing?.min_gaia_version,
     models: base?.models ?? existing?.models ?? manifest.models,
+    tools_count: base?.tools_count ?? existing?.tools_count ?? manifest.tools_count,
+    permissions: base?.permissions ?? existing?.permissions ?? manifest.permissions,
     requirements: base?.requirements ?? existing?.requirements ?? manifest.requirements,
     interfaces: base?.interfaces ?? existing?.interfaces ?? manifest.interfaces,
     latest_version: latest,
     deprecated: versions[latest].deprecated,
+    // Tracks the latest version exactly: if the new latest drops the message
+    // (e.g. un-deprecated), a stale message must not survive.
+    deprecation_message: useNew ? manifest.deprecation_message : existing?.deprecation_message,
     versions,
   };
 }
 
-/** Build the lightweight catalog entry for one agent manifest. */
-export function toIndexEntry(agent: AgentManifest): IndexEntry {
+/**
+ * Build the catalog entry for one agent manifest. `readme` is the README
+ * markdown of the latest version ("" if none was published).
+ */
+export function toIndexEntry(agent: AgentManifest, readme: string): IndexEntry {
   const latest = agent.versions[agent.latest_version];
+  const req = agent.requirements;
   return {
     id: agent.id,
     name: agent.name,
@@ -85,8 +95,23 @@ export function toIndexEntry(agent: AgentManifest): IndexEntry {
     author: agent.author,
     security_tier: agent.security_tier,
     download_size_bytes: latest?.artifact.size_bytes ?? 0,
-    requirements: { platforms: agent.requirements.platforms ?? [] },
+    tags: agent.tags,
+    tools_count: agent.tools_count,
+    models: agent.models,
+    min_gaia_version: agent.min_gaia_version ?? "",
+    permissions: agent.permissions,
     deprecated: agent.deprecated,
+    // undefined serializes to "key absent" — only present when set.
+    deprecation_message: agent.deprecation_message,
+    requirements: {
+      min_memory_gb: req.min_memory_gb,
+      min_disk_gb: req.min_disk_gb,
+      min_context_size: req.min_context_size,
+      platforms: req.platforms,
+      npu: req.npu ? "required" : "optional",
+      gpu_vram_gb: req.gpu_vram_gb,
+    },
+    readme,
   };
 }
 
@@ -102,7 +127,9 @@ export async function rebuildIndex(
   const entries: IndexEntry[] = [];
   for (const id of ids) {
     const agent = await readAgentManifest(bucket, id);
-    if (agent) entries.push(toIndexEntry(agent));
+    if (!agent) continue;
+    const readme = await readReadme(bucket, id, agent.latest_version);
+    entries.push(toIndexEntry(agent, readme));
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));
 

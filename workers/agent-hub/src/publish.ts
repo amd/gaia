@@ -6,8 +6,9 @@
  *
  * Flow: authenticate -> parse multipart -> validate manifest -> enforce
  * publisher scope -> enforce version immutability -> generate server-side
- * SHA-256 -> store artifact + raw manifest + per-agent manifest -> rebuild
- * index.json. Every guard fails loudly with a structured error.
+ * SHA-256 -> store artifact + raw manifest + optional README + per-agent
+ * manifest -> rebuild index.json. Every guard fails loudly with a structured
+ * error.
  */
 
 import { assertAuthorAllowed, authenticate } from "./auth";
@@ -18,6 +19,7 @@ import {
   artifactKey,
   rawManifestKey,
   readAgentManifest,
+  readmeKey,
   writeAgentManifest,
 } from "./storage";
 import type { ArtifactInfo, Env } from "./types";
@@ -59,7 +61,8 @@ export async function handlePublish(
       415,
       "unsupported_media_type",
       "POST /publish expects multipart/form-data with 'manifest' (gaia-agent.yaml " +
-        "text) and 'artifact' (the wheel or binary file) parts."
+        "text), 'artifact' (the wheel or binary file), and optionally 'readme' " +
+        "(README.md markdown text) parts."
     );
   }
 
@@ -86,6 +89,24 @@ export async function handlePublish(
     );
   }
   const artifactFile = artifactPart as File;
+
+  // Optional README markdown for this version (rendered on the Hub pages).
+  const readmePart = form.get("readme");
+  let readmeText: string | null = null;
+  if (readmePart != null) {
+    readmeText = typeof readmePart === "string" ? readmePart : await (readmePart as Blob).text();
+    // Multipart string fields are CRLF-normalized by the form encoding —
+    // canonicalize to LF so stored READMEs are byte-stable either way.
+    readmeText = readmeText.replace(/\r\n/g, "\n");
+    if (readmeText.trim() === "") {
+      throw new HttpError(
+        400,
+        "invalid_request",
+        "The 'readme' part is empty. Send the README.md markdown text, or omit the " +
+          "part entirely if the agent has no README."
+      );
+    }
+  }
 
   const manifest = parseManifest(manifestText);
   assertAuthorAllowed(publisher, manifest.author);
@@ -162,6 +183,11 @@ export async function handlePublish(
   await env.BUCKET.put(rawManifestKey(manifest.id, manifest.version), manifestText, {
     httpMetadata: { contentType: "application/x-yaml; charset=utf-8" },
   });
+  if (readmeText != null) {
+    await env.BUCKET.put(readmeKey(manifest.id, manifest.version), readmeText, {
+      httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+    });
+  }
 
   const versionEntry = makeVersionEntry(manifest, artifact, publisher.publisher, now.toISOString());
   const updated = upsertVersion(existing, manifest, versionEntry);
