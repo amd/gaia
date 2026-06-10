@@ -32,13 +32,14 @@
 name: Publish Agent Wheels (PyPI)
 
 on:
-  # Tag pushes trigger the publish path. No `paths:` filter here — a release tag
-  # must always run even when the tagged commit didn't touch an agent (GitHub
-  # applies push `paths` filters to tag pushes too, which would skip publishing).
-  push:
-    tags:
-      - 'v*'
-  # PRs get the build/twine-check only (the publish jobs are gated on a v* tag).
+  # PUBLISHING PAUSED (#1179): agent PyPI publishing is disabled while the Agent
+  # Hub distribution design is being finalized. The release-tag trigger is
+  # intentionally removed so a `v*` tag no longer fires the publish path, and the
+  # approve/publish jobs are additionally hard-gated below. To re-enable, restore
+  # the `push: tags: ['v*']` trigger here and drop the `false &&` guards on the
+  # approve-publish and publish jobs.
+  #
+  # PRs still get the build/twine-check so broken agent wheels are caught in review.
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -134,7 +135,9 @@ jobs:
   approve-publish:
     name: Approve Publishing
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.build.result == 'success'
+    # Publishing paused (#1179) — `false &&` hard-skips this job. Remove it (and
+    # restore the tag trigger above) to re-enable.
+    if: false && startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment: publish
     steps:
@@ -144,7 +147,9 @@ jobs:
   publish:
     name: Publish ${{ matrix.dist }}
     needs: [discover, approve-publish]
-    if: startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.approve-publish.result == 'success'
+    # Publishing paused (#1179) — `false &&` hard-skips this job. Remove it (and
+    # restore the tag trigger above) to re-enable.
+    if: false && startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.approve-publish.result == 'success'
     runs-on: ubuntu-latest
     # OIDC trusted publishing: the action mints a short-lived id-token PyPI
     # exchanges for an upload token. Without id-token: write the action falls
