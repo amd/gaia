@@ -162,20 +162,6 @@ export function securityTierLabel(tier: SecurityTier): string {
   return SECURITY_TIER_LABELS[tier] ?? tier;
 }
 
-/** Tailwind classes for a security-tier badge. */
-export function securityTierClasses(tier: SecurityTier): string {
-  switch (tier) {
-    case 'verified':
-      return 'bg-green-500/10 text-green-400 border-green-500/30';
-    case 'community':
-      return 'bg-blue-500/10 text-blue-400 border-blue-500/30';
-    case 'experimental':
-      return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30';
-    default:
-      return 'bg-gaia-card text-gaia-muted border-gaia-border';
-  }
-}
-
 /** Human-readable download size, e.g. "2.3 MB". */
 export function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 B';
