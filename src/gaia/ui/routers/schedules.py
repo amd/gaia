@@ -124,9 +124,7 @@ def get_scheduler(request: Request) -> Scheduler:
 @router.post("/api/schedules/parse", response_model=ParseScheduleResponse)
 async def parse_schedule(request: ParseScheduleRequest):
     """Parse a natural language schedule description into structured config."""
-    from datetime import datetime, timezone
-
-    from ..scheduler import ScheduleConfig, compute_next_run, parse_schedule_input
+    from ..scheduler import compute_next_run, parse_schedule_input
 
     config = parse_schedule_input(request.input)
     next_run = None
