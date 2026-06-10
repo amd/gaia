@@ -62,8 +62,8 @@
   height: 20px;
   padding: 0 6px;
   border-radius: var(--radius-full);
-  background: var(--amd-red);
-  color: white;
+  background: var(--accent);
+  color: #1a1a1a;
   font-size: 11px;
   font-weight: 700;
 }
@@ -180,12 +180,12 @@
   width: 6px;
   height: 6px;
   border-radius: var(--radius-full);
-  background: var(--amd-red);
+  background: var(--accent);
 }
 
 /* ── Type-based left border colors ───────────────────────────────────── */
 .notification-item.notif-type-permission {
-  border-left-color: var(--amd-red);
+  border-left-color: var(--accent);
 }
 .notification-item.notif-type-security {
   border-left-color: var(--accent-yellow);
@@ -205,7 +205,7 @@
 
 /* ── Type-based icon colors ──────────────────────────────────────────── */
 .notif-type-permission .notification-icon {
-  color: var(--amd-red);
+  color: var(--accent);
 }
 .notif-type-security .notification-icon {
   color: var(--accent-yellow);
