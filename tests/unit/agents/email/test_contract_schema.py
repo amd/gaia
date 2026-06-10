@@ -317,3 +317,52 @@ def test_result_summary_required():
     del payload["result"]["summary"]
     with pytest.raises(ValidationError):
         EmailTriageResult.model_validate(payload["result"])
+
+
+# ---------------------------------------------------------------------------
+# message_id field (#1539) — optional, backward-compatible amendment
+# ---------------------------------------------------------------------------
+
+
+def test_result_message_id_is_optional():
+    """message_id has a default of None — existing payloads validate unchanged."""
+    payload = _single_response()
+    assert "message_id" not in payload["result"]  # existing sample has no field
+    result = EmailTriageResult.model_validate(payload["result"])
+    assert result.message_id is None
+
+
+def test_result_message_id_accepted_when_present():
+    """A result with message_id validates and round-trips."""
+    payload = _single_response()
+    payload["result"]["message_id"] = "msg-abc-001"
+    result = EmailTriageResult.model_validate(payload["result"])
+    assert result.message_id == "msg-abc-001"
+
+
+def test_result_message_id_null_accepted():
+    """Explicit null (None) is accepted."""
+    payload = _single_response()
+    payload["result"]["message_id"] = None
+    result = EmailTriageResult.model_validate(payload["result"])
+    assert result.message_id is None
+
+
+def test_result_message_id_included_in_dump():
+    """message_id is serialized in model_dump output (consumers see it)."""
+    payload = _single_response()
+    payload["result"]["message_id"] = "t-42"
+    result = EmailTriageResult.model_validate(payload["result"])
+    dumped = result.model_dump()
+    assert "message_id" in dumped
+    assert dumped["message_id"] == "t-42"
+
+
+def test_response_with_message_id_round_trips():
+    """Full response envelope with message_id round-trips through dump/validate."""
+    payload = _single_response()
+    payload["result"]["message_id"] = "m-round-trip"
+    response = EmailTriageResponse.model_validate(payload)
+    dumped = response.model_dump()
+    again = EmailTriageResponse.model_validate(dumped)
+    assert again.result.message_id == "m-round-trip"
