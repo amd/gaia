@@ -4,7 +4,7 @@
 Structured verbose-logging contract for the Email Triage Agent (Phase A5).
 
 When ``EmailAgentConfig.debug=True`` (or ``gaia email -v``), every tool
-emits structured log entries via the ``gaia.agents.email`` logger with
+emits structured log entries via the ``gaia_agent_email`` logger with
 well-defined ``stage`` values so benchmark scripts can parse them
 without scraping prose:
 
@@ -31,7 +31,7 @@ import time
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Optional
 
-logger = logging.getLogger("gaia.agents.email")
+logger = logging.getLogger("gaia_agent_email")
 
 
 # Patterns redacted from any tool-call args before logging. Conservative —

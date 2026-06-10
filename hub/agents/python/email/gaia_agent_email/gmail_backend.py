@@ -48,7 +48,7 @@ from typing import (
 
 import httpx
 
-from gaia.agents.email.scopes import (
+from gaia_agent_email.scopes import (
     AGENT_NAMESPACED_ID,
     GMAIL_SCOPES,
 )
