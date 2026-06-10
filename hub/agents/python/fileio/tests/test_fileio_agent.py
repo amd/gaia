@@ -24,11 +24,13 @@ class TestFileIOAgentConfig(unittest.TestCase):
     def test_defaults(self):
         from gaia_agent_fileio.agent import FileIOAgentConfig
 
+        from gaia.agents.base.agent import default_max_steps
+
         cfg = FileIOAgentConfig()
         self.assertFalse(cfg.use_claude)
         self.assertFalse(cfg.use_chatgpt)
         self.assertIsNone(cfg.model_id)
-        self.assertEqual(cfg.max_steps, 10)
+        self.assertEqual(cfg.max_steps, default_max_steps())
 
 
 class TestFileIOAgentInit(unittest.TestCase):

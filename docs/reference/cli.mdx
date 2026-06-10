@@ -96,6 +96,21 @@ gaia --ui --base-url https://your-server:13305/api/v1
   `gaia chat --ui` continues to work as an alias. The Agent UI requires an AMD Ryzen AI Max (Strix Halo) or an AMD Radeon GPU with ≥ 24 GB VRAM. If your device is not supported, a dismissible warning banner will appear in the UI.
 </Note>
 
+### Agent step limit
+
+Agents stop after a maximum number of reasoning/tool steps. The default is **50**, applied consistently across the CLI, the Agent UI, and background runs.
+
+- **Per-invocation:** pass `--max-steps <n>` to any agent command (e.g. `gaia browse --max-steps 80`). `gaia blender` uses `--steps <n>`.
+- **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
+
+```bash
+# Raise the limit for every agent in this shell
+export GAIA_AGENT_MAX_STEPS=80
+gaia browse "research the latest AMD Ryzen AI news"
+```
+
+A few agents intentionally override the default (e.g. the Code agent uses 100 for multi-file generation). An invalid `GAIA_AGENT_MAX_STEPS` value (non-integer or ≤ 0) fails fast with an actionable error rather than silently capping agents.
+
 ---
 
 ## Initialization
@@ -497,6 +512,33 @@ gaia agent publish hub/agents/python/summarize/
 gaia agent publish --skip-r2
 ```
 </CodeGroup>
+
+##### Installing a published agent
+
+The two publish targets back two install paths, and both register the agent the
+same way — via the `gaia.agent` entry point, so the registry discovers it
+automatically:
+
+```bash From PyPI (pip)
+pip install gaia-agent-summarize          # one agent
+pip install "amd-gaia[agents]"            # every AMD production agent
+```
+
+The **Hub (R2)** path is the Agent UI's discover/install panel, which downloads
+the wheel from R2 into `~/.gaia/agents/<id>/` (`POST /api/agents/install`, backed
+by `gaia.hub.installer`). Use it when browsing the Hub UI; use `pip install` for
+scripted or headless setups.
+
+##### Automated PyPI publishing (CI)
+
+`.github/workflows/publish_agents.yml` builds every production agent wheel and
+publishes it to PyPI on a version tag (`v*`). Its matrix is derived from the
+`agents` extra in `setup.py` (via `util/list_agent_packages.py`), so adding an
+agent there is all it takes to start publishing it. The workflow uploads with
+[`pypa/gh-action-pypi-publish`](https://github.com/pypa/gh-action-pypi-publish)
+using the `PYPI_API_TOKEN` secret and `skip-existing: true`, so an unchanged
+agent version is a no-op rather than an error — PyPI enforces version
+immutability natively.
 
 #### Sharing: `export`, `import`
 

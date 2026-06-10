@@ -62,8 +62,10 @@ def _load_memory_settings() -> Dict:
     try:
         if _MEMORY_SETTINGS_PATH.exists():
             return json.loads(_MEMORY_SETTINGS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        pass
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(
+            "failed to load memory settings from %s: %s", _MEMORY_SETTINGS_PATH, e
+        )
     return {}
 
 
@@ -95,6 +97,47 @@ _SYSTEM_CONTEXT_REFRESH_DAYS: int = 7
 
 #: Auto-refresh LLM-inferred profile facts after this many days.
 _INFERRED_PROFILE_REFRESH_DAYS: int = 30
+
+
+def _live_software_versions() -> Dict[str, str]:
+    """Map of tracked software-version fact labels → current live value.
+
+    Keys match the label prefix used by ``collect_system_info()`` (e.g.
+    ``"GAIA version"``) so stored facts (``"GAIA version: 0.17.6"``) can be
+    compared by label. Empty if the version module can't be imported.
+    """
+    versions: Dict[str, str] = {}
+    try:
+        from gaia.version import LEMONADE_VERSION, __version__
+
+        versions["GAIA version"] = str(__version__)
+        versions["Lemonade Server version"] = str(LEMONADE_VERSION)
+    except Exception:
+        pass
+    return versions
+
+
+def _changed_software_versions(existing: List[Dict]) -> List[str]:
+    """Return the labels whose stored version differs from the live value.
+
+    Only labels present in BOTH the stored facts and the live map are
+    compared — a missing fact is left to the age/force refresh paths so a
+    transient collection gap doesn't force churn on every startup.
+    """
+    live = _live_software_versions()
+    if not live:
+        return []
+    stored: Dict[str, str] = {}
+    for item in existing:
+        content = item.get("content", "")
+        label, sep, value = content.partition(":")
+        if sep:
+            stored[label.strip()] = value.strip()
+    return [
+        label
+        for label, live_val in live.items()
+        if label in stored and stored[label] != live_val
+    ]
 
 
 # ============================================================================
@@ -398,18 +441,52 @@ class MemoryMixin:
             context,
         )
 
+    @staticmethod
+    def _system_context_refresh_reason(existing: List[Dict]) -> Optional[str]:
+        """Return a reason to refresh stored system context, or ``None`` to keep it.
+
+        Refresh triggers, in priority order:
+        1. A tracked software version (GAIA/Lemonade) differs from the live
+           value — fires immediately after an upgrade so versions never lag.
+        2. The newest fact is older than ``_SYSTEM_CONTEXT_REFRESH_DAYS``.
+        """
+        if not existing:
+            return None
+
+        changed = _changed_software_versions(existing)
+        if changed:
+            return "version change: " + ", ".join(changed)
+
+        newest_updated = existing[0].get("updated_at", "")
+        if not newest_updated:
+            return None
+        try:
+            last_update = datetime.fromisoformat(newest_updated).replace(tzinfo=None)
+        except Exception:
+            return None
+        age_days = (datetime.now() - last_update).days
+        if age_days >= _SYSTEM_CONTEXT_REFRESH_DAYS:
+            return f"{age_days} days old"
+        return None
+
     def init_system_context(self, force: bool = False) -> Dict[str, int]:
         """Store system context facts on first run (silent, non-blocking).
 
         Auto-collects OS/hardware/software info and stores it as 'system'
         category memories in the 'global' context.  Idempotent — skips if
-        already initialized unless *force* is ``True``.
+        already initialized unless *force* is ``True`` or a refresh is due.
+
+        Refresh is both version-aware (re-collects as soon as the stored GAIA
+        or Lemonade version differs from the live value) and age-based
+        (``_SYSTEM_CONTEXT_REFRESH_DAYS``). Existing facts are always cleared
+        before re-collecting so a version/spec change replaces the old fact
+        rather than accumulating a contradictory duplicate.
 
         Respects ``~/.gaia/memory_settings.json`` → ``system_context_enabled``.
         When that key is ``false`` this method is a no-op.
 
         Args:
-            force: Re-collect even if system context already exists.
+            force: Re-collect even if system context is otherwise up to date.
 
         Returns:
             Dict with 'stored' (int) count of items stored, and
@@ -420,30 +497,26 @@ class MemoryMixin:
             logger.debug("[MemoryMixin] system context disabled by user setting")
             return {"stored": 0, "disabled": True}
 
-        # Check if already initialized — auto-refresh when stale
         existing = self._memory_store.get_by_category(
-            "system", context="global", limit=1
+            "system", context="global", limit=200
         )
+
+        # Decide whether to (re-)collect.
         if existing and not force:
-            newest_updated = existing[0].get("updated_at", "")
-            if newest_updated:
-                try:
-                    last_update = datetime.fromisoformat(newest_updated).replace(
-                        tzinfo=None
-                    )
-                    age_days = (datetime.now() - last_update).days
-                    if age_days < _SYSTEM_CONTEXT_REFRESH_DAYS:
-                        return {"stored": 0}
-                    # Stale — delete old facts and fall through to re-collect
-                    logger.info(
-                        "[MemoryMixin] system context is %d days old, refreshing...",
-                        age_days,
-                    )
-                    self._memory_store.delete_by_source("system")
-                except Exception:
-                    return {"stored": 0}
-            else:
+            reason = self._system_context_refresh_reason(existing)
+            if reason is None:
                 return {"stored": 0}
+            logger.info("[MemoryMixin] refreshing system context (%s)...", reason)
+
+        # Clear existing facts first so changed values replace rather than
+        # accumulate — version strings fall below the dedup threshold and would
+        # otherwise leave two contradictory rows. Uses delete_by_category to
+        # match the `gaia memory bootstrap --system` / --reset-system paths.
+        if existing:
+            try:
+                self._memory_store.delete_by_category("system")
+            except Exception as e:
+                logger.debug("[MemoryMixin] failed to clear system context: %s", e)
 
         # Collect system information
         try:
@@ -470,10 +543,7 @@ class MemoryMixin:
                 logger.debug("[MemoryMixin] failed to store system fact: %s", e)
 
         if stored > 0:
-            logger.info(
-                "[MemoryMixin] stored %d system context items (first run)",
-                stored,
-            )
+            logger.info("[MemoryMixin] stored %d system context items", stored)
 
         return {"stored": stored}
 

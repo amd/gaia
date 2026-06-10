@@ -29,7 +29,7 @@ def _load_jira_agent_class():
     except ImportError as e:
         raise ImportError(
             "The jira agent is not installed. Install it with "
-            "`pip install gaia-agent-jira` (or `pip install amd-gaia[agents]` "
+            '`uv pip install gaia-agent-jira` (or `uv pip install "amd-gaia[agents]"` '
             "for all AMD agents). See https://amd-gaia.ai/docs/guides/jira."
         ) from e
     return JiraAgent

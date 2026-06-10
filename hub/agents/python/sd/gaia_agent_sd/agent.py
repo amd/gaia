@@ -9,10 +9,10 @@ and optimizes generation parameters based on the selected SD model.
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.logger import get_logger
 from gaia.sd import SDToolsMixin
 from gaia.vlm import VLMToolsMixin
@@ -37,7 +37,7 @@ class SDAgentConfig:
     model_id: str = "Gemma-4-E4B-it-GGUF"  # Multimodal model for agentic reasoning
 
     # Execution settings
-    max_steps: int = 10
+    max_steps: int = field(default_factory=default_max_steps)
     streaming: bool = False
     ctx_size: int = 16384  # 16K context for multi-step planning with dynamic parameters
 

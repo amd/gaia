@@ -136,22 +136,21 @@ class TestBuilderFailLoudly:
         ), f"Fabricated path must not be in the final answer: {answer!r}"
 
     def test_real_tool_call_and_file_present_returns_success(self, tmp_path):
-        """When create_agent runs and the file exists, the answer must confirm success."""
+        """When create_agent runs, the tool confirmation is returned directly.
+
+        The short-circuit means no second LLM summarization turn — only one
+        send_messages call is made.
+        """
         agent = _make_agent(tmp_path)
         agent.console = MagicMock()
 
         tool_call_response = '{"tool": "create_agent", "tool_args": {"name": "Zephyr"}}'
-        # First call: tool call; second: the LLM summarizes the result
-        summary = "Your Zephyr Agent has been created at ~/.gaia/agents/zephyr/agent.py"
-        responses = iter([tool_call_response, summary])
-
         agent.chat = MagicMock()
-        agent.chat.send_messages.side_effect = lambda **kwargs: _mock_chat_response(
-            next(responses)
-        )
+        agent.chat.send_messages.return_value = _mock_chat_response(tool_call_response)
 
         tool_result = f"Agent 'Zephyr Agent' created at {tmp_path}/zephyr/agent.py"
         with patch.object(agent, "_execute_tool", return_value=tool_result):
             result = agent._process_query_impl("create an agent named Zephyr")
 
-        assert result["answer"] == summary
+        assert result["answer"] == tool_result
+        assert agent.chat.send_messages.call_count == 1
