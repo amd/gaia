@@ -105,7 +105,7 @@ Full diagnostic run on a Ryzen AI PC: the agent gathers CPU, memory, disk, and p
 ## Architecture
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'16px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'16px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 graph TB
     User("User query")
     Agent("WindowsSystemHealthAgent<br/>gaia::Agent subclass")
@@ -122,16 +122,16 @@ graph TB
     MCP --> Shell3("mcp_windows_Shell<br/>Get-CimInstance (Memory)")
     MCP --> Shell4("mcp_windows_Shell<br/>Get-PSDrive (Disk)")
 
-    style User fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Agent fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
-    style LLM fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style MCP fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell1 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell2 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell3 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell4 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style User fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Agent fill:#E2A33E,stroke:#EFC480,stroke-width:3px,color:#1a1a1a
+    style LLM fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style MCP fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style Shell1 fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Shell2 fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Shell3 fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Shell4 fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
 
-    linkStyle default stroke:#ED1C24,stroke-width:2px
+    linkStyle default stroke:#E2A33E,stroke-width:2px
 ```
 
 The agent subclasses `gaia::Agent` and connects to the Windows MCP server at construction time. Unlike the Wi-Fi agent (which registers tools as C++ lambdas), this agent gets all its tools from the MCP server — every diagnostic runs through `mcp_windows_Shell`.
