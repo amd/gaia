@@ -513,6 +513,33 @@ gaia agent publish --skip-r2
 ```
 </CodeGroup>
 
+##### Installing a published agent
+
+The two publish targets back two install paths, and both register the agent the
+same way — via the `gaia.agent` entry point, so the registry discovers it
+automatically:
+
+```bash From PyPI (pip)
+pip install gaia-agent-summarize          # one agent
+pip install "amd-gaia[agents]"            # every AMD production agent
+```
+
+The **Hub (R2)** path is the Agent UI's discover/install panel, which downloads
+the wheel from R2 into `~/.gaia/agents/<id>/` (`POST /api/agents/install`, backed
+by `gaia.hub.installer`). Use it when browsing the Hub UI; use `pip install` for
+scripted or headless setups.
+
+##### Automated PyPI publishing (CI)
+
+`.github/workflows/publish_agents.yml` builds every production agent wheel and
+publishes it to PyPI on a version tag (`v*`). Its matrix is derived from the
+`agents` extra in `setup.py` (via `util/list_agent_packages.py`), so adding an
+agent there is all it takes to start publishing it. The workflow uploads with
+[`pypa/gh-action-pypi-publish`](https://github.com/pypa/gh-action-pypi-publish)
+using the `PYPI_API_TOKEN` secret and `skip-existing: true`, so an unchanged
+agent version is a no-op rather than an error — PyPI enforces version
+immutability natively.
+
 #### Sharing: `export`, `import`
 
 Export every custom agent installed under `~/.gaia/agents/` into a single `.zip` bundle, and import a bundle produced on another machine.
