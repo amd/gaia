@@ -2,16 +2,22 @@
 # SPDX-License-Identifier: MIT
 
 name: 'Install Lemonade Server'
-description: 'Verifies Lemonade Server matches the GAIA-expected version, upgrading via the matching MSI when the runner is behind.'
+description: 'Pins the runner to exactly LEMONADE_VERSION, reconciling via the matching MSI when the installed version differs.'
 
 # This action checks the lemonade-server already installed on the runner
 # against the version GAIA expects (``src/gaia/version.LEMONADE_VERSION``).
-# When the runner is at an older version, it downloads the matching MSI
-# from the lemonade-sdk GitHub releases and installs it silently -- same
-# release URL the gaia init flow uses (``src/gaia/installer/lemonade_installer.py:GITHUB_RELEASE_BASE``).
-# This keeps the runner's model catalog (e.g. Gemma-4-E4B-it-GGUF, the
-# LemonadeManager default) aligned with what GAIA expects so preload/pull
-# operations don't 422 with "model_name not registered".
+# If the runner has any version other than the expected one (ahead, behind,
+# missing, or unparseable), it reconciles via the matching MSI:
+#   1. Uninstall the current copy via the Windows uninstall registry / msiexec
+#      (WiX in-place version change returns 1603, so uninstall-first is required).
+#   2. Download + silently install the matching MSI from the lemonade-sdk
+#      GitHub releases -- the same release URL the gaia init flow uses
+#      (``src/gaia/installer/lemonade_installer.py:GITHUB_RELEASE_BASE``).
+# Exact-match is then verified; the step fails loud if the version is wrong.
+# msiexec is used (not winget) because the runner's service account runs as
+# SYSTEM, where winget is unavailable. This keeps the runner's model catalog
+# aligned with what GAIA ships to users so preload/pull operations don't 422
+# with "model_name not registered".
 
 outputs:
   lemonade-path:
@@ -29,7 +35,7 @@ runs:
         echo "LEMONADE_VERSION=$lemonadeVersion" >> $env:GITHUB_ENV
         Write-Host "Expected Lemonade version: $lemonadeVersion"
 
-    - name: Verify and (if needed) Upgrade Lemonade Server
+    - name: Verify and (if needed) Reconcile Lemonade Server
       id: verify
       shell: powershell
       run: |
@@ -205,8 +211,55 @@ runs:
             Write-Host "MSI install completed."
         }
 
+        function Reconcile-LemonadeVersion {
+            # Uninstall the current copy (any version) then install exactly $expected
+            # via the matching MSI. WiX MSI returns 1603 for in-place version
+            # changes, so uninstall-first is mandatory. The registry/msiexec
+            # uninstall is SYSTEM-safe; winget is not available to the runner's
+            # service account, so it's deliberately not used here.
+            param([string]$Expected)
+
+            # SYSTEM-safe uninstall: remove the current/drifted copy via the Windows
+            # uninstall registry. Mirrors lemonade_installer.py find_product_code / _uninstall_windows.
+            Write-Host "Checking Windows uninstall registry for residual Lemonade entries..."
+            $uninstallRoots = @(
+                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+                "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+            )
+            foreach ($root in $uninstallRoots) {
+                if (-not (Test-Path $root)) { continue }
+                Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
+                    try {
+                        $displayName = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName
+                        if ($displayName -and $displayName -match "(?i)lemonade") {
+                            $productCode = $_.PSChildName
+                            Write-Host "Found residual registry entry: '$displayName' ($productCode) -- removing via msiexec..."
+                            $r = Start-Process -FilePath "msiexec.exe" `
+                                -ArgumentList "/x", $productCode, "/qn", "/norestart" `
+                                -PassThru -Wait -ErrorAction SilentlyContinue
+                            if ($r) {
+                                Write-Host "msiexec /x exit code: $($r.ExitCode)"
+                            }
+                        }
+                    } catch {
+                        # Tolerate individual key read errors.
+                    }
+                }
+            }
+
+            # Install exactly the pinned version via the matching MSI.
+            Install-LemonadeMsi -Version $Expected
+        }
+
+        # -----------------------------------------------------------------------
+        # Main flow
+        # -----------------------------------------------------------------------
+
+        $expected = $env:LEMONADE_VERSION
+
         # Locate (or note absence of) the currently-installed lemonade-server.
-        $lemonadePath = Find-LemonadeServer
+        $lemonadePath     = Find-LemonadeServer
         $installedVersion = $null
         if ($lemonadePath) {
             $installedVersion = Get-LemonadeVersion -LemonadeExe $lemonadePath
@@ -214,78 +267,67 @@ runs:
             Write-Host "lemonade-server not found on this runner."
         }
 
-        $expectedVersion = $env:LEMONADE_VERSION
         Write-Host ""
         Write-Host "Installed version: $installedVersion"
-        Write-Host "Expected version:  $expectedVersion"
+        Write-Host "Expected version:  $expected"
 
-        # Decide whether to upgrade. We upgrade only when the runner is
-        # strictly behind the expected version. If the runner is ahead
-        # (someone manually installed a newer one), we leave it alone
-        # rather than downgrading.
-        $needsInstall = $false
-        if (-not $installedVersion) {
-            Write-Host "No existing install detected -- will install v$expectedVersion."
-            $needsInstall = $true
+        # Single equality rule: exact match → no-op; anything else → reconcile.
+        # This catches ahead runners (auto-update drift) as well as behind,
+        # missing, or unparseable versions.
+        $cmp = if ($installedVersion) { Compare-SemVer $installedVersion $expected } else { $null }
+        if ($cmp -eq 0) {
+            Write-Host "Runner version matches expected. No reconcile needed."
         } else {
-            $cmp = Compare-SemVer -A $installedVersion -B $expectedVersion
-            if ($null -eq $cmp) {
-                Write-Host "Could not parse versions for comparison; reinstalling v$expectedVersion to be safe."
-                $needsInstall = $true
-            } elseif ($cmp -lt 0) {
-                Write-Host "Runner is behind expected version -- upgrading to v$expectedVersion."
-                $needsInstall = $true
-            } elseif ($cmp -gt 0) {
-                Write-Host "Runner is AHEAD of expected version. Leaving as-is."
+            if ($installedVersion) {
+                Write-Host "Runner version ($installedVersion) differs from expected ($expected) -- reconciling to exactly $expected."
             } else {
-                Write-Host "Runner version matches expected. No install needed."
+                Write-Host "No existing install detected -- installing v$expected."
             }
-        }
 
-        if ($needsInstall) {
-            Install-LemonadeMsi -Version $expectedVersion
+            Reconcile-LemonadeVersion -Expected $expected
 
-            # Refresh PATH from registry so the MSI's freshly-added
-            # ``Program Files\Lemonade Server\bin`` shows up in this shell
-            # the same way the gaia init flow's
-            # ``LemonadeInstaller.refresh_path_from_registry`` does after
-            # an MSI install.
+            # Refresh PATH from registry so the freshly installed binaries
+            # in ``Program Files\Lemonade Server\bin`` show up in this shell.
             Refresh-EnvPath
 
-            # Re-locate after install. ``Find-LemonadeServer`` now searches
-            # the well-known install dirs first so the new v$expectedVersion
-            # exe in ``Program Files\Lemonade Server\bin`` wins over any
-            # stale per-user .bat that's still on the shell's PATH.
+            # Re-locate and re-detect after reconcile.
             $lemonadePath = Find-LemonadeServer
             if (-not $lemonadePath) {
-                Write-Host "ERROR: lemonade-server still not found on PATH after install."
+                Write-Host "ERROR: lemonade-server still not found on PATH after reconcile."
+                Write-Host "       Run: Get-Command lemonade-server,LemonadeServer -All"
                 exit 1
             }
             $installedVersion = Get-LemonadeVersion -LemonadeExe $lemonadePath
             Write-Host ""
-            Write-Host "Post-install version: $installedVersion"
-            $postCmp = Compare-SemVer -A $installedVersion -B $expectedVersion
-            if ($null -eq $postCmp -or $postCmp -lt 0) {
-                # Hard-fail: the MSI ran (exit 0) but we can't reach the
-                # expected version. Continuing would let downstream tests
-                # blow up on "model_name=... not registered" again with no
-                # signal pointing back to the install step.
-                Write-Host "ERROR: Post-install version ($installedVersion) is below expected ($expectedVersion)."
-                Write-Host "       MSI install may have failed silently or installed to an unexpected location."
-                Write-Host "       Run candidates seen on PATH:"
-                Get-Command lemonade-server -All -ErrorAction SilentlyContinue | ForEach-Object {
-                    Write-Host "         - $($_.Source)"
-                }
-                exit 1
-            } elseif ($postCmp -gt 0) {
-                Write-Host "WARNING: Post-install version ($installedVersion) is newer than expected ($expectedVersion); leaving as-is."
-            } else {
-                Write-Host "Post-install version matches expected."
+            Write-Host "Post-reconcile version: $installedVersion"
+        }
+
+        # Drift-prevention pinning can't run from this CI step -- winget is unavailable
+        # to the runner's SYSTEM service account; pinning is a runner-ops follow-up.
+        # The every-run reconcile is the safety net: a re-drifted runner is reset to
+        # the pinned version on the next run, before the pull.
+
+        # Exact-match gate -- fail loud if the version is still wrong after reconcile.
+        $finalCmp = Compare-SemVer $installedVersion $expected
+        if ($null -eq $finalCmp -or $finalCmp -ne 0) {
+            Write-Host "ERROR: Post-reconcile version ($installedVersion) does not match expected ($expected)."
+            Write-Host "       Lemonade binaries on PATH:"
+            Get-Command lemonade,lemonade-server,LemonadeServer -All -ErrorAction SilentlyContinue | ForEach-Object {
+                Write-Host "         - $($_.Source)"
             }
+            exit 1
+        }
+
+        # Warn if more than one distinct Lemonade binary resolves on PATH (coexistence smell).
+        $allBins = Get-Command lemonade,lemonade-server,LemonadeServer -All -ErrorAction SilentlyContinue
+        $distinctPaths = $allBins | Select-Object -ExpandProperty Source -Unique
+        if (($distinctPaths | Measure-Object).Count -gt 1) {
+            Write-Host "WARNING: Multiple Lemonade binaries found on PATH -- coexistence may cause unpredictable behaviour:"
+            $distinctPaths | ForEach-Object { Write-Host "  $_" }
         }
 
         if (-not $lemonadePath) {
-            Write-Host "ERROR: lemonade-server not available after verify/install step."
+            Write-Host "ERROR: lemonade-server not available after verify/reconcile step."
             exit 1
         }
 
@@ -295,3 +337,4 @@ runs:
 
         Write-Host ""
         Write-Host "Lemonade Server ready at: $lemonadePath"
+        Write-Host "Version: $installedVersion"
