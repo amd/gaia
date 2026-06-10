@@ -677,17 +677,23 @@ jobs:
   # are a rare exception, and declining is for bugs with no testable fix. PRs that
   # the job CAN validate must pass lint + unit tests (PHASE 3) before opening.
   #
-  # SECURITY: This job creates branches and pushes code, and it sets
-  # `allowed_non_write_users: "*"` — without it, claude-code-action's actor gate
-  # aborts on every community (read-access) bug report, which is ~all of them, so
-  # the job only ever ran for maintainer-filed issues. Opening the gate is safe
-  # here because this is an `issues` event, NOT `pull_request_target`: no fork
-  # code is checked out, so there is no untrusted-code execution path. The only
-  # untrusted input is issue text, fetched via `gh issue view` (not YAML
-  # interpolation) and handled as data per the prompt's injection rules; any PR
-  # Claude opens lands on an `autofix/*` branch behind branch protection + human
-  # review. Residual risk is injection nudging Claude into an attacker-influenced
-  # draft PR — the same input surface pr-review/issue-handler already accept.
+  # SECURITY: This job sets `allowed_non_write_users: "*"` so community bug reports
+  # (read-access users — ~all of them; the bug template auto-applies `bug`) reach
+  # Claude instead of aborting at claude-code-action's actor gate.
+  #
+  # This does NOT add a new class of community-triggerable exposure. The
+  # issue-handler job already runs Claude with Bash + the Anthropic OAuth token and
+  # GITHUB_TOKEN in scope on the SAME open `issues` trigger, so the injection-via-
+  # issue-text -> Bash -> credential-exfiltration path already exists and is the
+  # repo's documented, accepted posture (see the file header). Untrusted issue text
+  # is fetched via `gh issue view` (not YAML interpolation) and handled as data per
+  # the prompt's injection rules. That exfiltration surface is UNCHANGED here.
+  #
+  # The only delta over issue-handler is repo-write scope (contents: write +
+  # pull-requests: write, vs issue-handler's comment-only). A successful injection
+  # could push an `autofix/*` branch or open a PR with attacker-influenced content
+  # — bounded by branch protection on main, mandatory human review, and the
+  # GITHUB_TOKEN being unable to approve or merge its own PR.
   #
   # COST: runs on the Claude Max subscription (CLAUDE_CODE_OAUTH_TOKEN), so there
   # is no per-fix dollar cost — only shared subscription rate-pool usage. Most
@@ -737,8 +743,8 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # Community bug reporters have read access; without this the action's
-          # actor gate aborts before Claude runs. Safe on `issues` events — see
-          # the job's SECURITY note above (no fork code is checked out).
+          # actor gate aborts before Claude runs. Same accepted exposure as the
+          # issue-handler job — see the job's SECURITY note above.
           allowed_non_write_users: "*"
           prompt: |
             REPO: ${{ github.repository }}
