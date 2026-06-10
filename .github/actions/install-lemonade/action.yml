@@ -295,13 +295,21 @@ runs:
             # reinstalls a matching one. GGUF weights live in the separate
             # HuggingFace hub cache (``%USERPROFILE%\.cache\huggingface\hub``)
             # and are untouched, so only the small backend is re-fetched, never
-            # the models. Runs only on reconcile, so matched runners pay nothing.
+            # the models. Runs whenever the action reconciles (a drifted *or*
+            # missing install); a version-matched runner skips this block
+            # entirely and pays nothing.
             $cacheRoots = @(
                 "$env:USERPROFILE\.cache\lemonade",
                 "C:\windows\system32\config\systemprofile\.cache\lemonade"
             )
             if ($env:LEMONADE_CACHE_DIR) { $cacheRoots += $env:LEMONADE_CACHE_DIR }
-            foreach ($root in ($cacheRoots | Where-Object { $_ } | Select-Object -Unique)) {
+            # Case-insensitive dedup (Windows paths) while preserving original
+            # casing for the log line -- Select-Object -Unique alone is case-sensitive.
+            $seenRoots = @{}
+            foreach ($root in ($cacheRoots | Where-Object { $_ })) {
+                $rootKey = $root.ToLowerInvariant()
+                if ($seenRoots.ContainsKey($rootKey)) { continue }
+                $seenRoots[$rootKey] = $true
                 $backendDir = Join-Path $root "bin"
                 if (Test-Path $backendDir) {
                     Write-Host "Reconcile: clearing stale llama.cpp backend cache at $backendDir"
