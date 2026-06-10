@@ -286,6 +286,39 @@ runs:
 
             Reconcile-LemonadeVersion -Expected $expected
 
+            # An MSI version change swaps the server exe but leaves the
+            # versioned llama.cpp backend cached under ``%USERPROFILE%\.cache\
+            # lemonade\bin`` (lemonade ``path_utils.cpp`` get_cache_dir /
+            # get_downloaded_bin_dir). A *downgraded* server then can't spawn
+            # the stale newer backend -- the load fails with ``llama-server
+            # failed to start``. Wipe the backend cache so the pinned version
+            # reinstalls a matching one. GGUF weights live in the separate
+            # HuggingFace hub cache (``%USERPROFILE%\.cache\huggingface\hub``)
+            # and are untouched, so only the small backend is re-fetched, never
+            # the models. Runs only on reconcile, so matched runners pay nothing.
+            $cacheRoots = @(
+                "$env:USERPROFILE\.cache\lemonade",
+                "C:\windows\system32\config\systemprofile\.cache\lemonade"
+            )
+            if ($env:LEMONADE_CACHE_DIR) { $cacheRoots += $env:LEMONADE_CACHE_DIR }
+            foreach ($root in ($cacheRoots | Where-Object { $_ } | Select-Object -Unique)) {
+                $backendDir = Join-Path $root "bin"
+                if (Test-Path $backendDir) {
+                    Write-Host "Reconcile: clearing stale llama.cpp backend cache at $backendDir"
+                    # Fail loud: a swallowed wipe (e.g. a DLL locked by a stray
+                    # llama-server) would leave the stale backend in place and
+                    # the next load would fail with the same "llama-server
+                    # failed to start" -- with no signal pointing back here.
+                    try {
+                        Remove-Item $backendDir -Recurse -Force -ErrorAction Stop
+                    } catch {
+                        Write-Host "ERROR: failed to clear stale backend cache at $backendDir : $($_.Exception.Message)"
+                        Write-Host "       A stray llama-server may be holding a file lock; the runner needs manual cleanup."
+                        exit 1
+                    }
+                }
+            }
+
             # Refresh PATH from registry so the freshly installed binaries
             # in ``Program Files\Lemonade Server\bin`` show up in this shell.
             Refresh-EnvPath
