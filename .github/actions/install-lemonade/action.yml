@@ -2,20 +2,22 @@
 # SPDX-License-Identifier: MIT
 
 name: 'Install Lemonade Server'
-description: 'Pins the runner to exactly LEMONADE_VERSION, reconciling via WinGet when the installed version differs.'
+description: 'Pins the runner to exactly LEMONADE_VERSION, reconciling via the matching MSI when the installed version differs.'
 
 # This action checks the lemonade-server already installed on the runner
 # against the version GAIA expects (``src/gaia/version.LEMONADE_VERSION``).
 # If the runner has any version other than the expected one (ahead, behind,
-# missing, or unparseable), it reconciles via WinGet:
-#   1. Remove any gating WinGet pin (so the install target version is not blocked).
-#   2. Uninstall the current copy (WiX in-place version change returns 1603).
-#   3. Remove any residual MSI-direct install via the Windows uninstall registry.
-#   4. winget install --version $expected.
-#   5. Re-apply a pin to $expected to block future auto-update drift.
+# missing, or unparseable), it reconciles via the matching MSI:
+#   1. Uninstall the current copy via the Windows uninstall registry / msiexec
+#      (WiX in-place version change returns 1603, so uninstall-first is required).
+#   2. Download + silently install the matching MSI from the lemonade-sdk
+#      GitHub releases -- the same release URL the gaia init flow uses
+#      (``src/gaia/installer/lemonade_installer.py:GITHUB_RELEASE_BASE``).
 # Exact-match is then verified; the step fails loud if the version is wrong.
-# This keeps the runner's model catalog aligned with what GAIA ships to users
-# so preload/pull operations don't 422 with "model_name not registered".
+# msiexec is used (not winget) because the runner's service account runs as
+# SYSTEM, where winget is unavailable. This keeps the runner's model catalog
+# aligned with what GAIA ships to users so preload/pull operations don't 422
+# with "model_name not registered".
 
 outputs:
   lemonade-path:
@@ -182,30 +184,43 @@ runs:
             return $va.CompareTo($vb)
         }
 
-        function Reconcile-LemonadeVersion {
-            # Uninstall the current copy (any version) then install exactly $expected.
-            # WiX MSI returns 1603 for in-place version changes, so uninstall-first
-            # is mandatory. The WinGet pin is removed first (a gating pin blocks the
-            # install) and re-applied at the end of the caller.
-            param([string]$Expected)
-            $PKG = "AMD.LemonadeServer"
+        function Install-LemonadeMsi {
+            param([string]$Version)
+            $url = "https://github.com/lemonade-sdk/lemonade/releases/download/v$Version/lemonade.msi"
+            $dest = Join-Path $env:RUNNER_TEMP "lemonade-$Version.msi"
 
-            # winget is required; no MSI fallback (fail loud so the runner is fixed).
-            if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-                Write-Host "ERROR: winget not found on this runner; cannot enforce pinned Lemonade $Expected. Install App Installer/winget on the runner."
-                exit 1
+            Write-Host "Downloading Lemonade Server MSI from: $url"
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec 600
+            } catch {
+                Write-Host "ERROR: MSI download failed: $_"
+                throw
             }
 
-            # Remove any gating pin -- a pinned version blocks ``winget install --version``.
-            Write-Host "Removing WinGet pin for $PKG (best-effort)..."
-            winget pin remove --id $PKG 2>&1 | Out-Null
+            Write-Host "Running silent MSI install (msiexec /i $dest /quiet /norestart)..."
+            $msi = Start-Process -FilePath "msiexec.exe" `
+                -ArgumentList "/i", $dest, "/quiet", "/norestart", "/L*v", "$env:RUNNER_TEMP\lemonade-msi.log" `
+                -PassThru -Wait
+            Write-Host "msiexec exit code: $($msi.ExitCode)"
+            if ($msi.ExitCode -ne 0) {
+                Write-Host "===== MSI install log (tail) ====="
+                Get-Content "$env:RUNNER_TEMP\lemonade-msi.log" -Tail 80 -ErrorAction SilentlyContinue
+                Write-Host "==================================="
+                throw "MSI install failed with exit code $($msi.ExitCode). See log above."
+            }
+            Write-Host "MSI install completed."
+        }
 
-            # Uninstall the currently installed copy via WinGet.
-            Write-Host "Uninstalling $PKG via WinGet (tolerate not-installed)..."
-            winget uninstall --id $PKG --silent 2>&1 | Out-Null
+        function Reconcile-LemonadeVersion {
+            # Uninstall the current copy (any version) then install exactly $expected
+            # via the matching MSI. WiX MSI returns 1603 for in-place version
+            # changes, so uninstall-first is mandatory. The registry/msiexec
+            # uninstall is SYSTEM-safe; winget is not available to the runner's
+            # service account, so it's deliberately not used here.
+            param([string]$Expected)
 
-            # Defensive: remove any residual MSI-direct install that WinGet doesn't
-            # track. Mirrors lemonade_installer.py find_product_code / _uninstall_windows.
+            # SYSTEM-safe uninstall: remove the current/drifted copy via the Windows
+            # uninstall registry. Mirrors lemonade_installer.py find_product_code / _uninstall_windows.
             Write-Host "Checking Windows uninstall registry for residual Lemonade entries..."
             $uninstallRoots = @(
                 "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
@@ -233,22 +248,14 @@ runs:
                 }
             }
 
-            # Install exactly the pinned version.
-            Write-Host "Installing $PKG version $Expected via WinGet..."
-            winget install --id $PKG --version $Expected --silent --accept-package-agreements --accept-source-agreements
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "ERROR: winget install $PKG --version $Expected failed with exit code $LASTEXITCODE."
-                Write-Host "       Check that version $Expected is available: winget show $PKG --versions"
-                exit 1
-            }
-            Write-Host "WinGet install completed."
+            # Install exactly the pinned version via the matching MSI.
+            Install-LemonadeMsi -Version $Expected
         }
 
         # -----------------------------------------------------------------------
         # Main flow
         # -----------------------------------------------------------------------
 
-        $PKG      = "AMD.LemonadeServer"
         $expected = $env:LEMONADE_VERSION
 
         # Locate (or note absence of) the currently-installed lemonade-server.
@@ -265,7 +272,7 @@ runs:
         Write-Host "Expected version:  $expected"
 
         # Single equality rule: exact match → no-op; anything else → reconcile.
-        # This catches ahead runners (WinGet auto-update drift) as well as behind,
+        # This catches ahead runners (auto-update drift) as well as behind,
         # missing, or unparseable versions.
         $cmp = if ($installedVersion) { Compare-SemVer $installedVersion $expected } else { $null }
         if ($cmp -eq 0) {
@@ -295,23 +302,15 @@ runs:
             Write-Host "Post-reconcile version: $installedVersion"
         }
 
-        # Re-apply the WinGet pin to the expected version every run.
-        # This prevents future auto-update drift. Best-effort: the version
-        # is already correct at this point, so a pin failure is non-fatal.
-        Write-Host "Pinning $PKG to $expected via WinGet..."
-        winget pin add --id $PKG --version $expected 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "WARNING: winget pin add returned $LASTEXITCODE -- drift protection may be inactive, but the installed version is correct."
-        } else {
-            Write-Host "WinGet pin applied: $PKG @ $expected"
-        }
+        # Drift-prevention pinning can't run from this CI step -- winget is unavailable
+        # to the runner's SYSTEM service account; pinning is a runner-ops follow-up.
+        # The every-run reconcile is the safety net: a re-drifted runner is reset to
+        # the pinned version on the next run, before the pull.
 
         # Exact-match gate -- fail loud if the version is still wrong after reconcile.
         $finalCmp = Compare-SemVer $installedVersion $expected
         if ($null -eq $finalCmp -or $finalCmp -ne 0) {
             Write-Host "ERROR: Post-reconcile version ($installedVersion) does not match expected ($expected)."
-            Write-Host "       winget list output:"
-            winget list --id $PKG 2>&1 | ForEach-Object { Write-Host "         $_" }
             Write-Host "       Lemonade binaries on PATH:"
             Get-Command lemonade,lemonade-server,LemonadeServer -All -ErrorAction SilentlyContinue | ForEach-Object {
                 Write-Host "         - $($_.Source)"
