@@ -130,8 +130,11 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
         # Signature: callback(filename, step_num, total_steps, step_name, status)
         self._progress_callback: Optional[callable] = None
 
-        # Set reasonable defaults for agent - higher max_steps for interactive use
-        kwargs.setdefault("max_steps", 50)
+        # Set reasonable defaults for agent - higher max_steps for interactive
+        # use. Treat an explicit None (the CLI "use the default" sentinel) the
+        # same as omitted so this override isn't dropped to the global default.
+        if kwargs.get("max_steps") is None:
+            kwargs["max_steps"] = 50
 
         super().__init__(**kwargs)
 

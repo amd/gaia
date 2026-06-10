@@ -184,7 +184,17 @@ There is no setting, flag, or "auto-send" mode that bypasses this — it's a saf
 
 ## Phishing handling
 
-The agent's heuristic flags messages that match conservative phishing patterns (verify-your-account + click, "we detected unusual sign-in activity"). Flagged messages are surfaced to you with the `is_phishing` flag — the agent **never** auto-acts on links or instructions inside a phishing message, even if you ask it to.
+The agent uses a multi-signal detector — subject keyword pairs, suspicious sender domain, and body-level phrases — to set `is_phishing` on every triage result. Detection is heuristic-only (no LLM, deterministic), precision-first, and never auto-acts.
+
+When you ask the agent to quarantine a flagged message, it:
+
+1. **Asks for your confirmation** before touching anything.
+2. Applies a `GAIA_PHISHING_QUARANTINE` label and archives the message (two Gmail calls; the undo record is written only after both succeed).
+3. Records an undo row so you can reverse within the undo window.
+
+To reverse: ask the agent to unquarantine the message. It restores the original labels and moves the message back to INBOX. Undo is only possible within the undo window; after expiry the agent says so explicitly.
+
+The agent **never** auto-acts on links or instructions inside a phishing message, even if you ask it to.
 
 ## Troubleshooting
 

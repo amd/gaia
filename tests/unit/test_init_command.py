@@ -417,6 +417,71 @@ class TestDownloadModels(unittest.TestCase):
             self.assertGreaterEqual(mock_client.ensure_model_downloaded.call_count, 1)
 
 
+class TestInstallPipExtras(unittest.TestCase):
+    """Test _install_pip_extras frontend selection and messaging."""
+
+    def _make_cmd(self, profile):
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            return InitCommand(profile=profile, yes=True)
+
+    def test_no_extras_skips_install(self):
+        """Profiles without pip_extras short-circuit without shelling out."""
+        cmd = self._make_cmd("minimal")  # minimal declares no pip_extras
+        with patch("subprocess.run") as mock_run:
+            self.assertTrue(cmd._install_pip_extras())
+            mock_run.assert_not_called()
+
+    def test_standalone_uv_attempted_first(self):
+        """The standalone ``uv`` binary leads the install attempts.
+
+        uv-created venvs ship neither pip nor the uv module, so a bare
+        ``uv pip install`` is the only frontend that works inside them.
+        """
+        cmd = self._make_cmd("rag")  # rag pulls the [rag] extra
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "Name: amd-gaia\n"  # non-editable
+            return result
+
+        with patch("subprocess.run", side_effect=fake_run):
+            self.assertTrue(cmd._install_pip_extras())
+
+        install_calls = [c for c in calls if "install" in c]
+        self.assertTrue(install_calls, "expected an install attempt")
+        self.assertEqual(
+            install_calls[0][:2],
+            ["uv", "pip"],
+            "standalone uv must be the first install frontend",
+        )
+
+    def test_warning_has_no_doubled_pip_install(self):
+        """The fallback warning must not print 'pip install pip install'."""
+        cmd = self._make_cmd("rag")
+        warnings = []
+        cmd._print_warning = lambda msg: warnings.append(msg)
+        cmd._print_success = lambda msg: None
+
+        def fail_run(args, **kwargs):
+            result = MagicMock()
+            result.returncode = 1  # every frontend fails
+            result.stdout = ""
+            return result
+
+        with patch("subprocess.run", side_effect=fail_run):
+            self.assertTrue(cmd._install_pip_extras())
+
+        joined = " ".join(warnings)
+        self.assertTrue(warnings, "expected a fallback warning")
+        self.assertNotIn("pip install pip install", joined)
+        self.assertIn('uv pip install "amd-gaia[rag]"', joined)
+
+
 class TestVersionCompatibility(unittest.TestCase):
     """Test _check_version_compatibility version policy.
 

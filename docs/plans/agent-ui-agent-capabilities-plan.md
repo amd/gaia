@@ -360,7 +360,7 @@ GAIA already has a robust MCP client infrastructure:
 
 ### 7.2 Most Popular MCP Servers (2026 Ecosystem)
 
-Based on real usage data from [FastMCP](https://fastmcp.me/blog/top-10-most-popular-mcp-servers) (1,864+ servers tracked) and [mcpservers.org](https://mcpservers.org/):
+Based on real usage data from [MCP Directory](https://mcp.directory/blog/top-10-most-popular-mcp-servers) and [mcpservers.org](https://mcpservers.org/):
 
 #### Tier 1 — Essential (High demand, directly useful for Agent UI)
 

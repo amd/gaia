@@ -36,13 +36,13 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time
 from typing import Any, ClassVar, Dict, List, Optional
 
 import httpx
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
@@ -295,7 +295,7 @@ class ConnectorsDemoAgentConfig:
 
     base_url: Optional[str] = None
     model_id: Optional[str] = None
-    max_steps: int = 6
+    max_steps: int = field(default_factory=default_max_steps)
     streaming: bool = False
     debug: bool = False
     show_stats: bool = False

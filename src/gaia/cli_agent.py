@@ -374,6 +374,9 @@ def _scaffold_python(pkg_dir: Path, names: _Names) -> None:
     code_dir.mkdir(parents=True, exist_ok=True)
     tests_dir.mkdir(parents=True, exist_ok=True)
 
+    # Dev scaffold intentionally seeds the playful demo persona — a complete,
+    # runnable example the developer rewrites. (The conversational UI Builder
+    # instead authors a purpose-matched persona; see agents/builder/agent.py.)
     agent_source = generate_agent_source(
         agent_id=names.id,
         agent_name=names.display_name,
@@ -675,7 +678,7 @@ def _lint_formatters(py_files: List[Path], failures: List[str]) -> None:
     except ImportError:
         print(
             "  note: skipped black/isort check (not installed; "
-            "install with 'pip install \"amd-gaia[dev]\"')."
+            "install with 'uv pip install \"amd-gaia[dev]\"')."
         )
         return
     mode = black.Mode()

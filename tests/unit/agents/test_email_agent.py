@@ -161,6 +161,9 @@ class TestToolRegistry:
         "trash_message",
         "restore_message",
         "permanent_delete",
+        # Phishing quarantine (#1271)
+        "quarantine_phishing_message",
+        "unquarantine_message",
         # Calendar
         "list_calendar_events",
         "accept_invite",
