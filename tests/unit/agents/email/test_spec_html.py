@@ -15,7 +15,12 @@ from __future__ import annotations
 
 import re
 
-from gaia.agents.email.contract import (
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
     DraftReply,
@@ -25,7 +30,7 @@ from gaia.agents.email.contract import (
     EmailTriageResponse,
     EmailTriageResult,
 )
-from gaia.agents.email.spec_html import (
+from gaia_agent_email.spec_html import (
     _required_badge,
     _type_label,
     render_endpoint_spec_html,
@@ -308,7 +313,7 @@ def test_send_section_derived_from_route_models():
 
 
 def test_write_and_open_spec_writes_file_and_returns_path(tmp_path, monkeypatch):
-    import gaia.agents.email.spec_html as spec_mod
+    import gaia_agent_email.spec_html as spec_mod
 
     opened = []
     monkeypatch.setattr(spec_mod.webbrowser, "open", lambda uri: opened.append(uri))
@@ -325,7 +330,7 @@ def test_write_and_open_spec_writes_file_and_returns_path(tmp_path, monkeypatch)
 
 
 def test_write_and_open_spec_default_path_constant(monkeypatch):
-    import gaia.agents.email.spec_html as spec_mod
+    import gaia_agent_email.spec_html as spec_mod
 
     # Default path lives under ~/.gaia/email/ and is exposed as a constant the
     # CLI prints; assert the shape without writing to the real home dir.

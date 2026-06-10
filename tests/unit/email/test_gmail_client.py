@@ -16,13 +16,18 @@ from typing import Callable, List, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-import pytest
 
-from gaia.agents.email.gmail_backend import (
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.gmail_backend import (
     GmailBackend,
     LiveGmailBackend,
     _build_rfc822,
 )
+
 from gaia.connectors.errors import ConnectorsError
 
 # ---------------------------------------------------------------------------

@@ -19,16 +19,21 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email.tools.read_tools import (  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.tools.read_tools import (  # noqa: E402
     UNTRUSTED_BODY_CLOSE,
     UNTRUSTED_BODY_OPEN,
 )
-from gaia.agents.email.tools.summarize_tools import (  # noqa: E402
+from gaia_agent_email.tools.summarize_tools import (  # noqa: E402
     DEFAULT_SUMMARY_CHAR_LIMIT,
     EmailSummarizeError,
     SummarizeToolsMixin,
     summarize_email_llm,
 )
+
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 STUB_INBOX = _REPO_ROOT / "tests" / "fixtures" / "email" / "_stub_inbox.mbox"

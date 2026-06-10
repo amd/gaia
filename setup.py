@@ -69,8 +69,6 @@ setup(
         "gaia.connectors",
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
-        "gaia.agents.email",
-        "gaia.agents.email.tools",
     ],
     package_data={
         "gaia.eval": [
@@ -194,6 +192,9 @@ setup(
             "httpx>=0.27.0,<0.29.0",
             "respx>=0.21.0,<0.24.0",
             "keyring>=24.0.0,<26.0.0",
+            # Tokenizer proxy for the tool-prompt cost harness (#1448,
+            # gaia.eval.tool_cost) so the budget test can count tokens.
+            "tiktoken>=0.7.0,<1.0.0",
         ],
         "eval": [
             "anthropic",
@@ -202,6 +203,8 @@ setup(
             "numpy>=2.0,<2.3.0",
             "pypdf",
             "reportlab",
+            # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
+            "tiktoken>=0.7.0,<1.0.0",
         ],
         "talk": [
             "sounddevice",
@@ -254,6 +257,7 @@ setup(
         "agent-connectors-demo": ["gaia-agent-connectors-demo"],
         "agent-analyst": ["gaia-agent-analyst"],
         "agent-browser": ["gaia-agent-browser"],
+        "agent-email": ["gaia-agent-email"],
         "agents": [
             "gaia-agent-summarize",
             "gaia-agent-sd",
@@ -266,6 +270,7 @@ setup(
             "gaia-agent-connectors-demo",
             "gaia-agent-analyst",
             "gaia-agent-browser",
+            "gaia-agent-email",
         ],
     },
     classifiers=[
