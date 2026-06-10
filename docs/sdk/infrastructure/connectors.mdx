@@ -106,7 +106,7 @@ summary = conn.import_forwarded_connection(
         "https://www.googleapis.com/auth/calendar.events",
     ],
     account_email="alice@example.com",   # display-only in v1
-    grant_agents=["builtin:email"],       # agents that may use it
+    grant_agents=["installed:email"],       # agents that may use it
 )
 # summary carries metadata only — never the refresh token or client secret.
 ```
@@ -128,7 +128,7 @@ curl -X POST http://localhost:4200/v1/connections/google \
                    "https://www.googleapis.com/auth/gmail.send",
                    "https://www.googleapis.com/auth/calendar.events"],
         "account_email": "alice@example.com",
-        "grant_agents": ["builtin:email"]
+        "grant_agents": ["installed:email"]
       }'
 ```
 

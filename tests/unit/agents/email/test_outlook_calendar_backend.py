@@ -29,15 +29,20 @@ from typing import Callable, List, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-import pytest
 
-from gaia.agents.email.calendar_backend import CalendarBackend
-from gaia.agents.email.outlook_calendar_backend import (
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.calendar_backend import CalendarBackend
+from gaia_agent_email.outlook_calendar_backend import (
     LiveOutlookCalendarBackend,
     _get_outlook_calendar_token,
     graph_event_to_google,
 )
-from gaia.agents.email.tools.calendar_tools import list_calendar_events_impl
+from gaia_agent_email.tools.calendar_tools import list_calendar_events_impl
+
 from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 
 # ---------------------------------------------------------------------------
@@ -456,7 +461,8 @@ class TestScopeConformance:
         # The grant ledger refuses a token request for any scope not declared in
         # the connector catalog (#1105). Pin OUTLOOK_CALENDAR_SCOPES to the
         # catalog so the two cannot drift.
-        from gaia.agents.email.outlook_scopes import OUTLOOK_CALENDAR_SCOPES
+        from gaia_agent_email.outlook_scopes import OUTLOOK_CALENDAR_SCOPES
+
         from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
 
         for scope in OUTLOOK_CALENDAR_SCOPES:
@@ -474,14 +480,14 @@ class TestTokenResolver:
             return {"access_token": "CAL-TOK-123", "scopes": list(required_scopes)}
 
         monkeypatch.setattr(
-            "gaia.agents.email.outlook_calendar_backend.get_credential_sync",
+            "gaia_agent_email.outlook_calendar_backend.get_credential_sync",
             fake_get_credential_sync,
         )
         token = _get_outlook_calendar_token()
         assert token == "CAL-TOK-123"
         # Uses the microsoft connector + the email agent's namespaced id.
         assert captured["connector_id"] == "microsoft"
-        assert captured["agent_id"] == "builtin:email"
+        assert captured["agent_id"] == "installed:email"
         # Requests the Graph Calendars scope (NOT the mail scope).
         assert any("graph.microsoft.com/Calendars" in s for s in captured["scopes"])
 
@@ -500,7 +506,7 @@ class TestTokenResolver:
             )
 
         monkeypatch.setattr(
-            "gaia.agents.email.outlook_calendar_backend.get_credential_sync",
+            "gaia_agent_email.outlook_calendar_backend.get_credential_sync",
             fake_get_credential_sync,
         )
         with pytest.raises(AuthRequiredError) as exc:

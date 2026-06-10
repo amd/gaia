@@ -21,13 +21,16 @@ No network or OAuth — backends are constructed but never called.
 
 from __future__ import annotations
 
-import pytest
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
 
-from gaia.agents.email.calendar_backend import CalendarBackend, LiveCalendarBackend
-from gaia.agents.email.config import ConfigurationError, EmailAgentConfig
-from gaia.agents.email.gmail_backend import GmailBackend, LiveGmailBackend
-from gaia.agents.email.outlook_backend import LiveOutlookBackend
-from gaia.agents.email.outlook_calendar_backend import LiveOutlookCalendarBackend
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.calendar_backend import CalendarBackend, LiveCalendarBackend
+from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
+from gaia_agent_email.gmail_backend import GmailBackend, LiveGmailBackend
+from gaia_agent_email.outlook_backend import LiveOutlookBackend
+from gaia_agent_email.outlook_calendar_backend import LiveOutlookCalendarBackend
 
 
 class TestResolveMailBackend:
@@ -73,7 +76,7 @@ class TestResolveMailBackend:
 
 class TestAgentWiring:
     def _agent(self, **cfg_kwargs):
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         # Inject fake backends so no live token/HTTP path is hit during
         # construction; we only assert the wiring picked the right one.
@@ -81,7 +84,7 @@ class TestAgentWiring:
 
     def test_agent_routes_microsoft_to_outlook_backend(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         outlook_sentinel = object()
         cfg = EmailAgentConfig(
@@ -95,7 +98,7 @@ class TestAgentWiring:
 
     def test_agent_keeps_gmail_as_default(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         gmail_sentinel = object()
         cfg = EmailAgentConfig(
@@ -107,7 +110,7 @@ class TestAgentWiring:
         assert agent._gmail is gmail_sentinel
 
     def test_required_connectors_include_microsoft_and_google(self):
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         ids = {c.connector_id for c in EmailTriageAgent.REQUIRED_CONNECTORS}
         # Gmail must still be declared (don't break the shipped connector) and
@@ -116,7 +119,7 @@ class TestAgentWiring:
         assert "microsoft" in ids
 
     def test_microsoft_requirement_requests_graph_mail_scopes(self):
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         ms = next(
             c
@@ -175,7 +178,7 @@ class TestResolveCalendarBackend:
 class TestAgentCalendarWiring:
     def test_agent_routes_microsoft_to_outlook_calendar(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         cfg = EmailAgentConfig(
             mail_provider="microsoft",
@@ -188,7 +191,7 @@ class TestAgentCalendarWiring:
 
     def test_agent_keeps_google_calendar_as_default(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         cfg = EmailAgentConfig(
             gmail_backend=object(),
@@ -199,7 +202,7 @@ class TestAgentCalendarWiring:
 
     def test_injected_calendar_backend_still_wins_in_agent(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         cal_sentinel = object()
         cfg = EmailAgentConfig(

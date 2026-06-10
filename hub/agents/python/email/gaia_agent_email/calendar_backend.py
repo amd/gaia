@@ -23,7 +23,7 @@ from typing import (
 
 import httpx
 
-from gaia.agents.email.scopes import AGENT_NAMESPACED_ID, CALENDAR_SCOPES
+from gaia_agent_email.scopes import AGENT_NAMESPACED_ID, CALENDAR_SCOPES
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import get_credential_sync
 from gaia.logger import get_logger

@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Tests for ``gaia.agents.email.action_store``.
+Tests for ``gaia_agent_email.action_store``.
 
 Pinned behaviors:
 - ``record_action`` returns a UUID action_id and inserts a row.
@@ -16,9 +16,13 @@ from __future__ import annotations
 
 import time
 
-import pytest
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
 
-from gaia.agents.email import action_store
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email import action_store
+
 from gaia.database.mixin import DatabaseMixin
 
 

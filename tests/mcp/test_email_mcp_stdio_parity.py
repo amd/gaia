@@ -8,7 +8,7 @@ claim — it drives the *same* triage operation over two surfaces:
 
 1. the REST-side ``EmailTriageService`` (the FastAPI-free service the
    ``/v1/email/triage`` endpoint calls), and
-2. the new MCP **stdio** server (``python -m gaia.mcp.servers.email_mcp
+2. the new MCP **stdio** server (``python -m gaia_agent_email.mcp_server
    --transport stdio``), spoken to with the MCP Python SDK's stdio client,
 
 and asserts the structured output is **byte-identical** for a fixed fixture.
@@ -42,11 +42,18 @@ mcp_sdk = pytest.importorskip("mcp", reason="mcp SDK not installed ([mcp] extra)
 
 import anyio  # noqa: E402  (after importorskip)
 
-from gaia.agents.email.contract import (  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.api_routes import (  # noqa: E402  (read-only import)
+    EmailTriageService,
+)
+from gaia_agent_email.contract import (  # noqa: E402
     SCHEMA_VERSION,
     parse_response,
 )
-from gaia.api.email_routes import EmailTriageService  # noqa: E402  (read-only import)
 
 REPO_PYTHON = sys.executable
 
@@ -107,7 +114,7 @@ def _rest_triage(request: Dict[str, Any]) -> Dict[str, Any]:
     ``mode='json'`` so enums serialize to their string values exactly as the
     JSON-RPC wire form does — that is the representation we compare.
     """
-    from gaia.agents.email.contract import EmailTriageRequest
+    from gaia_agent_email.contract import EmailTriageRequest
 
     resp = EmailTriageService().triage_request(
         EmailTriageRequest.model_validate(request)
@@ -132,7 +139,7 @@ def _server_params():
     child_env["GAIA_EMAIL_MCP_FAKE_SEND"] = "1"
     return StdioServerParameters(
         command=REPO_PYTHON,
-        args=["-m", "gaia.mcp.servers.email_mcp", "--transport", "stdio"],
+        args=["-m", "gaia_agent_email.mcp_server", "--transport", "stdio"],
         # Inherit cwd so ``gaia`` is importable in the child.
         cwd=str(Path(__file__).resolve().parents[2]),
         env=child_env,
