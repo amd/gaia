@@ -360,6 +360,11 @@ jobs:
           path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Make re-runs idempotent: if this version is already on PyPI
+          # (e.g. a later stage failed and the workflow is re-run), skip the
+          # already-uploaded files instead of failing on a duplicate upload.
+          skip-existing: true
 
   publish-npm:
     name: Publish to npm
@@ -448,9 +453,11 @@ jobs:
 
       - name: Verify CLI entry points
         run: |
+          # Only core-wheel console_scripts belong here. gaia-emr / gaia-code
+          # moved to the standalone gaia-agent-emr / gaia-agent-code hub
+          # packages and are no longer installed by ``pip install amd-gaia``.
           gaia --help
           gaia-mcp --help
-          gaia-emr --help
 
       - name: Verify Python import
         env:
