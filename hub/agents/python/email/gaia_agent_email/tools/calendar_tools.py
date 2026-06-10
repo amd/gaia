@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from gaia.agents.base.tools import tool
-from gaia.agents.email.verbose import log_tool_call
+from gaia_agent_email.verbose import log_tool_call
 from gaia.connectors.errors import ConnectorsError
 from gaia.logger import get_logger
 
@@ -302,7 +302,7 @@ def _build_llm_user_prompt(subject: str, body: str) -> str:
     # Local import breaks a potential import cycle while reusing the agent's
     # single source of truth for the untrusted-input delimiters the system
     # prompt is trained to treat as data.
-    from gaia.agents.email.tools.read_tools import wrap_untrusted_body
+    from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 
     clipped = (body or "").strip()[:_BODY_CHAR_LIMIT]
     return (
@@ -693,7 +693,7 @@ def extract_event_details(
     """
     # Local import breaks a potential import cycle while reusing the single
     # source of truth for From-header parsing.
-    from gaia.agents.email.tools.read_tools import extract_sender_email
+    from gaia_agent_email.tools.read_tools import extract_sender_email
 
     title = (subject or "").strip() or _GENERIC_EVENT_TITLE
     address = extract_sender_email(sender) if sender else ""

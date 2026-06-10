@@ -35,30 +35,31 @@ import os
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
-from gaia.agents.base.agent import Agent
-from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.email import action_store
-from gaia.agents.email.config import EmailAgentConfig
-from gaia.agents.email.outlook_scopes import (
+from gaia_agent_email import action_store
+from gaia_agent_email.config import EmailAgentConfig
+from gaia_agent_email.outlook_scopes import (
     OUTLOOK_CALENDAR_SCOPES,
     OUTLOOK_MAIL_SCOPES,
 )
-from gaia.agents.email.scopes import (
+from gaia_agent_email.scopes import (
     AGENT_NAMESPACED_ID,
     ALL_SCOPES,
 )
-from gaia.agents.email.tools.calendar_tools import CalendarToolsMixin
-from gaia.agents.email.tools.delete_tools import DeleteToolsMixin
-from gaia.agents.email.tools.organize_tools import OrganizeToolsMixin
-from gaia.agents.email.tools.phishing_tools import PhishingToolsMixin
-from gaia.agents.email.tools.preference_tools import (
+from gaia_agent_email.tools.calendar_tools import CalendarToolsMixin
+from gaia_agent_email.tools.delete_tools import DeleteToolsMixin
+from gaia_agent_email.tools.organize_tools import OrganizeToolsMixin
+from gaia_agent_email.tools.phishing_tools import PhishingToolsMixin
+from gaia_agent_email.tools.preference_tools import (
     PreferenceToolsMixin,
     init_session_preferences,
 )
-from gaia.agents.email.tools.read_tools import ReadToolsMixin
-from gaia.agents.email.tools.reply_tools import ReplyToolsMixin
-from gaia.agents.email.tools.summarize_tools import SummarizeToolsMixin
+from gaia_agent_email.tools.read_tools import ReadToolsMixin
+from gaia_agent_email.tools.reply_tools import ReplyToolsMixin
+from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
+
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME

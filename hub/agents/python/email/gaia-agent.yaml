@@ -1,0 +1,32 @@
+id: email
+name: Email Triage
+version: 0.1.0
+description: "GAIA email triage agent — read, triage, organize, and reply to Gmail/Outlook locally"
+author: AMD
+license: MIT
+
+category: productivity
+tags: [email, gmail, calendar, triage]
+icon: mail
+tools_count: 6
+
+language: python
+min_gaia_version: "0.20.0"
+models: [Gemma-4-E4B-it-GGUF]
+
+python:
+  entry_module: gaia_agent_email
+  entry_class: EmailTriageAgent
+  dependencies:
+    - "amd-gaia>=0.20.0"
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+interfaces:
+  tui: false
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: true
