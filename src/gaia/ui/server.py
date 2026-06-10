@@ -58,6 +58,7 @@ from .routers import goals as goals_router_mod
 from .routers import hub as hub_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
+from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
@@ -509,6 +510,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(tunnel_router_mod.router)
     app.include_router(goals_router_mod.router)
     app.include_router(memory_router_mod.router)
+    app.include_router(schedules_router_mod.router)
     app.include_router(mcp_router_mod.router)
     # Issue #915 — OAuth connections (Settings page + agent grants).
     app.include_router(connectors_router_mod.router)
