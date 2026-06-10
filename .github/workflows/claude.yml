@@ -677,10 +677,17 @@ jobs:
   # are a rare exception, and declining is for bugs with no testable fix. PRs that
   # the job CAN validate must pass lint + unit tests (PHASE 3) before opening.
   #
-  # SECURITY: This job creates branches and pushes code. It does NOT set
-  # `allowed_non_write_users` — only repo-scoped permissions apply. Issue
-  # content is fetched via `gh issue view` (not YAML interpolation) to
-  # mitigate prompt injection from issue body text.
+  # SECURITY: This job creates branches and pushes code, and it sets
+  # `allowed_non_write_users: "*"` — without it, claude-code-action's actor gate
+  # aborts on every community (read-access) bug report, which is ~all of them, so
+  # the job only ever ran for maintainer-filed issues. Opening the gate is safe
+  # here because this is an `issues` event, NOT `pull_request_target`: no fork
+  # code is checked out, so there is no untrusted-code execution path. The only
+  # untrusted input is issue text, fetched via `gh issue view` (not YAML
+  # interpolation) and handled as data per the prompt's injection rules; any PR
+  # Claude opens lands on an `autofix/*` branch behind branch protection + human
+  # review. Residual risk is injection nudging Claude into an attacker-influenced
+  # draft PR — the same input surface pr-review/issue-handler already accept.
   #
   # COST: runs on the Claude Max subscription (CLAUDE_CODE_OAUTH_TOKEN), so there
   # is no per-fix dollar cost — only shared subscription rate-pool usage. Most
@@ -722,13 +729,17 @@ jobs:
           uv pip install --system -e ".[api]"
 
       - name: Attempt auto-fix
-        id: claude   # referenced by the Notify step's CLAUDE_OUTCOME below
+        id: claude   # referenced by the Notify step's execution_file check below
         uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Community bug reporters have read access; without this the action's
+          # actor gate aborts before Claude runs. Safe on `issues` events — see
+          # the job's SECURITY note above (no fork code is checked out).
+          allowed_non_write_users: "*"
           prompt: |
             REPO: ${{ github.repository }}
             ISSUE NUMBER: ${{ github.event.issue.number }}
@@ -987,12 +998,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           echo "::warning title=Auto-fix failed::auto-fix aborted for issue #$ISSUE_NUMBER."
-          # Only ping the issue when the fix attempt itself failed — not for checkout /
-          # setup / dependency-install flakes (infra noise the reporter can't act on).
-          if [ "$CLAUDE_OUTCOME" = "failure" ]; then
+          # Only ping the issue when Claude actually ran and then failed — gate on
+          # execution_file, which the action writes only once Claude starts. A
+          # pre-Claude abort (checkout/setup/dep-install flake, or the actor gate)
+          # leaves it empty: that is infra noise the reporter can't act on, so stay
+          # silent. (`steps.claude.outcome` can't distinguish these — an install
+          # crash sets it to 'failure' too. Same artifact check as claude-run.yml.)
+          if [ -n "$EXEC_FILE" ]; then
             gh issue comment "$ISSUE_NUMBER" --body "⚠️ The automated fix attempt ran but didn't complete cleanly. A maintainer may need to take a look. cc @kovtcharov-amd"
           fi
 
