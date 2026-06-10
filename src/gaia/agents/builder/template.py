@@ -6,8 +6,10 @@ from typing import List, Optional
 
 from gaia.agents.registry import KNOWN_TOOLS
 
-# Default instructions for generated agents — a fun, educational starting point.
-# Users are expected to replace this with their own system prompt.
+# Demo-only example persona — NOT the production default. Kept so docs and
+# tutorials can show a complete, playful agent. Generated agents derive their
+# persona from the user's described purpose (see ``default_system_prompt``); a
+# thematically-wrong placeholder is worse than a generic-but-correct one.
 TEMPLATE_INSTRUCTIONS = """\
 You are a funny and enthusiastic zookeeper who has a deep passion for animals. \
 You work at the world's most amazing zoo and every response you give includes \
@@ -21,18 +23,71 @@ Feel free to replace this instructions block with your own system prompt. \
 This is where you define your agent's personality, knowledge, and behavior.\
 """
 
-# Conversation starters shown as suggestion chips in the GAIA UI.
+# Demo-only example conversation starters (see TEMPLATE_INSTRUCTIONS).
 TEMPLATE_STARTERS = [
     "Hello! What's happening at the zoo today?",
     "Tell me a fun fact about one of your animals.",
     "Which animal is your favourite and why?",
 ]
 
+# Appended to every scaffolded agent's authored system prompt so the agent
+# itself sets honest expectations: it's a starter template, not a finished agent
+# with real tools. The Builder is an alpha feature.
+STARTER_CAVEAT = (
+    "\n\n---\n"
+    "You are a starter template scaffolded by the GAIA Agent Builder (an alpha "
+    "feature). You can talk about your topic from what you already know, but you do "
+    "not yet have tools to take real actions — you cannot actually fetch, browse, or "
+    "parse live data. In your first reply, briefly tell the user you're a starting "
+    "point they can extend with tools or MCP servers "
+    "(https://amd-gaia.ai/docs/guides/custom-agent), then help as best you can."
+)
+
+
+def default_system_prompt(agent_name: str, description: str) -> str:
+    """Minimal, purpose-derived system prompt used when none is supplied.
+
+    A generic-but-correct prompt beats a thematically-wrong placeholder
+    (CLAUDE.md: no silent fallbacks).
+    """
+    desc = description.strip()
+    body = f"You are {agent_name}, a helpful AI assistant."
+    if desc:
+        body += f" {desc}"
+    return (
+        f"{body}\n\nAnswer clearly and accurately. If you are unsure, say so "
+        "rather than guessing, and keep your responses focused on the user's "
+        "request."
+    )
+
+
+def default_conversation_starters(agent_name: str) -> List[str]:
+    """Generic, on-topic starter chips used when none are supplied.
+
+    Returns three to honor the "2-3 starters" contract in the create_agent tool
+    docstring and the Builder system prompt.
+    """
+    return [
+        f"What can {agent_name} help me with?",
+        "Show me an example of what you can do.",
+        "How should I get started?",
+    ]
+
+
+def _class_docstring(description: str) -> str:
+    """Return a safe one-line docstring literal built from the description.
+
+    Uses ``repr()`` so any quotes/backslashes in the description can't break the
+    generated source — consistent with the rest of this module.
+    """
+    return repr(description.strip() or "Custom GAIA agent.")
+
 
 def _build_header(class_name: str, agent_id: str, flavor: str) -> List[str]:
     """Top-of-file comments shared by every template."""
     return [
         f"# {class_name} -- Custom GAIA Agent{flavor}",
+        "# Alpha: scaffolded by the Gaia Builder — a starter template you extend yourself.",
         f"# Location: ~/.gaia/agents/{agent_id}/agent.py",
         "# Docs: https://amd-gaia.ai/docs/sdk/core/agent-system",
         "#        https://amd-gaia.ai/docs/sdk/patterns",
@@ -58,6 +113,7 @@ def _render_basic(
     class_name: str,
     starters: list,
     system_prompt: str,
+    card_description: str,
 ) -> List[str]:
     return [
         *_build_header(class_name, agent_id, ""),
@@ -66,18 +122,17 @@ def _render_basic(
         "",
         "",
         f"class {class_name}(Agent):",
-        '    """One-line description of what this agent does.',
+        f"    {_class_docstring(description)}",
         "",
-        "    TODO: Replace this docstring — it appears in IDE tooltips,",
-        "    `help()` output, and agent-discovery listings.",
-        '    """',
-        "",
-        *_build_class_attrs(agent_id, agent_name, description, starters),
+        *_build_class_attrs(agent_id, agent_name, card_description, starters),
         "",
         "    # -- System Prompt -----------------------------------------------",
         "    # This is your agent's personality and instructions.",
         "    # Edit the text below to change how your agent behaves.",
         "",
+        "    # A starter-template caveat is appended to the end of the returned prompt",
+        '    # (after the "---" marker). Delete that trailing text once your agent has real',
+        "    # tools/MCP, so it stops disclaiming abilities it now has.",
         "    def _get_system_prompt(self) -> str:",
         f"        return {repr(system_prompt)}",
         "",
@@ -114,6 +169,7 @@ def _render_mcp(
     class_name: str,
     starters: list,
     system_prompt: str,
+    card_description: str,
 ) -> List[str]:
     return [
         *_build_header(class_name, agent_id, " (MCP-enabled)"),
@@ -127,9 +183,9 @@ def _render_mcp(
         "",
         "",
         f"class {class_name}(Agent, MCPClientMixin):",
-        '    """Custom MCP-enabled agent created by the Gaia Builder."""',
+        f"    {_class_docstring(description)}",
         "",
-        *_build_class_attrs(agent_id, agent_name, description, starters),
+        *_build_class_attrs(agent_id, agent_name, card_description, starters),
         "",
         "    # -- MCP Setup --------------------------------------------------",
         "    # _mcp_manager must be set BEFORE super().__init__() because",
@@ -146,6 +202,9 @@ def _render_mcp(
         "    # This is your agent's personality and instructions.",
         "    # Edit the text below to change how your agent behaves.",
         "",
+        "    # A starter-template caveat is appended to the end of the returned prompt",
+        '    # (after the "---" marker). Delete that trailing text once your agent has real',
+        "    # tools/MCP, so it stops disclaiming abilities it now has.",
         "    def _get_system_prompt(self) -> str:",
         f"        return {repr(system_prompt)}",
         "",
@@ -184,6 +243,7 @@ def _render_with_tools(
     system_prompt: str,
     tools: List[str],
     enable_mcp: bool,
+    card_description: str,
 ) -> List[str]:
     """Compose a template with tool mixins (and optional MCP)."""
     # Build imports
@@ -219,13 +279,9 @@ def _render_with_tools(
         "",
         "",
         class_sig,
-        '    """One-line description of what this agent does.',
+        f"    {_class_docstring(description)}",
         "",
-        "    TODO: Replace this docstring — it appears in IDE tooltips,",
-        "    `help()` output, and agent-discovery listings.",
-        '    """',
-        "",
-        *_build_class_attrs(agent_id, agent_name, description, starters),
+        *_build_class_attrs(agent_id, agent_name, card_description, starters),
         "",
     ]
 
@@ -250,6 +306,9 @@ def _render_with_tools(
         [
             "    # -- System Prompt -----------------------------------------------",
             "",
+            "    # A starter-template caveat is appended to the end of the returned prompt",
+            '    # (after the "---" marker). Delete that trailing text once your agent has real',
+            "    # tools/MCP, so it stops disclaiming abilities it now has.",
             "    def _get_system_prompt(self) -> str:",
             f"        return {repr(system_prompt)}",
             "",
@@ -299,6 +358,7 @@ def generate_agent_source(
     system_prompt: str,
     enable_mcp: bool = False,
     tools: Optional[List[str]] = None,
+    card_description: Optional[str] = None,
 ) -> str:
     """Build a syntactically-safe agent.py source string.
 
@@ -308,7 +368,8 @@ def generate_agent_source(
     Args:
         agent_id: Short slug used as the directory name and AGENT_ID.
         agent_name: Human-readable display name (e.g. "Alpha Agent").
-        description: One-sentence description of the agent.
+        description: One-sentence description of the agent. Used for the class
+            docstring (so IDE tooltips / ``help()`` stay clean).
         class_name: Python class name (e.g. "AlphaAgent").
         starters: Conversation starter strings for the UI.
         system_prompt: The agent's system prompt text.
@@ -317,10 +378,15 @@ def generate_agent_source(
             When provided, adds the corresponding mixin imports, base classes,
             and ``self.register_<tool>_tools()`` calls.  Invalid names raise
             ``ValueError``.
+        card_description: Optional text for ``AGENT_DESCRIPTION`` (the Hub-card
+            label). Defaults to ``description`` when not supplied. The Builder
+            passes a tagged variant here so the "(alpha template)" marker shows
+            on the card without polluting the class docstring.
 
     Raises:
         ValueError: If ``tools`` contains an entry not in ``KNOWN_TOOLS``.
     """
+    card_description = card_description if card_description is not None else description
     tools = list(tools or [])
     if tools:
         unknown = [t for t in tools if t not in KNOWN_TOOLS]
@@ -338,13 +404,26 @@ def generate_agent_source(
             system_prompt=system_prompt,
             tools=tools,
             enable_mcp=enable_mcp,
+            card_description=card_description,
         )
     elif enable_mcp:
         lines = _render_mcp(
-            agent_id, agent_name, description, class_name, starters, system_prompt
+            agent_id,
+            agent_name,
+            description,
+            class_name,
+            starters,
+            system_prompt,
+            card_description,
         )
     else:
         lines = _render_basic(
-            agent_id, agent_name, description, class_name, starters, system_prompt
+            agent_id,
+            agent_name,
+            description,
+            class_name,
+            starters,
+            system_prompt,
+            card_description,
         )
     return "\n".join(lines) + "\n"

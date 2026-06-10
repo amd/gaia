@@ -521,7 +521,7 @@ class LiveOutlookBackend:
         )
         return {"id": "", "to": to, "subject": subject}
 
-    def create_label(
+    def create_label(  # pylint: disable=unused-argument
         self, *, name: str, label_list_visibility: str = "labelShow"
     ) -> Dict[str, Any]:
         # Master categories require a ``color`` (preset enum); ``preset0`` is a

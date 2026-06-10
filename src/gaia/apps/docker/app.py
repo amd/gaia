@@ -29,7 +29,7 @@ def _load_docker_agent():
     except ImportError as e:
         raise ImportError(
             "The docker agent is not installed. Install it with "
-            "`pip install gaia-agent-docker` (or `pip install amd-gaia[agents]` "
+            '`uv pip install gaia-agent-docker` (or `uv pip install "amd-gaia[agents]"` '
             "for all AMD agents). See https://amd-gaia.ai/docs/guides/docker."
         ) from e
     return DockerAgent, DEFAULT_MODEL

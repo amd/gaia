@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Structured-data analysis GAIA agent."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools import ScratchpadToolsMixin
 from gaia.mcp.mixin import MCPClientMixin
@@ -20,7 +20,7 @@ class AnalystAgentConfig:
     claude_model: str = "claude-sonnet-4-20250514"
     base_url: Optional[str] = None
     model_id: Optional[str] = None
-    max_steps: int = 10
+    max_steps: int = field(default_factory=default_max_steps)
     streaming: bool = False
     debug: bool = False
     debug_prompts: bool = False

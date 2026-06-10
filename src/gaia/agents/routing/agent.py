@@ -492,8 +492,8 @@ Conversation:
             raise RuntimeError(
                 "CodeAgent is not installed. RoutingAgent routes coding tasks "
                 "to the 'gaia-agent-code' package, which is not present. "
-                "Install it with 'pip install gaia-agent-code' (or "
-                "'pip install amd-gaia[agents]'), then retry. See "
+                "Install it with 'uv pip install gaia-agent-code' (or "
+                "'uv pip install \"amd-gaia[agents]\"'), then retry. See "
                 "docs/spec/agent-hub-restructure.mdx."
             )
 

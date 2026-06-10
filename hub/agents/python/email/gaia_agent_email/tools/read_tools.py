@@ -491,6 +491,7 @@ def triage_inbox_impl(
                 subject=payload_headers.get("subject", ""),
                 sender=payload_headers.get("from", ""),
                 label_ids=msg.get("labelIds", []),
+                body=msg.get("snippet", ""),
             )
             log_triage_dispatch(
                 message_id=msg["id"],

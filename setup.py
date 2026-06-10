@@ -107,6 +107,10 @@ setup(
         "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
+        # Required by the `gaia-mcp` bridge (base console_script), which parses
+        # multipart uploads via python_multipart at import time. Base — not an
+        # extra — so a plain `pip install amd-gaia` ships a working gaia-mcp.
+        "python-multipart>=0.0.9",
     ],
     extras_require={
         "image": [

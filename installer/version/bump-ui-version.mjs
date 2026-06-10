@@ -4,12 +4,13 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Syncs the version from src/gaia/version.py into the agent-ui webui package.json.
- * GAIA uses a single version source of truth in version.py.
+ * Syncs the version from src/gaia/version.py into the agent-ui webui
+ * package.json and package-lock.json. GAIA uses a single version source of
+ * truth in version.py.
  *
  * Usage:
- *   node installer/version/bump-ui-version.mjs          # reads version.py and syncs package.json
- *   node installer/version/bump-ui-version.mjs --check  # verify package.json matches version.py (used in CI)
+ *   node installer/version/bump-ui-version.mjs          # reads version.py and syncs package.json + lockfile
+ *   node installer/version/bump-ui-version.mjs --check  # verify package.json + lockfile match version.py (used in CI)
  */
 
 import { readFileSync, writeFileSync } from "fs";
@@ -29,6 +30,14 @@ const PACKAGE_PATH = resolve(
   "webui",
   "package.json"
 );
+const PACKAGE_LOCK_PATH = resolve(
+  rootDir,
+  "src",
+  "gaia",
+  "apps",
+  "webui",
+  "package-lock.json"
+);
 
 // Read version from version.py
 function readVersionPy() {
@@ -39,6 +48,19 @@ function readVersionPy() {
     process.exit(1);
   }
   return match[1];
+}
+
+// The lockfile stores the root package version twice — the top-level
+// `.version` and `.packages[""].version` — each immediately after a
+// `"name": "<pkg>"` line that no dependency shares. This targets exactly
+// those two: group 1 is the text up to the opening quote, group 2 the
+// version value, group 3 the closing quote.
+function lockVersionRegex(pkgName) {
+  const escaped = pkgName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `("name":\\s*"${escaped}",\\s*\\n\\s*"version":\\s*")([^"]+)(")`,
+    "g"
+  );
 }
 
 const version = readVersionPy();
@@ -56,16 +78,41 @@ if (checkOnly) {
   console.log(`version.py: ${version}\n`);
 
   const pkg = JSON.parse(readFileSync(PACKAGE_PATH, "utf8"));
-  if (pkg.version !== version) {
-    console.log(`FAIL: ${pkg.name}@${pkg.version} -- expected ${version}`);
+  const lockVersions = [
+    ...readFileSync(PACKAGE_LOCK_PATH, "utf8").matchAll(
+      lockVersionRegex(pkg.name)
+    ),
+  ].map((m) => m[2]);
+
+  const pkgOk = pkg.version === version;
+  const lockOk =
+    lockVersions.length === 2 && lockVersions.every((v) => v === version);
+
+  if (!pkgOk || !lockOk) {
+    if (!pkgOk) {
+      console.log(
+        `FAIL: package.json ${pkg.name}@${pkg.version} -- expected ${version}`
+      );
+    }
+    if (lockVersions.length !== 2) {
+      console.log(
+        `FAIL: package-lock.json -- expected 2 root version fields, found ${lockVersions.length}`
+      );
+    } else if (!lockOk) {
+      console.log(
+        `FAIL: package-lock.json root version ${[
+          ...new Set(lockVersions),
+        ].join(", ")} -- expected ${version}`
+      );
+    }
     console.log(
-      '\nRun "node installer/version/bump-ui-version.mjs" to sync package.json to version.py.'
+      '\nRun "node installer/version/bump-ui-version.mjs" to sync package.json + lockfile to version.py.'
     );
     process.exit(1);
-  } else {
-    console.log(`OK: ${pkg.name}@${pkg.version}`);
-    console.log("\nPackage version matches version.py.");
   }
+
+  console.log(`OK: ${pkg.name}@${pkg.version} (package.json + lockfile)`);
+  console.log("\nPackage and lockfile versions match version.py.");
 } else {
   // --- Sync mode ---
   console.log(`\nSyncing package to version ${version} (from version.py)\n`);
@@ -75,7 +122,31 @@ if (checkOnly) {
     const old = pkg.version;
     pkg.version = version;
     writeFileSync(PACKAGE_PATH, JSON.stringify(pkg, null, 2) + "\n", "utf8");
-    console.log(`  package.json  ${old} -> ${version}`);
+    console.log(`  package.json       ${old} -> ${version}`);
+
+    // Keep the lockfile root version in sync via a targeted regex (see
+    // lockVersionRegex); rewriting the whole file or `npm install` would
+    // churn transitive entries.
+    const lockContent = readFileSync(PACKAGE_LOCK_PATH, "utf8");
+    let count = 0;
+    const newLock = lockContent.replace(
+      lockVersionRegex(pkg.name),
+      (_m, prefix, _old, suffix) => {
+        count += 1;
+        return `${prefix}${version}${suffix}`;
+      }
+    );
+    if (count !== 2) {
+      console.error(
+        `\n  ERROR: expected 2 root version fields in package-lock.json, matched ${count}.`
+      );
+      console.error(
+        "  The lockfile structure changed — update bump-ui-version.mjs to match."
+      );
+      process.exit(1);
+    }
+    writeFileSync(PACKAGE_LOCK_PATH, newLock, "utf8");
+    console.log(`  package-lock.json  -> ${version}`);
   } catch (err) {
     console.error(`  ERROR: ${err.message}`);
     process.exit(1);

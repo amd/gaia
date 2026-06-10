@@ -468,6 +468,16 @@ function runCommand(cmd, args, { env, stageLabel } = {}) {
   });
 }
 
+/**
+ * Detect the Windows "file in use" signature in command output. An upgrade's
+ * `uv pip install --refresh` can't replace gaia.exe while a previous GAIA
+ * process still holds it open — pip reports os error 32 (issue #1388).
+ */
+function isFileLockedError(output) {
+  if (!output) return false;
+  return /os error 32/i.test(output) || /being used by another process/i.test(output);
+}
+
 // ── Pre-checks ───────────────────────────────────────────────────────────────
 
 /**
@@ -1148,14 +1158,22 @@ async function installBackend(opts = {}) {
 
   const installResult = await runCommand("uv", pipArgs, { stageLabel: "pip" });
   if (installResult.code !== 0) {
+    // Windows: an upgrade can't replace gaia.exe while a previous GAIA
+    // process still holds it open (issue #1388). The orphan cleanup in
+    // main.cjs should have killed it first; if the lock persists, point the
+    // user at the live process rather than the generic manual-install hint.
+    const output = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
+    const suggestion = isFileLockedError(output)
+      ? "A running GAIA process is locking the install. Close GAIA completely (including any leftover gaia.exe in Task Manager), then relaunch."
+      : `Try installing manually:\n  uv pip install ${pipPackage} --python ${
+          IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
+        }\nThen restart GAIA. See https://amd-gaia.ai/quickstart#cli-install`;
     throw new InstallError(
       `Failed to install ${pipPackage} (pip exit ${installResult.code}).`,
       {
         stage: STAGES.INSTALL_PACKAGE,
         code: installResult.code,
-        suggestion: `Try installing manually:\n  uv pip install ${pipPackage} --python ${
-          IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
-        }\nThen restart GAIA. See https://amd-gaia.ai/quickstart#cli-install`,
+        suggestion,
       }
     );
   }
@@ -1439,6 +1457,7 @@ module.exports = {
   runPreChecks,
   checkDiskSpace,
   checkNetwork,
+  isFileLockedError,
 
   // State machine
   getState,
