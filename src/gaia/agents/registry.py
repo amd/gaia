@@ -62,14 +62,13 @@ _MANIFEST_FINGERPRINT_KEYS = frozenset(
 # (#1162) but remain reserved so a custom agent can't claim the old ID and
 # shadow the alias resolution in ``_LEGACY_ID_ALIASES``.
 # Only ids that resolve to a framework *builtin* belong here. The chat/doc/file
-# profiles, data, web (and all their -lite / gaia-lite aliases) migrated to
-# standalone hub wheels (#1102), so they register via the gaia.agent entry
-# point and are no longer reserved builtins. ``builder`` is the only remaining
-# framework agent; ``email`` is still resident pending its own migration.
+# profiles, data, web, and email (and all their -lite / gaia-lite aliases)
+# migrated to standalone hub wheels (#1102), so they register via the gaia.agent
+# entry point and are no longer reserved builtins. ``builder`` is the only
+# remaining framework agent.
 _RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
     {
         "builder",
-        "email",
     }
 )
 
@@ -570,45 +569,11 @@ class AgentRegistry:
         # wheel (#1102) and is discovered via the ``gaia.agent`` entry point in
         # ``_discover_installed_agents`` — no built-in registration here.
 
-        # --- EmailTriageAgent (#962) ---
-        # First concrete email provider for the Email Triage Agent
-        # parent issue (#645). Reads/organizes/replies through Gmail
-        # via the connectors framework; processes all email content
-        # locally on Lemonade.
-        try:
-            from gaia.agents.email.agent import EmailTriageAgent
-            from gaia.agents.email.config import EmailAgentConfig
-
-            def email_factory(**kwargs):
-                valid_fields = {f.name for f in dataclasses.fields(EmailAgentConfig)}
-                config = EmailAgentConfig(
-                    **{k: v for k, v in kwargs.items() if k in valid_fields}
-                )
-                return EmailTriageAgent(config=config)
-
-            self._register(
-                AgentRegistration(
-                    id="email",
-                    name=EmailTriageAgent.AGENT_NAME,
-                    description=EmailTriageAgent.AGENT_DESCRIPTION,
-                    source="builtin",
-                    conversation_starters=list(EmailTriageAgent.CONVERSATION_STARTERS),
-                    factory=_wrap_factory_with_namespaced_id(
-                        email_factory, "builtin:email"
-                    ),
-                    agent_dir=None,
-                    models=[],
-                    required_connections=list(EmailTriageAgent.REQUIRED_CONNECTORS),
-                    namespaced_agent_id="builtin:email",
-                    category="productivity",
-                    tags=["email", "gmail", "calendar", "triage"],
-                    icon="mail",
-                    tools_count=6,
-                )
-            )
-            logger.info("registry: Registered built-in agent: email (EmailTriageAgent)")
-        except ImportError as e:
-            logger.debug("registry: EmailTriageAgent not available, skipping: %s", e)
+        # EmailTriageAgent (id="email") ships as the standalone
+        # ``gaia-agent-email`` wheel (#1102), discovered via the ``gaia.agent``
+        # entry point in ``_discover_installed_agents`` — no built-in
+        # registration here. Its REST + MCP surfaces ship in that wheel too
+        # (``gaia_agent_email.api_routes`` / ``gaia_agent_email.mcp_server``).
 
         # --- BuilderAgent ---
         try:

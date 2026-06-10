@@ -4614,7 +4614,14 @@ def handle_email_command(args):
     # --spec: generate the HTML endpoint spec and open it in a browser.
     # No LLM, no Lemonade — short-circuit before any server check.
     if getattr(args, "spec", False):
-        from gaia.agents.email.spec_html import write_and_open_spec
+        try:
+            from gaia_agent_email.spec_html import write_and_open_spec
+        except ImportError as e:
+            raise RuntimeError(
+                "The email agent is not installed. Install it with "
+                '`pip install gaia-agent-email` (or `pip install "amd-gaia[agents]"` '
+                "for all agents), then re-run `gaia email --spec`."
+            ) from e
 
         dest = write_and_open_spec(getattr(args, "output", None))
         print(dest)
@@ -4634,7 +4641,7 @@ def handle_email_command(args):
             sys.exit(1)
 
     try:
-        from gaia.agents.email.cli import main as email_main
+        from gaia_agent_email.cli import main as email_main
 
         # Normalize args the agent CLI expects.
         if not hasattr(args, "verbose"):
@@ -4654,7 +4661,10 @@ def handle_email_command(args):
     except ImportError as e:
         log.error(f"Failed to import Email agent: {e}")
         print("❌ Error: Email agent components are not available")
-        print("Make sure GAIA is installed properly: uv pip install -e .")
+        print(
+            "Install the email agent with `pip install gaia-agent-email` "
+            '(or `pip install "amd-gaia[agents]"` for all agents).'
+        )
         sys.exit(1)
     except Exception as e:
         log.error(f"Error running Email agent: {e}")

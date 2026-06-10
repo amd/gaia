@@ -3,12 +3,12 @@ title: "Email Triage Contract Schema"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/email/contract.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/email/contract.py)
+  **Source Code:** [`hub/agents/python/email/gaia_agent_email/contract.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/contract.py)
 </Info>
 
 <Note>
 **Component:** Email request/response contract (issue #1262)
-**Module:** `gaia.agents.email.contract`
+**Module:** `gaia_agent_email.contract`
 **Validation:** pydantic v2
 **Schema version:** `1.0`
 </Note>
@@ -30,7 +30,7 @@ stable shape.
   models, guaranteeing identical structured output for a fixed input.
 - **Single email *and* full thread.** The input is a discriminated union on a
   `kind` field (`"single"` / `"thread"`); a consumer branches deterministically.
-- **Dependency-light.** `gaia.agents.email.contract` imports only pydantic — no
+- **Dependency-light.** `gaia_agent_email.contract` imports only pydantic — no
   Gmail or connector backends — so either surface can import it without pulling
   live-mail machinery into the process. (A regression test enforces this.)
 - **Fail loudly.** Every model forbids unknown fields (`extra="forbid"`). An
@@ -243,7 +243,7 @@ Validate a payload at a boundary (REST endpoint, MCP tool handler). Both helpers
 raise loudly on a contract violation — never return a partial object:
 
 ```python
-from gaia.agents.email.contract import parse_request, parse_response
+from gaia_agent_email.contract import parse_request, parse_response
 
 request = parse_request(raw_request_dict)   # -> EmailTriageRequest
 if request.payload.kind == "thread":

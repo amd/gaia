@@ -38,7 +38,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from gaia.agents.email.tools.triage_heuristics import detect_phishing  # noqa: E402
+pytest.importorskip("gaia_agent_email")
+
+from gaia_agent_email.tools.triage_heuristics import detect_phishing  # noqa: E402
+
 from gaia.eval.quality_metrics import Confusion  # noqa: E402
 
 _FIXTURE_PATH = (
