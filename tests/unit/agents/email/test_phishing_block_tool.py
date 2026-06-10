@@ -30,13 +30,17 @@ if str(_REPO_ROOT / "src") not in sys.path:
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION  # noqa: E402
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
-from gaia.agents.email import action_store  # noqa: E402
-from gaia.agents.email.tools.phishing_tools import (  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")
+
+from gaia_agent_email import action_store  # noqa: E402
+from gaia_agent_email.tools.phishing_tools import (  # noqa: E402
     QUARANTINE_LABEL_NAME,
     PhishingToolsMixin,
     quarantine_phishing_impl,
     unquarantine_impl,
 )
+
 from gaia.database.mixin import DatabaseMixin  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -324,7 +328,7 @@ class TestPhishingBodyPromptInjection:
     """
 
     def test_system_prompt_contains_untrusted_input_warning(self):
-        from gaia.agents.email.agent import _SYSTEM_PROMPT
+        from gaia_agent_email.agent import _SYSTEM_PROMPT
 
         assert (
             "UNTRUSTED" in _SYSTEM_PROMPT
@@ -334,7 +338,7 @@ class TestPhishingBodyPromptInjection:
         ), "System prompt must reference the <<<UNTRUSTED_EMAIL_BODY_START>>> delimiter."
 
     def test_system_prompt_refuses_phishing_action_instructions(self):
-        from gaia.agents.email.agent import _SYSTEM_PROMPT
+        from gaia_agent_email.agent import _SYSTEM_PROMPT
 
         # The system prompt must tell the LLM to refuse acting on body instructions.
         assert (

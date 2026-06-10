@@ -13,7 +13,16 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.email.generate_mbox import SEED, TARGET_COUNTS, generate
+# The mbox generator imports the email triage heuristics, which now live in the
+# standalone gaia_agent_email hub package — skip when it isn't installed (the
+# generic unit-test job doesn't install hub agents).
+pytest.importorskip("gaia_agent_email")
+
+from tests.fixtures.email.generate_mbox import (  # noqa: E402
+    SEED,
+    TARGET_COUNTS,
+    generate,
+)
 
 EMAIL_DIR = Path("tests/fixtures/email")
 MBOX_PATH = EMAIL_DIR / "synthetic_inbox.mbox"
