@@ -98,17 +98,14 @@ jobs:
                 throw "Server failed to start"
             }
 
-            # Clear any cached/corrupted model files to force fresh download
-            # See: https://github.com/ggml-org/llama.cpp/issues/13534
-            Write-Host "`n=== Clearing Model Cache ==="
-            $lemonadeCache = "$env:LOCALAPPDATA\lemonade-server"
-            if (Test-Path "$lemonadeCache\models") {
-                Write-Host "Removing cached models from: $lemonadeCache\models"
-                Get-ChildItem "$lemonadeCache\models" -Directory | ForEach-Object {
-                    Write-Host "   Removing: $($_.Name)"
-                    Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-                }
-            }
+            # Stale-backend cleanup on a version change is handled by the
+            # install-lemonade action's reconcile step (it clears the versioned
+            # llama.cpp backend under %USERPROFILE%\.cache\lemonade\bin so a
+            # downgraded server doesn't fail with "llama-server failed to
+            # start"). The previous model-cache wipe here targeted a v9-era path
+            # (%LOCALAPPDATA%\lemonade-server\models) that doesn't exist in
+            # v10 -- GGUF weights live in the HuggingFace hub cache -- so it was
+            # a silent no-op and has been removed.
 
             # Pull embedding model (actual model used in tests)
             Write-Host "`n=== Pulling Embedding Model ==="
