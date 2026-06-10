@@ -14,6 +14,7 @@ Endpoints:
 """
 
 import asyncio
+import importlib.util
 import json
 import logging
 import os
@@ -97,17 +98,16 @@ app.add_middleware(
 # Email Triage Agent REST surface (#1229): POST /v1/email/{triage,draft,send}.
 # Ships with the standalone ``gaia-agent-email`` wheel (#1102); mount it only
 # when that wheel is installed so the core API server still starts without it.
-try:
-    import gaia_agent_email  # noqa: F401 — wheel-presence check only
-except ImportError:
+# Gate on the wheel's presence via find_spec (no import side effect), then
+# import the router OUTSIDE the gate so a genuine broken import inside an
+# installed wheel fails loudly rather than being swallowed as "not installed"
+# (no-silent-fallback rule).
+if importlib.util.find_spec("gaia_agent_email") is None:
     logger.info(
         "Email REST routes unavailable: install the email agent "
         "(`pip install gaia-agent-email`) to enable POST /v1/email/*."
     )
 else:
-    # Wheel is installed — import the router for real OUTSIDE the presence
-    # check so a genuine broken import inside the wheel fails loudly rather
-    # than being swallowed as "not installed" (no-silent-fallback rule).
     from gaia_agent_email.api_routes import router as email_router
 
     app.include_router(email_router)
