@@ -47,6 +47,16 @@ class TestSplitCamelCase:
     def test_numbers(self):
         assert _split_camel_case("Agent42Bot") == "Agent42 Bot"
 
+    def test_spaced_input_preserves_internal_caps(self):
+        """When the name already has spaces, internal caps are left intact."""
+        assert _split_camel_case("Daily arXiv Summary") == "Daily arXiv Summary"
+
+    def test_spaced_input_preserves_leading_lowercase_acronym(self):
+        assert _split_camel_case("iOS Helper") == "iOS Helper"
+
+    def test_spaced_input_preserves_proper_noun(self):
+        assert _split_camel_case("McKinsey Advisor") == "McKinsey Advisor"
+
 
 # ---------------------------------------------------------------------------
 # Display name normalization
@@ -316,6 +326,73 @@ class TestCreateAgentImpl:
                 break
         assert found, "No valid Agent subclass found in generated agent.py"
 
+    def test_built_agent_runs_with_authored_persona(self, tmp_path, monkeypatch):
+        """A Builder-produced agent instantiates and runs through the real agent
+        loop on ITS authored persona — fully offline (mocked LLM, no Lemonade).
+
+        Closes the coverage gap: other tests prove the Builder *writes* a correct
+        agent.py; this one *runs* a built agent end-to-end.
+        """
+        from unittest.mock import MagicMock
+
+        authored_prompt = (
+            "You are the Daily arXiv Summary Agent. You find recent arXiv papers "
+            "and deliver concise digests (title, authors, summary, why it matters)."
+        )
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Daily arXiv Summary",
+            description="Finds and summarizes new arXiv papers each day.",
+            system_prompt=authored_prompt,
+            conversation_starters=["Summarize today's top papers on diffusion models"],
+        )
+
+        # Dynamically import the generated agent.py (mirrors
+        # test_generated_agent_importable) and grab the built class.
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        spec = importlib.util.spec_from_file_location("built_arxiv_agent", py_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        agent_cls = module.DailyArxivSummaryAgent
+
+        # Construct with skip_lemonade=True so __init__ makes no network call,
+        # and a mocked LLM so the loop never hits a real server (CI-safe).
+        # A tool-calling model_id keeps _compose_system_prompt from appending the
+        # embedded-JSON response-format template; with no registered tools the
+        # composed prompt is then exactly the authored persona.
+        agent = agent_cls(
+            model_id="Qwen3.5-35B-A3B-GGUF",
+            skip_lemonade=True,
+            silent_mode=True,
+            max_steps=1,
+        )
+
+        mocked_answer = (
+            "I summarize recent arXiv papers — e.g. Denoising Diffusion "
+            "Probabilistic Models (arXiv:2006.11239)."
+        )
+        # The base loop calls self.chat.send_messages(...) and reads .text /
+        # .stats (agent.py). A JSON {"answer": ...} response is parsed as a
+        # planning-mode final answer the loop accepts and returns as result.
+        mock_resp = MagicMock()
+        mock_resp.text = '{"answer": "' + mocked_answer + '"}'
+        mock_resp.stats = {}
+        mock_resp.tool_calls = []
+
+        with patch.object(agent.chat, "send_messages", return_value=mock_resp):
+            result = agent.process_query("What do you do?")
+
+        assert result["status"] == "success"
+        assert mocked_answer in result["result"]
+        # The built agent ran on ITS authored persona, not a placeholder. The
+        # composed system prompt is the authored persona + the starter caveat.
+        assert authored_prompt in result["system_prompt"]
+        assert "starter template" in result["system_prompt"].lower()
+        assert authored_prompt in agent.system_prompt
+        assert result.get("error_count", 0) == 0
+        assert "zoo" not in result["result"].lower()
+
     def test_cleanup_on_failure(self, tmp_path, monkeypatch):
         """If writing fails, the directory is cleaned up."""
         monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
@@ -353,7 +430,10 @@ class TestCreateAgentImpl:
         monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
         with patch("gaia.ui._chat_helpers.get_agent_registry", return_value=None):
             result = _create_agent_impl("NoReg Agent")
-        assert "no-reg" in result
+        # The input "NoReg Agent" already contains a space, so _split_camel_case
+        # short-circuits and leaves "NoReg" intact, producing agent-id "noreg"
+        # (not the old "no-reg").
+        assert "noreg" in result
 
     def test_reserved_name_gaia_blocked(self, tmp_path, monkeypatch):
         monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
@@ -415,6 +495,101 @@ class TestCreateAgentImpl:
         py_path = tmp_path / ".gaia" / "agents" / "beta" / "agent.py"
         source = py_path.read_text(encoding="utf-8")
         assert "AGENT_NAME = 'Beta Agent'" in source
+
+
+# ---------------------------------------------------------------------------
+# Persona authoring (system prompt + conversation starters, no zoo default)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateAgentPersona:
+    def test_passed_system_prompt_is_used(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        prompt = "You summarize arXiv papers into concise digests."
+        _create_agent_impl("Daily arXiv Summary", system_prompt=prompt)
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        assert prompt in source
+
+    def test_passed_starters_are_used(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        starters = ["Summarize today's arXiv papers", "Find papers on diffusion models"]
+        _create_agent_impl(
+            "Daily arXiv Summary",
+            system_prompt="Summarize arXiv papers.",
+            conversation_starters=starters,
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        for s in starters:
+            assert s in source
+
+    def test_no_zoo_persona_when_prompt_provided(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Daily arXiv Summary",
+            description="Summarizes arXiv papers daily.",
+            system_prompt="You are an arXiv summarizer.",
+            conversation_starters=["Summarize today's papers"],
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8").lower()
+        assert "zoo" not in source
+        assert "zookeeper" not in source
+
+    def test_no_zoo_persona_in_fallback(self, tmp_path, monkeypatch):
+        """Omitting system_prompt yields a description-based prompt, never the zoo."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Daily arXiv Summary", description="Summarizes arXiv papers daily."
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        lowered = source.lower()
+        assert "zoo" not in lowered
+        assert "zookeeper" not in lowered
+        # Fallback derives the persona from name + description.
+        assert "Daily arXiv Summary Agent" in source
+        assert "Summarizes arXiv papers daily." in source
+
+    def test_no_todo_docstring(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Daily arXiv Summary", description="Summarizes arXiv papers daily."
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        assert "TODO: Replace this docstring" not in source
+        assert "Summarizes arXiv papers daily." in source
+
+    def test_agent_name_preserves_capitalization(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl("Daily arXiv Summary")
+        py_path = tmp_path / ".gaia" / "agents" / "daily-arxiv-summary" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        assert "AGENT_NAME = 'Daily arXiv Summary Agent'" in source
+        assert "ar Xiv" not in source
+
+    def test_acceptance_scenario_with_tools_and_mcp(self, tmp_path, monkeypatch):
+        """End-to-end acceptance: arXiv agent via generate_agent_source (tools + MCP)."""
+        from gaia.agents.builder.template import generate_agent_source
+
+        source = generate_agent_source(
+            agent_id="daily-arxiv-summary",
+            agent_name="Daily arXiv Summary Agent",
+            description="Summarizes the day's arXiv papers.",
+            class_name="DailyArxivSummaryAgent",
+            starters=["Summarize today's arXiv papers"],
+            system_prompt="You are an arXiv summarizer that finds and digests papers.",
+            tools=["rag", "browser", "shell", "file_search"],
+            enable_mcp=True,
+        )
+        ast.parse(source)
+        lowered = source.lower()
+        assert "zoo" not in lowered and "zookeeper" not in lowered
+        assert "TODO: Replace this docstring" not in source
+        assert "arXiv summarizer" in source
+        assert "AGENT_NAME = 'Daily arXiv Summary Agent'" in source
 
 
 # ---------------------------------------------------------------------------
@@ -570,16 +745,27 @@ class TestCreateAgentImplMCP:
 
 
 # ---------------------------------------------------------------------------
-# tools=[...] parameter (tool-mixin composition)
+# tools=[...] parameter — tested via generate_agent_source directly
+# (tools is no longer on the Builder's surface; _create_agent_impl no longer
+#  accepts a tools= arg; tool-mixin composition lives only at the generator layer)
 # ---------------------------------------------------------------------------
 
 
 class TestCreateAgentImplTools:
-    def test_single_tool_rag_generates_mixin(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        result = _create_agent_impl("Research Bot", tools=["rag"])
-        assert not result.startswith("Error:"), result
-        src = (tmp_path / ".gaia" / "agents" / "research-bot" / "agent.py").read_text()
+    """Tool-mixin composition tests exercising generate_agent_source directly."""
+
+    def test_single_tool_rag_generates_mixin(self):
+        from gaia.agents.builder.template import generate_agent_source
+
+        src = generate_agent_source(
+            agent_id="research-bot",
+            agent_name="Research Bot Agent",
+            description="Answers questions from local docs.",
+            class_name="ResearchBotAgent",
+            starters=["Ask me anything"],
+            system_prompt="You are Research Bot.",
+            tools=["rag"],
+        )
         ast.parse(src)
         assert "from gaia.agents.tools.rag_tools import RAGToolsMixin" in src
         # Agent must come first in the base list (GAIA convention).
@@ -587,60 +773,332 @@ class TestCreateAgentImplTools:
         assert "self.register_rag_tools()" in src
         assert "_TOOL_REGISTRY.clear()" in src
 
-    def test_multiple_tools_in_mro_order(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        _create_agent_impl("Doc Editor", tools=["rag", "file_io"])
-        src = (tmp_path / ".gaia" / "agents" / "doc-editor" / "agent.py").read_text()
+    def test_multiple_tools_in_mro_order(self):
+        from gaia.agents.builder.template import generate_agent_source
+
+        src = generate_agent_source(
+            agent_id="doc-editor",
+            agent_name="Doc Editor Agent",
+            description="Edits documents.",
+            class_name="DocEditorAgent",
+            starters=["Edit my doc"],
+            system_prompt="You are Doc Editor.",
+            tools=["rag", "file_io"],
+        )
         ast.parse(src)
         assert "class DocEditorAgent(Agent, RAGToolsMixin, FileIOToolsMixin):" in src
         assert "self.register_rag_tools()" in src
         assert "self.register_file_io_tools()" in src
 
-    def test_tools_combined_with_mcp(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        _create_agent_impl("Ops Bot", tools=["file_io"], enable_mcp=True)
-        src = (tmp_path / ".gaia" / "agents" / "ops-bot" / "agent.py").read_text()
+    def test_tools_combined_with_mcp(self):
+        from gaia.agents.builder.template import generate_agent_source
+
+        src = generate_agent_source(
+            agent_id="ops-bot",
+            agent_name="Ops Bot Agent",
+            description="Runs tasks via MCP.",
+            class_name="OpsBotAgent",
+            starters=["Organize my files"],
+            system_prompt="You are Ops Bot.",
+            tools=["file_io"],
+            enable_mcp=True,
+        )
         ast.parse(src)
         # MCPClientMixin must come LAST (after other mixins, after Agent).
         assert "class OpsBotAgent(Agent, FileIOToolsMixin, MCPClientMixin):" in src
         assert "self.register_file_io_tools()" in src
         assert "self.load_mcp_servers_from_config()" in src
-        mcp_json = tmp_path / ".gaia" / "agents" / "ops-bot" / "mcp_servers.json"
-        assert mcp_json.exists()
 
-    def test_invalid_tool_returns_error(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        result = _create_agent_impl("Bad Bot", tools=["definitely-not-a-tool"])
-        assert result.startswith("Error:")
-        assert "Unknown tool" in result or "definitely-not-a-tool" in result
-        # Nothing should have been written to disk.
-        assert not (tmp_path / ".gaia" / "agents" / "bad-bot").exists()
+    def test_invalid_tool_returns_error(self):
+        import pytest
 
-    def test_all_tools_importable(self, tmp_path, monkeypatch):
+        from gaia.agents.builder.template import generate_agent_source
+
+        with pytest.raises(ValueError, match="definitely-not-a-tool"):
+            generate_agent_source(
+                agent_id="bad-bot",
+                agent_name="Bad Bot Agent",
+                description="Bad.",
+                class_name="BadBotAgent",
+                starters=["Go"],
+                system_prompt="You are Bad Bot.",
+                tools=["definitely-not-a-tool"],
+            )
+
+    def test_all_tools_importable(self):
         """Every KNOWN_TOOLS entry can be composed into a generated agent."""
+        from gaia.agents.builder.template import generate_agent_source
         from gaia.agents.registry import KNOWN_TOOLS
 
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
         for i, tool_name in enumerate(sorted(KNOWN_TOOLS.keys())):
-            _create_agent_impl(f"Tool Test {i}", tools=[tool_name])
-            agent_id = f"tool-test-{i}"
-            py_path = tmp_path / ".gaia" / "agents" / agent_id / "agent.py"
-            assert py_path.exists(), f"agent not created for tool={tool_name}"
-            ast.parse(py_path.read_text())
+            src = generate_agent_source(
+                agent_id=f"tool-test-{i}",
+                agent_name=f"Tool Test {i} Agent",
+                description=f"Tests tool {tool_name}.",
+                class_name=f"ToolTest{i}Agent",
+                starters=["Go"],
+                system_prompt=f"You test {tool_name}.",
+                tools=[tool_name],
+            )
+            ast.parse(src)
 
-    def test_no_tools_same_as_basic(self, tmp_path, monkeypatch):
+    def test_no_tools_same_as_basic(self):
         """tools=None or tools=[] produces the same output as omitting the arg."""
-        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
-        _create_agent_impl("Plain Agent")
-        src_none = (tmp_path / ".gaia" / "agents" / "plain" / "agent.py").read_text()
+        from gaia.agents.builder.template import generate_agent_source
 
-        # Clean up and recreate with tools=[]
-        import shutil
-
-        shutil.rmtree(tmp_path / ".gaia" / "agents" / "plain")
-        _create_agent_impl("Plain Agent", tools=[])
-        src_empty = (tmp_path / ".gaia" / "agents" / "plain" / "agent.py").read_text()
+        kwargs = dict(
+            agent_id="plain",
+            agent_name="Plain Agent",
+            description="A plain agent.",
+            class_name="PlainAgent",
+            starters=["Hello"],
+            system_prompt="You are Plain.",
+        )
+        src_none = generate_agent_source(**kwargs, tools=None)
+        src_empty = generate_agent_source(**kwargs, tools=[])
         assert src_none == src_empty
+
+
+# ---------------------------------------------------------------------------
+# Builder surface: tools param removed, dict-error detection, docs link
+# ---------------------------------------------------------------------------
+
+
+class TestBuilderSurface:
+    def test_create_agent_tool_has_no_tools_param(self):
+        """The registered create_agent tool must NOT have a 'tools' parameter."""
+        import inspect
+        from unittest.mock import patch
+
+        from gaia.agents.builder.agent import BuilderAgent, BuilderAgentConfig
+
+        config = BuilderAgentConfig(
+            base_url="http://localhost:9999/api/v1",
+            model_id="test-model",
+            silent_mode=True,
+        )
+        with patch("os.path.expanduser", return_value="/tmp/gaia-test"):
+            agent = BuilderAgent(config)
+
+        # _TOOL_REGISTRY stores either the raw callable or a dict with a
+        # 'function' key (the @tool decorator wraps the function).  Check both.
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        tool_entry = _TOOL_REGISTRY.get("create_agent")
+        assert tool_entry is not None, "create_agent tool not found in registry"
+
+        if isinstance(tool_entry, dict):
+            # Check the schema's parameters dict (built by the @tool decorator)
+            params = tool_entry.get("parameters", {})
+            assert "tools" not in params, (
+                f"create_agent tool schema must not have a 'tools' parameter; "
+                f"found params: {list(params)}"
+            )
+            # Also check the underlying function's signature
+            fn = tool_entry.get("function", tool_entry)
+        else:
+            fn = tool_entry
+
+        if callable(fn):
+            sig = inspect.signature(fn)
+            assert "tools" not in sig.parameters, (
+                f"create_agent function must not have a 'tools' parameter; "
+                f"found params: {list(sig.parameters)}"
+            )
+
+    def test_stray_tools_kwarg_surfaces_error(self, tmp_path):
+        """If the LLM passes tools=[...] in the tool call, an honest error is returned."""
+        from unittest.mock import MagicMock, patch
+
+        from gaia.agents.builder.agent import BuilderAgent, BuilderAgentConfig
+
+        config = BuilderAgentConfig(
+            base_url="http://localhost:9999/api/v1",
+            model_id="test-model",
+            max_steps=5,
+            streaming=False,
+            silent_mode=True,
+        )
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            agent = BuilderAgent(config)
+        agent.console = MagicMock()
+
+        # LLM emits a call with a stray tools kwarg (old schema)
+        stray_call = (
+            '{"tool": "create_agent", "tool_args": {"name": "Stray", "tools": ["rag"]}}'
+        )
+        follow_up = "Here is your agent!"  # never reached
+
+        mock_resp = MagicMock()
+        mock_resp.text = stray_call
+        agent.chat = MagicMock()
+        agent.chat.send_messages.return_value = mock_resp
+
+        # The stray 'tools' kwarg trips a TypeError inside the tool, but the base
+        # Agent._execute_tool catches it and returns a {"status": "error", ...} dict.
+        # The dict-error check in _process_query_impl then surfaces it as an honest
+        # failure, not a crash.
+        result = agent._process_query_impl("create a Stray agent with RAG")
+
+        answer = result["answer"]
+        # Must not fabricate success
+        assert "✅" not in answer
+        assert "Agent Created" not in answer
+        assert "File location" not in answer
+        # Must indicate failure or inability
+        assert any(
+            kw in answer.lower()
+            for kw in ("error", "unable", "fail", "could not", "unexpected")
+        ), f"Expected failure indicator in answer, got: {answer!r}"
+        # Must NOT leak a raw error-dict repr into the user-facing message.
+        assert "{'status'" not in answer, f"raw dict leaked: {answer!r}"
+        assert "status': 'error'" not in answer, f"raw dict leaked: {answer!r}"
+
+    def test_confirmation_mentions_starter_and_docs_link(self, tmp_path, monkeypatch):
+        """Successful result contains alpha/starter framing, honest 'won't/own'
+        caveat, and the docs link — for both the non-MCP and MCP confirmations."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        for name, enable_mcp in (
+            ("Docs Test Agent", False),
+            ("Mcp Docs Test Agent", True),
+        ):
+            result = _create_agent_impl(
+                name,
+                description="Tests the confirmation message.",
+                enable_mcp=enable_mcp,
+            )
+            assert not result.startswith("Error:"), result
+            lowered = result.lower()
+            assert "starter" in lowered
+            assert "alpha" in lowered
+            assert "won't" in lowered
+            assert "own" in lowered
+            assert "amd-gaia.ai/docs/guides/custom-agent" in result
+
+    def test_confirmation_has_no_fabrication_markers(self, tmp_path, monkeypatch):
+        """Neither confirmation introduces the fabrication-guard substrings."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        for name, enable_mcp in (("Plain X", False), ("Mcp X", True)):
+            result = _create_agent_impl(name, enable_mcp=enable_mcp)
+            for marker in ("Agent Created", "✅", "File location"):
+                assert marker not in result, f"{marker!r} leaked into confirmation"
+
+    def test_confirmation_path_is_backtick_wrapped(self, tmp_path, monkeypatch):
+        """The created path is wrapped in inline-code backticks so markdown
+        rendering can't eat path separators (e.g. Windows `\\.gaia`)."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        for name, enable_mcp in (("Backtick X", False), ("Mcp Backtick X", True)):
+            agent_dir = "mcp-backtick-x" if enable_mcp else "backtick-x"
+            result = _create_agent_impl(name, enable_mcp=enable_mcp)
+            py_path = tmp_path / ".gaia" / "agents" / agent_dir / "agent.py"
+            assert f"`{py_path}`" in result, result
+            # The agent-id substring still appears (path text unchanged).
+            assert agent_dir in result
+
+    def test_mcp_confirmation_json_is_fenced(self, tmp_path, monkeypatch):
+        """The MCP confirmation renders its JSON example as a fenced ```json
+        block and references the filename as inline code, so markdown shows both
+        verbatim instead of collapsing newlines / mis-parsing the args list."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        result = _create_agent_impl("Mcp Fence Agent", enable_mcp=True)
+        assert not result.startswith("Error:"), result
+        # Fenced JSON example.
+        assert "```json" in result
+        assert "```" in result.split("```json", 1)[1]  # a closing fence follows
+        assert '"mcpServers"' in result
+        assert "mcp-server-time" in result
+        # Filename mentioned as inline code.
+        assert "`mcp_servers.json`" in result
+        # Non-MCP confirmation must NOT gain a fenced block.
+        plain = _create_agent_impl("Plain Fence Agent", enable_mcp=False)
+        assert "```" not in plain
+
+
+# ---------------------------------------------------------------------------
+# Alpha framing: Builder intro + scaffolded-agent caveat
+# ---------------------------------------------------------------------------
+
+
+class TestBuilderAlphaFraming:
+    def test_builder_system_prompt_states_alpha_and_template(self):
+        from gaia.agents.builder.system_prompt import BUILDER_SYSTEM_PROMPT
+
+        lowered = BUILDER_SYSTEM_PROMPT.lower()
+        assert "alpha" in lowered
+        assert "template" in lowered
+
+    def test_generated_prompt_has_starter_caveat(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Caveat Agent",
+            description="Demonstrates the caveat.",
+            system_prompt="You are Caveat Agent, an expert on testing.",
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "caveat" / "agent.py"
+        source = py_path.read_text(encoding="utf-8").lower()
+        assert "starter template" in source
+        assert "alpha" in source
+
+    def test_generated_template_flags_caveat_for_removal(self, tmp_path, monkeypatch):
+        """The generated source tells the user to delete the appended caveat once
+        the agent has real tools, so it stops disclaiming abilities it now has."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Removable Caveat Agent",
+            description="Demonstrates the removal hint.",
+            system_prompt="You are Removable Caveat Agent.",
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "removable-caveat" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+        assert "Delete that trailing text once your agent has real" in source
+
+    def test_alpha_tag_only_on_description_not_docstring(self, tmp_path, monkeypatch):
+        """The (alpha template) tag lands on AGENT_DESCRIPTION (Hub card) only —
+        the class docstring (IDE tooltips / help()) stays clean."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Tagged Agent",
+            description="Summarizes arXiv papers daily.",
+            system_prompt="You are Tagged Agent.",
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "tagged" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+
+        # Docstring (via ast) must NOT carry the tag.
+        tree = ast.parse(source)
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef))
+        docstring = ast.get_docstring(cls) or ""
+        assert docstring == "Summarizes arXiv papers daily."
+        assert "(alpha template)" not in docstring
+
+        # AGENT_DESCRIPTION line DOES carry the tag.
+        desc_line = next(
+            line for line in source.splitlines() if "AGENT_DESCRIPTION" in line
+        )
+        assert "(alpha template)" in desc_line
+        assert "Summarizes arXiv papers daily." in desc_line
+
+    def test_alpha_tag_on_description_for_mcp_variant(self, tmp_path, monkeypatch):
+        """Same split holds for the MCP-enabled render path."""
+        monkeypatch.setattr("gaia.agents.builder.agent.Path.home", lambda: tmp_path)
+        _create_agent_impl(
+            "Mcp Tagged Agent",
+            description="Connects to external services.",
+            system_prompt="You are Mcp Tagged Agent.",
+            enable_mcp=True,
+        )
+        py_path = tmp_path / ".gaia" / "agents" / "mcp-tagged" / "agent.py"
+        source = py_path.read_text(encoding="utf-8")
+
+        tree = ast.parse(source)
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef))
+        docstring = ast.get_docstring(cls) or ""
+        assert "(alpha template)" not in docstring
+
+        desc_line = next(
+            line for line in source.splitlines() if "AGENT_DESCRIPTION" in line
+        )
+        assert "(alpha template)" in desc_line
 
 
 # ---------------------------------------------------------------------------
