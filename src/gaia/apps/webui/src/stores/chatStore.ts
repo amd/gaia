@@ -78,6 +78,7 @@ interface ChatState {
     showFileBrowser: boolean;
     showSettings: boolean;
     showMemoryDashboard: boolean;
+    showSchedules: boolean;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     sidebarWidth: number;
@@ -89,6 +90,7 @@ interface ChatState {
     setShowFileBrowser: (show: boolean) => void;
     setShowSettings: (show: boolean) => void;
     setShowMemoryDashboard: (show: boolean) => void;
+    setShowSchedules: (show: boolean) => void;
     toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebarCollapsed: () => void;
@@ -253,6 +255,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showFileBrowser: false,
     showSettings: false,
     showMemoryDashboard: false,
+    showSchedules: false,
     toggleTheme: () =>
         set((state) => {
             const next = state.theme === 'dark' ? 'light' : 'dark';
@@ -274,9 +277,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
     setShowSettings: (show) =>
-        set(show ? { showSettings: true, showMemoryDashboard: false } : { showSettings: false }),
+        set(show ? { showSettings: true, showMemoryDashboard: false, showSchedules: false } : { showSettings: false }),
     setShowMemoryDashboard: (show) =>
-        set(show ? { showMemoryDashboard: true, showSettings: false } : { showMemoryDashboard: false }),
+        set(show ? { showMemoryDashboard: true, showSettings: false, showSchedules: false } : { showMemoryDashboard: false }),
+    setShowSchedules: (show) =>
+        set(show ? { showSchedules: true, showSettings: false, showMemoryDashboard: false } : { showSchedules: false }),
     toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>

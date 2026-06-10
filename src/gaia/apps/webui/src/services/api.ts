@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo, AgentCatalogResponse, InstallStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo, AgentCatalogResponse, InstallStatus } from '../types';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -823,4 +823,34 @@ export async function startAgentMCPServer(port?: number, backendUrl?: string): P
 
 export async function stopAgentMCPServer(): Promise<{ status: string; pid?: number }> {
     return apiFetch('POST', '/mcp/agent-server/stop');
+}
+
+// -- Schedules -----------------------------------------------------------------
+
+export async function listSchedules(): Promise<{ schedules: Schedule[]; total: number }> {
+    return apiFetch('GET', '/schedules');
+}
+
+export async function createSchedule(name: string, interval: string, prompt: string): Promise<Schedule> {
+    return apiFetch('POST', '/schedules', { name, interval, prompt });
+}
+
+export async function getSchedule(name: string): Promise<Schedule> {
+    return apiFetch('GET', `/schedules/${encodeURIComponent(name)}`);
+}
+
+export async function updateSchedule(name: string, status: string): Promise<Schedule> {
+    return apiFetch('PUT', `/schedules/${encodeURIComponent(name)}`, { status });
+}
+
+export async function deleteSchedule(name: string): Promise<void> {
+    return apiFetch('DELETE', `/schedules/${encodeURIComponent(name)}`);
+}
+
+export async function getScheduleResults(name: string, limit: number = 20): Promise<{ results: ScheduleResult[]; total: number }> {
+    return apiFetch('GET', `/schedules/${encodeURIComponent(name)}/results?limit=${limit}`);
+}
+
+export async function parseScheduleInput(input: string): Promise<ParsedSchedule> {
+    return apiFetch('POST', '/schedules/parse', { input });
 }
