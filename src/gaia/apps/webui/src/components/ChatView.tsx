@@ -280,10 +280,14 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
     const flushStreamBuffer = useCallback(() => {
         streamRafRef.current = null;
+        // Drop late flushes once the user has switched away — otherwise this
+        // session's stream would write into the shared store the new session
+        // now reads from (#1580).
+        if (useChatStore.getState().currentSessionId !== sessionId) return;
         if (streamBufferRef.current) {
             setStreamContent(streamBufferRef.current);
         }
-    }, [setStreamContent]);
+    }, [setStreamContent, sessionId]);
 
     // Load messages on mount, then poll for external changes (MCP, API)
     const msgPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -674,6 +678,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
         const controller = api.sendMessageStream(sessionId, messageText, {
             onChunk: (event) => {
+                // Stop writing once the user switched to another session (#1580).
+                if (useChatStore.getState().currentSessionId !== sessionId) return;
                 const content = event.content || '';
                 if (content) {
                     // 'answer' events carry the full final text (not a delta),
@@ -715,6 +721,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 }
             },
             onAgentEvent: (event) => {
+                // Ignore events from a stream the user has navigated away from
+                // so its steps don't leak into the new session's view (#1580).
+                if (useChatStore.getState().currentSessionId !== sessionId) return;
                 // ── Tool confirmation popup ──────────────────────────────
                 if (event.type === 'tool_confirm') {
                     if (!event.confirm_id) {
@@ -952,6 +961,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 }
                 streamBufferRef.current = '';
 
+                // If the user moved to another session, this completion belongs
+                // to a now-background stream — the message is persisted
+                // server-side, so don't touch the shared store (#1580).
+                if (useChatStore.getState().currentSessionId !== sessionId) return;
+
                 const content = event.content || fullContent;
                 log.chat.timed(`Agent response complete: ${content.length} chars`, streamStart);
 
@@ -1021,6 +1035,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     streamRafRef.current = null;
                 }
                 streamBufferRef.current = '';
+
+                // A stream aborted by switching sessions reports an error here;
+                // it's no longer the active view, so don't surface it (#1580).
+                if (useChatStore.getState().currentSessionId !== sessionId) return;
 
                 log.chat.error(`Chat error for session=${sessionId}`, err);
                 // Provide a user-friendly error message based on the error type
