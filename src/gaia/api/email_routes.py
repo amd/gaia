@@ -59,6 +59,7 @@ Design commitments
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import re
@@ -82,6 +83,8 @@ from gaia.agents.email.contract import (
     SingleEmailInput,
     ThreadInput,
 )
+from gaia.agents.email.tools.llm_triage import LLMTriageError
+from gaia.agents.email.tools.summarize_tools import EmailSummarizeError
 from gaia.agents.email.tools.triage_heuristics import classify_category_heuristic
 from gaia.logger import get_logger
 
@@ -710,7 +713,12 @@ async def triage_email(
     Lemonade LLM. The default ``engine=heuristic`` is byte-identical to the
     previous behaviour — no latency added, no LLM loaded.
     """
-    return _service.triage_request(request, engine=engine)
+    try:
+        return await asyncio.to_thread(_service.triage_request, request, engine=engine)
+    except (LLMTriageError, EmailSummarizeError) as e:
+        raise HTTPException(
+            status_code=502, detail=f"local LLM triage failed: {e}"
+        ) from e
 
 
 @router.post("/draft", response_model=EmailDraftResponse)

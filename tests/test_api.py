@@ -1549,5 +1549,72 @@ class TestEmailSendConfirmationGate:
         assert resp.status_code == 403
 
 
+class TestEmailTriageLlmEngine:
+    """POST /v1/email/triage?engine=llm — HTTP-level tests for the LLM path.
+
+    No live Lemonade backend: ``EmailTriageService._build_llm_chat`` is
+    patched to return a stub chat so tests are fully offline.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        self.client = TestClient(app)
+
+    def test_engine_llm_returns_200_and_contract_shape(self, mocker):
+        """engine=llm with a stub chat → 200 + contract-valid response with a
+        category field."""
+        from gaia.agents.email.contract import SCHEMA_VERSION, parse_response
+
+        # Stub: classify_email_llm returns a valid category dict;
+        # summarize_email_llm returns a plain-text summary.
+        mocker.patch(
+            "gaia.api.email_routes.EmailTriageService._build_llm_chat",
+            return_value=None,  # chat object — not used when tools are patched
+        )
+        mocker.patch(
+            "gaia.agents.email.tools.llm_triage.classify_email_llm",
+            return_value={
+                "category": "actionable",
+                "confidence": 0.9,
+                "reasoning": "test",
+            },
+        )
+        mocker.patch(
+            "gaia.agents.email.tools.summarize_tools.summarize_email_llm",
+            return_value="Test LLM summary.",
+        )
+
+        resp = self.client.post(
+            "/v1/email/triage?engine=llm", json=_single_email_payload()
+        )
+        assert resp.status_code == 200, resp.text
+        parsed = parse_response(resp.json())
+        assert parsed.schema_version == SCHEMA_VERSION
+        assert parsed.result.category is not None
+        assert parsed.result.summary
+
+    def test_engine_llm_failure_returns_502(self, mocker):
+        """When the local LLM raises LLMTriageError the endpoint returns 502
+        (not 500) so callers can distinguish an infra error from a bug."""
+        from gaia.agents.email.tools.llm_triage import LLMTriageError
+
+        mocker.patch(
+            "gaia.api.email_routes.EmailTriageService._build_llm_chat",
+            return_value=None,
+        )
+        mocker.patch(
+            "gaia.agents.email.tools.llm_triage.classify_email_llm",
+            side_effect=LLMTriageError("model unreachable", message_id="m-1"),
+        )
+
+        resp = self.client.post(
+            "/v1/email/triage?engine=llm", json=_single_email_payload()
+        )
+        assert resp.status_code == 502, resp.text
+        assert "local LLM triage failed" in resp.json()["detail"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
