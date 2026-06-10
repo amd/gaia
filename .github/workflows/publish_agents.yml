@@ -20,22 +20,26 @@
 # not change — that is PyPI's native version immutability, not custom overwrite
 # logic (issue #1179).
 #
-# Secret: PYPI_API_TOKEN — a PyPI API token (account- or project-scoped) with
-# upload rights to every gaia-agent-* project. Store it as a *repository* (or
-# org) secret so the matrix publish jobs can read it; the manual gate is the
-# separate "publish" environment on approve-publish. The publisher CLI's local
-# env var is PYPI_TOKEN; the CI secret is intentionally separate.
+# Auth: OIDC trusted publishing — NO stored token (matches publish.yml's
+# publish-pypi job for the core amd-gaia wheel). The publish job requests an
+# id-token and runs in the "pypi" environment; each gaia-agent-* PyPI project
+# authorizes this repo+workflow+environment via a trusted publisher. Because
+# these projects don't exist on PyPI yet, register PyPI *pending* publishers
+# (project gaia-agent-<id>, owner amd, repo gaia, workflow publish_agents.yml,
+# environment pypi) — the first run creates each project. The manual gate stays
+# on the separate "publish" environment on approve-publish.
 
 name: Publish Agent Wheels (PyPI)
 
 on:
-  # Tag pushes trigger the publish path. No `paths:` filter here — a release tag
-  # must always run even when the tagged commit didn't touch an agent (GitHub
-  # applies push `paths` filters to tag pushes too, which would skip publishing).
-  push:
-    tags:
-      - 'v*'
-  # PRs get the build/twine-check only (the publish jobs are gated on a v* tag).
+  # PUBLISHING PAUSED (#1179): agent PyPI publishing is disabled while the Agent
+  # Hub distribution design is being finalized. The release-tag trigger is
+  # intentionally removed so a `v*` tag no longer fires the publish path, and the
+  # approve/publish jobs are additionally hard-gated below. To re-enable, restore
+  # the `push: tags: ['v*']` trigger here and drop the `false &&` guards on the
+  # approve-publish and publish jobs.
+  #
+  # PRs still get the build/twine-check so broken agent wheels are caught in review.
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -131,7 +135,9 @@ jobs:
   approve-publish:
     name: Approve Publishing
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.build.result == 'success'
+    # Publishing paused (#1179) — `false &&` hard-skips this job. Remove it (and
+    # restore the tag trigger above) to re-enable.
+    if: false && startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment: publish
     steps:
@@ -141,8 +147,19 @@ jobs:
   publish:
     name: Publish ${{ matrix.dist }}
     needs: [discover, approve-publish]
-    if: startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.approve-publish.result == 'success'
+    # Publishing paused (#1179) — `false &&` hard-skips this job. Remove it (and
+    # restore the tag trigger above) to re-enable.
+    if: false && startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.approve-publish.result == 'success'
     runs-on: ubuntu-latest
+    # OIDC trusted publishing: the action mints a short-lived id-token PyPI
+    # exchanges for an upload token. Without id-token: write the action falls
+    # back to (missing) password auth and dies with a misleading "trusted
+    # publishing exchange failure" — see issue #1568.
+    environment:
+      name: pypi
+    permissions:
+      id-token: write
+      contents: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
@@ -158,4 +175,3 @@ jobs:
           # PyPI's native version immutability: an unchanged agent version is a
           # no-op, not a failure (issue #1179 — "no overwrite logic").
           skip-existing: true
-          password: ${{ secrets.PYPI_API_TOKEN }}
