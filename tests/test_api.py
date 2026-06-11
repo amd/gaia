@@ -1260,12 +1260,33 @@ class TestEmailTriageEndpoint:
     """POST /v1/email/triage — single email / thread in, structured result out."""
 
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, monkeypatch):
         if not API_AVAILABLE:
             pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
         # The /v1/email/* routes ship with the standalone gaia-agent-email
         # wheel (#1102); skip when a framework-only env lacks it.
         pytest.importorskip("gaia_agent_email")
+        import json
+        import types
+
+        from gaia_agent_email.api_routes import EmailTriageService
+
+        # Inject a fake chat so tests don't need a live Lemonade server.
+        # Returns a classification JSON for classify calls, a summary string
+        # for summarize calls.
+        class _FakeChat:
+            def send_messages(self, messages, system_prompt="", **kwargs):
+                resp = types.SimpleNamespace()
+                content = (messages[0].get("content", "") if messages else "")
+                if "Classify" in content:
+                    resp.text = json.dumps(
+                        {"category": "actionable", "confidence": 0.9, "reasoning": "test"}
+                    )
+                else:
+                    resp.text = "Alice is asking for a budget review by Friday."
+                return resp
+
+        monkeypatch.setattr(EmailTriageService, "_build_llm_chat", lambda self, **kw: _FakeChat())
         self.client = TestClient(app)
 
     def test_single_email_in_structured_out(self):
