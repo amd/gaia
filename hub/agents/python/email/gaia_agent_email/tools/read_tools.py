@@ -37,6 +37,7 @@ from gaia_agent_email.verbose import (
     log_triage_dispatch,
 )
 from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -744,7 +745,7 @@ class ReadToolsMixin:
                     list_inbox_impl(gmail, max_results=max_results, debug=debug_flag)
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -757,7 +758,7 @@ class ReadToolsMixin:
                     get_message_impl(gmail, message_id=message_id, debug=debug_flag)
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -770,7 +771,7 @@ class ReadToolsMixin:
                     get_thread_impl(gmail, thread_id=thread_id, debug=debug_flag)
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -810,7 +811,9 @@ class ReadToolsMixin:
                         debug=debug_flag,
                     )
                 )
-            except (ConnectorsError, EmailSummarizeError) as exc:
+            except ConnectorsError as exc:
+                return _envelope_err(format_connector_error(exc))
+            except EmailSummarizeError as exc:
                 return _envelope_err(str(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
@@ -834,7 +837,7 @@ class ReadToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -845,7 +848,7 @@ class ReadToolsMixin:
             try:
                 return _envelope_ok(list_labels_impl(gmail, debug=debug_flag))
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -884,7 +887,7 @@ class ReadToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -933,7 +936,7 @@ class ReadToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")

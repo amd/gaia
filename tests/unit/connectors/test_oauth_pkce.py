@@ -123,7 +123,12 @@ class TestGetCredential:
 
 class TestConfigure:
     @pytest.mark.asyncio
-    async def test_start_flow_returns_flow_info(self):
+    async def test_start_flow_returns_flow_info(self, monkeypatch):
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_SECRET", "GOCSPX-test")
+        from gaia.connectors.providers import _registry
+
+        _registry.clear()
         spec = _make_spec()
         handler = OAuthPkceHandler()
         flow_info = {
@@ -156,10 +161,15 @@ class TestConfigure:
         assert result["account_email"] == "user@example.com"
 
     @pytest.mark.asyncio
-    async def test_configure_uses_scopes_from_config(self):
+    async def test_configure_uses_scopes_from_config(self, monkeypatch):
         # The handler hands scopes to start_authorization; state-writes
         # happen inside flow.py, so we assert at the start_authorization
         # boundary instead.
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_SECRET", "GOCSPX-test")
+        from gaia.connectors.providers import _registry
+
+        _registry.clear()
         spec = _make_spec(default_scopes=("openid",))
         handler = OAuthPkceHandler()
         flow_info = {"flow_id": "f", "authorization_url": "https://example/"}

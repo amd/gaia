@@ -21,6 +21,7 @@ def tool(
     *,
     atomic: bool = False,
     display_label: str | None = None,
+    timeout: float | None = None,
     **kwargs,  # pylint: disable=unused-argument
 ) -> Callable:
     """
@@ -33,6 +34,12 @@ def tool(
     Args:
         func: Function to register as a tool (when used as @tool)
         atomic: If True, marks this tool as atomic (can execute without multi-step planning)
+        display_label: Optional user-facing label for UI progress strips
+        timeout: Per-tool execution limit in seconds. Overrides the global
+            ``GAIA_AGENT_TOOL_TIMEOUT`` default in ``Agent._execute_tool``. Set
+            this on tools that legitimately run long (e.g. image generation that
+            may download a model) so they aren't capped by the global default.
+            ``None`` (the default) means "use the global default".
         **kwargs: Optional arguments (ignored, for backward compatibility)
 
     Returns:
@@ -76,6 +83,7 @@ def tool(
             "function": f,
             "atomic": atomic,
             "display_label": display_label,
+            "timeout": timeout,
         }
 
         # Return the function unchanged

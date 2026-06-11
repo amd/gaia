@@ -34,6 +34,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from gaia.agents.base.tools import tool
 from gaia_agent_email.verbose import log_tool_call
 from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -793,7 +794,7 @@ class CalendarToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -813,7 +814,7 @@ class CalendarToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -833,7 +834,7 @@ class CalendarToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -875,7 +876,7 @@ class CalendarToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -915,7 +916,7 @@ class CalendarToolsMixin:
             except MeetingDetectionError as exc:
                 return _envelope_err(str(exc))
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -946,7 +947,7 @@ class CalendarToolsMixin:
                 # Inverted/missing window — bad caller input, no stack trace.
                 return _envelope_err(str(exc))
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")

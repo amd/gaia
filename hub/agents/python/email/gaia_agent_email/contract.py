@@ -247,6 +247,14 @@ class EmailTriageResult(_Strict):
     draft: Optional[DraftReply] = Field(
         default=None, description="Proposed reply, or null when none is suggested."
     )
+    message_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Echoes the provider message-id from the request (SingleEmailInput.message "
+            "or ThreadInput.thread_id). Null when the result was produced from a "
+            "raw Gmail-API message (no contract message_id available)."
+        ),
+    )
 
 
 class EmailTriageResponse(_Strict):

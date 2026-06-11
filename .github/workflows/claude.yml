@@ -677,10 +677,23 @@ jobs:
   # are a rare exception, and declining is for bugs with no testable fix. PRs that
   # the job CAN validate must pass lint + unit tests (PHASE 3) before opening.
   #
-  # SECURITY: This job creates branches and pushes code. It does NOT set
-  # `allowed_non_write_users` — only repo-scoped permissions apply. Issue
-  # content is fetched via `gh issue view` (not YAML interpolation) to
-  # mitigate prompt injection from issue body text.
+  # SECURITY: This job sets `allowed_non_write_users: "*"` so community bug reports
+  # (read-access users — ~all of them; the bug template auto-applies `bug`) reach
+  # Claude instead of aborting at claude-code-action's actor gate.
+  #
+  # This does NOT add a new class of community-triggerable exposure. The
+  # issue-handler job already runs Claude with Bash + the Anthropic OAuth token and
+  # GITHUB_TOKEN in scope on the SAME open `issues` trigger, so the injection-via-
+  # issue-text -> Bash -> credential-exfiltration path already exists and is the
+  # repo's documented, accepted posture (see the file header). Untrusted issue text
+  # is fetched via `gh issue view` (not YAML interpolation) and handled as data per
+  # the prompt's injection rules. That exfiltration surface is UNCHANGED here.
+  #
+  # The only delta over issue-handler is repo-write scope (contents: write +
+  # pull-requests: write, vs issue-handler's comment-only). A successful injection
+  # could push an `autofix/*` branch or open a PR with attacker-influenced content
+  # — bounded by branch protection on main, mandatory human review, and the
+  # GITHUB_TOKEN being unable to approve or merge its own PR.
   #
   # COST: runs on the Claude Max subscription (CLAUDE_CODE_OAUTH_TOKEN), so there
   # is no per-fix dollar cost — only shared subscription rate-pool usage. Most
@@ -722,13 +735,17 @@ jobs:
           uv pip install --system -e ".[api]"
 
       - name: Attempt auto-fix
-        id: claude   # referenced by the Notify step's CLAUDE_OUTCOME below
+        id: claude   # referenced by the Notify step's execution_file check below
         uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Community bug reporters have read access; without this the action's
+          # actor gate aborts before Claude runs. Same accepted exposure as the
+          # issue-handler job — see the job's SECURITY note above.
+          allowed_non_write_users: "*"
           prompt: |
             REPO: ${{ github.repository }}
             ISSUE NUMBER: ${{ github.event.issue.number }}
@@ -987,12 +1004,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           echo "::warning title=Auto-fix failed::auto-fix aborted for issue #$ISSUE_NUMBER."
-          # Only ping the issue when the fix attempt itself failed — not for checkout /
-          # setup / dependency-install flakes (infra noise the reporter can't act on).
-          if [ "$CLAUDE_OUTCOME" = "failure" ]; then
+          # Only ping the issue when Claude actually ran and then failed — gate on
+          # execution_file, which the action writes only once Claude starts. A
+          # pre-Claude abort (checkout/setup/dep-install flake, or the actor gate)
+          # leaves it empty: that is infra noise the reporter can't act on, so stay
+          # silent. (`steps.claude.outcome` can't distinguish these — an install
+          # crash sets it to 'failure' too. Same artifact check as claude-run.yml.)
+          if [ -n "$EXEC_FILE" ]; then
             gh issue comment "$ISSUE_NUMBER" --body "⚠️ The automated fix attempt ran but didn't complete cleanly. A maintainer may need to take a look. cc @kovtcharov-amd"
           fi
 
