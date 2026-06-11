@@ -223,9 +223,9 @@ class EmailTriageService:
             use_local_llm=True,
             use_claude=False,
             use_chatgpt=False,
-            # Output cap, not input — must fit the model's reasoning preamble
-            # before the JSON/summary; 512 truncated Gemma-4's thinking (502s).
-            max_tokens=2048,
+            # Output cap (not input); body is clipped to 4000 chars upstream so
+            # triage needs ≤~800 tok — 4096 is free headroom (model stops at EOS).
+            max_tokens=4096,
         )
         return AgentSDK(sdk_cfg)
 
