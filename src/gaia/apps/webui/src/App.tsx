@@ -64,6 +64,7 @@ function App() {
         removeSession,
         updateSessionInList,
         setMessages,
+        resetStreaming,
         showDocLibrary,
         showFileBrowser,
         showSettings,
@@ -502,6 +503,9 @@ function App() {
             setIsViewTransitioning(true);
             // Allow fade-out to complete, then swap content
             const timer = setTimeout(() => {
+                // Drop the previous session's in-flight stream state so the
+                // incoming view starts clean instead of mirroring it (#1580).
+                resetStreaming();
                 setDisplayedSessionId(currentSessionId);
                 // Brief delay before removing transition class (allows new content to mount)
                 requestAnimationFrame(() => {
@@ -512,7 +516,7 @@ function App() {
             }, 220); // matches CSS transition duration
             return () => clearTimeout(timer);
         }
-    }, [currentSessionId, displayedSessionId]);
+    }, [currentSessionId, displayedSessionId, resetStreaming]);
 
     return (
         <div className="app">

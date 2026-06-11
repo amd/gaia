@@ -301,6 +301,88 @@ class TestMessages:
         db.delete_session(session["id"])
         assert db.count_messages(session["id"]) == 0
 
+    def test_upsert_message_insert_when_no_id(self, db):
+        """upsert_message with msg_id=None behaves like a plain insert."""
+        session = db.create_session()
+        msg_id = db.upsert_message(session["id"], None, "assistant", "Hello")
+        assert msg_id > 0
+        messages = db.get_messages(session["id"])
+        assert len(messages) == 1
+        assert messages[0]["content"] == "Hello"
+
+    def test_upsert_message_replaces_existing(self, db):
+        """upsert_message deletes the old row and inserts the replacement."""
+        session = db.create_session()
+        old_id = db.add_message(session["id"], "assistant", "Blocked: tool")
+        new_id = db.upsert_message(session["id"], old_id, "assistant", "Full response")
+        assert new_id != old_id
+        messages = db.get_messages(session["id"])
+        assert len(messages) == 1
+        assert messages[0]["content"] == "Full response"
+        assert messages[0]["id"] == new_id
+
+    def test_upsert_message_wrong_session_keeps_old_row(self, db):
+        """A session_id mismatch must not delete another session's message."""
+        s1 = db.create_session()
+        s2 = db.create_session()
+        old_id = db.add_message(s1["id"], "assistant", "Original")
+        # Upsert against s2 should not touch s1's row; it inserts into s2.
+        db.upsert_message(s2["id"], old_id, "assistant", "Replacement")
+        assert db.count_messages(s1["id"]) == 1
+        assert db.get_messages(s1["id"])[0]["content"] == "Original"
+
+    def test_upsert_message_atomic_on_insert_failure(self, db, monkeypatch):
+        """If the INSERT fails mid-replace, the original row survives.
+
+        Simulates a crash between DELETE and INSERT: the transaction must roll
+        back so the session is never left without the message (issue #987).
+        """
+        session = db.create_session()
+        old_id = db.add_message(session["id"], "assistant", "Original")
+
+        real_conn = db._conn
+
+        class _FlakyConn:
+            """Forwards to the real connection but blows up on the INSERT."""
+
+            def execute(self, sql, *args, **kwargs):
+                if sql.lstrip().upper().startswith("INSERT INTO MESSAGES"):
+                    raise sqlite3.OperationalError("simulated crash before commit")
+                return real_conn.execute(sql, *args, **kwargs)
+
+            def commit(self):
+                return real_conn.commit()
+
+            def rollback(self):
+                return real_conn.rollback()
+
+        monkeypatch.setattr(db, "_conn", _FlakyConn())
+        with pytest.raises(sqlite3.OperationalError):
+            db.upsert_message(session["id"], old_id, "assistant", "Replacement")
+
+        monkeypatch.undo()
+        # The DELETE was rolled back — the original row is still present.
+        messages = db.get_messages(session["id"])
+        assert len(messages) == 1
+        assert messages[0]["content"] == "Original"
+        assert messages[0]["id"] == old_id
+
+    def test_upsert_message_persists_metadata(self, db):
+        """agent_steps and inference_stats round-trip through upsert."""
+        session = db.create_session()
+        msg_id = db.upsert_message(
+            session["id"],
+            None,
+            "assistant",
+            "Answer",
+            agent_steps=[{"type": "policy_alert", "decision": "BLOCK"}],
+            inference_stats={"tokens_per_second": 42},
+        )
+        msg = db.get_messages(session["id"])[0]
+        assert msg["id"] == msg_id
+        assert msg["agent_steps"] == [{"type": "policy_alert", "decision": "BLOCK"}]
+        assert msg["inference_stats"] == {"tokens_per_second": 42}
+
 
 class TestDocuments:
     def test_add_document(self, db):
