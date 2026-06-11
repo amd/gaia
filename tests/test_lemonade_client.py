@@ -723,6 +723,38 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertIsNone(responses.calls[-1].request.body)
 
     @responses.activate
+    def test_unload_model_ignore_if_not_loaded(self):
+        """Cold-start guard (#1544): Lemonade 404s "Model not loaded" when the
+        embedder slot is empty. ignore_if_not_loaded turns that one benign case
+        into a no-op; every other failure — and the default strict mode — still
+        raises, so a global unload or a real outage is never swallowed.
+        """
+        embed_model = "nomic-embed-text-v2-moe-GGUF"
+        not_loaded = {"error": f"Model not loaded: {embed_model}"}
+
+        # 404 "not loaded" + flag ON → no-op, no raise.
+        responses.add(responses.POST, f"{API_BASE}/unload", json=not_loaded, status=404)
+        result = self.client.unload_model(embed_model, ignore_if_not_loaded=True)
+        self.assertEqual(result.get("status"), "not_loaded")
+
+        # 404 "not loaded" + flag OFF (default) → raises.
+        responses.reset()
+        responses.add(responses.POST, f"{API_BASE}/unload", json=not_loaded, status=404)
+        with self.assertRaises(LemonadeClientError):
+            self.client.unload_model(embed_model)
+
+        # A different failure (500) is NOT swallowed even with the flag ON.
+        responses.reset()
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/unload",
+            json={"error": "Internal server error"},
+            status=500,
+        )
+        with self.assertRaises(LemonadeClientError):
+            self.client.unload_model(embed_model, ignore_if_not_loaded=True)
+
+    @responses.activate
     def test_set_params(self):
         """Test setting basic generation parameters."""
         # Mock response

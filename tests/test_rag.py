@@ -266,8 +266,11 @@ class TestRAGSDK:
 
             # Unload is scoped to the embedder ONLY — exactly one call, carrying
             # the embedder name. assert_called_once_with also pins that the bare
-            # global form unload_model() was never used.
-            lemonade.unload_model.assert_called_once_with(config.embedding_model)
+            # global form unload_model() was never used. ignore_if_not_loaded
+            # tolerates Lemonade's 404 on a cold (empty) embedder slot (#1544).
+            lemonade.unload_model.assert_called_once_with(
+                config.embedding_model, ignore_if_not_loaded=True
+            )
             # The chat model id is never handed to unload_model.
             for call in lemonade.unload_model.call_args_list:
                 assert config.model not in call.args

@@ -489,7 +489,12 @@ class RAGSDK:
 
             # Scoped unload of the embedder ONLY — a global /unload would evict
             # the co-resident chat model and trigger a ~100s cold reload (#1544).
-            self.llm_client.unload_model(self.config.embedding_model)
+            # ignore_if_not_loaded: on a cold start the embedder slot is empty
+            # and Lemonade 404s "Model not loaded" — a benign no-op here, since
+            # we reload it on the next line anyway.
+            self.llm_client.unload_model(
+                self.config.embedding_model, ignore_if_not_loaded=True
+            )
             self.llm_client.load_model(
                 self.config.embedding_model,
                 llamacpp_args="--ubatch-size 2048",
