@@ -910,6 +910,66 @@ quarantine_phishing_message → { "ok": true, "data": {
       </ol>
       <div class="ds"><b>Dataset:</b> inbox + which items belong in the digest vs archive. Expected: digest covers the informational set; archive touches only the intended set; undo available.</div>
     </div>
+
+    <div class="wf">
+      <div class="wt"><span class="id">W6</span><h3>Scheduling back-and-forth (time negotiation)</h3></div>
+      <div class="chain">detect (10) → conflicts (11) → draft + send proposals (3, 7) → <i>their reply</i> → conflicts (11) → create (12) + confirm (3, 7)</div>
+      <ol>
+        <li>Inbound "can we find time next week?" → <b>detect_meeting_request</b> = true <span class="pill t0">T0</span></li>
+        <li>Scan the calendar across the candidate window → <b>detect_calendar_conflicts</b> on each option, keep the free ones <span class="pill t0">T0</span></li>
+        <li><b>draft_reply</b> proposing 2–3 open slots → user confirms → <b>send</b> <span class="pill t0">T0</span> <span class="pill t2">T2</span></li>
+        <li>Recipient replies choosing — or countering with — a slot → <b>detect_calendar_conflicts</b> re-checks that exact time <span class="pill t0">T0</span></li>
+        <li><b>Still free</b> → user confirms → <b>create_event_from_email</b> + a confirmation <b>send</b> <span class="pill t2">T2</span>. <b>Now taken</b> → propose the next free slot (loop to step 3) — the agent never double-books.</li>
+      </ol>
+      <div class="ds"><b>Dataset:</b> a multi-message thread where the first-proposed slot becomes unavailable mid-conversation. Expected: agent proposes only free slots, re-checks on every round, re-proposes when a slot is taken, creates exactly the finally-agreed time, and confirmation fires at each send/create.</div>
+    </div>
+
+    <div class="wf">
+      <div class="wt"><span class="id">W7</span><h3>Find it, then act on it</h3> <span class="pill planned">uses planned search</span></div>
+      <div class="chain">search (13) → thread (6) / summary (2) → draft (3) → send (7)</div>
+      <ol>
+        <li>User: "find the contract thread from Dana and tell her we're signing." → <b>search_messages</b> locates the thread <span class="pill t0">T0</span> <span class="opt">(13, planned)</span></li>
+        <li><b>summarize_thread</b> → the outstanding ask + last sender <span class="pill t0">T0</span></li>
+        <li><b>draft_reply</b> to that sender, satisfying the intent <span class="pill t0">T0</span></li>
+        <li>User confirms → <b>send</b> <span class="pill t2">T2</span></li>
+      </ol>
+      <div class="ds"><b>Dataset:</b> a mailbox + a natural-language locate-and-act request. Expected: the right thread is found, the summary is faithful, the reply targets the correct recipient, and the send is gated.</div>
+    </div>
+
+    <div class="wf">
+      <div class="wt"><span class="id">W8</span><h3>Commitment tracking</h3> <span class="pill planned">uses planned tasks/follow-up</span></div>
+      <div class="chain">triage (1) → task extraction (14) → follow-up tracking (15)</div>
+      <ol>
+        <li>Triage marks a message <code>NEEDS_RESPONSE</code> and extracts its action items <span class="pill t0">T0</span></li>
+        <li>Action items are persisted to the task list, de-duplicated and linked to the source message <span class="pill t0">T0</span> <span class="opt">(14, planned)</span></li>
+        <li>Days later, the reply you sent gets no response → <b>follow-up tracking</b> surfaces a nudge <span class="pill t0">T0</span> <span class="opt">(15, planned)</span></li>
+      </ol>
+      <div class="ds"><b>Dataset:</b> an inbox + sent items over time. Expected: tasks created and de-duplicated, the unanswered sent message flagged after the window, and nothing auto-sent.</div>
+    </div>
+
+    <div class="wf">
+      <div class="wt"><span class="id">W9</span><h3>Learns who matters</h3> <span class="pill wip">personalization</span></div>
+      <div class="chain">triage (1) → set_priority_sender (P1) → persist via memory (P3) → future triage</div>
+      <ol>
+        <li>Triage ranks an important sender too low <span class="pill t0">T0</span></li>
+        <li>User marks them important → <b>set_priority_sender</b> <span class="pill t0">T0</span></li>
+        <li>The preference persists across restarts via on-device memory <span class="pill t0">T0</span> <span class="opt">(P3, in flight)</span></li>
+        <li>The next triage floats that sender up automatically — no rule written by hand</li>
+      </ol>
+      <div class="ds"><b>Dataset:</b> repeated triage of the same sender before and after a priority correction, across a restart. Expected: the sender's rank/category shifts after the correction and stays shifted on restart.</div>
+    </div>
+
+    <div class="wf">
+      <div class="wt"><span class="id">W10</span><h3>Attachment-aware reply</h3> <span class="pill wip">attachments in flight</span></div>
+      <div class="chain">read + attachment (P4) → summary (2) → draft (3) → send with attachment (7, P4)</div>
+      <ol>
+        <li>Read the message and expose its attachment (name, type, size) <span class="pill t0">T0</span> <span class="opt">(P4, in flight)</span></li>
+        <li><b>summarize_message</b> accounting for the attachment's content <span class="pill t0">T0</span></li>
+        <li><b>draft_reply</b> that references — or returns — a file <span class="pill t0">T0</span></li>
+        <li>User confirms → <b>send</b> with the attachment; the attachment is shown in the confirmation <span class="pill t2">T2</span></li>
+      </ol>
+      <div class="ds"><b>Dataset:</b> messages carrying attachments + a reply intent. Expected: the attachment is surfaced in triage/summary, the reply carries the correct file, and the send is gated.</div>
+    </div>
   </div>
 </section>
 
