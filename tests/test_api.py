@@ -1779,13 +1779,11 @@ class TestEmailSendOutlookOffEventLoop:
             "/v1/email/send", json={**payload, "confirmation_token": token}
         )
         # Graph sendMail returns no id — the endpoint maps the empty-id Outlook
-        # response to a synthetic sentinel id ("outlook-sent") or a 502 if the
-        # backend gives back a non-id result. Either way it must NOT be a 500.
-        assert resp.status_code != 500, resp.text
-        # 200 with a sent_id, OR a clear 502 (not a silent 500).
-        if resp.status_code == 200:
-            body = resp.json()
-            assert body["sent"] is True
+        # response to the synthetic sentinel id "outlook-sent".
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["sent"] is True
+        assert body["sent_id"] == "outlook-sent"
 
 
 if __name__ == "__main__":

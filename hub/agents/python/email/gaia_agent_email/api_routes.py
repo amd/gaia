@@ -49,7 +49,7 @@ import os
 import re
 import secrets
 import threading
-from typing import Any, List, Optional
+from typing import Any, List, NamedTuple, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
@@ -70,6 +70,7 @@ from gaia_agent_email.contract import (
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
 from gaia_agent_email.tools.triage_heuristics import classify_category_heuristic
+from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -499,12 +500,26 @@ confirmation_store = ConfirmationStore()
 # ---------------------------------------------------------------------------
 
 
-def get_send_backend():
+class _SendBackend(NamedTuple):
+    """Backend instance paired with its human-readable provider label."""
+
+    backend: Any
+    provider_label: str
+
+
+def get_send_backend() -> _SendBackend:
     """Resolve the mailbox backend used by the send endpoint.
 
     Honors the ``GAIA_EMAIL_PROVIDER`` environment variable (``"google"``
     by default; ``"microsoft"`` for Outlook.com / Hotmail / Live via MS
     Graph) so the REST send path works for both Gmail and personal Outlook.
+    The consuming application must set ``GAIA_EMAIL_PROVIDER=microsoft`` when
+    targeting an Outlook account; the default resolves Google/Gmail.
+
+    Returns a :class:`_SendBackend` named tuple so the provider label is
+    resolved exactly once here — the send handler consumes ``provider_label``
+    directly instead of re-reading the env var (which could diverge when tests
+    monkeypatch ``resolve_send_backend``).
 
     The ``to_thread`` wrap in the send handler means the backend's sync token
     bridge (``get_access_token_sync`` / ``get_credential_sync``) runs on a
@@ -516,12 +531,13 @@ def get_send_backend():
     inject a fake backend without touching live mail.
     """
     provider = os.environ.get("GAIA_EMAIL_PROVIDER", "google").strip().lower()
+    provider_label = "Google" if provider == "google" else "Microsoft"
     from gaia_agent_email.config import EmailAgentConfig
 
     try:
-        return EmailAgentConfig(mail_provider=provider).resolve_mail_backend()
+        backend = EmailAgentConfig(mail_provider=provider).resolve_mail_backend()
+        return _SendBackend(backend=backend, provider_label=provider_label)
     except Exception as exc:  # noqa: BLE001 - boundary translation, re-raised
-        provider_label = "Google" if provider == "google" else "Microsoft"
         raise HTTPException(
             status_code=503,
             detail=(
@@ -534,7 +550,9 @@ def get_send_backend():
 
 # Module-level indirection the send handler calls after the gate. Tests swap
 # this (e.g. ``monkeypatch.setattr(email_routes, "resolve_send_backend",
-# lambda: FakeGmailBackend())``) to inject a fake without touching live mail.
+# lambda: FakeGmailBackend())``) to inject a fake backend without touching
+# live mail. When a test injects a plain backend object (not a _SendBackend),
+# the send handler defaults the provider label to the configured env value.
 # Default is the fail-loud live resolver above.
 resolve_send_backend = get_send_backend
 
@@ -592,7 +610,15 @@ class EmailSendRequest(_Strict):
 
 
 class EmailSendResponse(_Strict):
-    sent_id: str = Field(..., description="Provider message id of the sent email.")
+    sent_id: str = Field(
+        ...,
+        description=(
+            "Provider message id of the sent email. "
+            "Microsoft/Outlook sends return the synthetic sentinel "
+            '"outlook-sent" (Graph sendMail returns HTTP 202 with no body, '
+            "so there is no retrievable provider id)."
+        ),
+    )
     to: List[EmailAddress] = Field(
         ..., description="Recipients the message was sent to."
     )
@@ -665,12 +691,19 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
         )
 
     # Gate passed — resolve the backend now (AFTER the gate) and send.
-    backend = resolve_send_backend()
+    # resolve_send_backend returns either a _SendBackend(backend, provider_label)
+    # or a plain backend object (test overrides). Unpack safely so the provider
+    # label is never read from the env a second time (avoids divergence when tests
+    # monkeypatch resolve_send_backend with a fake that carries no env context).
+    _resolved = resolve_send_backend()
+    if isinstance(_resolved, _SendBackend):
+        backend, provider_label = _resolved
+    else:
+        # Test-injected plain backend — fall back to the configured provider name.
+        backend = _resolved
+        _provider = os.environ.get("GAIA_EMAIL_PROVIDER", "google").strip().lower()
+        provider_label = "Google" if _provider == "google" else "Microsoft"
     to_header = ", ".join(_format_address(a) for a in request.to)
-    # Provider label for error messages — read the same env var get_send_backend
-    # reads so the error names the account the user needs to fix.
-    provider = os.environ.get("GAIA_EMAIL_PROVIDER", "google").strip().lower()
-    provider_label = "Google" if provider == "google" else "Microsoft"
     # Run the blocking send off the event loop. Both backends fetch their
     # access token via a sync bridge (get_access_token_sync / get_credential_sync)
     # that raises by design when called from a thread with a running loop
@@ -685,13 +718,7 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
         )
     except Exception as exc:  # noqa: BLE001 - boundary translation, re-raised
         # Distinguish auth/token failures (reconnect) from server-side rejects.
-        try:
-            from gaia.connectors.errors import AuthRequiredError, ConnectorsError
-
-            is_auth = isinstance(exc, (AuthRequiredError, ConnectorsError))
-        except ImportError:
-            is_auth = False
-        if is_auth:
+        if isinstance(exc, (AuthRequiredError, ConnectorsError)):
             detail = (
                 f"Email send failed: {provider_label} credentials are no longer "
                 f"valid. Reconnect the {provider_label} account via Settings → "
