@@ -39,7 +39,8 @@ class TestMigrateLegacyAgentGrants:
         assert listing["installed:email"] == scopes
 
     def test_migration_does_not_overwrite_existing_installed_email(self, fake_home):
-        """If installed:email already exists, migration must not clobber it."""
+        """If installed:email already exists, migration must not clobber it and
+        must remove the stale builtin:email key."""
         old_scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
         new_scopes = ["https://www.googleapis.com/auth/gmail.modify"]
         grant_agent("google", "builtin:email", old_scopes)
@@ -50,6 +51,8 @@ class TestMigrateLegacyAgentGrants:
         listing = list_agent_grants("google")
         # The existing installed:email entry is preserved unchanged.
         assert listing["installed:email"] == new_scopes
+        # The stale legacy key must be removed.
+        assert "builtin:email" not in listing
 
     def test_migration_is_idempotent(self, fake_home):
         """Calling migrate twice must not corrupt or duplicate entries."""

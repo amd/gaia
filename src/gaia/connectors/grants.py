@@ -265,9 +265,9 @@ def migrate_legacy_agent_grants() -> None:
     who granted permissions before the #1520 hub-migration don't silently lose
     access.  The migration is idempotent:
 
-    - If the new key already has an entry, the old entry is left as-is
-      (no overwrite — user may have re-granted under the new key with
-      different scopes).
+    - If the new key already has an entry, the legacy key is REMOVED and the
+      new key's existing value is preserved unchanged (user may have re-granted
+      under the new key with different scopes).
     - If the new key is absent, the old entry is copied to the new key and
       the old key is removed.
     - If there are no legacy keys in the ledger, the function is a no-op.

@@ -53,9 +53,9 @@ def _validate_provider_secret(provider_id: str) -> None:
 
     try:
         provider = _get_provider(provider_id)
-    except Exception:
-        # If the provider can't be loaded (e.g. no client_id), a more
-        # specific error will surface during start_authorization.
+    except (ConfigurationError, KeyError):
+        # If the provider can't be loaded (e.g. no client_id configured yet),
+        # a more specific error will surface during start_authorization.
         return
     if not getattr(provider, "client_secret", None):
         raise ConfigurationError(

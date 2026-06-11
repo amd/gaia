@@ -811,8 +811,10 @@ class ReadToolsMixin:
                         debug=debug_flag,
                     )
                 )
-            except (ConnectorsError, EmailSummarizeError) as exc:
+            except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
+            except EmailSummarizeError as exc:
+                return _envelope_err(str(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
