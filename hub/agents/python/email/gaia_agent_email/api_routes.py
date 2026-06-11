@@ -688,14 +688,19 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
         )
 
     # Gate passed — resolve the backend now (AFTER the gate) and send. Gmail's
-    # send takes a single 'to' header string.
+    # send takes a single 'to' header string. Run off the event loop so
+    # get_access_token_sync (used inside the token resolvers) does not hit
+    # the "called from a thread with a running event loop" guard (#1594).
     backend = resolve_send_backend()
     to_header = ", ".join(_format_address(a) for a in request.to)
-    result = backend.send_message(
-        to=to_header, subject=request.subject, body=request.body
+    result = await asyncio.to_thread(
+        backend.send_message, to=to_header, subject=request.subject, body=request.body
     )
     sent_id = result.get("id") or ""
-    if not sent_id:
+    # Graph sendMail returns 202 with no body → no id, but result["sent"]=True
+    # signals a successful send. Gmail raises on failure, so no-id + no-sent
+    # is an unknown failure state that we still reject loudly.
+    if not sent_id and not result.get("sent"):
         raise HTTPException(
             status_code=502,
             detail="Email backend did not return a message id for the send.",
