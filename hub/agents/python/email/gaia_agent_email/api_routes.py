@@ -45,11 +45,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
-import os
 import re
 import secrets
 import threading
-from typing import Any, List, NamedTuple, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
@@ -500,50 +499,29 @@ confirmation_store = ConfirmationStore()
 # ---------------------------------------------------------------------------
 
 
-class _SendBackend(NamedTuple):
-    """Backend instance paired with its human-readable provider label."""
+def get_send_backend() -> Any:
+    """Resolve the Gmail backend used by the send endpoint.
 
-    backend: Any
-    provider_label: str
-
-
-def get_send_backend() -> _SendBackend:
-    """Resolve the mailbox backend used by the send endpoint.
-
-    Honors the ``GAIA_EMAIL_PROVIDER`` environment variable (``"google"``
-    by default; ``"microsoft"`` for Outlook.com / Hotmail / Live via MS
-    Graph) so the REST send path works for both Gmail and personal Outlook.
-    The consuming application must set ``GAIA_EMAIL_PROVIDER=microsoft`` when
-    targeting an Outlook account; the default resolves Google/Gmail.
-
-    Returns a :class:`_SendBackend` named tuple so the provider label is
-    resolved exactly once here — the send handler consumes ``provider_label``
-    directly instead of re-reading the env var (which could diverge when tests
-    monkeypatch ``resolve_send_backend``).
-
-    The ``to_thread`` wrap in the send handler means the backend's sync token
-    bridge (``get_access_token_sync`` / ``get_credential_sync``) runs on a
-    loop-free worker thread regardless of provider (#1594 AC1/AC2).
+    Returns the live Gmail backend constructed from the current connectors
+    configuration. Raises HTTP 503 loudly when Google is not connected —
+    no silent fallback.
 
     IMPORTANT: invoked from the send handler *after* the confirmation gate —
     a request without a valid token is rejected 4xx before backend resolution.
     Tests override ``resolve_send_backend`` (the module-level alias below) to
     inject a fake backend without touching live mail.
     """
-    provider = os.environ.get("GAIA_EMAIL_PROVIDER", "google").strip().lower()
-    provider_label = "Google" if provider == "google" else "Microsoft"
     from gaia_agent_email.config import EmailAgentConfig
 
     try:
-        backend = EmailAgentConfig(mail_provider=provider).resolve_mail_backend()
-        return _SendBackend(backend=backend, provider_label=provider_label)
+        return EmailAgentConfig().resolve_mail_backend()
     except Exception as exc:  # noqa: BLE001 - boundary translation, re-raised
         raise HTTPException(
             status_code=503,
             detail=(
-                f"Email send backend unavailable: {provider_label} account is "
-                "not connected. Connect it via the connectors flow before "
-                f"sending. ({type(exc).__name__}: {exc})"
+                "Email send backend unavailable: Google account is not connected. "
+                "Connect it via Settings → Connections before sending. "
+                f"({type(exc).__name__}: {exc})"
             ),
         ) from exc
 
@@ -551,9 +529,7 @@ def get_send_backend() -> _SendBackend:
 # Module-level indirection the send handler calls after the gate. Tests swap
 # this (e.g. ``monkeypatch.setattr(email_routes, "resolve_send_backend",
 # lambda: FakeGmailBackend())``) to inject a fake backend without touching
-# live mail. When a test injects a plain backend object (not a _SendBackend),
-# the send handler defaults the provider label to the configured env value.
-# Default is the fail-loud live resolver above.
+# live mail. Default is the fail-loud live resolver above.
 resolve_send_backend = get_send_backend
 
 
@@ -612,12 +588,7 @@ class EmailSendRequest(_Strict):
 class EmailSendResponse(_Strict):
     sent_id: str = Field(
         ...,
-        description=(
-            "Provider message id of the sent email. "
-            "Microsoft/Outlook sends return the synthetic sentinel "
-            '"outlook-sent" (Graph sendMail returns HTTP 202 with no body, '
-            "so there is no retrievable provider id)."
-        ),
+        description="Provider message id of the sent email.",
     )
     to: List[EmailAddress] = Field(
         ..., description="Recipients the message was sent to."
@@ -691,24 +662,13 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
         )
 
     # Gate passed — resolve the backend now (AFTER the gate) and send.
-    # resolve_send_backend returns either a _SendBackend(backend, provider_label)
-    # or a plain backend object (test overrides). Unpack safely so the provider
-    # label is never read from the env a second time (avoids divergence when tests
-    # monkeypatch resolve_send_backend with a fake that carries no env context).
-    _resolved = resolve_send_backend()
-    if isinstance(_resolved, _SendBackend):
-        backend, provider_label = _resolved
-    else:
-        # Test-injected plain backend — fall back to the configured provider name.
-        backend = _resolved
-        _provider = os.environ.get("GAIA_EMAIL_PROVIDER", "google").strip().lower()
-        provider_label = "Google" if _provider == "google" else "Microsoft"
+    backend = resolve_send_backend()
     to_header = ", ".join(_format_address(a) for a in request.to)
-    # Run the blocking send off the event loop. Both backends fetch their
-    # access token via a sync bridge (get_access_token_sync / get_credential_sync)
-    # that raises by design when called from a thread with a running loop
-    # (#1579/#1589). to_thread hands the backend a loop-free worker thread so
-    # the token fetch works for both Gmail and Outlook (#1594 AC1/AC2).
+    # Run the blocking send off the event loop. The Gmail backend fetches its
+    # access token via a sync bridge (get_access_token_sync) that raises by
+    # design when called from a thread with a running loop (#1579/#1589).
+    # to_thread hands the backend a loop-free worker thread so the token
+    # fetch succeeds (#1594).
     try:
         result = await asyncio.to_thread(
             backend.send_message,
@@ -720,23 +680,18 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
         # Distinguish auth/token failures (reconnect) from server-side rejects.
         if isinstance(exc, (AuthRequiredError, ConnectorsError)):
             detail = (
-                f"Email send failed: {provider_label} credentials are no longer "
-                f"valid. Reconnect the {provider_label} account via Settings → "
-                f"Connections before retrying. ({type(exc).__name__}: {exc})"
+                "Email send failed: Google credentials are no longer valid. "
+                "Reconnect the Google account via Settings → Connections before "
+                f"retrying. ({type(exc).__name__}: {exc})"
             )
         else:
             detail = (
-                f"Email send failed ({provider_label} account): "
+                f"Email send failed (Google account): "
                 f"{type(exc).__name__}: {exc}. "
                 "If the account is connected, this is a server-side send error."
             )
         raise HTTPException(status_code=502, detail=detail) from exc
     sent_id = result.get("id") or ""
-    # Microsoft Graph sendMail returns 202 with no body → id is empty string.
-    # Treat a non-empty result dict without an id as a successful Outlook send
-    # and generate a synthetic sentinel so callers get a stable sent_id field.
-    if not sent_id and result:
-        sent_id = "outlook-sent"
     if not sent_id:
         raise HTTPException(
             status_code=502,
