@@ -237,6 +237,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     );
     // AC3: the session header shows which mailbox is active.
     const displayedMailProvider = session?.mail_provider;
+    // The single-provider pill reflects what THIS session triages (the stored
+    // session value), falling back to the sole connected provider when unset.
+    const activeMailbox = displayedMailProvider ?? connectedMailProviders[0];
 
     // Close mail-provider picker on outside click
     useEffect(() => {
@@ -1431,10 +1434,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             /* AC3: single connected provider → non-interactive pill */
                             <span
                                 className="mail-provider-pill"
-                                title={`Mailbox: ${PROVIDER_LABELS[connectedMailProviders[0]] ?? connectedMailProviders[0]}`}
+                                title={`Mailbox: ${PROVIDER_LABELS[activeMailbox] ?? activeMailbox}`}
                             >
                                 <Mail size={10} />
-                                {PROVIDER_LABELS[connectedMailProviders[0]] ?? connectedMailProviders[0]}
+                                {PROVIDER_LABELS[activeMailbox] ?? activeMailbox}
                             </span>
                         ) : (
                             /* AC2: multiple providers → interactive dropdown */
