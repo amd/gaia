@@ -10,7 +10,8 @@ import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
-import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
+import { getAgentIcon } from './agentIcons';
+import type { Message, StreamEvent, AgentStep, Attachment, Session, AgentInfo } from '../types';
 
 import './ChatView.css';
 import DashboardProgress from './DashboardProgress';
@@ -22,6 +23,17 @@ const EMPTY_SUGGESTIONS = [
     'Analyze a spreadsheet',
     'Show my recent files',
 ];
+
+function formatAgentCapabilities(agent?: AgentInfo): string {
+    if (!agent) return '';
+    const parts: string[] = [];
+    if (typeof agent.tools_count === 'number' && agent.tools_count > 0) {
+        parts.push(`${agent.tools_count} ${agent.tools_count === 1 ? 'tool' : 'tools'}`);
+    }
+    const tags = (agent.tags ?? []).filter(Boolean).slice(0, 3);
+    if (tags.length > 0) parts.push(tags.join(', '));
+    return parts.join(' | ');
+}
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -195,6 +207,15 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // Resolve human-readable agent names for the message header
     const sessionAgentName = agents.find((a) => a.id === session?.agent_type)?.name;
     const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name;
+    const displayedAgent = useMemo(
+        () => agents.find((a) => a.id === displayedAgentId),
+        [agents, displayedAgentId],
+    );
+    const displayedAgentCapabilities = useMemo(
+        () => formatAgentCapabilities(displayedAgent),
+        [displayedAgent],
+    );
+    const DisplayedAgentIcon = getAgentIcon(displayedAgent?.icon);
 
     // Close agent picker on outside click
     useEffect(() => {
@@ -1294,6 +1315,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     };
 
     const showEmptyState = !isLoadingMessages && messages.length === 0 && !isStreaming;
+    const emptyStateSuggestions = displayedAgent?.conversation_starters?.length
+        ? displayedAgent.conversation_starters
+        : EMPTY_SUGGESTIONS;
 
     // Pre-compute per-message latency: time from preceding user message to each
     // assistant message. O(N) single pass, avoids repeated backward scans in render.
@@ -1347,6 +1371,23 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     )}
                 </div>
                 <div className="task-header-right">
+                    {displayedAgent && (
+                        <div
+                            className="active-agent-indicator"
+                            aria-label="Active agent"
+                            title={displayedAgentCapabilities
+                                ? `${displayedAgent.name}: ${displayedAgentCapabilities}`
+                                : displayedAgent.name}
+                        >
+                            <DisplayedAgentIcon size={13} className="active-agent-icon" />
+                            <span className="active-agent-copy">
+                                <span className="active-agent-name">{displayedAgent.name}</span>
+                                {displayedAgentCapabilities && (
+                                    <span className="active-agent-capabilities">{displayedAgentCapabilities}</span>
+                                )}
+                            </span>
+                        </div>
+                    )}
                     <span
                         className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
                         title={
@@ -1495,15 +1536,24 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
                 {showEmptyState && (
                     <div className="empty-task">
-                        <div className="empty-task-icon">
-                            <MessageSquare size={36} strokeWidth={1.2} />
+                        <div className={`empty-task-icon${displayedAgent ? ' agent-aware' : ''}`}>
+                            {displayedAgent ? (
+                                <DisplayedAgentIcon size={36} strokeWidth={1.2} />
+                            ) : (
+                                <MessageSquare size={36} strokeWidth={1.2} />
+                            )}
                         </div>
-                        <h4 className="empty-task-title">What can I help you with?</h4>
-                        <p className="empty-task-desc">
-                            Ask about your documents, search files, or analyze data &mdash; powered by local AI.
+                        <h4 className="empty-task-title">{displayedAgent?.name || 'What can I help you with?'}</h4>
+                        <p className={`empty-task-desc${displayedAgentCapabilities ? '' : ' empty-task-desc-spaced'}`}>
+                            {displayedAgent?.description || (
+                                <>Ask about your documents, search files, or analyze data &mdash; powered by local AI.</>
+                            )}
                         </p>
+                        {displayedAgentCapabilities && (
+                            <div className="empty-task-capabilities">{displayedAgentCapabilities}</div>
+                        )}
                         <div className="empty-task-suggestions">
-                            {EMPTY_SUGGESTIONS.map((s) => (
+                            {emptyStateSuggestions.map((s) => (
                                 <button
                                     key={s}
                                     className="empty-task-chip"
