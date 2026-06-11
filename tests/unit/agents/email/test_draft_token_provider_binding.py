@@ -26,8 +26,6 @@ pytest.importorskip("gaia_agent_email")
 
 import gaia_agent_email.api_routes as email_routes
 from fastapi.testclient import TestClient
-from gaia_agent_email.gmail_backend import LiveGmailBackend
-from gaia_agent_email.outlook_backend import LiveOutlookBackend
 
 # The FastAPI app the email router is mounted on.
 try:

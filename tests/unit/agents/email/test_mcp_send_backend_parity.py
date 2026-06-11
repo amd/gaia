@@ -18,8 +18,6 @@ so that parity tests can run without a live mailbox connection.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 pytest.importorskip("gaia_agent_email")
