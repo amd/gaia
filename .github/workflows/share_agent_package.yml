@@ -38,6 +38,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+
       - name: Resolve agent metadata
         id: meta
         run: |
