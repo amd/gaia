@@ -69,6 +69,7 @@ from gaia_agent_email.contract import (
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
 from gaia_agent_email.tools.triage_heuristics import classify_category_heuristic
+from gaia.connectors.api import connected_mailbox_providers
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -499,33 +500,59 @@ confirmation_store = ConfirmationStore()
 
 
 def get_send_backend():
-    """Resolve the Gmail backend used by the send endpoint.
+    """Resolve the send backend from the connected OAuth mailbox.
 
-    Production builds the live backend and fails loudly if Google
-    credentials are not connected — never silently no-ops a send. Tests
-    override this via ``app.dependency_overrides[get_send_backend]`` to
-    inject ``FakeGmailBackend`` so no live mail is touched.
+    Production derives the backend from whichever mailbox the user connected
+    via Settings → Connectors. Fails loudly when the count is ambiguous —
+    never silently chooses or falls back:
 
-    IMPORTANT: this is invoked from the send handler *after* the
-    confirmation gate, NOT as a FastAPI ``Depends`` — a request that lacks a
-    valid confirmation token must be rejected with a 4xx regardless of
-    backend health, so the gate is always evaluated first. (Resolving the
-    backend as a ``Depends`` would let a backend-unavailable 503 preempt the
-    403, masking the missing-confirmation rejection.)
+      - 0 connected → HTTP 503 (actionable: go connect a mailbox)
+      - 2+ connected → HTTP 400 (actionable: use the draft-token provider
+        binding to specify which mailbox to send from)
+      - exactly 1 → build the matching live backend
+
+    IMPORTANT: invoked AFTER the confirmation gate, not as a FastAPI
+    ``Depends``, so a gate rejection (403) always preempts a backend-health
+    error (503/400).
     """
-    from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
-
-    try:
-        return LiveGmailBackend(_get_gmail_token)
-    except Exception as exc:  # noqa: BLE001 - boundary translation, re-raised
+    providers = connected_mailbox_providers()
+    if not providers:
         raise HTTPException(
             status_code=503,
             detail=(
-                "Email send backend unavailable: Google account is not "
-                "connected. Connect Google via the connectors flow before "
-                f"sending. ({type(exc).__name__}: {exc})"
+                "No mailbox connected — connect Google or Microsoft in "
+                "Settings → Connectors before sending."
             ),
-        ) from exc
+        )
+    if len(providers) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Multiple mailboxes connected ({', '.join(providers)}); "
+                "the send API can't choose. Send from the agent/UI (sends "
+                "from the message's mailbox), or include a draft confirmation "
+                "token that binds the provider."
+            ),
+        )
+    provider = providers[0]
+    if provider == "google":
+        from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
+
+        return LiveGmailBackend(_get_gmail_token)
+    if provider == "microsoft":
+        from gaia_agent_email.outlook_backend import (
+            LiveOutlookBackend,
+            _get_outlook_token,
+        )
+
+        return LiveOutlookBackend(_get_outlook_token)
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Connected mailbox provider '{provider}' has no send backend. "
+            "Expected 'google' or 'microsoft'."
+        ),
+    )
 
 
 # Module-level indirection the send handler calls after the gate. Tests swap
