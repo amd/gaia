@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import os
 import re
 import secrets
 import threading
@@ -499,30 +500,33 @@ confirmation_store = ConfirmationStore()
 
 
 def get_send_backend():
-    """Resolve the Gmail backend used by the send endpoint.
+    """Resolve the mailbox backend used by the send endpoint.
 
-    Production builds the live backend and fails loudly if Google
-    credentials are not connected — never silently no-ops a send. Tests
-    override this via ``app.dependency_overrides[get_send_backend]`` to
-    inject ``FakeGmailBackend`` so no live mail is touched.
+    Honors the ``GAIA_EMAIL_PROVIDER`` environment variable (``"google"``
+    by default; ``"microsoft"`` for Outlook.com / Hotmail / Live via MS
+    Graph) so the REST send path works for both Gmail and personal Outlook.
 
-    IMPORTANT: this is invoked from the send handler *after* the
-    confirmation gate, NOT as a FastAPI ``Depends`` — a request that lacks a
-    valid confirmation token must be rejected with a 4xx regardless of
-    backend health, so the gate is always evaluated first. (Resolving the
-    backend as a ``Depends`` would let a backend-unavailable 503 preempt the
-    403, masking the missing-confirmation rejection.)
+    The ``to_thread`` wrap in the send handler means the backend's sync token
+    bridge (``get_access_token_sync`` / ``get_credential_sync``) runs on a
+    loop-free worker thread regardless of provider (#1594 AC1/AC2).
+
+    IMPORTANT: invoked from the send handler *after* the confirmation gate —
+    a request without a valid token is rejected 4xx before backend resolution.
+    Tests override ``resolve_send_backend`` (the module-level alias below) to
+    inject a fake backend without touching live mail.
     """
-    from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
+    provider = os.environ.get("GAIA_EMAIL_PROVIDER", "google").strip().lower()
+    from gaia_agent_email.config import EmailAgentConfig
 
     try:
-        return LiveGmailBackend(_get_gmail_token)
+        return EmailAgentConfig(mail_provider=provider).resolve_mail_backend()
     except Exception as exc:  # noqa: BLE001 - boundary translation, re-raised
+        provider_label = "Google" if provider == "google" else "Microsoft"
         raise HTTPException(
             status_code=503,
             detail=(
-                "Email send backend unavailable: Google account is not "
-                "connected. Connect Google via the connectors flow before "
+                f"Email send backend unavailable: {provider_label} account is "
+                "not connected. Connect it via the connectors flow before "
                 f"sending. ({type(exc).__name__}: {exc})"
             ),
         ) from exc
@@ -660,14 +664,18 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
             ),
         )
 
-    # Gate passed — resolve the backend now (AFTER the gate) and send. Gmail's
-    # send takes a single 'to' header string.
+    # Gate passed — resolve the backend now (AFTER the gate) and send.
     backend = resolve_send_backend()
     to_header = ", ".join(_format_address(a) for a in request.to)
-    # Run the blocking send off the event loop. The backend fetches the Gmail
-    # token via get_access_token_sync, which raises by design if called from a
-    # thread with a running loop (#1579/#1589); to_thread hands it a loop-free
-    # worker thread so the sync token bridge works.
+    # Provider label for error messages — read the same env var get_send_backend
+    # reads so the error names the account the user needs to fix.
+    provider = os.environ.get("GAIA_EMAIL_PROVIDER", "google").strip().lower()
+    provider_label = "Google" if provider == "google" else "Microsoft"
+    # Run the blocking send off the event loop. Both backends fetch their
+    # access token via a sync bridge (get_access_token_sync / get_credential_sync)
+    # that raises by design when called from a thread with a running loop
+    # (#1579/#1589). to_thread hands the backend a loop-free worker thread so
+    # the token fetch works for both Gmail and Outlook (#1594 AC1/AC2).
     try:
         result = await asyncio.to_thread(
             backend.send_message,
@@ -676,16 +684,32 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
             body=request.body,
         )
     except Exception as exc:  # noqa: BLE001 - boundary translation, re-raised
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"Email send failed for {to_header} ({type(exc).__name__}: {exc}). "
-                "Verify the account is still connected (reconnect via the "
-                "connectors flow); if it is connected, this is a server-side "
-                "send error, not a missing confirmation."
-            ),
-        ) from exc
+        # Distinguish auth/token failures (reconnect) from server-side rejects.
+        try:
+            from gaia.connectors.errors import AuthRequiredError, ConnectorsError
+
+            is_auth = isinstance(exc, (AuthRequiredError, ConnectorsError))
+        except ImportError:
+            is_auth = False
+        if is_auth:
+            detail = (
+                f"Email send failed: {provider_label} credentials are no longer "
+                f"valid. Reconnect the {provider_label} account via Settings → "
+                f"Connections before retrying. ({type(exc).__name__}: {exc})"
+            )
+        else:
+            detail = (
+                f"Email send failed ({provider_label} account): "
+                f"{type(exc).__name__}: {exc}. "
+                "If the account is connected, this is a server-side send error."
+            )
+        raise HTTPException(status_code=502, detail=detail) from exc
     sent_id = result.get("id") or ""
+    # Microsoft Graph sendMail returns 202 with no body → id is empty string.
+    # Treat a non-empty result dict without an id as a successful Outlook send
+    # and generate a synthetic sentinel so callers get a stable sent_id field.
+    if not sent_id and result:
+        sent_id = "outlook-sent"
     if not sent_id:
         raise HTTPException(
             status_code=502,

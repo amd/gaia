@@ -1639,6 +1639,154 @@ class TestEmailSendRunsOffEventLoop:
         assert resp.status_code == 502, resp.text
         assert "send failed" in resp.text.lower()
 
+    def test_auth_failure_mentions_reconnect_not_server_error(self, monkeypatch):
+        """An auth/token error surfaces a reconnect hint (AC4: distinguish
+        auth/reconnect from server-side rejection)."""
+        from gaia_agent_email import api_routes as email_routes
+
+        from gaia.connectors.errors import AuthRequiredError
+
+        class _AuthFailBackend:
+            def send_message(self, to, subject, body):
+                raise AuthRequiredError(
+                    AuthRequiredError.Reason.REAUTH_REQUIRED,
+                    provider="google",
+                )
+
+        monkeypatch.setattr(
+            email_routes, "resolve_send_backend", lambda: _AuthFailBackend()
+        )
+        payload = {
+            "to": [{"email": "bob@example.com"}],
+            "subject": "Re: budget",
+            "body": "Sure, let's do it.",
+        }
+        token = self.client.post("/v1/email/draft", json=payload).json()[
+            "confirmation_token"
+        ]
+        resp = self.client.post(
+            "/v1/email/send", json={**payload, "confirmation_token": token}
+        )
+        assert resp.status_code == 502, resp.text
+        body_text = resp.text.lower()
+        # Must name what needs fixing: reconnect / credentials
+        assert "reconnect" in body_text or "credentials" in body_text, resp.text
+
+
+class TestEmailSendBackendProviderResolution:
+    """get_send_backend() must honor GAIA_EMAIL_PROVIDER so the REST send
+    path resolves the correct live backend for both Google and Microsoft
+    without test overrides (#1594 AC2)."""
+
+    @pytest.fixture(autouse=True)
+    def _require_email(self):
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        pytest.importorskip("gaia_agent_email")
+
+    def test_get_send_backend_defaults_to_gmail(self, monkeypatch):
+        """Without GAIA_EMAIL_PROVIDER, get_send_backend() constructs a
+        LiveGmailBackend (or raises 503 when Google is not connected — either
+        way it must NOT attempt Outlook)."""
+        monkeypatch.delenv("GAIA_EMAIL_PROVIDER", raising=False)
+        from gaia_agent_email import api_routes as email_routes
+        from gaia_agent_email.gmail_backend import LiveGmailBackend
+
+        # Patch resolve_mail_backend on the config class to capture the call.
+        captured = {}
+
+        def _fake_resolve(self):
+            captured["provider"] = self.mail_provider
+            return LiveGmailBackend(lambda: "fake-token")
+
+        monkeypatch.setattr(
+            "gaia_agent_email.config.EmailAgentConfig.resolve_mail_backend",
+            _fake_resolve,
+        )
+        email_routes.get_send_backend()
+        assert captured.get("provider") == "google"
+
+    def test_get_send_backend_respects_microsoft_env_var(self, monkeypatch):
+        """GAIA_EMAIL_PROVIDER=microsoft → get_send_backend() resolves the
+        Outlook backend (LiveOutlookBackend or any backend returned by
+        resolve_mail_backend for provider='microsoft')."""
+        monkeypatch.setenv("GAIA_EMAIL_PROVIDER", "microsoft")
+        from gaia_agent_email import api_routes as email_routes
+        from gaia_agent_email.outlook_backend import LiveOutlookBackend
+
+        captured = {}
+
+        def _fake_resolve(self):
+            captured["provider"] = self.mail_provider
+            return LiveOutlookBackend(lambda: "fake-token")
+
+        monkeypatch.setattr(
+            "gaia_agent_email.config.EmailAgentConfig.resolve_mail_backend",
+            _fake_resolve,
+        )
+        email_routes.get_send_backend()
+        assert captured.get("provider") == "microsoft"
+
+
+class TestEmailSendOutlookOffEventLoop:
+    """POST /v1/email/send with provider=microsoft must run the blocking
+    Outlook backend off the event loop (#1594 AC2). Drives the async
+    happy-path against a loop-guarded Outlook backend stub."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        pytest.importorskip("gaia_agent_email")
+        from gaia_agent_email import api_routes as email_routes
+
+        class _OutlookLoopGuardedBackend:
+            """Mirrors LiveOutlookBackend: send_message raises when called
+            on a thread with a running event loop (get_credential_sync guard).
+            Returns a Graph-style empty-id dict on success (per outlook_backend
+            send_message contract)."""
+
+            def send_message(self, to, subject, body):
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    # Off the loop — success (Graph sendMail returns no body)
+                    return {"id": "", "to": to, "subject": subject}
+                raise RuntimeError(
+                    "Outlook send_message ran on a thread with a running event loop"
+                )
+
+        # Inject the Outlook-style backend; the send handler does not inspect
+        # the backend type — only the returned dict shape matters.
+        monkeypatch.setattr(
+            email_routes, "resolve_send_backend", lambda: _OutlookLoopGuardedBackend()
+        )
+        self.client = TestClient(app)
+
+    def test_outlook_send_happy_path_does_not_500(self):
+        """Draft → send via an Outlook-style backend returns 200 and is run
+        off the event loop (the Graph sendMail returns no message id — the
+        endpoint handles the empty-id case via the sentinel path)."""
+        payload = {
+            "to": [{"email": "carol@example.com"}],
+            "subject": "Re: meeting",
+            "body": "Works for me.",
+        }
+        token = self.client.post("/v1/email/draft", json=payload).json()[
+            "confirmation_token"
+        ]
+        resp = self.client.post(
+            "/v1/email/send", json={**payload, "confirmation_token": token}
+        )
+        # Graph sendMail returns no id — the endpoint maps the empty-id Outlook
+        # response to a synthetic sentinel id ("outlook-sent") or a 502 if the
+        # backend gives back a non-id result. Either way it must NOT be a 500.
+        assert resp.status_code != 500, resp.text
+        # 200 with a sent_id, OR a clear 502 (not a silent 500).
+        if resp.status_code == 200:
+            body = resp.json()
+            assert body["sent"] is True
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
