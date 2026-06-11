@@ -43,6 +43,7 @@ called from the loop thread.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextvars
 import logging
 import threading
@@ -164,7 +165,11 @@ def run_sync(
 
     try:
         return future.result(timeout=timeout)
-    except TimeoutError as e:
+    except concurrent.futures.TimeoutError as e:
+        # concurrent.futures.TimeoutError is a distinct class on Python 3.10;
+        # only an alias for builtins.TimeoutError on 3.11+. Catch it by its
+        # canonical name so the actionable error fires on every supported
+        # Python (GAIA targets >=3.10).
         future.cancel()
         raise ConnectorsError(
             f"Connector async operation timed out after {timeout}s. "
