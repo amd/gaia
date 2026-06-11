@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from gaia.agents.base.agent import default_max_steps
+from gaia.connectors.api import connected_mailbox_providers
 
 
 class ConfigurationError(ValueError):
@@ -82,10 +83,13 @@ class EmailAgentConfig:
       Defaults to ``~/.gaia/email/state.db``. Eval harness passes a
       ``tmp_path``-derived path so concurrent live + eval runs don't
       race on the same SQLite file.
-    - ``mail_provider``: which mailbox provider the agent operates on —
-      ``"google"`` (Gmail, the default) or ``"microsoft"`` (personal
-      Outlook.com / Hotmail / Live via MS Graph, #1275). Selects the live
-      backend in ``resolve_mail_backend``. Case-insensitive.
+    - ``mail_provider``: a FILTER over the connected mailboxes (#1603 Phase 2).
+      ``None`` (the default) means "every connected mailbox" — a both-connected
+      user triages Gmail and Outlook together. ``"google"`` / ``"microsoft"``
+      restricts to that one provider (and only when it is connected). The
+      plural ``resolve_mail_backends`` reads the connected set; the singular
+      ``resolve_mail_backend`` stays connector-agnostic (``None`` → Gmail) for
+      the eval seam. Case-insensitive.
     - ``calendar_provider``: which calendar provider the agent operates on —
       ``"google"`` (the default) or ``"microsoft"`` (personal Outlook.com
       calendar via MS Graph, #1276). Selects the live backend in
@@ -111,7 +115,7 @@ class EmailAgentConfig:
     output_dir: Optional[str] = None
     undo_window_seconds: int = 30
     db_path: Optional[str] = None
-    mail_provider: str = "google"
+    mail_provider: Optional[str] = None
     calendar_provider: Optional[str] = None
     gmail_backend: Optional[Any] = None
     outlook_backend: Optional[Any] = None
@@ -190,6 +194,77 @@ class EmailAgentConfig:
             "supported. Use 'google' (Gmail) or 'microsoft' (Outlook.com / "
             "Hotmail / Live)."
         )
+
+    def _build_mail_backend(self, provider: str) -> Any:
+        """Build (or return the injected) live backend for one provider.
+
+        Honors the per-provider eval seam: ``gmail_backend`` for ``google`` and
+        ``outlook_backend`` for ``microsoft``. An unknown provider raises
+        ``ConfigurationError`` (fail loudly).
+        """
+        if provider == "google":
+            if self.gmail_backend is not None:
+                return self.gmail_backend
+            from gaia_agent_email.gmail_backend import (
+                LiveGmailBackend,
+                _get_gmail_token,
+            )
+
+            return LiveGmailBackend(_get_gmail_token)
+        if provider == "microsoft":
+            if self.outlook_backend is not None:
+                return self.outlook_backend
+            from gaia_agent_email.outlook_backend import (
+                LiveOutlookBackend,
+                _get_outlook_token,
+            )
+
+            return LiveOutlookBackend(_get_outlook_token)
+        raise ConfigurationError(
+            f"Connected mailbox provider {provider!r} has no backend. "
+            "Expected 'google' or 'microsoft'."
+        )
+
+    def resolve_mail_backends(self) -> List[Tuple[str, Any]]:
+        """Return ``[(provider, backend), ...]`` for every admitted mailbox.
+
+        ``mail_provider`` is a FILTER over the connected set (#1603 Phase 2):
+
+          - ``None`` → every connected mailbox (multi-inbox scan).
+          - ``"google"`` / ``"microsoft"`` → only that provider, and only when
+            it is actually connected.
+
+        Connector-derived: the connected set comes from
+        ``connected_mailbox_providers()`` (the keyring), in registry order
+        (google before microsoft). Fails loudly — an explicit filter naming an
+        unconnected provider, or nothing connected at all, raises
+        ``ConfigurationError`` rather than silently triaging one mailbox.
+
+        The per-provider eval seam (``gmail_backend`` / ``outlook_backend``) is
+        honored via ``_build_mail_backend``. Distinct from the singular
+        ``resolve_mail_backend``, which stays connector-agnostic for the
+        single-backend eval path.
+        """
+        connected = connected_mailbox_providers()
+        selected_filter = (self.mail_provider or "").strip().lower()
+        if selected_filter:
+            selected = [p for p in connected if p == selected_filter]
+            if not selected:
+                connected_desc = ", ".join(connected) if connected else "none"
+                raise ConfigurationError(
+                    f"Session selected mailbox {selected_filter!r} but it is "
+                    f"not connected. Connected: {connected_desc}. Connect it in "
+                    "Settings → Connectors, or clear the selection to use every "
+                    "connected mailbox."
+                )
+        else:
+            selected = list(connected)
+        if not selected:
+            raise ConfigurationError(
+                "No mailbox connected — connect Google or Microsoft in "
+                "Settings → Connectors before triaging."
+            )
+        return [(provider, self._build_mail_backend(provider)) for provider in selected]
 
     def resolve_calendar_backend(self) -> Any:
         """Return the calendar backend for the configured ``calendar_provider``.
