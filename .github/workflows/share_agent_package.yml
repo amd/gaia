@@ -1,0 +1,74 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# On-demand share of one agent's wheel+sdist as a GitHub prerelease asset.
+# Reuses the discover-matrix (util/list_agent_packages.py) and the build
+# composite action so there is no second build recipe.
+# Namespaced tag prefix "agent-pkg-*" (not "v*") intentionally avoids firing
+# publish_agents.yml / publish.yml — PyPI path (#1179) remains untouched.
+
+name: Share Agent Package (GitHub Release)
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent_id:
+        description: 'Agent id to build and share (e.g. email)'
+        required: true
+        default: 'email'
+      ref:
+        description: 'git ref/sha/tag to build (blank = the branch this is dispatched from)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+# Never cancel a half-done release upload — wait for it to complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.agent_id }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-share:
+    name: Build and share ${{ inputs.agent_id }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Resolve agent metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          ENTRY=$(python util/list_agent_packages.py --format matrix --only "${{ inputs.agent_id }}")
+          PATHV=$(echo "$ENTRY" | python -c "import json,sys;e=json.load(sys.stdin)['include'][0];print(e['path'])")
+          DIST=$(echo  "$ENTRY" | python -c "import json,sys;e=json.load(sys.stdin)['include'][0];print(e['dist'])")
+          VERSION=$(python -c "import tomllib;print(tomllib.load(open('$PATHV/pyproject.toml','rb'))['project']['version'])")
+          echo "path=$PATHV"    >> "$GITHUB_OUTPUT"
+          echo "dist=$DIST"     >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/build-agent-wheel
+        with:
+          path: ${{ steps.meta.outputs.path }}
+          dist: ${{ steps.meta.outputs.dist }}
+
+      - name: Publish prerelease asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="agent-pkg-${{ inputs.agent_id }}-v${{ steps.meta.outputs.version }}"
+          DIST_DIR="${{ steps.meta.outputs.path }}/dist"
+          # Fail loud if the build produced nothing — never upload an empty release.
+          ls "$DIST_DIR"/*.whl "$DIST_DIR"/*.tar.gz
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$DIST_DIR"/* --clobber
+          else
+            gh release create "$TAG" "$DIST_DIR"/* --prerelease --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --notes "Interim GitHub-native share of ${{ steps.meta.outputs.dist }} built from $GITHUB_SHA. Not a PyPI release (#1179)."
+          fi
+          echo "Release: https://github.com/amd/gaia/releases/tag/$TAG"
