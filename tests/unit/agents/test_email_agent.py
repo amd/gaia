@@ -23,13 +23,18 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email.agent import EmailTriageAgent  # noqa: E402
-from gaia.agents.email.config import EmailAgentConfig  # noqa: E402
-from gaia.agents.email.outlook_scopes import (  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
+from gaia_agent_email.config import EmailAgentConfig  # noqa: E402
+from gaia_agent_email.outlook_scopes import (  # noqa: E402
     OUTLOOK_CALENDAR_SCOPES,
     OUTLOOK_MAIL_SCOPES,
 )
-from gaia.agents.email.scopes import AGENT_NAMESPACED_ID, ALL_SCOPES  # noqa: E402
+from gaia_agent_email.scopes import AGENT_NAMESPACED_ID, ALL_SCOPES  # noqa: E402
+
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeCalendarBackend,
     FakeGmailBackend,
@@ -77,7 +82,7 @@ class TestConstruction:
         assert agent.AGENT_NAME == "Email Triage"
 
     def test_namespaced_id_constant(self):
-        assert AGENT_NAMESPACED_ID == "builtin:email"
+        assert AGENT_NAMESPACED_ID == "installed:email"
 
     def test_required_connectors_well_formed(self):
         # Two providers are declared: Google (Gmail #962 + Calendar) and
@@ -100,6 +105,18 @@ class TestConstruction:
 
     def test_response_mode_is_conversational(self, agent):
         assert agent.response_mode == "conversational"
+
+    def test_injected_single_fake_builds_backends_map(self, agent, fake_gmail):
+        # Phase 2 (#1603 D2): the agent binds a provider→backend map. An
+        # injected single fake (no provider) tags as "google" to preserve the
+        # shipped Gmail fixtures, and ``self._gmail`` stays the primary backend.
+        assert agent._backends == {"google": fake_gmail}
+        assert agent._gmail is fake_gmail
+
+    def test_primary_backend_is_first_in_map(self, agent):
+        # self._gmail must be the first value in self._backends so existing
+        # single-backend tool closures keep working unchanged.
+        assert agent._gmail is next(iter(agent._backends.values()))
 
     def test_system_prompt_pre_scan_canary(self, agent):
         """Canary against silent prompt drift.
@@ -251,7 +268,7 @@ class TestAC3LocalLLMOnly:
     def test_remote_base_url_rejected_at_construction(
         self, fake_gmail, fake_calendar, tmp_path
     ):
-        from gaia.agents.email.config import ConfigurationError
+        from gaia_agent_email.config import ConfigurationError
 
         cfg = EmailAgentConfig(
             base_url="https://api.openai.com/v1",
@@ -271,7 +288,9 @@ class TestRegistryIntegration:
         from gaia.agents.registry import AgentRegistry
 
         reg = AgentRegistry()
-        reg._register_builtin_agents()
+        # email ships as the standalone gaia-agent-email wheel (#1102); it is
+        # registered via entry-point discovery, not as a built-in.
+        reg.discover()
         assert "email" in {r.id for r in reg.list()}
 
         with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:

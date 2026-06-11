@@ -83,11 +83,13 @@ def test_pyproject_declares_gaia_agent_entry_point(packages):
 
 
 def test_publish_workflow_exists_and_uses_pypi_action():
-    """The CI workflow publishes via gh-action-pypi-publish with the token secret."""
+    """The CI workflow publishes via gh-action-pypi-publish using OIDC."""
     assert WORKFLOW.exists(), "publish_agents.yml workflow is missing"
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "pypa/gh-action-pypi-publish" in text
-    assert "secrets.PYPI_API_TOKEN" in text
+    # OIDC trusted publishing — no stored token (#1570). The action mints a
+    # short-lived id-token PyPI exchanges for an upload token.
+    assert "id-token: write" in text
     # PyPI-native immutability rather than custom overwrite logic (#1179).
     assert "skip-existing: true" in text
     # Matrix is generated from the helper, not a hand-maintained second list.
@@ -142,3 +144,72 @@ def test_helper_rejects_bad_naming(tmp_path):
     )
     with pytest.raises(lap.AgentListError, match="naming convention"):
         lap.list_agent_packages(setup_py=fake_setup)
+
+
+# ── --only filter tests (#1598) ──────────────────────────────────────────────
+
+
+def test_only_filter_ids():
+    """--only email returns exactly the email agent when using --format ids."""
+    import subprocess  # nosec B404 — fixed argv, no shell
+
+    out = subprocess.run(
+        [
+            sys.executable,
+            str(UTIL_DIR / "list_agent_packages.py"),
+            "--only",
+            "email",
+            "--format",
+            "ids",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lines = [ln for ln in out.stdout.splitlines() if ln.strip()]
+    assert lines == ["email"], f"expected ['email'] but got {lines!r}"
+
+
+def test_only_filter_matrix_single_entry():
+    """--format matrix --only email yields an include list of length 1 with correct fields."""
+    import json
+    import subprocess  # nosec B404 — fixed argv, no shell
+
+    out = subprocess.run(
+        [
+            sys.executable,
+            str(UTIL_DIR / "list_agent_packages.py"),
+            "--format",
+            "matrix",
+            "--only",
+            "email",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    matrix = json.loads(out.stdout)
+    assert "include" in matrix
+    assert len(matrix["include"]) == 1
+    entry = matrix["include"][0]
+    assert entry["id"] == "email"
+    assert entry["dist"] == "gaia-agent-email"
+    assert entry["path"].endswith("hub/agents/python/email")
+
+
+def test_only_filter_unknown_id_fails():
+    """An unknown agent id with --only exits non-zero and surfaces valid ids."""
+    import subprocess  # nosec B404 — fixed argv, no shell
+
+    result = subprocess.run(
+        [sys.executable, str(UTIL_DIR / "list_agent_packages.py"), "--only", "nope"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, "expected non-zero exit for unknown agent id"
+    # Error message should name some valid ids so the user knows what to use.
+    assert (
+        "nope" in result.stderr
+        or "valid" in result.stderr.lower()
+        or "email" in result.stderr
+    )

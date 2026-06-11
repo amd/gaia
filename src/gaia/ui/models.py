@@ -287,7 +287,8 @@ class SessionResponse(BaseModel):
     private: bool = False
     agent_type: str = "chat"
     device: str = "gpu"
-    mail_provider: str = "google"
+    # Mailbox FILTER (#1596): None = every connected mailbox (no pick).
+    mail_provider: Optional[str] = None
 
 
 class SessionListResponse(BaseModel):

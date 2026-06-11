@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
     system_prompt TEXT,
     device TEXT DEFAULT 'gpu',
-    mail_provider TEXT DEFAULT 'google'
+    -- Mailbox FILTER (#1596): NULL = every connected mailbox; the legacy
+    -- ALTER migration below still backfills pre-Phase-2 rows to 'google'.
+    mail_provider TEXT
 );
 
 -- Many-to-many: which docs are attached to which session
@@ -75,10 +77,36 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id               TEXT PRIMARY KEY,
+    name             TEXT UNIQUE NOT NULL,
+    interval_seconds INTEGER NOT NULL,
+    prompt           TEXT NOT NULL,
+    status           TEXT DEFAULT 'active',
+    created_at       TEXT,
+    last_run_at      TEXT,
+    next_run_at      TEXT,
+    last_result      TEXT,
+    run_count        INTEGER DEFAULT 0,
+    error_count      INTEGER DEFAULT 0,
+    session_id       TEXT,
+    schedule_config  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS schedule_results (
+    id          TEXT PRIMARY KEY,
+    task_id     TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+    executed_at TEXT NOT NULL,
+    result      TEXT,
+    error       TEXT
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_session_docs ON session_documents(session_id);
+CREATE INDEX IF NOT EXISTS idx_schedule_results_task
+    ON schedule_results(task_id, executed_at DESC);
 """
 
 
@@ -287,7 +315,8 @@ class ChatDatabase:
         title = title or "New Chat"
         agent_type = agent_type or "chat"
         device = device or "gpu"
-        mail_provider = mail_provider or "google"
+        # mail_provider is a FILTER (#1596): no pick stays NULL ("every
+        # connected mailbox") — never silently coerce to google.
 
         with self._transaction():
             self._conn.execute(
@@ -501,6 +530,64 @@ class ChatDatabase:
             msg_id = cursor.lastrowid
 
         return msg_id or 0
+
+    def upsert_message(
+        self,
+        session_id: str,
+        msg_id: int | None,
+        role: str,
+        content: str,
+        rag_sources: List[Dict] | None = None,
+        agent_steps: List[Dict] | None = None,
+        tokens_prompt: int | None = None,
+        tokens_completion: int | None = None,
+        inference_stats: Dict | None = None,
+    ) -> int:
+        """Atomically replace a message with a fresh row. Returns the new ID.
+
+        When ``msg_id`` is not None the old row is deleted and the new row is
+        inserted in the SAME transaction, so a crash or exception can never leave
+        the session without the message (the failure mode of a separate
+        ``delete_message`` + ``add_message``). A new id is minted rather than
+        reusing ``msg_id`` to keep the delete-then-insert id semantics.
+        """
+        sources_json = json.dumps(rag_sources) if rag_sources else None
+        steps_json = json.dumps(agent_steps) if agent_steps else None
+        stats_json = json.dumps(inference_stats) if inference_stats else None
+
+        with self._transaction():
+            if msg_id is not None:
+                self._conn.execute(
+                    "DELETE FROM messages WHERE id = ? AND session_id = ?",
+                    (msg_id, session_id),
+                )
+
+            cursor = self._conn.execute(
+                """INSERT INTO messages
+                   (session_id, role, content, created_at, rag_sources,
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    role,
+                    content,
+                    self._now(),
+                    sources_json,
+                    steps_json,
+                    tokens_prompt,
+                    tokens_completion,
+                    stats_json,
+                ),
+            )
+
+            # Update session timestamp
+            self._conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (self._now(), session_id),
+            )
+            new_id = cursor.lastrowid
+
+        return new_id or 0
 
     def get_messages(
         self, session_id: str, limit: int = 100, offset: int = 0
@@ -879,6 +966,105 @@ class ChatDatabase:
         with self._lock:
             rows = self._conn.execute("SELECT key, value FROM settings").fetchall()
             return {row["key"]: row["value"] for row in rows}
+
+    # ── Scheduled tasks ─────────────────────────────────────────────────
+
+    def create_scheduled_task(self, row: Dict[str, Any]) -> None:
+        """Insert a scheduled task row.
+
+        Args:
+            row: Mapping with keys id, name, interval_seconds, prompt, status,
+                created_at, next_run_at, run_count, error_count, session_id,
+                schedule_config.
+
+        Raises:
+            sqlite3.IntegrityError: if a task with the same name exists.
+        """
+        with self._transaction():
+            self._conn.execute(
+                """INSERT INTO scheduled_tasks
+                   (id, name, interval_seconds, prompt, status, created_at,
+                    next_run_at, run_count, error_count, session_id, schedule_config)
+                   VALUES (:id, :name, :interval_seconds, :prompt, :status,
+                           :created_at, :next_run_at, :run_count, :error_count,
+                           :session_id, :schedule_config)""",
+                row,
+            )
+
+    def update_scheduled_task(
+        self,
+        task_id: str,
+        *,
+        status: str,
+        last_run_at: str | None = None,
+        next_run_at: str | None = None,
+        last_result: str | None = None,
+        run_count: int = 0,
+        error_count: int = 0,
+        session_id: str | None = None,
+        schedule_config: str | None = None,
+    ) -> None:
+        """Update the mutable fields of a scheduled task row."""
+        with self._transaction():
+            self._conn.execute(
+                """UPDATE scheduled_tasks
+                   SET status = ?, last_run_at = ?, next_run_at = ?, last_result = ?,
+                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?
+                   WHERE id = ?""",
+                (
+                    status,
+                    last_run_at,
+                    next_run_at,
+                    last_result,
+                    run_count,
+                    error_count,
+                    session_id,
+                    schedule_config,
+                    task_id,
+                ),
+            )
+
+    def delete_scheduled_task(self, task_id: str) -> None:
+        """Delete a scheduled task and its results."""
+        with self._transaction():
+            self._conn.execute(
+                "DELETE FROM schedule_results WHERE task_id = ?", (task_id,)
+            )
+            self._conn.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
+
+    def list_scheduled_tasks(self) -> List[Dict[str, Any]]:
+        """Load all scheduled task rows."""
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM scheduled_tasks").fetchall()
+            return [dict(r) for r in rows]
+
+    def store_schedule_result(
+        self,
+        result_id: str,
+        task_id: str,
+        executed_at: str,
+        result: str | None,
+        error: str | None,
+    ) -> None:
+        """Store one schedule execution result."""
+        with self._transaction():
+            self._conn.execute(
+                """INSERT INTO schedule_results (id, task_id, executed_at, result, error)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (result_id, task_id, executed_at, result, error),
+            )
+
+    def get_schedule_results(
+        self, task_id: str, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """Get past execution results for a task, newest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT * FROM schedule_results WHERE task_id = ?
+                   ORDER BY executed_at DESC LIMIT ?""",
+                (task_id, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     # ── Stats ───────────────────────────────────────────────────────────
 

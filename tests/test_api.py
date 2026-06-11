@@ -1196,9 +1196,10 @@ class TestErrorResponseFormat:
 # EMAIL AGENT REST SURFACE (#1229) — TestClient, no external server / Lemonade
 # =============================================================================
 #
-# These exercise the /v1/email/* endpoints added by src/gaia/api/email_routes.py.
+# These exercise the /v1/email/* endpoints exposed by the gaia-agent-email
+# wheel (gaia_agent_email.api_routes), mounted conditionally by openai_server.
 # The triage endpoint accepts / returns the FROZEN #1262 contract
-# (gaia.agents.email.contract). The send endpoint enforces the confirmation
+# (gaia_agent_email.contract). The send endpoint enforces the confirmation
 # gate (#1264) at the API boundary: a send without a valid confirmation token
 # is rejected with a 4xx — never silently auto-confirmed.
 
@@ -1259,15 +1260,45 @@ class TestEmailTriageEndpoint:
     """POST /v1/email/triage — single email / thread in, structured result out."""
 
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, monkeypatch):
         if not API_AVAILABLE:
             pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        # The /v1/email/* routes ship with the standalone gaia-agent-email
+        # wheel (#1102); skip when a framework-only env lacks it.
+        pytest.importorskip("gaia_agent_email")
+        import json
+        import types
+
+        from gaia_agent_email.api_routes import EmailTriageService
+
+        # Inject a fake chat so tests don't need a live Lemonade server.
+        # Returns a classification JSON for classify calls, a summary string
+        # for summarize calls.
+        class _FakeChat:
+            def send_messages(self, messages, system_prompt="", **kwargs):
+                resp = types.SimpleNamespace()
+                content = messages[0].get("content", "") if messages else ""
+                if "Classify" in content:
+                    resp.text = json.dumps(
+                        {
+                            "category": "actionable",
+                            "confidence": 0.9,
+                            "reasoning": "test",
+                        }
+                    )
+                else:
+                    resp.text = "Alice is asking for a budget review by Friday."
+                return resp
+
+        monkeypatch.setattr(
+            EmailTriageService, "_build_llm_chat", lambda self, **kw: _FakeChat()
+        )
         self.client = TestClient(app)
 
     def test_single_email_in_structured_out(self):
         """A single email in returns a contract-valid structured result."""
-        from gaia.agents.email.contract import SCHEMA_VERSION, parse_response
-        from gaia.agents.email.tools.triage_heuristics import ALL_CATEGORIES
+        from gaia_agent_email.contract import SCHEMA_VERSION, parse_response
+        from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
 
         resp = self.client.post("/v1/email/triage", json=_single_email_payload())
         assert resp.status_code == 200, resp.text
@@ -1283,7 +1314,7 @@ class TestEmailTriageEndpoint:
 
     def test_thread_in_structured_out(self):
         """A full thread in returns request_kind == 'thread'."""
-        from gaia.agents.email.contract import parse_response
+        from gaia_agent_email.contract import parse_response
 
         resp = self.client.post("/v1/email/triage", json=_thread_payload())
         assert resp.status_code == 200, resp.text
@@ -1297,7 +1328,7 @@ class TestEmailTriageEndpoint:
     def test_single_email_proposes_draft_to_sender(self):
         """An inbound email from someone else yields a draft addressed back
         to that sender."""
-        from gaia.agents.email.contract import parse_response
+        from gaia_agent_email.contract import parse_response
 
         resp = self.client.post(
             "/v1/email/triage",
@@ -1312,8 +1343,8 @@ class TestEmailTriageEndpoint:
     def test_promotional_email_is_low_priority(self):
         """The agent's real heuristic categorizer drives the result —
         a promo subject lands in 'low priority' deterministically."""
-        from gaia.agents.email.contract import parse_response
-        from gaia.agents.email.tools.triage_heuristics import CATEGORY_LOW_PRIORITY
+        from gaia_agent_email.contract import parse_response
+        from gaia_agent_email.tools.triage_heuristics import CATEGORY_LOW_PRIORITY
 
         payload = _single_email_payload(
             subject="50% off — sale ends tonight!",
@@ -1368,6 +1399,9 @@ class TestEmailSendConfirmationGate:
     def setup(self, monkeypatch):
         if not API_AVAILABLE:
             pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        # The /v1/email/* routes ship with the standalone gaia-agent-email
+        # wheel (#1102); skip when a framework-only env lacks it.
+        pytest.importorskip("gaia_agent_email")
         # Inject an in-memory Gmail backend so the (authorized) send path
         # never touches live mail. The gate-rejection cases never reach the
         # backend — the confirmation check is enforced first.
@@ -1377,7 +1411,8 @@ class TestEmailSendConfirmationGate:
         repo_root = Path(__file__).resolve().parent.parent
         if str(repo_root) not in sys.path:
             sys.path.insert(0, str(repo_root))
-        from gaia.api import email_routes
+        from gaia_agent_email import api_routes as email_routes
+
         from tests.fixtures.email.fake_gmail import FakeGmailBackend
 
         self.fake_backend = FakeGmailBackend()
@@ -1506,7 +1541,7 @@ class TestEmailSendConfirmationGate:
         resolved: a no-token send returns 403 even when the backend is
         unavailable (would otherwise 503). The gate must never be masked by
         backend health."""
-        from gaia.api import email_routes
+        from gaia_agent_email import api_routes as email_routes
 
         def _boom():
             raise AssertionError("backend resolved before the gate — gate bypassed")
@@ -1521,6 +1556,177 @@ class TestEmailSendConfirmationGate:
             },
         )
         assert resp.status_code == 403
+
+
+class TestEmailSendOffLoop:
+    """send_email runs backend.send_message() off the event loop (#1594).
+
+    The FastAPI route is async; calling backend.send_message() (which uses
+    get_access_token_sync) synchronously from the async handler raises a
+    RuntimeError because get_access_token_sync detects a running event loop.
+    The fix: ``asyncio.to_thread(backend.send_message, ...)``.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        pytest.importorskip("gaia_agent_email")
+
+    def test_send_runs_on_worker_thread(self, monkeypatch):
+        """backend.send_message must be called from a thread WITHOUT a running loop.
+
+        We inject a backend whose send_message asserts it is NOT on a thread that
+        has a running asyncio event loop — this is the condition that made #1594
+        raise RuntimeError.
+        """
+        import asyncio
+        import sys
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from gaia_agent_email import api_routes as email_routes
+
+        call_log = []
+
+        class _LoopAssertingBackend:
+            def send_message(self, *, to, subject, body, **_kw):
+                # If called from the event loop thread, get_running_loop() succeeds;
+                # from a worker thread it raises RuntimeError. This is the exact
+                # guard that get_access_token_sync enforces — we assert the same.
+                try:
+                    asyncio.get_running_loop()
+                    call_log.append("ON_LOOP")  # Wrong: called from loop thread
+                except RuntimeError:
+                    call_log.append("OFF_LOOP")  # Correct: called from worker
+                return {"id": "test-id-off-loop", "to": to, "subject": subject}
+
+        monkeypatch.setattr(email_routes, "resolve_send_backend", _LoopAssertingBackend)
+
+        client = TestClient(app)
+        # Get a valid token first
+        draft_resp = client.post(
+            "/v1/email/draft",
+            json={
+                "to": [{"email": "test@example.com"}],
+                "subject": "Test",
+                "body": "Hello",
+            },
+        )
+        assert draft_resp.status_code == 200, draft_resp.text
+        token = draft_resp.json()["confirmation_token"]
+
+        send_resp = client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "test@example.com"}],
+                "subject": "Test",
+                "body": "Hello",
+                "confirmation_token": token,
+            },
+        )
+        assert send_resp.status_code == 200, send_resp.text
+        assert call_log == ["OFF_LOOP"], (
+            f"send_message ran on the event loop (call_log={call_log!r}); "
+            "#1594: wrap in asyncio.to_thread"
+        )
+
+
+class TestEmailSendOutlook502Fix:
+    """Graph sendMail returns 202 (no body, no id) — this is success, not 502.
+
+    Prior to D4 the send handler raised 502 any time sent_id was empty, which
+    broke Outlook sends (Graph sendMail legitimately returns 202 with no id).
+    The fix: treat result['sent']==True as success even with no id.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        pytest.importorskip("gaia_agent_email")
+
+    def test_outlook_202_no_id_returns_200(self, monkeypatch):
+        """A backend returning {"id":"","sent":True} must produce HTTP 200."""
+        import sys
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from gaia_agent_email import api_routes as email_routes
+
+        class _OutlookLikeBackend:
+            # Graph sendMail: 202 No Content; no id echoed back, but no exception.
+            def send_message(self, *, to, subject, body, **_kw):
+                return {"id": "", "sent": True, "to": to, "subject": subject}
+
+        monkeypatch.setattr(email_routes, "resolve_send_backend", _OutlookLikeBackend)
+        client = TestClient(app)
+        draft = client.post(
+            "/v1/email/draft",
+            json={
+                "to": [{"email": "bob@example.com"}],
+                "subject": "Hello",
+                "body": "World",
+            },
+        )
+        token = draft.json()["confirmation_token"]
+        resp = client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "bob@example.com"}],
+                "subject": "Hello",
+                "body": "World",
+                "confirmation_token": token,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["sent"] is True
+        assert body["sent_id"] == ""  # No id from Graph, but not a 502
+
+    def test_silent_no_op_backend_still_502s(self, monkeypatch):
+        """A backend returning {"id":""} WITHOUT 'sent':True is still a 502.
+
+        Gmail raises on real failure, so a backend returning no id AND no
+        sent signal is an unknown failure state — still fail loud.
+        """
+        import sys
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from gaia_agent_email import api_routes as email_routes
+
+        class _SilentNoOpBackend:
+            def send_message(self, *, to, subject, body, **_kw):
+                return {"id": ""}  # No 'sent' key — unknown failure
+
+        monkeypatch.setattr(email_routes, "resolve_send_backend", _SilentNoOpBackend)
+        client = TestClient(app)
+        draft = client.post(
+            "/v1/email/draft",
+            json={
+                "to": [{"email": "bob@example.com"}],
+                "subject": "Hello",
+                "body": "World",
+            },
+        )
+        token = draft.json()["confirmation_token"]
+        resp = client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "bob@example.com"}],
+                "subject": "Hello",
+                "body": "World",
+                "confirmation_token": token,
+            },
+        )
+        assert resp.status_code == 502
 
 
 if __name__ == "__main__":

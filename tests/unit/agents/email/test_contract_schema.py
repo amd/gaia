@@ -12,16 +12,19 @@ These tests freeze the request/response contract shared by the REST surface
 - Invalid payloads are rejected LOUDLY (pydantic ValidationError / ValueError),
   never silently coerced.
 
-The schema lives in ``gaia.agents.email.contract`` — dependency-light (pydantic
+The schema lives in ``gaia_agent_email.contract`` — dependency-light (pydantic
 only) so both API surfaces can import it without dragging Gmail backends in.
 """
 
 from __future__ import annotations
 
-import pytest
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
 from pydantic import ValidationError
 
-from gaia.agents.email.contract import (
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
     DraftReply,
@@ -32,7 +35,7 @@ from gaia.agents.email.contract import (
     EmailTriageResult,
     parse_request,
 )
-from gaia.agents.email.tools.triage_heuristics import ALL_CATEGORIES
+from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
 
 # ---------------------------------------------------------------------------
 # Sample payloads (the frozen contract examples — kept in sync with the .mdx)
@@ -140,10 +143,10 @@ def test_contract_import_is_backend_free():
     import sys
 
     code = (
-        "import sys, gaia.agents.email.contract;"
+        "import sys, gaia_agent_email.contract;"
         "heavy=[m for m in sys.modules if 'gmail_backend' in m "
         "or 'connectors' in m or 'calendar_backend' in m "
-        "or m=='gaia.agents.email.agent'];"
+        "or m=='gaia_agent_email.agent'];"
         "assert not heavy, heavy;"
         "print('ok')"
     )
@@ -317,3 +320,41 @@ def test_result_summary_required():
     del payload["result"]["summary"]
     with pytest.raises(ValidationError):
         EmailTriageResult.model_validate(payload["result"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 (#1603) contract freeze guard — the multi-inbox 'mailbox' tag lives
+# on the INTERNAL agent tool-result dicts, NOT on the frozen REST schema.
+# ---------------------------------------------------------------------------
+
+
+def test_schema_version_unchanged_by_multi_inbox():
+    """Multi-inbox (#1603 Phase 2) must NOT bump the frozen contract.
+
+    The REST /triage endpoint analyzes a single caller-supplied payload — it
+    never reads mailboxes, so it needs no source-mailbox field and no version
+    bump. If this fails, someone changed the frozen contract; that requires an
+    explicit version negotiation, not a drive-by edit.
+    """
+    assert SCHEMA_VERSION == "1.0"
+
+
+def test_triage_result_gained_no_new_required_field():
+    """Every EmailTriageResult field beyond the original required set must be
+    optional — a new REQUIRED field would break every existing consumer."""
+    required = {
+        name
+        for name, field in EmailTriageResult.model_fields.items()
+        if field.is_required()
+    }
+    assert required == {"category", "summary"}, (
+        f"EmailTriageResult required fields changed: {sorted(required)}. "
+        "Adding a required field is a breaking contract change — it needs a "
+        "SCHEMA_VERSION bump and a migration plan, not a drive-by edit."
+    )
+
+
+def test_triage_result_has_no_mailbox_field():
+    """The 'mailbox' tag is internal to the agent tools; the frozen REST result
+    must not grow one implicitly."""
+    assert "mailbox" not in EmailTriageResult.model_fields
