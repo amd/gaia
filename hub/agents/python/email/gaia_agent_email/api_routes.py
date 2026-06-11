@@ -452,20 +452,25 @@ class ConfirmationStore:
     endpoint. Consuming a token removes it (single-use). The server-side
     secret makes tokens unforgeable; the fingerprint makes them payload-
     specific.
+
+    Tokens may optionally carry a provider binding (D5): when the draft
+    specified ``provider="microsoft"``, the token stores that binding so the
+    send handler routes to the correct backend even when multiple mailboxes
+    are connected.
     """
 
     def __init__(self, secret: Optional[bytes] = None):
         self._secret = secret or secrets.token_bytes(32)
         self._lock = threading.Lock()
-        # token -> fingerprint it authorizes
-        self._tokens: dict[str, str] = {}
+        # token -> (fingerprint, provider_or_None)
+        self._tokens: dict[str, tuple[str, Optional[str]]] = {}
 
-    def issue(self, fingerprint: str) -> str:
+    def issue(self, fingerprint: str, *, provider: Optional[str] = None) -> str:
         token = hmac.new(
             self._secret, (fingerprint + secrets.token_hex(8)).encode("utf-8"), "sha256"
         ).hexdigest()
         with self._lock:
-            self._tokens[token] = fingerprint
+            self._tokens[token] = (fingerprint, provider)
         return token
 
     def consume(self, token: str, fingerprint: str) -> bool:
@@ -476,17 +481,29 @@ class ConfirmationStore:
         A blank/unknown token, or a token issued for a different payload,
         returns False and is NOT consumed.
         """
+        ok, _ = self.consume_with_provider(token, fingerprint)
+        return ok
+
+    def consume_with_provider(
+        self, token: str, fingerprint: str
+    ) -> tuple[bool, Optional[str]]:
+        """Like ``consume`` but also returns the bound provider (or None).
+
+        Returns ``(True, provider_or_None)`` on success; ``(False, None)`` on
+        rejection. The provider is the value passed to ``issue(provider=...)``.
+        """
         if not token:
-            return False
+            return False, None
         with self._lock:
-            expected = self._tokens.get(token)
-            if expected is None:
-                return False
-            if not hmac.compare_digest(expected, fingerprint):
+            entry = self._tokens.get(token)
+            if entry is None:
+                return False, None
+            expected_fp, bound_provider = entry
+            if not hmac.compare_digest(expected_fp, fingerprint):
                 # Right token, wrong payload — do not consume; reject.
-                return False
+                return False, None
             del self._tokens[token]
-            return True
+            return True, bound_provider
 
 
 # Process-wide store. Tokens live only for the life of the server process —
@@ -562,6 +579,46 @@ def get_send_backend():
 resolve_send_backend = get_send_backend
 
 
+def _resolve_backend_for_provider(provider: Optional[str]):
+    """Resolve a send backend for a specific provider.
+
+    When a draft token carries a provider binding, send uses this helper
+    instead of the count-based ``get_send_backend()``. Validates the provider
+    is in the connected set before building the backend — fail loud if not.
+    ``provider=None`` falls through to the count-based resolver.
+    """
+    if provider is None:
+        return resolve_send_backend()
+    connected = connected_mailbox_providers()
+    if provider not in connected:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Mailbox '{provider}' is not connected. Connect it via "
+                "Settings → Connectors, or omit the provider to use the "
+                f"single connected mailbox. Connected: {connected or '(none)'}."
+            ),
+        )
+    if provider == "google":
+        from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
+
+        return LiveGmailBackend(_get_gmail_token)
+    if provider == "microsoft":
+        from gaia_agent_email.outlook_backend import (
+            LiveOutlookBackend,
+            _get_outlook_token,
+        )
+
+        return LiveOutlookBackend(_get_outlook_token)
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Provider '{provider}' has no send backend. "
+            "Expected 'google' or 'microsoft'."
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Send / draft request & response models (LOCAL — contract.py is frozen and
 # triage-only; the send handshake is not part of the #1262 contract).
@@ -580,6 +637,14 @@ class EmailDraftRequest(_Strict):
     )
     subject: str = Field(..., description="Proposed subject line.")
     body: str = Field(..., description="Proposed reply body.")
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional provider binding ('google' or 'microsoft'). When set, "
+            "the confirmation token is bound to this provider so the send "
+            "routes to the correct mailbox even when multiple are connected."
+        ),
+    )
 
 
 class EmailDraftResponse(_Strict):
@@ -610,6 +675,14 @@ class EmailSendRequest(_Strict):
         description=(
             "Confirmation token from POST /v1/email/draft. A send without a "
             "valid token for this exact payload is rejected (403)."
+        ),
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional provider override ('google' or 'microsoft'). Ignored "
+            "when the confirmation token carries a provider binding — the "
+            "token's bound provider always wins."
         ),
     )
 
@@ -658,7 +731,7 @@ async def draft_reply(request: EmailDraftRequest) -> EmailDraftResponse:
     user, and only a user-approved send echoes the token back.
     """
     fingerprint = _payload_fingerprint(request.to, request.subject, request.body)
-    token = confirmation_store.issue(fingerprint)
+    token = confirmation_store.issue(fingerprint, provider=request.provider)
     draft = DraftReply(to=request.to, subject=request.subject, body=request.body)
     return EmailDraftResponse(draft=draft, confirmation_token=token)
 
@@ -675,7 +748,10 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     auto-confirms.
     """
     fingerprint = _payload_fingerprint(request.to, request.subject, request.body)
-    if not confirmation_store.consume(request.confirmation_token or "", fingerprint):
+    gate_ok, bound_provider = confirmation_store.consume_with_provider(
+        request.confirmation_token or "", fingerprint
+    )
+    if not gate_ok:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -691,7 +767,9 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     # send takes a single 'to' header string. Run off the event loop so
     # get_access_token_sync (used inside the token resolvers) does not hit
     # the "called from a thread with a running event loop" guard (#1594).
-    backend = resolve_send_backend()
+    # The token's bound provider (D5) overrides the count-based D2 logic;
+    # if no binding, fall back to the single-mailbox resolver.
+    backend = _resolve_backend_for_provider(bound_provider)
     to_header = ", ".join(_format_address(a) for a in request.to)
     result = await asyncio.to_thread(
         backend.send_message, to=to_header, subject=request.subject, body=request.body
