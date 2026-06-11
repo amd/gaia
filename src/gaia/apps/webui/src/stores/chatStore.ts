@@ -50,6 +50,10 @@ interface ChatState {
     appendStreamContent: (content: string) => void;
     setStreamContent: (content: string) => void;
     clearStreamContent: () => void;
+    /** Atomically clear all streaming state (streaming flag, content, steps).
+     *  Used when switching sessions so the incoming view never mirrors the
+     *  previous session's in-flight stream (issue #1580). */
+    resetStreaming: () => void;
 
     // Agent activity (steps during current response)
     agentSteps: AgentStep[];
@@ -187,6 +191,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => ({ streamingContent: state.streamingContent + content })),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [] }),
 
     // Agent activity
     agentSteps: [],
