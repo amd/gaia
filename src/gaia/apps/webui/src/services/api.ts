@@ -770,6 +770,7 @@ export async function searchFiles(query: string, fileTypes?: string, maxResults?
     results: Array<{ name: string; path: string; size: number; size_display: string; extension: string; modified: string; directory: string }>;
     total: number;
     query: string;
+    searched_locations: string[];
 }> {
     const params = new URLSearchParams({ query });
     if (fileTypes) params.set('file_types', fileTypes);
