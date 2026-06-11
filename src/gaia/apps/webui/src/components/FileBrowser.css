@@ -200,9 +200,29 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
     font-size: 12px;
     color: var(--text-secondary);
     padding: 4px 0;
+}
+
+.fb-search-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.fb-search-scope {
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fb-search-scope code {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
 }
 
 .fb-back-btn {
