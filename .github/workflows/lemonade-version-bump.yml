@@ -205,8 +205,12 @@ jobs:
               --body-file /tmp/pr-body.md \
               --base main \
               --head ${{ steps.detect.outputs.branch }} \
-              --label dependencies
+              --label dependencies \
+              --label "lemonade 🍋" \
+              --reviewer kovtcharov-amd,itomek-amd
             ```
+            The label "lemonade 🍋" includes a space and an emoji — keep it quoted exactly.
+            Both reviewers are required on every bump PR.
 
             PR body (/tmp/pr-body.md) — keep it tight, lead with impact:
             ```
