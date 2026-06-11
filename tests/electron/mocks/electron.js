@@ -220,6 +220,22 @@ module.exports = {
   
   Tray: jest.fn(),
 
+  nativeImage: {
+    createFromPath: jest.fn((p) => ({
+      _path: p,
+      _isTemplate: false,
+      isEmpty: () => false,
+      setTemplateImage(flag) {
+        this._isTemplate = flag;
+      },
+    })),
+    createEmpty: jest.fn(() => ({
+      _path: null,
+      isEmpty: () => true,
+      setTemplateImage: jest.fn(),
+    })),
+  },
+
   Notification: Object.assign(
     class MockNotification extends EventEmitter {
       constructor(options = {}) {
