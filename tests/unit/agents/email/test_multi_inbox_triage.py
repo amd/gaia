@@ -241,6 +241,26 @@ class TestMultiInboxTriageMergeAndTag:
         finally:
             agent.close_db()
 
+    def test_pre_scan_budget_counts_actual_returned_not_per_backend_cap(
+        self, tmp_path, monkeypatch
+    ):
+        # An under-filled first inbox must NOT exhaust the budget via the
+        # per-backend cap: the second mailbox is still scanned and contributes.
+        # 1 google message, 2 microsoft; ask for 4 (per_backend cap 2) — the
+        # exact-count guard must let microsoft through after google's single msg.
+        agent, _, _ = _agent_two_backends(
+            tmp_path, monkeypatch, google_ids=["g1"], microsoft_ids=["m1", "m2"]
+        )
+        try:
+            envelope = json.loads(_registered_tool("pre_scan_inbox")(4))
+            data = envelope["data"]
+            items = data["urgent"] + data["actionable"] + data["suggested_archives"]
+            mailboxes = {it["mailbox"] for it in items}
+            # Both mailboxes contributed — the early-exit guard didn't misfire.
+            assert mailboxes == {"google", "microsoft"}, mailboxes
+        finally:
+            agent.close_db()
+
 
 # ---------------------------------------------------------------------------
 # D4 — per-message backend routing
