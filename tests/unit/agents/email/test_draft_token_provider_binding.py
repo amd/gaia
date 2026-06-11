@@ -255,3 +255,125 @@ class TestDraftTokenProviderBinding:
         ok, bound_provider = store.consume_with_provider(token, fp)
         assert ok is True
         assert bound_provider is None
+
+
+class TestSendRequestProviderFallback:
+    """``EmailSendRequest.provider`` is the unbound-token fallback.
+
+    Precedence: the token's bound provider always wins; ``request.provider`` is
+    consulted ONLY when the token carries no binding. Both None + multiple
+    connected → still 400 ambiguous.
+    """
+
+    def _draft_token(self, client, *, provider=None):
+        body = {
+            "to": [{"email": "bob@example.com"}],
+            "subject": "Hello",
+            "body": "World",
+        }
+        if provider is not None:
+            body["provider"] = provider
+        resp = client.post("/v1/email/draft", json=body)
+        assert resp.status_code == 200, resp.text
+        return resp.json()["confirmation_token"]
+
+    def _spy_resolver(self, monkeypatch, calls):
+        """Patch _resolve_backend_for_provider to record the provider it sees."""
+
+        class _Fake:
+            def __init__(self, name):
+                self.name = name
+
+            def send_message(self, *, to, subject, body, **_kw):
+                calls.append(self.name)
+                if self.name == "microsoft":
+                    return {"id": "", "sent": True, "to": to, "subject": subject}
+                return {"id": f"{self.name}-sent", "to": to, "subject": subject}
+
+        def _resolve(provider=None):
+            # Mirror production: None + 2 connected → 400 ambiguous.
+            if provider is None:
+                from fastapi import HTTPException
+
+                connected = email_routes.connected_mailbox_providers()
+                if len(connected) != 1:
+                    raise HTTPException(400, f"ambiguous: {connected}")
+                provider = connected[0]
+            return _Fake(provider)
+
+        monkeypatch.setattr(email_routes, "_resolve_backend_for_provider", _resolve)
+        return calls
+
+    def test_unbound_token_uses_request_provider(self, monkeypatch):
+        """Unbound token + request.provider='microsoft' + both connected → Outlook."""
+        if app is None:
+            pytest.skip("gaia.api.openai_server not available")
+        monkeypatch.setattr(
+            email_routes,
+            "connected_mailbox_providers",
+            lambda: ["google", "microsoft"],
+        )
+        calls = self._spy_resolver(monkeypatch, [])
+        client = TestClient(app)
+        token = self._draft_token(client)  # no binding
+        resp = client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "bob@example.com"}],
+                "subject": "Hello",
+                "body": "World",
+                "confirmation_token": token,
+                "provider": "microsoft",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert calls == ["microsoft"], f"request.provider ignored: {calls}"
+
+    def test_token_binding_wins_over_request_provider(self, monkeypatch):
+        """Token bound to google + request.provider='microsoft' → google wins."""
+        if app is None:
+            pytest.skip("gaia.api.openai_server not available")
+        monkeypatch.setattr(
+            email_routes,
+            "connected_mailbox_providers",
+            lambda: ["google", "microsoft"],
+        )
+        calls = self._spy_resolver(monkeypatch, [])
+        client = TestClient(app)
+        token = self._draft_token(client, provider="google")  # bound to google
+        resp = client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "bob@example.com"}],
+                "subject": "Hello",
+                "body": "World",
+                "confirmation_token": token,
+                "provider": "microsoft",  # must be ignored
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert calls == ["google"], f"token binding did not win: {calls}"
+
+    def test_unbound_token_no_provider_both_connected_still_400(self, monkeypatch):
+        """Unbound token + no request.provider + both connected → 400 ambiguous."""
+        if app is None:
+            pytest.skip("gaia.api.openai_server not available")
+        monkeypatch.setattr(
+            email_routes,
+            "connected_mailbox_providers",
+            lambda: ["google", "microsoft"],
+        )
+        calls = self._spy_resolver(monkeypatch, [])
+        client = TestClient(app)
+        token = self._draft_token(client)  # no binding, no provider on send
+        resp = client.post(
+            "/v1/email/send",
+            json={
+                "to": [{"email": "bob@example.com"}],
+                "subject": "Hello",
+                "body": "World",
+                "confirmation_token": token,
+            },
+        )
+        assert resp.status_code == 400, resp.text
+        assert calls == [], f"a send leaked through the ambiguity guard: {calls}"
