@@ -1429,7 +1429,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 </div>
                 <div className="task-header-right">
                     {/* Mail-provider selector — only for email sessions (issue #1596). */}
-                    {session?.agent_type === 'email' && (
+                    {session?.agent_type === 'email' && connectedMailProviders.length > 0 && (
                         connectedMailProviders.length === 1 ? (
                             /* AC3: single connected provider → non-interactive pill */
                             <span
@@ -1458,7 +1458,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                                 </button>
                                 {mailProviderPickerOpen && (
                                     <div className="agent-picker-dropdown" role="listbox">
-                                        {MAIL_PROVIDERS.map((p) => (
+                                        {connectedMailProviders.map((p) => (
                                             <button
                                                 key={p}
                                                 className={`agent-picker-option${displayedMailProvider === p ? ' active' : ''}`}
