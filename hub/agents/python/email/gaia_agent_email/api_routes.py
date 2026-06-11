@@ -664,9 +664,27 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     # send takes a single 'to' header string.
     backend = resolve_send_backend()
     to_header = ", ".join(_format_address(a) for a in request.to)
-    result = backend.send_message(
-        to=to_header, subject=request.subject, body=request.body
-    )
+    # Run the blocking send off the event loop. The backend fetches the Gmail
+    # token via get_access_token_sync, which raises by design if called from a
+    # thread with a running loop (#1579/#1589); to_thread hands it a loop-free
+    # worker thread so the sync token bridge works.
+    try:
+        result = await asyncio.to_thread(
+            backend.send_message,
+            to=to_header,
+            subject=request.subject,
+            body=request.body,
+        )
+    except Exception as exc:  # noqa: BLE001 - boundary translation, re-raised
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Email send failed for {to_header} ({type(exc).__name__}: {exc}). "
+                "Verify the account is still connected (reconnect via the "
+                "connectors flow); if it is connected, this is a server-side "
+                "send error, not a missing confirmation."
+            ),
+        ) from exc
     sent_id = result.get("id") or ""
     if not sent_id:
         raise HTTPException(

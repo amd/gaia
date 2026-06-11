@@ -15,6 +15,7 @@ Test coverage includes:
 - Edge cases and resilience testing
 """
 
+import asyncio
 import json
 import time
 
@@ -1556,6 +1557,87 @@ class TestEmailSendConfirmationGate:
             },
         )
         assert resp.status_code == 403
+
+
+class TestEmailSendRunsOffEventLoop:
+    """POST /v1/email/send must run the blocking backend send OFF the event
+    loop (#1594). The live Gmail/Outlook backends fetch their token via
+    ``get_access_token_sync``, which raises by design when called from a thread
+    that already has a running loop (#1579/#1589). If the endpoint runs the
+    send directly on the loop, that guard fires and the send 500s. This drives
+    the async happy-path against a backend that reproduces the guard.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        pytest.importorskip("gaia_agent_email")
+        from gaia_agent_email import api_routes as email_routes
+
+        class _LoopGuardedBackend:
+            """Mirrors the live backend's token bridge: send_message raises if
+            it runs on a thread with a running event loop, exactly as
+            ``get_access_token_sync`` does. Succeeds only off the loop."""
+
+            def send_message(self, to, subject, body):
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    return {"id": "sent-off-loop-1"}
+                raise RuntimeError(
+                    "send_message ran on a thread with a running event loop"
+                )
+
+        monkeypatch.setattr(
+            email_routes, "resolve_send_backend", lambda: _LoopGuardedBackend()
+        )
+        self.client = TestClient(app)
+
+    def test_send_happy_path_does_not_500(self):
+        """Draft → send with a valid token returns 200 (not a 500 from the
+        running-loop token guard firing on the event loop thread)."""
+        payload = {
+            "to": [{"email": "alice@example.com"}],
+            "subject": "Re: budget",
+            "body": "Looks good, approved.",
+        }
+        token = self.client.post("/v1/email/draft", json=payload).json()[
+            "confirmation_token"
+        ]
+        resp = self.client.post(
+            "/v1/email/send", json={**payload, "confirmation_token": token}
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["sent"] is True
+        assert body["sent_id"] == "sent-off-loop-1"
+
+    def test_backend_send_failure_is_actionable_502_not_bare_500(self, monkeypatch):
+        """A genuine backend send failure surfaces as an actionable 502, not a
+        bare 500 (acceptance criterion #4)."""
+        from gaia_agent_email import api_routes as email_routes
+
+        class _FailingBackend:
+            def send_message(self, to, subject, body):
+                raise RuntimeError("gmail API rejected the send")
+
+        monkeypatch.setattr(
+            email_routes, "resolve_send_backend", lambda: _FailingBackend()
+        )
+        payload = {
+            "to": [{"email": "alice@example.com"}],
+            "subject": "Re: budget",
+            "body": "Looks good, approved.",
+        }
+        token = self.client.post("/v1/email/draft", json=payload).json()[
+            "confirmation_token"
+        ]
+        resp = self.client.post(
+            "/v1/email/send", json={**payload, "confirmation_token": token}
+        )
+        assert resp.status_code == 502, resp.text
+        assert "send failed" in resp.text.lower()
 
 
 if __name__ == "__main__":
