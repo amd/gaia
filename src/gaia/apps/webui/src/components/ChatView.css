@@ -42,6 +42,50 @@
 .task-header-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .task-header-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
+.active-agent-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    max-width: 260px;
+    padding: 4px 9px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.active-agent-icon {
+    flex-shrink: 0;
+    color: var(--amd-red);
+}
+
+.active-agent-copy {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 1px;
+    line-height: 1.1;
+}
+
+.active-agent-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    font-weight: 650;
+    color: var(--text-primary);
+}
+
+.active-agent-capabilities {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 9px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+}
+
 .task-title {
     font-size: 13px;
     font-weight: 600;
@@ -260,6 +304,11 @@
     opacity: 0.3;
 }
 
+.empty-task-icon.agent-aware {
+    color: var(--amd-red);
+    opacity: 0.8;
+}
+
 .empty-task-title {
     font-size: 20px;
     font-weight: 700;
@@ -273,9 +322,25 @@
     font-size: 14px;
     font-family: var(--font-sans);
     color: var(--text-muted);
-    margin-bottom: 32px;
+    margin-bottom: 14px;
     line-height: 1.75;
     max-width: 440px;
+}
+
+.empty-task-desc-spaced {
+    margin-bottom: 32px;
+}
+
+.empty-task-capabilities {
+    margin-bottom: 28px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    white-space: nowrap;
 }
 
 .empty-task-suggestions {
