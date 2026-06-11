@@ -736,15 +736,27 @@ def _ttft_section(scorecard_path: Optional[str]) -> str:
     )
 
 
-def _run_live_ttft(profile: str, base_url: str, model: str, trials: int) -> str:
-    """Compare full-vs-subset prompt-prefill TTFT against a resident model."""
+def _run_live_ttft(
+    profile: str,
+    base_url: str,
+    model: str,
+    trials: int,
+    filter_names: Optional[List[str]] = None,
+) -> str:
+    """Compare full-vs-subset prompt-prefill TTFT against a resident model.
+
+    When *filter_names* is given (``--filter`` on the CLI), it is the loaded
+    subset to measure — e.g. the Part-1 loader's actual selection. Otherwise the
+    illustrative ``FIXED_SUBSET_DEFAULT`` is used.
+    """
+    subset_names = filter_names if filter_names else list(FIXED_SUBSET_DEFAULT)
     agent = build_doc_agent_skeleton(profile)
     full = measure_prefill_ttft(agent, base_url=base_url, model=model, n_trials=trials)
     subset = measure_prefill_ttft(
         agent,
         base_url=base_url,
         model=model,
-        filter_to=list(FIXED_SUBSET_DEFAULT),
+        filter_to=subset_names,
         n_trials=trials,
     )
     fm, sm = full["ttft"], subset["ttft"]
@@ -809,9 +821,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=5,
         help="Timed trials per tool set for --live-ttft (default: 5)",
     )
+    parser.add_argument(
+        "--filter",
+        default=None,
+        help="Comma-separated tool names to measure as the loaded subset for "
+        "--live-ttft (e.g. the Part-1 loader's selection). Defaults to the "
+        "illustrative FIXED_SUBSET_DEFAULT.",
+    )
     args = parser.parse_args(argv)
     if args.live_ttft:
-        print(_run_live_ttft(args.profile, args.base_url, args.model, args.trials))
+        filter_names = (
+            [n.strip() for n in args.filter.split(",") if n.strip()]
+            if args.filter
+            else None
+        )
+        print(
+            _run_live_ttft(
+                args.profile, args.base_url, args.model, args.trials, filter_names
+            )
+        )
     else:
         print(format_markdown_report(args.profile, args.scorecard))
     return 0
