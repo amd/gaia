@@ -57,8 +57,7 @@ class TrayManager {
     this.config = this._loadConfig();
 
     /** @type {Electron.NativeImage} */
-    const trayIconFile = process.platform === "win32" ? "icon.ico" : "icon.png";
-    this._icon = this._loadIcon(trayIconFile);
+    this._icon = this._loadTrayIcon();
 
     this._registerIpcHandlers();
   }
@@ -153,18 +152,33 @@ class TrayManager {
 
   // ── Private: Icon loading ────────────────────────────────────────────
 
+  /**
+   * Pick the platform-appropriate tray icon. The menu bar is ~22pt tall, so
+   * each platform gets a purpose-built small asset — never the 4K app icon.
+   * @returns {Electron.NativeImage}
+   */
+  _loadTrayIcon() {
+    if (process.platform === "win32") {
+      return this._loadIcon("tray-icon.ico");
+    }
+    if (process.platform === "darwin") {
+      // macOS menu-bar extras must be template images: the OS tints the
+      // alpha mask for light/dark mode. Electron auto-discovers the @2x
+      // retina variant by name.
+      const img = this._loadIcon("tray-iconTemplate.png");
+      img.setTemplateImage(true);
+      return img;
+    }
+    return this._loadIcon("tray-icon.png"); // Linux: full-colour PNG
+  }
+
   _loadIcon(filename) {
     // __dirname is services/, assets/ is one level up alongside main.cjs
     const iconPath = path.join(__dirname, "..", "assets", filename);
-    try {
-      if (fs.existsSync(iconPath)) {
-        return nativeImage.createFromPath(iconPath);
-      }
-    } catch (err) {
-      console.warn(`[tray] Could not load icon ${filename}:`, err.message);
+    if (!fs.existsSync(iconPath)) {
+      throw new Error(`[tray] icon asset missing: ${iconPath}`);
     }
-    // Return empty image as fallback (Electron will show a default)
-    return nativeImage.createEmpty();
+    return nativeImage.createFromPath(iconPath);
   }
 
   // ── Private: Config persistence ──────────────────────────────────────

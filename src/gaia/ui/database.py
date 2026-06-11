@@ -502,6 +502,64 @@ class ChatDatabase:
 
         return msg_id or 0
 
+    def upsert_message(
+        self,
+        session_id: str,
+        msg_id: int | None,
+        role: str,
+        content: str,
+        rag_sources: List[Dict] | None = None,
+        agent_steps: List[Dict] | None = None,
+        tokens_prompt: int | None = None,
+        tokens_completion: int | None = None,
+        inference_stats: Dict | None = None,
+    ) -> int:
+        """Atomically replace a message with a fresh row. Returns the new ID.
+
+        When ``msg_id`` is not None the old row is deleted and the new row is
+        inserted in the SAME transaction, so a crash or exception can never leave
+        the session without the message (the failure mode of a separate
+        ``delete_message`` + ``add_message``). A new id is minted rather than
+        reusing ``msg_id`` to keep the delete-then-insert id semantics.
+        """
+        sources_json = json.dumps(rag_sources) if rag_sources else None
+        steps_json = json.dumps(agent_steps) if agent_steps else None
+        stats_json = json.dumps(inference_stats) if inference_stats else None
+
+        with self._transaction():
+            if msg_id is not None:
+                self._conn.execute(
+                    "DELETE FROM messages WHERE id = ? AND session_id = ?",
+                    (msg_id, session_id),
+                )
+
+            cursor = self._conn.execute(
+                """INSERT INTO messages
+                   (session_id, role, content, created_at, rag_sources,
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    role,
+                    content,
+                    self._now(),
+                    sources_json,
+                    steps_json,
+                    tokens_prompt,
+                    tokens_completion,
+                    stats_json,
+                ),
+            )
+
+            # Update session timestamp
+            self._conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (self._now(), session_id),
+            )
+            new_id = cursor.lastrowid
+
+        return new_id or 0
+
     def get_messages(
         self, session_id: str, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:

@@ -39,14 +39,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email.tools import read_tools  # noqa: E402
-from gaia.agents.email.tools.read_tools import pre_scan_inbox_impl  # noqa: E402
-from gaia.agents.email.tools.triage_heuristics import (  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.tools import read_tools  # noqa: E402
+from gaia_agent_email.tools.read_tools import pre_scan_inbox_impl  # noqa: E402
+from gaia_agent_email.tools.triage_heuristics import (  # noqa: E402
     CATEGORY_ACTIONABLE,
     CATEGORY_INFORMATIONAL,
     CATEGORY_LOW_PRIORITY,
     CATEGORY_URGENT,
 )
+
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 
@@ -280,8 +285,8 @@ def _make_email_agent(fake_gmail, tmp_path):
     """
     from unittest.mock import MagicMock, patch
 
-    from gaia.agents.email.agent import EmailTriageAgent
-    from gaia.agents.email.config import EmailAgentConfig
+    from gaia_agent_email.agent import EmailTriageAgent
+    from gaia_agent_email.config import EmailAgentConfig
 
     cfg = EmailAgentConfig(
         gmail_backend=fake_gmail,
