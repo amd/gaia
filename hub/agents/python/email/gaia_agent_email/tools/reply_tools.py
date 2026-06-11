@@ -19,6 +19,7 @@ from gaia.agents.base.tools import tool
 from gaia_agent_email import action_store
 from gaia_agent_email.verbose import log_tool_call
 from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -238,7 +239,7 @@ class ReplyToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -258,7 +259,7 @@ class ReplyToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -271,7 +272,7 @@ class ReplyToolsMixin:
                     send_draft_impl(gmail, db, draft_id=draft_id, debug=debug_flag)
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -291,7 +292,7 @@ class ReplyToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -311,7 +312,7 @@ class ReplyToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")

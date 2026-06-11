@@ -39,6 +39,7 @@ import httpx
 
 from gaia.connectors.errors import (
     AuthRequiredError,
+    ConfigurationError,
     ConnectionRevokedError,
     ConnectorsError,
 )
@@ -199,6 +200,39 @@ async def _refresh_token(
             f"Token endpoint refused refresh for {provider.provider_id}: "
             f"{payload.get('error', 'unknown')} (status 400). See "
             "docs/security/connections.mdx."
+        )
+
+    if response.status_code == 401:
+        # Google returns 401 invalid_client when the client_secret is
+        # absent or wrong in the refresh POST.  Distinguish the two cases
+        # so the error tells the user what to do rather than just "try again":
+        #   - No client_secret configured → ConfigurationError (fix: re-enter
+        #     credentials in Settings → Connections).
+        #   - Secret is present but token rejected → AuthRequiredError (fix:
+        #     reconnect from Settings → Connections).
+        try:
+            err_payload = response.json()
+        except Exception:
+            err_payload = {}
+        client_secret = getattr(provider, "client_secret", None)
+        if not client_secret:
+            raise ConfigurationError(
+                f"Token endpoint returned 401 for {provider.provider_id}: "
+                "client_secret is not configured. Open Settings → Connections "
+                f"→ {provider.provider_id} and re-enter the Client Secret, or "
+                "set the GAIA_GOOGLE_CLIENT_SECRET environment variable. "
+                "See docs/runbooks/google-oauth-client.md."
+            )
+        raise AuthRequiredError(
+            AuthRequiredError.Reason.REAUTH_REQUIRED,
+            provider=provider.provider_id,
+            message=(
+                f"Token endpoint returned 401 for {provider.provider_id} "
+                f"({err_payload.get('error', 'invalid_client')}). "
+                "Reconnect from Settings → Connections → "
+                f"{provider.provider_id}. "
+                "See docs/runbooks/google-oauth-client.md."
+            ),
         )
 
     if response.status_code != 200:
