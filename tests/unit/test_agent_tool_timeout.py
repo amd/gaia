@@ -164,6 +164,28 @@ class TestPerToolOverride:
         agent = _make_agent()
         assert agent._resolve_tool_timeout("generate_image") == 900.0
 
+    def test_long_running_tools_opt_out_of_global_cap(self):
+        """Heavy index/summarize tools keep generous timeouts, not the 180s cap.
+
+        These write to shared FAISS/DB state and can legitimately run minutes;
+        the default cap would abandon a valid operation mid-write.
+        """
+        from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+        from gaia.agents.tools.rag_tools import RAGToolsMixin
+
+        RAGToolsMixin.__new__(RAGToolsMixin).register_rag_tools()
+        CodeIndexToolsMixin.__new__(CodeIndexToolsMixin).register_code_index_tools()
+
+        agent = _make_agent()
+        expected = {
+            "index_document": 600.0,
+            "summarize_document": 600.0,
+            "index_directory": 900.0,
+            "index_codebase": 900.0,
+        }
+        for name, want in expected.items():
+            assert agent._resolve_tool_timeout(name) == want, name
+
     def test_per_tool_timeout_beats_global(self, monkeypatch):
         """A tool's own short timeout fires even when the global cap is large."""
         release = threading.Event()

@@ -1199,6 +1199,10 @@ class RAGToolsMixin:
 
         @tool(
             name="index_document",
+            # Indexing a large PDF (parse + chunk + embed) can run past the
+            # default per-tool cap; it also writes to the shared FAISS index, so
+            # abandoning it mid-write must not happen on a legitimate operation.
+            timeout=600,
             description=(
                 "Add a document to the RAG index so its contents can be queried. "
                 "IMPORTANT: After successfully indexing a document, you MUST call "
@@ -1448,6 +1452,9 @@ class RAGToolsMixin:
 
         @tool(
             name="summarize_document",
+            # Iterative section-by-section summarization of a large document on a
+            # local NPU can legitimately exceed the default per-tool cap.
+            timeout=600,
             description="Generate a comprehensive summary of a large indexed document by iterating through its content in sections. Best for getting an overview of lengthy documents.",
             parameters={
                 "file_path": {
@@ -1926,6 +1933,10 @@ Use the {summary_type} style. Ensure page references from section summaries are 
         @tool(
             atomic=True,
             name="index_directory",
+            # Bulk ingest of a whole directory (many files, each parsed + embedded
+            # into the shared FAISS index) routinely runs minutes; don't abandon a
+            # legitimate ingest mid-write at the default cap.
+            timeout=900,
             description="Index all supported files in a directory. Supports PDF, TXT, CSV, JSON, and code files.",
             parameters={
                 "directory_path": {
