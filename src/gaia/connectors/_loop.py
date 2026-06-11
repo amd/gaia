@@ -47,7 +47,6 @@ import concurrent.futures
 import contextvars
 import logging
 import threading
-import time
 from typing import Any, Coroutine, TypeVar
 
 from gaia.connectors.errors import ConnectorsError
@@ -80,25 +79,29 @@ def _get_persistent_loop() -> asyncio.AbstractEventLoop:
         if _loop is not None and _loop.is_running():
             return _loop
 
+        # Re-init path (prior loop exists but stopped): we intentionally do
+        # NOT close/reclaim the old loop here. This is effectively unreachable
+        # today — the daemon loop only stops at process exit — so it is a
+        # latent-only branch, not a live resource leak.
+
         new_loop = asyncio.new_event_loop()
+        ready = threading.Event()
 
         def _run_loop() -> None:
             asyncio.set_event_loop(new_loop)
+            # Fires on the loop's first iteration, i.e. once run_forever is
+            # actually running — a clean handshake with no busy-wait.
+            new_loop.call_soon(ready.set)
             new_loop.run_forever()
 
         t = threading.Thread(target=_run_loop, name="gaia-connectors-loop", daemon=True)
         t.start()
 
-        # Wait until the loop is actually running before returning it.
-        deadline = 5.0
-        start = time.monotonic()
-        while not new_loop.is_running():
-            if time.monotonic() - start > deadline:
-                raise RuntimeError(
-                    "gaia-connectors-loop thread did not start within "
-                    f"{deadline}s. This is a bug — please report it."
-                )
-            time.sleep(0.001)
+        if not ready.wait(timeout=5.0):
+            raise RuntimeError(
+                "gaia-connectors-loop thread did not start within 5s. "
+                "This is a bug — please report it."
+            )
 
         _loop = new_loop
         _loop_thread = t
@@ -170,6 +173,10 @@ def run_sync(
         # only an alias for builtins.TimeoutError on 3.11+. Catch it by its
         # canonical name so the actionable error fires on every supported
         # Python (GAIA targets >=3.10).
+        # Best-effort cancel: run_coroutine_threadsafe's future cannot stop a
+        # coroutine already executing on the loop thread, so a truly-stuck op
+        # keeps running on the shared loop after we raise (bounded in practice
+        # by the inner httpx 10s timeout, well under the 30s default).
         future.cancel()
         raise ConnectorsError(
             f"Connector async operation timed out after {timeout}s. "
