@@ -241,23 +241,30 @@ class TestMultiInboxTriageMergeAndTag:
         finally:
             agent.close_db()
 
-    def test_pre_scan_budget_counts_actual_returned_not_per_backend_cap(
+    def test_pre_scan_under_budget_backend_not_skipped_when_earlier_backend_underfills(
         self, tmp_path, monkeypatch
     ):
-        # An under-filled first inbox must NOT exhaust the budget via the
-        # per-backend cap: the second mailbox is still scanned and contributes.
-        # 1 google message, 2 microsoft; ask for 4 (per_backend cap 2) — the
-        # exact-count guard must let microsoft through after google's single msg.
+        # The budget guard must count messages ACTUALLY returned, not the
+        # per-backend cap. Fails-first scenario (max_messages < n_backends):
+        #   - google inbox EMPTY, microsoft has 1 message
+        #   - pre_scan(max_messages=1) → per_backend = max(1, 1//2) = 1
+        #   - OLD `scanned += per_backend`: empty google bumps scanned to 1 →
+        #     guard `scanned >= 1` trips → microsoft is SKIPPED (the bug)
+        #   - NEW `scanned += actual`: empty google returns 0 → scanned stays 0
+        #     → microsoft is scanned and contributes.
+        # google is first in registry order, so it is the under-filling backend.
         agent, _, _ = _agent_two_backends(
-            tmp_path, monkeypatch, google_ids=["g1"], microsoft_ids=["m1", "m2"]
+            tmp_path, monkeypatch, google_ids=[], microsoft_ids=["m1"]
         )
         try:
-            envelope = json.loads(_registered_tool("pre_scan_inbox")(4))
+            envelope = json.loads(_registered_tool("pre_scan_inbox")(1))
             data = envelope["data"]
             items = data["urgent"] + data["actionable"] + data["suggested_archives"]
             mailboxes = {it["mailbox"] for it in items}
-            # Both mailboxes contributed — the early-exit guard didn't misfire.
-            assert mailboxes == {"google", "microsoft"}, mailboxes
+            # microsoft was reached despite the empty google scanned first.
+            assert "microsoft" in mailboxes, mailboxes
+            # And its message was tagged for downstream routing.
+            assert agent._message_mailbox.get("m1") == "microsoft"
         finally:
             agent.close_db()
 

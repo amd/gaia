@@ -518,10 +518,8 @@ class EmailTriageAgent(
                 force_llm=force_llm,
                 debug=debug_flag,
             )
-            # Count the messages this backend actually returned, not the
-            # per-backend cap — the cap can exceed the inbox size, which would
-            # trip the budget guard a hair early on a later backend. The pre-scan
-            # totals carry the pre-cap section sizes; sum those plus informational.
+            # Count messages actually returned, not the cap — an under-filled
+            # backend would otherwise trip the budget guard and skip a later one.
             backend_totals = out.get("totals", {})
             scanned += (
                 int(backend_totals.get("urgent", 0))
