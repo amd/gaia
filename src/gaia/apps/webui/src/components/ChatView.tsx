@@ -2,19 +2,24 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
+import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus, Mail } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY, selectUnreadCount } from '../stores/notificationStore';
+import { useConnectionsStore } from '../stores/connectorsStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
+import { MAIL_PROVIDERS, type MailProvider } from '../utils/mailProviderDefault';
 
 import './ChatView.css';
 import DashboardProgress from './DashboardProgress';
 
+
+/** Human-readable labels for mail providers (issue #1596). */
+const PROVIDER_LABELS: Record<string, string> = { google: 'Gmail', microsoft: 'Outlook' };
 
 const EMPTY_SUGGESTIONS = [
     'Summarize a document',
@@ -195,6 +200,48 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // Resolve human-readable agent names for the message header
     const sessionAgentName = agents.find((a) => a.id === session?.agent_type)?.name;
     const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name;
+
+    // Mail-provider picker (issue #1596) — only rendered for email sessions.
+    const [mailProviderPickerOpen, setMailProviderPickerOpen] = useState(false);
+    const mailProviderPickerRef = useRef<HTMLDivElement>(null);
+    const connectedProviders = useConnectionsStore((s) => s.connections.map((c) => c.provider));
+    const connectedMailProviders = connectedProviders.filter(
+        (p): p is MailProvider => (MAIL_PROVIDERS as readonly string[]).includes(p),
+    );
+    // AC3: the session header shows which mailbox is active.
+    const displayedMailProvider = session?.mail_provider;
+
+    // Close mail-provider picker on outside click
+    useEffect(() => {
+        if (!mailProviderPickerOpen) return;
+        const handler = (e: MouseEvent) => {
+            if (mailProviderPickerRef.current && !mailProviderPickerRef.current.contains(e.target as Node)) {
+                setMailProviderPickerOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, [mailProviderPickerOpen]);
+
+    const handleMailProviderChange = useCallback(async (newProvider: MailProvider) => {
+        setMailProviderPickerOpen(false);
+        if (newProvider === displayedMailProvider) return;
+        const previousProvider = displayedMailProvider;
+        // Store the choice for the next session create (App.tsx handleNewTask reads it).
+        useConnectionsStore.getState().setPendingMailProvider(newProvider);
+        if (messages.length === 0) {
+            // Empty session — update in place (mirrors handleAgentChange pattern).
+            updateSessionInList(sessionId, { mail_provider: newProvider } as Partial<Session>);
+            try {
+                await api.updateSession(sessionId, { mail_provider: newProvider });
+            } catch {
+                // Roll back optimistic update on failure.
+                updateSessionInList(sessionId, { mail_provider: previousProvider } as Partial<Session>);
+            }
+        }
+        // If messages exist we don't start a new session — the header pill stays
+        // non-interactive once the session has content (same guard as agent change).
+    }, [displayedMailProvider, messages.length, sessionId, updateSessionInList]);
 
     // Close agent picker on outside click
     useEffect(() => {
@@ -1347,6 +1394,51 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     )}
                 </div>
                 <div className="task-header-right">
+                    {/* Mail-provider selector — only for email sessions (issue #1596). */}
+                    {session?.agent_type === 'email' && (
+                        connectedMailProviders.length === 1 ? (
+                            /* AC3: single connected provider → non-interactive pill */
+                            <span
+                                className="mail-provider-pill"
+                                title={`Mailbox: ${PROVIDER_LABELS[connectedMailProviders[0]] ?? connectedMailProviders[0]}`}
+                            >
+                                <Mail size={10} />
+                                {PROVIDER_LABELS[connectedMailProviders[0]] ?? connectedMailProviders[0]}
+                            </span>
+                        ) : (
+                            /* AC2: multiple providers → interactive dropdown */
+                            <div className="agent-picker mail-provider-picker" ref={mailProviderPickerRef}>
+                                <button
+                                    className="agent-picker-btn"
+                                    onClick={() => setMailProviderPickerOpen((o) => !o)}
+                                    aria-haspopup="listbox"
+                                    aria-expanded={mailProviderPickerOpen}
+                                    title="Switch mailbox provider"
+                                >
+                                    <Mail size={10} />
+                                    {displayedMailProvider
+                                        ? (PROVIDER_LABELS[displayedMailProvider] ?? displayedMailProvider)
+                                        : 'Mailbox'}
+                                    <ChevronDown size={10} />
+                                </button>
+                                {mailProviderPickerOpen && (
+                                    <div className="agent-picker-dropdown" role="listbox">
+                                        {MAIL_PROVIDERS.map((p) => (
+                                            <button
+                                                key={p}
+                                                className={`agent-picker-option${displayedMailProvider === p ? ' active' : ''}`}
+                                                role="option"
+                                                aria-selected={displayedMailProvider === p}
+                                                onClick={() => handleMailProviderChange(p)}
+                                            >
+                                                {PROVIDER_LABELS[p] ?? p}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )
+                    )}
                     <span
                         className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
                         title={

@@ -21,6 +21,12 @@ interface ConnectionsState {
     loading: boolean;
     error: string | null;
 
+    /**
+     * Issue #1596 — user's explicit mail-provider choice for the next email session.
+     * Undefined means "no explicit preference" (auto-select if only one is connected).
+     */
+    pendingMailProvider: string | undefined;
+
     /** Initial load — populates connections + grants in one round-trip. */
     refresh: () => Promise<void>;
 
@@ -33,6 +39,9 @@ interface ConnectionsState {
     removeGrant: (provider: string, agentId: string) => void;
 
     setError: (msg: string | null) => void;
+
+    /** Set the mail provider the user explicitly chose in the selector. */
+    setPendingMailProvider: (provider: string | undefined) => void;
 }
 
 export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
@@ -40,6 +49,7 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
     grants: {},
     loading: false,
     error: null,
+    pendingMailProvider: undefined,
 
     refresh: async () => {
         set({ loading: true, error: null });
@@ -94,4 +104,6 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
         }),
 
     setError: (msg) => set({ error: msg }),
+
+    setPendingMailProvider: (provider) => set({ pendingMailProvider: provider }),
 }));

@@ -789,6 +789,25 @@
     font-weight: 600;
 }
 
+/* ── Mail-provider pill (issue #1596) ───────────────────────────── */
+/* Non-interactive badge shown when exactly one mail provider is connected. */
+.mail-provider-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+    line-height: 1;
+    height: 20px;
+}
+
 /* ── Attachments ─────────────────────────────────────────────────── */
 
 .input-content {

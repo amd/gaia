@@ -18,9 +18,11 @@ import { PermissionPrompt } from './components/PermissionPrompt';
 import { NotificationCenter } from './components/NotificationCenter';
 import { useChatStore } from './stores/chatStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { useConnectionsStore } from './stores/connectorsStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash, findSessionByHash } from './utils/format';
+import { resolveMailProvider } from './utils/mailProviderDefault';
 
 /** Wrapper that delays unmount to allow CSS exit animations to play. */
 function AnimatedPresence({ show, children, duration = 250 }: {
@@ -106,6 +108,12 @@ function App() {
         const interval = setInterval(loadAgents, 30_000);
         return () => clearInterval(interval);
     }, [loadAgents]);
+
+    // Refresh connected-providers at boot so the mail-provider selector
+    // (issue #1596) knows what's connected without opening Settings first.
+    useEffect(() => {
+        useConnectionsStore.getState().refresh().catch(() => { /* non-critical */ });
+    }, []);
 
     // Mobile gateway state
     const [showMobileAccess, setShowMobileAccess] = useState(false);
@@ -346,11 +354,20 @@ function App() {
             const activeAgent = agents.find((a) => a.id === activeAgentId);
             const tier = activeAgent?.model_tiers?.find((t) => t.name === activeModelTier);
             const tierModel = tier?.models?.[0];
+            // AC1/AC2 (#1596): resolve mail provider for email sessions.
+            // One connected mail provider → auto-select; multiple → use stored choice.
+            const mailProvider = activeAgentId === 'email'
+                ? resolveMailProvider(
+                    useConnectionsStore.getState().connections.map((c) => c.provider),
+                    useConnectionsStore.getState().pendingMailProvider,
+                )
+                : undefined;
             const session = await api.createSession({
                 title: 'New Task',
                 agent_type: activeAgentId,
                 device: activeDevice,
                 ...(tierModel ? { model: tierModel } : {}),
+                ...(mailProvider ? { mail_provider: mailProvider } : {}),
             });
             log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
             addSession(session);
