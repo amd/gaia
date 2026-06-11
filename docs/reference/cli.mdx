@@ -111,6 +111,19 @@ gaia browse "research the latest AMD Ryzen AI news"
 
 A few agents intentionally override the default (e.g. the Code agent uses 100 for multi-file generation). An invalid `GAIA_AGENT_MAX_STEPS` value (non-integer or ≤ 0) fails fast with an actionable error rather than silently capping agents.
 
+### Per-tool execution timeout
+
+Each tool call is bounded so a hung tool (e.g. a stuck connector or network request) surfaces an actionable error instead of leaving the agent — and the UI — stuck indefinitely. The default is **180 seconds** per tool.
+
+- **Fleet-wide:** set `GAIA_AGENT_TOOL_TIMEOUT` (seconds) to change the default for every tool at once.
+
+```bash
+# Allow long-running tools more headroom in this shell
+export GAIA_AGENT_TOOL_TIMEOUT=300
+```
+
+Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
+
 ---
 
 ## Initialization
