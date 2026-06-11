@@ -201,8 +201,6 @@ class TestContextvarPreserved:
         async def read_ctx():
             captured.append(current_agent_id())
 
-        _var_token = None
-
         def worker():
             with _agent_context("test:agent-42"):
                 run_sync(read_ctx())
