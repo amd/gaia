@@ -320,3 +320,41 @@ def test_result_summary_required():
     del payload["result"]["summary"]
     with pytest.raises(ValidationError):
         EmailTriageResult.model_validate(payload["result"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 (#1603) contract freeze guard — the multi-inbox 'mailbox' tag lives
+# on the INTERNAL agent tool-result dicts, NOT on the frozen REST schema.
+# ---------------------------------------------------------------------------
+
+
+def test_schema_version_unchanged_by_multi_inbox():
+    """Multi-inbox (#1603 Phase 2) must NOT bump the frozen contract.
+
+    The REST /triage endpoint analyzes a single caller-supplied payload — it
+    never reads mailboxes, so it needs no source-mailbox field and no version
+    bump. If this fails, someone changed the frozen contract; that requires an
+    explicit version negotiation, not a drive-by edit.
+    """
+    assert SCHEMA_VERSION == "1.0"
+
+
+def test_triage_result_gained_no_new_required_field():
+    """Every EmailTriageResult field beyond the original required set must be
+    optional — a new REQUIRED field would break every existing consumer."""
+    required = {
+        name
+        for name, field in EmailTriageResult.model_fields.items()
+        if field.is_required()
+    }
+    assert required == {"category", "summary"}, (
+        f"EmailTriageResult required fields changed: {sorted(required)}. "
+        "Adding a required field is a breaking contract change — it needs a "
+        "SCHEMA_VERSION bump and a migration plan, not a drive-by edit."
+    )
+
+
+def test_triage_result_has_no_mailbox_field():
+    """The 'mailbox' tag is internal to the agent tools; the frozen REST result
+    must not grow one implicitly."""
+    assert "mailbox" not in EmailTriageResult.model_fields
