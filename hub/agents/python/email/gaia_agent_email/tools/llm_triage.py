@@ -93,9 +93,6 @@ _SYSTEM_PROMPT = (
 )
 
 _CATEGORY_BY_LOWER = {c.lower(): c for c in ALL_CATEGORIES}
-# Cap body characters sent to the classifier — enough signal for a category
-# decision without unbounded prompt growth on long threads.
-_BODY_CHAR_LIMIT = 4000
 
 
 class LLMTriageError(RuntimeError):
@@ -116,12 +113,11 @@ def _build_user_prompt(subject: str, sender: str, body: str) -> str:
     # delimiters the system prompt is trained to treat as data.
     from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 
-    clipped = (body or "").strip()[:_BODY_CHAR_LIMIT]
     return (
         f"Classify this email.\n\n"
         f"Subject: {subject}\n"
         f"From: {sender}\n"
-        f"Body:\n{wrap_untrusted_body(clipped)}\n"
+        f"Body:\n{wrap_untrusted_body((body or '').strip())}\n"
     )
 
 
