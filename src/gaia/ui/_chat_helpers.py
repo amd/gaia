@@ -1948,12 +1948,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 return None
 
             persisted_policy_block_content = _policy_block_response(blocked_steps)
-            if persisted_policy_block_msg_id is not None:
-                # ChatDatabase is single-writer SQLite today; make this replacement
-                # transactional before moving the chat DB to a multi-writer backend.
-                db.delete_message(request.session_id, persisted_policy_block_msg_id)
-            persisted_policy_block_msg_id = db.add_message(
+            persisted_policy_block_msg_id = db.upsert_message(
                 request.session_id,
+                persisted_policy_block_msg_id,
                 "assistant",
                 persisted_policy_block_content,
                 agent_steps=captured_steps if captured_steps else None,
@@ -2293,12 +2290,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             ):
                 msg_id = persisted_policy_block_msg_id
             else:
-                if persisted_policy_block_msg_id is not None:
-                    # ChatDatabase is single-writer SQLite today; make this replacement
-                    # transactional before moving the chat DB to a multi-writer backend.
-                    db.delete_message(request.session_id, persisted_policy_block_msg_id)
-                msg_id = db.add_message(
+                msg_id = db.upsert_message(
                     request.session_id,
+                    persisted_policy_block_msg_id,
                     "assistant",
                     full_response,
                     agent_steps=captured_steps if captured_steps else None,
