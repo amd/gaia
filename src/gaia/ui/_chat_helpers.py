@@ -1414,12 +1414,17 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     sse_handler = None
     producer = None
     cleanup_done = False
+    # Cooperative cancel signal for the producer's agent loop. Set on stream
+    # timeout / client disconnect so the agent bails at its next step boundary
+    # and the producer thread is actually reaped (see agent._cancel_event).
+    cancel_event = threading.Event()
 
     def _cleanup_stream():
         nonlocal cleanup_done
         if cleanup_done:
             return
         cleanup_done = True
+        cancel_event.set()
         if sse_handler is not None:
             sse_handler.cancelled.set()
         _active_sse_handlers.pop(session_id, None)
@@ -1823,6 +1828,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
                     return
+
+                # Let the agent loop observe stream-timeout/disconnect so a hung
+                # turn is torn down instead of leaking this producer thread.
+                agent._cancel_event = cancel_event
 
                 # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
                 # omitted, the agent's __init__ set model_id via kwargs.setdefault — a value

@@ -165,15 +165,22 @@ def get_access_token_sync(
     Synchronous wrapper around ``get_access_token``.
 
     Used by sync agent tool bodies (``Agent.process_query`` runs in a
-    ``ThreadPoolExecutor`` worker thread). ``asyncio.run`` inherits the
-    calling thread's contextvars into the new event loop's context, so
-    the agent-id contextvar set by the agent runtime is visible to the
-    async refresh code.
+    ``ThreadPoolExecutor`` worker thread).
 
     Must NOT be called from a thread that already has a running event
-    loop — ``asyncio.run`` would raise ``RuntimeError``. The runtime
-    guard turns this into an actionable error rather than a confusing
-    crash. Use ``await get_access_token(...)`` directly from async code.
+    loop. The runtime guard turns this into an actionable error rather
+    than a confusing crash. Use ``await get_access_token(...)`` directly
+    from async code.
+
+    Submits the coroutine to the persistent connector event loop (see
+    ``_loop.py``) and blocks with a bounded wait. The persistent loop avoids
+    two bugs that ``asyncio.run`` caused (#1579): the cross-loop Lock error
+    (Python ≤ 3.11) and the Windows ProactorEventLoop teardown hang on
+    repeated create/destroy cycles.
+
+    Contextvar propagation: the persistent-loop bridge captures
+    ``copy_context()`` at submit time so the agent-id contextvar set by the
+    agent runtime is visible inside the async refresh code.
     """
     try:
         running = asyncio.get_running_loop()
@@ -186,7 +193,9 @@ def get_access_token_sync(
             "directly from async code instead, or schedule this call on a "
             "worker thread without a running loop."
         )
-    return asyncio.run(
+    from gaia.connectors._loop import run_sync
+
+    return run_sync(
         get_access_token(
             provider=provider,
             scopes=scopes,
