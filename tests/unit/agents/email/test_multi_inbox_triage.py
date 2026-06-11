@@ -304,6 +304,35 @@ class TestPerMessageRouting:
         finally:
             agent.close_db()
 
+    def test_get_message_routes_to_tagged_mailbox(self, tmp_path, monkeypatch):
+        # The standard flow is triage → get_message → act; a body read on an
+        # Outlook-tagged id must hit Outlook, not 404 against the primary Gmail.
+        agent, spy_g, spy_m = _agent_two_backends(
+            tmp_path, monkeypatch, google_ids=["g1"], microsoft_ids=["m1"]
+        )
+        try:
+            _registered_tool("triage_inbox")(20)
+            envelope = json.loads(_registered_tool("get_message")("m1"))
+            assert envelope["ok"] is True, envelope
+            # The Outlook spy stamps its sender — proves which backend answered.
+            assert "microsoft@example.com" in envelope["data"]["from"]
+        finally:
+            agent.close_db()
+
+    def test_get_thread_routes_to_tagged_mailbox(self, tmp_path, monkeypatch):
+        agent, spy_g, spy_m = _agent_two_backends(
+            tmp_path, monkeypatch, google_ids=["g1"], microsoft_ids=["m1"]
+        )
+        try:
+            _registered_tool("triage_inbox")(20)
+            # Thread ids are remembered alongside message ids at triage time.
+            envelope = json.loads(_registered_tool("get_thread")("t-m1"))
+            assert envelope["ok"] is True, envelope
+            senders = [m["from"] for m in envelope["data"]["messages"]]
+            assert any("microsoft@example.com" in s for s in senders)
+        finally:
+            agent.close_db()
+
     def test_undo_routes_to_the_mailbox_the_action_hit(self, tmp_path, monkeypatch):
         # D5: trash an Outlook-tagged message, then restore — the untrash must
         # dispatch to the Outlook backend (read from the action row's mailbox),

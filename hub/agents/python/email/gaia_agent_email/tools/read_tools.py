@@ -714,11 +714,11 @@ class ReadToolsMixin:
     """Mixin that registers the read-side tools.
 
     The mixin is state-free at construction time — it relies on the agent
-    class having set ``self._gmail`` (and optionally ``self.config.debug``)
-    before invoking ``self._register_read_tools()``. The ``agent``
-    closure capture is used so triage / pre-scan tools can read live
-    ``self._session_preferences`` (set on the agent instance) at call
-    time, not snapshot at registration time.
+    class having set ``self._gmail``, ``self._backends``, and the
+    ``_backend_for_message`` routing helper (#1603 Phase 2) before invoking
+    ``self._register_read_tools()``. The ``agent`` closure capture is used so
+    triage / pre-scan tools can read live ``self._session_preferences`` (set
+    on the agent instance) at call time, not snapshot at registration time.
     """
 
     def _register_read_tools(self) -> None:
@@ -751,11 +751,17 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def get_message(message_id: str) -> str:
-            """Fetch a single message by id, including full body."""
+        def get_message(message_id: str, mailbox: str = "") -> str:
+            """Fetch a single message by id, including full body.
+
+            ``mailbox`` (optional) names the source mailbox ('google' /
+            'microsoft') from triage output so the read routes correctly when
+            multiple mailboxes are connected.
+            """
             try:
+                backend = agent._backend_for_message(message_id, mailbox or None)
                 return _envelope_ok(
-                    get_message_impl(gmail, message_id=message_id, debug=debug_flag)
+                    get_message_impl(backend, message_id=message_id, debug=debug_flag)
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
@@ -764,11 +770,15 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def get_thread(thread_id: str) -> str:
-            """Fetch every message in a thread (conversation view)."""
+        def get_thread(thread_id: str, mailbox: str = "") -> str:
+            """Fetch every message in a thread (conversation view).
+
+            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            """
             try:
+                backend = agent._backend_for_message(thread_id, mailbox or None)
                 return _envelope_ok(
-                    get_thread_impl(gmail, thread_id=thread_id, debug=debug_flag)
+                    get_thread_impl(backend, thread_id=thread_id, debug=debug_flag)
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
@@ -777,7 +787,7 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def summarize_thread(thread_id: str) -> str:
+        def summarize_thread(thread_id: str, mailbox: str = "") -> str:
             """Summarize an entire email thread, not just its latest message.
 
             Reads every message in the thread and produces one concise,
@@ -803,9 +813,10 @@ class ReadToolsMixin:
                 )
 
                 chat = getattr(agent, "chat", None)
+                backend = agent._backend_for_message(thread_id, mailbox or None)
                 return _envelope_ok(
                     summarize_thread_impl(
-                        gmail,
+                        backend,
                         chat,
                         thread_id=thread_id,
                         debug=debug_flag,

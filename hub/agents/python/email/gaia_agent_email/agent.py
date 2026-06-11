@@ -472,6 +472,9 @@ class EmailTriageAgent(
             for item in out["results"]:
                 item["mailbox"] = provider
                 self._remember_message_mailbox(item.get("id"), provider)
+                # Thread ids share the provenance map so get_thread /
+                # summarize_thread route to the right mailbox too.
+                self._remember_message_mailbox(item.get("thread_id"), provider)
                 merged.append(item)
         merged = merged[:max_messages]
         # Re-group the merged, capped list so the bucketed view matches what the
@@ -520,14 +523,17 @@ class EmailTriageAgent(
             for item in out.get("urgent", []):
                 item["mailbox"] = provider
                 self._remember_message_mailbox(item.get("message_id"), provider)
+                self._remember_message_mailbox(item.get("thread_id"), provider)
                 urgent.append(item)
             for item in out.get("actionable", []):
                 item["mailbox"] = provider
                 self._remember_message_mailbox(item.get("message_id"), provider)
+                self._remember_message_mailbox(item.get("thread_id"), provider)
                 actionable.append(item)
             for item in out.get("suggested_archives", []):
                 item["mailbox"] = provider
                 self._remember_message_mailbox(item.get("message_id"), provider)
+                self._remember_message_mailbox(item.get("thread_id"), provider)
                 suggested_archives.append(item)
             informational_count += int(out.get("informational_count", 0))
         return {
