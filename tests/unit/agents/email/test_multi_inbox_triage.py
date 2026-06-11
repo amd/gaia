@@ -304,6 +304,25 @@ class TestPerMessageRouting:
         finally:
             agent.close_db()
 
+    def test_undo_routes_to_the_mailbox_the_action_hit(self, tmp_path, monkeypatch):
+        # D5: trash an Outlook-tagged message, then restore — the untrash must
+        # dispatch to the Outlook backend (read from the action row's mailbox),
+        # never to Gmail.
+        agent, spy_g, spy_m = _agent_two_backends(
+            tmp_path, monkeypatch, google_ids=["g1"], microsoft_ids=["m1"]
+        )
+        try:
+            _registered_tool("triage_inbox")(20)
+            trash_env = json.loads(_registered_tool("trash_message")("m1"))
+            assert trash_env["ok"] is True, trash_env
+            action_id = trash_env["data"]["action_id"]
+            restore_env = json.loads(_registered_tool("restore_message")(action_id))
+            assert restore_env["ok"] is True, restore_env
+            assert ("untrash_message", "m1") in spy_m.calls
+            assert all(c[0] != "untrash_message" for c in spy_g.calls)
+        finally:
+            agent.close_db()
+
 
 class TestSingleBackendRoutingUnchanged:
     def test_single_backend_routes_without_provenance(self, tmp_path, monkeypatch):
