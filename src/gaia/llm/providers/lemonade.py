@@ -412,8 +412,8 @@ class LemonadeProvider(LLMClient):
         self._backend.load_model(model_name, **kwargs)
         self._model = model_name
 
-    def unload_model(self) -> None:
-        self._backend.unload_model()
+    def unload_model(self, model_name: Optional[str] = None) -> None:
+        self._backend.unload_model(model_name)
 
     def _extract_text(self, response: dict) -> str:
         return response["choices"][0]["text"]

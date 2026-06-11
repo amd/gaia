@@ -3,7 +3,7 @@
 """Base LLM client interface."""
 
 from abc import ABC, abstractmethod
-from typing import Iterator, Union
+from typing import Iterator, Optional, Union
 
 from .exceptions import NotSupportedError
 
@@ -56,5 +56,5 @@ class LLMClient(ABC):
     def load_model(self, model_name: str, **kwargs) -> None:
         raise NotSupportedError(self.provider_name, "load_model")
 
-    def unload_model(self) -> None:
+    def unload_model(self, model_name: Optional[str] = None) -> None:
         raise NotSupportedError(self.provider_name, "unload_model")
