@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS email_actions (
     thread_id    TEXT,
     payload_json TEXT NOT NULL,
     batch_id     TEXT,
+    mailbox      TEXT,
     created_at   REAL NOT NULL,
     undone_at    REAL
 );
@@ -75,9 +76,25 @@ BODY_PREVIEW_MAX_CHARS = 100
 
 
 def init_schema(db) -> None:
-    """Create both tables if they don't exist. Idempotent."""
+    """Create both tables if they don't exist, then run migrations. Idempotent."""
     db.execute(EMAIL_ACTIONS_DDL)
     db.execute(EMAIL_DRAFTS_DDL)
+    _migrate_email_actions_mailbox(db)
+
+
+def _migrate_email_actions_mailbox(db) -> None:
+    """Add the ``mailbox`` column to a pre-#1603 ``email_actions`` table.
+
+    A fresh DB already has the column (it is in the DDL); an existing DB created
+    before Phase 2 does not. We ADD it guarded by a ``PRAGMA table_info``
+    existence check and backfill legacy rows to 'google' — every action recorded
+    before multi-inbox could only have hit the single (Gmail) mailbox.
+    """
+    cols = {row["name"] for row in db.query("PRAGMA table_info(email_actions)")}
+    if "mailbox" in cols:
+        return
+    db.execute("ALTER TABLE email_actions ADD COLUMN mailbox TEXT")
+    db.update("email_actions", {"mailbox": "google"}, "mailbox IS NULL", {})
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +110,16 @@ def record_action(
     thread_id: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
     batch_id: Optional[str] = None,
+    mailbox: Optional[str] = None,
 ) -> str:
     """Insert a row, return the new action_id.
 
     ``payload`` carries the data needed to reverse the action — e.g. for
     ``trash`` the message id is enough; for ``add_label`` we record the
     added label id so undo can ``remove_label`` exactly that one.
+
+    ``mailbox`` records which mailbox the action hit ('google' / 'microsoft')
+    so undo routes to the right account when multiple are connected (#1603).
     """
     action_id = uuid.uuid4().hex
     db.insert(
@@ -110,6 +131,7 @@ def record_action(
             "thread_id": thread_id,
             "payload_json": json.dumps(payload or {}),
             "batch_id": batch_id,
+            "mailbox": mailbox,
             "created_at": time.time(),
             "undone_at": None,
         },
@@ -145,6 +167,7 @@ def fetch_undoable(
         "thread_id": row["thread_id"],
         "payload": payload,
         "batch_id": row["batch_id"],
+        "mailbox": row["mailbox"],
         "created_at": row["created_at"],
     }
 
@@ -179,6 +202,7 @@ def fetch_batch_undoable(
                 "thread_id": row["thread_id"],
                 "payload": payload,
                 "batch_id": row["batch_id"],
+                "mailbox": row["mailbox"],
                 "created_at": row["created_at"],
             }
         )

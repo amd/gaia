@@ -234,10 +234,16 @@ class TestSummarizeThreadImpl:
 
 
 class _Recorder:
-    """Captures the @tool functions a mixin registers without a real Agent."""
+    """Captures the @tool functions a mixin registers without a real Agent.
+
+    Implements the mixin host contract: ``_gmail``/``_backends`` plus the
+    per-message routing helper (#1603 Phase 2) — single-backend here, so it
+    always returns the one fake.
+    """
 
     def __init__(self, gmail, chat, debug=False):
         self._gmail = gmail
+        self._backends = {"google": gmail}
         self.chat = chat
         self._tools = {}
 
@@ -247,6 +253,9 @@ class _Recorder:
         self.config = _Cfg()
         self.config.debug = debug
         self.config.force_llm = False
+
+    def _backend_for_message(self, message_id, explicit_mailbox=None):
+        return self._gmail
 
 
 def _register_read_via_mixin(gmail, chat):
