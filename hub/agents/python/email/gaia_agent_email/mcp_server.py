@@ -47,6 +47,7 @@ from gaia_agent_email.api_routes import (  # read-only reuse of the REST surface
     _format_address,
     _payload_fingerprint,
 )
+from gaia.connectors.api import connected_mailbox_providers
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -283,7 +284,8 @@ class EmailTriageMCPAgent(MCPAgent):
         to_header = ", ".join(_format_address(a) for a in to)
         result = backend.send_message(to=to_header, subject=subject, body=body)
         sent_id = result.get("id") or ""
-        if not sent_id:
+        # Graph sendMail returns 202 with no body → sent=True, empty id is success.
+        if not sent_id and not result.get("sent"):
             return {
                 "sent": False,
                 "error": "Email backend did not return a message id for the send.",
@@ -297,24 +299,48 @@ class EmailTriageMCPAgent(MCPAgent):
         }
 
     def _resolve_send_backend(self):
-        """Resolve the send backend AFTER the gate.
+        """Resolve the send backend AFTER the gate — connector-derived (#1603).
 
-        The opt-in ``GAIA_EMAIL_MCP_FAKE_SEND`` test seam swaps in an
-        in-process fake. Otherwise build the live Gmail backend and fail
-        loudly if Google is not connected — never silently no-op a send.
+        The opt-in ``GAIA_EMAIL_MCP_FAKE_SEND`` seam short-circuits BEFORE the
+        provider count check so parity tests run without a live mailbox. Then:
+
+          - 0 connected → RuntimeError (actionable: go connect a mailbox)
+          - 2+ connected → RuntimeError (actionable: ambiguous, use the agent UI)
+          - exactly 1    → build the matching live backend
+
+        Never silently no-ops a send.
         """
         if os.environ.get(_FAKE_SEND_ENV):
             return _FakeSendBackend()
-        from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
-        try:
-            return LiveGmailBackend(_get_gmail_token)
-        except Exception as exc:  # noqa: BLE001 - boundary translation, re-raised
+        providers = connected_mailbox_providers()
+        if not providers:
             raise RuntimeError(
-                "Email send backend unavailable: Google account is not "
-                "connected. Connect Google via the connectors flow before "
-                f"sending. ({type(exc).__name__}: {exc})"
-            ) from exc
+                "No mailbox connected — connect Google or Microsoft in "
+                "Settings → Connectors before sending via MCP."
+            )
+        if len(providers) > 1:
+            raise RuntimeError(
+                f"Multiple mailboxes connected ({', '.join(providers)}); "
+                "the MCP send can't choose. Send from the agent UI (sends "
+                "from the message's mailbox), or draft with a provider binding."
+            )
+        provider = providers[0]
+        if provider == "google":
+            from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
+
+            return LiveGmailBackend(_get_gmail_token)
+        if provider == "microsoft":
+            from gaia_agent_email.outlook_backend import (
+                LiveOutlookBackend,
+                _get_outlook_token,
+            )
+
+            return LiveOutlookBackend(_get_outlook_token)
+        raise RuntimeError(
+            f"Connected mailbox provider '{provider}' has no send backend. "
+            "Expected 'google' or 'microsoft'."
+        )
 
 
 def start_email_mcp(
