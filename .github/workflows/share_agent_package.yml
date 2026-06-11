@@ -45,9 +45,11 @@ jobs:
 
       - name: Resolve agent metadata
         id: meta
+        env:
+          AGENT_ID: ${{ inputs.agent_id }}
         run: |
           set -euo pipefail
-          ENTRY=$(python util/list_agent_packages.py --format matrix --only "${{ inputs.agent_id }}")
+          ENTRY=$(python util/list_agent_packages.py --format matrix --only "$AGENT_ID")
           PATHV=$(echo "$ENTRY" | python -c "import json,sys;e=json.load(sys.stdin)['include'][0];print(e['path'])")
           DIST=$(echo  "$ENTRY" | python -c "import json,sys;e=json.load(sys.stdin)['include'][0];print(e['dist'])")
           VERSION=$(python -c "import tomllib;print(tomllib.load(open('$PATHV/pyproject.toml','rb'))['project']['version'])")
@@ -63,9 +65,10 @@ jobs:
       - name: Publish prerelease asset
         env:
           GH_TOKEN: ${{ github.token }}
+          AGENT_ID: ${{ inputs.agent_id }}
         run: |
           set -euo pipefail
-          TAG="agent-pkg-${{ inputs.agent_id }}-v${{ steps.meta.outputs.version }}"
+          TAG="agent-pkg-${AGENT_ID}-v${{ steps.meta.outputs.version }}"
           DIST_DIR="${{ steps.meta.outputs.path }}/dist"
           # Fail loud if the build produced nothing — never upload an empty release.
           ls "$DIST_DIR"/*.whl "$DIST_DIR"/*.tar.gz
