@@ -138,6 +138,12 @@ def main(argv: List[str] | None = None) -> int:
         help="ids: one agent id per line; paths: one repo-relative path per "
         "line; matrix: a GitHub Actions matrix JSON object (default: ids)",
     )
+    parser.add_argument(
+        "--only",
+        metavar="AGENT_ID",
+        help="filter output to a single agent by id (e.g. email); fails loudly "
+        "if the id is not found in setup.py[agents]",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -145,6 +151,18 @@ def main(argv: List[str] | None = None) -> int:
     except AgentListError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+    if args.only is not None:
+        filtered = [p for p in packages if p.agent_id == args.only]
+        if not filtered:
+            valid = ", ".join(p.agent_id for p in packages)
+            print(
+                f"error: agent id {args.only!r} not found in setup.py[agents]. "
+                f"Valid ids: {valid}",
+                file=sys.stderr,
+            )
+            return 1
+        packages = filtered
 
     if args.format == "ids":
         print("\n".join(p.agent_id for p in packages))
