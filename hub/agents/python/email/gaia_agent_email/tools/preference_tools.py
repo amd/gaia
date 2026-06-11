@@ -27,7 +27,7 @@ import json
 from typing import Any, Dict
 
 from gaia.agents.base.tools import tool
-from gaia.agents.email.tools.triage_heuristics import (
+from gaia_agent_email.tools.triage_heuristics import (
     CATEGORY_INFORMATIONAL,
     CATEGORY_LOW_PRIORITY,
 )

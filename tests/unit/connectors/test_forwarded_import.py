@@ -194,8 +194,8 @@ class TestGrants:
     def test_grant_agents_written(self):
         from gaia.connectors.grants import check_agent_grant
 
-        _do_import(grant_agents=["builtin:email"])
-        assert check_agent_grant("google", "builtin:email", FULL_SCOPES)
+        _do_import(grant_agents=["installed:email"])
+        assert check_agent_grant("google", "installed:email", FULL_SCOPES)
 
     def test_no_grant_agents_writes_nothing(self):
         from gaia.connectors.grants import list_agent_grants
@@ -299,14 +299,14 @@ class TestRefreshUsesForwardedClient:
         # v1 store is single-slot per provider: the keyring key is always
         # DEFAULT_ACCOUNT regardless of the display account_email. Import
         # without a display email so the read-side default key matches.
-        _do_import(grant_agents=["builtin:email"], account_email="")
+        _do_import(grant_agents=["installed:email"], account_email="")
 
         from gaia.connectors.api import get_access_token
 
         token = await get_access_token(
             provider="google",
             scopes=FULL_SCOPES,
-            agent_id="builtin:email",
+            agent_id="installed:email",
         )
         assert token == "STUB-ACCESS"
         assert FWD_CLIENT_ID in captured["body"]
