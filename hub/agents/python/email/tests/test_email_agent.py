@@ -67,7 +67,7 @@ def test_discovered_when_installed():
 
 
 # ---------------------------------------------------------------------------
-# engine=llm triage endpoint tests
+# LLM triage endpoint tests
 # ---------------------------------------------------------------------------
 
 
@@ -113,32 +113,19 @@ def _fake_chat(category="actionable", summary="Alice invites Bob to lunch."):
     return _FakeChat()
 
 
-def test_engine_llm_triage_service_returns_result():
-    """EmailTriageService.triage_request with engine='llm' and a fake chat."""
+def test_triage_service_uses_llm():
+    """EmailTriageService.triage_request uses the LLM path with a fake chat."""
     from gaia_agent_email.api_routes import EmailTriageService
 
     service = EmailTriageService()
     request = _make_single_request()
     chat = _fake_chat(category="actionable", summary="Alice invites Bob to lunch.")
 
-    response = service.triage_request(request, engine="llm", chat=chat)
+    response = service.triage_request(request, chat=chat)
 
     assert response.result.category == "actionable"
     assert "Alice" in response.result.summary or "lunch" in response.result.summary
     assert response.result.message_id == "msg-001"
-
-
-def test_engine_llm_triage_service_invalid_engine():
-    """An unsupported engine value raises ValueError, not a silent fallback."""
-    from gaia_agent_email.api_routes import EmailTriageService
-
-    service = EmailTriageService()
-    request = _make_single_request()
-    try:
-        service.triage_request(request, engine="openai")
-        assert False, "should have raised"
-    except ValueError as exc:
-        assert "engine=" in str(exc)
 
 
 def test_body_not_clipped_by_llm_triage():
@@ -193,12 +180,13 @@ def test_thread_newest_first():
     captured = {}
 
     class _CapturingService(EmailTriageService):
-        def _build_result(self, *, body, **kwargs):
+        def _build_result_llm(self, *, body, **kwargs):
             captured["body"] = body
-            return super()._build_result(body=body, **kwargs)
+            return super()._build_result_llm(body=body, **kwargs)
 
+    chat = _fake_chat(category="actionable", summary="Project update thread.")
     service = _CapturingService()
-    response = service.triage_request(request, engine="heuristic")
+    response = service.triage_request(request, chat=chat)
 
     assert response.result.message_id == "thread-001"
     assert "body" in captured

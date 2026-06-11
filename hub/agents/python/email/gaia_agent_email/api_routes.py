@@ -48,9 +48,9 @@ import hmac
 import re
 import secrets
 import threading
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -126,16 +126,10 @@ class EmailTriageService:
     """Convert contract inputs (or raw Gmail-API messages) into a contract
     :class:`EmailTriageResult`.
 
-    Two modes (selected via the ``engine`` parameter):
-
-    - ``"heuristic"`` (default) — deterministic, no LLM, offline-testable.
-      Category comes from the agent's heuristic categorizer; summary /
-      action items are derived with explicit rules.
-    - ``"llm"`` — opt-in LLM escalation. When the heuristic returns
-      ``confident=False``, the category is escalated via
-      ``classify_email_llm`` and the summary is replaced by
-      ``summarize_email_llm``. Both call the LOCAL Lemonade server; a cloud
-      ``base_url`` raises ``ConfigurationError`` loudly (AC3).
+    Triage always uses the local Lemonade LLM. High-confidence heuristic
+    signals (spam, promotions) skip the LLM classify call as an internal
+    optimisation, but the LLM is always used for summaries and for any
+    message the heuristic cannot confidently classify.
     """
 
     # -- Public: contract path ---------------------------------------------
@@ -143,42 +137,23 @@ class EmailTriageService:
     def triage_request(
         self,
         request: EmailTriageRequest,
-        engine: str = "heuristic",
         chat: Optional[Any] = None,
     ) -> EmailTriageResponse:
         """Triage a contract request envelope into a contract response.
 
         Args:
             request: The frozen #1262 contract request.
-            engine:  ``"heuristic"`` (default, no LLM) or ``"llm"``
-                     (escalate low-confidence results via the local model).
-            chat:    Pre-built chat client for ``engine="llm"``. When None and
-                     ``engine="llm"``, a local Lemonade client is constructed
-                     via :meth:`_build_llm_chat`. Ignored for
-                     ``engine="heuristic"``.
+            chat:    Pre-built chat client. When None a local Lemonade client
+                     is constructed via :meth:`_build_llm_chat`.
         """
-        if engine not in ("heuristic", "llm"):
-            raise ValueError(
-                f"engine={engine!r} is not supported. "
-                "Use 'heuristic' (default, no LLM) or 'llm' (local LLM escalation). "
-                "Cloud LLM endpoints are never permitted for email content (AC3)."
-            )
-
         payload = request.payload
+        resolved_chat = chat or self._build_llm_chat()
         if isinstance(payload, SingleEmailInput):
             kind = "single"
-            if engine == "llm":
-                resolved_chat = chat or self._build_llm_chat()
-                result = self._triage_single_llm(payload, resolved_chat)
-            else:
-                result = self._triage_single(payload)
+            result = self._triage_single_llm(payload, resolved_chat)
         elif isinstance(payload, ThreadInput):
             kind = "thread"
-            if engine == "llm":
-                resolved_chat = chat or self._build_llm_chat()
-                result = self._triage_thread_llm(payload, resolved_chat)
-            else:
-                result = self._triage_thread(payload)
+            result = self._triage_thread_llm(payload, resolved_chat)
         else:  # pragma: no cover - discriminated union guarantees one of the two
             raise HTTPException(
                 status_code=422,
@@ -238,43 +213,6 @@ class EmailTriageService:
             principal=principal,
             reply_to=_parse_address(sender),
         )
-
-    # -- Internal -----------------------------------------------------------
-
-    def _triage_single(self, payload: SingleEmailInput) -> EmailTriageResult:
-        msg = payload.message
-        return self._build_result(
-            subject=msg.subject,
-            sender_raw=_format_address(msg.from_),
-            body=msg.body,
-            label_ids=[],
-            principal=payload.principal,
-            reply_to=msg.from_,
-            message_id=msg.message_id,
-        )
-
-    def _triage_thread(self, payload: ThreadInput) -> EmailTriageResult:
-        # Summarize the whole thread; categorize on the LAST inbound message
-        # (the one awaiting the principal's attention), reply to its sender.
-        messages: List[EmailMessage] = payload.messages
-        last = messages[-1]
-        # Join newest-first so the model sees the most recent context first.
-        combined_body = "\n\n".join(
-            f"{_format_address(m.from_)}: {m.body}" for m in reversed(messages)
-        )
-        result = self._build_result(
-            subject=last.subject,
-            sender_raw=_format_address(last.from_),
-            body=combined_body,
-            label_ids=[],
-            principal=payload.principal,
-            reply_to=last.from_,
-            summary_prefix=f"Thread of {len(messages)} messages. ",
-            message_id=payload.thread_id,
-        )
-        return result
-
-    # -- LLM-escalation path (engine="llm") --------------------------------
 
     def _triage_single_llm(
         self, payload: SingleEmailInput, chat: Any
@@ -666,19 +604,7 @@ _service = EmailTriageService()
 
 
 @router.post("/triage", response_model=EmailTriageResponse)
-async def triage_email(
-    request: EmailTriageRequest,
-    engine: Literal["heuristic", "llm"] = Query(
-        default="heuristic",
-        description=(
-            "Triage engine to use. "
-            "'heuristic' (default) — deterministic, no LLM, zero latency added. "
-            "'llm' — escalate low-confidence results via the local Lemonade model; "
-            "cloud LLM endpoints are never permitted (AC3). An unknown value is "
-            "rejected with HTTP 422."
-        ),
-    ),
-) -> EmailTriageResponse:
+async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
     """Triage a single email or a full thread.
 
     Accepts the FROZEN #1262 ``EmailTriageRequest`` (a single-email or
@@ -686,13 +612,9 @@ async def triage_email(
     ``EmailTriageResponse`` — category, spam/phishing signals, a plain-text
     summary, extracted action items, and an optional draft-reply proposal.
     No mail is read or sent; this analyzes only the payload in the request.
-
-    Pass ``?engine=llm`` to escalate low-confidence results through the local
-    Lemonade LLM. The default ``engine=heuristic`` is byte-identical to the
-    previous behaviour — no latency added, no LLM loaded.
     """
     try:
-        return await asyncio.to_thread(_service.triage_request, request, engine=engine)
+        return await asyncio.to_thread(_service.triage_request, request)
     except (LLMTriageError, EmailSummarizeError) as e:
         raise HTTPException(
             status_code=502, detail=f"local LLM triage failed: {e}"
