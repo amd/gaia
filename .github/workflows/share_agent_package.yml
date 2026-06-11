@@ -68,6 +68,9 @@ jobs:
           AGENT_ID: ${{ inputs.agent_id }}
         run: |
           set -euo pipefail
+          # Tag the actually-built commit (the checked-out ref), not GITHUB_SHA —
+          # which is the dispatch branch head and diverges when `ref` is set.
+          SHA="$(git rev-parse HEAD)"
           TAG="agent-pkg-${AGENT_ID}-v${{ steps.meta.outputs.version }}"
           DIST_DIR="${{ steps.meta.outputs.path }}/dist"
           # Fail loud if the build produced nothing — never upload an empty release.
@@ -75,8 +78,8 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$DIST_DIR"/* --clobber
           else
-            gh release create "$TAG" "$DIST_DIR"/* --prerelease --target "$GITHUB_SHA" \
+            gh release create "$TAG" "$DIST_DIR"/* --prerelease --target "$SHA" \
               --title "$TAG" \
-              --notes "Interim GitHub-native share of ${{ steps.meta.outputs.dist }} built from $GITHUB_SHA. Not a PyPI release (#1179)."
+              --notes "Interim GitHub-native share of ${{ steps.meta.outputs.dist }} built from $SHA. Not a PyPI release (#1179)."
           fi
           echo "Release: https://github.com/amd/gaia/releases/tag/$TAG"

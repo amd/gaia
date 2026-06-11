@@ -149,7 +149,7 @@ def test_helper_rejects_bad_naming(tmp_path):
 # ── --only filter tests (#1598) ──────────────────────────────────────────────
 
 
-def test_only_filter_ids(packages):
+def test_only_filter_ids():
     """--only email returns exactly the email agent when using --format ids."""
     import subprocess  # nosec B404 — fixed argv, no shell
 
@@ -166,11 +166,11 @@ def test_only_filter_ids(packages):
         text=True,
         check=True,
     )
-    lines = [l for l in out.stdout.splitlines() if l.strip()]
+    lines = [ln for ln in out.stdout.splitlines() if ln.strip()]
     assert lines == ["email"], f"expected ['email'] but got {lines!r}"
 
 
-def test_only_filter_matrix_single_entry(packages):
+def test_only_filter_matrix_single_entry():
     """--format matrix --only email yields an include list of length 1 with correct fields."""
     import json
     import subprocess  # nosec B404 — fixed argv, no shell
