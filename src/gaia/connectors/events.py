@@ -73,8 +73,9 @@ def emit_change(event_type: str, payload: dict) -> None:
     Lets synchronous callers (``api.py``, the CLI) trigger an event without
     being async themselves. Inside the UI server (a running event loop) the
     coroutine is scheduled on that loop and fanned out to SSE subscribers; in a
-    bare process (the CLI) it is run to completion against the registered
-    emitter — the no-op logging emitter unless an SSE one was registered.
+    bare process (the CLI) it is submitted to the persistent connector event
+    loop (see ``_loop.py``) rather than ``asyncio.run``, avoiding Windows
+    ProactorEventLoop teardown churn (#1579).
     Failures are logged, never silently swallowed.
     """
     try:
@@ -86,7 +87,9 @@ def emit_change(event_type: str, payload: dict) -> None:
         task = loop.create_task(emit(event_type, payload))
         task.add_done_callback(_log_emit_result)
     else:
+        from gaia.connectors._loop import run_sync
+
         try:
-            asyncio.run(emit(event_type, payload))
+            run_sync(emit(event_type, payload))
         except Exception:  # defensive: a notification must not break the write
             logger.exception("emit_change failed for %s", event_type)

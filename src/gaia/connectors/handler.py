@@ -183,6 +183,11 @@ def get_credential_sync(
     Uses the same running-loop guard pattern as ``get_access_token_sync`` in
     ``tokens.py``: raises ``RuntimeError`` if called from inside a running loop
     (callers should use ``await get_credential(...)`` instead).
+
+    Submits to the persistent connector event loop (see ``_loop.py``) rather
+    than ``asyncio.run``, avoiding the Windows ProactorEventLoop teardown hang
+    and cross-loop Lock errors from #1579. Contextvar propagation is preserved
+    via ``copy_context()`` at submit time.
     """
     try:
         loop = asyncio.get_running_loop()
@@ -193,7 +198,9 @@ def get_credential_sync(
             "get_credential_sync() called from inside a running event loop. "
             "Use 'await get_credential(...)' instead."
         )
-    return asyncio.run(
+    from gaia.connectors._loop import run_sync
+
+    return run_sync(
         get_credential(
             connector_id,
             agent_id=agent_id,

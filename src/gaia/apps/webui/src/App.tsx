@@ -9,6 +9,7 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { FileBrowser } from './components/FileBrowser';
 import { MemoryDashboard } from './components/MemoryDashboard';
+import { ScheduleManager } from './components/ScheduleManager';
 import { SettingsPage } from './components/SettingsPage';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
@@ -63,12 +64,15 @@ function App() {
         removeSession,
         updateSessionInList,
         setMessages,
+        resetStreaming,
         showDocLibrary,
         showFileBrowser,
         showSettings,
         setShowSettings,
         showMemoryDashboard,
         setShowMemoryDashboard,
+        showSchedules,
+        setShowSchedules,
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
@@ -499,6 +503,9 @@ function App() {
             setIsViewTransitioning(true);
             // Allow fade-out to complete, then swap content
             const timer = setTimeout(() => {
+                // Drop the previous session's in-flight stream state so the
+                // incoming view starts clean instead of mirroring it (#1580).
+                resetStreaming();
                 setDisplayedSessionId(currentSessionId);
                 // Brief delay before removing transition class (allows new content to mount)
                 requestAnimationFrame(() => {
@@ -509,7 +516,7 @@ function App() {
             }, 220); // matches CSS transition duration
             return () => clearTimeout(timer);
         }
-    }, [currentSessionId, displayedSessionId]);
+    }, [currentSessionId, displayedSessionId, resetStreaming]);
 
     return (
         <div className="app">
@@ -531,7 +538,7 @@ function App() {
 
             <Sidebar
                 onNewTask={handleNewTask}
-                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); window.history.replaceState(null, '', window.location.pathname); }}
+                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); setShowSchedules(false); window.history.replaceState(null, '', window.location.pathname); }}
                 tunnelActive={tunnelActive}
                 tunnelLoading={tunnelLoading}
                 onMobileToggle={handleMobileToggle}
@@ -542,6 +549,8 @@ function App() {
                     <SettingsPage />
                 ) : showMemoryDashboard ? (
                     <MemoryDashboard />
+                ) : showSchedules ? (
+                    <ScheduleManager />
                 ) : (
                     <>
                         {/* Connection / LLM status banner */}

@@ -299,12 +299,23 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
      *  earlier messages won't be interrupted by new streaming content. */
     const isNearBottomRef = useRef(true);
 
+    // True once the user has navigated to another session. The store's
+    // currentSessionId flips synchronously on switch (the displayed view lags
+    // ~220ms behind it), so an in-flight stream callback can detect it's now
+    // writing for a background session and bail before mutating shared state
+    // (#1580).
+    const isStale = useCallback(
+        () => useChatStore.getState().currentSessionId !== sessionId,
+        [sessionId],
+    );
+
     const flushStreamBuffer = useCallback(() => {
         streamRafRef.current = null;
+        if (isStale()) return; // don't flush into the now-active session's store
         if (streamBufferRef.current) {
             setStreamContent(streamBufferRef.current);
         }
-    }, [setStreamContent]);
+    }, [setStreamContent, isStale]);
 
     // Load messages on mount, then poll for external changes (MCP, API)
     const msgPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -695,6 +706,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
         const controller = api.sendMessageStream(sessionId, messageText, {
             onChunk: (event) => {
+                if (isStale()) return; // stop writing after a session switch (#1580)
                 const content = event.content || '';
                 if (content) {
                     // 'answer' events carry the full final text (not a delta),
@@ -736,6 +748,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 }
             },
             onAgentEvent: (event) => {
+                // Ignore events from a stream the user navigated away from so its
+                // steps don't leak into the new session's view (#1580).
+                if (isStale()) return;
                 // ── Tool confirmation popup ──────────────────────────────
                 if (event.type === 'tool_confirm') {
                     if (!event.confirm_id) {
@@ -973,6 +988,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 }
                 streamBufferRef.current = '';
 
+                // A completion for a backgrounded session is persisted
+                // server-side, so don't touch the shared store (#1580).
+                if (isStale()) return;
+
                 const content = event.content || fullContent;
                 log.chat.timed(`Agent response complete: ${content.length} chars`, streamStart);
 
@@ -1013,7 +1032,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 setTimeout(() => {
                     api.getMessages(sessionId)
                         .then((data) => {
-                            if (useChatStore.getState().currentSessionId !== sessionId) return;
+                            if (isStale()) return;
                             const msgs: Message[] = (data.messages || []).map((m: any) => {
                                 return {
                                     ...m,
@@ -1042,6 +1061,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     streamRafRef.current = null;
                 }
                 streamBufferRef.current = '';
+
+                // A real error event arriving on a backgrounded stream isn't
+                // the active view's concern, so don't surface it (#1580).
+                if (isStale()) return;
 
                 log.chat.error(`Chat error for session=${sessionId}`, err);
                 // Provide a user-friendly error message based on the error type
@@ -1094,7 +1117,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         }, undefined, undefined, activeAgentId);
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId, addNotification]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId, addNotification, isStale]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
@@ -1141,13 +1164,13 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 // Reload messages on error to restore accurate state
                 api.getMessages(sessionId)
                     .then((data) => {
-                        if (useChatStore.getState().currentSessionId !== sessionId) return;
+                        if (isStale()) return;
                         setMessages(data.messages || []);
                     })
                     .catch(() => {});
             }
         }, 250);
-    }, [sessionId, isStreaming, removeMessage, setMessages]);
+    }, [sessionId, isStreaming, removeMessage, setMessages, isStale]);
 
     // Resend a user message: delete it and everything below, then re-send
     const handleResendMessage = useCallback(async (message: Message) => {
@@ -1165,7 +1188,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             // Reload messages on error
             api.getMessages(sessionId)
                 .then((data) => {
-                    if (useChatStore.getState().currentSessionId !== sessionId) return;
+                    if (isStale()) return;
                     setMessages(data.messages || []);
                 })
                 .catch(() => {});
@@ -1174,7 +1197,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
         // Re-send the same message text
         sendMessage(text);
-    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, sendMessage]);
+    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, sendMessage, isStale]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
