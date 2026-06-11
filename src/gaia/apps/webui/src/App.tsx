@@ -110,9 +110,11 @@ function App() {
     }, [loadAgents]);
 
     // Refresh connected-providers at boot so the mail-provider selector
-    // (issue #1596) knows what's connected without opening Settings first.
+    // knows what's connected without opening Settings first.
     useEffect(() => {
-        useConnectionsStore.getState().refresh().catch(() => { /* non-critical */ });
+        useConnectionsStore.getState().refresh().catch((err) => {
+            log.chat.warn('Boot-time connections refresh failed', err);
+        });
     }, []);
 
     // Mobile gateway state
@@ -354,7 +356,7 @@ function App() {
             const activeAgent = agents.find((a) => a.id === activeAgentId);
             const tier = activeAgent?.model_tiers?.find((t) => t.name === activeModelTier);
             const tierModel = tier?.models?.[0];
-            // AC1/AC2 (#1596): resolve mail provider for email sessions.
+            // Resolve the mail provider for email sessions.
             // One connected mail provider → auto-select; multiple → use stored choice.
             const mailProvider = activeAgentId === 'email'
                 ? resolveMailProvider(

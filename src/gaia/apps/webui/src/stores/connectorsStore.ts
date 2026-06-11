@@ -22,7 +22,7 @@ interface ConnectionsState {
     error: string | null;
 
     /**
-     * Issue #1596 — user's explicit mail-provider choice for the next email session.
+     * User's explicit mail-provider choice for the next email session.
      * Undefined means "no explicit preference" (auto-select if only one is connected).
      */
     pendingMailProvider: string | undefined;

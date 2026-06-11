@@ -19,7 +19,7 @@ import './ChatView.css';
 import DashboardProgress from './DashboardProgress';
 
 
-/** Human-readable labels for mail providers (issue #1596). */
+/** Human-readable labels for mail providers. */
 const PROVIDER_LABELS: Record<string, string> = { google: 'Gmail', microsoft: 'Outlook' };
 
 const EMPTY_SUGGESTIONS = [
@@ -222,7 +222,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     );
     const DisplayedAgentIcon = getAgentIcon(displayedAgent?.icon);
 
-    // Mail-provider picker (issue #1596) — only rendered for email sessions.
+    // Mail-provider picker — only rendered for email sessions.
     const [mailProviderPickerOpen, setMailProviderPickerOpen] = useState(false);
     const mailProviderPickerRef = useRef<HTMLDivElement>(null);
     // Select the stable `connections` reference, then derive — mapping inside the
@@ -1428,7 +1428,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     )}
                 </div>
                 <div className="task-header-right">
-                    {/* Mail-provider selector — only for email sessions (issue #1596). */}
+                    {/* Mail-provider selector — only for email sessions. */}
                     {session?.agent_type === 'email' && connectedMailProviders.length > 0 && (
                         connectedMailProviders.length === 1 ? (
                             /* AC3: single connected provider → non-interactive pill */
