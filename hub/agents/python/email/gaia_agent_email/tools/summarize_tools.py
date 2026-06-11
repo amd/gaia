@@ -27,10 +27,7 @@ from typing import Any, Dict
 
 from gaia.agents.base.tools import tool
 from gaia_agent_email.gmail_backend import decode_message_body
-from gaia_agent_email.tools.read_tools import (
-    DEFAULT_BODY_LIMIT_CHARS,
-    wrap_untrusted_body,
-)
+from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 from gaia_agent_email.verbose import log_tool_call
 from gaia.connectors.errors import ConnectorsError
 from gaia.logger import get_logger
@@ -96,12 +93,11 @@ def _envelope_err(message: str) -> str:
 
 
 def _build_user_prompt(subject: str, sender: str, body: str) -> str:
-    clipped = (body or "").strip()[:DEFAULT_BODY_LIMIT_CHARS]
     return (
         "Summarize this email.\n\n"
         f"Subject: {subject}\n"
         f"From: {sender}\n"
-        f"Body:\n{wrap_untrusted_body(clipped)}\n"
+        f"Body:\n{wrap_untrusted_body((body or '').strip())}\n"
     )
 
 
