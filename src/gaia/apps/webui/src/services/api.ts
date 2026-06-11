@@ -66,11 +66,28 @@ async function apiFetch<T>(
         throw new Error(getFriendlyError(res.status, detail));
     }
 
-    // Some endpoints (DELETE) may not return JSON
+    // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
+    // body, so there is no JSON to parse. A non-JSON response *with* content,
+    // however, means the request never reached the intended handler — e.g. an
+    // HTML error page or the SPA index.html served with a 200 because the route
+    // wasn't mounted. Surface that loudly instead of silently casting to
+    // `undefined`, which turns every such backend regression into an opaque
+    // "Cannot destructure ..." at the callsite (#983).
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
-        log.api.timed(`${method} ${url} -> ${res.status} (no body)`, t);
-        return undefined as T;
+        const text = await res.text().catch(() => '');
+        if (res.status === 204 || text.trim() === '') {
+            log.api.timed(`${method} ${url} -> ${res.status} (no body)`, t);
+            return undefined as T;
+        }
+        log.api.error(`${method} ${url} -> ${res.status} (non-JSON body)`, {
+            contentType,
+            preview: text.slice(0, 200),
+        });
+        throw new Error(
+            `${method} ${path}: expected JSON, got ${contentType || 'no Content-Type'} ` +
+            `(HTTP ${res.status}: ${text.slice(0, 120)})`,
+        );
     }
 
     const data = await res.json();
