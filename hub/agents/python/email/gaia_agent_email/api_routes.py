@@ -680,9 +680,11 @@ class EmailSendRequest(_Strict):
     provider: Optional[str] = Field(
         default=None,
         description=(
-            "Optional provider override ('google' or 'microsoft'). Ignored "
-            "when the confirmation token carries a provider binding — the "
-            "token's bound provider always wins."
+            "Optional provider ('google' or 'microsoft'), used ONLY as the "
+            "fallback when the confirmation token carries no provider binding. "
+            "A token's bound provider always wins; with two mailboxes connected "
+            "and neither a binding nor this field set, the send is rejected as "
+            "ambiguous (400)."
         ),
     )
 
@@ -767,9 +769,10 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     # send takes a single 'to' header string. Run off the event loop so
     # get_access_token_sync (used inside the token resolvers) does not hit
     # the "called from a thread with a running event loop" guard (#1594).
-    # The token's bound provider (D5) overrides the count-based D2 logic;
-    # if no binding, fall back to the single-mailbox resolver.
-    backend = _resolve_backend_for_provider(bound_provider)
+    # Provider precedence: the token's bound provider (D5) always wins; only an
+    # unbound token falls back to request.provider; with neither, the
+    # count-based resolver decides (and 400s when 2+ are connected).
+    backend = _resolve_backend_for_provider(bound_provider or request.provider)
     to_header = ", ".join(_format_address(a) for a in request.to)
     result = await asyncio.to_thread(
         backend.send_message, to=to_header, subject=request.subject, body=request.body
