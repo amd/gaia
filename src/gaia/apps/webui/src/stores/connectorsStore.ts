@@ -76,7 +76,15 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
         }
     },
 
-    setConnections: (conns) => set({ connections: conns }),
+    setConnections: (conns) =>
+        set((s) => {
+            const connectedProviders = new Set(conns.map((c) => c.provider));
+            const pendingStillConnected = s.pendingMailProvider === undefined || connectedProviders.has(s.pendingMailProvider);
+            return {
+                connections: conns,
+                ...(pendingStillConnected ? {} : { pendingMailProvider: undefined }),
+            };
+        }),
     addConnection: (conn) =>
         set((s) => {
             const without = s.connections.filter((c) => c.provider !== conn.provider);
@@ -85,6 +93,8 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
     removeConnection: (provider) =>
         set((s) => ({
             connections: s.connections.filter((c) => c.provider !== provider),
+            // Clear the pending choice if the provider it referenced was disconnected.
+            ...(s.pendingMailProvider === provider ? { pendingMailProvider: undefined } : {}),
         })),
 
     setGrants: (provider, grants) =>

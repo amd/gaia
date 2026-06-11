@@ -234,7 +234,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             updateSessionInList(sessionId, { mail_provider: newProvider } as Partial<Session>);
             try {
                 await api.updateSession(sessionId, { mail_provider: newProvider });
-            } catch {
+            } catch (err) {
+                log.chat.error('Failed to update mail provider', err);
                 // Roll back optimistic update on failure.
                 updateSessionInList(sessionId, { mail_provider: previousProvider } as Partial<Session>);
             }
@@ -1410,10 +1411,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             <div className="agent-picker mail-provider-picker" ref={mailProviderPickerRef}>
                                 <button
                                     className="agent-picker-btn"
-                                    onClick={() => setMailProviderPickerOpen((o) => !o)}
+                                    onClick={() => !messages.length && setMailProviderPickerOpen((o) => !o)}
                                     aria-haspopup="listbox"
                                     aria-expanded={mailProviderPickerOpen}
-                                    title="Switch mailbox provider"
+                                    disabled={messages.length > 0}
+                                    title={messages.length > 0 ? 'Mailbox is locked once a session has messages — start a new task to change it' : 'Switch mailbox provider'}
                                 >
                                     <Mail size={10} />
                                     {displayedMailProvider
