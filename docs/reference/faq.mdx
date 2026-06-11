@@ -8,7 +8,7 @@ icon: "circle-question"
 
 <AccordionGroup>
   <Accordion title="Where are my chats stored?" icon="database">
-    Your chat database is at `~/.gaia/chat/chat.db` (a SQLite file). It is never sent off your machine. Documents you upload are at `~/.gaia/documents/`.
+    Your chat database is at `~/.gaia/chat/gaia_chat.db` (a SQLite file). It is never sent off your machine. Documents you upload are at `~/.gaia/chat/uploads/`.
 
     See the [installation guide](/guides/install#where-things-live) for the full list of where GAIA stores data on your machine.
   </Accordion>
@@ -21,7 +21,20 @@ icon: "circle-question"
     - **Linux (Debian/Ubuntu):** `sudo apt remove gaia-desktop` (or `apt purge` to also remove data)
     - **Linux (AppImage):** Delete the `.AppImage` file
 
-    By default, uninstalling keeps your chats and documents. To remove everything, run `~/.gaia/venv/bin/gaia uninstall --purge` from a terminal.
+    By default, uninstalling keeps your chats and documents. To remove everything, run `gaia uninstall --purge` from a terminal:
+
+    <Tabs>
+      <Tab title="Windows">
+        ```powershell
+        ~\.gaia\venv\Scripts\gaia uninstall --purge
+        ```
+      </Tab>
+      <Tab title="macOS / Linux">
+        ```bash
+        ~/.gaia/venv/bin/gaia uninstall --purge
+        ```
+      </Tab>
+    </Tabs>
   </Accordion>
 
   <Accordion title="Why is the first launch slow?" icon="hourglass">
