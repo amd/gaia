@@ -52,7 +52,12 @@ jobs:
           ENTRY=$(python util/list_agent_packages.py --format matrix --only "$AGENT_ID")
           PATHV=$(echo "$ENTRY" | python -c "import json,sys;e=json.load(sys.stdin)['include'][0];print(e['path'])")
           DIST=$(echo  "$ENTRY" | python -c "import json,sys;e=json.load(sys.stdin)['include'][0];print(e['dist'])")
-          VERSION=$(python -c "import tomllib;print(tomllib.load(open('$PATHV/pyproject.toml','rb'))['project']['version'])")
+          VERSION=$(PATHV="$PATHV" python <<'PY'
+          import os, tomllib
+          with open(os.path.join(os.environ["PATHV"], "pyproject.toml"), "rb") as f:
+              print(tomllib.load(f)["project"]["version"])
+          PY
+          )
           echo "path=$PATHV"    >> "$GITHUB_OUTPUT"
           echo "dist=$DIST"     >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -66,13 +71,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           AGENT_ID: ${{ inputs.agent_id }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          DIST: ${{ steps.meta.outputs.dist }}
+          PKG_PATH: ${{ steps.meta.outputs.path }}
         run: |
           set -euo pipefail
           # Tag the actually-built commit (the checked-out ref), not GITHUB_SHA —
           # which is the dispatch branch head and diverges when `ref` is set.
           SHA="$(git rev-parse HEAD)"
-          TAG="agent-pkg-${AGENT_ID}-v${{ steps.meta.outputs.version }}"
-          DIST_DIR="${{ steps.meta.outputs.path }}/dist"
+          TAG="agent-pkg-${AGENT_ID}-v${VERSION}"
+          DIST_DIR="${PKG_PATH}/dist"
           # Fail loud if the build produced nothing — never upload an empty release.
           ls "$DIST_DIR"/*.whl "$DIST_DIR"/*.tar.gz
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -80,6 +88,6 @@ jobs:
           else
             gh release create "$TAG" "$DIST_DIR"/* --prerelease --target "$SHA" \
               --title "$TAG" \
-              --notes "Interim GitHub-native share of ${{ steps.meta.outputs.dist }} built from $SHA. Not a PyPI release (#1179)."
+              --notes "Interim GitHub-native share of ${DIST} built from $SHA. Not a PyPI release (#1179)."
           fi
           echo "Release: https://github.com/amd/gaia/releases/tag/$TAG"
