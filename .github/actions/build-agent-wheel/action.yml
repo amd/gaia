@@ -1,0 +1,65 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+name: 'Build Agent Wheel'
+description: 'Canonical build recipe for a gaia-agent-* wheel + sdist: build, verify amd-gaia dep, twine check.'
+
+inputs:
+  path:
+    description: 'Package directory (e.g. hub/agents/python/email)'
+    required: true
+  dist:
+    description: 'Distribution name (e.g. gaia-agent-email), used in error messages'
+    required: true
+  python-version:
+    description: 'Python version to use'
+    required: false
+    default: '3.x'
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: 'pip'
+
+    - name: Build wheel + sdist
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade build
+        rm -rf "${{ inputs.path }}/dist"
+        python -m build --outdir "${{ inputs.path }}/dist" "${{ inputs.path }}"
+
+    - name: Verify metadata declares the amd-gaia framework dependency
+      shell: bash
+      # Issue #1179: every agent wheel must depend on amd-gaia>={min_gaia_version}.
+      run: |
+        set -euo pipefail
+        python - "${{ inputs.path }}/dist" "${{ inputs.dist }}" << 'PYEOF'
+        import glob, sys, zipfile
+        dist_dir, dist_name = sys.argv[1], sys.argv[2]
+        wheels = glob.glob(f"{dist_dir}/*.whl")
+        if not wheels:
+            sys.exit(f"ERROR: no wheel built in {dist_dir}")
+        z = zipfile.ZipFile(wheels[0])
+        meta_name = next(n for n in z.namelist() if n.endswith("METADATA"))
+        meta = z.read(meta_name).decode()
+        if not any(
+            line.startswith("Requires-Dist: amd-gaia")
+            for line in meta.splitlines()
+        ):
+            sys.exit(
+                f"ERROR: {dist_name} wheel does not declare an 'amd-gaia' "
+                f"dependency (Requires-Dist). Add it to its pyproject.toml."
+            )
+        print(f"{dist_name}: amd-gaia dependency present")
+        PYEOF
+
+    - name: Check with twine
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade twine
+        twine check "${{ inputs.path }}"/dist/*
