@@ -9,6 +9,7 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { FileBrowser } from './components/FileBrowser';
 import { MemoryDashboard } from './components/MemoryDashboard';
+import { ScheduleManager } from './components/ScheduleManager';
 import { SettingsPage } from './components/SettingsPage';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
@@ -17,9 +18,11 @@ import { PermissionPrompt } from './components/PermissionPrompt';
 import { NotificationCenter } from './components/NotificationCenter';
 import { useChatStore } from './stores/chatStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { useConnectionsStore } from './stores/connectorsStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash, findSessionByHash } from './utils/format';
+import { resolveMailProvider } from './utils/mailProviderDefault';
 
 /** Wrapper that delays unmount to allow CSS exit animations to play. */
 function AnimatedPresence({ show, children, duration = 250 }: {
@@ -63,12 +66,15 @@ function App() {
         removeSession,
         updateSessionInList,
         setMessages,
+        resetStreaming,
         showDocLibrary,
         showFileBrowser,
         showSettings,
         setShowSettings,
         showMemoryDashboard,
         setShowMemoryDashboard,
+        showSchedules,
+        setShowSchedules,
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
@@ -102,6 +108,14 @@ function App() {
         const interval = setInterval(loadAgents, 30_000);
         return () => clearInterval(interval);
     }, [loadAgents]);
+
+    // Refresh connected-providers at boot so the mail-provider selector
+    // knows what's connected without opening Settings first.
+    useEffect(() => {
+        useConnectionsStore.getState().refresh().catch((err) => {
+            log.chat.warn('Boot-time connections refresh failed', err);
+        });
+    }, []);
 
     // Mobile gateway state
     const [showMobileAccess, setShowMobileAccess] = useState(false);
@@ -342,11 +356,20 @@ function App() {
             const activeAgent = agents.find((a) => a.id === activeAgentId);
             const tier = activeAgent?.model_tiers?.find((t) => t.name === activeModelTier);
             const tierModel = tier?.models?.[0];
+            // Resolve the mail provider for email sessions.
+            // One connected mail provider → auto-select; multiple → use stored choice.
+            const mailProvider = activeAgentId === 'email'
+                ? resolveMailProvider(
+                    useConnectionsStore.getState().connections.map((c) => c.provider),
+                    useConnectionsStore.getState().pendingMailProvider,
+                )
+                : undefined;
             const session = await api.createSession({
                 title: 'New Task',
                 agent_type: activeAgentId,
                 device: activeDevice,
                 ...(tierModel ? { model: tierModel } : {}),
+                ...(mailProvider ? { mail_provider: mailProvider } : {}),
             });
             log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
             addSession(session);
@@ -499,6 +522,9 @@ function App() {
             setIsViewTransitioning(true);
             // Allow fade-out to complete, then swap content
             const timer = setTimeout(() => {
+                // Drop the previous session's in-flight stream state so the
+                // incoming view starts clean instead of mirroring it (#1580).
+                resetStreaming();
                 setDisplayedSessionId(currentSessionId);
                 // Brief delay before removing transition class (allows new content to mount)
                 requestAnimationFrame(() => {
@@ -509,7 +535,7 @@ function App() {
             }, 220); // matches CSS transition duration
             return () => clearTimeout(timer);
         }
-    }, [currentSessionId, displayedSessionId]);
+    }, [currentSessionId, displayedSessionId, resetStreaming]);
 
     return (
         <div className="app">
@@ -531,7 +557,7 @@ function App() {
 
             <Sidebar
                 onNewTask={handleNewTask}
-                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); window.history.replaceState(null, '', window.location.pathname); }}
+                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); setShowSchedules(false); window.history.replaceState(null, '', window.location.pathname); }}
                 tunnelActive={tunnelActive}
                 tunnelLoading={tunnelLoading}
                 onMobileToggle={handleMobileToggle}
@@ -542,6 +568,8 @@ function App() {
                     <SettingsPage />
                 ) : showMemoryDashboard ? (
                     <MemoryDashboard />
+                ) : showSchedules ? (
+                    <ScheduleManager />
                 ) : (
                     <>
                         {/* Connection / LLM status banner */}
