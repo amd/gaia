@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import ClassVar, List, Optional
+from typing import Any, ClassVar, List, Optional
 
 from gaia_agent_email import action_store
 from gaia_agent_email.config import EmailAgentConfig
@@ -215,11 +215,19 @@ class EmailTriageAgent(
         self.config = config
 
         # Backend resolution. Production binds to live; eval injects fakes.
-        # ``resolve_mail_backend`` picks Gmail vs Outlook from
-        # ``config.mail_provider`` (#1275) — the tools treat either as a
-        # ``GmailBackend``. The attribute stays ``self._gmail`` for tool-mixin
-        # compatibility regardless of the underlying provider.
-        self._gmail = config.resolve_mail_backend()
+        # ``resolve_mail_backends`` returns provider→backend for every mailbox
+        # the ``mail_provider`` filter admits (#1603 Phase 2): None scans every
+        # connected mailbox, an explicit value restricts to one. Each backend
+        # satisfies the ``GmailBackend`` Protocol so the tools treat Gmail and
+        # Outlook interchangeably.
+        self._backends: dict[str, Any] = dict(config.resolve_mail_backends())
+        # ``self._gmail`` stays the PRIMARY backend (first in registry order) so
+        # existing single-backend tool closures keep working unchanged.
+        self._gmail = next(iter(self._backends.values()))
+        # message_id → provider, populated by triage / scan / read so action
+        # tools route each message to the mailbox it came from (no cross-mailbox
+        # 404s when multiple are connected). See ``_backend_for_message``.
+        self._message_mailbox: dict[str, str] = {}
         # ``resolve_calendar_backend`` picks Google vs Outlook from
         # ``config.calendar_provider`` (#1276) — the tools treat either as a
         # ``CalendarBackend``. An injected backend (eval/test seam) wins inside

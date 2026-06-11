@@ -241,11 +241,25 @@ class EmailAgentConfig:
         ``ConfigurationError`` rather than silently triaging one mailbox.
 
         The per-provider eval seam (``gmail_backend`` / ``outlook_backend``) is
-        honored via ``_build_mail_backend``. Distinct from the singular
+        honored via ``_build_mail_backend``. An injected backend also marks its
+        provider as available, so eval / unit tests that inject a fake do NOT
+        need a live keyring connection. Distinct from the singular
         ``resolve_mail_backend``, which stays connector-agnostic for the
         single-backend eval path.
         """
-        connected = connected_mailbox_providers()
+        # Eval seam: when a fake backend is injected, it FULLY defines the
+        # available set — the live keyring is not consulted at all, so an
+        # injected-fake run stays hermetic regardless of the host's real OAuth
+        # connections. Otherwise the available set is the connected mailboxes.
+        injected = set()
+        if self.gmail_backend is not None:
+            injected.add("google")
+        if self.outlook_backend is not None:
+            injected.add("microsoft")
+        available = injected if injected else set(connected_mailbox_providers())
+        # Canonical registry order (google before microsoft) — deterministic
+        # regardless of keyring vs injection ordering.
+        connected = [p for p in ("google", "microsoft") if p in available]
         selected_filter = (self.mail_provider or "").strip().lower()
         if selected_filter:
             selected = [p for p in connected if p == selected_filter]
