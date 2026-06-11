@@ -120,6 +120,11 @@ setup(
             "fastapi>=0.115.0",
             "uvicorn>=0.32.0",
             "python-multipart>=0.0.9",
+            # `gaia api` auto-mounts the email wheel's router when
+            # gaia_agent_email is importable; that chain reaches a module-level
+            # `import keyring` in gaia.connectors.store, so the server crashes at
+            # startup without it. Same pin/upper bound as the [ui]/[dev] extras.
+            "keyring>=24.0.0,<26.0.0",
         ],
         "ui": [
             "fastapi>=0.115.0",
