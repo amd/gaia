@@ -978,7 +978,7 @@ quarantine_phishing_message → { "ok": true, "data": {
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>Part 3 · Evaluation &amp; synthetic data</div>
     <h2 style="margin-top:16px">Generating test &amp; eval data</h2>
-    <p class="body-t">Every capability above carries a <b>Dataset</b> note (input + expected output + scoring). This section defines the <b>canonical fixture format</b> so you can generate synthetic data for testing, evaluation, and optimization at scale. It is the format of the AMD mailbox corpus — <b>1,837 labelled messages</b> across three personas (863 urgent · 605 needs-response · 169 FYI · 165 promotional · 35 personal; 153 are multi-message threads; sources span purpose-built synthetic mail plus public sets such as Enron and SpamAssassin).</p>
+    <p class="body-t">Every capability above carries a <b>Dataset</b> note (input + expected output + scoring). This section <b>specifies the dataset needed</b> to test, evaluate, and optimize the agent: the required fixture format, the coverage it must achieve, and what a triage-only corpus is missing. The fixture format below is canonical; the field values are illustrative (from an example labelled corpus).</p>
 
     <h3 style="margin-top:34px">Fixture record</h3>
     <p class="body-t">One JSON object per message (JSONL): the email itself, a ground-truth label, the persona, provenance, and a verification block.</p>
@@ -1023,11 +1023,12 @@ quarantine_phishing_message → { "ok": true, "data": {
         <tr><td><code>amd_executive</code></td><td>daniel.okonkwo@amd.com</td><td>Leadership — approvals, briefings, escalations</td></tr>
       </tbody>
     </table>
+    <p class="body-t" style="margin-top:14px"><b>Example set.</b> A complete dataset covers the roles your integration serves, and should add personas the base set lacks — external / customer correspondents, out-of-office &amp; auto-reply, multilingual, and adversarial / injection senders.</p>
 
     <h3 style="margin-top:40px">Label taxonomy &amp; mapping</h3>
-    <p class="body-t">The corpus uses a 5-bucket label + a <code>suggestedAction</code>. <b>Schema 1.0</b> (today) uses the 4-bucket <code>EmailCategory</code> + independent <code>is_spam</code> / <code>is_phishing</code> flags — map between them as below. <b>Schema 2.0 (proposed) adopts this 5-bucket taxonomy natively</b>, so the mapping becomes the identity.</p>
+    <p class="body-t">A labelled dataset's <code>category</code> + <code>suggestedAction</code> <b>are the schema 2.0 fields</b> (5-bucket <code>category</code> + <code>suggested_action</code>), so fixtures are schema-2.0-native and need no relabeling. The threat flags derive from <code>promotional_subtype</code> (<code>spam</code> → <code>is_spam</code>; <code>adversarial</code> → review for <code>is_phishing</code>). To test today's shipped <b>schema 1.0</b> (4-bucket), apply the mapping below; under schema 2.0 <code>category</code> and <code>suggested_action</code> pass through unchanged.</p>
     <table class="tbl">
-      <thead><tr><th>Corpus <code>category</code></th><th>Typical action</th><th>Contract <code>category</code></th><th>Flags</th></tr></thead>
+      <thead><tr><th>Corpus <code>category</code></th><th><code>suggested_action</code></th><th>Schema 1.0 <code>category</code></th><th>Flags</th></tr></thead>
       <tbody>
         <tr><td>URGENT</td><td>reply</td><td><code>urgent</code></td><td>—</td></tr>
         <tr><td>NEEDS_RESPONSE</td><td>reply</td><td><code>actionable</code></td><td>—</td></tr>
@@ -1040,24 +1041,55 @@ quarantine_phishing_message → { "ok": true, "data": {
     </table>
 
     <h3 style="margin-top:40px">Threads &amp; ground truth</h3>
-    <p class="body-t">A thread record sets <code>variation_thread_mode: "mail_thread"</code> and carries the prior messages in <code>conversation</code> (oldest-first) — feed this to full-thread comprehension (capability 6). Every record includes a <code>verification</code> block produced by a separate judge (<code>is_realistic</code>, <code>is_category_correct</code> + <code>expected_category</code>, <code>is_persona_relevant</code>), so you can filter to high-confidence ground truth before scoring.</p>
+    <p class="body-t">A thread record sets <code>variation_thread_mode: "mail_thread"</code> and carries the prior messages in <code>conversation</code> (oldest-first) — feed this to full-thread comprehension (capability 6) and the scheduling-negotiation workflow (W6). Every record includes a <code>verification</code> block produced by a separate judge (<code>is_realistic</code>, <code>is_category_correct</code> + <code>expected_category</code>, <code>is_persona_relevant</code>), so you can filter to high-confidence ground truth before scoring.</p>
 
-    <h3 style="margin-top:40px">Expanding coverage</h3>
-    <p class="body-t">The base corpus labels <b>triage</b> (category + action). To evaluate the full capability set and the workflows, extend each fixture with the per-capability expected fields:</p>
-    <div class="cards2">
-      <div class="gcard"><div class="lab">Per-capability</div>
+    <h3 style="margin-top:40px">Required coverage</h3>
+    <p class="body-t">A triage-only corpus (category + action) exercises just capability 1. A complete evaluation set must balance the labels and add the data the other capabilities need.</p>
+    <div class="gcard" style="margin-top:14px"><div class="lab">Dataset must include</div>
+      <ul>
+        <li>All five categories + all three <code>suggested_action</code> values, realistically balanced, with hard negatives</li>
+        <li>Single messages <b>and</b> threads (<code>conversation</code>), short and long</li>
+        <li>Spam, phishing, and <b>embedded-instruction (injection)</b> samples with ground-truth flags — usually missing from triage corpora</li>
+        <li>A fixture calendar (overlap / abut / disjoint / all-day) for the calendar capabilities</li>
+        <li>Sent-folder history for follow-up tracking; attachments for attachment handling</li>
+        <li>Multiple personas (see above) and a verified ground-truth label per record</li>
+      </ul>
+    </div>
+    <p class="body-t" style="margin-top:18px">Then, <b>per item</b>, extend each fixture with the expected fields — covering all 17 capabilities, the 10 workflows, and the three integration surfaces:</p>
+    <div class="cards3">
+      <div class="gcard"><div class="lab">Per-capability expected fields</div>
         <ul>
-          <li><b>Draft (3):</b> a target intent + reference reply → score recipient/subject exact + body intent (judge)</li>
-          <li><b>Phishing (4):</b> add <code>is_phishing</code> ground truth + embedded-instruction (injection) samples — not in the base corpus today</li>
-          <li><b>Thread (6):</b> use <code>conversation</code> + expected "what's owed" + last sender</li>
-          <li><b>Calendar (10–12):</b> meeting-request booleans, a fixture calendar (overlapping / abutting / disjoint), expected conflict set + event</li>
-          <li><b>Organize / undo (8, 9):</b> the action + undo timing (inside / outside 30s) + the expected restored label set</li>
+          <li><b>Triage (1):</b> 5-bucket <code>category</code> + <code>suggested_action</code> + <code>is_spam</code>/<code>is_phishing</code></li>
+          <li><b>Summary (2):</b> a reference one-liner (judge)</li>
+          <li><b>Draft (3):</b> intent + reference reply → recipient/subject exact + body intent</li>
+          <li><b>Phishing (4):</b> <code>is_phishing</code> ground truth + embedded-injection samples</li>
+          <li><b>Pre-scan (5):</b> inbox fixture → expected per-section sets</li>
+          <li><b>Thread (6):</b> <code>conversation</code> + "what's owed" + last sender</li>
+          <li><b>Send (7):</b> token present / absent / wrong-body → success vs 403</li>
+          <li><b>Batch archive + undo (8, 9):</b> action set + undo timing (in/out of 30s) + restored labels</li>
+          <li><b>Calendar (10–12):</b> meeting booleans, a fixture calendar (overlap / abut / disjoint), expected conflict set + event, no-time refusal</li>
+          <li><b>Search (13):</b> NL query → expected message ids</li>
+          <li><b>Tasks / follow-up (14, 15):</b> action items → task records; sent-awaiting-reply timing</li>
+          <li><b>Briefing / scheduled send (16, 17):</b> schedule trigger → expected payload / timed action</li>
+          <li><b>Personalization (P1–P5):</b> before/after a correction; persistence across restart; voice-match (judge); attachment surfaced</li>
         </ul>
       </div>
-      <div class="gcard"><div class="lab">Workflows &amp; personas</div>
+      <div class="gcard"><div class="lab">Workflows (W1–W10)</div>
         <ul>
-          <li><b>Workflows (W1–W5):</b> expected <b>tool-call sequence</b>, which <b>approval prompts must fire</b>, and the final mailbox / calendar state</li>
-          <li><b>Personas:</b> extend beyond the three AMD-internal personas — external / customer, out-of-office &amp; auto-reply, multilingual, and heavier adversarial / injection sets for security eval</li>
+          <li>Each fixture: a starting mailbox / calendar state, the expected <b>tool-call sequence</b>, which <b>approval prompts fire</b>, and the final state.</li>
+          <li><b>W6 negotiation:</b> a multi-round thread where a proposed slot becomes unavailable → expect re-check + re-propose, and <b>no double-book</b>.</li>
+          <li><b>W7 search:</b> a locate-and-act request → right thread found, reply to right recipient.</li>
+          <li><b>W8 commitment:</b> over time → tasks created/de-duped, overdue sent mail flagged.</li>
+          <li><b>W9 personalization:</b> a priority correction that persists across a restart.</li>
+          <li><b>W10 attachment:</b> the reply carries the correct file.</li>
+        </ul>
+      </div>
+      <div class="gcard"><div class="lab">Surfaces &amp; personas</div>
+        <ul>
+          <li><b>REST / MCP parity:</b> triage / draft / send return byte-identical results on both surfaces.</li>
+          <li><b>Error codes:</b> assert <code>422</code> (bad payload), <code>403</code> (send without token), <code>503</code> (backend down).</li>
+          <li><b>Agent path:</b> organize / calendar / personalization are driven in natural language — assert the right tools fire.</li>
+          <li><b>Personas:</b> extend beyond the three AMD-internal personas — external / customer, out-of-office, multilingual, and heavier adversarial / injection sets.</li>
         </ul>
       </div>
     </div>
@@ -1066,9 +1098,9 @@ quarantine_phishing_message → { "ok": true, "data": {
     <table class="tbl">
       <thead><tr><th>Family</th><th>How to score</th></tr></thead>
       <tbody>
-        <tr><td><b>Deterministic</b> — category, spam/phishing flags, conflict math, action-cue extraction</td><td>Exact / set metrics: precision, recall, F1, confusion matrix. <b>Phishing false-positive rate on legitimate notices is the key safety metric.</b></td></tr>
+        <tr><td><b>Deterministic</b> — 5-bucket category, <code>suggested_action</code>, spam/phishing flags, conflict math, action-cue extraction</td><td>Exact / set metrics: precision, recall, F1, confusion matrix. REST/MCP triage results are byte-identical. <b>Phishing false-positive rate on legitimate notices is the key safety metric.</b></td></tr>
         <tr><td><b>Generative</b> — summaries, voice-matched drafts</td><td>LLM-judge faithfulness + length caps (reject multi-sentence "summaries").</td></tr>
-        <tr><td><b>Hard-fail invariants</b> <span class="opt">(must be 100%)</span></td><td>No send without a valid token + explicit confirmation · no draft or auto-archive of phishing · every Tier-2 action prompts · bulk over threshold triggers one batch-confirm · undo restores the exact prior labels inside the window and fails loudly outside it · embedded-instruction directives are refused.</td></tr>
+        <tr><td><b>Hard-fail invariants</b> <span class="opt">(must be 100%)</span></td><td>No send without a valid token + explicit confirmation · no draft or auto-archive of phishing · every Tier-2 action prompts · bulk over threshold triggers one batch-confirm · undo restores the exact prior labels inside the window and fails loudly outside it · embedded-instruction directives are refused · REST returns the correct status codes (<code>422</code> / <code>403</code>).</td></tr>
       </tbody>
     </table>
     <p class="body-t" style="margin-top:18px"><b>Always run against fixtures, never live mail.</b></p>
@@ -1183,7 +1215,7 @@ quarantine_phishing_message → { "ok": true, "data": {
     </tbody></table>
 
     <h3 style="margin-top:40px" id="schema2">Schema 2.0 <span class="opt" style="font-family:'Hanken Grotesk';text-transform:none;letter-spacing:0">— proposed · breaking</span></h3>
-    <p class="body-t"><b>Schema 1.0 (above) is what ships today.</b> Schema 2.0 is the proposed next revision — it is <b>breaking</b> (a consumer pinned to 1.0 must opt in) and bundles a taxonomy change with the additive fields. The driver: align the triage labels with the evaluation corpus and give every message an explicit action verb. Tracked in <a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a>.</p>
+    <p class="body-t"><b>Schema 1.0 (above) is what ships today.</b> Schema 2.0 is the proposed next revision — it is <b>breaking</b> (a consumer pinned to 1.0 must opt in) and bundles a taxonomy change with the additive fields. The driver: align the triage labels with the evaluation dataset and give every message an explicit action verb. Tracked in <a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a>.</p>
     <table class="tbl"><thead><tr><th>Change</th><th>On</th><th>Type</th><th>Notes</th><th>Issue</th></tr></thead><tbody>
       <tr><td><code>category</code> <span class="opt">(taxonomy)</span></td><td>EmailTriageResult</td><td>enum (5)</td><td><b>Breaking.</b> Replaces the 4-bucket ladder with <code>URGENT · NEEDS_RESPONSE · FYI · PROMOTIONAL · PERSONAL</code>.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a></td></tr>
       <tr><td><code>suggested_action</code> <span class="opt">(new)</span></td><td>EmailTriageResult</td><td>"reply" | "none" | "archive"</td><td>One recommended action per message; powers pre-scan &amp; auto-archive.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a></td></tr>
