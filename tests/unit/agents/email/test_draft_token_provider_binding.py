@@ -24,9 +24,8 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("gaia_agent_email")
 
-from fastapi.testclient import TestClient
-
 import gaia_agent_email.api_routes as email_routes
+from fastapi.testclient import TestClient
 from gaia_agent_email.gmail_backend import LiveGmailBackend
 from gaia_agent_email.outlook_backend import LiveOutlookBackend
 
@@ -126,6 +125,7 @@ class TestDraftTokenProviderBinding:
             "connected_mailbox_providers",
             lambda: ["google", "microsoft"],
         )
+
         # Backend resolver: when provider binding overrides, it calls with a
         # single-element list. We track via calls.
         def _resolve_with_provider(provider=None):
@@ -135,7 +135,9 @@ class TestDraftTokenProviderBinding:
                 return _FG()
             return _build(["google", "microsoft"])  # would 400 without binding
 
-        monkeypatch.setattr(email_routes, "_resolve_backend_for_provider", _resolve_with_provider)
+        monkeypatch.setattr(
+            email_routes, "_resolve_backend_for_provider", _resolve_with_provider
+        )
 
         client = TestClient(app)
         draft_resp = client.post(

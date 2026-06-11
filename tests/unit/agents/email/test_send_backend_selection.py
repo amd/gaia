@@ -22,9 +22,8 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("gaia_agent_email")
 
-from fastapi import HTTPException
-
 import gaia_agent_email.api_routes as email_routes
+from fastapi import HTTPException
 from gaia_agent_email.gmail_backend import LiveGmailBackend
 from gaia_agent_email.outlook_backend import LiveOutlookBackend
 

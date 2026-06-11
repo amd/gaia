@@ -25,7 +25,6 @@ import pytest
 pytest.importorskip("keyring")
 from gaia.connectors.store import DEFAULT_ACCOUNT, SERVICE_NAME, _connection_username
 
-
 # ---------------------------------------------------------------------------
 # Helpers to write blobs directly into the in-memory keyring so we can
 # simulate "google connected", "microsoft connected", etc. without running the

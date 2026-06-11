@@ -59,7 +59,9 @@ def test_no_hidden_mailbox_provider_env_var():
             for match in _PATTERN.finditer(text):
                 # Compute line number for the match.
                 line_no = text[: match.start()].count("\n") + 1
-                hits.append(f"{path.relative_to(_REPO_ROOT)}:{line_no}: {match.group()!r}")
+                hits.append(
+                    f"{path.relative_to(_REPO_ROOT)}:{line_no}: {match.group()!r}"
+                )
 
     assert not hits, (
         "Found banned mailbox-provider env var references in the codebase "

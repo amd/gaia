@@ -108,7 +108,9 @@ class TestMcpSendOutlook502Parity:
         fp = _payload_fingerprint(to, "Hello", "World")
         token = agent._confirmation_store.issue(fp)
 
-        monkeypatch.setattr(agent, "_resolve_send_backend", lambda: _FakeOutlookBackend())
+        monkeypatch.setattr(
+            agent, "_resolve_send_backend", lambda: _FakeOutlookBackend()
+        )
 
         result = agent._send(
             {
