@@ -1277,16 +1277,22 @@ class TestEmailTriageEndpoint:
         class _FakeChat:
             def send_messages(self, messages, system_prompt="", **kwargs):
                 resp = types.SimpleNamespace()
-                content = (messages[0].get("content", "") if messages else "")
+                content = messages[0].get("content", "") if messages else ""
                 if "Classify" in content:
                     resp.text = json.dumps(
-                        {"category": "actionable", "confidence": 0.9, "reasoning": "test"}
+                        {
+                            "category": "actionable",
+                            "confidence": 0.9,
+                            "reasoning": "test",
+                        }
                     )
                 else:
                     resp.text = "Alice is asking for a budget review by Friday."
                 return resp
 
-        monkeypatch.setattr(EmailTriageService, "_build_llm_chat", lambda self, **kw: _FakeChat())
+        monkeypatch.setattr(
+            EmailTriageService, "_build_llm_chat", lambda self, **kw: _FakeChat()
+        )
         self.client = TestClient(app)
 
     def test_single_email_in_structured_out(self):
