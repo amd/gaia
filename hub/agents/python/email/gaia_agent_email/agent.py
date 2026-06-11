@@ -518,7 +518,17 @@ class EmailTriageAgent(
                 force_llm=force_llm,
                 debug=debug_flag,
             )
-            scanned += per_backend
+            # Count the messages this backend actually returned, not the
+            # per-backend cap — the cap can exceed the inbox size, which would
+            # trip the budget guard a hair early on a later backend. The pre-scan
+            # totals carry the pre-cap section sizes; sum those plus informational.
+            backend_totals = out.get("totals", {})
+            scanned += (
+                int(backend_totals.get("urgent", 0))
+                + int(backend_totals.get("actionable", 0))
+                + int(backend_totals.get("suggested_archives", 0))
+                + int(out.get("informational_count", 0))
+            )
             merged_prefs_applied = out.get("preferences_applied", merged_prefs_applied)
             for item in out.get("urgent", []):
                 item["mailbox"] = provider
