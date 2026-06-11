@@ -870,21 +870,12 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(1, min(int(max_messages or 25), 100))
-                # Wire LLM follow-up (#1107) for heuristic-uncertain messages.
-                # Built at call time so agent.chat is initialized.
-                chat = getattr(agent, "chat", None)
-                classifier = make_llm_classifier(chat) if chat is not None else None
+                # Phase 2 (#1603): scan every connected mailbox, tag each item
+                # with its source mailbox, split the budget across mailboxes,
+                # and merge. LLM follow-up (#1107) is wired inside the agent
+                # orchestration so agent.chat is initialized at call time.
                 return _envelope_ok(
-                    triage_inbox_impl(
-                        gmail,
-                        max_messages=max_messages,
-                        session_preferences=getattr(
-                            agent, "_session_preferences", None
-                        ),
-                        force_llm=bool(getattr(agent.config, "force_llm", False)),
-                        classifier=classifier,
-                        debug=debug_flag,
-                    )
+                    agent._triage_all_backends(max_messages=max_messages)
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
@@ -924,16 +915,10 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(1, min(int(max_messages or 25), 100))
+                # Phase 2 (#1603): pre-scan every connected mailbox, tag each
+                # section item with its source mailbox, split the budget, merge.
                 return _envelope_ok(
-                    pre_scan_inbox_impl(
-                        gmail,
-                        max_messages=max_messages,
-                        session_preferences=getattr(
-                            agent, "_session_preferences", None
-                        ),
-                        force_llm=bool(getattr(agent.config, "force_llm", False)),
-                        debug=debug_flag,
-                    )
+                    agent._pre_scan_all_backends(max_messages=max_messages)
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))

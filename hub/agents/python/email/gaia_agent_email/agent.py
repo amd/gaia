@@ -228,6 +228,9 @@ class EmailTriageAgent(
         # tools route each message to the mailbox it came from (no cross-mailbox
         # 404s when multiple are connected). See ``_backend_for_message``.
         self._message_mailbox: dict[str, str] = {}
+        # draft_id → provider, so send_draft routes back to the mailbox the
+        # draft was created in.
+        self._draft_mailbox: dict[str, str] = {}
         # ``resolve_calendar_backend`` picks Google vs Outlook from
         # ``config.calendar_provider`` (#1276) — the tools treat either as a
         # ``CalendarBackend``. An injected backend (eval/test seam) wins inside
@@ -304,6 +307,244 @@ class EmailTriageAgent(
         self._register_calendar_tools()
         self._register_preference_tools()
         self._register_phishing_tools()
+
+    # -- Phase 2 multi-inbox routing (#1603) -------------------------------
+
+    def _remember_message_mailbox(self, message_id: Optional[str], provider: str) -> None:
+        """Record which mailbox a message_id came from, for action routing."""
+        if message_id:
+            self._message_mailbox[message_id] = provider
+
+    def _backend_for_message(
+        self, message_id: str, explicit_mailbox: Optional[str] = None
+    ):
+        """Return the backend the given message belongs to.
+
+        Resolution order:
+          1. ``explicit_mailbox`` when supplied (the LLM passed the tagged value
+             it saw in triage output).
+          2. The provider remembered from triage / scan / read.
+          3. The sole backend when exactly one is connected.
+          4. Otherwise FAIL LOUD — with multiple mailboxes connected and no
+             provenance, guessing would risk a cross-mailbox 404 / wrong-account
+             mutation.
+        """
+        provider = explicit_mailbox or self._message_mailbox.get(message_id)
+        if provider is None:
+            if len(self._backends) == 1:
+                return next(iter(self._backends.values()))
+            raise ValueError(
+                f"Cannot determine which mailbox message {message_id!r} belongs "
+                f"to; multiple mailboxes are connected ({', '.join(self._backends)}). "
+                "Re-run triage so the message is tagged, or pass mailbox= "
+                "explicitly."
+            )
+        backend = self._backends.get(provider)
+        if backend is None:
+            raise ValueError(
+                f"Message {message_id!r} is tagged mailbox {provider!r}, which is "
+                f"not connected. Connected: {', '.join(self._backends) or 'none'}."
+            )
+        return backend
+
+    def _provider_for_message(
+        self, message_id: str, explicit_mailbox: Optional[str] = None
+    ) -> str:
+        """Return the provider name a message routes to (the key in _backends).
+
+        Same resolution as ``_backend_for_message`` but yields the provider
+        STRING so action rows can record which mailbox they hit (undo routing).
+        """
+        backend = self._backend_for_message(message_id, explicit_mailbox)
+        for provider, candidate in self._backends.items():
+            if candidate is backend:
+                return provider
+        # _backend_for_message only ever returns a value from _backends.
+        raise ValueError(
+            f"resolved backend for message {message_id!r} is not in _backends"
+        )
+
+    def _send_backend(self, explicit_mailbox: Optional[str] = None):
+        """Resolve a backend for a send-from-scratch (``send_now``).
+
+        ``send_now`` has no source message, so it defaults to the primary
+        mailbox unless an explicit ``mailbox`` names another connected one.
+        """
+        if explicit_mailbox is None:
+            return self._gmail
+        backend = self._backends.get(explicit_mailbox)
+        if backend is None:
+            raise ValueError(
+                f"Mailbox {explicit_mailbox!r} is not connected. Connected: "
+                f"{', '.join(self._backends) or 'none'}."
+            )
+        return backend
+
+    def _remember_draft_mailbox(
+        self, draft_id: Optional[str], provider: str
+    ) -> None:
+        """Record which mailbox a draft was created in (for send_draft routing)."""
+        if draft_id:
+            self._draft_mailbox[draft_id] = provider
+
+    def _backend_for_draft(self, draft_id: str, explicit_mailbox: Optional[str] = None):
+        """Resolve the backend a draft lives in, for ``send_draft``.
+
+        Prefers an explicit mailbox, then the provider remembered when the draft
+        was created, then the sole backend. Fails loud when ambiguous.
+        """
+        provider = explicit_mailbox or self._draft_mailbox.get(draft_id)
+        if provider is None:
+            if len(self._backends) == 1:
+                return next(iter(self._backends.values()))
+            raise ValueError(
+                f"Cannot determine which mailbox draft {draft_id!r} belongs to; "
+                f"multiple mailboxes are connected ({', '.join(self._backends)}). "
+                "Re-create the draft or pass mailbox= explicitly."
+            )
+        backend = self._backends.get(provider)
+        if backend is None:
+            raise ValueError(
+                f"Draft {draft_id!r} is tagged mailbox {provider!r}, which is not "
+                f"connected. Connected: {', '.join(self._backends) or 'none'}."
+            )
+        return backend
+
+    def _backend_for_action(self, action: dict):
+        """Resolve the backend for a recorded action row (undo routing).
+
+        Prefers the mailbox stored on the row (#1603 D5); falls back to the
+        message's remembered provider, then to the sole backend. Legacy rows
+        with no mailbox default to 'google' when present, else fail loud if the
+        choice is ambiguous.
+        """
+        provider = action.get("mailbox")
+        message_id = action.get("message_id", "")
+        if provider is None:
+            return self._backend_for_message(message_id)
+        backend = self._backends.get(provider)
+        if backend is None:
+            raise ValueError(
+                f"Action for message {message_id!r} is tagged mailbox "
+                f"{provider!r}, which is not connected. Connected: "
+                f"{', '.join(self._backends) or 'none'}."
+            )
+        return backend
+
+    def _triage_all_backends(self, *, max_messages: int) -> dict:
+        """Triage every connected mailbox, tag each item, merge under budget.
+
+        ``max_messages`` is a TOTAL budget split across mailboxes (NEVER
+        per-mailbox) — "triage 20" with two connected stays ~20 total, not 40 —
+        because local inference is slow (~9-31 s/email) and a doubled budget
+        would blow the user's expected wait. Every returned item gains a
+        ``mailbox`` tag and its id is remembered for downstream action routing.
+        """
+        from gaia_agent_email.tools import read_tools
+        from gaia_agent_email.tools.read_tools import triage_inbox_impl
+        from gaia_agent_email.tools.triage_heuristics import group_by_category
+
+        # Reference the factory via the read_tools module so the existing
+        # ``read_tools.make_llm_classifier`` test seam (the pre-scan canary)
+        # keeps intercepting the expensive triage path.
+        chat = getattr(self, "chat", None)
+        classifier = (
+            read_tools.make_llm_classifier(chat) if chat is not None else None
+        )
+        prefs = getattr(self, "_session_preferences", None)
+        force_llm = bool(getattr(self.config, "force_llm", False))
+        debug_flag = bool(getattr(self.config, "debug", False))
+
+        backends = self._backends
+        per_backend = max(1, max_messages // len(backends))
+        merged: list[dict] = []
+        for provider, backend in backends.items():
+            if len(merged) >= max_messages:
+                break
+            out = triage_inbox_impl(
+                backend,
+                max_messages=per_backend,
+                session_preferences=prefs,
+                force_llm=force_llm,
+                classifier=classifier,
+                debug=debug_flag,
+            )
+            for item in out["results"]:
+                item["mailbox"] = provider
+                self._remember_message_mailbox(item.get("id"), provider)
+                merged.append(item)
+        merged = merged[:max_messages]
+        # Re-group the merged, capped list so the bucketed view matches what the
+        # caller actually sees.
+        return {"results": merged, "grouped": group_by_category(merged)}
+
+    def _pre_scan_all_backends(self, *, max_messages: int) -> dict:
+        """Pre-scan every connected mailbox, tag each item, merge under budget.
+
+        Same TOTAL-budget split as ``_triage_all_backends``. Each section item
+        (urgent / actionable / suggested_archives) gains a ``mailbox`` tag and
+        its message_id is remembered for action routing. Per-section caps and
+        the envelope shape are preserved by merging the per-backend envelopes.
+        """
+        from gaia_agent_email.tools.read_tools import (
+            PRE_SCAN_ACTIONABLE_CAP,
+            PRE_SCAN_ARCHIVE_CAP,
+            PRE_SCAN_URGENT_CAP,
+            pre_scan_inbox_impl,
+        )
+
+        prefs = getattr(self, "_session_preferences", None)
+        force_llm = bool(getattr(self.config, "force_llm", False))
+        debug_flag = bool(getattr(self.config, "debug", False))
+
+        backends = self._backends
+        per_backend = max(1, max_messages // len(backends))
+        urgent: list[dict] = []
+        actionable: list[dict] = []
+        suggested_archives: list[dict] = []
+        informational_count = 0
+        scanned = 0
+        merged_prefs_applied: dict = {}
+        for provider, backend in backends.items():
+            if scanned >= max_messages:
+                break
+            out = pre_scan_inbox_impl(
+                backend,
+                max_messages=per_backend,
+                session_preferences=prefs,
+                force_llm=force_llm,
+                debug=debug_flag,
+            )
+            scanned += per_backend
+            merged_prefs_applied = out.get("preferences_applied", merged_prefs_applied)
+            for item in out.get("urgent", []):
+                item["mailbox"] = provider
+                self._remember_message_mailbox(item.get("message_id"), provider)
+                urgent.append(item)
+            for item in out.get("actionable", []):
+                item["mailbox"] = provider
+                self._remember_message_mailbox(item.get("message_id"), provider)
+                actionable.append(item)
+            for item in out.get("suggested_archives", []):
+                item["mailbox"] = provider
+                self._remember_message_mailbox(item.get("message_id"), provider)
+                suggested_archives.append(item)
+            informational_count += int(out.get("informational_count", 0))
+        return {
+            "kind": "email_pre_scan",
+            "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
+            "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
+            "informational_count": informational_count,
+            "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
+            "suggested_drafts": [],
+            "preferences_applied": merged_prefs_applied,
+            "totals": {
+                "urgent": len(urgent),
+                "actionable": len(actionable),
+                "informational": informational_count,
+                "suggested_archives": len(suggested_archives),
+            },
+        }
 
     # -- Phase I3 batch-organize counter -----------------------------------
 
