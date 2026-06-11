@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, Brain, EyeOff } from 'lucide-react';
+import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, Brain, EyeOff, Clock } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -105,7 +105,7 @@ function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSele
 export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
     const {
         sessions, currentSessionId, setCurrentSession, removeSession, addSession,
-        setMessages, theme, toggleTheme, setShowSettings, setShowMemoryDashboard,
+        setMessages, theme, toggleTheme, setShowSettings, setShowMemoryDashboard, setShowSchedules,
         sidebarOpen, setSidebarOpen, setLoadingMessages,
         sidebarCollapsed, toggleSidebarCollapsed,
         sidebarWidth, setSidebarWidth,
@@ -452,6 +452,9 @@ export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobi
                     )}
                     <button className="btn-icon" onClick={() => setShowMemoryDashboard(true)} title="Memory Dashboard" aria-label="Memory Dashboard">
                         <Brain size={17} />
+                    </button>
+                    <button className="btn-icon" onClick={() => setShowSchedules(true)} title="Scheduled Tasks" aria-label="Scheduled Tasks">
+                        <Clock size={17} />
                     </button>
                     <button className="btn-icon" onClick={() => setShowSettings(true)} title="Settings" aria-label="Settings">
                         <Settings size={17} />

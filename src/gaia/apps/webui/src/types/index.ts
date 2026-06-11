@@ -16,6 +16,8 @@ export interface Session {
     agent_type?: string;
     /** Device used for this session (cpu / gpu / npu). */
     device?: string;
+    /** Mail provider for email-triage sessions ("google" | "microsoft"). */
+    mail_provider?: string;
 }
 
 /** Per-device configuration for an agent (CPU / GPU / NPU). */
@@ -497,6 +499,45 @@ export interface MCPServerStatus {
     connected: boolean;
     tool_count: number;
     error: string | null;
+}
+
+// ── Scheduled Tasks ──────────────────────────────────────────────────────
+
+/** A recurring scheduled task. */
+export interface Schedule {
+    id: string;
+    name: string;
+    interval_seconds: number;
+    prompt: string;
+    status: 'active' | 'paused' | 'cancelled';
+    created_at: string | null;
+    last_run_at: string | null;
+    next_run_at: string | null;
+    last_result: string | null;
+    run_count: number;
+    error_count: number;
+    session_id: string | null;
+}
+
+/** A single execution result for a scheduled task. */
+export interface ScheduleResult {
+    id: string;
+    task_id: string;
+    executed_at: string;
+    result: string | null;
+    error: string | null;
+}
+
+/** Parsed result from natural language schedule input. */
+export interface ParsedSchedule {
+    interval_seconds: number;
+    time_of_day: string | null;
+    start_hour: number | null;
+    end_hour: number | null;
+    days_of_week: number[] | null;
+    description: string;
+    next_run_at: string | null;
+    valid: boolean;
 }
 
 // ── Mobile Access / Tunnel Types ─────────────────────────────────────────

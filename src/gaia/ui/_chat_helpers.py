@@ -1414,12 +1414,17 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     sse_handler = None
     producer = None
     cleanup_done = False
+    # Cooperative cancel signal for the producer's agent loop. Set on stream
+    # timeout / client disconnect so the agent bails at its next step boundary
+    # and the producer thread is actually reaped (see agent._cancel_event).
+    cancel_event = threading.Event()
 
     def _cleanup_stream():
         nonlocal cleanup_done
         if cleanup_done:
             return
         cleanup_done = True
+        cancel_event.set()
         if sse_handler is not None:
             sse_handler.cancelled.set()
         _active_sse_handlers.pop(session_id, None)
@@ -1824,6 +1829,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 if sse_handler.cancelled.is_set():
                     return
 
+                # Let the agent loop observe stream-timeout/disconnect so a hung
+                # turn is torn down instead of leaking this producer thread.
+                agent._cancel_event = cancel_event
+
                 # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
                 # omitted, the agent's __init__ set model_id via kwargs.setdefault — a value
                 # invisible pre-construction. Using agent.model_id preserves the existing
@@ -1948,12 +1957,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 return None
 
             persisted_policy_block_content = _policy_block_response(blocked_steps)
-            if persisted_policy_block_msg_id is not None:
-                # ChatDatabase is single-writer SQLite today; make this replacement
-                # transactional before moving the chat DB to a multi-writer backend.
-                db.delete_message(request.session_id, persisted_policy_block_msg_id)
-            persisted_policy_block_msg_id = db.add_message(
+            persisted_policy_block_msg_id = db.upsert_message(
                 request.session_id,
+                persisted_policy_block_msg_id,
                 "assistant",
                 persisted_policy_block_content,
                 agent_steps=captured_steps if captured_steps else None,
@@ -2293,12 +2299,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             ):
                 msg_id = persisted_policy_block_msg_id
             else:
-                if persisted_policy_block_msg_id is not None:
-                    # ChatDatabase is single-writer SQLite today; make this replacement
-                    # transactional before moving the chat DB to a multi-writer backend.
-                    db.delete_message(request.session_id, persisted_policy_block_msg_id)
-                msg_id = db.add_message(
+                msg_id = db.upsert_message(
                     request.session_id,
+                    persisted_policy_block_msg_id,
                     "assistant",
                     full_response,
                     agent_steps=captured_steps if captured_steps else None,

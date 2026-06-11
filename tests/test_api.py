@@ -1196,9 +1196,10 @@ class TestErrorResponseFormat:
 # EMAIL AGENT REST SURFACE (#1229) — TestClient, no external server / Lemonade
 # =============================================================================
 #
-# These exercise the /v1/email/* endpoints added by src/gaia/api/email_routes.py.
+# These exercise the /v1/email/* endpoints exposed by the gaia-agent-email
+# wheel (gaia_agent_email.api_routes), mounted conditionally by openai_server.
 # The triage endpoint accepts / returns the FROZEN #1262 contract
-# (gaia.agents.email.contract). The send endpoint enforces the confirmation
+# (gaia_agent_email.contract). The send endpoint enforces the confirmation
 # gate (#1264) at the API boundary: a send without a valid confirmation token
 # is rejected with a 4xx — never silently auto-confirmed.
 
@@ -1259,15 +1260,45 @@ class TestEmailTriageEndpoint:
     """POST /v1/email/triage — single email / thread in, structured result out."""
 
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, monkeypatch):
         if not API_AVAILABLE:
             pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        # The /v1/email/* routes ship with the standalone gaia-agent-email
+        # wheel (#1102); skip when a framework-only env lacks it.
+        pytest.importorskip("gaia_agent_email")
+        import json
+        import types
+
+        from gaia_agent_email.api_routes import EmailTriageService
+
+        # Inject a fake chat so tests don't need a live Lemonade server.
+        # Returns a classification JSON for classify calls, a summary string
+        # for summarize calls.
+        class _FakeChat:
+            def send_messages(self, messages, system_prompt="", **kwargs):
+                resp = types.SimpleNamespace()
+                content = messages[0].get("content", "") if messages else ""
+                if "Classify" in content:
+                    resp.text = json.dumps(
+                        {
+                            "category": "actionable",
+                            "confidence": 0.9,
+                            "reasoning": "test",
+                        }
+                    )
+                else:
+                    resp.text = "Alice is asking for a budget review by Friday."
+                return resp
+
+        monkeypatch.setattr(
+            EmailTriageService, "_build_llm_chat", lambda self, **kw: _FakeChat()
+        )
         self.client = TestClient(app)
 
     def test_single_email_in_structured_out(self):
         """A single email in returns a contract-valid structured result."""
-        from gaia.agents.email.contract import SCHEMA_VERSION, parse_response
-        from gaia.agents.email.tools.triage_heuristics import ALL_CATEGORIES
+        from gaia_agent_email.contract import SCHEMA_VERSION, parse_response
+        from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
 
         resp = self.client.post("/v1/email/triage", json=_single_email_payload())
         assert resp.status_code == 200, resp.text
@@ -1283,7 +1314,7 @@ class TestEmailTriageEndpoint:
 
     def test_thread_in_structured_out(self):
         """A full thread in returns request_kind == 'thread'."""
-        from gaia.agents.email.contract import parse_response
+        from gaia_agent_email.contract import parse_response
 
         resp = self.client.post("/v1/email/triage", json=_thread_payload())
         assert resp.status_code == 200, resp.text
@@ -1297,7 +1328,7 @@ class TestEmailTriageEndpoint:
     def test_single_email_proposes_draft_to_sender(self):
         """An inbound email from someone else yields a draft addressed back
         to that sender."""
-        from gaia.agents.email.contract import parse_response
+        from gaia_agent_email.contract import parse_response
 
         resp = self.client.post(
             "/v1/email/triage",
@@ -1312,8 +1343,8 @@ class TestEmailTriageEndpoint:
     def test_promotional_email_is_low_priority(self):
         """The agent's real heuristic categorizer drives the result —
         a promo subject lands in 'low priority' deterministically."""
-        from gaia.agents.email.contract import parse_response
-        from gaia.agents.email.tools.triage_heuristics import CATEGORY_LOW_PRIORITY
+        from gaia_agent_email.contract import parse_response
+        from gaia_agent_email.tools.triage_heuristics import CATEGORY_LOW_PRIORITY
 
         payload = _single_email_payload(
             subject="50% off — sale ends tonight!",
@@ -1368,6 +1399,9 @@ class TestEmailSendConfirmationGate:
     def setup(self, monkeypatch):
         if not API_AVAILABLE:
             pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        # The /v1/email/* routes ship with the standalone gaia-agent-email
+        # wheel (#1102); skip when a framework-only env lacks it.
+        pytest.importorskip("gaia_agent_email")
         # Inject an in-memory Gmail backend so the (authorized) send path
         # never touches live mail. The gate-rejection cases never reach the
         # backend — the confirmation check is enforced first.
@@ -1377,7 +1411,8 @@ class TestEmailSendConfirmationGate:
         repo_root = Path(__file__).resolve().parent.parent
         if str(repo_root) not in sys.path:
             sys.path.insert(0, str(repo_root))
-        from gaia.api import email_routes
+        from gaia_agent_email import api_routes as email_routes
+
         from tests.fixtures.email.fake_gmail import FakeGmailBackend
 
         self.fake_backend = FakeGmailBackend()
@@ -1506,7 +1541,7 @@ class TestEmailSendConfirmationGate:
         resolved: a no-token send returns 403 even when the backend is
         unavailable (would otherwise 503). The gate must never be masked by
         backend health."""
-        from gaia.api import email_routes
+        from gaia_agent_email import api_routes as email_routes
 
         def _boom():
             raise AssertionError("backend resolved before the gate — gate bypassed")

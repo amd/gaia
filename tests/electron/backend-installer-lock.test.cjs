@@ -3,6 +3,7 @@
 
 const {
   isFileLockedError,
+  isTransientNetworkError,
 } = require("../../src/gaia/apps/webui/services/backend-installer.cjs");
 
 describe("isFileLockedError", () => {
@@ -25,5 +26,51 @@ describe("isFileLockedError", () => {
     ).toBe(false);
     expect(isFileLockedError("")).toBe(false);
     expect(isFileLockedError(undefined)).toBe(false);
+  });
+});
+
+describe("isTransientNetworkError", () => {
+  test("detects the broken-pipe signature that failed release v0.20.1", () => {
+    const out = [
+      "error: Failed to fetch: `https://pypi.org/simple/scipy/`",
+      "  Caused by: error sending request for url (https://pypi.org/simple/scipy/)",
+      "  Caused by: client error (SendRequest)",
+      "  Caused by: connection error",
+      "  Caused by: stream closed because of a broken pipe",
+    ].join("\n");
+    expect(isTransientNetworkError(out)).toBe(true);
+  });
+
+  test("detects common transient network phrasings", () => {
+    [
+      "error sending request for url",
+      "connection reset by peer",
+      "connection refused",
+      "Could not connect to server",
+      "operation timed out",
+      "request timeout",
+      "Temporary failure in name resolution",
+      "failed to lookup address information",
+      "network is unreachable",
+    ].forEach((phrase) => {
+      expect(isTransientNetworkError(phrase)).toBe(true);
+    });
+  });
+
+  test("does NOT retry dependency-resolution or file-lock failures", () => {
+    // No solution found / version conflicts are deterministic — retrying is futile.
+    expect(
+      isTransientNetworkError(
+        "error: No solution found when resolving dependencies"
+      )
+    ).toBe(false);
+    // File-lock (os error 32) is a distinct, user-actionable failure.
+    expect(
+      isTransientNetworkError(
+        "The process cannot access the file because it is being used by another process. (os error 32)"
+      )
+    ).toBe(false);
+    expect(isTransientNetworkError("")).toBe(false);
+    expect(isTransientNetworkError(undefined)).toBe(false);
   });
 });
