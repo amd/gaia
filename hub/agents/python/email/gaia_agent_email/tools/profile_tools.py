@@ -47,6 +47,14 @@ _INTERACTION_ENTITY_PREFIX = "email:interaction:"
 _INTERACTION_DOMAIN = "email_agent_interactions"
 _INTERACTION_CATEGORY = "interaction"
 
+# Sanity ceiling on how many distinct-sender interaction records we read in
+# one profiling pass. This is NOT a silent truncation cap: if a real inbox
+# ever has more distinct senders than this, ``_read_interactions`` logs a
+# WARNING so the coverage loss is loud (per the repo's no-silent-fallbacks
+# rule) and the ceiling can be raised deliberately. 50k senders is far beyond
+# any realistic single mailbox, so in practice it is never hit.
+_MAX_INTERACTION_RECORDS = 50000
+
 
 def _envelope_ok(data: Any) -> str:
     return json.dumps({"ok": True, "data": data}, default=str)
@@ -134,6 +142,11 @@ class ProfileToolsMixin:
         Each element has: ``sender``, ``count``, ``category_counts``,
         ``last_ts``. Returns an empty list when memory is disabled or no
         records exist. Designed for reuse by #1290 and other callers.
+
+        Reads up to ``_MAX_INTERACTION_RECORDS`` distinct-sender records. That
+        ceiling is far beyond any realistic mailbox; if it is ever reached we
+        log a WARNING (never silently drop coverage) so it can be raised
+        deliberately.
         """
         store = getattr(self, "_memory_store", None)
         if store is None:
@@ -141,8 +154,15 @@ class ProfileToolsMixin:
         rows = store.get_by_category(
             _INTERACTION_CATEGORY,
             domain=_INTERACTION_DOMAIN,
-            limit=1000,
+            limit=_MAX_INTERACTION_RECORDS,
         )
+        if len(rows) >= _MAX_INTERACTION_RECORDS:
+            log.warning(
+                "profile_tools: interaction-record read hit the %d-record "
+                "ceiling; the inbox profile may be incomplete. Raise "
+                "_MAX_INTERACTION_RECORDS to cover all senders.",
+                _MAX_INTERACTION_RECORDS,
+            )
         out: List[Dict[str, Any]] = []
         for row in rows:
             try:
