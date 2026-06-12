@@ -1,24 +1,24 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Session-scoped preference tools mixin for ``EmailTriageAgent``.
+"""Persistent preference tools mixin for ``EmailTriageAgent``.
 
-These tools mutate ``self._session_preferences`` on the agent instance —
-an in-memory dict that lives for the lifetime of the agent and is wiped
-on restart. The deliberate scoping keeps the daily-driver demo focused
-on proving the value before investing in a persistent memory subsystem;
-once the broader memory work lands, persisting these preferences is a
-direct upgrade path.
+These tools mutate ``self._session_preferences`` on the agent instance and
+persist the current snapshot to the agent's MemoryStore so that preferences
+survive across restarts.  On agent construction, ``_load_persisted_preferences``
+seeds ``_session_preferences`` from the stored snapshot.
+
+When memory is disabled (``self._memory_store is None``) the tools still work
+in-process — they just cannot persist between sessions.
 
 Tools registered:
 
 - ``set_priority_sender(email)`` — flag a sender as always urgent
 - ``set_low_priority_sender(email)`` — flag a sender as always low-priority
 - ``set_category_default(category, action)`` — per-category default action
-- ``clear_session_preferences()`` — wipe in-process preferences
+- ``clear_session_preferences()`` — wipe preferences (in-process and persisted)
 
 The first three tools are consulted by ``triage_inbox`` and
-``pre_scan_inbox`` (see ``read_tools.py``). ``clear_session_preferences``
-exists so the user can reset without restarting the agent.
+``pre_scan_inbox`` (see ``read_tools.py``).
 """
 
 from __future__ import annotations
@@ -34,6 +34,13 @@ from gaia_agent_email.tools.triage_heuristics import (
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
+
+# Stable entity key used to store the single preferences record in MemoryStore.
+# Using a unique entity means get_by_entity() always returns at most one record,
+# giving us a clean upsert path: retrieve → update(id) if exists, store() if not.
+_PREF_ENTITY = "email:preferences"
+_PREF_DOMAIN = "email_agent_prefs"
+_PREF_CATEGORY = "preference"
 
 
 # Categories that accept a session-level default action. Keep this set
@@ -103,6 +110,45 @@ def _snapshot(prefs: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _persist_preferences(agent: Any) -> None:
+    """Write the current snapshot to MemoryStore under a stable entity key.
+
+    Uses an idempotent upsert:
+    - If a record already exists for ``_PREF_ENTITY``, update it in-place
+      (``store.update(id, content=...)``) so the record count stays at one.
+    - If no record exists yet, create it with ``store.store(...)``.
+
+    When ``agent._memory_store is None`` (memory disabled via
+    ``GAIA_MEMORY_DISABLED=1`` or Lemonade unreachable at startup),
+    the write is silently skipped — preferences remain in-process only.
+    This is an explicit opt-out / degraded state, not a generic fallback.
+    """
+    store = getattr(agent, "_memory_store", None)
+    if store is None:
+        return
+
+    prefs = getattr(agent, "_session_preferences", None)
+    if prefs is None:
+        return
+
+    content = json.dumps(_snapshot(prefs))
+    context = getattr(agent, "_memory_context", "email")
+
+    existing = store.get_by_entity(_PREF_ENTITY)
+    if existing:
+        store.update(existing[0]["id"], content=content)
+    else:
+        store.store(
+            category=_PREF_CATEGORY,
+            content=content,
+            domain=_PREF_DOMAIN,
+            entity=_PREF_ENTITY,
+            context=context,
+            confidence=1.0,
+            source="preference_tools",
+        )
+
+
 class PreferenceToolsMixin:
     """Mixin that registers session-preference tools.
 
@@ -111,12 +157,49 @@ class PreferenceToolsMixin:
     via a closure over the agent instance.
     """
 
+    def _load_persisted_preferences(self) -> None:
+        """Seed ``_session_preferences`` from the persisted memory record.
+
+        Called from ``EmailTriageAgent.__init__`` after ``init_memory()`` so
+        that preferences set in a previous session are immediately available.
+
+        When no record exists (first run or after ``clear_session_preferences``
+        wiped everything) or when memory is disabled, the empty default set by
+        ``init_session_preferences()`` is left untouched.
+        """
+        store = getattr(self, "_memory_store", None)
+        if store is None:
+            return
+
+        existing = store.get_by_entity(_PREF_ENTITY)
+        if not existing:
+            return
+
+        try:
+            data = json.loads(existing[0]["content"])
+        except (json.JSONDecodeError, KeyError):
+            log.warning(
+                "preference_tools: failed to parse persisted preferences; "
+                "starting with empty defaults"
+            )
+            return
+
+        prefs = getattr(self, "_session_preferences", None)
+        if prefs is None:
+            return
+
+        _validate_session_preferences(prefs)
+        # lists → sets for the two sender fields
+        prefs["priority_senders"] = set(data.get("priority_senders") or [])
+        prefs["low_priority_senders"] = set(data.get("low_priority_senders") or [])
+        prefs["category_defaults"] = dict(data.get("category_defaults") or {})
+
     def _register_preference_tools(self) -> None:
         agent = self  # captured for live access to ``_session_preferences``
 
         @tool
         def set_priority_sender(email: str) -> str:
-            """Mark a sender as always urgent for this session.
+            """Mark a sender as always urgent across sessions.
 
             Senders flagged here bypass the triage heuristic entirely —
             ``triage_inbox`` and ``pre_scan_inbox`` will classify their
@@ -124,7 +207,7 @@ class PreferenceToolsMixin:
             Gmail labels. Useful for high-signal senders the heuristic
             can't recognize on its own (e.g. ``boss@company.com``).
 
-            **Session-scoped — preferences are wiped on agent restart.**
+            Preferences persist across agent restarts.
 
             Args:
                 email: A bare email address, e.g. ``alice@example.com``.
@@ -145,6 +228,7 @@ class PreferenceToolsMixin:
                 # priority designation supersedes — silently drop the
                 # contradicting flag.
                 prefs["low_priority_senders"].discard(normalized)
+                _persist_preferences(agent)
                 return _envelope_ok(
                     {
                         "added": normalized,
@@ -157,14 +241,14 @@ class PreferenceToolsMixin:
 
         @tool
         def set_low_priority_sender(email: str) -> str:
-            """Mark a sender as always low-priority for this session.
+            """Mark a sender as always low-priority across sessions.
 
             Senders flagged here are classified as ``low priority`` and
             surfaced in ``pre_scan_inbox``'s ``suggested_archives``
             section. Useful for newsletters or bot accounts the
             heuristic can't recognize on its own.
 
-            **Session-scoped — preferences are wiped on agent restart.**
+            Preferences persist across agent restarts.
 
             Args:
                 email: A bare email address, e.g.
@@ -183,6 +267,7 @@ class PreferenceToolsMixin:
                 # Same conflict resolution as set_priority_sender —
                 # later wins.
                 prefs["priority_senders"].discard(normalized)
+                _persist_preferences(agent)
                 return _envelope_ok(
                     {
                         "added": normalized,
@@ -195,7 +280,7 @@ class PreferenceToolsMixin:
 
         @tool
         def set_category_default(category: str, action: str) -> str:
-            """Set a default action for a triage category.
+            """Set a default action for a triage category, persisted across restarts.
 
             Currently supports two categories — ``informational`` and
             ``low priority`` — with two possible actions: ``archive``
@@ -205,7 +290,7 @@ class PreferenceToolsMixin:
             ``keep``: the safety cost of silently archiving important
             mail is too high.
 
-            **Session-scoped — preferences are wiped on agent restart.**
+            Preferences persist across agent restarts.
 
             Args:
                 category: One of ``"informational"`` or ``"low priority"``.
@@ -232,6 +317,7 @@ class PreferenceToolsMixin:
                     prefs["category_defaults"].pop(cat, None)
                 else:
                     prefs["category_defaults"][cat] = act
+                _persist_preferences(agent)
                 return _envelope_ok(
                     {
                         "category": cat,
@@ -245,11 +331,12 @@ class PreferenceToolsMixin:
 
         @tool
         def clear_session_preferences() -> str:
-            """Wipe in-process session preferences.
+            """Wipe preferences in-process and from persistent storage.
 
             Resets ``priority_senders``, ``low_priority_senders``, and
             ``category_defaults`` to empty without restarting the agent.
-            Use when the user wants a fresh triage run with no overrides.
+            The cleared state is also persisted so a fresh session starts
+            empty. Use when the user wants a clean slate.
 
             Mutates the existing dict in place rather than rebinding to
             a fresh one. Read-side tools currently look up the dict via
@@ -266,6 +353,7 @@ class PreferenceToolsMixin:
                 prefs["priority_senders"].clear()
                 prefs["low_priority_senders"].clear()
                 prefs["category_defaults"].clear()
+                _persist_preferences(agent)
                 return _envelope_ok(
                     {
                         "cleared": True,
