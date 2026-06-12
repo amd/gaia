@@ -90,7 +90,7 @@ Mirrors the proven pattern used by esbuild / swc / Rollup: the main package carr
 // @gaia/agent-email-darwin-arm64/package.json
 {
   "name": "@gaia/agent-email-darwin-arm64",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "os": ["darwin"],
   "cpu": ["arm64"],
   "files": ["bin/"]          // the frozen Python or native C++ binary
@@ -191,7 +191,7 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 - **Build matrix** produces all four platform binaries per implementation, runs `chmod +x`, signs, and stages the npm packages.
 - **Atomic publish:** main package + 4 platform packages publish on a single tag with locked, matching versions — a partial publish (client without its binary, or vice versa) must fail the whole release.
 - **Namespacing:** keep the agent-package release tags namespaced (`agent-pkg-email-*`) so they never fire the paused PyPI workflows (`publish.yml` / `publish_agents.yml`), exactly as the current GitHub-share workflow does.
-- **Reuse, don't fork:** extend the existing `build-agent-wheel` composite action and `list_agent_packages.py` discovery rather than adding a parallel recipe, so build logic can't drift.
+- **Reuse, don't fork:** extend the existing `build-agent-wheel` composite action and `util/list_agent_packages.py` discovery rather than adding a parallel recipe, so build logic can't drift.
 - **Distribution registries:** scoped npm (`@gaia/*`) — private during pre-GA, public at launch. GitHub Releases remain the channel for raw signed binaries and the Python wheel/sdist.
 
 ---
