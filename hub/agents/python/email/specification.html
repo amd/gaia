@@ -283,15 +283,17 @@
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>Email Agent · Capability &amp; API Specification</div>
     <h1 style="margin-top:24px">The Email Agent,<br><span class="c1">Defined End to End</span></h1>
-    <p class="lead">GAIA's Email Agent reads, classifies, summarizes, drafts, sends, organizes, and schedules — every email-body inference running <em>locally on the Ryzen&nbsp;AI NPU</em>. This spec defines the twelve shipped-or-wired capabilities (plus five planned) with examples, the guardrail model that governs when the user is asked to approve, the workflows that chain them, the personalization track, and the REST + contract reference.</p>
+    <p class="lead">GAIA's Email Agent reads, classifies, summarizes, drafts, sends, organizes, and schedules — every email-body inference running <em>locally on the Ryzen&nbsp;AI NPU or GPU</em>. This spec defines the seventeen capabilities with examples, the guardrail model that governs when the user is asked to approve, the workflows that chain them, the personalization track, and the REST API specification.</p>
     <div class="chips">
-      <div class="chip"><div class="k">Contract</div><div class="v">schema 1.0</div></div>
-      <div class="chip"><div class="k">Milestone</div><div class="v g"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a></div></div>
+      <div class="chip"><div class="k">Contract</div><div class="v">schema 2.0</div></div>
+      <div class="chip"><div class="k">Capabilities</div><div class="v g">17</div></div>
+      <div class="chip"><div class="k">Personalization</div><div class="v">5</div></div>
+      <div class="chip"><div class="k">Workflows</div><div class="v">10</div></div>
       <div class="chip"><div class="k">Inference</div><div class="v">100% on-device</div></div>
-      <div class="chip"><div class="k">External actions</div><div class="v r">confirmation-gated</div></div>
+      <div class="chip"><div class="k">Milestone</div><div class="v g"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a></div></div>
     </div>
-    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.0</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-11</b> &nbsp;·&nbsp; <b style="color:var(--ink)">schema 1.0</b> shipped · <b style="color:var(--ink)">schema 2.0</b> proposed &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
-    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6"><b style="color:var(--ink)">Schema 1.0</b> is what ships today (4-bucket triage). <b style="color:var(--ink)">Schema 2.0</b> is the proposed next revision — it adopts a 5-bucket taxonomy and a <code>suggested_action</code> verb (breaking), and folds in the additive fields. See the API reference.</div>
+    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.0</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-11</b> &nbsp;·&nbsp; contract <b style="color:var(--ink)">schema 2.0</b> · <b style="color:var(--ink)">1.0</b> shipped today &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
+    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">This spec defines contract <b style="color:var(--ink)">schema 2.0</b> — a 5-bucket taxonomy plus a <code>suggested_action</code> verb. <b style="color:var(--ink)">Schema 1.0</b> (4-bucket) is what's implemented today; the API reference shows both and the migration. The change is breaking, so consumers opt in.</div>
   </div>
 </section>
 
