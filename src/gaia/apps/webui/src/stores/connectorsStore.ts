@@ -54,13 +54,25 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
     refresh: async () => {
         set({ loading: true, error: null });
         try {
-            const { connections } = await api.listConnections();
+            // T-8b framework endpoint — the legacy /api/connections routes the
+            // old listConnections() targeted are no longer mounted (#1630).
+            const { connectors } = await api.listConnectors();
+            // The mail selector consumes connected OAuth providers only; MCP
+            // and not-yet-connected tiles never feed it.
+            const connections: ConnectorInfo[] = connectors
+                .filter((c) => c.type === 'oauth_pkce' && c.configured)
+                .map((c) => ({
+                    provider: c.id,
+                    account_email: c.account_id ?? '',
+                    scopes: c.scopes,
+                    connected_at: null,
+                }));
             // Pull grants for every connected provider.
             const grants: Record<string, Record<string, string[]>> = {};
             await Promise.all(
                 connections.map(async (c) => {
                     try {
-                        const r = await api.listAgentGrants(c.provider);
+                        const r = await api.listConnectorGrants(c.provider);
                         grants[c.provider] = r.grants;
                     } catch {
                         grants[c.provider] = {};
