@@ -23,6 +23,14 @@ import re
 from pathlib import Path
 
 SETUP_PY = Path(__file__).resolve().parents[2] / "setup.py"
+EMAIL_PYPROJECT = (
+    Path(__file__).resolve().parents[2]
+    / "hub"
+    / "agents"
+    / "python"
+    / "email"
+    / "pyproject.toml"
+)
 
 
 def _parse_api_extra() -> list[str]:
@@ -63,4 +71,20 @@ def test_api_extra_declares_keyring() -> None:
         "setup.py[api] is missing 'keyring' (needed by "
         "openai_server -> email_router -> gaia.connectors.api -> store -> `import keyring`).\n"
         f"Current [api] extra: {api_reqs}"
+    )
+
+
+def test_email_wheel_requires_amd_gaia_api_extra() -> None:
+    """gaia-agent-email must depend on ``amd-gaia[api]`` — see #1617.
+
+    A bare ``amd-gaia`` dependency let a consuming app's
+    ``pip install gaia-agent-email`` resolve core WITHOUT the [api] extra, so
+    the REST-server deps (fastapi/uvicorn) and keyring were absent and
+    ``gaia api`` crashed. Requesting the [api] extra pulls them automatically.
+    """
+    deps = re.findall(r'"(amd-gaia[^"]*)"', EMAIL_PYPROJECT.read_text())
+    assert deps, f"no amd-gaia dependency found in {EMAIL_PYPROJECT}"
+    assert any("[api]" in d for d in deps), (
+        "gaia-agent-email must depend on amd-gaia[api] so consumers get the "
+        f"REST-server deps + keyring automatically (got {deps})."
     )
