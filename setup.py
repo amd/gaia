@@ -170,6 +170,9 @@ setup(
         "telegram": [
             "python-telegram-bot>=20.3",
         ],
+        "litellm": [
+            "litellm>=1.35.0,<2.0",
+        ],
         "dev": [
             "pytest",
             "pytest-cov",
