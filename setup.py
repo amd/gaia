@@ -111,6 +111,8 @@ setup(
         # multipart uploads via python_multipart at import time. Base — not an
         # extra — so a plain `pip install amd-gaia` ships a working gaia-mcp.
         "python-multipart>=0.0.9",
+        # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
+        "keyring>=24.0.0,<26.0.0",
     ],
     extras_require={
         "image": [
