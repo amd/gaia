@@ -1055,44 +1055,102 @@ quarantine_phishing_message → { "ok": true, "data": {
         <li>Multiple personas (see above) and a verified ground-truth label per record</li>
       </ul>
     </div>
-    <p class="body-t" style="margin-top:18px">Then, <b>per item</b>, extend each fixture with the expected fields — covering all 17 capabilities, the 10 workflows, and the three integration surfaces:</p>
-    <div class="cards3">
-      <div class="gcard"><div class="lab">Per-capability expected fields</div>
-        <ul>
-          <li><b>Triage (1):</b> 5-bucket <code>category</code> + <code>suggested_action</code> + <code>is_spam</code>/<code>is_phishing</code></li>
-          <li><b>Summary (2):</b> a reference one-liner (judge)</li>
-          <li><b>Draft (3):</b> intent + reference reply → recipient/subject exact + body intent</li>
-          <li><b>Phishing (4):</b> <code>is_phishing</code> ground truth + embedded-injection samples</li>
-          <li><b>Pre-scan (5):</b> inbox fixture → expected per-section sets</li>
-          <li><b>Thread (6):</b> <code>conversation</code> + "what's owed" + last sender</li>
-          <li><b>Send (7):</b> token present / absent / wrong-body → success vs 403</li>
-          <li><b>Batch archive + undo (8, 9):</b> action set + undo timing (in/out of 30s) + restored labels</li>
-          <li><b>Calendar (10–12):</b> meeting booleans, a fixture calendar (overlap / abut / disjoint), expected conflict set + event, no-time refusal</li>
-          <li><b>Search (13):</b> NL query → expected message ids</li>
-          <li><b>Tasks / follow-up (14, 15):</b> action items → task records; sent-awaiting-reply timing</li>
-          <li><b>Briefing / scheduled send (16, 17):</b> schedule trigger → expected payload / timed action</li>
-          <li><b>Personalization (P1–P5):</b> before/after a correction; persistence across restart; voice-match (judge); attachment surfaced</li>
-        </ul>
-      </div>
-      <div class="gcard"><div class="lab">Workflows (W1–W10)</div>
-        <ul>
-          <li>Each fixture: a starting mailbox / calendar state, the expected <b>tool-call sequence</b>, which <b>approval prompts fire</b>, and the final state.</li>
-          <li><b>W6 negotiation:</b> a multi-round thread where a proposed slot becomes unavailable → expect re-check + re-propose, and <b>no double-book</b>.</li>
-          <li><b>W7 search:</b> a locate-and-act request → right thread found, reply to right recipient.</li>
-          <li><b>W8 commitment:</b> over time → tasks created/de-duped, overdue sent mail flagged.</li>
-          <li><b>W9 personalization:</b> a priority correction that persists across a restart.</li>
-          <li><b>W10 attachment:</b> the reply carries the correct file.</li>
-        </ul>
-      </div>
-      <div class="gcard"><div class="lab">Surfaces &amp; personas</div>
-        <ul>
-          <li><b>REST / MCP parity:</b> triage / draft / send return byte-identical results on both surfaces.</li>
-          <li><b>Error codes:</b> assert <code>422</code> (bad payload), <code>403</code> (send without token), <code>503</code> (backend down).</li>
-          <li><b>Agent path:</b> organize / calendar / personalization are driven in natural language — assert the right tools fire.</li>
-          <li><b>Personas:</b> extend beyond the three AMD-internal personas — external / customer, out-of-office, multilingual, and heavier adversarial / injection sets.</li>
-        </ul>
-      </div>
-    </div>
+    <p class="body-t" style="margin-top:18px">For full validation, fixtures take one of two shapes. A <b>message fixture</b> is the base record plus an <code>expected</code> block holding ground truth for the single-message capabilities. A <b>scenario fixture</b> drives a chained, multi-turn workflow end-to-end. The <a class="iss" href="#covmatrix">coverage matrix</a> below maps every capability and workflow to its fixture and key assertion.</p>
+
+    <h3 style="margin-top:34px">Message fixture &mdash; <code>expected</code> block</h3>
+    <p class="body-t">Add to the base record; each sub-key is the ground truth for one single-message capability (omit the ones a message does not exercise).</p>
+    <pre class="code">"attachments": [ { "name": "MSA.pdf", "mime": "application/pdf" } ],   // cap P4
+"expected": {
+  "triage": {
+    "category": "NEEDS_RESPONSE",           // cap 1  (5-bucket)
+    "suggested_action": "reply",            // cap 1
+    "is_spam": false, "is_phishing": false, // cap 4
+    "action_items": ["Return the signed MSA by Friday"]   // caps 1, 14
+  },
+  "summary": "Vendor asks you to review and sign the MSA by Friday.",  // cap 2  (judge)
+  "draft": {                                                           // cap 3
+    "intent": "confirm we will sign and return it Friday",
+    "to": "dana@vendor.com", "subject_prefix": "Re:",
+    "body_must_mention": ["sign", "Friday"]
+  },
+  "meeting": { "is_meeting_request": false },   // cap 10
+  "search_terms": ["MSA", "contract", "Dana"],  // cap 13  (retrieval target)
+  "is_injection": false                         // cap 4   (prompt-injection sample?)
+}</pre>
+
+    <h3 style="margin-top:40px">Scenario fixture &mdash; chained workflows</h3>
+    <p class="body-t">An initial world state plus an ordered list of <code>turns</code>. Each turn asserts the expected <b>tool-call sequence</b>, the <b>approvals</b> that must fire (Tier&nbsp;2), any tool that <b>must not</b> run, and what the reply must contain. The example is W6 &mdash; a scheduling negotiation where the first agreed slot is taken, so the agent must re-propose and never double-book.</p>
+    <pre class="code">{
+  "kind": "scenario",
+  "id": "w6-negotiation-001",
+  "workflow": "W6",                    // W1 ... W10
+  "persona": "amd_pm",
+  "initial_state": {
+    "calendar": [ { "id": "ev-1", "start": "2026-06-16T15:00:00Z", "end": "2026-06-16T16:00:00Z" } ],
+    "inbox":  [ /* message records */ ],
+    "sent":   [ /* prior sent mail - for follow-up scenarios */ ]
+  },
+  "turns": [
+    { "inbound": { "from": "pm@co.com", "body": "Can we find time next week?" },
+      "expected_tool_calls": ["detect_meeting_request", "detect_calendar_conflicts", "draft_reply", "send_now"],
+      "expected_approvals":  ["send_now"],
+      "reply_must_propose":  ["2026-06-17T10:00:00Z", "2026-06-18T14:00:00Z"] },
+
+    { "inbound": { "from": "pm@co.com", "body": "Tue 16th at 3pm works" },   // now taken
+      "expected_tool_calls": ["detect_calendar_conflicts", "draft_reply", "send_now"],
+      "reply_must_propose_alternative": true,
+      "must_not": ["create_event_from_email"] },                            // no double-book
+
+    { "inbound": { "from": "pm@co.com", "body": "OK - Wed 10am" },
+      "expected_tool_calls": ["detect_calendar_conflicts", "create_event_from_email", "draft_reply", "send_now"],
+      "expected_approvals":  ["create_event_from_email", "send_now"] }
+  ],
+  "expected_final_state": {
+    "calendar_has_event": { "start": "2026-06-17T10:00:00Z" },
+    "no_double_book": true
+  }
+}</pre>
+
+    <h3 style="margin-top:40px" id="covmatrix">Coverage matrix</h3>
+    <p class="body-t">Every capability and workflow, its fixture, and the assertion that validates it. <span class="opt">Fixture: <b>msg</b> = message &middot; <b>scn</b> = scenario &middot; <b>seq</b> = multi-record sequence.</span></p>
+    <table class="tbl">
+      <thead><tr><th>#</th><th>Item</th><th>Fixture</th><th>Key assertion</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>4-way triage</td><td>msg</td><td><code>expected.triage.category</code> + <code>suggested_action</code> + flags match</td></tr>
+        <tr><td>2</td><td>Per-email summary</td><td>msg</td><td><code>expected.summary</code> &mdash; judge faithfulness + length cap</td></tr>
+        <tr><td>3</td><td>Draft reply</td><td>msg</td><td>recipient/subject exact + body intent; no draft for phishing</td></tr>
+        <tr><td>4</td><td>Phishing detection</td><td>msg</td><td><code>is_phishing</code> matches; injection refused; FP rate on legit notices</td></tr>
+        <tr><td>5</td><td>Inbox pre-scan</td><td>scn</td><td>per-section sets correct; phishing never in suggested archives</td></tr>
+        <tr><td>6</td><td>Full-thread comprehension</td><td>msg <span class="opt">(thread)</span></td><td>summary faithful to whole thread; category/draft on last inbound</td></tr>
+        <tr><td>7</td><td>Send a reply</td><td>scn</td><td>token present &rarr; sent; absent / wrong-body &rarr; <code>403</code>, no send</td></tr>
+        <tr><td>8</td><td>Batch archive</td><td>scn</td><td>exact archived set; bulk &rarr; one batch-confirm; undo restores labels</td></tr>
+        <tr><td>9</td><td>Quarantine + undo</td><td>scn</td><td>confirm required; undo in-window restores; out-of-window fails loudly</td></tr>
+        <tr><td>10</td><td>Calendar &mdash; detect</td><td>msg</td><td><code>expected.meeting.is_meeting_request</code> matches; negatives not flagged</td></tr>
+        <tr><td>11</td><td>Calendar &mdash; conflicts</td><td>scn <span class="opt">(+cal)</span></td><td>exact conflict set; abutting/disjoint excluded; malformed skipped</td></tr>
+        <tr><td>12</td><td>Calendar &mdash; create</td><td>scn <span class="opt">(+cal)</span></td><td>created after confirm; no-time &rarr; refusal; inverted window rejected</td></tr>
+        <tr><td>13</td><td>Search past email</td><td>scn</td><td>NL query &rarr; expected message ids returned</td></tr>
+        <tr><td>14</td><td>Task extraction</td><td>msg</td><td>action items &rarr; task records, de-duped, linked to source</td></tr>
+        <tr><td>15</td><td>Follow-up tracking</td><td>seq</td><td>sent mail with no reply flagged after the window; never auto-sends</td></tr>
+        <tr><td>16</td><td>Proactive daily briefing</td><td>scn <span class="opt">(scheduled)</span></td><td>trigger &rarr; expected pre-scan payload; off by default</td></tr>
+        <tr><td>17</td><td>Scheduled send / snooze</td><td>scn <span class="opt">(timed)</span></td><td>fires at/after time, not before; cancellable; send gated at create</td></tr>
+        <tr><td>P1</td><td>Behavioral prioritization</td><td>seq</td><td>sender rank/category shifts after a correction</td></tr>
+        <tr><td>P2</td><td>Inbox profiling</td><td>seq</td><td>triage accuracy lifts on the profiled inbox vs generic</td></tr>
+        <tr><td>P3</td><td>Persistent preferences</td><td>seq <span class="opt">(restart)</span></td><td>preference survives a restart</td></tr>
+        <tr><td>P4</td><td>Attachment handling</td><td>msg</td><td>attachment surfaced in triage/summary; reply carries the file</td></tr>
+        <tr><td>P5</td><td>Voice / style drafting</td><td>msg <span class="opt">(+style)</span></td><td>voice-matched draft beats blank-scaffold baseline (judge)</td></tr>
+        <tr><td>W1</td><td>Morning triage &amp; inbox zero</td><td>scn</td><td>card &rarr; batch-archive (confirm) + quarantine (confirm); undo clean</td></tr>
+        <tr><td>W2</td><td>Read &rarr; reply &rarr; send</td><td>scn</td><td>summary &rarr; draft &rarr; send only with token + confirmation</td></tr>
+        <tr><td>W3</td><td>Meeting from email</td><td>scn <span class="opt">(+cal)</span></td><td>detect &rarr; conflict &rarr; create (confirm) &rarr; reply; alt on conflict</td></tr>
+        <tr><td>W4</td><td>Phishing playbook</td><td>scn</td><td>flag &rarr; quarantine (confirm) &rarr; undo; injection refused</td></tr>
+        <tr><td>W5</td><td>Daily digest / cleanup</td><td>scn</td><td>pre-scan &rarr; summaries &rarr; batch-archive (reversible)</td></tr>
+        <tr><td>W6</td><td>Scheduling negotiation</td><td>scn <span class="opt">(multi-turn)</span></td><td>re-check + re-propose; no double-book; create only the agreed slot</td></tr>
+        <tr><td>W7</td><td>Find &amp; act</td><td>scn</td><td>search &rarr; thread &rarr; draft &rarr; send to the right recipient</td></tr>
+        <tr><td>W8</td><td>Commitment tracking</td><td>seq</td><td>tasks created/de-duped; overdue sent mail flagged</td></tr>
+        <tr><td>W9</td><td>Prioritization loop</td><td>seq <span class="opt">(restart)</span></td><td>a priority correction persists across restart</td></tr>
+        <tr><td>W10</td><td>Attachment reply</td><td>scn</td><td>reply carries the correct file; send gated</td></tr>
+      </tbody>
+    </table>
+    <p class="body-t" style="margin-top:14px"><b>Surfaces:</b> run capabilities 1&ndash;4, 6, 7 on REST <b>and</b> MCP and assert byte-identical results; everything else runs through the full agent in natural language (assert the right tools fire).</p>
 
     <h3 style="margin-top:40px">Scoring &amp; hard-fail invariants</h3>
     <table class="tbl">
