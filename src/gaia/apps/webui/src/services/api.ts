@@ -196,7 +196,7 @@ export async function rollbackAgent(agentId: string): Promise<InstallStatus> {
 
 // -- Connections (issue #915) ---------------------------------------------------
 
-import type { AgentMcpServer, ConnectorInfo, ConnectorRow } from '../types';
+import type { AgentMcpServer, ConnectorRow } from '../types';
 
 // New framework endpoints (T-8b) — /api/connectors
 const UI_HEADER = { 'x-gaia-ui': '1' };
@@ -361,53 +361,6 @@ export async function deactivateConnectorAgent(
         `/connectors/${connectorId}/activations/${encodeURIComponent(agentId)}`,
         undefined,
         UI_HEADER,
-    );
-}
-
-export async function listConnections(): Promise<{ connections: ConnectorInfo[] }> {
-    return apiFetch('GET', '/connections');
-}
-
-export async function getConnection(provider: string): Promise<ConnectorInfo> {
-    return apiFetch('GET', `/connections/${provider}`);
-}
-
-export async function authorizeConnection(
-    provider: string,
-    scopes: string[],
-): Promise<{ flow_id: string; authorization_url: string }> {
-    return apiFetch('POST', `/connections/${provider}/authorize`, { scopes });
-}
-
-export async function revokeConnection(provider: string): Promise<void> {
-    await apiFetch<unknown>('DELETE', `/connections/${provider}`);
-}
-
-export async function listAgentGrants(provider: string): Promise<{
-    grants: Record<string, string[]>;
-}> {
-    return apiFetch('GET', `/connections/${provider}/grants`);
-}
-
-export async function grantAgent(
-    provider: string,
-    agentId: string,
-    scopes: string[],
-): Promise<{ provider: string; agent_id: string; scopes: string[] }> {
-    return apiFetch(
-        'PUT',
-        `/connections/${provider}/grants/${encodeURIComponent(agentId)}`,
-        { scopes },
-    );
-}
-
-export async function revokeAgentGrant(
-    provider: string,
-    agentId: string,
-): Promise<void> {
-    await apiFetch<unknown>(
-        'DELETE',
-        `/connections/${provider}/grants/${encodeURIComponent(agentId)}`,
     );
 }
 
