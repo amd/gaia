@@ -21,7 +21,7 @@ class LiteLLMProvider(LLMClient):
             import litellm  # noqa: F401  -- validate the optional dependency at construction
         except ImportError as e:
             raise ImportError(
-                "litellm is not installed. Install it with: pip install gaia[litellm]"
+                "litellm is not installed. Install it with: pip install 'gaia[litellm]'"
             ) from e
 
         self._model = model
