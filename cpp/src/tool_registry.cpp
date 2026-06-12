@@ -169,6 +169,12 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
         } catch (const std::invalid_argument& e) {
             return json{{"status", "error"}, {"error", std::string("Argument validation failed: ") + e.what()}};
         }
+    } else if (!tool->parameters.empty()) {
+        // Auto-validate against declared parameter schema
+        std::string validationError = validateArgsAgainstSchema(tool->parameters, effectiveArgs);
+        if (!validationError.empty()) {
+            return json{{"status", "error"}, {"error", "Invalid arguments for '" + resolvedName + "': " + validationError}};
+        }
     }
 
     // 3. CONFIRM check
@@ -223,6 +229,58 @@ std::string ToolRegistry::toLower(const std::string& s) {
     std::transform(result.begin(), result.end(), result.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return result;
+}
+
+std::string ToolRegistry::validateArgsAgainstSchema(
+    const std::vector<ToolParameter>& params, const json& args) {
+    // args should be an object (or null/missing treated as empty object)
+    json effectiveArgs = (args.is_null() || args.is_discarded()) ? json::object() : args;
+    if (!effectiveArgs.is_object()) {
+        return "expected object, got " + std::string(effectiveArgs.type_name());
+    }
+
+    // Check required parameters are present
+    for (const auto& param : params) {
+        if (param.required && !effectiveArgs.contains(param.name)) {
+            return "missing required parameter '" + param.name + "'";
+        }
+
+        // Type-check if the parameter is present
+        if (effectiveArgs.contains(param.name)) {
+            const auto& val = effectiveArgs[param.name];
+            bool typeOk = false;
+            switch (param.type) {
+                case ToolParamType::STRING:
+                    typeOk = val.is_string();
+                    break;
+                case ToolParamType::INTEGER:
+                    typeOk = val.is_number_integer();
+                    break;
+                case ToolParamType::NUMBER:
+                    typeOk = val.is_number();
+                    break;
+                case ToolParamType::BOOLEAN:
+                    typeOk = val.is_boolean();
+                    break;
+                case ToolParamType::ARRAY:
+                    typeOk = val.is_array();
+                    break;
+                case ToolParamType::OBJECT:
+                    typeOk = val.is_object();
+                    break;
+                case ToolParamType::UNKNOWN:
+                    typeOk = true;  // accept anything
+                    break;
+            }
+            if (!typeOk) {
+                return "parameter '" + param.name + "' should be " +
+                       paramTypeToString(param.type) + ", got " +
+                       std::string(val.type_name());
+            }
+        }
+    }
+
+    return "";  // valid
 }
 
 } // namespace gaia
