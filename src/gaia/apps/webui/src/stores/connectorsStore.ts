@@ -54,16 +54,25 @@ export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
     refresh: async () => {
         set({ loading: true, error: null });
         try {
-            const { connections } = await api.listConnections();
+            const { connectors } = await api.listConnectors();
+            const connected = connectors.filter(
+                (c) => c.type === 'oauth_pkce' && c.configured === true,
+            );
+            const connections: ConnectorInfo[] = connected.map((c) => ({
+                provider: c.id,
+                account_email: c.account_id ?? '',
+                scopes: c.scopes ?? [],
+                connected_at: null,
+            }));
             // Pull grants for every connected provider.
             const grants: Record<string, Record<string, string[]>> = {};
             await Promise.all(
-                connections.map(async (c) => {
+                connected.map(async (c) => {
                     try {
-                        const r = await api.listAgentGrants(c.provider);
-                        grants[c.provider] = r.grants;
+                        const r = await api.listConnectorGrants(c.id);
+                        grants[c.id] = r.grants;
                     } catch {
-                        grants[c.provider] = {};
+                        grants[c.id] = {};
                     }
                 }),
             );
