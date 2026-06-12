@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -173,6 +172,83 @@ def _triage_messages(
         return_value={"results": messages, "grouped": group_by_category(messages)},
     ):
         return agent._triage_all_backends(max_messages=50)
+
+
+def _build_agent_with_fake_gmail(
+    tmp_path: Path,
+    received_msg: dict,
+) -> EmailTriageAgent:
+    """Build an agent backed by a real FakeGmailBackend seeded with one message.
+
+    Lets the end-to-end "observe" test drive a genuine reply through the agent
+    (draft_reply tool → backend.create_draft) and verify the reply-latency
+    observation is recorded from the ORIGINAL message's internalDate anchor.
+    """
+    from gaia_agent_email.config import EmailAgentConfig
+    from tests.fixtures.email.fake_gmail import FakeGmailBackend
+
+    backend = FakeGmailBackend(user_email="me@example.com")
+    backend.add_message(received_msg)
+
+    cfg = EmailAgentConfig(
+        gmail_backend=backend,
+        calendar_backend=_MinimalCalendarBackend(),
+        db_path=str(tmp_path / "state.db"),
+        memory_db_path=str(tmp_path / "memory.db"),
+        silent_mode=True,
+        debug=False,
+    )
+
+    with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk, patch(
+        "gaia.agents.base.memory.MemoryMixin._get_embedder",
+        return_value=MagicMock(),
+    ), patch(
+        "gaia.agents.base.memory.MemoryMixin._embed_text",
+        side_effect=_fake_embed,
+    ), patch(
+        "gaia.agents.base.memory.MemoryMixin._backfill_embeddings",
+        return_value=0,
+    ), patch(
+        "gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index",
+    ), patch(
+        "gaia.agents.base.memory.MemoryMixin.init_system_context",
+    ):
+        mock_sdk.return_value = MagicMock()
+        return EmailTriageAgent(config=cfg)
+
+
+def _received_message(
+    message_id: str,
+    sender: str,
+    *,
+    received_seconds_ago: float,
+) -> dict:
+    """Build a Gmail-API-shape received message with an internalDate anchor."""
+    internal_ms = int((time.time() - received_seconds_ago) * 1000)
+    return {
+        "id": message_id,
+        "threadId": f"thread_{message_id}",
+        "labelIds": ["INBOX", "UNREAD"],
+        "internalDate": str(internal_ms),
+        "snippet": "hello",
+        "payload": {
+            "headers": [
+                {"name": "From", "value": f"Boss <{sender}>"},
+                {"name": "Subject", "value": "Need your input"},
+                {"name": "Message-ID", "value": f"<{message_id}@example.com>"},
+                {"name": "Date", "value": "Mon, 12 Jun 2026 10:00:00 +0000"},
+            ],
+        },
+    }
+
+
+def _invoke_draft_reply(agent: EmailTriageAgent, message_id: str, body: str) -> dict:
+    """Call the draft_reply tool through the registry (as the agent would)."""
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    entry = _TOOL_REGISTRY.get("draft_reply")
+    assert entry is not None, "draft_reply tool not registered"
+    return json.loads(entry["function"](message_id, body))
 
 
 # ---------------------------------------------------------------------------
@@ -373,10 +449,16 @@ class TestPromotionOnDemandAtTriage:
     def test_sender_promoted_after_triage_not_before(self, tmp_path):
         """Sender promoted INSIDE triage: absent before, present after.
 
-        PROVES on-demand-only: thread count is measured before and after
-        triage; a scheduler/background thread would increase it. The test
-        fails if any new threads appear between construction and post-triage
-        assertion.
+        PROVES on-demand-only two ways:
+        1. The promotion is absent BEFORE the triage call and present AFTER —
+           so it cannot have come from a background task that ran at an
+           arbitrary earlier time (the before-check runs immediately after
+           construction with nothing in between).
+        2. No background machinery is instantiated. We patch
+           ``threading.Thread`` and ``threading.Timer`` for the duration of the
+           triage call and assert neither is constructed — a scheduler / timer
+           would have to build one. This is deterministic, unlike a live
+           thread-count delta (which GC / OS threads can perturb).
         """
         agent = _build_agent(tmp_path)
         try:
@@ -398,26 +480,75 @@ class TestPromotionOnDemandAtTriage:
                 "Sender must NOT be priority before triage — promotion must be on-demand"
             )
 
-            # Record active thread count right now (no scheduler should exist).
-            threads_before = set(t.ident for t in threading.enumerate())
-
-            # Run triage (on-demand evaluation happens here).
+            # Run triage with thread/timer constructors patched. If any
+            # scheduler or background worker were started, it would have to
+            # instantiate one of these — and the assertions below would fail.
             msgs = [self._message_from(sender, "urgent")]
-            _triage_messages(agent, msgs)
+            with patch("threading.Thread") as mock_thread, patch(
+                "threading.Timer"
+            ) as mock_timer:
+                _triage_messages(agent, msgs)
+                assert not mock_thread.called, (
+                    "threading.Thread was constructed during triage — promotion "
+                    "must run synchronously, not on a background thread"
+                )
+                assert not mock_timer.called, (
+                    "threading.Timer was constructed during triage — promotion "
+                    "must not be scheduled"
+                )
 
-            # AFTER triage: sender must be promoted.
+            # AFTER triage: sender must be promoted (synchronously, inside the call).
             assert sender in agent._session_preferences["priority_senders"], (
                 f"Expected {sender} in priority_senders after triage. "
                 f"Got: {agent._session_preferences['priority_senders']}"
             )
+        finally:
+            agent.close_db()
 
-            # No NEW daemon threads were started — a background scheduler would
-            # add at least one thread.
-            threads_after = set(t.ident for t in threading.enumerate())
-            new_threads = threads_after - threads_before
-            assert not new_threads, (
-                f"New threads appeared during/after triage — possible background "
-                f"scheduler: {[threading.active_count()]}, new idents: {new_threads}"
+    def test_promotion_runs_synchronously_within_triage_call(self, tmp_path):
+        """_apply_behavioral_promotions is invoked from inside _triage_all_backends.
+
+        Proves the evaluation is part of the synchronous triage call path (not
+        deferred to a worker): we spy on _apply_behavioral_promotions and assert
+        it was called exactly once, synchronously, during the triage call —
+        with the promotion already applied by the time triage returns.
+        """
+        agent = _build_agent(tmp_path)
+        try:
+            from gaia_agent_email.tools.profile_tools import (
+                REPLY_PROMOTION_MIN_REPLIES,
+                REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS,
+            )
+            sender = "boss@example.com"
+            _seed_fast_replies(
+                agent,
+                sender,
+                count=REPLY_PROMOTION_MIN_REPLIES,
+                latency_seconds=REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS / 2,
+            )
+
+            real_apply = agent._apply_behavioral_promotions
+            calls = {"n": 0, "promoted_when_returned": False}
+
+            def _spy():
+                calls["n"] += 1
+                real_apply()
+                # The promotion must be applied by the time this returns,
+                # proving it is synchronous (no deferral).
+                calls["promoted_when_returned"] = (
+                    sender in agent._session_preferences["priority_senders"]
+                )
+
+            with patch.object(agent, "_apply_behavioral_promotions", side_effect=_spy):
+                msgs = [self._message_from(sender, "urgent")]
+                _triage_messages(agent, msgs)
+
+            assert calls["n"] == 1, (
+                f"_apply_behavioral_promotions should be called exactly once per "
+                f"triage, got {calls['n']}"
+            )
+            assert calls["promoted_when_returned"], (
+                "promotion must be applied synchronously within the triage call"
             )
         finally:
             agent.close_db()
@@ -613,5 +744,143 @@ class TestMemoryDisabledNoPromotion:
         try:
             result = agent._evaluate_promotions()
             assert result == []
+        finally:
+            agent.close_db()
+
+
+# ---------------------------------------------------------------------------
+# Tests — end-to-end OBSERVE: replying through the agent records latency
+# ---------------------------------------------------------------------------
+
+
+class TestReplyObservationEndToEnd:
+    """Closes the AC's 'observed' half: a real reply through the agent records
+    a reply-latency observation computed from the original message's receipt
+    anchor — not seeded data.
+    """
+
+    def test_reply_through_agent_records_observation(self, tmp_path):
+        """draft_reply via the agent records a reply interaction with computed latency.
+
+        Seeds a received message with internalDate 120 s ago, drives the
+        draft_reply tool (the genuine reply path), then asserts a reply record
+        was written for the ORIGINAL sender with a latency near 120 s — proving
+        the agent OBSERVES reply behavior, not just consumes pre-seeded data.
+        """
+        sender = "boss@example.com"
+        received = _received_message(
+            "msg1", sender, received_seconds_ago=120.0
+        )
+        agent = _build_agent_with_fake_gmail(tmp_path, received)
+        try:
+            # No reply records exist before the reply.
+            before = agent._memory_store.get_by_entity(
+                f"{_REPLY_ENTITY_PREFIX}{sender}"
+            )
+            assert len(before) == 0
+
+            # Drive a genuine reply through the agent.
+            result = _invoke_draft_reply(agent, "msg1", "Sure, on it.")
+            assert result["ok"] is True, f"draft_reply failed: {result}"
+            # The internal anchor field must not leak into the user envelope.
+            assert "_original_msg" not in result["data"]
+
+            # A reply observation was recorded for the original sender.
+            rows = agent._memory_store.get_by_entity(
+                f"{_REPLY_ENTITY_PREFIX}{sender}"
+            )
+            assert len(rows) == 1, (
+                f"Expected 1 reply record after replying through agent, got {len(rows)}"
+            )
+            payload = json.loads(rows[0]["content"])
+            latencies = payload["reply_latencies_seconds"]
+            assert len(latencies) == 1
+            # Latency should be close to the 120 s receipt anchor (allow drift
+            # for test execution time).
+            assert 110.0 <= latencies[0] <= 200.0, (
+                f"Computed latency {latencies[0]} not near the 120 s anchor"
+            )
+        finally:
+            agent.close_db()
+
+    def test_repeated_fast_replies_then_triage_promotes(self, tmp_path):
+        """Full loop: observe fast replies via the agent, then triage promotes.
+
+        Drives REPLY_PROMOTION_MIN_REPLIES genuine replies (each to a freshly
+        seeded recently-received message, so the computed latency is well under
+        the threshold), then runs triage and asserts the sender is promoted —
+        all from OBSERVED behavior, no seeded reply data.
+        """
+        from gaia_agent_email.tools.profile_tools import REPLY_PROMOTION_MIN_REPLIES
+
+        sender = "boss@example.com"
+        # Seed the first received message; we add the rest below.
+        received = _received_message("rmsg0", sender, received_seconds_ago=10.0)
+        agent = _build_agent_with_fake_gmail(tmp_path, received)
+        try:
+            # Reply to the first message.
+            res0 = _invoke_draft_reply(agent, "rmsg0", "Reply 0")
+            assert res0["ok"] is True
+
+            # Add and reply to additional recently-received messages so the
+            # reply count reaches the promotion threshold, each fast.
+            backend = agent._backends["google"]
+            for i in range(1, REPLY_PROMOTION_MIN_REPLIES):
+                mid = f"rmsg{i}"
+                backend.add_message(
+                    _received_message(mid, sender, received_seconds_ago=10.0)
+                )
+                res = _invoke_draft_reply(agent, mid, f"Reply {i}")
+                assert res["ok"] is True
+
+            # Observed fast-reply behavior should now qualify the sender.
+            promoted = agent._evaluate_promotions()
+            assert sender in promoted, (
+                f"Sender should qualify after {REPLY_PROMOTION_MIN_REPLIES} observed "
+                f"fast replies. promoted={promoted}"
+            )
+
+            # And triage applies the promotion.
+            triage_msg = {
+                "id": "tmsg",
+                "thread_id": "tthread",
+                "from": f"Boss <{sender}>",
+                "subject": "FYI",
+                "snippet": "info",
+                "category": "informational",
+                "mailbox": "google",
+            }
+            _triage_messages(agent, [triage_msg])
+            assert sender in agent._session_preferences["priority_senders"], (
+                "Triage should promote a sender with observed fast-reply behavior"
+            )
+        finally:
+            agent.close_db()
+
+    def test_send_now_fresh_compose_records_nothing(self, tmp_path):
+        """A fresh compose (send_now, no original) records no reply observation.
+
+        send_now has no receipt anchor, so we must not fabricate a latency.
+        """
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        # Build an agent with a fake backend (one unrelated received message).
+        received = _received_message("other", "someone@example.com", received_seconds_ago=60.0)
+        agent = _build_agent_with_fake_gmail(tmp_path, received)
+        try:
+            entry = _TOOL_REGISTRY.get("send_now")
+            assert entry is not None, "send_now tool not registered"
+            result = json.loads(
+                entry["function"]("newcontact@example.com", "Hi", "Reaching out")
+            )
+            assert result["ok"] is True, f"send_now failed: {result}"
+
+            # No reply record for the fresh-compose recipient (no anchor).
+            rows = agent._memory_store.get_by_entity(
+                f"{_REPLY_ENTITY_PREFIX}newcontact@example.com"
+            )
+            assert len(rows) == 0, (
+                "send_now (fresh compose) must not record a reply observation"
+            )
         finally:
             agent.close_db()
