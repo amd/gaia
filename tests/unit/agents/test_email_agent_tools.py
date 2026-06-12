@@ -765,8 +765,10 @@ class TestDeleteTools:
         msg_id = list(fake_gmail._messages.keys())[0]
         out = trash_message_impl(fake_gmail, db, message_id=msg_id)
         action_id = out["action_id"]
+        # restore_message_impl now takes a backend resolver (#1603 Phase 2):
+        # resolve_backend(action) -> backend. Single-mailbox test → always fake.
         result = restore_message_impl(
-            fake_gmail, db, action_id=action_id, window_seconds=30
+            lambda _action: fake_gmail, db, action_id=action_id, window_seconds=30
         )
         assert result["restored"] is True
         post = fake_gmail.get_message(msg_id)
@@ -787,7 +789,12 @@ class TestDeleteTools:
             {"id": action_id},
         )
         with pytest.raises(RuntimeError) as exc:
-            restore_message_impl(fake_gmail, db, action_id=action_id, window_seconds=30)
+            restore_message_impl(
+                lambda _action: fake_gmail,
+                db,
+                action_id=action_id,
+                window_seconds=30,
+            )
         assert "undo window" in str(exc.value)
 
     def test_permanent_delete_removes_from_store(self, fake_gmail, db):

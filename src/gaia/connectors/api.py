@@ -165,15 +165,22 @@ def get_access_token_sync(
     Synchronous wrapper around ``get_access_token``.
 
     Used by sync agent tool bodies (``Agent.process_query`` runs in a
-    ``ThreadPoolExecutor`` worker thread). ``asyncio.run`` inherits the
-    calling thread's contextvars into the new event loop's context, so
-    the agent-id contextvar set by the agent runtime is visible to the
-    async refresh code.
+    ``ThreadPoolExecutor`` worker thread).
 
     Must NOT be called from a thread that already has a running event
-    loop — ``asyncio.run`` would raise ``RuntimeError``. The runtime
-    guard turns this into an actionable error rather than a confusing
-    crash. Use ``await get_access_token(...)`` directly from async code.
+    loop. The runtime guard turns this into an actionable error rather
+    than a confusing crash. Use ``await get_access_token(...)`` directly
+    from async code.
+
+    Submits the coroutine to the persistent connector event loop (see
+    ``_loop.py``) and blocks with a bounded wait. The persistent loop avoids
+    two bugs that ``asyncio.run`` caused (#1579): the cross-loop Lock error
+    (Python ≤ 3.11) and the Windows ProactorEventLoop teardown hang on
+    repeated create/destroy cycles.
+
+    Contextvar propagation: the persistent-loop bridge captures
+    ``copy_context()`` at submit time so the agent-id contextvar set by the
+    agent runtime is visible inside the async refresh code.
     """
     try:
         running = asyncio.get_running_loop()
@@ -186,7 +193,9 @@ def get_access_token_sync(
             "directly from async code instead, or schedule this call on a "
             "worker thread without a running loop."
         )
-    return asyncio.run(
+    from gaia.connectors._loop import run_sync
+
+    return run_sync(
         get_access_token(
             provider=provider,
             scopes=scopes,
@@ -535,11 +544,41 @@ def tripwire_check() -> None:
             logger.warning("tripwire: provider %s check failed: %s", provider_id, e)
 
 
+def connected_mailbox_providers() -> list[str]:
+    """Return ids of OAuth PKCE connectors that have a stored connection.
+
+    "Connected" means the user completed the OAuth flow and a connection blob
+    exists in the keyring — regardless of any per-agent grant. The grant gate
+    fires later at token-fetch time and raises loudly there if needed.
+
+    Returns ids in registry order (google before microsoft). Only
+    ``oauth_pkce`` connectors are considered; MCP-server connectors have no
+    mailbox surface and are excluded.
+
+    Read-only; never returns secrets.
+    """
+    # Importing the catalog populates REGISTRY with the built-in specs (google,
+    # microsoft, mcp_servers). Idempotent: Python's module cache makes repeat
+    # imports a no-op. Mirrors the pattern in _require_mcp_server_for_activation.
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+    from gaia.connectors.store import peek_connection
+
+    result: list[str] = []
+    for spec in REGISTRY.all():
+        if spec.type != "oauth_pkce":
+            continue
+        if peek_connection(spec.id) is not None:
+            result.append(spec.id)
+    return result
+
+
 __all__ = [
     "activate",
     "activate_agent",
     "cancel_flow",
     "complete_authorization",
+    "connected_mailbox_providers",
     "deactivate",
     "deactivate_agent",
     "get_access_token",

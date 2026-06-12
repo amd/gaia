@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
     system_prompt TEXT,
     device TEXT DEFAULT 'gpu',
-    mail_provider TEXT DEFAULT 'google'
+    -- Mailbox FILTER (#1596): NULL = every connected mailbox; the legacy
+    -- ALTER migration below still backfills pre-Phase-2 rows to 'google'.
+    mail_provider TEXT
 );
 
 -- Many-to-many: which docs are attached to which session
@@ -313,7 +315,8 @@ class ChatDatabase:
         title = title or "New Chat"
         agent_type = agent_type or "chat"
         device = device or "gpu"
-        mail_provider = mail_provider or "google"
+        # mail_provider is a FILTER (#1596): no pick stays NULL ("every
+        # connected mailbox") — never silently coerce to google.
 
         with self._transaction():
             self._conn.execute(

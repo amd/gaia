@@ -16,6 +16,8 @@ export interface Session {
     agent_type?: string;
     /** Device used for this session (cpu / gpu / npu). */
     device?: string;
+    /** Mail provider for email-triage sessions ("google" | "microsoft"). */
+    mail_provider?: string;
 }
 
 /** Per-device configuration for an agent (CPU / GPU / NPU). */

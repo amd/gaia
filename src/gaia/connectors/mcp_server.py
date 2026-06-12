@@ -27,8 +27,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-import keyring
-
+from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec

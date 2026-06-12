@@ -928,6 +928,19 @@ def _session_agent_kwargs(
     }
 
 
+def _session_mail_provider(session: dict) -> str | None:
+    """Session mailbox FILTER for the email agent (#1596 / #1603 Phase 2).
+
+    ``None`` (unset, null, or empty string from the frontend) means "every
+    connected mailbox" — the email agent scans all of them and fails loudly
+    when none is connected. An explicit ``"google"`` / ``"microsoft"``
+    restricts to that provider. Never coerce a missing pick to "google":
+    that silently triaged Gmail for sessions that never chose a provider
+    and ignored a connected Outlook.
+    """
+    return session.get("mail_provider") or None
+
+
 def _find_last_tool_step(steps: list) -> dict | None:
     """Find the last tool step in captured_steps, searching backwards."""
     for i in range(len(steps) - 1, -1, -1):
@@ -1282,8 +1295,9 @@ async def _get_chat_response(
                     ),
                     # Forwarded only here (not via _session_agent_kwargs, which
                     # also feeds the strict ChatAgentConfig). Non-email factories
-                    # drop it via dataclasses.fields filtering.
-                    mail_provider=session.get("mail_provider") or "google",
+                    # drop it via dataclasses.fields filtering. None = scan every
+                    # connected mailbox (#1596).
+                    mail_provider=_session_mail_provider(session),
                 )
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
@@ -1414,12 +1428,17 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     sse_handler = None
     producer = None
     cleanup_done = False
+    # Cooperative cancel signal for the producer's agent loop. Set on stream
+    # timeout / client disconnect so the agent bails at its next step boundary
+    # and the producer thread is actually reaped (see agent._cancel_event).
+    cancel_event = threading.Event()
 
     def _cleanup_stream():
         nonlocal cleanup_done
         if cleanup_done:
             return
         cleanup_done = True
+        cancel_event.set()
         if sse_handler is not None:
             sse_handler.cancelled.set()
         _active_sse_handlers.pop(session_id, None)
@@ -1741,8 +1760,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                 session_id=session_id,
                             ),
                             # See the non-streaming path: email-only kwarg,
-                            # filtered out by non-email factories.
-                            mail_provider=session.get("mail_provider") or "google",
+                            # filtered out by non-email factories. None = scan
+                            # every connected mailbox (#1596).
+                            mail_provider=_session_mail_provider(session),
                         )
                         agent.console = sse_handler
                         logger.info(
@@ -1823,6 +1843,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
                     return
+
+                # Let the agent loop observe stream-timeout/disconnect so a hung
+                # turn is torn down instead of leaking this producer thread.
+                agent._cancel_event = cancel_event
 
                 # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
                 # omitted, the agent's __init__ set model_id via kwargs.setdefault — a value

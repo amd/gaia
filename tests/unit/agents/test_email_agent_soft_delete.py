@@ -135,6 +135,126 @@ class TestRecordAndFetch:
 
 
 # ---------------------------------------------------------------------------
+# mailbox column + migration (#1603 Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class TestMailboxColumn:
+    def test_fresh_db_has_mailbox_column(self, db):
+        cols = {row["name"] for row in db.query("PRAGMA table_info(email_actions)")}
+        assert "mailbox" in cols
+
+    def test_record_action_stores_mailbox(self, db):
+        action_id = action_store.record_action(
+            db, action_type="trash", message_id="m1", mailbox="microsoft"
+        )
+        row = action_store.fetch_undoable(db, action_id=action_id, window_seconds=30)
+        assert row is not None
+        assert row["mailbox"] == "microsoft"
+
+    def test_record_action_without_mailbox_stores_null(self, db):
+        action_id = action_store.record_action(db, action_type="trash", message_id="m1")
+        row = action_store.fetch_undoable(db, action_id=action_id, window_seconds=30)
+        assert row is not None
+        assert row["mailbox"] is None
+
+    def test_fetch_batch_undoable_surfaces_mailbox(self, db):
+        action_store.record_action(
+            db,
+            action_type="archive",
+            message_id="m1",
+            batch_id="b1",
+            mailbox="google",
+        )
+        rows = action_store.fetch_batch_undoable(db, batch_id="b1", window_seconds=30)
+        assert rows and rows[0]["mailbox"] == "google"
+
+
+class TestMailboxMigration:
+    """A pre-#1603 DB (no mailbox column) gets the column added + rows
+    backfilled to 'google' — every pre-multi-inbox action could only have hit
+    the single Gmail mailbox.
+    """
+
+    _LEGACY_ACTIONS_DDL = """
+    CREATE TABLE email_actions (
+        action_id    TEXT PRIMARY KEY,
+        action_type  TEXT NOT NULL,
+        message_id   TEXT NOT NULL,
+        thread_id    TEXT,
+        payload_json TEXT NOT NULL,
+        batch_id     TEXT,
+        created_at   REAL NOT NULL,
+        undone_at    REAL
+    );
+    """
+
+    def _legacy_db(self):
+        legacy = _DB()
+        legacy.execute(self._LEGACY_ACTIONS_DDL)
+        legacy.execute(action_store.EMAIL_DRAFTS_DDL)
+        return legacy
+
+    def test_migration_adds_column_to_legacy_db(self):
+        legacy = self._legacy_db()
+        try:
+            cols = {
+                row["name"] for row in legacy.query("PRAGMA table_info(email_actions)")
+            }
+            assert "mailbox" not in cols  # genuinely legacy
+            action_store.init_schema(legacy)
+            cols = {
+                row["name"] for row in legacy.query("PRAGMA table_info(email_actions)")
+            }
+            assert "mailbox" in cols
+        finally:
+            legacy.close_db()
+
+    def test_migration_backfills_legacy_rows_to_google(self):
+        legacy = self._legacy_db()
+        try:
+            legacy.insert(
+                "email_actions",
+                {
+                    "action_id": "legacy1",
+                    "action_type": "trash",
+                    "message_id": "m1",
+                    "thread_id": None,
+                    "payload_json": "{}",
+                    "batch_id": None,
+                    "created_at": time.time(),
+                    "undone_at": None,
+                },
+            )
+            action_store.init_schema(legacy)
+            row = legacy.query(
+                "SELECT mailbox FROM email_actions WHERE action_id = 'legacy1'",
+                one=True,
+            )
+            assert row["mailbox"] == "google"
+        finally:
+            legacy.close_db()
+
+    def test_migration_is_idempotent(self):
+        legacy = self._legacy_db()
+        try:
+            action_store.init_schema(legacy)
+            # Second init must not raise (duplicate-column guard).
+            action_store.init_schema(legacy)
+        finally:
+            legacy.close_db()
+
+    def test_migration_does_not_overwrite_recorded_mailbox(self, db):
+        # A row recorded with an explicit mailbox keeps it across re-init.
+        action_id = action_store.record_action(
+            db, action_type="trash", message_id="m1", mailbox="microsoft"
+        )
+        action_store.init_schema(db)
+        row = action_store.fetch_undoable(db, action_id=action_id, window_seconds=30)
+        assert row["mailbox"] == "microsoft"
+
+
+# ---------------------------------------------------------------------------
 # email_drafts
 # ---------------------------------------------------------------------------
 

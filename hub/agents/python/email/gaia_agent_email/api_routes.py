@@ -42,12 +42,13 @@ Design commitments
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import re
 import secrets
 import threading
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
@@ -65,7 +66,10 @@ from gaia_agent_email.contract import (
     SingleEmailInput,
     ThreadInput,
 )
+from gaia_agent_email.tools.llm_triage import LLMTriageError
+from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
 from gaia_agent_email.tools.triage_heuristics import classify_category_heuristic
+from gaia.connectors.api import connected_mailbox_providers
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -121,31 +125,66 @@ def _split_sentences(text: str) -> List[str]:
 
 class EmailTriageService:
     """Convert contract inputs (or raw Gmail-API messages) into a contract
-    :class:`EmailTriageResult` deterministically.
+    :class:`EmailTriageResult`.
 
-    No LLM is invoked: category comes from the agent's heuristic
-    categorizer, and the summary / action items / draft proposal are derived
-    from the message text with explicit rules. This keeps the REST surface
-    fast, offline-testable, and aligned with the agent's pre-LLM fast path.
+    Triage always uses the local Lemonade LLM. High-confidence heuristic
+    signals (spam, promotions) skip the LLM classify call as an internal
+    optimisation, but the LLM is always used for summaries and for any
+    message the heuristic cannot confidently classify.
     """
 
     # -- Public: contract path ---------------------------------------------
 
-    def triage_request(self, request: EmailTriageRequest) -> EmailTriageResponse:
-        """Triage a contract request envelope into a contract response."""
+    def triage_request(
+        self,
+        request: EmailTriageRequest,
+        chat: Optional[Any] = None,
+    ) -> EmailTriageResponse:
+        """Triage a contract request envelope into a contract response.
+
+        Args:
+            request: The frozen #1262 contract request.
+            chat:    Pre-built chat client. When None a local Lemonade client
+                     is constructed via :meth:`_build_llm_chat`.
+        """
         payload = request.payload
+        resolved_chat = chat or self._build_llm_chat()
         if isinstance(payload, SingleEmailInput):
-            result = self._triage_single(payload)
             kind = "single"
+            result = self._triage_single_llm(payload, resolved_chat)
         elif isinstance(payload, ThreadInput):
-            result = self._triage_thread(payload)
             kind = "thread"
+            result = self._triage_thread_llm(payload, resolved_chat)
         else:  # pragma: no cover - discriminated union guarantees one of the two
             raise HTTPException(
                 status_code=422,
                 detail=f"Unsupported payload kind: {getattr(payload, 'kind', '?')!r}",
             )
         return EmailTriageResponse(request_kind=kind, result=result)
+
+    def _build_llm_chat(self, base_url: Optional[str] = None) -> Any:
+        """Build a local Lemonade chat client for LLM triage/summarise.
+
+        Validates the AC3 local-only contract before constructing the client.
+        Raises ``ConfigurationError`` loudly when ``base_url`` points at a
+        cloud LLM — no silent fallback to heuristic.
+        """
+        from gaia_agent_email.config import EmailAgentConfig
+        from gaia.chat.sdk import AgentConfig, AgentSDK
+
+        cfg = EmailAgentConfig(base_url=base_url)
+        cfg.validate()
+
+        sdk_cfg = AgentConfig(
+            base_url=base_url,
+            use_local_llm=True,
+            use_claude=False,
+            use_chatgpt=False,
+            # Output cap (not input); context window governs what fits.
+            # 4096 gives Gemma-4-E4B room for its reasoning chain + JSON.
+            max_tokens=4096,
+        )
+        return AgentSDK(sdk_cfg)
 
     def triage_gmail_message(
         self, msg: dict, *, principal_email: str
@@ -176,28 +215,29 @@ class EmailTriageService:
             reply_to=_parse_address(sender),
         )
 
-    # -- Internal -----------------------------------------------------------
-
-    def _triage_single(self, payload: SingleEmailInput) -> EmailTriageResult:
+    def _triage_single_llm(
+        self, payload: SingleEmailInput, chat: Any
+    ) -> EmailTriageResult:
         msg = payload.message
-        return self._build_result(
+        return self._build_result_llm(
             subject=msg.subject,
             sender_raw=_format_address(msg.from_),
             body=msg.body,
             label_ids=[],
             principal=payload.principal,
             reply_to=msg.from_,
+            chat=chat,
+            message_id=msg.message_id,
         )
 
-    def _triage_thread(self, payload: ThreadInput) -> EmailTriageResult:
-        # Summarize the whole thread; categorize on the LAST inbound message
-        # (the one awaiting the principal's attention), reply to its sender.
+    def _triage_thread_llm(self, payload: ThreadInput, chat: Any) -> EmailTriageResult:
         messages: List[EmailMessage] = payload.messages
         last = messages[-1]
+        # Join newest-first so the model sees the most recent context first.
         combined_body = "\n\n".join(
-            f"{_format_address(m.from_)}: {m.body}" for m in messages
+            f"{_format_address(m.from_)}: {m.body}" for m in reversed(messages)
         )
-        result = self._build_result(
+        return self._build_result_llm(
             subject=last.subject,
             sender_raw=_format_address(last.from_),
             body=combined_body,
@@ -205,8 +245,67 @@ class EmailTriageService:
             principal=payload.principal,
             reply_to=last.from_,
             summary_prefix=f"Thread of {len(messages)} messages. ",
+            chat=chat,
+            message_id=payload.thread_id,
         )
-        return result
+
+    def _build_result_llm(
+        self,
+        *,
+        subject: str,
+        sender_raw: str,
+        body: str,
+        label_ids: List[str],
+        principal: EmailAddress,
+        reply_to: Optional[EmailAddress],
+        summary_prefix: str = "",
+        chat: Any,
+        message_id: Optional[str] = None,
+    ) -> EmailTriageResult:
+        """Build a result using LLM escalation when heuristic confidence is low."""
+        from gaia_agent_email.tools.llm_triage import classify_email_llm
+        from gaia_agent_email.tools.summarize_tools import summarize_email_llm
+
+        heuristic = classify_category_heuristic(
+            subject=subject, sender=sender_raw, label_ids=label_ids
+        )
+
+        if heuristic.confident:
+            category = EmailCategory(heuristic.category)
+        else:
+            llm_result = classify_email_llm(
+                chat,
+                subject=subject,
+                sender=sender_raw,
+                body=body,
+            )
+            category = EmailCategory(llm_result["category"])
+
+        llm_summary = summarize_email_llm(
+            chat,
+            subject=subject,
+            sender=sender_raw,
+            body=body,
+        )
+        summary = summary_prefix + llm_summary
+
+        action_items = self._extract_action_items(body)
+        draft = self._build_draft(
+            subject=subject,
+            reply_to=reply_to,
+            principal=principal,
+            is_spam=heuristic.is_spam,
+            is_phishing=heuristic.is_phishing,
+        )
+        return EmailTriageResult(
+            category=category,
+            is_spam=heuristic.is_spam,
+            is_phishing=heuristic.is_phishing,
+            summary=summary,
+            action_items=action_items,
+            draft=draft,
+            message_id=message_id,
+        )
 
     def _build_result(
         self,
@@ -218,6 +317,7 @@ class EmailTriageService:
         principal: EmailAddress,
         reply_to: Optional[EmailAddress],
         summary_prefix: str = "",
+        message_id: Optional[str] = None,
     ) -> EmailTriageResult:
         heuristic = classify_category_heuristic(
             subject=subject, sender=sender_raw, label_ids=label_ids
@@ -239,6 +339,7 @@ class EmailTriageService:
             summary=summary,
             action_items=action_items,
             draft=draft,
+            message_id=message_id,
         )
 
     def _summarize(self, subject: str, body: str) -> str:
@@ -351,20 +452,25 @@ class ConfirmationStore:
     endpoint. Consuming a token removes it (single-use). The server-side
     secret makes tokens unforgeable; the fingerprint makes them payload-
     specific.
+
+    Tokens may optionally carry a provider binding (D5): when the draft
+    specified ``provider="microsoft"``, the token stores that binding so the
+    send handler routes to the correct backend even when multiple mailboxes
+    are connected.
     """
 
     def __init__(self, secret: Optional[bytes] = None):
         self._secret = secret or secrets.token_bytes(32)
         self._lock = threading.Lock()
-        # token -> fingerprint it authorizes
-        self._tokens: dict[str, str] = {}
+        # token -> (fingerprint, provider_or_None)
+        self._tokens: dict[str, tuple[str, Optional[str]]] = {}
 
-    def issue(self, fingerprint: str) -> str:
+    def issue(self, fingerprint: str, *, provider: Optional[str] = None) -> str:
         token = hmac.new(
             self._secret, (fingerprint + secrets.token_hex(8)).encode("utf-8"), "sha256"
         ).hexdigest()
         with self._lock:
-            self._tokens[token] = fingerprint
+            self._tokens[token] = (fingerprint, provider)
         return token
 
     def consume(self, token: str, fingerprint: str) -> bool:
@@ -375,17 +481,29 @@ class ConfirmationStore:
         A blank/unknown token, or a token issued for a different payload,
         returns False and is NOT consumed.
         """
+        ok, _ = self.consume_with_provider(token, fingerprint)
+        return ok
+
+    def consume_with_provider(
+        self, token: str, fingerprint: str
+    ) -> tuple[bool, Optional[str]]:
+        """Like ``consume`` but also returns the bound provider (or None).
+
+        Returns ``(True, provider_or_None)`` on success; ``(False, None)`` on
+        rejection. The provider is the value passed to ``issue(provider=...)``.
+        """
         if not token:
-            return False
+            return False, None
         with self._lock:
-            expected = self._tokens.get(token)
-            if expected is None:
-                return False
-            if not hmac.compare_digest(expected, fingerprint):
+            entry = self._tokens.get(token)
+            if entry is None:
+                return False, None
+            expected_fp, bound_provider = entry
+            if not hmac.compare_digest(expected_fp, fingerprint):
                 # Right token, wrong payload — do not consume; reject.
-                return False
+                return False, None
             del self._tokens[token]
-            return True
+            return True, bound_provider
 
 
 # Process-wide store. Tokens live only for the life of the server process —
@@ -399,33 +517,59 @@ confirmation_store = ConfirmationStore()
 
 
 def get_send_backend():
-    """Resolve the Gmail backend used by the send endpoint.
+    """Resolve the send backend from the connected OAuth mailbox.
 
-    Production builds the live backend and fails loudly if Google
-    credentials are not connected — never silently no-ops a send. Tests
-    override this via ``app.dependency_overrides[get_send_backend]`` to
-    inject ``FakeGmailBackend`` so no live mail is touched.
+    Production derives the backend from whichever mailbox the user connected
+    via Settings → Connectors. Fails loudly when the count is ambiguous —
+    never silently chooses or falls back:
 
-    IMPORTANT: this is invoked from the send handler *after* the
-    confirmation gate, NOT as a FastAPI ``Depends`` — a request that lacks a
-    valid confirmation token must be rejected with a 4xx regardless of
-    backend health, so the gate is always evaluated first. (Resolving the
-    backend as a ``Depends`` would let a backend-unavailable 503 preempt the
-    403, masking the missing-confirmation rejection.)
+      - 0 connected → HTTP 503 (actionable: go connect a mailbox)
+      - 2+ connected → HTTP 400 (actionable: use the draft-token provider
+        binding to specify which mailbox to send from)
+      - exactly 1 → build the matching live backend
+
+    IMPORTANT: invoked AFTER the confirmation gate, not as a FastAPI
+    ``Depends``, so a gate rejection (403) always preempts a backend-health
+    error (503/400).
     """
-    from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
-
-    try:
-        return LiveGmailBackend(_get_gmail_token)
-    except Exception as exc:  # noqa: BLE001 - boundary translation, re-raised
+    providers = connected_mailbox_providers()
+    if not providers:
         raise HTTPException(
             status_code=503,
             detail=(
-                "Email send backend unavailable: Google account is not "
-                "connected. Connect Google via the connectors flow before "
-                f"sending. ({type(exc).__name__}: {exc})"
+                "No mailbox connected — connect Google or Microsoft in "
+                "Settings → Connectors before sending."
             ),
-        ) from exc
+        )
+    if len(providers) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Multiple mailboxes connected ({', '.join(providers)}); "
+                "the send API can't choose. Send from the agent/UI (sends "
+                "from the message's mailbox), or include a draft confirmation "
+                "token that binds the provider."
+            ),
+        )
+    provider = providers[0]
+    if provider == "google":
+        from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
+
+        return LiveGmailBackend(_get_gmail_token)
+    if provider == "microsoft":
+        from gaia_agent_email.outlook_backend import (
+            LiveOutlookBackend,
+            _get_outlook_token,
+        )
+
+        return LiveOutlookBackend(_get_outlook_token)
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Connected mailbox provider '{provider}' has no send backend. "
+            "Expected 'google' or 'microsoft'."
+        ),
+    )
 
 
 # Module-level indirection the send handler calls after the gate. Tests swap
@@ -433,6 +577,46 @@ def get_send_backend():
 # lambda: FakeGmailBackend())``) to inject a fake without touching live mail.
 # Default is the fail-loud live resolver above.
 resolve_send_backend = get_send_backend
+
+
+def _resolve_backend_for_provider(provider: Optional[str]):
+    """Resolve a send backend for a specific provider.
+
+    When a draft token carries a provider binding, send uses this helper
+    instead of the count-based ``get_send_backend()``. Validates the provider
+    is in the connected set before building the backend — fail loud if not.
+    ``provider=None`` falls through to the count-based resolver.
+    """
+    if provider is None:
+        return resolve_send_backend()
+    connected = connected_mailbox_providers()
+    if provider not in connected:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Mailbox '{provider}' is not connected. Connect it via "
+                "Settings → Connectors, or omit the provider to use the "
+                f"single connected mailbox. Connected: {connected or '(none)'}."
+            ),
+        )
+    if provider == "google":
+        from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
+
+        return LiveGmailBackend(_get_gmail_token)
+    if provider == "microsoft":
+        from gaia_agent_email.outlook_backend import (
+            LiveOutlookBackend,
+            _get_outlook_token,
+        )
+
+        return LiveOutlookBackend(_get_outlook_token)
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Provider '{provider}' has no send backend. "
+            "Expected 'google' or 'microsoft'."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +637,14 @@ class EmailDraftRequest(_Strict):
     )
     subject: str = Field(..., description="Proposed subject line.")
     body: str = Field(..., description="Proposed reply body.")
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional provider binding ('google' or 'microsoft'). When set, "
+            "the confirmation token is bound to this provider so the send "
+            "routes to the correct mailbox even when multiple are connected."
+        ),
+    )
 
 
 class EmailDraftResponse(_Strict):
@@ -485,6 +677,16 @@ class EmailSendRequest(_Strict):
             "valid token for this exact payload is rejected (403)."
         ),
     )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional provider ('google' or 'microsoft'), used ONLY as the "
+            "fallback when the confirmation token carries no provider binding. "
+            "A token's bound provider always wins; with two mailboxes connected "
+            "and neither a binding nor this field set, the send is rejected as "
+            "ambiguous (400)."
+        ),
+    )
 
 
 class EmailSendResponse(_Strict):
@@ -513,7 +715,12 @@ async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
     summary, extracted action items, and an optional draft-reply proposal.
     No mail is read or sent; this analyzes only the payload in the request.
     """
-    return _service.triage_request(request)
+    try:
+        return await asyncio.to_thread(_service.triage_request, request)
+    except (LLMTriageError, EmailSummarizeError) as e:
+        raise HTTPException(
+            status_code=502, detail=f"local LLM triage failed: {e}"
+        ) from e
 
 
 @router.post("/draft", response_model=EmailDraftResponse)
@@ -526,7 +733,7 @@ async def draft_reply(request: EmailDraftRequest) -> EmailDraftResponse:
     user, and only a user-approved send echoes the token back.
     """
     fingerprint = _payload_fingerprint(request.to, request.subject, request.body)
-    token = confirmation_store.issue(fingerprint)
+    token = confirmation_store.issue(fingerprint, provider=request.provider)
     draft = DraftReply(to=request.to, subject=request.subject, body=request.body)
     return EmailDraftResponse(draft=draft, confirmation_token=token)
 
@@ -543,7 +750,10 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     auto-confirms.
     """
     fingerprint = _payload_fingerprint(request.to, request.subject, request.body)
-    if not confirmation_store.consume(request.confirmation_token or "", fingerprint):
+    gate_ok, bound_provider = confirmation_store.consume_with_provider(
+        request.confirmation_token or "", fingerprint
+    )
+    if not gate_ok:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -556,14 +766,22 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
         )
 
     # Gate passed — resolve the backend now (AFTER the gate) and send. Gmail's
-    # send takes a single 'to' header string.
-    backend = resolve_send_backend()
+    # send takes a single 'to' header string. Run off the event loop so
+    # get_access_token_sync (used inside the token resolvers) does not hit
+    # the "called from a thread with a running event loop" guard (#1594).
+    # Provider precedence: the token's bound provider (D5) always wins; only an
+    # unbound token falls back to request.provider; with neither, the
+    # count-based resolver decides (and 400s when 2+ are connected).
+    backend = _resolve_backend_for_provider(bound_provider or request.provider)
     to_header = ", ".join(_format_address(a) for a in request.to)
-    result = backend.send_message(
-        to=to_header, subject=request.subject, body=request.body
+    result = await asyncio.to_thread(
+        backend.send_message, to=to_header, subject=request.subject, body=request.body
     )
     sent_id = result.get("id") or ""
-    if not sent_id:
+    # Graph sendMail returns 202 with no body → no id, but result["sent"]=True
+    # signals a successful send. Gmail raises on failure, so no-id + no-sent
+    # is an unknown failure state that we still reject loudly.
+    if not sent_id and not result.get("sent"):
         raise HTTPException(
             status_code=502,
             detail="Email backend did not return a message id for the send.",

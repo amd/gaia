@@ -4,6 +4,7 @@
 
 from .claude import ClaudeProvider
 from .lemonade import LemonadeProvider
+from .litellm import LiteLLMProvider
 from .openai_provider import OpenAIProvider
 
-__all__ = ["ClaudeProvider", "LemonadeProvider", "OpenAIProvider"]
+__all__ = ["ClaudeProvider", "LemonadeProvider", "LiteLLMProvider", "OpenAIProvider"]
