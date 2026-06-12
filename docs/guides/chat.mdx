@@ -330,7 +330,7 @@ agent = ChatAgent(ChatAgentConfig(prompt_profile="doc", dynamic_tools=True))
 GAIA_DYNAMIC_TOOLS=1 gaia eval agent --category tool_selection --agent-type doc
 
 # Optional tuning: match threshold (cosine, inclusive) and loaded-set cap
-GAIA_DYNAMIC_TOOLS_TAU=0.55 GAIA_DYNAMIC_TOOLS_MAX=14 GAIA_DYNAMIC_TOOLS=1 ...
+GAIA_DYNAMIC_TOOLS_TAU=0.20 GAIA_DYNAMIC_TOOLS_MAX=14 GAIA_DYNAMIC_TOOLS=1 ...
 ```
 
 It needs memory enabled (it reuses the memory embedder). If memory is off, the

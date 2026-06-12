@@ -259,7 +259,7 @@ an env var (env wins) so the eval harness can flip them without code changes:
 | Knob | Config field | Env override | Default |
 |------|--------------|--------------|---------|
 | Enable | `dynamic_tools` | `GAIA_DYNAMIC_TOOLS` (`1`/`true`/`yes`/`on`) | `False` |
-| Match threshold τ | `dynamic_tools_threshold` | `GAIA_DYNAMIC_TOOLS_TAU` | `0.55` (inclusive) |
+| Match threshold τ | `dynamic_tools_threshold` | `GAIA_DYNAMIC_TOOLS_TAU` | `0.20` (inclusive) |
 | Loaded-set cap | `dynamic_tools_max` | `GAIA_DYNAMIC_TOOLS_MAX` | `14` |
 
 A malformed `*_TAU` / `*_MAX` value raises at construction (no silent default).
@@ -380,8 +380,11 @@ These were open in the design sketch; Part 1 (#1449) decided them as follows:
    bundles, in [`tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py)
    (see [How Part 1 shipped](#part-1-selection-dual-path-filtering-landed-1449)),
    pinned to cover the 37-tool `doc` registry exactly.
-2. **Similarity threshold τ / cap** — *decided.* τ = `0.55` inclusive, cap = `14`
-   (both tunable via config/env).
+2. **Similarity threshold τ / cap** — *decided.* τ = `0.20` inclusive, cap = `14`
+   (both tunable via config/env). τ was calibrated against live nomic
+   embeddings: question↔tool-description similarity is weak (real scores
+   ~0.05–0.25), so the original `0.55` guess made the semantic tier inert
+   (CORE-only). `0.20` surfaces document-action tools while excluding noise.
 3. **Selection stability policy** — *decided.* Re-select every turn, but the
    loaded set only grows ("expand-on-new-match") and the prompt is recomputed
    only when it changes, so non-expansion turns stay KV-warm. At the cap a

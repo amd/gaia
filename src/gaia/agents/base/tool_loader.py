@@ -50,9 +50,13 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Default semantic match threshold (cosine). Tuned against the doc profile;
-# overridable per-agent. Inclusive boundary: score == threshold matches.
-DEFAULT_THRESHOLD = 0.55
+# Default semantic match threshold (cosine), inclusive. Calibrated against the
+# doc profile's live nomic embeddings (#1449): a user's question is only weakly
+# similar to a tool's *description*, so real scores sit ~0.05-0.25 (not the
+# 0.5-0.7 a symmetric-similarity guess assumed). 0.20 surfaces document-action
+# tools (index/summarize/RAG) for doc-oriented turns while excluding lower-
+# scoring noise; plain content questions fall back to the CORE set. Overridable.
+DEFAULT_THRESHOLD = 0.20
 # Default cap: 10 CORE + 4 dynamic slots = 14 (≈62% shrink on the 37-tool doc
 # profile, clears the ≥60% Part-0 TTFT-reduction gate). See the plan deviations.
 DEFAULT_MAX_TOOLS = 14

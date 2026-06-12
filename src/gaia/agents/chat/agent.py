@@ -135,7 +135,7 @@ class ChatAgentConfig:
     # the full registry, shrinking first-turn prefill. Env overrides resolved in
     # __init__: GAIA_DYNAMIC_TOOLS / GAIA_DYNAMIC_TOOLS_TAU / GAIA_DYNAMIC_TOOLS_MAX.
     dynamic_tools: bool = False
-    dynamic_tools_threshold: float = 0.55  # inclusive cosine match threshold
+    dynamic_tools_threshold: float = 0.20  # inclusive cosine; calibrated #1449
     dynamic_tools_max: int = 14  # cap (10 CORE + 4 dynamic slots)
 
     # Per-agent identity for the connectors activation filter (#1005).

@@ -11,9 +11,11 @@ Where the inputs come from
 --------------------------
 * **loaded sets** — the ``TOOL_LOADER {json}`` INFO lines the loader emits each
   turn. ``gaia eval agent`` drives the agent through the backend server, so
-  these land in the *server* log. Capture it::
+  these land in the *server* log. GAIA's logger writes to **stdout**, so capture
+  stdout (``2>`` alone misses it); ``tee`` also keeps it on screen::
 
-      python -m gaia.ui.server --port 4200 --host 127.0.0.1 2> server.log
+      GAIA_DYNAMIC_TOOLS=1 python -m gaia.ui.server --port 4200 --host 127.0.0.1 \
+          2>&1 | tee server.log
 
   The loader's per-session turn counter resets to 1 on each new conversation, so
   ``turn == 1`` marks a scenario boundary; lines are grouped into scenarios in
@@ -250,9 +252,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     log_path = Path(args.log) if args.log else _discover_log(run_dir)
     if log_path is None or not log_path.is_file():
         raise SystemExit(
-            "no TOOL_LOADER log found. Capture the backend-server log "
-            "(e.g. `python -m gaia.ui.server --port 4200 2> server.log`) and pass "
-            "it via --log. The loader emits one `TOOL_LOADER {json}` line per turn."
+            "no TOOL_LOADER log found. GAIA logs to stdout, so capture stdout "
+            "(`... 2>&1 | tee server.log`, NOT `2> server.log`) and pass it via "
+            "--log. The loader emits one `TOOL_LOADER {json}` line per turn."
         )
     loaded = parse_loaded_sets_from_log(log_path.read_text(encoding="utf-8"))
     if not loaded:
