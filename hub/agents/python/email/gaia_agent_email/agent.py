@@ -113,9 +113,9 @@ ACTIONS:
   shows the user the literal recipient/subject/body; trust ONLY what
   appears there.
 - Preference tools (set_priority_sender, set_low_priority_sender,
-  set_category_default, clear_session_preferences) — mutate session-scoped
-  classification preferences. Confirm the change in plain English; the
-  preferences are wiped on agent restart by design.
+  set_category_default, clear_session_preferences) — mutate persistent
+  classification preferences that survive across restarts. Confirm the
+  change in plain English.
 
 PRE-SCAN BEHAVIOR:
 When the user asks for a pre-scan, morning brief, triage view, or "what's
@@ -269,6 +269,11 @@ class EmailTriageAgent(
         memory_db = Path(config.resolved_memory_db_path())
         memory_db.parent.mkdir(parents=True, exist_ok=True)
         self.init_memory(db_path=memory_db, context="email")
+
+        # Restore preferences from the previous session. Must come after
+        # init_memory() (so _memory_store is set) and after
+        # _session_preferences is set (done above).
+        self._load_persisted_preferences()
 
         # LLM connection. Default to Lemonade — the config's base_url
         # allowlist guarantees the host is local.
