@@ -27,7 +27,9 @@ jobs:
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv
         with:
-          install-package: ".[dev]"
+          # [ui] carries fastapi/uvicorn + the RAG deps gaia.ui.server imports at
+          # boot — the harness spawns that server, so [dev] alone fails at import.
+          install-package: ".[dev,ui]"
 
       - name: Ensure Lemonade
         shell: powershell
