@@ -595,9 +595,17 @@ async def async_main(action, **kwargs):
                 return {"response": response, "stats": stats}
         return {"response": response}
     elif action == "chat":
-        # Use Chat Agent with RAG, file search, and shell execution
-        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-        from gaia.agents.chat.app import interactive_mode
+        # Use Chat Agent with RAG, file search, and shell execution.
+        # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+        try:
+            from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+            from gaia_agent_chat.app import interactive_mode
+        except ImportError as e:
+            raise RuntimeError(
+                "The chat agent is not installed. Install it with "
+                '`pip install gaia-agent-chat` (or `pip install "amd-gaia[agents]"` '
+                "for all agents), then re-run `gaia chat`."
+            ) from e
 
         try:
             # Use silent mode when debug is off to hide intermediate processing
@@ -1011,8 +1019,16 @@ def _launch_interactive_cli(log=None):
         if not success:
             sys.exit(1)
 
-        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-        from gaia.agents.chat.app import interactive_mode
+        # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+        try:
+            from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+            from gaia_agent_chat.app import interactive_mode
+        except ImportError as e:
+            raise RuntimeError(
+                "The chat agent is not installed. Install it with "
+                '`pip install gaia-agent-chat` (or `pip install "amd-gaia[agents]"` '
+                "for all agents), then re-run `gaia chat`."
+            ) from e
 
         config = ChatAgentConfig(
             base_url=base_url or os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),

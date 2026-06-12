@@ -3,8 +3,10 @@
 
 import os
 
+# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
 
 def test_shell_injection():
