@@ -132,6 +132,34 @@ class TestLiteLLMGenerate:
         del sys.modules["litellm"]
 
 
+class TestLiteLLMEmbed:
+    def test_embed_default_model(self):
+        fake = _stub_litellm()
+        fake.embedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2, 0.3]}])
+        from gaia.llm.providers.litellm import LiteLLMProvider
+
+        provider = LiteLLMProvider(api_key="sk-test", model="text-embedding-3-small")
+        result = provider.embed(["hello"])
+
+        assert result == [[0.1, 0.2, 0.3]]
+        assert fake.embedding.call_args.kwargs["model"] == "text-embedding-3-small"
+        assert fake.embedding.call_args.kwargs["api_key"] == "sk-test"
+        del sys.modules["litellm"]
+
+    def test_embed_uses_override_model(self):
+        fake = _stub_litellm()
+        fake.embedding.return_value = MagicMock(data=[{"embedding": [0.0]}])
+        from gaia.llm.providers.litellm import LiteLLMProvider
+
+        provider = LiteLLMProvider(model="text-embedding-3-small")
+        # Overriding the model must NOT raise TypeError (model previously landed
+        # in both the explicit arg and **call_kwargs).
+        provider.embed(["hello"], model="text-embedding-3-large")
+
+        assert fake.embedding.call_args.kwargs["model"] == "text-embedding-3-large"
+        del sys.modules["litellm"]
+
+
 class TestLiteLLMNotSupported:
     def test_vision_raises_not_supported(self):
         _stub_litellm()

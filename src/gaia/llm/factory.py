@@ -24,7 +24,7 @@ def create_client(
     Create an LLM client, auto-detecting provider from parameters.
 
     Args:
-        provider: Explicit provider name ("lemonade", "openai", or "claude").
+        provider: Explicit provider name ("lemonade", "openai", "claude", or "litellm").
                   If not specified, auto-detected from use_claude/use_openai flags.
         use_claude: If True, use Claude provider (ignored if provider is specified)
         use_openai: If True, use OpenAI provider (ignored if provider is specified)
