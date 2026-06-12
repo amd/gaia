@@ -17,14 +17,17 @@ class LiteLLMProvider(LLMClient):
         system_prompt: Optional[str] = None,
         **kwargs,
     ):
-        import litellm
+        try:
+            import litellm  # noqa: F401  -- validate the optional dependency at construction
+        except ImportError as e:
+            raise ImportError(
+                "litellm is not installed. Install it with: pip install gaia[litellm]"
+            ) from e
 
         self._model = model
         self._system_prompt = system_prompt
         self._api_key = api_key
         self._extra_kwargs = kwargs
-
-        litellm.drop_params = True
 
     @property
     def provider_name(self) -> str:
@@ -59,6 +62,7 @@ class LiteLLMProvider(LLMClient):
             )
 
         call_kwargs = {**self._extra_kwargs, **kwargs}
+        call_kwargs.setdefault("drop_params", True)
         if self._api_key:
             call_kwargs["api_key"] = self._api_key
 
@@ -66,7 +70,6 @@ class LiteLLMProvider(LLMClient):
             model=model or self._model,
             messages=messages,
             stream=stream,
-            drop_params=True,
             **call_kwargs,
         )
         if stream:
@@ -76,14 +79,15 @@ class LiteLLMProvider(LLMClient):
     def embed(self, texts: list[str], **kwargs) -> list[list[float]]:
         import litellm
 
+        model = kwargs.pop("model", self._model)
         call_kwargs = {**self._extra_kwargs, **kwargs}
+        call_kwargs.setdefault("drop_params", True)
         if self._api_key:
             call_kwargs["api_key"] = self._api_key
 
         response = litellm.embedding(
-            model=kwargs.pop("model", self._model),
+            model=model,
             input=texts,
-            drop_params=True,
             **call_kwargs,
         )
         return [item["embedding"] for item in response.data]
