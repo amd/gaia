@@ -303,36 +303,32 @@
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>At a glance</div>
     <h2 style="margin-top:16px">The capability surface at a glance</h2>
-    <p class="body-t">Twelve capabilities are shipped today (<b>4 validated</b>, <b>8 wired</b>); <b>5 more are planned</b> (13–17). Every action carries a <b>guardrail tier</b>: <b>Tier&nbsp;0</b> read-only, <b>Tier&nbsp;1</b> reversible (30-second undo + bulk batch-confirm), <b>Tier&nbsp;2</b> explicit confirmation. The last two columns flag whether a capability needs the <b>always-on</b> or <b>personalization</b> tracks.</p>
-    <p class="body-t">Mail is read through your connected <b>Gmail or Outlook</b> account (both shipped — Gmail <a class="iss" href="https://github.com/amd/gaia/issues/962" target="_blank" rel="noopener">#962</a>, Outlook <a class="iss" href="https://github.com/amd/gaia/issues/1275" target="_blank" rel="noopener">#1275</a>/<a class="iss" href="https://github.com/amd/gaia/issues/1276" target="_blank" rel="noopener">#1276</a>). A <b>personalization &amp; memory</b> track (below) makes the agent learn how you work, and several <b>contract enhancements</b> are planned — see <a class="iss" href="#personalization">Personalization</a> and the <a class="iss" href="#reference">proposed contract additions</a>. Tip: click any row below to jump to its full entry.</p>
+    <p class="body-t">GAIA's Email Agent triages, drafts, sends, and organizes mail — all on-device through your connected <b>Gmail or Outlook</b>. Every action runs under a <b>guardrail tier</b>: <b>Tier&nbsp;0</b> read-only, <b>Tier&nbsp;1</b> reversible (30-second undo), <b>Tier&nbsp;2</b> needs your confirmation. <b>17 capabilities</b> across three states — <b>4 validated, 8 wired, 5 planned</b> — plus a personalization track that learns how you work. Click any row to jump to its full entry.</p>
 
     <div class="cards3">
       <div class="gcard" style="border-top-color:var(--ok)">
-        <div class="lab" style="color:var(--ok)">Completed · shipped</div>
-        <h3>Validated &amp; demoed</h3>
+        <div class="lab" style="color:var(--ok)">Shipped</div>
+        <h3>4 validated</h3>
         <ul>
-          <li><b>4 capabilities</b> — 4-way triage, per-email summary, draft reply, phishing detection</li>
-          <li>Stable contract (<a class="iss" href="https://github.com/amd/gaia/issues/1262" target="_blank" rel="noopener">#1262</a>) + send-confirmation gate (<a class="iss" href="https://github.com/amd/gaia/issues/1264" target="_blank" rel="noopener">#1264</a>)</li>
-          <li>Gmail (<a class="iss" href="https://github.com/amd/gaia/issues/962" target="_blank" rel="noopener">#962</a>) + Outlook (<a class="iss" href="https://github.com/amd/gaia/issues/1275" target="_blank" rel="noopener">#1275</a>/<a class="iss" href="https://github.com/amd/gaia/issues/1276" target="_blank" rel="noopener">#1276</a>) connectors</li>
-          <li>Tag: <span class="pill ok">Validated</span></li>
+          <li>Triage, summary, draft, phishing detection</li>
+          <li>Stable contract + send-confirmation gate (<a class="iss" href="https://github.com/amd/gaia/issues/1262" target="_blank" rel="noopener">#1262</a> · <a class="iss" href="https://github.com/amd/gaia/issues/1264" target="_blank" rel="noopener">#1264</a>)</li>
+          <li>Gmail + Outlook connectors (<a class="iss" href="https://github.com/amd/gaia/issues/962" target="_blank" rel="noopener">#962</a> · <a class="iss" href="https://github.com/amd/gaia/issues/1275" target="_blank" rel="noopener">#1275</a>/<a class="iss" href="https://github.com/amd/gaia/issues/1276" target="_blank" rel="noopener">#1276</a>)</li>
         </ul>
       </div>
       <div class="gcard t1">
-        <div class="lab">In progress · WIP</div>
-        <h3>Built, validation underway</h3>
+        <div class="lab">In progress</div>
+        <h3>8 wired</h3>
         <ul>
-          <li><b>8 capabilities</b> wired but not yet tested — pre-scan, thread, send, batch archive, quarantine+undo, calendar detect/conflicts/create</li>
-          <li><b>4 personalization</b> features in flight (P1–P4)</li>
-          <li>Tags: <span class="pill wip">Wired</span> <span class="pill wip">In flight</span></li>
+          <li>Pre-scan, threads, send, batch archive, undo, calendar — built, validation underway</li>
+          <li>4 personalization features in flight (P1–P4)</li>
         </ul>
       </div>
       <div class="gcard" style="border-top-color:var(--faint)">
-        <div class="lab" style="color:var(--faint)">Planned · scoped</div>
-        <h3>Not yet built</h3>
+        <div class="lab" style="color:var(--faint)">Planned</div>
+        <h3>5 + schema 2.0</h3>
         <ul>
-          <li><b>6 planned features</b> — integrated as capabilities 13–17 + personalization P5; filed as P3 stretch in <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a></li>
-          <li><b>Schema 2.0</b> (breaking) — 5-bucket taxonomy + <code>suggested_action</code>, plus additive context / usage / action-item type</li>
-          <li>Tag: <span class="pill t0">planned</span></li>
+          <li>Capabilities 13–17 + personalization P5 — <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</li>
+          <li><b>Schema 2.0</b> (breaking) — 5-bucket taxonomy + <code>suggested_action</code></li>
         </ul>
       </div>
     </div>
