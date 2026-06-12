@@ -18,12 +18,13 @@ class LiteLLMProvider(LLMClient):
         **kwargs,
     ):
         try:
-            import litellm  # noqa: F401  -- validate the optional dependency at construction
+            import litellm
         except ImportError as e:
             raise ImportError(
                 "litellm is not installed. Install it with: pip install 'gaia[litellm]'"
             ) from e
 
+        self._litellm = litellm
         self._model = model
         self._system_prompt = system_prompt
         self._api_key = api_key
@@ -54,8 +55,6 @@ class LiteLLMProvider(LLMClient):
         stream: bool = False,
         **kwargs,
     ) -> Union[str, Iterator[str]]:
-        import litellm
-
         if self._system_prompt:
             messages = [{"role": "system", "content": self._system_prompt}] + list(
                 messages
@@ -66,7 +65,7 @@ class LiteLLMProvider(LLMClient):
         if self._api_key:
             call_kwargs["api_key"] = self._api_key
 
-        response = litellm.completion(
+        response = self._litellm.completion(
             model=model or self._model,
             messages=messages,
             stream=stream,
@@ -77,15 +76,13 @@ class LiteLLMProvider(LLMClient):
         return response.choices[0].message.content
 
     def embed(self, texts: list[str], **kwargs) -> list[list[float]]:
-        import litellm
-
         model = kwargs.pop("model", self._model)
         call_kwargs = {**self._extra_kwargs, **kwargs}
         call_kwargs.setdefault("drop_params", True)
         if self._api_key:
             call_kwargs["api_key"] = self._api_key
 
-        response = litellm.embedding(
+        response = self._litellm.embedding(
             model=model,
             input=texts,
             **call_kwargs,
