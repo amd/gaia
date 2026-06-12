@@ -269,6 +269,7 @@
     <a class="l" href="#capabilities">Capabilities</a>
     <a class="l" href="#personalization">Personalization</a>
     <a class="l" href="#workflows">Workflows</a>
+    <a class="l" href="#autonomy">Autonomy</a>
     <a class="l" href="#eval">Eval data</a>
     <a class="l" href="#reference">API Reference</a>
   </div>
@@ -990,6 +991,79 @@ quarantine_phishing_message → { "ok": true, "data": {
       </ol>
       <div class="ds"><b>Dataset:</b> messages carrying attachments + a reply intent. Expected: the attachment is surfaced in triage/summary, the reply carries the correct file, and the send is gated.</div>
     </div>
+  </div>
+</section>
+
+<!-- ───────── AUTONOMY & ALWAYS-ON ───────── -->
+<section class="sec" id="autonomy">
+  <div class="wrap">
+    <div class="eyebrow"><span class="bar"></span>Part 2b · Autonomy &amp; always-on</div>
+    <h2 style="margin-top:16px">Running unattended <span class="pill planned" style="vertical-align:middle">planned</span></h2>
+    <p class="body-t">The agent can run on its own — woken by a <b>schedule</b>, an <b>event</b>, or a job it <b>queued for itself</b> — entirely on-device. The schedule mechanism ships today in the Agent UI (persisted recurring + one-shot jobs); the full always-on model (heartbeat, webhooks, self-scheduling, background service) is the <b>autonomy engine</b> (<a class="iss" href="https://github.com/amd/gaia/issues/555" target="_blank" rel="noopener">#555</a>), planned for the email agent.</p>
+
+    <h3 style="margin-top:34px">What wakes the agent</h3>
+    <div class="cards3">
+      <div class="gcard"><div class="lab">Time · schedule</div><h3>Recurring &amp; one-shot</h3>
+        <ul>
+          <li>Human-readable schedules (not raw cron)</li>
+          <li>Powers the daily briefing, scheduled send / snooze, periodic triage / digest, and follow-up re-checks</li>
+          <li>Jobs are persisted and auto-restart on startup</li>
+        </ul></div>
+      <div class="gcard"><div class="lab">Event · hooks <span class="opt">(planned)</span></div><h3>On arrival</h3>
+        <ul>
+          <li>A new-mail <b>webhook</b> or poll triggers triage the moment mail lands</li>
+          <li>System events (wake, network) can resume queued work</li>
+          <li>Each inbound is processed once (idempotent)</li>
+        </ul></div>
+      <div class="gcard"><div class="lab">User · on demand</div><h3>One-off run</h3>
+        <ul>
+          <li>A chat or CLI request runs the agent once</li>
+          <li>The same capabilities, just human-initiated</li>
+          <li>Can also <em>create</em> a schedule ("brief me every morning at 8")</li>
+        </ul></div>
+    </div>
+
+    <h3 style="margin-top:40px">Self-scheduling loop</h3>
+    <p class="body-t">On each wake the agent runs <b>THINK → ACT → SCHEDULE → COMPLETE</b>: it assesses what changed, takes the allowed actions, and may <b>queue its own next run</b> — "re-check this thread tomorrow", "nudge if no reply in two days", "re-scan the calendar before the proposed slot". Self-scheduling is <b>bounded</b> — a finite horizon, idempotent steps, a capped frequency, and safe-mode by default — so it cannot run away.</p>
+
+    <h3 style="margin-top:40px">Schedule format</h3>
+    <p class="body-t">Schedules are human-readable strings, parsed to concrete timers; one-shot jobs are supported too.</p>
+    <pre class="code">"every 30m"                      // interval
+"hourly"  |  "daily"  |  "weekly"  // aliases
+"daily at 8am"                   // time-of-day
+"weekdays at 9am"                // day-of-week
+"every hour from 8am to 6pm"     // windowed
+one-shot: "in 2 days", "tomorrow at 9am"</pre>
+
+    <h3 style="margin-top:40px">Guardrails when unattended</h3>
+    <p class="body-t">The tier model still governs everything — but with no human in the loop, the rule is simple: <b>nothing external happens without a person.</b></p>
+    <table class="tbl">
+      <thead><tr><th>Tier</th><th>Unattended behavior</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pill t0">Tier 0</span> read · triage · summarize · detect</td><td>Runs freely; no approval.</td></tr>
+        <tr><td><span class="pill t1">Tier 1</span> organize · auto-quarantine phishing/spam</td><td>Runs automatically — the user is <b>notified</b> and everything is <b>reversible</b> (the spam-style model).</td></tr>
+        <tr><td><span class="pill t2">Tier 2</span> send · forward · create event · RSVP · permanent delete</td><td><b>Never auto-fires.</b> The action is <b>queued to a pending-approvals list</b> with a notification, and runs only after the user approves. Safe mode is the default.</td></tr>
+        <tr><td><span class="pill t2" style="background:var(--ink)">cross-cutting</span> prompt injection</td><td>The untrusted-body defense is always on — and matters most when no human is watching the output.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:40px">Always-on service</h3>
+    <div class="cards2">
+      <div class="gcard"><div class="lab">Runtime</div>
+        <ul>
+          <li>Runs as a background service (system-tray app on desktop)</li>
+          <li>Jobs persist across restarts and resume automatically</li>
+          <li>Every run is written to an activity log</li>
+        </ul></div>
+      <div class="gcard"><div class="lab">Enables</div>
+        <ul>
+          <li>Capabilities <b>15</b> (follow-up), <b>16</b> (daily briefing), <b>17</b> (scheduled send / snooze)</li>
+          <li>Periodic runs of <b>W1</b> (morning triage) and <b>W5</b> (daily digest)</li>
+          <li>Surfaced via desktop notifications; safe mode default, dangerous mode opt-in</li>
+        </ul></div>
+    </div>
+
+    <p class="body-t" style="margin-top:18px"><b>Evaluating it:</b> the scheduled / triggered <code>scenario</code> fixtures (the <code>scn</code> · scheduled / timed rows in the <a class="iss" href="#covmatrix">coverage matrix</a>) validate autonomy — assert a job fires at the right time (and not before), a self-scheduled follow-up is queued, and every Tier-2 action <b>queues for approval rather than auto-sending</b>.</p>
   </div>
 </section>
 
