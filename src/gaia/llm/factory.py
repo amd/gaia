@@ -10,6 +10,7 @@ _PROVIDERS: dict[str, str] = {
     "lemonade": "gaia.llm.providers.lemonade.LemonadeProvider",
     "openai": "gaia.llm.providers.openai_provider.OpenAIProvider",
     "claude": "gaia.llm.providers.claude.ClaudeProvider",
+    "litellm": "gaia.llm.providers.litellm.LiteLLMProvider",
 }
 
 
