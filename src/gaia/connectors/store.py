@@ -367,10 +367,21 @@ def list_connections() -> List[str]:
     Best-effort enumeration of stored providers.
 
     The ``keyring`` API does not expose a portable "list all entries for
-    service" call. v1 returns the providers we know about (currently
-    just ``google``); future providers extend this.
+    service" call, so we probe each registered OAuth provider for a stored
+    connection blob. The provider set is registry-driven (every ``oauth_pkce``
+    spec), so a newly added provider is enumerated without editing this
+    function — and generic consumers (``api.list_connections`` /
+    ``get_connection`` / the REST endpoint / ``tripwire_check``) see every
+    connected mailbox, not just Google.
     """
-    known = ("google",)
+    # Function-local import: keep this module free of a module-level registry
+    # dependency (mirrors ``api._require_mcp_server_for_activation``). Importing
+    # the catalog registers the built-in specs; the module cache makes repeats a
+    # no-op.
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    known = tuple(spec.id for spec in REGISTRY.all() if spec.type == "oauth_pkce")
     found: list[str] = []
     for provider in known:
         username = _connection_username(provider, DEFAULT_ACCOUNT)
