@@ -24,10 +24,11 @@ This milestone delivers that path: the email agent distributed through **npm** a
 
 ### Goals
 
-- A host web app can run `npm install @gaia/agent-email` and get a working local email agent — **no Python install, no C++ toolchain, no build step**.
+- A host web app can run `npm install @gaia/agent-email` and, with one **build-time fetch** step, get a working local email agent — **no Python install, no C++ toolchain, no compile step**.
+- The npm package stays **lightweight** (JS/TS client + fetch CLI only); the large binaries live in **R2** object storage, the single source of truth.
 - **One REST contract** backs both the Python and C++ implementations; the host integrates once and is implementation-agnostic.
-- Installs are **reproducible and offline-friendly** (lockfile-captured, no `postinstall` network fetch).
-- Each platform downloads **only its own binary**, not all four.
+- The platform binary is **present on disk at build/sign time** (fetched before the host signs its app), so it's covered by the host's code signature and runs **fully offline at runtime**.
+- Each platform fetches **only its own binary**, integrity-verified against a **pinned SHA-256** — fail loudly on mismatch.
 - Binaries are **signed/notarized** so a host app that bundles them stays signable.
 
 ### Non-goals (this milestone)
@@ -44,12 +45,14 @@ This milestone delivers that path: the email agent distributed through **npm** a
 | Asset | State |
 |-------|-------|
 | `gaia-agent-email` wheel + sdist | ✅ Builds via `build-agent-wheel` composite action |
-| GitHub-prerelease share | ✅ `build_agent_package.yml` (`workflow_dispatch`), `agent-pkg-email-v0.1.0` published |
+| GitHub-prerelease share | ✅ `build_agent_package.yml` (`workflow_dispatch`), `agent-pkg-email-v0.1.0` published — kept as the **manual** mirror |
+| R2 distribution backend (`workers/agent-hub/`) | ✅ Cloudflare Worker exists — reuse as the **canonical** binary store |
 | PyPI publish | ⏸ Paused (#1179) — out of scope here |
 | REST API surface | ✅ Email REST router exists (triage, connectors); needs a published contract |
 | npm client | ❌ Does not exist — **this milestone** |
 | Frozen Python binary (no-interpreter) | ❌ Does not exist — **this milestone** |
 | C++ implementation + binary | ❌ `hub/agents/cpp/` is an empty placeholder — **this milestone** |
+| Build-time fetch CLI + SHA-256 manifest | ❌ Does not exist — **this milestone** |
 | Signed/notarized binaries | ❌ Does not exist — **this milestone** |
 | Sidecar lifecycle contract | ❌ Not specified — **this milestone** |
 
@@ -73,49 +76,59 @@ The agent runs as a **separate local process** the host app spawns, supervises, 
 └─────────────────────────┘
 ```
 
-### npm layout — `optionalDependencies` + `os`/`cpu`
+### Distribution — thin npm package + build-time R2 fetch
 
-Mirrors the proven pattern used by esbuild / swc / Rollup: the main package carries **only** the JS/TS client and a resolver; each platform binary is a **separate optional dependency** gated by `os`/`cpu`, so npm installs exactly one.
+The npm package carries **only** the JS/TS client and a small fetch CLI — **no binaries**. The large per-platform binaries live in **R2** (the existing `workers/agent-hub/` backend), which becomes the single source of truth. The host pulls its platform binary with an **explicit build-time step**, before it signs its app.
 
 ```
-@gaia/agent-email                 ← main: JS/TS client + resolver, NO binaries
-  optionalDependencies:
-    @gaia/agent-email-win32-x64
-    @gaia/agent-email-darwin-arm64
-    @gaia/agent-email-darwin-x64
-    @gaia/agent-email-linux-x64
+@gaia/agent-email                 ← npm: JS/TS client + `fetch` CLI + SHA-256 manifest. NO binaries.
+        │  build-time: npx @gaia/agent-email fetch
+        ▼
+R2 (canonical)                    ← per-platform binaries, immutable, versioned
+  agent-email/<version>/email-win32-x64.exe
+  agent-email/<version>/email-darwin-arm64
+  agent-email/<version>/email-darwin-x64
+  agent-email/<version>/email-linux-x64
+        │  verified against pinned SHA-256, written to the host's resources dir
+        ▼
+host app bundle (signed)          ← binary on disk at sign time → covered by the host signature
 ```
+
+The fetch CLI resolves `${process.platform}-${process.arch}`, downloads that one object from R2, **verifies it against a SHA-256 pinned in the package** (fail loudly on mismatch), and writes it to a host-specified resources directory:
 
 ```jsonc
-// @gaia/agent-email-darwin-arm64/package.json
+// @gaia/agent-email/package.json (the only published binary-bearing artifact is the manifest)
 {
-  "name": "@gaia/agent-email-darwin-arm64",
+  "name": "@gaia/agent-email",
   "version": "0.1.0",
-  "os": ["darwin"],
-  "cpu": ["arm64"],
-  "files": ["bin/"]          // the frozen Python or native C++ binary
+  "bin": { "agent-email": "./cli.js" },     // exposes `npx @gaia/agent-email fetch`
+  "files": ["dist/", "binaries.lock.json"]  // SHA-256 + R2 keys per platform, no binaries
 }
 ```
 
 ```ts
-// @gaia/agent-email — runtime resolution
-function binaryPath(): string {
-  const pkg = `@gaia/agent-email-${process.platform}-${process.arch}`;
+// resolves the *fetched* binary (written by the build-time fetch step), not an npm sub-package
+function binaryPath(resourcesDir: string): string {
   const ext = process.platform === "win32" ? ".exe" : "";
-  return require.resolve(`${pkg}/bin/agent${ext}`);
+  return path.join(resourcesDir, `email-${process.platform}-${process.arch}${ext}`);
 }
 ```
 
-**Why not the alternatives:**
+**Build-time, not runtime.** The fetch runs in the host's build pipeline *before* code-signing, so the binary is on disk when the host signs and notarizes — it is covered by the host's signature and needs no network at runtime. A **runtime / first-init download is explicitly rejected**: a binary fetched after the app is signed is not covered by the signature (macOS Gatekeeper quarantine blocks it; Windows SmartScreen flags it) and breaks offline first-run.
 
-- **Single fat package** (all binaries in one tarball) — every user downloads all platforms; frozen-Python binaries are large (~40–100 MB each), pushing the combined tarball into hundreds of MB and against practical size limits. Rejected.
-- **`postinstall` download** (node-pre-gyp / prebuild-install style) — breaks under `npm install --ignore-scripts`, breaks offline/air-gapped and behind proxies, and is not lockfile-reproducible. Rejected as default; reserved only as a fallback if a frozen binary exceeds registry size limits (see [Risks](#risks)).
+**Why this over the alternatives:**
+
+- **Binaries in npm via `optionalDependencies`** (esbuild/swc pattern) — considered, and viable; it's the most reproducible (lockfile-pinned) and lowest-friction for the consumer (`npm install` just works). Rejected as the default here because frozen-Python binaries are large (~40–100 MB each), and we want **one canonical binary store (R2)** shared across the npm path, the `gaia agent install` Hub path, and the GitHub manual share — rather than duplicating tens of MB into the npm registry per release.
+- **`postinstall` download** — breaks under `npm install --ignore-scripts` and behind proxies; rejected. The fetch is an **explicit build step**, not an install hook.
+- **Runtime / first-init download** — rejected (signing + offline reasons above).
+
+A **runtime-fetch mode** is offered *only* for the non-bundled server/dev consumer (behind an explicit flag, same SHA-256 verification, fails loudly when offline) — never into a signed app bundle.
 
 ### Lifecycle handshake
 
 The host app implements a deterministic startup sequence; the client SDK provides helpers for each step:
 
-1. **Resolve** the platform binary (`binaryPath()` above).
+1. **Resolve** the platform binary (`binaryPath()` above) — the binary fetched at build time from R2 and SHA-verified.
 2. **Spawn** it on an allocated loopback port (`agent --port <p> --host 127.0.0.1`).
 3. **Health** — poll `GET /health` until ready or timeout (fail loudly on timeout — no silent "assume ready").
 4. **Version-check** — `GET /version` returns `{ apiVersion, agentVersion }`; the client refuses a mismatched `apiVersion` with an actionable error rather than making calls against an incompatible binary.
@@ -147,21 +160,21 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 - Freeze `gaia-agent-email` (PyInstaller or Nuitka) into a single self-contained executable that boots the REST server.
 - Per-platform builds: `win32-x64`, `darwin-arm64`, `darwin-x64`, `linux-x64`.
 - Smoke test each frozen binary in a **clean environment with no Python**: spawn → health → version → triage.
-- Measure binary size per platform; record against npm/registry limits (gates the [Risks](#risks) fallback decision).
+- Compute and record each binary's **SHA-256** (feeds the Phase 3 pinned manifest); measure per-platform size for R2 storage/transfer.
 
 **Exit criteria:** all four frozen binaries pass the no-Python smoke test and the lifecycle handshake.
 
-### Phase 3 — npm packaging & publish pipeline
+### Phase 3 — R2 distribution + thin npm package
 
-**Goal:** `npm install @gaia/agent-email` yields a working agent, one binary per platform.
+**Goal:** `npm install @gaia/agent-email` + one build-time fetch yields a working, signature-ready agent.
 
-- Create the four `@gaia/agent-email-<os>-<arch>` platform packages with correct `os`/`cpu` and `files`.
-- Wire the main package's `optionalDependencies` to **exact** sub-package versions (no `^`) so client and binary never drift.
-- Ensure POSIX binaries carry the **executable bit** in the published tarball; CI `chmod +x` before publish.
-- Document the **`asarUnpack`/`extraResources`** requirement for hosts that bundle into an Electron-style asar archive (binaries in an asar cannot be spawned).
-- CI release matrix: build each platform binary → assemble its package → sign → publish all packages **atomically on one tag** (main + 4 sub-packages, locked versions).
+- Publish the four per-platform binaries to **R2** under an immutable, versioned key layout (`agent-email/<version>/email-<os>-<arch>`), via the existing `workers/agent-hub/` backend.
+- Build the thin `@gaia/agent-email` npm package: JS/TS client + `fetch` CLI + a **`binaries.lock.json`** manifest pinning each platform's R2 key and **SHA-256**.
+- `fetch` CLI: resolve platform → download from R2 → **verify SHA-256 (fail loudly on mismatch)** → write to the host-specified resources dir → `chmod +x` on POSIX.
+- Document the host integration: run `npx @gaia/agent-email fetch` as a **build step before signing**, and (for Electron-style hosts) keep the fetched binary outside the `asar` (`extraResources`) so it can be spawned.
+- CI release matrix: build each binary → SHA → upload to R2 → publish the npm package, **atomically on one tag** (manifest SHAs must match the uploaded R2 objects or the release fails).
 
-**Exit criteria:** on three real OSes, a clean `npm install @gaia/agent-email` downloads only that platform's binary and the lifecycle handshake succeeds.
+**Exit criteria:** on three real OSes, `npm install` + `npx @gaia/agent-email fetch` retrieves the platform binary, SHA-256 verifies, and the lifecycle handshake succeeds; install works under `--ignore-scripts`.
 
 ### Phase 4 — Code signing & notarization
 
@@ -179,7 +192,7 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 - Stand up the C++ email agent server under `hub/agents/cpp/email/`, implementing the Phase 1 OpenAPI contract (same routes, same `/version` `apiVersion`).
 - Build static / dependency-bundled binaries for the four platforms via the existing C++ build infrastructure (`build_cpp.yml`, `cpp/packaging/`).
-- Distribute via the **same npm platform-package mechanism** — the host install path is unchanged; only the binary's provenance differs.
+- Distribute via the **same R2 + thin-package mechanism** — upload to the same R2 key layout, pin SHA-256 in the manifest; the host install + fetch path is unchanged, only the binary's provenance differs.
 - Conformance test: the C++ binary passes the **same contract test suite** as the Python binary (identical request/response behavior).
 
 **Exit criteria:** the C++ binary is a drop-in for the frozen Python binary behind the same client, validated by a shared contract test suite.
@@ -188,18 +201,19 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 ## CI / Release Pipeline
 
-- **Build matrix** produces all four platform binaries per implementation, runs `chmod +x`, signs, and stages the npm packages.
-- **Atomic publish:** main package + 4 platform packages publish on a single tag with locked, matching versions — a partial publish (client without its binary, or vice versa) must fail the whole release.
-- **Namespacing:** keep the agent-package release tags namespaced (`agent-pkg-email-*`) so they never fire the paused PyPI workflows (`publish.yml` / `publish_agents.yml`), exactly as the current GitHub-share workflow does.
+- **Build matrix** produces all four platform binaries per implementation, runs `chmod +x`, signs, and computes SHA-256.
+- **Atomic release:** upload binaries to R2 → write the pinned manifest → publish the thin npm package, on a single tag. The manifest's SHA-256s must match the uploaded R2 objects, and the npm package must reference an R2 version that exists, or the whole release fails — no client-without-binary or stale-SHA states.
+- **Canonical store = R2, mirror = GitHub:** R2 (`workers/agent-hub/`) is the programmatic source of truth for binaries; the `agent-pkg-email-*` GitHub release stays as the manual, no-login mirror.
+- **Namespacing:** keep release tags namespaced (`agent-pkg-email-*`) so they never fire the paused PyPI workflows (`publish.yml` / `publish_agents.yml`).
 - **Reuse, don't fork:** extend the existing `build-agent-wheel` composite action and `util/list_agent_packages.py` discovery rather than adding a parallel recipe, so build logic can't drift.
-- **Distribution registries:** scoped npm (`@gaia/*`) — private during pre-GA, public at launch. GitHub Releases remain the channel for raw signed binaries and the Python wheel/sdist.
+- **Distribution registries:** scoped npm (`@gaia/*`) — private during pre-GA, public at launch.
 
 ---
 
 ## Versioning & Contract Governance
 
 - **`apiVersion`** (SemVer) is the host-facing contract version, advertised on `/version`. Breaking REST changes bump its major.
-- **Package version** tracks the agent build; the four platform packages and the main client always publish in lockstep with **exact** version pins.
+- **Package version** tracks the agent build; the npm package, the R2 binary version (`agent-email/<version>/…`), and the pinned `binaries.lock.json` manifest always publish in lockstep — the manifest references the matching R2 version, never a floating one.
 - The **OpenAPI spec is the single source of truth** — client, Python server, and C++ server are all validated against it in CI. A change to the contract that isn't reflected in all three fails CI.
 - Client refuses a binary whose `apiVersion` major it doesn't support — **fail loudly**, never best-effort against an incompatible server.
 
@@ -214,15 +228,19 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 | Clean-env | Frozen Python binary on a machine with **no Python**; C++ binary with **no toolchain** |
 | Per-platform | Full install + handshake on `win32-x64`, `darwin-arm64`, `darwin-x64`, `linux-x64` |
 | Conformance | Python and C++ binaries pass the **same** contract suite (drop-in equivalence) |
-| Signing | Notarization (macOS) / SmartScreen (Windows) on a test host app that bundles the binaries |
-| Install shape | `npm install` pulls exactly one platform package; `--ignore-scripts` still works (no `postinstall`) |
+| Signing | Notarization (macOS) / SmartScreen (Windows) on a test host app that runs the build-time fetch then bundles + signs the binary |
+| Integrity | `fetch` rejects a tampered/size-mismatched R2 object (SHA-256 fail-loud); succeeds on a match |
+| Offline runtime | After a build-time fetch, the agent spawns and serves with **no network** |
+| Install shape | `npm install` pulls only the thin package; `--ignore-scripts` still works (fetch is an explicit step, not a hook) |
 
 ---
 
 ## Risks
 
-- **Frozen-Python binary size** — may approach npm/registry per-package limits. *Mitigation:* the `optionalDependencies` split means each user pulls only one; if a single binary still exceeds limits, fall back to a CDN download **for that package only** (measured in Phase 2 before committing).
-- **Signing ownership unresolved** — blocks Phase 3 publish. *Mitigation:* resolve the cert-ownership decision (us vs. partner) before the first signed release.
+- **Runtime download mistaken for build-time fetch** — if a host wires the fetch at runtime/first-init instead of at build time, the binary lands outside its code signature (Gatekeeper/SmartScreen blocks) and breaks offline first-run. *Mitigation:* make `fetch` an explicit, documented build step; the integration guide leads with "fetch before sign"; the runtime-fetch flag is opt-in and documented as server/dev-only.
+- **R2 availability / integrity at build time** — a build can't fetch if R2 is down or an object is corrupt. *Mitigation:* immutable versioned keys, SHA-256 pinned in the package (fail loudly on mismatch), and the GitHub release as a manual fallback mirror.
+- **Manifest ↔ R2 drift** — a published SHA that doesn't match the uploaded object bricks every consumer. *Mitigation:* the atomic release gates publish on manifest SHAs matching R2 objects.
+- **Signing ownership unresolved** — blocks the first signed release. *Mitigation:* resolve the cert-ownership decision (us vs. partner) before Phase 4.
 - **Contract drift between Python and C++** — two implementations of one spec can diverge. *Mitigation:* shared OpenAPI source of truth + a single conformance suite both must pass in CI.
 - **Electron asar packaging** — binaries inside an asar can't be spawned. *Mitigation:* document the `asarUnpack` requirement prominently in the integration guide.
 - **Executable-bit loss** — a binary published without the exec bit fails to spawn on POSIX. *Mitigation:* CI `chmod +x` + a post-pack assertion.
@@ -239,9 +257,9 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 ## Exit Criteria (Milestone)
 
-1. `npm install @gaia/agent-email` on each of the four target platforms yields a working agent with no Python/C++ prerequisites, pulling only that platform's binary.
+1. `npm install @gaia/agent-email` + `npx @gaia/agent-email fetch` on each of the four target platforms yields a working agent with no Python/C++ prerequisites, pulling only that platform's binary from R2 and SHA-256-verifying it.
 2. The JS/TS client runs the full lifecycle handshake and a triage round-trip against the frozen Python binary.
-3. Binaries are signed/notarized and verified inside a test host app.
+3. Binaries are signed/notarized and verified inside a test host app that fetched at build time; the agent then runs **offline**.
 4. The C++ binary passes the same contract suite as the Python binary and is a drop-in behind the same client.
-5. Installs are lockfile-reproducible and succeed under `--ignore-scripts`.
+5. The thin npm package installs under `--ignore-scripts`; `fetch` fails loudly on a SHA-256 mismatch or when offline.
 6. The OpenAPI contract is published and enforced in CI across client + both servers.
