@@ -132,6 +132,14 @@ def parse_loaded_sets_from_log(text: str) -> List[List[List[str]]]:
 
     A new scenario begins at each ``"turn": 1`` selection line (the loader resets
     its turn counter per conversation).
+
+    Assumption: every scenario emits a ``turn == 1`` line. A turn-1 *embedder
+    failure* session-disables the loader before ``_log_selection`` runs, so that
+    scenario emits no ``TOOL_LOADER`` line and its boundary is missed — quietly
+    shifting the per-scenario alignment. This is an eval-tooling edge case (the
+    embedder is up for a real recall run); if it happens, the per-scenario /
+    per-turn count mismatch surfaces as an alignment warning in
+    :func:`compute_recall` rather than passing silently.
     """
     scenarios: List[List[List[str]]] = []
     current: List[List[str]] = []
@@ -167,8 +175,8 @@ def _model_is_native(scorecard: Dict) -> bool:
         from gaia.llm.lemonade_client import is_tool_calling_model
 
         return is_tool_calling_model(model)
-    except Exception:
-        # If we can't classify, treat as native so misses don't hard-fail.
+    except ImportError:
+        # Can't import the classifier — treat as native so misses don't hard-fail.
         return True
 
 

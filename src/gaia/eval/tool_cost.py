@@ -88,14 +88,24 @@ _OPTIONAL_DEPS = (
 )
 
 
-def _ensure_optional_deps_stubbed() -> None:
-    """Stub missing heavy optional deps so the chat agent can import."""
+def _ensure_optional_deps_stubbed() -> List[str]:
+    """Stub missing heavy optional deps so the chat agent can import.
+
+    Returns the names this call newly stubbed, so the caller can remove them
+    again — a leaked ``MagicMock`` makes ``import faiss`` *succeed* for later
+    tests that probe for the real dep, turning their graceful-skip into a hard
+    failure. Modules already present (real or stubbed by someone else) are left
+    untouched and not returned.
+    """
+    stubbed: List[str] = []
     for mod in _OPTIONAL_DEPS:
         if mod in sys.modules:
             continue
         if importlib.util.find_spec(mod) is not None:
             continue
         sys.modules[mod] = MagicMock()
+        stubbed.append(mod)
+    return stubbed
 
 
 def get_tokenizer() -> Optional[Any]:
@@ -156,50 +166,60 @@ def build_doc_agent_skeleton(
 
     The freshly registered tools are snapshotted into the instance via
     ``_instance_tools``; the global registry is restored on the way out.
+
+    Cleans up after itself: any ``MagicMock`` dep stubs this call adds are
+    removed from ``sys.modules`` on exit. Without that, a leaked ``faiss``/
+    ``pypdf`` mock makes ``import faiss`` *succeed* for later tests that probe
+    for the real dep — turning their graceful-skip into a hard failure. (Only
+    the stubs are removed; gaia modules stay cached, since the consumers that
+    matter import these deps lazily, so dropping the stub is enough.)
     """
-    _ensure_optional_deps_stubbed()
+    stubbed = _ensure_optional_deps_stubbed()
+    try:
+        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
-    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-    cfg = ChatAgentConfig(
-        rag_documents=[],
-        streaming=False,
-        silent_mode=True,
-        prompt_profile=profile,
-    )
-
-    with _isolated_registry() as tools_mod:
-        stack = contextlib.ExitStack()
-        stack.enter_context(
-            patch("gaia.agents.base.agent.Agent.__init__", return_value=None)
+        cfg = ChatAgentConfig(
+            rag_documents=[],
+            streaming=False,
+            silent_mode=True,
+            prompt_profile=profile,
         )
-        if deterministic:
-            # No npx -> search_documentation skipped; scrub PERPLEXITY_API_KEY
-            # -> search_web skipped. clear=True + filtered copy removes the key
-            # for the duration and restores the full environment afterwards.
-            stack.enter_context(patch("shutil.which", return_value=None))
-            scrubbed = {
-                k: v for k, v in os.environ.items() if k != "PERPLEXITY_API_KEY"
-            }
-            stack.enter_context(patch.dict(os.environ, scrubbed, clear=True))
 
-        with stack:
-            agent = ChatAgent.__new__(ChatAgent)
-            agent.config = cfg
-            agent._instance_tools = None
-            agent.model_id = "Gemma-4-E4B-it-GGUF"
-            agent._memory_store = MagicMock()  # non-None -> memory tools register
-            agent.rag = MagicMock()
-            agent.console = MagicMock()
-            # Satisfy ChatAgent.__del__ so GC of the skeleton stays quiet.
-            agent.observers = []
-            agent._web_client = None
-            agent._fs_index = None
-            agent._scratchpad = None
-            agent._register_tools()
-            agent._instance_tools = dict(tools_mod._TOOL_REGISTRY)
+        with _isolated_registry() as tools_mod:
+            stack = contextlib.ExitStack()
+            stack.enter_context(
+                patch("gaia.agents.base.agent.Agent.__init__", return_value=None)
+            )
+            if deterministic:
+                # No npx -> search_documentation skipped; scrub PERPLEXITY_API_KEY
+                # -> search_web skipped. clear=True + filtered copy removes the key
+                # for the duration and restores the full environment afterwards.
+                stack.enter_context(patch("shutil.which", return_value=None))
+                scrubbed = {
+                    k: v for k, v in os.environ.items() if k != "PERPLEXITY_API_KEY"
+                }
+                stack.enter_context(patch.dict(os.environ, scrubbed, clear=True))
 
-    return agent
+            with stack:
+                agent = ChatAgent.__new__(ChatAgent)
+                agent.config = cfg
+                agent._instance_tools = None
+                agent.model_id = "Gemma-4-E4B-it-GGUF"
+                agent._memory_store = MagicMock()  # non-None -> memory tools register
+                agent.rag = MagicMock()
+                agent.console = MagicMock()
+                # Satisfy ChatAgent.__del__ so GC of the skeleton stays quiet.
+                agent.observers = []
+                agent._web_client = None
+                agent._fs_index = None
+                agent._scratchpad = None
+                agent._register_tools()
+                agent._instance_tools = dict(tools_mod._TOOL_REGISTRY)
+
+        return agent
+    finally:
+        for mod in stubbed:
+            sys.modules.pop(mod, None)
 
 
 def _render_paths(

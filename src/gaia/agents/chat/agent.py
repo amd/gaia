@@ -343,6 +343,7 @@ class ChatAgent(
         # loader never imports MemoryMixin; they resolve lazily on first select(),
         # by which point init_memory() has probed the embedder.
         self._dynamic_tools_native_warned = False
+        self._dynamic_tools_validated = False
         self.tool_loader = self._maybe_build_tool_loader()
 
         # Initialize memory subsystem (before super().__init__ which calls _register_tools)
@@ -521,6 +522,11 @@ class ChatAgent(
         if not self._dynamic_tools_active():
             return None
         self._maybe_warn_native_tool_gap()
+        if not self._dynamic_tools_validated:
+            # Fail loudly on first activation if a CORE/bundle name doesn't exist
+            # in the live registry (drift). The reverse direction is the CI test.
+            self.tool_loader.validate_registry(self._tools_registry)
+            self._dynamic_tools_validated = True
         query = self._build_tool_selection_query(user_input)
         return self.tool_loader.select(query, self._tools_registry)
 

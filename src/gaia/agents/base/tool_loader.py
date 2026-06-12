@@ -167,8 +167,14 @@ class ToolLoader:
     def validate_registry(self, registry: Dict[str, dict]) -> None:
         """Raise if CORE or any bundle names a tool absent from *registry*.
 
-        Fails loudly on drift so a new doc-profile tool forces a conscious
-        bundling decision rather than silently slipping through unselected.
+        Checks the config→registry direction only (no dead/misspelled CORE or
+        bundle names). The host agent calls this once on first activation
+        (ChatAgent does, since its doc CORE∪bundles must cover the registry) so
+        genuine drift fails loudly at runtime. ``select`` itself does *not* call
+        it — the loader tolerates bundle members absent from the registry by
+        design. The reverse direction (a *registry* tool not covered by
+        CORE/bundles, which would silently never be surfaced) is the CI bundle
+        test's job — it compares both sets exactly.
         """
         names = set(registry)
         missing_core = sorted(self._core - names)

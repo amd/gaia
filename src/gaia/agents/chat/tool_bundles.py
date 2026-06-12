@@ -7,10 +7,13 @@ the small always-on set (cap- and eviction-exempt); bundles are cohesion groups
 pulled in whole when any member is semantically matched.
 
 ``DOC_CORE_TOOLS`` ∪ all ``DOC_BUNDLES`` members must equal the doc-profile
-registry **exactly** — enforced at runtime by ``ToolLoader.validate_registry``
-(fails loudly on drift) and in CI by ``tests/unit/test_chat_tool_bundles.py``. A
-new doc-profile tool therefore forces a conscious bundling decision instead of
-silently shipping unselected.
+registry **exactly**. The drift guard is the CI test
+``tests/unit/test_chat_tool_bundles.py`` — it compares both sets and fails the
+build if a registry tool is uncovered *or* a configured name is absent, so a new
+doc-profile tool forces a conscious bundling decision instead of silently
+shipping unselected. At runtime, ``ToolLoader.validate_registry`` (called once on
+first ``select``) additionally fails loudly if any CORE/bundle name is missing
+from the registry (the config→registry direction only).
 """
 
 from __future__ import annotations

@@ -275,9 +275,11 @@ otherwise `self.tool_loader is None` and the agent stays on the legacy path.
 **Bundles (cohesion groups, pulled in whole on a member match):** `rag_query`,
 `rag_index`, `file_search`, `file_browse`, `file_edit`, `data`, `shell`,
 `clipboard`, `desktop`, `vision`, `memory`, `loop_control`. CORE ∪ all bundle
-members must equal the 37-tool `doc` registry exactly — enforced at runtime by
-`ToolLoader.validate_registry` and in CI by `test_chat_tool_bundles.py`, so a new
-doc tool forces a conscious bundling decision.
+members must equal the 37-tool `doc` registry exactly. The drift guard is the CI
+test `test_chat_tool_bundles.py` (it compares both sets, so a new doc tool forces
+a conscious bundling decision); `ToolLoader.validate_registry`, called once on
+first `select`, additionally fails loudly at runtime if a CORE/bundle name is
+missing from the registry.
 
 **Selection each turn** = CORE ∪ semantically-matched tools (+ their bundles),
 accumulated into a session-scoped *loaded set* that only grows, then sorted. The

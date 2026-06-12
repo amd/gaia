@@ -45,6 +45,7 @@ def _bare_agent(**attrs) -> ChatAgent:
     a.tool_loader = None
     a._memory_store = object()
     a._dynamic_tools_native_warned = False
+    a._dynamic_tools_validated = False
     a.model_id = None
     for k, v in attrs.items():
         setattr(a, k, v)
