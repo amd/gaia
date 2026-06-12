@@ -18,6 +18,7 @@ wiring by ``test_cli_agent.py``.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -56,11 +57,18 @@ def test_dist_name_and_directory_convention(packages):
 
 
 def test_every_wheel_declares_amd_gaia_dependency(packages):
-    """Issue #1179 scope 3: each wheel depends on amd-gaia>={min_gaia_version}."""
+    """Issue #1179 scope 3: each wheel depends on amd-gaia>={min_gaia_version}.
+
+    An optional ``[extras]`` segment is allowed (e.g. ``amd-gaia[api]>=`` — the
+    email wheel pulls the [api] extra so consumers auto-get the REST-server deps
+    + keyring; see #1617).
+    """
+    # amd-gaia, an optional [extras] group, then a >= floor.
+    pat = re.compile(r"amd-gaia(\[[^\]]*\])?>=")
     for p in packages:
         pyproject = (p.path / "pyproject.toml").read_text(encoding="utf-8")
-        assert (
-            "amd-gaia>=" in pyproject
+        assert pat.search(
+            pyproject
         ), f"{p.dist_name}: pyproject.toml is missing an 'amd-gaia>=' dependency"
 
 

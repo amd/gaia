@@ -47,6 +47,7 @@ def archive_message_impl(
     *,
     message_id: str,
     prior: Optional[Dict[str, Any]] = None,
+    mailbox: Optional[str] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
     with log_tool_call(
@@ -66,59 +67,84 @@ def archive_message_impl(
             message_id=message_id,
             thread_id=prior.get("threadId"),
             payload={"prior_labels": prior_labels},
+            mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
         return {"action_id": action_id, "message_id": message_id}
 
 
 def mark_read_impl(
-    gmail, db, *, message_id: str, debug: bool = False
+    gmail, db, *, message_id: str, mailbox: Optional[str] = None, debug: bool = False
 ) -> Dict[str, Any]:
     with log_tool_call("mark_read", {"message_id": message_id}, debug=debug) as st:
         gmail.mark_read(message_id)
         action_id = action_store.record_action(
-            db, action_type="mark_read", message_id=message_id, payload={}
+            db,
+            action_type="mark_read",
+            message_id=message_id,
+            payload={},
+            mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
         return {"action_id": action_id, "message_id": message_id}
 
 
 def mark_unread_impl(
-    gmail, db, *, message_id: str, debug: bool = False
+    gmail, db, *, message_id: str, mailbox: Optional[str] = None, debug: bool = False
 ) -> Dict[str, Any]:
     with log_tool_call("mark_unread", {"message_id": message_id}, debug=debug) as st:
         gmail.mark_unread(message_id)
         action_id = action_store.record_action(
-            db, action_type="mark_unread", message_id=message_id, payload={}
+            db,
+            action_type="mark_unread",
+            message_id=message_id,
+            payload={},
+            mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
         return {"action_id": action_id, "message_id": message_id}
 
 
-def add_star_impl(gmail, db, *, message_id: str, debug: bool = False) -> Dict[str, Any]:
+def add_star_impl(
+    gmail, db, *, message_id: str, mailbox: Optional[str] = None, debug: bool = False
+) -> Dict[str, Any]:
     with log_tool_call("add_star", {"message_id": message_id}, debug=debug) as st:
         gmail.add_star(message_id)
         action_id = action_store.record_action(
-            db, action_type="add_star", message_id=message_id, payload={}
+            db,
+            action_type="add_star",
+            message_id=message_id,
+            payload={},
+            mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
         return {"action_id": action_id, "message_id": message_id}
 
 
 def remove_star_impl(
-    gmail, db, *, message_id: str, debug: bool = False
+    gmail, db, *, message_id: str, mailbox: Optional[str] = None, debug: bool = False
 ) -> Dict[str, Any]:
     with log_tool_call("remove_star", {"message_id": message_id}, debug=debug) as st:
         gmail.remove_star(message_id)
         action_id = action_store.record_action(
-            db, action_type="remove_star", message_id=message_id, payload={}
+            db,
+            action_type="remove_star",
+            message_id=message_id,
+            payload={},
+            mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
         return {"action_id": action_id, "message_id": message_id}
 
 
 def label_message_impl(
-    gmail, db, *, message_id: str, label_id: str, debug: bool = False
+    gmail,
+    db,
+    *,
+    message_id: str,
+    label_id: str,
+    mailbox: Optional[str] = None,
+    debug: bool = False,
 ) -> Dict[str, Any]:
     with log_tool_call(
         "label_message",
@@ -131,6 +157,7 @@ def label_message_impl(
             action_type="add_label",
             message_id=message_id,
             payload={"label_id": label_id},
+            mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
         return {"action_id": action_id, "message_id": message_id, "label_id": label_id}
@@ -143,6 +170,7 @@ def move_to_label_impl(
     message_id: str,
     label_id: str,
     prior: Optional[Dict[str, Any]] = None,
+    mailbox: Optional[str] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Add a label and remove INBOX.
@@ -169,13 +197,14 @@ def move_to_label_impl(
             action_type="move_to_label",
             message_id=message_id,
             payload={"label_id": label_id, "prior_labels": prior_labels},
+            mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
         return {"action_id": action_id, "message_id": message_id, "label_id": label_id}
 
 
 def undo_archive_batch_impl(
-    gmail,
+    resolve_backend,
     db,
     *,
     batch_id: str,
@@ -188,9 +217,11 @@ def undo_archive_batch_impl(
     label the message carried before) for every still-undoable ``archive``
     row sharing ``batch_id``, then marks each row undone.
 
-    Raises ``RuntimeError`` if the batch has no undoable rows — the window
-    expired, every row was already undone, or the batch_id is unknown. We
-    fail loudly rather than silently no-op so the caller surfaces it.
+    ``resolve_backend(row) -> backend`` routes each row to the mailbox it was
+    archived from (#1603 Phase 2), so a cross-mailbox batch undoes against the
+    right accounts. Raises ``RuntimeError`` if the batch has no undoable rows —
+    the window expired, every row was already undone, or the batch_id is
+    unknown. We fail loudly rather than silently no-op so the caller surfaces it.
     """
     with log_tool_call("undo_archive_batch", {"batch_id": batch_id}, debug=debug) as st:
         rows = action_store.fetch_batch_undoable(
@@ -209,13 +240,14 @@ def undo_archive_batch_impl(
                 # than mis-restore an unrelated action recorded under the
                 # same id by a future caller.
                 continue
+            backend = resolve_backend(row)
             mid = row["message_id"]
             prior_labels = set(row["payload"].get("prior_labels") or [])
-            current = set(gmail.get_message(mid).get("labelIds", []))
+            current = set(backend.get_message(mid).get("labelIds", []))
             # Archive only ever removes labels (INBOX); re-add whatever the
             # message carried before that it no longer has.
             for lab in prior_labels - current:
-                gmail.add_label(mid, lab)
+                backend.add_label(mid, lab)
             action_store.mark_undone(db, action_id=row["action_id"])
             restored.append({"message_id": mid, "action_id": row["action_id"]})
         st["result_summary"] = {"restored": len(restored)}
@@ -267,17 +299,25 @@ def _coerce_ids(message_ids):
 
 
 def _run_batch(
-    _gmail,
+    resolve_backend,
     db,
     message_ids: list[str],
     *,
-    gmail_op,
+    op_name: str,
+    op_args: tuple = (),
     action_type: str,
+    action_mailbox=None,
     payload: dict | None = None,
     batch_id: str,
     debug: bool = False,
 ) -> dict:
-    """Execute a Gmail mutation for each message_id, recording each action.
+    """Execute a mailbox mutation for each message_id, recording each action.
+
+    ``resolve_backend(mid) -> backend`` routes each id to its own mailbox
+    (#1603 Phase 2), so a batch can span Gmail and Outlook. ``op_name`` is the
+    backend method to call (e.g. ``"mark_read"``); ``op_args`` are trailing
+    positional args (e.g. the label id). ``action_mailbox(mid) -> str`` records
+    which mailbox the action hit so undo routes correctly.
 
     Returns ``{"succeeded": [...], "failed": [...]}``.
     """
@@ -285,13 +325,15 @@ def _run_batch(
     failed: list[dict] = []
     for mid in message_ids:
         try:
-            gmail_op(mid)
+            backend = resolve_backend(mid)
+            getattr(backend, op_name)(mid, *op_args)
             aid = action_store.record_action(
                 db,
                 action_type=action_type,
                 message_id=mid,
                 payload=dict(payload or {}),
                 batch_id=batch_id,
+                mailbox=action_mailbox(mid) if action_mailbox else None,
             )
             succeeded.append({"message_id": mid, "action_id": aid})
         except Exception as exc:
@@ -302,12 +344,13 @@ def _run_batch(
 
 
 def _run_batch_with_prior(
-    gmail,
+    resolve_backend,
     db,
     message_ids: list[str],
     *,
-    gmail_op,
+    backend_op,
     action_type: str,
+    action_mailbox=None,
     prior_fn,
     payload_fn,
     batch_id: str,
@@ -315,16 +358,19 @@ def _run_batch_with_prior(
 ) -> dict:
     """Same as _run_batch but fetches per-message prior state first.
 
-    ``prior_fn(msg) -> prior`` is called once per message.
-    ``payload_fn(msg, prior) -> dict`` builds the action payload.
+    ``resolve_backend(mid) -> backend`` routes per message. ``backend_op(backend,
+    mid)`` performs the mutation on the resolved backend. ``prior_fn(msg) ->
+    prior`` is called once per message; ``payload_fn(msg, prior) -> dict`` builds
+    the action payload.
     """
     succeeded: list[dict] = []
     failed: list[dict] = []
     for mid in message_ids:
         try:
-            msg = gmail.get_message(mid)
+            backend = resolve_backend(mid)
+            msg = backend.get_message(mid)
             prior = prior_fn(msg)
-            gmail_op(mid)
+            backend_op(backend, mid)
             aid = action_store.record_action(
                 db,
                 action_type=action_type,
@@ -332,6 +378,7 @@ def _run_batch_with_prior(
                 thread_id=msg.get("threadId"),
                 payload=payload_fn(msg, prior),
                 batch_id=batch_id,
+                mailbox=action_mailbox(mid) if action_mailbox else None,
             )
             succeeded.append({"message_id": mid, "action_id": aid})
         except Exception as exc:
@@ -343,11 +390,10 @@ def _run_batch_with_prior(
 
 class OrganizeToolsMixin:
     def _register_organize_tools(self) -> None:
-        gmail = self._gmail
         db = self
         debug_flag = bool(getattr(self.config, "debug", False))
         window = int(getattr(self.config, "undo_window_seconds", 30))
-        agent = self  # for batch-threshold counter access
+        agent = self  # batch-threshold counter + per-message backend routing
 
         def _check_threshold() -> Optional[str]:
             """Return error message if Phase I3 threshold is exceeded, else None.
@@ -360,109 +406,38 @@ class OrganizeToolsMixin:
                 return _BATCH_THRESHOLD_ERROR
             return None
 
+        # Per-message backend routing for batch tools (#1603 Phase 2). A batch's
+        # ids may span mailboxes; each is routed to the mailbox it came from.
+        def _batch_backend(mid: str):
+            return agent._backend_for_message(mid)
+
+        def _batch_provider(mid: str) -> str:
+            return agent._provider_for_message(mid)
+
         @tool
-        def archive_message(message_id: str) -> str:
-            """Archive a message (remove from INBOX). Reversible via restore_message."""
+        def archive_message(message_id: str, mailbox: str = "") -> str:
+            """Archive a message (remove from INBOX). Reversible via restore_message.
+
+            ``mailbox`` (optional) names the source mailbox ('google' /
+            'microsoft') from triage output so the action routes correctly when
+            multiple mailboxes are connected.
+            """
             try:
                 if (err := _check_threshold()) is not None:
                     return _envelope_err(err)
-                # Single Gmail fetch — used for both prior_labels (impl)
-                # and sender (counter). Avoids the redundant round-trip
-                # the previous _peek_sender helper introduced.
-                prior = gmail.get_message(message_id)
+                provider = agent._provider_for_message(message_id, mailbox or None)
+                backend = agent._backends[provider]
+                # Single fetch — used for both prior_labels (impl) and sender
+                # (counter). Avoids a redundant round-trip.
+                prior = backend.get_message(message_id)
                 agent._record_organize_op(message_id, _extract_sender(prior))
                 return _envelope_ok(
                     archive_message_impl(
-                        gmail, db, message_id=message_id, prior=prior, debug=debug_flag
-                    )
-                )
-            except ConnectorsError as exc:
-                return _envelope_err(format_connector_error(exc))
-            except Exception as exc:
-                log.exception("email tool error: %s", type(exc).__name__)
-                return _envelope_err(f"{type(exc).__name__}: {exc}")
-
-        @tool
-        def mark_read(message_id: str) -> str:
-            """Mark a message as read."""
-            try:
-                if (err := _check_threshold()) is not None:
-                    return _envelope_err(err)
-                # mark_read does not need prior_labels; only bump
-                # the counter with what we know — the message_id
-                # alone is enough since distinct-sender counting
-                # treats unknown senders as "" (one bucket).
-                agent._record_organize_op(message_id, "")
-                return _envelope_ok(
-                    mark_read_impl(gmail, db, message_id=message_id, debug=debug_flag)
-                )
-            except ConnectorsError as exc:
-                return _envelope_err(format_connector_error(exc))
-            except Exception as exc:
-                log.exception("email tool error: %s", type(exc).__name__)
-                return _envelope_err(f"{type(exc).__name__}: {exc}")
-
-        @tool
-        def mark_unread(message_id: str) -> str:
-            """Mark a message as unread."""
-            try:
-                if (err := _check_threshold()) is not None:
-                    return _envelope_err(err)
-                agent._record_organize_op(message_id, "")
-                return _envelope_ok(
-                    mark_unread_impl(gmail, db, message_id=message_id, debug=debug_flag)
-                )
-            except ConnectorsError as exc:
-                return _envelope_err(format_connector_error(exc))
-            except Exception as exc:
-                log.exception("email tool error: %s", type(exc).__name__)
-                return _envelope_err(f"{type(exc).__name__}: {exc}")
-
-        @tool
-        def add_star(message_id: str) -> str:
-            """Star a message."""
-            try:
-                if (err := _check_threshold()) is not None:
-                    return _envelope_err(err)
-                agent._record_organize_op(message_id, "")
-                return _envelope_ok(
-                    add_star_impl(gmail, db, message_id=message_id, debug=debug_flag)
-                )
-            except ConnectorsError as exc:
-                return _envelope_err(format_connector_error(exc))
-            except Exception as exc:
-                log.exception("email tool error: %s", type(exc).__name__)
-                return _envelope_err(f"{type(exc).__name__}: {exc}")
-
-        @tool
-        def remove_star(message_id: str) -> str:
-            """Remove the star from a message."""
-            try:
-                if (err := _check_threshold()) is not None:
-                    return _envelope_err(err)
-                agent._record_organize_op(message_id, "")
-                return _envelope_ok(
-                    remove_star_impl(gmail, db, message_id=message_id, debug=debug_flag)
-                )
-            except ConnectorsError as exc:
-                return _envelope_err(format_connector_error(exc))
-            except Exception as exc:
-                log.exception("email tool error: %s", type(exc).__name__)
-                return _envelope_err(f"{type(exc).__name__}: {exc}")
-
-        @tool
-        def label_message(message_id: str, label_id: str) -> str:
-            """Add a label to a message. Pass the label id (e.g. ``Label_1``)."""
-            try:
-                if (err := _check_threshold()) is not None:
-                    return _envelope_err(err)
-                agent._record_organize_op(message_id, "")
-                return _envelope_ok(
-                    label_message_impl(
-                        gmail,
+                        backend,
                         db,
                         message_id=message_id,
-                        label_id=label_id,
+                        prior=prior,
+                        mailbox=provider,
                         debug=debug_flag,
                     )
                 )
@@ -473,21 +448,150 @@ class OrganizeToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def move_to_label(message_id: str, label_id: str) -> str:
-            """Move a message out of INBOX into a label."""
+        def mark_read(message_id: str, mailbox: str = "") -> str:
+            """Mark a message as read. ``mailbox`` routes when multiple connected."""
             try:
                 if (err := _check_threshold()) is not None:
                     return _envelope_err(err)
-                # Single Gmail fetch — for prior_labels + sender.
-                prior = gmail.get_message(message_id)
+                provider = agent._provider_for_message(message_id, mailbox or None)
+                # mark_read does not need prior_labels; only bump
+                # the counter with what we know — the message_id
+                # alone is enough since distinct-sender counting
+                # treats unknown senders as "" (one bucket).
+                agent._record_organize_op(message_id, "")
+                return _envelope_ok(
+                    mark_read_impl(
+                        agent._backends[provider],
+                        db,
+                        message_id=message_id,
+                        mailbox=provider,
+                        debug=debug_flag,
+                    )
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(format_connector_error(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def mark_unread(message_id: str, mailbox: str = "") -> str:
+            """Mark a message as unread. ``mailbox`` routes when multiple connected."""
+            try:
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                provider = agent._provider_for_message(message_id, mailbox or None)
+                agent._record_organize_op(message_id, "")
+                return _envelope_ok(
+                    mark_unread_impl(
+                        agent._backends[provider],
+                        db,
+                        message_id=message_id,
+                        mailbox=provider,
+                        debug=debug_flag,
+                    )
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(format_connector_error(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def add_star(message_id: str, mailbox: str = "") -> str:
+            """Star a message. ``mailbox`` routes when multiple connected."""
+            try:
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                provider = agent._provider_for_message(message_id, mailbox or None)
+                agent._record_organize_op(message_id, "")
+                return _envelope_ok(
+                    add_star_impl(
+                        agent._backends[provider],
+                        db,
+                        message_id=message_id,
+                        mailbox=provider,
+                        debug=debug_flag,
+                    )
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(format_connector_error(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def remove_star(message_id: str, mailbox: str = "") -> str:
+            """Remove the star from a message. ``mailbox`` routes when multiple connected."""
+            try:
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                provider = agent._provider_for_message(message_id, mailbox or None)
+                agent._record_organize_op(message_id, "")
+                return _envelope_ok(
+                    remove_star_impl(
+                        agent._backends[provider],
+                        db,
+                        message_id=message_id,
+                        mailbox=provider,
+                        debug=debug_flag,
+                    )
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(format_connector_error(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def label_message(message_id: str, label_id: str, mailbox: str = "") -> str:
+            """Add a label to a message. Pass the label id (e.g. ``Label_1``).
+
+            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            """
+            try:
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                provider = agent._provider_for_message(message_id, mailbox or None)
+                agent._record_organize_op(message_id, "")
+                return _envelope_ok(
+                    label_message_impl(
+                        agent._backends[provider],
+                        db,
+                        message_id=message_id,
+                        label_id=label_id,
+                        mailbox=provider,
+                        debug=debug_flag,
+                    )
+                )
+            except ConnectorsError as exc:
+                return _envelope_err(format_connector_error(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def move_to_label(message_id: str, label_id: str, mailbox: str = "") -> str:
+            """Move a message out of INBOX into a label.
+
+            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            """
+            try:
+                if (err := _check_threshold()) is not None:
+                    return _envelope_err(err)
+                provider = agent._provider_for_message(message_id, mailbox or None)
+                backend = agent._backends[provider]
+                # Single fetch — for prior_labels + sender.
+                prior = backend.get_message(message_id)
                 agent._record_organize_op(message_id, _extract_sender(prior))
                 return _envelope_ok(
                     move_to_label_impl(
-                        gmail,
+                        backend,
                         db,
                         message_id=message_id,
                         label_id=label_id,
                         prior=prior,
+                        mailbox=provider,
                         debug=debug_flag,
                     )
                 )
@@ -510,11 +614,12 @@ class OrganizeToolsMixin:
             try:
                 batch_id = uuid.uuid4().hex
                 result = _run_batch(
-                    gmail,
+                    _batch_backend,
                     db,
                     message_ids,
-                    gmail_op=gmail.mark_read,
+                    op_name="mark_read",
                     action_type="mark_read",
+                    action_mailbox=_batch_provider,
                     batch_id=batch_id,
                     debug=debug_flag,
                 )
@@ -545,11 +650,12 @@ class OrganizeToolsMixin:
             try:
                 batch_id = uuid.uuid4().hex
                 result = _run_batch(
-                    gmail,
+                    _batch_backend,
                     db,
                     message_ids,
-                    gmail_op=gmail.mark_unread,
+                    op_name="mark_unread",
                     action_type="mark_unread",
+                    action_mailbox=_batch_provider,
                     batch_id=batch_id,
                     debug=debug_flag,
                 )
@@ -580,11 +686,12 @@ class OrganizeToolsMixin:
             try:
                 batch_id = uuid.uuid4().hex
                 result = _run_batch(
-                    gmail,
+                    _batch_backend,
                     db,
                     message_ids,
-                    gmail_op=gmail.add_star,
+                    op_name="add_star",
                     action_type="add_star",
+                    action_mailbox=_batch_provider,
                     batch_id=batch_id,
                     debug=debug_flag,
                 )
@@ -615,11 +722,12 @@ class OrganizeToolsMixin:
             try:
                 batch_id = uuid.uuid4().hex
                 result = _run_batch(
-                    gmail,
+                    _batch_backend,
                     db,
                     message_ids,
-                    gmail_op=gmail.remove_star,
+                    op_name="remove_star",
                     action_type="remove_star",
+                    action_mailbox=_batch_provider,
                     batch_id=batch_id,
                     debug=debug_flag,
                 )
@@ -659,11 +767,12 @@ class OrganizeToolsMixin:
                     return {"prior_labels": prior_labels}
 
                 result = _run_batch_with_prior(
-                    gmail,
+                    _batch_backend,
                     db,
                     message_ids,
-                    gmail_op=gmail.archive_message,
+                    backend_op=lambda backend, mid: backend.archive_message(mid),
                     action_type="archive",
+                    action_mailbox=_batch_provider,
                     prior_fn=_archive_prior_fn,
                     payload_fn=_archive_payload_fn,
                     batch_id=batch_id,
@@ -692,7 +801,7 @@ class OrganizeToolsMixin:
             try:
                 return _envelope_ok(
                     undo_archive_batch_impl(
-                        gmail,
+                        agent._backend_for_action,
                         db,
                         batch_id=batch_id,
                         window_seconds=window,
@@ -717,15 +826,14 @@ class OrganizeToolsMixin:
                 batch_id = uuid.uuid4().hex
                 label_id_local = label_id  # closure capture
 
-                def _label_op(mid: str) -> None:
-                    gmail.add_label(mid, label_id_local)
-
                 result = _run_batch(
-                    gmail,
+                    _batch_backend,
                     db,
                     message_ids,
-                    gmail_op=_label_op,
+                    op_name="add_label",
+                    op_args=(label_id_local,),
                     action_type="add_label",
+                    action_mailbox=_batch_provider,
                     payload={"label_id": label_id_local},
                     batch_id=batch_id,
                     debug=debug_flag,
@@ -758,9 +866,9 @@ class OrganizeToolsMixin:
                 batch_id = uuid.uuid4().hex
                 label_id_local = label_id
 
-                def _move_op(mid: str) -> None:
-                    gmail.add_label(mid, label_id_local)
-                    gmail.archive_message(mid)
+                def _move_op(backend, mid: str) -> None:
+                    backend.add_label(mid, label_id_local)
+                    backend.archive_message(mid)
 
                 def _move_prior_fn(msg: Dict[str, Any]) -> List[str]:
                     return list(msg.get("labelIds", []))
@@ -774,11 +882,12 @@ class OrganizeToolsMixin:
                     }
 
                 result = _run_batch_with_prior(
-                    gmail,
+                    _batch_backend,
                     db,
                     message_ids,
-                    gmail_op=_move_op,
+                    backend_op=_move_op,
                     action_type="move_to_label",
+                    action_mailbox=_batch_provider,
                     prior_fn=_move_prior_fn,
                     payload_fn=_move_payload_fn,
                     batch_id=batch_id,

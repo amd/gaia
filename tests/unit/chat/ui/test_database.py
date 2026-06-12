@@ -120,9 +120,11 @@ class TestSessions:
         refreshed = db.get_session(session["id"])
         assert refreshed["updated_at"] >= original_updated
 
-    def test_create_session_default_mail_provider(self, db):
+    def test_create_session_default_mail_provider_is_null(self, db):
+        # #1596: mail_provider is a FILTER — no pick stays NULL ("every
+        # connected mailbox"), never silently coerced to google.
         session = db.create_session()
-        assert session["mail_provider"] == "google"
+        assert session["mail_provider"] is None
 
     def test_create_session_with_mail_provider(self, db):
         session = db.create_session(mail_provider="microsoft")
@@ -131,7 +133,7 @@ class TestSessions:
         assert db.get_session(session["id"])["mail_provider"] == "microsoft"
 
     def test_update_session_mail_provider(self, db):
-        session = db.create_session()  # defaults to google
+        session = db.create_session()  # no pick (NULL = all connected)
         updated = db.update_session(session["id"], mail_provider="microsoft")
         assert updated["mail_provider"] == "microsoft"
 
