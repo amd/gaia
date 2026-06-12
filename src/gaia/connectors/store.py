@@ -35,9 +35,7 @@ import logging
 import time
 from typing import List, Optional
 
-import keyring
-import keyring.errors
-
+from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConnectorsError,
