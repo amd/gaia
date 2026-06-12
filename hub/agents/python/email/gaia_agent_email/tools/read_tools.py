@@ -905,20 +905,18 @@ class ReadToolsMixin:
             ``kind: "email_pre_scan"`` so the chat surface renders the
             structured card component instead of plain text.
 
-            CRITICAL OUTPUT FORMAT for the LLM:
-            After this tool returns, your response to the user MUST be a
-            single fenced code block tagged ``email_pre_scan`` with the
-            ``data`` field's JSON inside it, exactly like::
+            OUTPUT FORMAT for the LLM:
+            Do NOT copy, re-serialize, or paraphrase the returned JSON
+            into your reply. The chat surface injects the triage card
+            automatically from this tool's return value, so re-emitting
+            the envelope is redundant — and on long mailboxes (Outlook
+            message ids run ~100+ chars each) it burns the output budget
+            on ids and truncates your summary before it finishes.
 
-                ```email_pre_scan
-                {"kind": "email_pre_scan", ...}
-                ```
-
-            Optionally include ONE short framing sentence before the
-            block (e.g. "Here's your morning pre-scan:"). The frontend
-            detects the language tag and renders a triage card; if you
-            paraphrase the JSON or omit the fence, the user sees raw
-            text instead of the card.
+            After the tool returns, write ONE short framing sentence
+            (e.g. "Here's your morning pre-scan — 5 actionable, 1
+            suggested archive.") and stop. The user can already see the
+            card; do not restate its contents.
 
             Args:
                 max_messages: How many INBOX messages to scan
