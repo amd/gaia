@@ -500,6 +500,9 @@ class EmailTriageAgent(
                 self._remember_message_mailbox(item.get("thread_id"), provider)
                 # Record interaction for inbox profiling (#1289). Memory-guarded
                 # inside _record_interaction — silently skips when disabled.
+                # Recorded BEFORE the max_messages cap below on purpose: triage
+                # already classified this item, so its sender history is real
+                # even if the cap drops it from the returned view.
                 sender_addr = extract_sender_email(item.get("from", ""))
                 if sender_addr:
                     self._record_interaction(sender_addr, item.get("category", ""))
