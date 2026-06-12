@@ -307,7 +307,7 @@
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>At a glance</div>
     <h2 style="margin-top:16px">The capability surface at a glance</h2>
-    <p class="body-t">GAIA's Email Agent triages, drafts, sends, and organizes mail — all on-device through your connected <b>Gmail or Outlook</b>. Every action runs under a <b>guardrail tier</b>: <b>Tier&nbsp;0</b> read-only, <b>Tier&nbsp;1</b> reversible (30-second undo), <b>Tier&nbsp;2</b> needs your confirmation. <b>17 capabilities</b> across three states — <b>4 validated, 8 wired, 5 planned</b> — plus a personalization track that learns how you work. Click any row to jump to its full entry.</p>
+    <p class="body-t">Mail is read through your connected <b>Gmail or Outlook</b>. Every action runs under a <b>guardrail tier</b>: <b>Tier&nbsp;0</b> read-only, <b>Tier&nbsp;1</b> reversible (30-second undo), <b>Tier&nbsp;2</b> needs your confirmation. <b>17 capabilities</b> across three states — <b>4 validated, 8 wired, 5 planned</b> — plus a personalization track that learns how you work. Click any row to jump to its full entry.</p>
 
     <div class="cards3">
       <div class="gcard" style="border-top-color:var(--ok)">
@@ -653,7 +653,7 @@ quarantine_phishing_message → { "ok": true, "data": {
     <!-- 7 -->
     <div class="cap">
       <div class="cap-head"><span class="num">7</span><h3>Send a reply via agent</h3><span class="pill wip">Wired</span><span class="pill t2">Tier 2 · confirm + token</span></div>
-      <div class="field"><div class="fl">Use-case</div><div class="fv">Deliver a reply through the user's mailbox — the end of the draft → confirm → send pipeline and the agent's one outbound action. Because it leaves the device it is gated: the UI blocks on an explicit confirmation showing the literal recipient, subject, and body; over REST/MCP it is rejected without a valid, single-use confirmation token from <a class="eplink" href="#ep-draft"><code>/draft</code></a> bound to that exact payload. It never auto-sends, and a token minted for one message cannot authorize different content.</div></div>
+      <div class="field"><div class="fl">Use-case</div><div class="fv">Deliver a reply through the user's mailbox — the end of the draft → confirm → send pipeline and the agent's one outbound action. Because it leaves the device, it always requires explicit confirmation and never auto-sends (mechanics in <b>Guardrails</b> below).</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">Closes the loop — the agent acts, not just suggests, under an explicit gate.</div></div>
       <div class="field"><div class="fl">Backed by</div><div class="fv"><code>send_now</code> / <code>send_draft</code> · <a class="eplink" href="#ep-send"><code>POST /v1/email/send</code></a> · MCP <code>send_email</code>.</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv"><b>The canonical "ask the user" case.</b> The UI blocks on an explicit confirmation showing the literal to/subject/body. REST/MCP: <b>403 / rejected</b> unless a valid single-use, payload-bound token from <a class="eplink" href="#ep-draft"><code>/draft</code></a> is echoed. Never auto-confirms.</div></div>
@@ -813,7 +813,7 @@ quarantine_phishing_message → { "ok": true, "data": {
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>Part 1b · Personalization &amp; memory</div>
     <h2 style="margin-top:16px">Learns how you work <span class="pill t0" style="vertical-align:middle"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a></span></h2>
-    <p class="body-t">These features are the agent's <b>moat</b> — it adapts to the individual user, entirely on-device. Today, classification preferences are <b>session-scoped</b> (<code>set_priority_sender</code>, <code>set_low_priority_sender</code>, <code>set_category_default</code>) and wiped on restart by design; the work below makes them <b>durable and learned</b> rather than hand-set. P1–P4 are <b>in flight</b> (actively being built); P5 is <b>planned</b> (scoped, not started).</p>
+    <p class="body-t">These features make the agent <b>adapt to the individual user</b>, entirely on-device. Today, classification preferences are <b>session-scoped</b> (<code>set_priority_sender</code>, <code>set_low_priority_sender</code>, <code>set_category_default</code>) and wiped on restart by design; the work below makes them <b>durable and learned</b> rather than hand-set. P1–P4 are <b>in flight</b>; P5 is <b>planned</b>.</p>
 
     <div class="cap">
       <div class="cap-head"><span class="num">P1</span><h3>Behavioral sender prioritization</h3><span class="pill wip">In flight</span><span class="pill t0">Tier 0</span></div>
@@ -1077,20 +1077,13 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
     </table>
 
     <h3 style="margin-top:40px">Always-on service</h3>
-    <div class="cards2">
-      <div class="gcard"><div class="lab">Runtime</div>
-        <ul>
-          <li>Runs as a background service (system-tray app on desktop)</li>
-          <li>Jobs persist across restarts and resume automatically</li>
-          <li>Every run is written to an activity log</li>
-        </ul></div>
-      <div class="gcard"><div class="lab">Enables</div>
-        <ul>
-          <li>Capabilities <b>15</b> (follow-up), <b>16</b> (daily briefing), <b>17</b> (scheduled send / snooze)</li>
-          <li>Periodic runs of <b>W1</b> (morning triage) and <b>W5</b> (daily digest)</li>
-          <li>Surfaced via desktop notifications; safe mode default, dangerous mode opt-in</li>
-        </ul></div>
-    </div>
+    <div class="gcard"><div class="lab">Runtime</div>
+      <ul>
+        <li>Runs as a background service (system-tray app on desktop)</li>
+        <li>Jobs persist across restarts and resume automatically</li>
+        <li>Every run is written to an activity log</li>
+        <li>Surfaced via desktop notifications; safe mode is the default, dangerous mode is opt-in</li>
+      </ul></div>
 
     <p class="body-t" style="margin-top:18px"><b>Evaluating it:</b> the scheduled / triggered <code>scenario</code> fixtures (the <code>scn</code> · scheduled / timed rows in the <a class="iss" href="#covmatrix">coverage matrix</a>) validate autonomy — assert a job fires at the right time (and not before), a self-scheduled follow-up is queued, and every Tier-2 action <b>queues for approval rather than auto-sending</b>.</p>
   </div>
