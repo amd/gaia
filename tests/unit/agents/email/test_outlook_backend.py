@@ -29,11 +29,16 @@ from typing import Callable, List, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-import pytest
 
-from gaia.agents.email.gmail_backend import GmailBackend, decode_message_body
-from gaia.agents.email.outlook_backend import LiveOutlookBackend, _get_outlook_token
-from gaia.agents.email.tools.read_tools import list_inbox_impl, triage_inbox_impl
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.gmail_backend import GmailBackend, decode_message_body
+from gaia_agent_email.outlook_backend import LiveOutlookBackend, _get_outlook_token
+from gaia_agent_email.tools.read_tools import list_inbox_impl, triage_inbox_impl
+
 from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 
 # ---------------------------------------------------------------------------
@@ -551,14 +556,14 @@ class TestTokenResolver:
             return {"access_token": "TOK-123", "scopes": list(required_scopes)}
 
         monkeypatch.setattr(
-            "gaia.agents.email.outlook_backend.get_credential_sync",
+            "gaia_agent_email.outlook_backend.get_credential_sync",
             fake_get_credential_sync,
         )
         token = _get_outlook_token()
         assert token == "TOK-123"
         # Uses the microsoft connector + the email agent's namespaced id.
         assert captured["connector_id"] == "microsoft"
-        assert captured["agent_id"] == "builtin:email"
+        assert captured["agent_id"] == "installed:email"
         # Requests at least Mail.Read / Mail.ReadWrite (the Graph mail scopes).
         assert any("graph.microsoft.com/Mail" in s for s in captured["scopes"])
 
@@ -575,7 +580,7 @@ class TestTokenResolver:
             )
 
         monkeypatch.setattr(
-            "gaia.agents.email.outlook_backend.get_credential_sync",
+            "gaia_agent_email.outlook_backend.get_credential_sync",
             fake_get_credential_sync,
         )
         with pytest.raises(AuthRequiredError) as exc:
@@ -645,3 +650,37 @@ class TestTriageAgainstOutlook:
         assert out["grouped"]["total"] == 2
         ids = {r["id"] for r in out["results"]}
         assert ids == {"m1", "m2"}
+
+
+# ---------------------------------------------------------------------------
+# send_message returns sent signal (D4 — Graph sendMail 202 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestSendMessageSentSignal:
+    """LiveOutlookBackend.send_message must return {"sent": True} (#1603, D4).
+
+    Graph sendMail returns HTTP 202 with no body — no message id is echoed back.
+    The REST handler previously raised 502 on empty sent_id; the fix is to
+    include "sent": True in the return dict so the handler can distinguish
+    "Outlook success (no id)" from "unknown failure (no id, no signal)".
+    """
+
+    def test_send_message_returns_sent_true(self):
+        backend, _, _ = _backend(lambda r: httpx.Response(202))
+        result = backend.send_message(
+            to="bob@example.com", subject="Hello", body="World"
+        )
+        assert result.get("sent") is True
+
+    def test_send_message_id_is_empty_string(self):
+        """Graph does NOT return an id for sendMail — empty string, not None."""
+        backend, _, _ = _backend(lambda r: httpx.Response(202))
+        result = backend.send_message(to="x@example.com", subject="s", body="b")
+        assert result.get("id") == ""
+
+    def test_send_message_still_posts_to_sendmail_endpoint(self):
+        """The change to the return value must not affect the actual HTTP call."""
+        backend, rec, _ = _backend(lambda r: httpx.Response(202))
+        backend.send_message(to="bob@example.com", subject="Hi", body="Hello")
+        assert rec.requests[0].url.path.endswith("/me/sendMail")

@@ -128,6 +128,10 @@ class SDToolsMixin:
         @tool(
             atomic=True,
             name="generate_image",
+            # Opt out of the global per-tool timeout: first use may download a
+            # multi-GB SD model (the SD client allows up to 600s for that),
+            # well past the default agent tool cap.
+            timeout=900,
             description="Generate an image from a text prompt using Stable Diffusion. "
             "Returns the path to the saved image file.",
             parameters={

@@ -26,6 +26,7 @@ import respx
 from gaia.connectors import (
     AuthRequiredError,
     get_access_token,
+    get_connection,
     grant_agent,
     list_agent_grants,
     list_connections,
@@ -174,3 +175,48 @@ class TestPublicSurface:
     def test_revoke_connection_via_public_api(self, seeded):
         revoke_connection("google")
         assert list_connections() == []
+
+    def test_microsoft_connection_visible_to_generic_api(self, monkeypatch, tmp_path):
+        # Root-cause fix (#1603): a stored Microsoft connection with no google
+        # must be seen by the GENERIC api surface — list_connections() includes
+        # it and get_connection("microsoft") returns metadata (not None). The
+        # old store.list_connections() hardcoded ("google",), so every generic
+        # consumer was Microsoft-blind.
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        _registry.clear()
+        from gaia.connectors.providers import get as get_provider
+
+        ms = get_provider("microsoft")
+        save_connection(
+            provider="microsoft",
+            account_email="user@outlook.com",
+            refresh_token="ms-rt",
+            scopes=["Mail.ReadWrite"],
+            client_id_hash=ms.client_id_hash,
+        )
+
+        rows = list_connections()
+        providers = {row["provider"] for row in rows}
+        assert "microsoft" in providers
+
+        conn = get_connection("microsoft")
+        assert conn is not None, "get_connection('microsoft') must not be None"
+        assert conn["account_email"] == "user@outlook.com"
+        assert "refresh_token" not in conn
+
+    def test_both_providers_visible_to_generic_api(self, monkeypatch, tmp_path, seeded):
+        # google seeded by the fixture; add microsoft and assert both surface.
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
+        from gaia.connectors.providers import get as get_provider
+
+        ms = get_provider("microsoft")
+        save_connection(
+            provider="microsoft",
+            account_email="user@outlook.com",
+            refresh_token="ms-rt",
+            scopes=["Mail.ReadWrite"],
+            client_id_hash=ms.client_id_hash,
+        )
+        providers = {row["provider"] for row in list_connections()}
+        assert {"google", "microsoft"} <= providers

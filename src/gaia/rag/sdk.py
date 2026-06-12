@@ -470,9 +470,12 @@ class RAGSDK:
     def _load_embedder(self):
         """Load embedding model via Lemonade server for hardware acceleration.
 
-        Forces a fresh load with --ubatch-size 2048 to prevent llama.cpp issues
-        after VLM processing. Must unload first since Lemonade skips reload
-        if model already loaded.
+        Model-scoped refresh: unload ONLY the embedder slot, then reload it
+        with --ubatch-size 2048 (a fresh load avoids llama.cpp issues after VLM
+        processing). Lemonade holds the chat model and embedder at the same
+        time, so the chat model is never evicted (issue #1544). A scoped-unload
+        or load failure surfaces — no fall-back to a global unload, which would
+        evict the co-resident chat model and trigger a ~100s cold reload.
         """
         if self.embedder is None:
             self.log.info(
@@ -484,25 +487,25 @@ class RAGSDK:
             if not hasattr(self, "llm_client") or self.llm_client is None:
                 self.llm_client = LemonadeClient()
 
-            # Force fresh load - must unload first
-            try:
-                self.llm_client.unload_model()
-            except Exception as e:
-                self.log.warning("unload_model failed (continuing): %s", e)
-
-            try:
-                self.llm_client.load_model(
-                    self.config.embedding_model,
-                    llamacpp_args="--ubatch-size 2048",
-                )
-                self.log.info("Loaded embedding model with ubatch-size=2048")
-            except Exception as e:
-                self.log.warning(f"Could not pre-load embedding model: {e}")
+            # Scoped unload of the embedder ONLY — a global /unload would evict
+            # the co-resident chat model and trigger a ~100s cold reload (#1544).
+            # ignore_if_not_loaded: on a cold start the embedder slot is empty
+            # and Lemonade 404s "Model not loaded" — a benign no-op here, since
+            # we reload it on the next line anyway.
+            self.llm_client.unload_model(
+                self.config.embedding_model, ignore_if_not_loaded=True
+            )
+            self.llm_client.load_model(
+                self.config.embedding_model,
+                llamacpp_args="--ubatch-size 2048",
+            )
 
             self.embedder = self.llm_client
             self.use_lemonade_embeddings = True
 
-            self.log.info("Using Lemonade server for hardware-accelerated embeddings")
+            self.log.info(
+                "Loaded embedding model (ubatch-size=2048); chat model left resident"
+            )
 
     def _encode_texts(
         self, texts: List[str], show_progress: bool = False

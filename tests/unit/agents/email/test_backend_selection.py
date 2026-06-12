@@ -21,13 +21,16 @@ No network or OAuth — backends are constructed but never called.
 
 from __future__ import annotations
 
-import pytest
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
 
-from gaia.agents.email.calendar_backend import CalendarBackend, LiveCalendarBackend
-from gaia.agents.email.config import ConfigurationError, EmailAgentConfig
-from gaia.agents.email.gmail_backend import GmailBackend, LiveGmailBackend
-from gaia.agents.email.outlook_backend import LiveOutlookBackend
-from gaia.agents.email.outlook_calendar_backend import LiveOutlookCalendarBackend
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.calendar_backend import CalendarBackend, LiveCalendarBackend
+from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
+from gaia_agent_email.gmail_backend import GmailBackend, LiveGmailBackend
+from gaia_agent_email.outlook_backend import LiveOutlookBackend
+from gaia_agent_email.outlook_calendar_backend import LiveOutlookCalendarBackend
 
 
 class TestResolveMailBackend:
@@ -73,7 +76,7 @@ class TestResolveMailBackend:
 
 class TestAgentWiring:
     def _agent(self, **cfg_kwargs):
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         # Inject fake backends so no live token/HTTP path is hit during
         # construction; we only assert the wiring picked the right one.
@@ -81,7 +84,7 @@ class TestAgentWiring:
 
     def test_agent_routes_microsoft_to_outlook_backend(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         outlook_sentinel = object()
         cfg = EmailAgentConfig(
@@ -95,7 +98,7 @@ class TestAgentWiring:
 
     def test_agent_keeps_gmail_as_default(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         gmail_sentinel = object()
         cfg = EmailAgentConfig(
@@ -107,7 +110,7 @@ class TestAgentWiring:
         assert agent._gmail is gmail_sentinel
 
     def test_required_connectors_include_microsoft_and_google(self):
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         ids = {c.connector_id for c in EmailTriageAgent.REQUIRED_CONNECTORS}
         # Gmail must still be declared (don't break the shipped connector) and
@@ -116,7 +119,7 @@ class TestAgentWiring:
         assert "microsoft" in ids
 
     def test_microsoft_requirement_requests_graph_mail_scopes(self):
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         ms = next(
             c
@@ -124,6 +127,106 @@ class TestAgentWiring:
             if c.connector_id == "microsoft"
         )
         assert any("graph.microsoft.com/Mail" in s for s in ms.scopes)
+
+
+class TestResolveMailBackends:
+    """Plural resolver (#1603 Phase 2): ``mail_provider`` becomes a FILTER.
+
+    ``resolve_mail_backends()`` returns ``[(provider, backend), ...]`` for every
+    CONNECTED mailbox the filter admits — so a both-connected user triages both,
+    and a single-mailbox user gets exactly that one. It is connector-derived
+    (consults ``connected_mailbox_providers``); the singular ``resolve_mail_backend``
+    stays connector-agnostic for the existing eval seam.
+
+    Fail-loud: a filter naming an unconnected provider, or nothing connected,
+    raises ``ConfigurationError`` — never silently picks one.
+    """
+
+    def test_none_filter_both_connected_returns_two_in_order(self, monkeypatch):
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google", "microsoft"],
+        )
+        cfg = EmailAgentConfig(mail_provider=None)
+        pairs = cfg.resolve_mail_backends()
+        providers = [p for p, _ in pairs]
+        assert providers == ["google", "microsoft"]
+        assert isinstance(dict(pairs)["google"], LiveGmailBackend)
+        assert isinstance(dict(pairs)["microsoft"], LiveOutlookBackend)
+
+    def test_none_filter_one_connected_returns_one(self, monkeypatch):
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["microsoft"],
+        )
+        cfg = EmailAgentConfig(mail_provider=None)
+        pairs = cfg.resolve_mail_backends()
+        assert [p for p, _ in pairs] == ["microsoft"]
+        assert isinstance(pairs[0][1], LiveOutlookBackend)
+
+    def test_explicit_filter_selects_only_that_provider(self, monkeypatch):
+        # Both connected, but the session explicitly chose google → just google.
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google", "microsoft"],
+        )
+        cfg = EmailAgentConfig(mail_provider="google")
+        pairs = cfg.resolve_mail_backends()
+        assert [p for p, _ in pairs] == ["google"]
+        assert isinstance(pairs[0][1], LiveGmailBackend)
+
+    def test_explicit_filter_unconnected_raises_actionable(self, monkeypatch):
+        # Session selected microsoft but only google is connected → fail loud.
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google"],
+        )
+        cfg = EmailAgentConfig(mail_provider="microsoft")
+        with pytest.raises(ConfigurationError) as exc:
+            cfg.resolve_mail_backends()
+        msg = str(exc.value)
+        assert "microsoft" in msg
+        # Names what IS connected so the user can course-correct.
+        assert "google" in msg
+
+    def test_nothing_connected_raises_actionable(self, monkeypatch):
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: [],
+        )
+        cfg = EmailAgentConfig(mail_provider=None)
+        with pytest.raises(ConfigurationError) as exc:
+            cfg.resolve_mail_backends()
+        msg = str(exc.value)
+        assert "connect" in msg.lower()
+
+    def test_injected_backend_honored_per_provider(self, monkeypatch):
+        # The eval seam: an injected backend for the connected provider wins
+        # over building a live one.
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google"],
+        )
+        sentinel = object()
+        cfg = EmailAgentConfig(mail_provider=None, gmail_backend=sentinel)
+        pairs = cfg.resolve_mail_backends()
+        assert pairs == [("google", sentinel)]
+
+    def test_injected_outlook_backend_honored_for_microsoft(self, monkeypatch):
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["microsoft"],
+        )
+        sentinel = object()
+        cfg = EmailAgentConfig(mail_provider=None, outlook_backend=sentinel)
+        pairs = cfg.resolve_mail_backends()
+        assert pairs == [("microsoft", sentinel)]
+
+    def test_singular_resolver_unchanged_default_is_gmail(self):
+        # D1 must NOT regress the connector-agnostic singular seam: default
+        # (mail_provider=None) still builds Gmail without any connectivity mock.
+        cfg = EmailAgentConfig()
+        assert isinstance(cfg.resolve_mail_backend(), LiveGmailBackend)
 
 
 class TestResolveCalendarBackend:
@@ -175,7 +278,7 @@ class TestResolveCalendarBackend:
 class TestAgentCalendarWiring:
     def test_agent_routes_microsoft_to_outlook_calendar(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         cfg = EmailAgentConfig(
             mail_provider="microsoft",
@@ -188,7 +291,7 @@ class TestAgentCalendarWiring:
 
     def test_agent_keeps_google_calendar_as_default(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         cfg = EmailAgentConfig(
             gmail_backend=object(),
@@ -199,7 +302,7 @@ class TestAgentCalendarWiring:
 
     def test_injected_calendar_backend_still_wins_in_agent(self, tmp_path, monkeypatch):
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        from gaia.agents.email.agent import EmailTriageAgent
+        from gaia_agent_email.agent import EmailTriageAgent
 
         cal_sentinel = object()
         cfg = EmailAgentConfig(

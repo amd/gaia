@@ -20,16 +20,19 @@ Labelled fixtures cover the three acceptance-criteria cases:
 
 from __future__ import annotations
 
-import pytest
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
 
-from gaia.agents.email.tools.calendar_tools import (
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.tools.calendar_tools import (
     MeetingDetection,
     MeetingDetectionError,
     detect_meeting_request_heuristic,
     detect_meeting_request_impl,
     detect_meeting_request_llm,
 )
-from gaia.agents.email.tools.read_tools import (
+from gaia_agent_email.tools.read_tools import (
     UNTRUSTED_BODY_CLOSE,
     UNTRUSTED_BODY_OPEN,
 )

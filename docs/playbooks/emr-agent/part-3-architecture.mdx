@@ -50,7 +50,7 @@ flowchart TD
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | **FileWatcher** | watchdog library | Monitors directory for new intake forms |
-| **VLM Extraction** | Qwen3-VL on NPU | Extracts patient data from images/PDFs |
+| **VLM Extraction** | Qwen3-VL on iGPU (Vulkan) | Extracts patient data from images/PDFs |
 | **SQLite DB** | sqlite3 | Local storage for patients, alerts, sessions |
 | **FastAPI Server** | FastAPI + uvicorn | REST API + SSE events for real-time updates |
 | **React Dashboard** | React + Vite | Four views: Dashboard, Patients, Chat, Settings |
@@ -182,7 +182,7 @@ The agent follows a 7-step pipeline from file detection to database storage.
   </Step>
 
   <Step title="VLM Extraction">
-    **Model:** Qwen3-VL-4B-Instruct running on NPU/iGPU
+    **Model:** Qwen3-VL-4B-Instruct (GGUF) running on the iGPU via llama.cpp/Vulkan
 
     ```python
     EXTRACTION_PROMPT = """Extract patient data from this medical intake form.
@@ -481,7 +481,7 @@ classDiagram
 
 ### Performance
 
-- **VLM on NPU** - Ryzen AI accelerates inference
+- **VLM on iGPU** - llama.cpp/Vulkan accelerates inference
 - **Lazy VLM loading** - Model loaded only when first file arrives
 - **Connection pooling** - DatabaseMixin reuses SQLite connections
 

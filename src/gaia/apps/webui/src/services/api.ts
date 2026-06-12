@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo, AgentCatalogResponse, InstallStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo, AgentCatalogResponse, InstallStatus } from '../types';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -66,11 +66,28 @@ async function apiFetch<T>(
         throw new Error(getFriendlyError(res.status, detail));
     }
 
-    // Some endpoints (DELETE) may not return JSON
+    // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
+    // body, so there is no JSON to parse. A non-JSON response *with* content,
+    // however, means the request never reached the intended handler — e.g. an
+    // HTML error page or the SPA index.html served with a 200 because the route
+    // wasn't mounted. Surface that loudly instead of silently casting to
+    // `undefined`, which turns every such backend regression into an opaque
+    // "Cannot destructure ..." at the callsite (#983).
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
-        log.api.timed(`${method} ${url} -> ${res.status} (no body)`, t);
-        return undefined as T;
+        const text = await res.text().catch(() => '');
+        if (res.status === 204 || text.trim() === '') {
+            log.api.timed(`${method} ${url} -> ${res.status} (no body)`, t);
+            return undefined as T;
+        }
+        log.api.error(`${method} ${url} -> ${res.status} (non-JSON body)`, {
+            contentType,
+            preview: text.slice(0, 200),
+        });
+        throw new Error(
+            `${method} ${path}: expected JSON, got ${contentType || 'no Content-Type'} ` +
+            `(HTTP ${res.status}: ${text.slice(0, 120)})`,
+        );
     }
 
     const data = await res.json();
@@ -408,7 +425,7 @@ export async function getSession(id: string): Promise<Session> {
     return apiFetch('GET', `/sessions/${id}`);
 }
 
-export async function updateSession(id: string, data: { title?: string; system_prompt?: string; private?: boolean; agent_type?: string }): Promise<Session> {
+export async function updateSession(id: string, data: { title?: string; system_prompt?: string; private?: boolean; agent_type?: string; mail_provider?: string }): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}`, data);
 }
 
@@ -753,6 +770,7 @@ export async function searchFiles(query: string, fileTypes?: string, maxResults?
     results: Array<{ name: string; path: string; size: number; size_display: string; extension: string; modified: string; directory: string }>;
     total: number;
     query: string;
+    searched_locations: string[];
 }> {
     const params = new URLSearchParams({ query });
     if (fileTypes) params.set('file_types', fileTypes);
@@ -823,4 +841,34 @@ export async function startAgentMCPServer(port?: number, backendUrl?: string): P
 
 export async function stopAgentMCPServer(): Promise<{ status: string; pid?: number }> {
     return apiFetch('POST', '/mcp/agent-server/stop');
+}
+
+// -- Schedules -----------------------------------------------------------------
+
+export async function listSchedules(): Promise<{ schedules: Schedule[]; total: number }> {
+    return apiFetch('GET', '/schedules');
+}
+
+export async function createSchedule(name: string, interval: string, prompt: string): Promise<Schedule> {
+    return apiFetch('POST', '/schedules', { name, interval, prompt });
+}
+
+export async function getSchedule(name: string): Promise<Schedule> {
+    return apiFetch('GET', `/schedules/${encodeURIComponent(name)}`);
+}
+
+export async function updateSchedule(name: string, status: string): Promise<Schedule> {
+    return apiFetch('PUT', `/schedules/${encodeURIComponent(name)}`, { status });
+}
+
+export async function deleteSchedule(name: string): Promise<void> {
+    return apiFetch('DELETE', `/schedules/${encodeURIComponent(name)}`);
+}
+
+export async function getScheduleResults(name: string, limit: number = 20): Promise<{ results: ScheduleResult[]; total: number }> {
+    return apiFetch('GET', `/schedules/${encodeURIComponent(name)}/results?limit=${limit}`);
+}
+
+export async function parseScheduleInput(input: string): Promise<ParsedSchedule> {
+    return apiFetch('POST', '/schedules/parse', { input });
 }

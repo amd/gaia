@@ -3063,16 +3063,40 @@ class LemonadeClient:
                 with self._downloads_lock:
                     self.active_downloads.pop(model_name, None)
 
-    def unload_model(self) -> Dict[str, Any]:
+    def unload_model(
+        self,
+        model_name: Optional[str] = None,
+        *,
+        ignore_if_not_loaded: bool = False,
+    ) -> Dict[str, Any]:
         """
-        Unload the current model from the server.
+        Unload a model from the server.
+
+        Args:
+            model_name: Unload ONLY this model — Lemonade's /unload leaves any
+                other loaded models resident. If None, unload all models
+                (global), the historical behavior other callers rely on.
+            ignore_if_not_loaded: When True and a scoped unload targets a model
+                that isn't currently loaded, treat Lemonade's 404 "Model not
+                loaded" as a successful no-op instead of raising. For callers
+                that unload only to force a fresh reload (e.g. RAG's embedder
+                refresh), an empty slot on a cold start is expected, not an
+                error. Any other failure (server down, auth, 500) still raises.
 
         Returns:
             Dict containing the status of the unload operation
         """
         url = f"{self.base_url}/unload"
-        response = self._send_request("post", url)
-        self.model = None
+        data = {"model_name": model_name} if model_name else None
+        try:
+            response = self._send_request("post", url, data)
+        except LemonadeClientError as e:
+            if ignore_if_not_loaded and model_name and "not loaded" in str(e).lower():
+                self.log.info("Model %s not loaded; nothing to unload", model_name)
+                return {"status": "not_loaded", "model_name": model_name}
+            raise
+        if model_name is None or self.model == model_name:
+            self.model = None
         self.log.info(f"Model unloaded successfully: {response}")
         return response
 

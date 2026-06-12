@@ -43,7 +43,7 @@ graph TD
     E[/"New Intake Form"/] --> C
     C --> F["File Created Event"]
     F --> G["VLM Extraction"]
-    G --> H[("VLM Model<br/>on NPU")]
+    G --> H[("VLM Model<br/>on iGPU (Vulkan)")]
     H --> I["Structured JSON"]
     I --> D
     D --> J[("SQLite DB")]
@@ -61,7 +61,7 @@ graph TD
 **Flow:**
 1. New form dropped in watched folder
 2. FileWatcherMixin triggers callback → `_on_file_created()`
-3. VLM extracts patient data (running on NPU for speed)
+3. VLM extracts patient data (Qwen3-VL GGUF runs on the iGPU via llama.cpp/Vulkan)
 4. JSON parsed and validated
 5. DatabaseMixin stores structured record in SQLite
 6. Agent can now query patients via natural language
@@ -368,7 +368,7 @@ Add VLM to extract patient data from images.
 process_intake_form("patient1.jpg")
   → Read image file as bytes
   → Send to VLM with extraction prompt
-  → VLM processes image (running on NPU for speed)
+  → VLM processes image (Qwen3-VL GGUF runs on the iGPU via llama.cpp/Vulkan)
   → Returns JSON string: {"first_name": "John", ...}
   → Parse JSON to dict
   → Insert into database
