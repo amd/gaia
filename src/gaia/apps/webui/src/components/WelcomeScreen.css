@@ -19,7 +19,7 @@
     right: -120px;
     width: 600px;
     height: 600px;
-    background: radial-gradient(circle, rgba(237, 28, 36, 0.10) 0%, transparent 70%);
+    background: radial-gradient(circle, rgba(226, 163, 62, 0.10) 0%, transparent 70%);
     pointer-events: none;
 }
 [data-theme="dark"] .welcome::after {
@@ -44,12 +44,12 @@
 /* ── Animation Keyframes ────────────────────────────────────── */
 @keyframes titleGlow {
     0%, 100% {
-        filter: drop-shadow(0 0 20px rgba(237, 28, 36, 0.35))
-                drop-shadow(0 0 80px rgba(237, 28, 36, 0.12));
+        filter: drop-shadow(0 0 20px rgba(226, 163, 62, 0.35))
+                drop-shadow(0 0 80px rgba(226, 163, 62, 0.12));
     }
     50% {
-        filter: drop-shadow(0 0 28px rgba(237, 28, 36, 0.45))
-                drop-shadow(0 0 100px rgba(237, 28, 36, 0.18));
+        filter: drop-shadow(0 0 28px rgba(226, 163, 62, 0.45))
+                drop-shadow(0 0 100px rgba(226, 163, 62, 0.18));
     }
 }
 
@@ -79,7 +79,7 @@
     font-weight: 700;
     font-family: 'JetBrains Mono', 'Space Mono', monospace;
     letter-spacing: -1px;
-    background: linear-gradient(135deg, var(--amd-red), #ff6b35);
+    background: linear-gradient(135deg, var(--accent), #ff6b35);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -92,21 +92,21 @@
 
 /* Glow applied only after typing completes */
 .welcome-title.typing-done {
-    filter: drop-shadow(0 0 18px rgba(237, 28, 36, 0.25))
-            drop-shadow(0 0 60px rgba(237, 28, 36, 0.10));
+    filter: drop-shadow(0 0 18px rgba(226, 163, 62, 0.25))
+            drop-shadow(0 0 60px rgba(226, 163, 62, 0.10));
 }
 
 /* Pulse the glow subtly on dark backgrounds -- only after typing completes */
 [data-theme="dark"] .welcome-title.typing-done {
-    filter: drop-shadow(0 0 20px rgba(237, 28, 36, 0.35))
-            drop-shadow(0 0 80px rgba(237, 28, 36, 0.12));
+    filter: drop-shadow(0 0 20px rgba(226, 163, 62, 0.35))
+            drop-shadow(0 0 80px rgba(226, 163, 62, 0.12));
     animation: titleGlow 4s ease-in-out infinite;
 }
 
 /* All child spans need their own gradient (background-clip:text
    doesn't inherit through child elements) */
 .welcome-title > span {
-    background: linear-gradient(135deg, var(--amd-red), #ff6b35);
+    background: linear-gradient(135deg, var(--accent), #ff6b35);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -115,15 +115,15 @@
 }
 /* "GAIA" text gets extra pulsating glow */
 .gaia-glow {
-    filter: drop-shadow(0 0 6px rgba(237, 28, 36, 0.3));
+    filter: drop-shadow(0 0 6px rgba(226, 163, 62, 0.3));
     transition: filter 0.5s ease;
 }
 .welcome-title.typing-done .gaia-glow {
     animation: gaiaGlow 3s ease-in-out infinite;
 }
 @keyframes gaiaGlow {
-    0%, 100% { filter: drop-shadow(0 0 8px rgba(237, 28, 36, 0.35)); }
-    50% { filter: drop-shadow(0 0 16px rgba(237, 28, 36, 0.55)) drop-shadow(0 0 40px rgba(237, 28, 36, 0.15)); }
+    0%, 100% { filter: drop-shadow(0 0 8px rgba(226, 163, 62, 0.35)); }
+    50% { filter: drop-shadow(0 0 16px rgba(226, 163, 62, 0.55)) drop-shadow(0 0 40px rgba(226, 163, 62, 0.15)); }
 }
 
 /* Terminal cursor: pixelated red block that blinks after typing finishes */
@@ -131,13 +131,13 @@
     display: inline-block;
     width: 8px;
     height: 1.15em;
-    background: var(--amd-red);
+    background: var(--accent);
     margin-left: 2px;
     vertical-align: text-bottom;
     /* Pixelated aesthetic - sharp edges, no rounding */
     border-radius: 0;
     image-rendering: pixelated;
-    box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
+    box-shadow: 0 0 8px rgba(226, 163, 62, 0.5), 0 0 2px rgba(226, 163, 62, 0.8);
 }
 
 .terminal-cursor.blink {
@@ -240,13 +240,13 @@
     left: 0;
     right: 0;
     height: 2px;
-    background: linear-gradient(90deg, var(--amd-red), #ff6b35);
+    background: linear-gradient(90deg, var(--accent), #ff6b35);
     opacity: 0;
     transition: opacity 0.3s var(--ease);
 }
 
 .feature-card:hover {
-    border-color: var(--amd-red);
+    border-color: var(--accent);
     transform: translateY(-2px);
 }
 .feature-card:hover::before {
@@ -271,7 +271,7 @@
 }
 
 .feature-icon {
-    color: var(--amd-red);
+    color: var(--accent);
     margin-bottom: 10px;
     display: flex;
     justify-content: center;
@@ -333,7 +333,7 @@
 }
 .feature-code-erasing {
     opacity: 0.7;
-    color: var(--amd-red);
+    color: var(--accent);
 }
 
 /* Typed expanded description */
@@ -481,9 +481,9 @@
 .content-revealed .chip:nth-child(4) { animation-delay: 1060ms; }
 
 .chip:hover {
-    border-color: var(--amd-red);
-    color: var(--amd-red);
-    background: var(--amd-red-dim2);
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim2);
     transform: translateY(-1px);
 }
 

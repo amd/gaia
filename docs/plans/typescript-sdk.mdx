@@ -1,0 +1,1226 @@
+---
+title: "TypeScript SDK"
+description: "First-class typed TS surface for the GAIA Python framework — enabling Claudia, VSCode, mobile, and other TS frontends to integrate without bespoke glue"
+icon: "code"
+---
+
+# TypeScript SDK -- First-Class TS Integration for the GAIA Framework
+
+> **Date:** 2026-04-30 (revised after first review pass)
+>
+> **Status:** Planning (0% implemented)
+>
+> **Milestone candidate:** v0.22.0 (App Consolidation) co-shipping with v0.23.0 (Autonomy Engine)
+>
+> **Prerequisites:**
+> - GAIA HTTP/SSE surface (`src/gaia/ui/server.py` + `src/gaia/api/openai_server.py`) -- already shipped
+> - Pydantic schemas in `src/gaia/api/schemas.py` -- already shipped
+> - **Phase 0 (this plan):** OpenAPI cleanup, codegen spike, tick-driver scaffold spec, npm scope decision -- see §17, "Phase 0"
+> - **Hard prerequisite:** Phase 0 must land before any code in `ts/` is scaffolded
+> - **Soft prerequisite:** v0.20.0 Memory APIs (`MemoryStore`, `MemoryMixin`) for Phase 2 of this SDK
+> - **Soft prerequisite:** v0.23.0 Autonomy Engine for full ambient loop; Phase 1 ships with a tick-driver scaffold (§4.1.1)
+>
+> **Related plans:**
+> - [Autonomy Engine](autonomy-engine.mdx) -- the server-side loop this SDK subscribes to
+> - [Agent UI](agent-ui.mdx) -- consumes this SDK in Phase 3 (eat-your-own-dogfood migration)
+> - [Axis -- GAIA Integration](axis-gaia-integration.md) -- prior art for third-party integration
+> - [MCP Docs](mcp-docs.mdx) -- bidirectional tool bridge sits on top of MCP
+
+---
+
+## 1. What We're Building
+
+A typed, ergonomic, **published-to-npm** TypeScript SDK that wraps the GAIA Python
+framework's HTTP/SSE surface, agent runtime, and MCP bridge. The SDK lets any
+TypeScript frontend (Claudia, VSCode extensions, web apps, React Native mobile) drive
+GAIA agents end-to-end without hand-rolling REST/SSE/MCP plumbing.
+
+**The first reference consumer is [Claudia](https://github.com/extropolis/claudia)**, which
+will use this SDK to build an *ambient agent manager* -- a continuously-running
+supervisor that monitors all jobs across all workspaces and manages tasks per workspace.
+Claudia's ambient agent manager is implemented entirely in TypeScript inside the Claudia
+repo; it consumes this SDK to call into a long-running GAIA agent server. That use case
+drives every API decision in this spec.
+
+This is not a port of GAIA's Python framework. The agent runtime stays in Python --
+unique GAIA capabilities (memory, RAG, autonomy, fine-tuning, NPU-accelerated local
+inference) all stay where AMD's optimization investment lands. The SDK is a thin,
+generated-where-possible, hand-written-where-it-matters consumer surface.
+
+---
+
+## 2. Goals & Non-Goals
+
+### Goals
+
+- **Single, typed entrypoint** for all GAIA capabilities a TS frontend needs (chat, agents, sessions, MCP config, memory, RAG, files, system status).
+- **Zero configuration drift** between Python schemas and TS types -- enforced by CI.
+- **Streaming-first ergonomics** -- `AsyncIterable` over typed event unions, with `AbortSignal` cancellation and SSE auto-reconnect.
+- **Two transports, one API surface** -- HTTP/SSE to a remote GAIA instance, or embedded process supervision for desktop apps.
+- **Capability negotiation** -- SDK and server interoperate cleanly across version skew.
+- **Bundle-size discipline** -- tree-shakeable, ESM-first, no heavyweight runtime deps.
+- **Eat-your-own-dogfood path** -- GAIA's own Electron framework migrates to consume the SDK in Phase 3, replacing today's hand-rolled JS.
+
+### Non-Goals
+
+- **Not a TS port of GAIA's `Agent` base class.** Tool registry, planner, error recovery, and the agent execution loop stay in Python. The SDK exposes them as remote services.
+- **Not a replacement for `@modelcontextprotocol/sdk`.** TS frontends that want to expose tools *back* to GAIA host their own MCP server using the standard upstream MCP SDK. We do not reinvent MCP.
+- **Not a fork from gaia's roadmap.** Memory, autonomy, eval, fine-tuning, voice, vision, browser automation, OS agents -- all consumed via SDK calls, never reimplemented in TS.
+- **Not a C++ framework binding.** The C++ port (`cpp/`) has its own integration story.
+- **Not internationalized in v1** -- locale strings are passed through opaquely; no translation in the SDK.
+
+---
+
+## 3. Reference Use Cases
+
+Every API decision is validated against these three end-to-end scenarios.
+
+### 3.1 Claudia ambient agent manager (primary)
+
+Claudia is an Electron + web IDE for managing many concurrent Claude Code tasks across
+multiple workspaces. It will add an ambient agent manager that continuously monitors
+all tasks, intelligently surfaces issues, spawns follow-up work, asks the user
+asynchronously when uncertain, and never blocks on those questions.
+
+- Claudia's TS code (`backend/src/agent-manager/`) imports `@amd-gaia/client` and `@amd-gaia/embedded`.
+- On startup, the embedded transport spawns and supervises a GAIA agent server as a sidecar process.
+- Claudia builds an agent definition: system prompt, MCP tool references pointing to its own `claudia-mcp-server.ts` (which exposes `list_workspaces`, `list_tasks`, `get_task_output`, `send_task_input`, `create_task`, `notify_user`, `ask_user_async`), strategy mode (Observe / Nudge / Manage), observability rules.
+- Claudia calls `client.agents.run(definition)` and subscribes to events.
+- The GAIA-side autonomy engine (v0.23.0) runs the heartbeat. Each tick, the agent inspects workspaces via the MCP back-channel, decides whether action is warranted, and emits typed events (observation, tool call, plan step, async question, completion) over SSE.
+- Claudia reacts in TS: posts to its supervisor chat thread, surfaces async questions in an inbox panel, updates UI badges, etc.
+
+### 3.2 VSCode extension that drives a GAIA chat agent for code Q&A
+
+- TS extension imports `@amd-gaia/client` only (no embedded transport -- assumes user already runs GAIA).
+- Calls `client.chat.complete({ messages, stream: true })` and renders tokens.
+- No agent definition; pure chat surface with MCP tool refs to VSCode's workspace.
+
+### 3.3 React Native mobile companion that views ongoing autonomous work
+
+- Phone app pairs with desktop GAIA over a tunnel URL (see `agent-ui.mdx`).
+- Imports `@amd-gaia/client` (HTTP transport only -- embedded does not apply).
+- Subscribes to a running agent's event stream over SSE-via-tunnel.
+- Surfaces async questions for thumb-tap answering.
+
+These three -- desktop-with-embedded, desktop-with-remote, mobile-with-tunnel -- cover the realistic transport matrix.
+
+---
+
+## 4. Architecture
+
+### 4.1 Where the loop lives (load-bearing decision)
+
+**Server-driven.** The agent execution loop runs inside the GAIA Python process. The
+SDK is subscribe-style, not RPC-per-tick.
+
+| Concern | Server-driven (chosen) | Client-driven (rejected) |
+|---|---|---|
+| Per-tick IPC cost | Zero. Loop ticks internally; SDK only sees events worth surfacing. | Every tick is at least one TS->Python round trip; usually more once the agent calls back. |
+| Roadmap alignment | Matches v0.23.0 Autonomy Engine design. | Would force re-implementing the autonomy loop in TS. |
+| Persistence across consumer restart | Loop survives. SDK reconnects and re-subscribes. | Loop dies with the consumer. |
+| Multi-consumer observation | One agent, many subscribers (Electron + mobile + tunnel). | Each consumer runs its own loop -- divergent state. |
+| Memory locality | Memory store and loop colocated; v0.20.0 memory mixin works unchanged. | Cross-process every tick to read/write memory. |
+
+Until v0.23.0 Autonomy Engine ships, a thin tick-driver scaffold inside the GAIA agent
+server fills the gap. It is replaced by the official engine when that lands; SDK
+consumers see no change.
+
+#### 4.1.1 Tick-driver scaffold (Phase 1)
+
+Spec, not afterthought. Lives in `src/gaia/agents/runtime/scaffold.py`. Responsibilities:
+
+- One asyncio task per running agent. Sleeps `strategy.autonomy.heartbeatSeconds`, wakes,
+  invokes the agent's `tick()` method (which the Autonomy Engine will later replace).
+- Maintains an in-memory event ring buffer (default 10 min, configurable) keyed by
+  monotonic `event_id`.
+- Persists agent definitions and run state to sqlite at
+  `~/.gaia/agents/runtime.db` so embedded restarts don't lose them.
+- Exposes the §6.2 endpoints; the Autonomy Engine drops in behind the same surface.
+- No scheduling beyond fixed-interval heartbeats. Cron-style triggers, event hooks, and
+  priority queues are explicitly v0.23.0.
+
+The scaffold is throwaway code by design — replaced wholesale, not extended. SDK
+consumers see no behavior change at the swap.
+
+### 4.2 Component diagram
+
+```
++----------------------------------------------------------------+
+|  TS Frontend (e.g., Claudia)                                   |
+|                                                                 |
+|  +---------------------+        +---------------------------+   |
+|  |  Frontend code      |        |  MCP server (frontend's)  |   |
+|  |  (supervisor logic, |        |  Exposes frontend tools:  |   |
+|  |   prompts, strategy)|        |  list_tasks, create_task, |   |
+|  +-----+---------------+        |  ask_user_async, ...      |   |
+|        |                        +-------------+-------------+   |
+|        v                                      ^                 |
+|  +---------------------+                      |                 |
+|  |  @amd-gaia/client   |                      |                 |
+|  |  (typed SDK)        |                      | (gaia agent     |
+|  +--+----------------+-+                      |  calls these    |
+|     |                |                        |  via MCP)       |
+|     | HTTP/SSE       | spawn/supervise        |                 |
+|     v                v                        |                 |
++-----|----------------|------------------------|-----------------+
+      |                |                        |
+      |        +-------+--------+                |
+      |        | @amd-gaia/     |                |
+      |        |   embedded     |                |
+      |        | (process mgmt) |                |
+      |        +-------+--------+                |
+      v                |                        |
++-----|----------------|------------------------|-----------------+
+|     v                v                        |                 |
+|  GAIA Python Server (FastAPI + agent runtime)                  |
+|                                                                 |
+|  /v1/chat/completions      Agent runtime (tool loop, planner) -+
+|  /v1/agents/define              ^                              |
+|  /v1/agents/run                 |                              |
+|  /v1/agents/{id}/events (SSE)   |                              |
+|  /v1/memory/...                 |                              |
+|  /v1/rag/...                    |                              |
+|  /v1/sessions/...               | (uses MCPMixin to call into  |
+|  /v1/mcp/...                    |  the frontend's MCP server)  |
+|                                 |                              |
+|  Lemonade (local LLM, NPU) <----+                              |
+|  Memory store (v0.20.0)                                        |
+|  Autonomy engine (v0.23.0)                                     |
++-----------------------------------------------------------------+
+```
+
+Two arrows leave the TS frontend: one *into* GAIA (via the SDK), and one *out of* GAIA's
+agent loop *back into* the frontend's own MCP server (the bidirectional tool path). The
+SDK does not own the inbound MCP server -- the consumer does, using
+`@modelcontextprotocol/sdk`.
+
+### 4.3 Where each piece lives
+
+| Concern | Location |
+|---|---|
+| Agent runtime, tool loop, planner, error recovery | GAIA Python (unchanged) |
+| Memory, RAG, fine-tuning, NPU inference | GAIA Python (unchanged) |
+| Autonomy engine (heartbeat, scheduler, event hooks) | GAIA Python (v0.23.0) |
+| Agent definition, prompts, strategy, observability rules | TS frontend (e.g., Claudia repo) |
+| Frontend-specific tools (workspace ops, UI updates) | TS frontend, exposed via its own MCP server |
+| Type-safe transport, agent ergonomics, streaming events | `@amd-gaia/client` |
+| Process supervision for desktop hosts | `@amd-gaia/embedded` |
+
+---
+
+## 5. Package Layout
+
+Three published packages under the `@amd-gaia` npm scope.
+
+### 5.1 `@amd-gaia/client-core`
+
+Low-level, generated-from-Pydantic types and a thin HTTP/SSE transport. Exists so
+heavier packages can depend on a stable, minimal core.
+
+- Generated TS types from GAIA's OpenAPI export (via `openapi-typescript`).
+- Hand-written `HttpTransport` (fetch-based, isomorphic Node + browser).
+- Hand-written `SseTransport` with reconnect/backoff and typed event parsing.
+- Capability negotiation primitives.
+- Error classes (`GaiaError`, `GaiaNetworkError`, `GaiaModelError`, `GaiaToolError`, `GaiaValidationError`).
+- Zero runtime deps beyond `eventsource-parser` (tiny, well-maintained).
+
+### 5.2 `@amd-gaia/client`
+
+Ergonomic facade over `client-core`. The package most consumers import.
+
+- `GaiaClient` class -- single entry point.
+- Service modules: `client.chat`, `client.agents`, `client.sessions`, `client.memory`, `client.rag`, `client.mcp`, `client.files`, `client.system`.
+- Agent ergonomics (see §7): `define`, `run`, `subscribe`, `send`, `pause`, `stop`.
+- `AsyncIterable<AgentEvent>` over the typed event union.
+- `AbortSignal` integration on every call.
+- Tree-shakeable subpath imports: `@amd-gaia/client/chat`, `/agents`, `/memory`, etc.
+- Re-exports types from `client-core`.
+
+### 5.3 `@amd-gaia/embedded`
+
+Optional package for hosts that want to spawn and supervise a GAIA process in-process
+(Electron, Node CLIs). Pure Node; will not load in browser/RN bundles.
+
+- `EmbeddedGaia` class: `start`, `stop`, `health`, `restart`, `port`, `logs`.
+- Port allocation, graceful shutdown, log capture, crash recovery with backoff.
+- Wraps GAIA's existing installer launch path -- does not reinvent model download or hardware detection.
+- Surface explicitly small: process lifecycle only.
+
+### 5.4 Possible Phase 3 helper: `@amd-gaia/mcp-tools-host`
+
+Thin opinionated wrapper around `@modelcontextprotocol/sdk` that ergonomically exposes
+TS-side tools to a connecting GAIA agent (auth handshake matching GAIA, schema
+conventions, lifecycle helpers). Out of scope for v1; consumers use upstream MCP SDK
+directly.
+
+---
+
+## 6. Server-Side API Additions
+
+The SDK requires these GAIA endpoints. Most already exist; the agent endpoints are new.
+
+### 6.1 Existing endpoints reused
+
+- `POST /v1/chat/completions` -- already shipped (OpenAI-compatible).
+- `GET /v1/sessions`, `POST /v1/sessions`, `GET /v1/sessions/{id}` -- already shipped.
+- `/v1/files/*`, `/v1/documents/*` -- already shipped (Phase 2 SDK consumption).
+- `/v1/mcp/*` -- already shipped.
+- `/v1/system/status`, `/v1/system/health` -- already shipped.
+
+### 6.2 New endpoints (agent runtime)
+
+These extend GAIA's FastAPI surface to expose the agent runtime as a service. They are
+co-developed with this SDK; the spec for the server-side implementation is owned by the
+[Autonomy Engine](autonomy-engine.mdx) plan.
+
+All write endpoints accept an `Idempotency-Key` header; the server stores
+`(key, response)` for 24h and replays the response on retry.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/agents/define` | Persist an agent definition (prompt, tool refs, strategy, observability). Returns `agent_id`. Definitions are immutable; updates require a new define. |
+| `POST /v1/agents/{agent_id}/run` | Start the agent runtime. Returns `run_id`. Idempotent: re-running a running agent returns the existing `run_id`. |
+| `POST /v1/agents/{agent_id}/pause` | Pause without losing state. |
+| `POST /v1/agents/{agent_id}/stop` | Stop and free resources. Drains in-flight tool calls up to a 30s deadline, then force-cancels (§11.4). |
+| `POST /v1/agents/{agent_id}/messages` | Inject a user message into the agent's context. Used for synchronous interaction and async-question replies. |
+| `POST /v1/agents/{agent_id}/tool_confirmations/{call_id}` | Approve or deny a gated tool call (Observe / Nudge modes). |
+| `POST /v1/chat/completions/{request_id}/cancel` | Cancel an in-flight chat completion. |
+| `GET /v1/agents/{agent_id}/events` (SSE) | Subscribe to typed event stream. `?since=<event_id>` resumes from the ring buffer; missed window returns `gap_detected` and resumes live. Multiple subscribers supported. |
+| `GET /v1/agents/{agent_id}` | Snapshot of agent state, recent observations, pending questions. |
+| `GET /v1/agents/{agent_id}/messages` | Conversation history for a run. |
+| `GET /v1/agents` | List all defined / running agents (scoped by auth). |
+| `GET /v1/version`, `GET /v1/capabilities` | Version + declared feature set for capability negotiation. |
+
+### 6.3 Sessions vs. agents (clarification)
+
+Two distinct concepts; consumers must not conflate them.
+
+- **Sessions** (`/v1/sessions/*`) — short-lived stateless chat threads. Used by `client.chat`. History is passed in by the consumer (OpenAI-compat). One session = one conversation thread.
+- **Agents** (`/v1/agents/*`) — long-lived stateful entities with their own memory, tool refs, strategy, and event stream. History is server-owned, fetched via `GET /v1/agents/{agent_id}/messages`.
+
+Rule: chat completions = sessions; autonomy / tool loops = agents. Don't try to drive an agent through `client.sessions`.
+
+### 6.4 Capabilities response
+
+```json
+{
+  "gaia_version": "0.23.0",
+  "min_compatible_sdk": "0.22.0",
+  "features": {
+    "memory.three_tier": true,
+    "memory.dashboard": true,
+    "autonomy.heartbeat": true,
+    "autonomy.event_hooks": true,
+    "agents.async_questions": true,
+    "agents.multi_subscriber_sse": true,
+    "rag.semantic_search": true,
+    "voice.asr": false,
+    "voice.tts": false,
+    "vision.vlm": true
+  },
+  "models": {
+    "default_local": "lemonade://gemma-4-e4b",
+    "available": ["lemonade://...", "claude://claude-sonnet-4-..."]
+  }
+}
+```
+
+The SDK reads this on connect and gates feature flags client-side. Calling a feature the
+server does not advertise throws `GaiaUnsupportedError` synchronously, before any
+network round-trip.
+
+---
+
+## 7. Agent Ergonomics (the core SDK API)
+
+The shape consumers will spend most of their time in.
+
+### 7.0 Identifier vocabulary
+
+Wire format: `snake_case`. SDK surface: `camelCase`. The transport translates.
+
+| ID | Lifetime | Where it appears |
+|---|---|---|
+| `agent_id` / `agentId` | Persistent. Survives restart, embedded crash, SDK reinstall. | `definition.agentId`, `handle.agentId`, all `/v1/agents/{agent_id}/*` URLs |
+| `run_id` / `runId` | One per `agents.run()` call. | `handle.runId`, `completion` event payload |
+| `event_id` / `eventId` | Monotonic per run; used as resume cursor. | `?since=<event_id>`, `gap_detected` bounds |
+| `call_id` / `callId` | One per tool invocation. | `tool_call`, `tool_result`, `tool_confirmation_request` events |
+| `question_id` / `questionId` | One per `user_question`. | `replyToQuestion`, `user_question` event |
+
+### 7.1 Defining and running an agent
+
+```ts
+import { GaiaClient } from '@amd-gaia/client';
+
+const client = new GaiaClient({ baseUrl: 'http://localhost:8765' });
+
+const definition = await client.agents.define({
+  name: 'claudia-supervisor',
+  systemPrompt: claudiaSupervisorPrompt,        // string, owned by Claudia repo
+  model: 'claude://claude-sonnet-4-20250514',   // URI scheme everywhere
+  tools: {
+    mcpServers: [
+      { name: 'claudia', url: 'http://localhost:4000/mcp', auth: { kind: 'bearer', token: '...' } },
+    ],
+    confirmation: 'tools-marked-dangerous',     // or 'none' | 'all'
+  },
+  strategy: {
+    mode: 'nudge',                              // 'observe' | 'nudge' | 'manage'
+    autonomy: { heartbeatSeconds: 30, maxConcurrentToolCalls: 3 },
+  },
+  observe: ['workspace:*', 'task:*'],           // observability rules
+  memory: { enabled: true, namespace: 'claudia' },   // scoped to auth identity (§10.5)
+});
+// definition.agentId is the persistent ID; survives restart.
+
+const handle = await client.agents.run(definition.agentId);
+// handle.agentId === definition.agentId; handle.runId is the current run.
+```
+
+### 7.2 Subscribing to events
+
+```ts
+const ac = new AbortController();
+
+for await (const event of handle.events({ signal: ac.signal })) {
+  switch (event.type) {
+    case 'observation':     /* agent noticed something */ break;
+    case 'plan_step':       /* agent created/updated a plan */ break;
+    case 'tool_call':       /* agent invoked a tool (your MCP server) */ break;
+    case 'tool_result':     break;
+    case 'token':           /* streaming LLM token */ break;
+    case 'message':         /* completed assistant message */ break;
+    case 'user_question':   /* agent wants async clarification */ break;
+    case 'completion':      /* agent finished a unit of work */ break;
+    case 'error':           break;
+  }
+}
+```
+
+`handle.events()` is an `AsyncIterable<AgentEvent>` where `AgentEvent` is a discriminated
+union. Each branch is fully typed. Calling `ac.abort()` stops iteration without stopping
+the agent.
+
+### 7.3 Async user questions (key Claudia primitive)
+
+When the agent emits a `user_question` event, the consumer surfaces it in UI without
+blocking other agent activity. When the user responds, the consumer replies:
+
+```ts
+await client.agents.replyToQuestion(handle.agentId, questionId, "yes, use Python 3.12");
+```
+
+The agent treats the reply as new context and resumes whatever branch of reasoning was
+parked.
+
+### 7.4 Tool confirmation (Observe / Nudge modes)
+
+Distinct from `user_question`. When `tools.confirmation` is non-`none`, gated tool
+calls emit `tool_confirmation_request` events:
+
+```ts
+case 'tool_confirmation_request': {
+  // ev.callId, ev.toolName, ev.args, ev.dangerLevel
+  const ok = await ui.confirmToolCall(ev);
+  await client.agents.confirmToolCall(handle.agentId, ev.callId, ok ? 'approve' : 'deny');
+  break;
+}
+```
+
+The agent blocks on the call until the consumer responds (per-call timeout configured
+in the agent definition; default 5 min, then auto-deny). `user_question` is for
+clarification ("which Python version?"); `tool_confirmation_request` is for permission
+("OK to delete workspace?"). Two surfaces, two events.
+
+### 7.5 Sending input
+
+```ts
+await handle.send({ role: 'user', content: 'pause work in workspace A until further notice' });
+```
+
+Used for both interactive chat and operator overrides.
+
+### 7.6 Lifecycle
+
+```ts
+await handle.pause();
+await handle.resume();
+await handle.stop();   // drains in-flight tool calls (§11.4); 30s deadline.
+```
+
+---
+
+## 8. Bidirectional Tools
+
+The SDK is consumer-side only. To expose tools *back* to GAIA, the consumer hosts an
+MCP server -- using upstream `@modelcontextprotocol/sdk` (or any MCP server library) --
+and references that server in the agent definition's `tools.mcpServers`. The GAIA agent
+runtime, via its existing `MCPMixin`, connects out and registers those tools natively.
+
+### 8.1 Reference implementation: Claudia's `claudia-mcp-server.ts`
+
+Claudia already ships an MCP server. Tools the ambient agent manager will use:
+
+| Tool | Purpose |
+|---|---|
+| `list_workspaces` | Snapshot of all known workspaces |
+| `list_tasks(workspace_id?)` | Tasks per workspace, with state |
+| `get_task_output(task_id, lines?)` | Recent terminal output |
+| `get_task_conversation(task_id)` | Parsed conversation history |
+| `send_task_input(task_id, input)` | Inject text into a task's PTY |
+| `create_task(workspace_id, prompt)` | Spawn a new task |
+| `pause_task(task_id)`, `stop_task(task_id)` | Lifecycle |
+| `notify_user(severity, message, context?)` | Surface in Claudia UI |
+| `ask_user_async(question, options?)` | Returns `question_id`, agent does not block |
+
+The agent reads workspace/task state, decides, and uses the same MCP path to act --
+all over the channel the consumer already owns. The SDK does not get involved in the
+inbound direction.
+
+### 8.2 Why we don't reinvent
+
+`@modelcontextprotocol/sdk` is mature, battle-tested across many ecosystems, and
+already what GAIA's `MCPMixin` speaks. Wrapping or replacing it would duplicate
+maintenance for zero ergonomic gain. A future `@amd-gaia/mcp-tools-host` (Phase 3) may
+provide opinionated GAIA-flavored defaults on top of the upstream SDK; not in v1.
+
+### 8.3 Decision rule for consumers
+
+> **Direct SDK** when the TS frontend is the *caller* (chat completions, defining agents, reading memory, RAG search, system status).
+>
+> **MCP** when the TS frontend is the *callee* (gaia agent invokes a tool the frontend implements).
+
+These two surfaces never overlap.
+
+---
+
+## 9. Streaming Model
+
+Streaming is the dominant interaction shape (chat tokens, agent events). The SDK's
+streaming primitive is `AsyncIterable` over typed event unions. Other shapes
+(callbacks, RxJS Observables) can be adapted on top in a couple lines, but not the
+reverse.
+
+### 9.1 Transport
+
+- **HTTP transport (all environments):** `fetch` + `ReadableStream` + `eventsource-parser`. **Native `EventSource` is not used** because it cannot send `Authorization` headers in browsers — every transport path uses fetch-streaming, single isomorphic code path.
+- **Embedded transport:** still HTTP/SSE under the hood (the embedded GAIA process listens on `localhost:<port>`); embedded mode just guarantees the server is up.
+
+### 9.1.1 Why SSE, not WebSocket
+
+SSE is unidirectional server-to-client; consumer-to-server input goes through normal
+POSTs (`/messages`, `/confirmations`, `/cancel`). Chosen because:
+
+- Trivial server-side fanout (multi-subscriber from one ring buffer).
+- Reconnect + `?since=<event_id>` resume is a one-line semantic; WebSockets would require an app-level resume protocol.
+- No proxy / corporate-firewall surprises (SSE is plain HTTP).
+- Lower implementation cost across Node, browser, and RN.
+
+The bidirectional nature of agent interaction is handled by parallel POST endpoints — no
+real benefit from a single duplex channel here.
+
+### 9.2 Event union shape
+
+Every event carries `agentId`, `runId`, `eventId` (monotonic per run, used as resume cursor),
+and `ts`. Discriminated by `type`.
+
+```ts
+interface BaseEvent { agentId: string; runId: string; eventId: number; ts: string; }
+
+type AgentEvent =
+  | (BaseEvent & { type: 'observation'; observation: Observation })
+  | (BaseEvent & { type: 'plan_step';   step: PlanStep })
+  | (BaseEvent & { type: 'tool_call';   toolName: string; args: unknown; callId: string })
+  | (BaseEvent & { type: 'tool_result'; callId: string; ok: boolean; result?: unknown; error?: string })
+  | (BaseEvent & { type: 'tool_confirmation_request'; callId: string; toolName: string; args: unknown; dangerLevel: 'safe' | 'flagged' | 'dangerous'; expiresAt: string })
+  | (BaseEvent & { type: 'token';       delta: string })
+  | (BaseEvent & { type: 'message';     role: 'assistant'; content: string })
+  | (BaseEvent & { type: 'user_question'; questionId: string; prompt: string; options?: string[] })
+  | (BaseEvent & { type: 'usage';       inputTokens: number; outputTokens: number; costUsd?: number; modelId: string })
+  | (BaseEvent & { type: 'gap_detected'; missedSinceEventId: number; reason: 'ring_buffer_overflow' | 'server_restart' })
+  | (BaseEvent & { type: 'completion';  reason: 'done' | 'paused' | 'stopped' | 'error' })
+  | (BaseEvent & { type: 'error';       error: GaiaErrorPayload });
+```
+
+Adding new event variants is non-breaking provided consumers follow the documented
+switch-with-default pattern (lint rule provided in `@amd-gaia/client/eslint-config`).
+
+### 9.2.1 Ordering guarantees
+
+- **Per run:** strict total order by `eventId`. Events are assigned monotonically before being broadcast.
+- **Across runs of the same agent:** ordered by `runId` then `eventId`.
+- **Across reconnect:** preserved via `?since=<event_id>`. If the buffer rolled, a synthetic `gap_detected` event is injected before live resumes — consumers must treat it as authoritative loss.
+- **Across multiple subscribers:** every subscriber receives the same sequence in the same order. Per-subscriber buffer with eviction policy: slow subscribers get disconnected after 60s of pressure with `error` event `code = 'subscriber_too_slow'`; they must reconnect with a `since` cursor.
+
+### 9.3 Reconnect and backoff
+
+SSE auto-reconnect is built into the transport, with exponential backoff (1s, 2s, 4s,
+... capped at 30s). On reconnect, the SDK passes the last seen `eventId`:
+`GET /v1/agents/{agent_id}/events?since=<event_id>`. The server returns events the
+consumer missed, then resumes live.
+
+**Overflow behavior.** Server-side ring buffer is 10 min default, configurable. If
+reconnect lands past the buffer, the server emits a single synthetic
+`gap_detected` event (with `missedSinceEventId` and `reason`) and resumes live. The
+SDK does **not** automatically replay-from-zero — consumers handle gap recovery by
+calling `client.agents.snapshot(agentId)` if they need authoritative state.
+
+### 9.4 Cancellation
+
+Every method that can stream or take time accepts `signal: AbortSignal`. Aborting:
+- a `for await` over events stops iteration but does not stop the agent.
+- a chat completion sends `POST /v1/chat/completions/{id}/cancel` if mid-flight.
+- `handle.stop()` is the explicit "stop the agent" call.
+
+---
+
+## 10. Auth & Security
+
+### 10.1 Auth strategies (per transport)
+
+| Transport | Auth |
+|---|---|
+| Embedded | Per-spawn token issued by the SDK at process start; passed via env var to the GAIA process; SDK includes it as bearer on every call. Token never leaves the host. |
+| HTTP (local) | API key or bearer token. Configured by consumer; SDK does not persist. |
+| HTTP over tunnel | OAuth-PKCE (matches GAIA issue #915 / mobile design); SDK exposes `client.auth.beginPkce()` / `completePkce()` helpers. |
+| MCP back-channel | Bearer token on the consumer's MCP server, validated by GAIA when the agent connects out. Consumer's responsibility. |
+
+### 10.2 Secret storage
+
+The SDK never persists secrets to `localStorage`, IndexedDB, or disk. Consumers pass
+tokens at construction; if persistence is needed it is the host's job (Electron
+safeStorage, iOS Keychain, etc.).
+
+### 10.3 CORS
+
+Server-side: GAIA's FastAPI configures CORS based on operator settings. SDK never
+attempts to bypass.
+
+### 10.4 Auth refresh on long-running streams
+
+Bearer tokens expire. The SDK accepts an optional `auth.refresh: () => Promise<Token>`
+callback at construction. On 401 from any endpoint:
+
+1. SDK invokes `auth.refresh()` (with single-flight; concurrent 401s share one refresh).
+2. Replays the failed call once with the new token.
+3. If the SSE stream returned 401, reconnects (with current `since` cursor) using the new token.
+
+Without `auth.refresh`, a 401 surfaces as `GaiaAuthError` and the consumer is on its own.
+OAuth-PKCE tunnel mode wires this automatically.
+
+### 10.5 Multi-tenant scoping
+
+When one GAIA instance serves multiple consumers (rare in v1, common in deployment):
+
+- Memory `namespace` is scoped to the auth identity: two consumers with different bearer tokens cannot collide on `'claudia'`.
+- File and RAG operations are auth-scoped — `client.files.list()` returns only the caller's files.
+- `GET /v1/agents` returns only agents the caller owns.
+
+Single-user local installs (the common case) all share one auth identity; namespace
+collisions within one identity are rejected with `GaiaConflictError`.
+
+### 10.6 MCP server reachability (Electron note)
+
+The agent runtime connects out from the Python process to the consumer's MCP server.
+In Electron, the MCP server **must run in the main process or a sidecar** — the
+renderer-process loopback is not reachable from the GAIA process. Documented gotcha;
+example wiring shown in `ts/examples/electron-skeleton/`.
+
+### 10.7 Tool confirmation gating
+
+Maps cleanly onto Claudia's three autonomy modes (Observe / Nudge / Manage):
+
+| Mode | `confirmation` setting | Behavior |
+|---|---|---|
+| Observe | `all` | Every tool call requires user confirmation, surfaced via `user_question` event. |
+| Nudge | `tools-marked-dangerous` | Tools listed in GAIA's `TOOLS_REQUIRING_CONFIRMATION` set still gate; safe tools auto-execute. |
+| Manage | `none` | Agent acts autonomously. Audit trail unchanged. |
+
+The confirmation setting is part of the agent definition, not the SDK -- the SDK simply
+forwards it. Consumers can override per-tool via MCP server policy.
+
+---
+
+## 11. Errors, Retries, Cancellation
+
+### 11.1 Error hierarchy
+
+```ts
+class GaiaError extends Error { code: string; cause?: unknown; }
+class GaiaNetworkError extends GaiaError {}            // fetch failure, timeout
+class GaiaValidationError extends GaiaError { issues: Issue[]; }   // 400-class
+class GaiaAuthError extends GaiaError {}                // 401/403
+class GaiaNotFoundError extends GaiaError {}           // 404
+class GaiaConflictError extends GaiaError {}           // 409
+class GaiaModelError extends GaiaError { modelId: string; }
+class GaiaToolError extends GaiaError { toolName: string; toolCallId: string; }
+class GaiaUnsupportedError extends GaiaError { feature: string; }   // capability mismatch
+class GaiaServerError extends GaiaError {}             // 5xx, generic
+```
+
+Python exceptions raised in GAIA serialize to a typed wire format
+(`{ code, message, details, traceback? }`) and the SDK maps them deterministically.
+Mapping table is exported for consumers that want to handle specific cases.
+
+**Traceback policy:** `traceback` is included when the GAIA server runs with
+`GAIA_DEBUG=1`. Off by default. Production deployments must not set it (information
+disclosure). Consumers that want richer dev errors run their embedded GAIA with the env var.
+
+### 11.2 Retry policy
+
+- **Idempotent reads** (`GET`, capability calls): retry 3x with exponential backoff on `GaiaNetworkError` and 5xx. Default; configurable per-call.
+- **Idempotent writes**: SDK auto-generates an `Idempotency-Key` header (UUIDv4) and retries 3x. Server stores `(key, response)` for 24h and replays on retry — see §6.2.
+- **Non-idempotent writes** (`agents.send`, message injection): no retry by default. Surface error.
+- **Streaming endpoints**: automatic reconnect (§9.3), but never re-fire requests.
+- **429 (rate limited):** honored via `Retry-After` header up to a per-call cap (default 60s); beyond that, surface as `GaiaRateLimitError` (a `GaiaError` subclass). Cloud-model 429s are passed through.
+
+### 11.3 Cancellation everywhere
+
+`AbortSignal` accepted on every public method. Aborting a streaming iteration is
+non-destructive. Aborting an in-flight non-streaming call sends `Request`-level abort.
+
+### 11.4 Stop semantics for in-flight tool calls
+
+`handle.stop()` and `POST /v1/agents/{agent_id}/stop`:
+
+1. Server marks the agent as stopping; no new tool calls are issued.
+2. In-flight tool calls (consumer's MCP server) are given **30s drain deadline** to return.
+3. After 30s, remaining calls are abandoned. The agent runtime emits `tool_result` with `ok: false, error: 'aborted_by_stop'` for each.
+4. Server emits `completion` with `reason: 'stopped'` and closes the SSE stream.
+
+`handle.pause()` is gentler: drains all current tool calls without timeout, then halts
+the heartbeat.
+
+### 11.5 Tool call timeout (consumer's MCP server)
+
+Per-tool timeout configured in the agent definition (`tools.callTimeoutMs`, default 60s).
+On timeout, the runtime cancels the MCP request and emits `tool_result` with
+`ok: false, error: 'tool_timeout'`. Consumer's MCP server is responsible for honoring
+`AbortSignal` from the upstream MCP SDK.
+
+---
+
+## 12. Versioning & Capability Negotiation
+
+### 12.1 Versioning
+
+- SDK package versions track GAIA minor versions (`amd-gaia 0.23.x` -> `@amd-gaia/client 0.23.x`).
+- Patch versions are independent (SDK can ship `0.23.5` without a GAIA release).
+- SemVer applies: breaking changes in SDK only on minor bumps that match a GAIA minor bump.
+
+### 12.2 Compatibility matrix
+
+The SDK declares `minCompatibleGaia` and `maxKnownGaia` in its package metadata. On
+connect:
+
+1. SDK calls `GET /v1/version` and `GET /v1/capabilities`.
+2. If `gaia_version < minCompatibleGaia`, throws `GaiaUnsupportedError` with upgrade guidance.
+3. If `gaia_version > maxKnownGaia`, logs a warning but proceeds (forward compat).
+4. SDK exposes `client.capabilities` -- a typed snapshot consumers can guard against.
+
+```ts
+if (client.capabilities.features['autonomy.heartbeat']) {
+  // safe to set strategy.autonomy
+}
+```
+
+### 12.3 Deprecation policy
+
+A capability marked deprecated remains for two minor versions. SDK emits a one-time
+console warning and a typed `client.on('deprecation', ...)` event. Removed only after
+the deprecation window.
+
+---
+
+## 13. Embedded Transport -- Scope & Non-Scope
+
+### 13.1 In scope (`@amd-gaia/embedded`)
+
+- Spawn the GAIA Python process with the correct entrypoint, port, and per-spawn auth token.
+- Health check: poll `/v1/system/health` until ready, then resolve.
+- Crash recovery: restart with exponential backoff (1s, 5s, 30s, give up after 3).
+- Graceful shutdown on host exit (`SIGTERM`, drain, kill after timeout).
+- Log capture and forwarding to a host-provided sink.
+- Dynamic port allocation when default is taken.
+- Single source of truth for "is GAIA running" -- consumers ask the embedded handle, not the OS.
+
+**Persistence across restart.** Agent definitions and run state are written to sqlite
+at `~/.gaia/agents/runtime.db` (configurable via `GAIA_DATA_DIR`). After an embedded
+crash + restart:
+
+- Defined agents are reloaded; `agentId`s are stable.
+- Previously-running agents do **not** auto-resume — the host frontend decides whether to call `agents.run(agentId)` again. Rationale: surprise resumption of an autonomous agent after a crash is dangerous; explicit re-run is safer.
+- Pending `user_question` and `tool_confirmation_request` events are persisted; replayed to subscribers via `?since=<event_id>` after reconnect.
+
+### 13.2 Explicitly out of scope
+
+- **Model download** -- delegated to GAIA's installer (`installer/`).
+- **Hardware detection / NPU config** -- delegated to GAIA's installer + Lemonade.
+- **First-run onboarding UX** -- the host frontend's responsibility.
+- **Bundling the Python interpreter** -- handled by GAIA's existing platform installers (Windows MSI / macOS DMG / Linux AppImage).
+- **Firewall prompts** -- OS / host responsibility.
+
+The embedded package is small on purpose. Heavy lifting stays with GAIA's installer
+team and Lemonade.
+
+### 13.3 Bundle size note
+
+`@amd-gaia/embedded` is Node-only (uses `child_process`, `net`, `fs`). It MUST NOT be
+imported in browser/RN bundles. Package marks itself with `"browser": false` in
+exports map; bundlers reject browser imports with a clear error.
+
+---
+
+## 14. Type Generation Pipeline
+
+### 14.1 What is generated
+
+| Surface | Generation source | Tool |
+|---|---|---|
+| REST request/response types | FastAPI -> OpenAPI export | `openapi-typescript` |
+| Agent event union | Pydantic -> JSONSchema | `json-schema-to-typescript` |
+| MCP tool/result envelopes | Pydantic -> JSONSchema | `json-schema-to-typescript` |
+| Agent state machine constants | Hand-written (low churn) | -- |
+| Plan step schema | Pydantic -> JSONSchema | `json-schema-to-typescript` |
+| Capability flag enum | Generated from `src/gaia/api/capabilities.py` | small Python script emits TS const union |
+| JSDoc on generated types | Pydantic `Field(description=...)` propagated | `openapi-typescript` `--enable-jsdoc` flag + post-processor |
+
+### 14.2 Process
+
+1. New script `scripts/export-schemas.py` in gaia repo: starts an in-process FastAPI
+   app, dumps OpenAPI to `ts/schemas/openapi.json`, and exports all relevant Pydantic
+   models to `ts/schemas/*.json`.
+2. New script `ts/scripts/generate.ts`: runs `openapi-typescript` and
+   `json-schema-to-typescript`, writes outputs to `ts/packages/client-core/src/generated/`.
+3. CI runs both scripts on every PR; commits checked in. A diff means schema drift,
+   and CI fails.
+
+### 14.3 Drift gate (CI)
+
+A new GitHub Actions job (`schema-drift-check`):
+
+- Runs the export + generate scripts.
+- `git diff --exit-code ts/schemas/ ts/packages/*/src/generated/`.
+- On drift: fails with "regenerate types: `pnpm gaia-gen`".
+
+This is the single mechanism that prevents the SDK from rotting against the Python
+schemas. Without it, every other guarantee in this spec degrades over time.
+
+### 14.4 Pydantic field description coverage
+
+For typedoc-rendered API reference (§22) to be useful, generated types must carry doc
+comments. Phase 0 includes an audit + fix pass on `src/gaia/api/schemas.py`:
+
+- Every `Field` in a request/response model gets a `description=`.
+- Lint rule (`pyright-config` + custom plugin) enforces description coverage on touched files.
+- Post-processor in `ts/scripts/generate.ts` lifts descriptions into JSDoc on the generated TS types.
+
+Without this, generated types are accurate but undocumented — the most common SDK rot
+shape after schema drift.
+
+---
+
+## 15. Testing Strategy
+
+### 15.1 Layers
+
+| Layer | Tooling | Coverage target |
+|---|---|---|
+| Unit (TS) | Vitest | Pure logic in SDK (URL composition, event parsing, capability negotiation, retry logic, error mapping). Mocked transport. |
+| Integration (TS <-> live GAIA) | Vitest + real GAIA via `@amd-gaia/embedded` | Each service module exercised against a real backend. Streaming endpoints covered. |
+| Contract | Vitest | Boots GAIA, dumps OpenAPI, asserts identical to the committed schema. Catches Python-side changes that bypass the drift gate. |
+| Browser parity | Vitest browser mode + Playwright | Every method that runs in browser -- chat, agent observe -- exercised in real Chromium. |
+| SSE fault injection | Vitest with proxy that drops connections | Reconnect, resume-via-`since`, message-loss bounds. |
+
+### 15.2 Embedded transport tests
+
+- Cross-platform CI matrix (Ubuntu, Windows, macOS) -- matches existing GAIA CI.
+- Spawn GAIA, confirm health, confirm graceful shutdown on parent exit.
+- Crash recovery: kill GAIA mid-run, confirm restart with backoff and event-stream resume.
+- Port collision: pre-bind default port, confirm fallback.
+
+### 15.3 Performance smoke tests
+
+- Time-to-first-token on chat completions vs. raw curl baseline (must be within 10%).
+- 1000 events streamed: end-to-end latency p50 < 5ms, p95 < 20ms (measured locally).
+- Agent definition + run + first event: < 500ms p95.
+
+### 15.4 Bundle size budgets
+
+Enforced in CI via `size-limit`:
+
+| Package | Budget (min+gzip) |
+|---|---|
+| `@amd-gaia/client-core` | 30 KB |
+| `@amd-gaia/client` | 80 KB |
+| `@amd-gaia/embedded` | 20 KB (Node-only, less critical) |
+
+Exceeding the budget fails CI. Increases require explicit PR approval and budget bump.
+
+### 15.5 Examples in CI
+
+`ts/examples/*-skeleton/` directories are typechecked **and built** against the
+locally-built packages on every PR. Examples that don't compile fail the build.
+At least the Phase 1 skeletons are exercised against a live embedded GAIA in
+integration tests.
+
+---
+
+## 16. Operational Surfaces
+
+Things consumers need to run this in production.
+
+### 16.1 Debug logging
+
+
+SDK accepts a `logger` option at construction:
+
+```ts
+new GaiaClient({ baseUrl, logger: { debug, info, warn, error } });
+```
+
+Default is no-op. SDK never writes to `console` directly. Internal trace points use
+namespaces (`gaia:client:transport`, `gaia:client:sse`, `gaia:embedded:spawn`) so
+consumers can filter.
+
+### 16.2 Token / cost reporting
+
+Every chat completion and agent run emits `usage` events with input/output token counts
+and (when known) `costUsd`. Consumers aggregate; SDK does not retain or report.
+Local-model usage reports zero cost.
+
+### 16.3 Telemetry
+
+**Off by default. Zero network calls outside the consumer-configured `baseUrl`.** No
+opt-in path in v1 — if AMD requires usage analytics in OEM bundles, the OEM bundles
+that in separately.
+
+### 16.4 TLS / cert trust
+
+HTTP transport accepts a `fetch` override at construction (Node) for custom agents
+(self-signed certs, mTLS, proxies). Browser uses the runtime default. No
+`rejectUnauthorized: false` shortcut is provided — consumers wanting to skip TLS verify
+do it explicitly through the fetch override.
+
+### 16.5 Connection probe
+
+`new GaiaClient({ baseUrl })` is **lazy** — no network call. First service call (or
+explicit `client.ready()`) probes `/v1/version` + `/v1/capabilities` and caches the
+result for the lifetime of the client. `client.capabilities` throws
+`GaiaNotReadyError` if read before probe.
+
+### 16.6 Diagnostic CLI
+
+Ships in `@amd-gaia/client` as a Node bin:
+
+```bash
+npx @amd-gaia/client diagnose --base-url http://localhost:8765
+# exercises: version probe, capability fetch, chat smoke, agent define/run/stop, sse roundtrip
+```
+
+Mirrors GAIA's "test the actual CLI" philosophy. Also useful in support tickets.
+
+---
+
+## 17. Phasing & Dependencies
+
+### Toolchain version floors
+
+| Component | Minimum | Notes |
+|---|---|---|
+| Node.js | 20.x LTS | Native fetch streaming, stable WHATWG streams. |
+| TypeScript | 5.4 | `strict: true` mandatory. |
+| pnpm | 9.x | Workspace root for `ts/`. |
+| React Native | 0.74+ | First-class fetch streaming. |
+| Browser baseline | Last 2 of Chrome/Edge/Safari/Firefox | No IE / legacy Edge. |
+
+Existing `src/gaia/apps/webui/` (npm-based) coexists with `ts/` (pnpm-based) initially;
+a Phase 3 follow-up consolidates onto pnpm.
+
+### Phase 0 (prerequisite, hard gate) -- de-risk before scaffolding
+
+No code in `ts/` lands until these are done:
+
+1. **OpenAPI cleanliness audit.** `src/gaia/api/schemas.py` walked end-to-end. Every `Field` has `description=`, all `Any` fields are typed or explicitly opted into, discriminated unions tagged. Lint rule blocks regressions.
+2. **Codegen spike.** Run `openapi-typescript` + `json-schema-to-typescript` against the cleaned schema, verify discriminated unions, dates, and generics produce usable TS. If they don't, plan deviates here — escalate before continuing.
+3. **Tick-driver scaffold spec sign-off.** §4.1.1 reviewed by autonomy-engine plan owner; sqlite schema for `runtime.db` documented.
+4. **npm scope decision** (§21 #1). AMD legal confirmation that `@amd-gaia` (or chosen alternative) is publishable.
+5. **Pydantic field description coverage** baseline metric captured; CI tracks future regression.
+
+Phase 0 is ~2 weeks of work. Without it, Phase 1 builds on assumptions that haven't been verified.
+
+### Phase 1 (v0.22.x window) -- core SDK, no memory/RAG dependency
+
+Surfaces shipped:
+- `client.chat`, `client.sessions`, `client.system`
+- `client.agents` (`define`, `run`, `pause`, `stop`, `events`, `messages`, `replyToQuestion`, `confirmToolCall`, `snapshot`)
+- `client.mcp` (configuration only, agent reads it)
+- `@amd-gaia/embedded`
+- **Server-side:** tick-driver scaffold (§4.1.1) inside the GAIA agent server.
+- Auth (bearer, embedded token, refresh hook), capability negotiation, error hierarchy, streaming, reconnect with `gap_detected`, idempotency keys, type generation pipeline, CI drift gate.
+
+Goal: Claudia's ambient agent manager is end-to-end functional on Phase 1.
+
+**Validation gates (all required):**
+- Claudia repo ships a release that uses `@amd-gaia/client` to drive the supervisor agent.
+- `ts/examples/vscode-chat-skeleton/` compiles, runs against a live GAIA, and is exercised in integration CI. (Catches Claudia-shape bias early — second consumer is mandatory before stable.)
+- Bundle budgets (§15.4) green.
+- Drift gate green for two consecutive minor releases.
+
+
+### Phase 2 (gated on v0.20.0 memory) -- knowledge & files
+
+- `client.memory` (read/write three-tier memory, daily logs, MEMORY.md operations).
+- `client.rag` (semantic search over indexed documents).
+- `client.files` (upload, list, delete documents).
+- Memory dashboard subscription events.
+
+**Hard gate:** v0.20.0 PR #606 (memory) merged; memory APIs stable.
+
+### Phase 3 (post-v0.23.0) -- ecosystem polish
+
+- Migrate `src/gaia/electron/` from hand-rolled JS MCP/HTTP code to consume `@amd-gaia/client`. Forces final ergonomic pass; rewards by deleting hand-rolled glue.
+- Introduce `@amd-gaia/mcp-tools-host` if usage justifies it.
+- Consume v0.23.0 autonomy engine features end-to-end (event hooks, scheduler).
+- React Native compatibility hardening: SSE polyfill audits, fetch quirks documented, mobile-friendly defaults.
+
+### Out of v1 entirely (deferred -- write a follow-up plan if/when justified)
+
+- Voice surfaces (`client.voice` -- ASR/TTS) -- ships when Lemonade v10 voice lands (v0.21.0).
+- Vision surfaces (`client.vision`) -- ships when VLM stabilizes (v0.21.0).
+- Browser automation (`client.browser`) -- ships post v0.21.0.
+- A TS port of the `Agent` base class -- explicitly rejected.
+
+---
+
+## 18. Dogfood Migration: GAIA Electron App -> SDK Consumer
+
+### 18.1 Why
+
+The current `src/gaia/electron/` framework is plain JavaScript with hand-written
+`mcp-client.js` and ad-hoc fetch. It is GAIA's reference desktop shell and GAIA's most
+demanding TS-side consumer. Migrating it to consume `@amd-gaia/client` and
+`@amd-gaia/embedded`:
+
+- Forces honest API ergonomics -- if the SDK is awkward for GAIA's own app, it is
+  awkward for everyone else.
+- Deletes hand-rolled glue (probably ~300--500 LOC) once the migration completes.
+- Aligns GAIA's own desktop experience with what we ask third-party TS frontends to do.
+
+### 18.2 Scope (Phase 3)
+
+- Convert `src/gaia/electron/` from JS to TS.
+- Replace `services/mcp-client.js` with `@amd-gaia/client`.
+- Replace ad-hoc process spawning with `@amd-gaia/embedded`.
+- Keep public Electron API for app modules unchanged (don't break existing apps; just
+  swap the underlying implementation).
+
+### 18.3 Acceptance
+
+- All existing Electron app modules (Chat, Document, Settings, Tunnel) function unchanged.
+- E2E tests pass on Windows + macOS + Linux.
+- Hand-rolled MCP / HTTP files removed.
+
+---
+
+## 19. Repository Layout
+
+New top-level `ts/` directory in the gaia repo, structured as a pnpm workspace.
+
+```
+gaia/
+  ts/
+    pnpm-workspace.yaml
+    package.json
+    tsconfig.base.json
+    schemas/                 # generated JSON-Schemas + OpenAPI snapshot
+    scripts/
+      generate.ts            # codegen runner
+      verify-drift.ts        # CI drift check
+    packages/
+      client-core/
+        src/
+          generated/         # codegen output, gitignored locally, committed in CI
+          transport-http.ts
+          transport-sse.ts
+          errors.ts
+          capabilities.ts
+        package.json
+      client/
+        src/
+          chat.ts agents.ts sessions.ts memory.ts rag.ts mcp.ts files.ts system.ts
+          index.ts
+        package.json
+      embedded/
+        src/
+          spawn.ts health.ts logs.ts ports.ts
+          index.ts
+        package.json
+    examples/
+      claudia-supervisor-skeleton/   # minimal example mirroring Claudia's usage
+      vscode-chat-skeleton/
+      mobile-rn-skeleton/
+    tests/
+      integration/
+      contract/
+```
+
+CI updates:
+- New job `ts-build` -- builds and tests `ts/`. Runs on Ubuntu + Windows + macOS.
+- New job `schema-drift-check` -- runs the codegen + diff.
+- Existing Python CI grows a step that exports OpenAPI before TS jobs run (cached).
+
+Publishing:
+- New GitHub Actions workflow `publish-ts.yml`. Triggered on tagged release. Publishes
+  all three packages to npm under `@amd-gaia` org. `npm provenance` enabled.
+
+---
+
+## 20. Risks & Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| Pydantic <-> TS drift | High over time | High | Mandatory CI drift gate (§14.3). |
+| OpenAPI export carries `Any` / untyped fields → generated TS is `unknown` | High | High | Phase 0 audit + lint rule blocks regressions (§17 Phase 0). |
+| Streaming reconnect edge cases (network flap, server restart) | Medium | Medium | Resume-via-`since`, ring buffer, `gap_detected` event, fault-injection tests (§9.2.1, §9.3). |
+| Embedded process orphans on crash | Low | Medium | Parent-PID watchdog; on parent death, exit. Tested in CI. |
+| Capability flags drift from documented set | Medium | Low | Generated from `src/gaia/api/capabilities.py` (§14.1). |
+| API ergonomics revealed wrong only at Claudia integration | Medium | Medium | Phase 1 dual gate: Claudia ships + VSCode skeleton compiles & runs in CI (§17). |
+| Bundle bloat in `@amd-gaia/client` | Medium | Low | Subpath imports, `"sideEffects": false`, size-limit CI check with KB budgets (§15.4). |
+| MCP back-channel auth misconfigured by consumer | Medium | High | Documented patterns, example code, runtime warning when MCP server has no auth on non-loopback. |
+| v0.20.0 memory schema changes mid-Phase-2 | Medium | Medium | Phase 2 hard-gated on memory PR #606 + 1 minor of stabilization. |
+| Confusion between SDK direct calls vs MCP back-channel | High | Medium | Documented decision rule (§8.3); both paths first-class. |
+| Tool confirmation event conflated with `user_question` | High | Medium | Distinct event type `tool_confirmation_request` (§7.4, §9.2). |
+| Multi-tenant memory/file/namespace collision when one GAIA serves multiple consumers | Medium | High | Auth-scoped namespaces; reject collisions with `GaiaConflictError` (§10.5). |
+| Long-running stream bearer-token expiry | Medium | Medium | `auth.refresh` hook with single-flight; SSE reconnect picks up new token (§10.4). |
+| Examples drift from published packages | High | Low (death-by-1000-cuts) | Examples typechecked & built against locally-built packages in CI (§15.5). |
+| Tick-driver scaffold becomes load-bearing past v0.23.0 | Low | High | Throwaway-by-design; Autonomy Engine lands behind same surface (§4.1.1). |
+
+---
+
+## 21. Open Questions
+
+Resolved during/before Phase 0 (see §17 Phase 0):
+
+- ~~Package scope name~~ — AMD legal sign-off in Phase 0.
+- ~~OpenAPI export reliability~~ — Phase 0 audit + lint rule.
+- ~~Multi-subscriber SSE backpressure~~ — resolved in §9.2.1 (eviction after 60s pressure).
+- ~~Tool confirmation event shape~~ — resolved in §7.4 / §9.2.
+
+Still open:
+
+1. **Telemetry stance.** Off by default (§16.3). Confirm no OEM-bundle requirement before tagging stable.
+2. **CONTRIBUTING and CLA flow for the `ts/` directory.** Inherits gaia's existing CLA; verify with AMD that a TS subtree doesn't trigger a separate review process.
+3. **Versioning when SDK leads (rare patch fix).** Confirm we can publish `@amd-gaia/client@0.23.1` against `amd-gaia==0.23.0` without confusing consumers.
+4. **OpenAPI cleanup ownership.** Who owns `src/gaia/api/schemas.py` Phase 0 audit — sdk-architect, api-documenter, or this plan's owner? Decide before kicking off.
+5. **`/v1/agents` listing scope under shared deployments.** §10.5 says auth-scoped; need to validate against actual operator-mode deployment patterns (currently theoretical; no production multi-tenant deployment exists).
+
+---
+
+## 22. Success Criteria
+
+**Phase 0 ships when:**
+
+- [ ] `src/gaia/api/schemas.py` audit complete; every `Field` has `description=`; lint rule active.
+- [ ] Codegen spike produces clean TS for the existing surface (no untyped `Record<string, unknown>` for typed payloads).
+- [ ] Tick-driver scaffold spec signed off by autonomy-engine plan owner.
+- [ ] npm scope confirmed with AMD legal.
+- [ ] §21 #4 (audit ownership) assigned.
+
+**Phase 1 ships when:**
+
+- [ ] All three npm packages published to the chosen scope at version matching a tagged GAIA release.
+- [ ] Generated types exhaustively cover the Phase 1 surface; CI drift gate active and green.
+- [ ] All test layers in §15 implemented and green on Ubuntu + Windows + macOS, including bundle budgets and examples-in-CI.
+- [ ] Claudia ships a production release against the SDK **and** `ts/examples/vscode-chat-skeleton/` runs green in CI (dual-consumer validation).
+- [ ] Documentation: typedoc-rendered API reference (with JSDoc from Pydantic descriptions) + quickstart for each transport + the three reference-use-case sample apps in `ts/examples/`.
+- [ ] `npx @amd-gaia/client diagnose` exists and exercises the full Phase 1 surface against a live server.
+- [ ] `docs/plans/typescript-sdk.mdx` cross-linked from `agent-ui.mdx`, `autonomy-engine.mdx`, and the GAIA README.
+
+---
+
+## 23. Appendix -- Minimal Claudia-Style Usage Sketch
+
+End-to-end shape consumers will recognize. Not real Claudia code; illustrative.
+
+```ts
+// claudia/backend/src/agent-manager/index.ts
+import { GaiaClient } from '@amd-gaia/client';
+import { EmbeddedGaia } from '@amd-gaia/embedded';
+import { claudiaSupervisorPrompt } from './prompts.js';
+
+export async function startAgentManager(deps: {
+  mcpServerUrl: string;     // claudia's own MCP server (main process / sidecar — §10.6)
+  mcpToken: string;
+  mode: 'observe' | 'nudge' | 'manage';
+  onUserQuestion: (q: { id: string; prompt: string; options?: string[] }) => void;
+  onToolConfirmation: (req: { callId: string; toolName: string; args: unknown }) => Promise<boolean>;
+  onObservation: (obs: unknown) => void;
+}) {
+  const gaia = new EmbeddedGaia({ logSink: console });
+  await gaia.start();
+
+  const client = new GaiaClient({
+    baseUrl: gaia.url,
+    auth: { kind: 'bearer', token: gaia.token },
+    logger: console,
+  });
+
+  await client.ready();
+  await client.requireCapabilities([
+    'autonomy.heartbeat',
+    'agents.async_questions',
+  ]);
+
+  const def = await client.agents.define({
+    name: 'claudia-supervisor',
+    systemPrompt: claudiaSupervisorPrompt,
+    model: 'claude://claude-sonnet-4-20250514',
+    tools: {
+      mcpServers: [{ name: 'claudia', url: deps.mcpServerUrl, auth: { kind: 'bearer', token: deps.mcpToken } }],
+      confirmation: deps.mode === 'observe' ? 'all' : deps.mode === 'nudge' ? 'tools-marked-dangerous' : 'none',
+      callTimeoutMs: 60_000,
+    },
+    strategy: { mode: deps.mode, autonomy: { heartbeatSeconds: 30 } },
+    observe: ['workspace:*', 'task:*'],
+    memory: { enabled: true, namespace: 'claudia' },
+  });
+
+  const handle = await client.agents.run(def.agentId);
+
+  (async () => {
+    for await (const ev of handle.events()) {
+      switch (ev.type) {
+        case 'user_question':
+          deps.onUserQuestion({ id: ev.questionId, prompt: ev.prompt, options: ev.options });
+          break;
+        case 'tool_confirmation_request': {
+          const ok = await deps.onToolConfirmation({ callId: ev.callId, toolName: ev.toolName, args: ev.args });
+          await client.agents.confirmToolCall(handle.agentId, ev.callId, ok ? 'approve' : 'deny');
+          break;
+        }
+        case 'observation':
+          deps.onObservation(ev.observation);
+          break;
+        case 'gap_detected':
+          // missed events; refresh from snapshot
+          await client.agents.snapshot(handle.agentId);
+          break;
+        // ... other branches
+      }
+    }
+  })().catch(console.error);
+
+  return {
+    handle,
+    replyToQuestion: (questionId: string, answer: string) =>
+      client.agents.replyToQuestion(handle.agentId, questionId, answer),
+    stop: async () => { await handle.stop(); await gaia.stop(); },
+  };
+}
+```
+
+That is the entire surface area Claudia's supervisor module needs from the GAIA TS SDK.
+Everything else -- the supervisor's prompts, decision strategies, UI wiring, the
+async-question inbox, the workspace-observation rules -- lives in the Claudia repo as
+plain TypeScript, fully owned by Claudia.

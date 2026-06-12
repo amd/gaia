@@ -254,20 +254,25 @@ def _publish_r2(wheel: Path, manifest: Path, hub_url: Optional[str]) -> TargetRe
 
     url = f"{_hub_base_url(hub_url)}/publish"
     manifest_text = manifest.read_text(encoding="utf-8")
+    files = {
+        "manifest": ("gaia-agent.yaml", manifest_text, "text/yaml"),
+    }
+    # Workers that predate the readme field ignore unknown multipart parts.
+    readme = manifest.parent / "README.md"
+    if readme.exists():
+        files["readme"] = (
+            "README.md",
+            readme.read_text(encoding="utf-8"),
+            "text/markdown",
+        )
     log.debug("publisher: POST %s (%s)", url, wheel.name)
     try:
         with wheel.open("rb") as fh:
+            files["artifact"] = (wheel.name, fh, "application/octet-stream")
             resp = requests.post(
                 url,
                 headers={"Authorization": f"Bearer {token}"},
-                files={
-                    "manifest": ("gaia-agent.yaml", manifest_text, "text/yaml"),
-                    "artifact": (
-                        wheel.name,
-                        fh,
-                        "application/octet-stream",
-                    ),
-                },
+                files=files,
                 timeout=_PUBLISH_TIMEOUT,
             )
     except requests.RequestException as exc:

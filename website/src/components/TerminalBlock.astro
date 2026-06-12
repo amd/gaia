@@ -1,0 +1,73 @@
+---
+interface Line { prompt?: boolean; text: string; muted?: boolean }
+interface Props { lines: Line[]; typing?: boolean; class?: string }
+const { lines, typing = false, class: className = '' } = Astro.props;
+---
+<div
+  class={`g-terminal rounded-lg border border-g-border bg-[#0c0c0e] p-5 font-mono text-[13px] leading-relaxed text-left shadow-2xl ${className}`}
+  data-typing={typing ? 'true' : undefined}
+  data-lines={typing ? JSON.stringify(lines) : undefined}
+>
+  <div class="flex gap-1.5 mb-4" aria-hidden="true">
+    <span class="w-2.5 h-2.5 rounded-full bg-[#2a2a2e]"></span>
+    <span class="w-2.5 h-2.5 rounded-full bg-[#2a2a2e]"></span>
+    <span class="w-2.5 h-2.5 rounded-full bg-[#2a2a2e]"></span>
+  </div>
+  <div class="g-terminal-body min-h-[5.5rem]">
+    {!typing && lines.map((l) => (
+      <div class={l.muted ? 'text-[#71717a]' : 'text-[#e8e8e6]'}>
+        {l.prompt && <span class="text-g-gold select-none">$ </span>}{l.text}
+      </div>
+    ))}
+  </div>
+</div>
+
+<script>
+  // Auto-typing: starts when scrolled into view; respects reduced motion.
+  const els = document.querySelectorAll<HTMLElement>('[data-typing="true"]');
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  els.forEach((el) => {
+    const lines = JSON.parse(el.dataset.lines || '[]') as { prompt?: boolean; text: string; muted?: boolean }[];
+    const body = el.querySelector('.g-terminal-body')!;
+    const renderAll = () => {
+      body.innerHTML = lines
+        .map((l) => `<div class="${l.muted ? 'text-[#71717a]' : 'text-[#e8e8e6]'}">${l.prompt ? '<span class="text-g-gold select-none">$ </span>' : ''}${l.text}</div>`)
+        .join('');
+    };
+    if (reduced) { renderAll(); return; }
+    let started = false;
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting) || started) return;
+      started = true;
+      io.disconnect();
+      let li = 0, ci = 0;
+      const rows: HTMLElement[] = [];
+      const cursor = document.createElement('span');
+      cursor.className = 'animate-g-blink text-g-gold';
+      cursor.textContent = '▋';
+      const tick = () => {
+        if (li >= lines.length) { cursor.remove(); return; }
+        const line = lines[li];
+        if (ci === 0) {
+          const row = document.createElement('div');
+          row.className = line.muted ? 'text-[#71717a]' : 'text-[#e8e8e6]';
+          if (line.prompt) row.innerHTML = '<span class="text-g-gold select-none">$ </span>';
+          body.appendChild(row);
+          rows.push(row);
+          row.appendChild(cursor);
+        }
+        const row = rows[li];
+        if (ci < line.text.length) {
+          cursor.before(document.createTextNode(line.text[ci]));
+          ci++;
+          setTimeout(tick, line.prompt ? 34 : 8);
+        } else {
+          li++; ci = 0;
+          setTimeout(tick, 420);
+        }
+      };
+      tick();
+    }, { threshold: 0.4 });
+    io.observe(el);
+  });
+</script>

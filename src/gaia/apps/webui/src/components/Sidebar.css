@@ -80,7 +80,7 @@
     font-family: var(--font-display);
     letter-spacing: 2px;
     text-transform: uppercase;
-    background: linear-gradient(135deg, var(--amd-red), #ff6b35);
+    background: linear-gradient(135deg, var(--accent), #ff6b35);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -124,9 +124,9 @@
     transition: all var(--duration) var(--ease);
 }
 .new-task-btn:hover {
-    background: var(--amd-red-dim);
-    border-color: var(--amd-red);
-    color: var(--amd-red);
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--accent);
     transform: translateY(-1px);
 }
 
@@ -182,11 +182,11 @@
     /* Tone-down: was 0.4 alpha border + 12 px red glow which looked
        alarming. Soft brand-red ring at lower intensity reads as
        focus without the "warning" vibe. */
-    border-color: rgba(237, 28, 36, 0.35);
+    border-color: rgba(226, 163, 62, 0.35);
     background: var(--bg-secondary);
     box-shadow:
         inset 0 1px 1px rgba(0, 0, 0, 0.04),
-        0 0 0 3px rgba(237, 28, 36, 0.08);
+        0 0 0 3px rgba(226, 163, 62, 0.08);
 }
 .sidebar-search input::placeholder { color: var(--text-muted); font-family: var(--font-sans); }
 
@@ -287,7 +287,7 @@
 
 [data-theme="dark"] .session-item.active {
     /* Dark mode active: NO red tint anywhere. The previous version
-       had `rgba(237, 28, 36, 0.06)` background + `rgba(237, 28, 36, 0.12)`
+       had `rgba(226, 163, 62, 0.06)` background + `rgba(226, 163, 62, 0.12)`
        border + an inset 28-px red glow which collectively made every
        selected row look like a tinted warning band. Now it's a
        neutral white-tinted card sitting forward on the dark sidebar,
@@ -358,8 +358,8 @@
 }
 .session-hash:hover {
     opacity: 1 !important;
-    color: var(--amd-red);
-    background: var(--amd-red-dim2);
+    color: var(--accent);
+    background: var(--accent-dim2);
 }
 .session-hash.copied {
     opacity: 1 !important;
@@ -390,7 +390,7 @@
 }
 .session-item:hover .session-delete,
 .session-item:focus-within .session-delete { display: flex; }
-.session-delete:hover { background: var(--amd-red); color: white; }
+.session-delete:hover { background: var(--danger); color: white; }
 
 /* Delete confirmation state */
 .session-delete.confirm {
@@ -398,7 +398,7 @@
     align-items: center;
     gap: 4px;
     padding: 3px 10px;
-    background: var(--amd-red);
+    background: var(--danger);
     color: white;
     border-radius: var(--radius-sm);
     font-size: 10px;
@@ -410,7 +410,7 @@
     animation: confirmPop 150ms var(--ease);
 }
 .session-delete.confirm:hover {
-    background: var(--amd-red-dark);
+    background: var(--danger-dark);
 }
 
 .confirm-label {
@@ -552,7 +552,7 @@
 
 .sidebar-resize-handle:hover,
 .sidebar-resize-handle:active {
-    background: var(--amd-red);
+    background: var(--accent);
     opacity: 0.6;
 }
 
