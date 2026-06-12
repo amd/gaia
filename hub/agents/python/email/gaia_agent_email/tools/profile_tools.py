@@ -19,8 +19,12 @@ is a JSON object::
 
 Bounded and idempotent by design — ``_record_interaction`` always does an
 upsert into the single per-sender record, so the record count is O(senders)
-regardless of how many emails arrive. #1290 can reuse ``_read_interactions``
-directly to build richer views.
+regardless of how many emails arrive.
+
+Reply behavior is tracked separately in reply records (entity
+``email:reply:<sender>``). ``_evaluate_promotions()`` reads these to identify
+senders with consistently fast replies and returns them for promotion to
+priority senders. Called on-demand at triage time — no background thread.
 
 Tools registered:
 
@@ -31,6 +35,7 @@ Tools registered:
 from __future__ import annotations
 
 import json
+import statistics
 from datetime import timezone, datetime
 from typing import Any, Dict, List
 
@@ -46,6 +51,26 @@ log = get_logger(__name__)
 _INTERACTION_ENTITY_PREFIX = "email:interaction:"
 _INTERACTION_DOMAIN = "email_agent_interactions"
 _INTERACTION_CATEGORY = "interaction"
+
+# Stable entity prefix for per-sender REPLY behavior records.
+# Entity = f"{_REPLY_ENTITY_PREFIX}{sender_email}"
+_REPLY_ENTITY_PREFIX = "email:reply:"
+_REPLY_DOMAIN = "email_agent_replies"
+_REPLY_CATEGORY = "reply_behavior"
+
+# Promotion thresholds for behavioral learning.
+# A sender qualifies for promotion when they have at least
+# REPLY_PROMOTION_MIN_REPLIES replies recorded AND the median reply
+# latency is <= REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS.
+# Named as module-level constants so callers can inspect and tests can import.
+REPLY_PROMOTION_MIN_REPLIES: int = 3
+REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS: float = 300.0  # 5 minutes
+
+# Rolling window cap on reply latencies stored per sender. Prevents a single
+# per-sender record from growing without bound for very active correspondents.
+# Only the most recent _REPLY_LATENCY_WINDOW samples are kept; the median
+# is computed over this window. Far beyond any realistic weekly reply volume.
+_REPLY_LATENCY_WINDOW: int = 100
 
 # Sanity ceiling on how many distinct-sender interaction records we read in
 # one profiling pass. This is NOT a silent truncation cap: if a real inbox
@@ -76,11 +101,123 @@ def _dominant_category(category_counts: Dict[str, int]) -> str:
 
 
 class ProfileToolsMixin:
-    """Mixin that registers inbox-profiling tools.
+    """Mixin that registers inbox-profiling tools and behavioral-learning helpers.
 
     State-free at construction time — reads ``self._memory_store`` via
     a closure captured when ``_register_profile_tools()`` is called.
+
+    Behavioral learning (added in #1290):
+    - ``_record_reply_interaction`` stores reply latency data per sender.
+    - ``_evaluate_promotions`` reads the reply data and returns senders whose
+      median reply latency qualifies them for priority promotion.
+    Both methods are memory-guarded (skip when ``_memory_store is None``).
+    Promotion is NEVER triggered on a background thread; it happens only when
+    ``_evaluate_promotions`` is called explicitly — currently from
+    ``_triage_all_backends`` in ``agent.py``.
     """
+
+    def _record_reply_interaction(
+        self, sender: str, *, latency_seconds: float
+    ) -> None:
+        """Append a reply latency data point for *sender*.
+
+        Keeps a single rolling record per sender (upsert — never unbounded).
+        When ``_memory_store is None`` (memory disabled), silently skips.
+        Skips silently when *sender* is empty.
+
+        The record's ``content`` JSON::
+
+            {
+                "sender":                   "alice@example.com",
+                "reply_latencies_seconds":  [30.0, 45.0, 20.0],
+                "last_ts":                  "2026-06-12T14:23:00+00:00"
+            }
+        """
+        store = getattr(self, "_memory_store", None)
+        if store is None:
+            return
+        if not sender:
+            return
+        # Negative latency indicates a clock-skew anomaly; discard rather than
+        # let it skew the median toward zero and trigger spurious promotions.
+        if latency_seconds < 0:
+            return
+
+        entity = f"{_REPLY_ENTITY_PREFIX}{sender}"
+        context = getattr(self, "_memory_context", "email")
+        now = _now_iso()
+
+        existing = store.get_by_entity(entity)
+        if existing:
+            row = existing[0]
+            try:
+                payload = json.loads(row["content"])
+            except (json.JSONDecodeError, KeyError):
+                payload = {
+                    "sender": sender,
+                    "reply_latencies_seconds": [],
+                    "last_ts": now,
+                }
+            latencies = list(payload.get("reply_latencies_seconds") or [])
+            latencies.append(float(latency_seconds))
+            # Keep only the most recent _REPLY_LATENCY_WINDOW entries so the
+            # record stays bounded for very active correspondents.
+            latencies = latencies[-_REPLY_LATENCY_WINDOW:]
+            payload["reply_latencies_seconds"] = latencies
+            payload["last_ts"] = now
+            store.update(row["id"], content=json.dumps(payload))
+        else:
+            payload = {
+                "sender": sender,
+                "reply_latencies_seconds": [float(latency_seconds)],
+                "last_ts": now,
+            }
+            store.store(
+                category=_REPLY_CATEGORY,
+                content=json.dumps(payload),
+                domain=_REPLY_DOMAIN,
+                entity=entity,
+                context=context,
+                confidence=1.0,
+                source="profile_tools",
+            )
+
+    def _evaluate_promotions(self) -> List[str]:
+        """Return senders that qualify for priority promotion based on reply behavior.
+
+        A sender qualifies when:
+        - they have at least ``REPLY_PROMOTION_MIN_REPLIES`` recorded replies, AND
+        - the median reply latency is <= ``REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS``.
+
+        Returns an empty list when memory is disabled or no reply data exists.
+        Called on-demand at triage time — never from a background thread.
+        """
+        store = getattr(self, "_memory_store", None)
+        if store is None:
+            return []
+
+        rows = store.get_by_category(
+            _REPLY_CATEGORY,
+            domain=_REPLY_DOMAIN,
+            limit=50000,
+        )
+        qualified: List[str] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["content"])
+                sender = payload.get("sender", "")
+                latencies = payload.get("reply_latencies_seconds") or []
+                if len(latencies) < REPLY_PROMOTION_MIN_REPLIES:
+                    continue
+                median_latency = statistics.median(latencies)
+                if median_latency <= REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS:
+                    qualified.append(sender)
+            except (json.JSONDecodeError, KeyError, TypeError, statistics.StatisticsError):
+                log.warning(
+                    "profile_tools: skipping malformed reply record %s",
+                    row.get("id"),
+                )
+        return qualified
 
     def _record_interaction(self, sender: str, category: str) -> None:
         """Update the rolling interaction record for *sender*.

@@ -51,6 +51,9 @@ from gaia_agent_email.tools.organize_tools import OrganizeToolsMixin
 from gaia_agent_email.tools.phishing_tools import PhishingToolsMixin
 from gaia_agent_email.tools.preference_tools import (
     PreferenceToolsMixin,
+    _normalize_email,
+    _persist_preferences,
+    _validate_session_preferences,
     init_session_preferences,
 )
 from gaia_agent_email.tools.profile_tools import ProfileToolsMixin
@@ -508,9 +511,55 @@ class EmailTriageAgent(
                     self._record_interaction(sender_addr, item.get("category", ""))
                 merged.append(item)
         merged = merged[:max_messages]
+        # Behavioral learning: evaluate reply behavior and promote qualifying
+        # senders to priority. On-demand — no background thread.
+        self._apply_behavioral_promotions()
         # Re-group the merged, capped list so the bucketed view matches what the
         # caller actually sees.
         return {"results": merged, "grouped": group_by_category(merged)}
+
+    def _apply_behavioral_promotions(self) -> None:
+        """Promote qualifying senders to priority based on observed reply behavior.
+
+        Reads reply interactions via ``_evaluate_promotions()`` and, for each
+        qualifying sender not already in priority_senders, writes them through
+        the #1288 persistence path (``_session_preferences`` + MemoryStore) so
+        the promotion applies this turn AND survives restart.
+
+        Called synchronously from ``_triage_all_backends`` — never on a
+        background thread or scheduler. Memory-guarded: skips silently when
+        ``_memory_store is None``.
+        """
+        if getattr(self, "_memory_store", None) is None:
+            return
+
+        promoted_senders = self._evaluate_promotions()
+        if not promoted_senders:
+            return
+
+        prefs = getattr(self, "_session_preferences", None)
+        if prefs is None:
+            return
+
+        _validate_session_preferences(prefs)
+        new_promotions: list[str] = []
+        for sender in promoted_senders:
+            normalized = _normalize_email(sender)
+            if not normalized or "@" not in normalized:
+                continue
+            if normalized not in prefs["priority_senders"]:
+                prefs["priority_senders"].add(normalized)
+                prefs["low_priority_senders"].discard(normalized)
+                new_promotions.append(normalized)
+
+        if new_promotions:
+            _persist_preferences(self)
+            logger.info(
+                "email behavioral learning: promoted %d sender(s) to priority "
+                "via observed reply behavior: %s",
+                len(new_promotions),
+                new_promotions,
+            )
 
     def _pre_scan_all_backends(self, *, max_messages: int) -> dict:
         """Pre-scan every connected mailbox, tag each item, merge under budget.
