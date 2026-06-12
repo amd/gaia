@@ -30,6 +30,7 @@ from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 from gaia_agent_email.verbose import log_tool_call
 from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -249,7 +250,9 @@ class SummarizeToolsMixin:
                         debug=debug_flag,
                     )
                 )
-            except (ConnectorsError, EmailSummarizeError) as exc:
+            except ConnectorsError as exc:
+                return _envelope_err(format_connector_error(exc))
+            except EmailSummarizeError as exc:
                 return _envelope_err(str(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)

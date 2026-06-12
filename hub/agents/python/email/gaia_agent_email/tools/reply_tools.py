@@ -19,6 +19,7 @@ from gaia.agents.base.tools import tool
 from gaia_agent_email import action_store
 from gaia_agent_email.verbose import log_tool_call
 from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -224,65 +225,90 @@ def forward_message_impl(
 
 class ReplyToolsMixin:
     def _register_reply_tools(self) -> None:
-        gmail = self._gmail
         db = self
+        agent = self  # per-message backend routing (#1603 Phase 2)
         debug_flag = bool(getattr(self.config, "debug", False))
 
         @tool
-        def draft_reply(message_id: str, body: str) -> str:
-            """Create a reply draft for a message (does NOT send)."""
+        def draft_reply(message_id: str, body: str, mailbox: str = "") -> str:
+            """Create a reply draft for a message (does NOT send).
+
+            ``mailbox`` (optional) names the source mailbox so the draft is
+            created in the right account when multiple mailboxes are connected.
+            """
             try:
-                return _envelope_ok(
-                    draft_reply_impl(
-                        gmail, db, message_id=message_id, body=body, debug=debug_flag
-                    )
+                provider = agent._provider_for_message(message_id, mailbox or None)
+                backend = agent._backends[provider]
+                result = draft_reply_impl(
+                    backend, db, message_id=message_id, body=body, debug=debug_flag
                 )
+                # Remember which mailbox holds this draft so send_draft routes
+                # back to the same backend.
+                agent._remember_draft_mailbox(result.get("draft_id"), provider)
+                return _envelope_ok(result)
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def draft_forward(message_id: str, to: str, body: str = "") -> str:
-            """Create a forward draft for a message (does NOT send)."""
+        def draft_forward(
+            message_id: str, to: str, body: str = "", mailbox: str = ""
+        ) -> str:
+            """Create a forward draft for a message (does NOT send).
+
+            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            """
             try:
-                return _envelope_ok(
-                    draft_forward_impl(
-                        gmail,
-                        db,
-                        message_id=message_id,
-                        to=to,
-                        body=body,
-                        debug=debug_flag,
-                    )
+                provider = agent._provider_for_message(message_id, mailbox or None)
+                backend = agent._backends[provider]
+                result = draft_forward_impl(
+                    backend,
+                    db,
+                    message_id=message_id,
+                    to=to,
+                    body=body,
+                    debug=debug_flag,
                 )
+                agent._remember_draft_mailbox(result.get("draft_id"), provider)
+                return _envelope_ok(result)
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def send_draft(draft_id: str) -> str:
-            """Send a previously-created draft. Requires user confirmation."""
+        def send_draft(draft_id: str, mailbox: str = "") -> str:
+            """Send a previously-created draft. Requires user confirmation.
+
+            Routes to the mailbox the draft was created in (remembered from
+            ``draft_reply`` / ``draft_forward``). ``mailbox`` overrides that.
+            """
             try:
+                backend = agent._backend_for_draft(draft_id, mailbox or None)
                 return _envelope_ok(
-                    send_draft_impl(gmail, db, draft_id=draft_id, debug=debug_flag)
+                    send_draft_impl(backend, db, draft_id=draft_id, debug=debug_flag)
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def send_now(to: str, subject: str, body: str) -> str:
-            """Send an email immediately, no draft step. Requires user confirmation."""
+        def send_now(to: str, subject: str, body: str, mailbox: str = "") -> str:
+            """Send an email immediately, no draft step. Requires user confirmation.
+
+            ``mailbox`` (optional) chooses which account sends when multiple are
+            connected; defaults to the primary mailbox.
+            """
             try:
+                backend = agent._send_backend(mailbox or None)
                 return _envelope_ok(
                     send_now_impl(
-                        gmail,
+                        backend,
                         db,
                         to=to,
                         subject=subject,
@@ -291,18 +317,24 @@ class ReplyToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def forward_message(message_id: str, to: str, note: str = "") -> str:
-            """Forward an email to a new recipient. Requires user confirmation."""
+        def forward_message(
+            message_id: str, to: str, note: str = "", mailbox: str = ""
+        ) -> str:
+            """Forward an email to a new recipient. Requires user confirmation.
+
+            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            """
             try:
+                provider = agent._provider_for_message(message_id, mailbox or None)
                 return _envelope_ok(
                     forward_message_impl(
-                        gmail,
+                        agent._backends[provider],
                         db,
                         message_id=message_id,
                         to=to,
@@ -311,7 +343,7 @@ class ReplyToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")

@@ -2,19 +2,25 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
+import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus, Mail } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY, selectUnreadCount } from '../stores/notificationStore';
+import { useConnectionsStore } from '../stores/connectorsStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
-import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
+import { getAgentIcon } from './agentIcons';
+import type { Message, StreamEvent, AgentStep, Attachment, Session, AgentInfo } from '../types';
+import { MAIL_PROVIDERS, type MailProvider } from '../utils/mailProviderDefault';
 
 import './ChatView.css';
 import DashboardProgress from './DashboardProgress';
 
+
+/** Human-readable labels for mail providers. */
+const PROVIDER_LABELS: Record<string, string> = { google: 'Gmail', microsoft: 'Outlook' };
 
 const EMPTY_SUGGESTIONS = [
     'Summarize a document',
@@ -22,6 +28,17 @@ const EMPTY_SUGGESTIONS = [
     'Analyze a spreadsheet',
     'Show my recent files',
 ];
+
+function formatAgentCapabilities(agent?: AgentInfo): string {
+    if (!agent) return '';
+    const parts: string[] = [];
+    if (typeof agent.tools_count === 'number' && agent.tools_count > 0) {
+        parts.push(`${agent.tools_count} ${agent.tools_count === 1 ? 'tool' : 'tools'}`);
+    }
+    const tags = (agent.tags ?? []).filter(Boolean).slice(0, 3);
+    if (tags.length > 0) parts.push(tags.join(', '));
+    return parts.join(' | ');
+}
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -195,6 +212,67 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // Resolve human-readable agent names for the message header
     const sessionAgentName = agents.find((a) => a.id === session?.agent_type)?.name;
     const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name;
+    const displayedAgent = useMemo(
+        () => agents.find((a) => a.id === displayedAgentId),
+        [agents, displayedAgentId],
+    );
+    const displayedAgentCapabilities = useMemo(
+        () => formatAgentCapabilities(displayedAgent),
+        [displayedAgent],
+    );
+    const DisplayedAgentIcon = getAgentIcon(displayedAgent?.icon);
+
+    // Mail-provider picker — only rendered for email sessions.
+    const [mailProviderPickerOpen, setMailProviderPickerOpen] = useState(false);
+    const mailProviderPickerRef = useRef<HTMLDivElement>(null);
+    // Select the stable `connections` reference, then derive — mapping inside the
+    // selector returns a fresh array each render and loops useSyncExternalStore.
+    const connections = useConnectionsStore((s) => s.connections);
+    const connectedMailProviders = useMemo(
+        () =>
+            connections
+                .map((c) => c.provider)
+                .filter((p): p is MailProvider => (MAIL_PROVIDERS as readonly string[]).includes(p)),
+        [connections],
+    );
+    // AC3: the session header shows which mailbox is active.
+    const displayedMailProvider = session?.mail_provider;
+    // The single-provider pill reflects what THIS session triages (the stored
+    // session value), falling back to the sole connected provider when unset.
+    const activeMailbox = displayedMailProvider ?? connectedMailProviders[0];
+
+    // Close mail-provider picker on outside click
+    useEffect(() => {
+        if (!mailProviderPickerOpen) return;
+        const handler = (e: MouseEvent) => {
+            if (mailProviderPickerRef.current && !mailProviderPickerRef.current.contains(e.target as Node)) {
+                setMailProviderPickerOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, [mailProviderPickerOpen]);
+
+    const handleMailProviderChange = useCallback(async (newProvider: MailProvider) => {
+        setMailProviderPickerOpen(false);
+        if (newProvider === displayedMailProvider) return;
+        const previousProvider = displayedMailProvider;
+        // Store the choice for the next session create (App.tsx handleNewTask reads it).
+        useConnectionsStore.getState().setPendingMailProvider(newProvider);
+        if (messages.length === 0) {
+            // Empty session — update in place (mirrors handleAgentChange pattern).
+            updateSessionInList(sessionId, { mail_provider: newProvider } as Partial<Session>);
+            try {
+                await api.updateSession(sessionId, { mail_provider: newProvider });
+            } catch (err) {
+                log.chat.error('Failed to update mail provider', err);
+                // Roll back optimistic update on failure.
+                updateSessionInList(sessionId, { mail_provider: previousProvider } as Partial<Session>);
+            }
+        }
+        // If messages exist we don't start a new session — the header pill stays
+        // non-interactive once the session has content (same guard as agent change).
+    }, [displayedMailProvider, messages.length, sessionId, updateSessionInList]);
 
     // Close agent picker on outside click
     useEffect(() => {
@@ -1294,6 +1372,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     };
 
     const showEmptyState = !isLoadingMessages && messages.length === 0 && !isStreaming;
+    const emptyStateSuggestions = displayedAgent?.conversation_starters?.length
+        ? displayedAgent.conversation_starters
+        : EMPTY_SUGGESTIONS;
 
     // Pre-compute per-message latency: time from preceding user message to each
     // assistant message. O(N) single pass, avoids repeated backward scans in render.
@@ -1347,6 +1428,69 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     )}
                 </div>
                 <div className="task-header-right">
+                    {/* Mail-provider selector — only for email sessions. */}
+                    {session?.agent_type === 'email' && connectedMailProviders.length > 0 && (
+                        connectedMailProviders.length === 1 ? (
+                            /* AC3: single connected provider → non-interactive pill */
+                            <span
+                                className="mail-provider-pill"
+                                title={`Mailbox: ${PROVIDER_LABELS[activeMailbox] ?? activeMailbox}`}
+                            >
+                                <Mail size={10} />
+                                {PROVIDER_LABELS[activeMailbox] ?? activeMailbox}
+                            </span>
+                        ) : (
+                            /* AC2: multiple providers → interactive dropdown */
+                            <div className="agent-picker mail-provider-picker" ref={mailProviderPickerRef}>
+                                <button
+                                    className="agent-picker-btn"
+                                    onClick={() => !messages.length && setMailProviderPickerOpen((o) => !o)}
+                                    aria-haspopup="listbox"
+                                    aria-expanded={mailProviderPickerOpen}
+                                    disabled={messages.length > 0}
+                                    title={messages.length > 0 ? 'Mailbox is locked once a session has messages — start a new task to change it' : 'Switch mailbox provider'}
+                                >
+                                    <Mail size={10} />
+                                    {displayedMailProvider
+                                        ? (PROVIDER_LABELS[displayedMailProvider] ?? displayedMailProvider)
+                                        : 'Mailbox'}
+                                    <ChevronDown size={10} />
+                                </button>
+                                {mailProviderPickerOpen && (
+                                    <div className="agent-picker-dropdown" role="listbox">
+                                        {connectedMailProviders.map((p) => (
+                                            <button
+                                                key={p}
+                                                className={`agent-picker-option${displayedMailProvider === p ? ' active' : ''}`}
+                                                role="option"
+                                                aria-selected={displayedMailProvider === p}
+                                                onClick={() => handleMailProviderChange(p)}
+                                            >
+                                                {PROVIDER_LABELS[p] ?? p}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )
+                    )}
+                    {displayedAgent && (
+                        <div
+                            className="active-agent-indicator"
+                            aria-label="Active agent"
+                            title={displayedAgentCapabilities
+                                ? `${displayedAgent.name}: ${displayedAgentCapabilities}`
+                                : displayedAgent.name}
+                        >
+                            <DisplayedAgentIcon size={13} className="active-agent-icon" />
+                            <span className="active-agent-copy">
+                                <span className="active-agent-name">{displayedAgent.name}</span>
+                                {displayedAgentCapabilities && (
+                                    <span className="active-agent-capabilities">{displayedAgentCapabilities}</span>
+                                )}
+                            </span>
+                        </div>
+                    )}
                     <span
                         className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
                         title={
@@ -1495,15 +1639,24 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
                 {showEmptyState && (
                     <div className="empty-task">
-                        <div className="empty-task-icon">
-                            <MessageSquare size={36} strokeWidth={1.2} />
+                        <div className={`empty-task-icon${displayedAgent ? ' agent-aware' : ''}`}>
+                            {displayedAgent ? (
+                                <DisplayedAgentIcon size={36} strokeWidth={1.2} />
+                            ) : (
+                                <MessageSquare size={36} strokeWidth={1.2} />
+                            )}
                         </div>
-                        <h4 className="empty-task-title">What can I help you with?</h4>
-                        <p className="empty-task-desc">
-                            Ask about your documents, search files, or analyze data &mdash; powered by local AI.
+                        <h4 className="empty-task-title">{displayedAgent?.name || 'What can I help you with?'}</h4>
+                        <p className={`empty-task-desc${displayedAgentCapabilities ? '' : ' empty-task-desc-spaced'}`}>
+                            {displayedAgent?.description || (
+                                <>Ask about your documents, search files, or analyze data &mdash; powered by local AI.</>
+                            )}
                         </p>
+                        {displayedAgentCapabilities && (
+                            <div className="empty-task-capabilities">{displayedAgentCapabilities}</div>
+                        )}
                         <div className="empty-task-suggestions">
-                            {EMPTY_SUGGESTIONS.map((s) => (
+                            {emptyStateSuggestions.map((s) => (
                                 <button
                                     key={s}
                                     className="empty-task-chip"

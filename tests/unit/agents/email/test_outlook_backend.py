@@ -650,3 +650,37 @@ class TestTriageAgainstOutlook:
         assert out["grouped"]["total"] == 2
         ids = {r["id"] for r in out["results"]}
         assert ids == {"m1", "m2"}
+
+
+# ---------------------------------------------------------------------------
+# send_message returns sent signal (D4 — Graph sendMail 202 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestSendMessageSentSignal:
+    """LiveOutlookBackend.send_message must return {"sent": True} (#1603, D4).
+
+    Graph sendMail returns HTTP 202 with no body — no message id is echoed back.
+    The REST handler previously raised 502 on empty sent_id; the fix is to
+    include "sent": True in the return dict so the handler can distinguish
+    "Outlook success (no id)" from "unknown failure (no id, no signal)".
+    """
+
+    def test_send_message_returns_sent_true(self):
+        backend, _, _ = _backend(lambda r: httpx.Response(202))
+        result = backend.send_message(
+            to="bob@example.com", subject="Hello", body="World"
+        )
+        assert result.get("sent") is True
+
+    def test_send_message_id_is_empty_string(self):
+        """Graph does NOT return an id for sendMail — empty string, not None."""
+        backend, _, _ = _backend(lambda r: httpx.Response(202))
+        result = backend.send_message(to="x@example.com", subject="s", body="b")
+        assert result.get("id") == ""
+
+    def test_send_message_still_posts_to_sendmail_endpoint(self):
+        """The change to the return value must not affect the actual HTTP call."""
+        backend, rec, _ = _backend(lambda r: httpx.Response(202))
+        backend.send_message(to="bob@example.com", subject="Hi", body="Hello")
+        assert rec.requests[0].url.path.endswith("/me/sendMail")

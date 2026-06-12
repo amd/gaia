@@ -519,7 +519,9 @@ class LiveOutlookBackend:
             "/me/sendMail",
             json_body={"message": message, "saveToSentItems": True},
         )
-        return {"id": "", "to": to, "subject": subject}
+        # Graph sendMail returns HTTP 202 with no body — no id is echoed back.
+        # "sent": True signals success to the REST handler without inventing a fake id.
+        return {"id": "", "sent": True, "to": to, "subject": subject}
 
     def create_label(  # pylint: disable=unused-argument
         self, *, name: str, label_list_visibility: str = "labelShow"
