@@ -171,6 +171,10 @@
   .wf .wt .id{ font-family:'Archivo',sans-serif; font-weight:800; color:var(--c1); font-size:17px; }
   .wf .wt h3{ font-size:20px; }
   .wf .chain{ font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--faint); margin-top:6px; letter-spacing:.02em; }
+  .wf .trig{ font-size:13px; color:var(--soft); margin-top:9px; }
+  .wf .trig b{ color:var(--ink); }
+  .wf .trig .tg{ font-family:'JetBrains Mono',monospace; font-size:11px; padding:2px 7px; border-radius:4px; background:var(--surface2); color:var(--faint); letter-spacing:.04em; }
+  .wf .trig code{ font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ink); }
   .wf ol{ margin:14px 0 0 20px; display:flex; flex-direction:column; gap:8px; }
   .wf li{ font-size:15px; color:var(--soft); line-height:1.45; }
   .wf li b{ color:var(--ink); font-weight:600; }
@@ -334,28 +338,28 @@
     </div>
 
     <table class="tbl">
-      <thead><tr><th>#</th><th>Capability</th><th>Status</th><th>What it does</th><th>Guardrail</th><th>Always-on</th><th>Personal.</th></tr></thead>
+      <thead><tr><th>#</th><th>Capability</th><th>Status</th><th>What it does</th><th>Guardrail</th><th>Trigger</th><th>Personal.</th></tr></thead>
       <tbody>
-        <tr><td><b>1</b></td><td><b>4-way triage</b></td><td><span class="dot ok"></span>Validated</td><td>Classify each message: urgent / actionable / informational / low-pri (+ spam &amp; phishing flags)</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">—</span></td><td><span style="color:var(--soft)">○</span></td></tr>
-        <tr><td><b>2</b></td><td><b>Per-email summary</b></td><td><span class="dot ok"></span>Validated</td><td>One-line gist of any single message</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">—</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>3</b></td><td><b>Draft reply</b></td><td><span class="dot ok"></span>Validated</td><td>In-thread <code>Re:</code> scaffold; agent fills the body</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">—</span></td><td><span style="color:var(--soft)">○</span></td></tr>
-        <tr><td><b>4</b></td><td><b>Phishing detection</b></td><td><span class="dot ok"></span>Validated</td><td>Flag phishing; auto-quarantine like spam (notify + reversible)</td><td><span class="pill t0">Tier 0</span> <span class="pill t1">auto</span></td><td><span class="opt">—</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>5</b></td><td><b>Inbox pre-scan</b></td><td><span class="dot wip"></span>Wired</td><td>Per-category counts + suggested archives as a triage card</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">—</span></td><td><span style="color:var(--soft)">○</span></td></tr>
-        <tr><td><b>6</b></td><td><b>Full-thread comprehension</b></td><td><span class="dot wip"></span>Wired</td><td>Gist of a long back-and-forth, categorized on the last inbound</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">—</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>7</b></td><td><b>Send a reply via agent</b></td><td><span class="dot wip"></span>Wired</td><td>Post a reply through the agent (draft → confirm → send)</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">—</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>8</b></td><td><b>Batch archive</b></td><td><span class="dot wip"></span>Wired</td><td>Archive 20+ messages in one reversible action</td><td><span class="pill t1">Tier 1</span></td><td><span class="opt">—</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>9</b></td><td><b>Quarantine + undo</b></td><td><span class="dot wip"></span>Wired</td><td>30-second reversibility on bulk / destructive ops</td><td><span class="pill t1">Tier 1</span></td><td><span class="opt">—</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>10</b></td><td><b>Calendar — detect</b></td><td><span class="dot wip"></span>Wired</td><td>Spot meeting requests inside email bodies</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">—</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>11</b></td><td><b>Calendar — conflicts</b></td><td><span class="dot wip"></span>Wired</td><td>Check the calendar in-line for overlaps</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">—</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>12</b></td><td><b>Calendar — create</b></td><td><span class="dot wip"></span>Wired</td><td>Create events from email context</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">—</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>13</b></td><td><b>Search past email</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Natural-language / keyword search across the mailbox</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">—</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>14</b></td><td><b>Task extraction → list</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Persist action items into a trackable task list</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">—</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>15</b></td><td><b>Follow-up tracking</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Flag sent mail awaiting a reply; nudge when overdue</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">●</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>16</b></td><td><b>Proactive daily briefing</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Scheduled morning inbox + calendar + tasks brief</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">●</span></td><td><span style="color:var(--soft)">○</span></td></tr>
-        <tr><td><b>17</b></td><td><b>Scheduled send &amp; snooze</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Defer a send; snooze a message out of the inbox</td><td><span class="pill t2">Tier 2</span></td><td><span style="color:var(--c1)">●</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>1</b></td><td><b>4-way triage</b></td><td><span class="dot ok"></span>Validated</td><td>Classify each message: urgent / actionable / informational / low-pri (+ spam &amp; phishing flags)</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span style="color:var(--soft)">○</span></td></tr>
+        <tr><td><b>2</b></td><td><b>Per-email summary</b></td><td><span class="dot ok"></span>Validated</td><td>One-line gist of any single message</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>3</b></td><td><b>Draft reply</b></td><td><span class="dot ok"></span>Validated</td><td>In-thread <code>Re:</code> scaffold; agent fills the body</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span style="color:var(--soft)">○</span></td></tr>
+        <tr><td><b>4</b></td><td><b>Phishing detection</b></td><td><span class="dot ok"></span>Validated</td><td>Flag phishing; auto-quarantine like spam (notify + reversible)</td><td><span class="pill t0">Tier 0</span> <span class="pill t1">auto</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>5</b></td><td><b>Inbox pre-scan</b></td><td><span class="dot wip"></span>Wired</td><td>Per-category counts + suggested archives as a triage card</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span style="color:var(--soft)">○</span></td></tr>
+        <tr><td><b>6</b></td><td><b>Full-thread comprehension</b></td><td><span class="dot wip"></span>Wired</td><td>Gist of a long back-and-forth, categorized on the last inbound</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>7</b></td><td><b>Send a reply via agent</b></td><td><span class="dot wip"></span>Wired</td><td>Post a reply through the agent (draft → confirm → send)</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>8</b></td><td><b>Batch archive</b></td><td><span class="dot wip"></span>Wired</td><td>Archive 20+ messages in one reversible action</td><td><span class="pill t1">Tier 1</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>9</b></td><td><b>Quarantine + undo</b></td><td><span class="dot wip"></span>Wired</td><td>30-second reversibility on bulk / destructive ops</td><td><span class="pill t1">Tier 1</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>10</b></td><td><b>Calendar — detect</b></td><td><span class="dot wip"></span>Wired</td><td>Spot meeting requests inside email bodies</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>11</b></td><td><b>Calendar — conflicts</b></td><td><span class="dot wip"></span>Wired</td><td>Check the calendar in-line for overlaps</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>12</b></td><td><b>Calendar — create</b></td><td><span class="dot wip"></span>Wired</td><td>Create events from email context</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>13</b></td><td><b>Search past email</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Natural-language / keyword search across the mailbox</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>14</b></td><td><b>Task extraction → list</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Persist action items into a trackable task list</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>15</b></td><td><b>Follow-up tracking</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Flag sent mail awaiting a reply; nudge when overdue</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>16</b></td><td><b>Proactive daily briefing</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Scheduled morning inbox + calendar + tasks brief</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span style="color:var(--soft)">○</span></td></tr>
+        <tr><td><b>17</b></td><td><b>Scheduled send &amp; snooze</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Defer a send; snooze a message out of the inbox</td><td><span class="pill t2">Tier 2</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span class="opt">—</span></td></tr>
       </tbody>
     </table>
-    <p class="body-t" style="margin-top:12px"><span class="opt">Always-on &amp; Personalization: <span style="color:var(--c1)">●</span> required · <span style="color:var(--soft)">○</span> enhances · — n/a.</span></p>
+    <p class="body-t" style="margin-top:12px"><span class="opt"><b>Trigger</b> — what fires each capability: <span style="color:var(--c1)">Scheduled</span> (cron/timer) · <span style="color:var(--soft)">New&nbsp;mail</span> (on arrival) · Manual (you ask). <b>Personal.</b> — <span style="color:var(--soft)">○</span> adapts to the user · — n/a.</span></p>
 
     <div class="stats">
       <div class="st"><div class="v">17</div><div class="l">Capabilities</div></div>
@@ -863,12 +867,13 @@ quarantine_phishing_message → { "ok": true, "data": {
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>Part 2 · Common workflows</div>
     <h2 style="margin-top:16px">Capabilities, chained</h2>
-    <p class="body-t">End-to-end jobs the agent automates by chaining capabilities. Each step is tagged with its approval tier so it's clear where the user is asked first.</p>
+    <p class="body-t">End-to-end jobs the agent automates by chaining capabilities. Each workflow's <b>Trigger</b> line shows what kicks it off; each step is tagged with its approval tier so it's clear where the user is asked first.</p>
 
     <div class="wf">
       <div class="wt"><span class="id">W1</span><h3>Morning triage &amp; inbox zero</h3></div>
       <div class="wb">It's 8am and dozens of unread messages are waiting. The user wants the inbox down to just what needs them — fast, and reversibly.</div>
       <div class="chain">pre-scan (5) → triage (1) → batch archive (8) → quarantine + undo (9)</div>
+      <div class="trig"><b>Trigger:</b> <span class="tg" style="color:var(--c1)">Scheduled</span> <code>daily at 8am</code> — or run on demand.</div>
       <ol>
         <li><b>pre_scan_inbox</b> renders the triage card <span class="pill t0">T0</span></li>
         <li>Archive the suggested low-priority set via <b>archive_message_batch</b> <span class="pill t1">T1 · bulk → batch-confirm</span></li>
@@ -882,6 +887,7 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="wt"><span class="id">W2</span><h3>Read → understand → reply → send</h3></div>
       <div class="wb">A long thread needs a reply. The user wants the gist and a ready-to-send response, reviewed before it goes out.</div>
       <div class="chain">summary (2) / thread (6) → draft (3) → send (7)</div>
+      <div class="trig"><b>Trigger:</b> <span class="tg">Manual</span> — user opens a thread and asks for a reply.</div>
       <ol>
         <li><b>summarize_thread</b> → gist + the outstanding ask <span class="pill t0">T0</span></li>
         <li><b>draft_reply</b> → scaffold to the last sender + token <span class="pill t0">T0</span></li>
@@ -894,6 +900,7 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="wt"><span class="id">W3</span><h3>Meeting-from-email scheduling</h3></div>
       <div class="wb">An email proposes a specific time. The user wants it on the calendar if they're free, and a reply either way.</div>
       <div class="chain">detect (10) → conflicts (11) → create (12) → draft (3) → send (7)</div>
+      <div class="trig"><b>Trigger:</b> <span class="tg" style="color:var(--soft)">New&nbsp;mail</span> — fires when a meeting request lands; user confirms the event and the send.</div>
       <ol>
         <li><b>detect_meeting_request</b> = true <span class="pill t0">T0</span></li>
         <li><b>detect_calendar_conflicts</b> on the proposed window <span class="pill t0">T0</span></li>
@@ -907,6 +914,7 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="wt"><span class="id">W4</span><h3>Phishing response playbook</h3></div>
       <div class="wb">A credential-phishing email lands. It's auto-quarantined like spam and the user is notified — zero action needed unless they want to look.</div>
       <div class="chain">triage (1) → phishing detection (4) → auto-quarantine + notify (4, 9)</div>
+      <div class="trig"><b>Trigger:</b> <span class="tg" style="color:var(--soft)">New&nbsp;mail</span> — fully automatic on arrival (zero human loop).</div>
       <ol>
         <li>Triage flags <code>is_phishing=true</code>; body treated as untrusted, any embedded directive refused <span class="pill t0">T0</span></li>
         <li>The message is <b>auto-quarantined</b> like spam (removed from INBOX, never deleted) and the user is <b>notified</b> — no confirmation <span class="pill t1">T1</span></li>
@@ -919,6 +927,7 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="wt"><span class="id">W5</span><h3>Daily digest / bulk cleanup</h3></div>
       <div class="wb">End of day. The user wants a quick digest of the FYI pile, then the clutter cleared — reversibly.</div>
       <div class="chain">pre-scan (5) → triage (1) → summary (2) → batch archive (8)</div>
+      <div class="trig"><b>Trigger:</b> <span class="tg" style="color:var(--c1)">Scheduled</span> <code>daily at 6pm</code> — or run on demand.</div>
       <ol>
         <li><b>pre_scan_inbox</b> for per-category counts <span class="pill t0">T0</span></li>
         <li><b>summarize_message</b> over the informational bucket → a digest <span class="pill t0">T0</span></li>
@@ -931,6 +940,7 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="wt"><span class="id">W6</span><h3>Scheduling back-and-forth (time negotiation)</h3></div>
       <div class="wb">Pinning down a time takes a few rounds. The agent proposes slots, adapts when one gets taken, and books only the time both sides land on.</div>
       <div class="chain">detect (10) → conflicts (11) → draft + send proposals (3, 7) → <i>their reply</i> → conflicts (11) → create (12) + confirm (3, 7)</div>
+      <div class="trig"><b>Trigger:</b> <span class="tg" style="color:var(--soft)">New&nbsp;mail</span> + <span class="tg" style="color:var(--c1)">self-scheduled</span> — inbound request, then re-checks each round until the time is booked.</div>
       <ol>
         <li>Inbound "can we find time next week?" → <b>detect_meeting_request</b> = true <span class="pill t0">T0</span></li>
         <li>Scan the calendar across the candidate window → <b>detect_calendar_conflicts</b> on each option, keep the free ones <span class="pill t0">T0</span></li>
@@ -945,6 +955,7 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="wt"><span class="id">W7</span><h3>Find it, then act on it</h3> <span class="pill planned">uses planned search</span></div>
       <div class="wb">The user half-remembers an email and wants to act on it: "find Dana's contract thread and tell her we're signing."</div>
       <div class="chain">search (13) → thread (6) / summary (2) → draft (3) → send (7)</div>
+      <div class="trig"><b>Trigger:</b> <span class="tg">Manual</span> — user asks to locate a thread and act on it.</div>
       <ol>
         <li>User: "find the contract thread from Dana and tell her we're signing." → <b>search_messages</b> locates the thread <span class="pill t0">T0</span> <span class="opt">(13, planned)</span></li>
         <li><b>summarize_thread</b> → the outstanding ask + last sender <span class="pill t0">T0</span></li>
@@ -958,6 +969,7 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="wt"><span class="id">W8</span><h3>Commitment tracking</h3> <span class="pill planned">uses planned tasks/follow-up</span></div>
       <div class="wb">Promises made over email get forgotten. The agent captures them as tasks and nudges when a sent message goes unanswered.</div>
       <div class="chain">triage (1) → task extraction (14) → follow-up tracking (15)</div>
+      <div class="trig"><b>Trigger:</b> <span class="tg" style="color:var(--soft)">New&nbsp;mail</span> (capture) + <span class="tg" style="color:var(--c1)">Scheduled</span> <code>daily</code> follow-up sweep.</div>
       <ol>
         <li>Triage marks a message <code>NEEDS_RESPONSE</code> and extracts its action items <span class="pill t0">T0</span></li>
         <li>Action items are persisted to the task list, de-duplicated and linked to the source message <span class="pill t0">T0</span> <span class="opt">(14, planned)</span></li>
@@ -970,6 +982,7 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="wt"><span class="id">W9</span><h3>Learns who matters</h3> <span class="pill wip">personalization</span></div>
       <div class="wb">The agent ranked someone too low. The user corrects it once — and the agent remembers, for good.</div>
       <div class="chain">triage (1) → set_priority_sender (P1) → persist via memory (P3) → future triage</div>
+      <div class="trig"><b>Trigger:</b> <span class="tg">Manual</span> — user correction; applied automatically on the next triage.</div>
       <ol>
         <li>Triage ranks an important sender too low <span class="pill t0">T0</span></li>
         <li>User marks them important → <b>set_priority_sender</b> <span class="pill t0">T0</span></li>
@@ -983,6 +996,7 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="wt"><span class="id">W10</span><h3>Attachment-aware reply</h3> <span class="pill wip">attachments in flight</span></div>
       <div class="wb">An email asks for a file back. The agent reads the attachment, drafts the reply, and sends it with the right file attached.</div>
       <div class="chain">read + attachment (P4) → summary (2) → draft (3) → send with attachment (7, P4)</div>
+      <div class="trig"><b>Trigger:</b> <span class="tg">Manual</span> — user asks to reply with a file.</div>
       <ol>
         <li>Read the message and expose its attachment (name, type, size) <span class="pill t0">T0</span> <span class="opt">(P4, in flight)</span></li>
         <li><b>summarize_message</b> accounting for the attachment's content <span class="pill t0">T0</span></li>
@@ -1022,6 +1036,21 @@ quarantine_phishing_message → { "ok": true, "data": {
           <li>Can also <em>create</em> a schedule ("brief me every morning at 8")</li>
         </ul></div>
     </div>
+
+    <h3 style="margin-top:40px">Triggers per capability &amp; workflow</h3>
+    <p class="body-t">Most capabilities are <b>manual</b> — you ask. The ones below run on their own, on a <b>schedule</b> or when <b>mail arrives</b>. Schedules shown are defaults; the user can change them.</p>
+    <table class="tbl">
+      <thead><tr><th>Fires</th><th>Trigger</th><th>Schedule / event</th><th>Unattended tier</th></tr></thead>
+      <tbody>
+        <tr><td>Triage (1), phishing (4), calendar&nbsp;detect (10), task&nbsp;extract (14)</td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td>On every inbound — new-mail webhook or poll</td><td>T0 read · T1 auto-quarantine</td></tr>
+        <tr><td>Follow-up tracking (15)</td><td><span style="color:var(--c1)">Scheduled</span></td><td><code>daily at 9am</code> sweep + self-scheduled per-thread re-checks</td><td>T0 — nudge only</td></tr>
+        <tr><td>Proactive daily briefing (16)</td><td><span style="color:var(--c1)">Scheduled</span></td><td><code>daily at 8am</code></td><td>T0</td></tr>
+        <tr><td>Scheduled send / snooze (17)</td><td><span style="color:var(--c1)">Scheduled</span></td><td>One-shot at the chosen time</td><td>T2 — queued for approval if unattended</td></tr>
+        <tr><td>W1 morning triage · W5 daily digest</td><td><span style="color:var(--c1)">Scheduled</span></td><td><code>daily at 8am</code> / <code>daily at 6pm</code></td><td>archive = T1 reversible</td></tr>
+        <tr><td>W4 phishing playbook</td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td>On arrival — zero human loop</td><td>T1 auto-quarantine</td></tr>
+        <tr><td>W6 time negotiation · W8 commitment tracking</td><td><span style="color:var(--soft)">New&nbsp;mail</span> + <span style="color:var(--c1)">self-scheduled</span></td><td>Inbound request, then re-checks until resolved</td><td>send / create = T2 queued</td></tr>
+      </tbody>
+    </table>
 
     <h3 style="margin-top:40px">Self-scheduling loop</h3>
     <p class="body-t">On each wake the agent runs <b>THINK → ACT → SCHEDULE → COMPLETE</b>: it assesses what changed, takes the allowed actions, and may <b>queue its own next run</b> — "re-check this thread tomorrow", "nudge if no reply in two days", "re-scan the calendar before the proposed slot". Self-scheduling is <b>bounded</b> — a finite horizon, idempotent steps, a capped frequency, and safe-mode by default — so it cannot run away.</p>
