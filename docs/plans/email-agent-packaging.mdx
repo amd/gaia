@@ -213,7 +213,8 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 - **Auth:** the publish step authenticates to the Worker with a Bearer `PUBLISH_TOKENS` secret stored in GitHub Actions (scoped to the `email` author); never embedded in the package.
 - **Canonical store = R2, mirror = GitHub:** R2 (`workers/agent-hub/`) is the programmatic source of truth; the `agent-pkg-email-*` GitHub release stays as the manual, no-login mirror.
 - **Namespacing:** keep release tags namespaced (`agent-pkg-email-*`) so they never fire the paused PyPI workflows (`publish.yml` / `publish_agents.yml`).
-- **Distribution registries:** the existing **`@amd-gaia`** npm scope (already hosts `@amd-gaia/agent-ui`). The thin model needs **one package, `@amd-gaia/agent-email`** — no per-platform sub-packages. CI publishes with a granular **`NPM_TOKEN`** secret (`--access public` to match `agent-ui`).
+- **Distribution registries:** the existing **`@amd-gaia`** npm scope (already hosts `@amd-gaia/agent-ui`). The thin model needs **one public package, `@amd-gaia/agent-email`** — no per-platform sub-packages.
+- **npm auth = trusted publishing (OIDC), no stored token.** The package is configured as an npm trusted publisher; the publish job requests `id-token: write` and runs `npm publish --access public` with provenance — **no `NPM_TOKEN` secret to store or rotate**. This mirrors the repo's PyPI trusted-publishing pattern (`publish_agents.yml`). The publish must run from the exact workflow file registered as the trusted publisher on npm.
 
 ---
 
