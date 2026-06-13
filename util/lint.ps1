@@ -353,7 +353,8 @@ function Invoke-ImportTests {
         @{Import="from gaia.agents.docker import DockerAgent"; Desc="Docker agent"; Optional=$false},
         @{Import="from gaia.agents.blender import BlenderAgent"; Desc="Blender agent"; Optional=$false},
         @{Import="from gaia.agents.emr import MedicalIntakeAgent"; Desc="Medical intake agent"; Optional=$false},
-        @{Import="from gaia.agents.routing import RoutingAgent"; Desc="Routing agent"; Optional=$false},
+        @{Import="from gaia_agent_routing import RoutingAgent"; Desc="Routing agent"; Optional=$true},
+        @{Import="from gaia_agent_docqa import DocumentQAAgent"; Desc="Document Q&A agent"; Optional=$true},
 
         # Database
         @{Import="from gaia.database import DatabaseAgent"; Desc="Database agent"; Optional=$false},

@@ -126,8 +126,10 @@ def cmd_run(args):
             return 1
 
     try:
-        # Import RoutingAgent for intelligent language detection
-        from gaia.agents.routing.agent import RoutingAgent
+        # Import RoutingAgent for intelligent language detection. It ships as
+        # the standalone gaia-agent-routing wheel (#1102), declared as a
+        # dependency of this package.
+        from gaia_agent_routing.agent import RoutingAgent
 
         # Handle --path argument
         project_path = args.path if hasattr(args, "path") else None
