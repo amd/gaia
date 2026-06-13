@@ -1,0 +1,276 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Fully-automated, tag-triggered release for the @amd-gaia/agent-email package
+# (milestone #49, issue #1648). One namespaced tag does the WHOLE release:
+#
+#   1. build   — freeze the email REST sidecar into a native one-file binary on
+#                each of the 4 target platforms (no cross-compile), compute its
+#                SHA-256 + size, upload the binary + a meta sidecar.
+#   2. publish — POST /publish every binary to the Agent Hub R2 Worker (Bearer
+#                token from a repo secret), regenerate binaries.lock.json with
+#                the REAL hashes, then `npm publish` via npm trusted publishing
+#                (OIDC, provenance — NO npm token).
+#
+# Atomic + idempotent: the Worker computes SHA-256 server-side and rejects any
+# attempt to overwrite a published filename, so a re-run of an already-published
+# version is a no-op (publish_to_r2.py treats 409-with-identical-bytes as
+# success and fails loudly only on a genuine hash divergence). The npm publish
+# is skipped if that exact version already exists on the registry.
+#
+# Tag namespace: `agent-pkg-email-*` (NOT `v*`). This is the established Agent
+# Hub package-share namespace (see build_agent_package.yml) and deliberately
+# does NOT fire publish.yml (v* only) or the paused publish_agents.yml (no tag
+# trigger). Example: `git tag agent-pkg-email-v0.1.0 && git push origin --tags`.
+#
+# Maintainer setup (one-time):
+#   * Repo secret  AGENT_HUB_PUBLISH_TOKEN  — Bearer token for POST /publish.
+#   * Repo variable AGENT_HUB_BASE_URL      — Worker origin, e.g.
+#       https://gaia-agent-hub.<acct>.workers.dev  (no trailing slash, no /publish).
+#   * npm trusted publisher for @amd-gaia/agent-email registered against THIS
+#     workflow file name: release_agent_email.yml (repo amd/gaia). The OIDC
+#     subject is tied to the exact filename — renaming this file breaks publish.
+
+name: Release Agent (email)
+
+on:
+  push:
+    tags:
+      - 'agent-pkg-email-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (must match package.json + gaia-agent.yaml), e.g. 0.1.0'
+        required: true
+
+concurrency:
+  # Never cancel a half-done release — a partial publish must finish.
+  group: release-agent-email-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PKG_DIR: hub/agents/npm/agent-email
+  MANIFEST: hub/agents/python/email/gaia-agent.yaml
+  FREEZE_DIST: hub/agents/python/email/packaging/dist
+
+jobs:
+  # ── Stage 1: native freeze on every platform ───────────────────────
+  build:
+    name: Freeze (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32-x64
+            artifact: email-agent-win32-x64.exe
+            frozen: email-agent.exe
+          - os: macos-14
+            platform: darwin-arm64
+            artifact: email-agent-darwin-arm64
+            frozen: email-agent
+          - os: macos-13
+            platform: darwin-x64
+            artifact: email-agent-darwin-x64
+            frozen: email-agent
+          - os: ubuntu-latest
+            platform: linux-x64
+            artifact: email-agent-linux-x64
+            frozen: email-agent
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install deps + PyInstaller (frozen-binary env)
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv .venv-freeze --python 3.12
+          uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/python/email pyinstaller
+
+      - name: Freeze one-file binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" hub/agents/python/email/packaging/freeze.py --onefile
+
+      - name: Smoke-test the frozen binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" hub/agents/python/email/packaging/smoke_test.py \
+            "${FREEZE_DIST}/${{ matrix.frozen }}"
+
+      - name: Stage artifact + compute SHA-256 / size
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          cp "${FREEZE_DIST}/${{ matrix.frozen }}" "staging/${{ matrix.artifact }}"
+          python - "staging/${{ matrix.artifact }}" "${{ matrix.platform }}" "${{ matrix.artifact }}" "${{ matrix.frozen }}" <<'PY'
+          import hashlib, json, sys
+          path, platform, filename, frozen = sys.argv[1:5]
+          data = open(path, "rb").read()
+          meta = {
+              "platform": platform,
+              "filename": filename,
+              "executable": "email-agent.exe" if frozen.endswith(".exe") else "email-agent",
+              "sha256": hashlib.sha256(data).hexdigest(),
+              "size": len(data),
+          }
+          open(f"staging/{platform}.meta.json", "w").write(json.dumps([meta], indent=2))
+          print(json.dumps(meta, indent=2))
+          PY
+
+      - name: Upload platform artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: email-agent-${{ matrix.platform }}
+          path: |
+            staging/${{ matrix.artifact }}
+            staging/${{ matrix.platform }}.meta.json
+          if-no-files-found: error
+
+  # ── Stage 2: publish to R2 + npm (single atomic step) ──────────────
+  publish:
+    name: Publish to R2 + npm
+    runs-on: ubuntu-latest
+    needs: [build]
+    permissions:
+      contents: read
+      id-token: write   # npm trusted publishing (OIDC) — no npm token
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Resolve + validate release version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            # Strip the agent-pkg-email- prefix and an optional leading 'v'.
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#agent-pkg-email-}"
+            VERSION="${VERSION#v}"
+          fi
+          PKG_VER="$(node -p "require('./${PKG_DIR}/package.json').version")"
+          MAN_VER="$(python -c "import yaml,sys; print(yaml.safe_load(open('${MANIFEST}'))['version'])")"
+          echo "release version: ${VERSION} (package.json=${PKG_VER}, manifest=${MAN_VER})"
+          if [ "$VERSION" != "$PKG_VER" ] || [ "$VERSION" != "$MAN_VER" ]; then
+            echo "::error::version mismatch — tag/input=${VERSION}, package.json=${PKG_VER}, gaia-agent.yaml=${MAN_VER}. Align all three before tagging."
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Assert release config present
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${{ vars.AGENT_HUB_BASE_URL }}" ]; then
+            echo "::error::repo variable AGENT_HUB_BASE_URL is not set (Worker origin, e.g. https://hub.example)."
+            exit 1
+          fi
+          if [ -z "${{ secrets.AGENT_HUB_PUBLISH_TOKEN }}" ]; then
+            echo "::error::repo secret AGENT_HUB_PUBLISH_TOKEN is not set (Bearer publish token)."
+            exit 1
+          fi
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: email-agent-*
+          path: artifacts
+
+      - name: Install publish deps
+        run: python -m pip install --upgrade requests pyyaml
+
+      - name: Collect binaries
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bins
+          # Each artifact dir holds the binary + a <platform>.meta.json.
+          find artifacts -type f ! -name '*.meta.json' -exec cp {} bins/ \;
+          find artifacts -name '*.meta.json' -exec cp {} bins/ \;
+          echo "=== collected ==="
+          ls -la bins/
+          # Build the repeatable --artifact arg list (path=platform from meta).
+          ARGS=""
+          for meta in bins/*.meta.json; do
+            plat="$(python -c "import json,sys; print(json.load(open(sys.argv[1]))[0]['platform'])" "$meta")"
+            fn="$(python -c "import json,sys; print(json.load(open(sys.argv[1]))[0]['filename'])" "$meta")"
+            ARGS="$ARGS --artifact bins/${fn}=${plat}"
+          done
+          echo "artifact_args=$ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Publish binaries to R2
+        env:
+          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.AGENT_HUB_PUBLISH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python hub/agents/python/email/packaging/publish_to_r2.py \
+            --base-url "${{ vars.AGENT_HUB_BASE_URL }}" \
+            --manifest "${MANIFEST}" \
+            ${{ steps.collect.outputs.artifact_args }} \
+            --summary-out published.json
+
+      - name: Regenerate binaries.lock.json with real hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python hub/agents/python/email/packaging/gen_binaries_lock.py \
+            --base-url "${{ vars.AGENT_HUB_BASE_URL }}" \
+            --version "${{ steps.ver.outputs.version }}" \
+            --lock "${PKG_DIR}/binaries.lock.json" \
+            $(for m in bins/*.meta.json; do echo --summary "$m"; done)
+          echo "=== regenerated lock ==="
+          cat "${PKG_DIR}/binaries.lock.json"
+
+      - name: Build npm package
+        working-directory: ${{ env.PKG_DIR }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upgrade npm (trusted publishing support)
+        run: npm install -g npm@latest
+
+      - name: Publish to npm (OIDC trusted publishing, provenance)
+        working-directory: ${{ env.PKG_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          if npm view "@amd-gaia/agent-email@${VERSION}" version >/dev/null 2>&1; then
+            echo "@amd-gaia/agent-email@${VERSION} already on npm — skipping (idempotent)."
+            exit 0
+          fi
+          npm publish --access public --provenance

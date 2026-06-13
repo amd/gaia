@@ -38,9 +38,17 @@ export function upsertVersion(
   manifest: ParsedManifest,
   version: VersionEntry
 ): AgentManifest {
+  // If the version already exists, this publish adds another platform binary to
+  // it: append the new artifact(s), keep the original published_at/publisher and
+  // the primary artifact. The caller has already rejected duplicate filenames.
+  const prior = existing?.versions?.[version.version];
+  const merged: VersionEntry = prior
+    ? { ...prior, artifacts: [...prior.artifacts, ...version.artifacts] }
+    : version;
+
   const versions: Record<string, VersionEntry> = {
     ...(existing?.versions ?? {}),
-    [version.version]: version,
+    [version.version]: merged,
   };
   const latest = latestVersion(Object.keys(versions));
 
@@ -128,5 +136,6 @@ export function makeVersionEntry(
     publisher,
     deprecated: manifest.deprecated,
     artifact,
+    artifacts: [artifact],
   };
 }

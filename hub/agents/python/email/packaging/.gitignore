@@ -1,0 +1,5 @@
+# PyInstaller freeze artifacts — large, reproducible, never committed.
+build/
+dist/
+*.spec
+__pycache__/
