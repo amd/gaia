@@ -46,7 +46,8 @@ This milestone delivers that path: the email agent distributed through **npm** a
 |-------|-------|
 | `gaia-agent-email` wheel + sdist | ✅ Builds via `build-agent-wheel` composite action |
 | GitHub-prerelease share | ✅ `build_agent_package.yml` (`workflow_dispatch`), `agent-pkg-email-v0.1.0` published — kept as the **manual** mirror |
-| R2 distribution backend (`workers/agent-hub/`) | ✅ Cloudflare Worker exists — reuse as the **canonical** binary store |
+| R2 distribution backend (`workers/agent-hub/`) | ✅ Cloudflare Worker with `POST /publish` (Bearer auth, version-immutability, server-side SHA-256, `agents/<id>/<version>/…` layout, index rebuild) — **reuse as the canonical store** |
+| CI workflow that pushes binaries to R2 | ❌ Does not exist — `build_agents.yml` uploads only GitHub Actions artifacts ("R2 … handled by other issues"); `build_agent_package.yml` is **manual** → GitHub release — **this milestone** |
 | PyPI publish | ⏸ Paused (#1179) — out of scope here |
 | REST API surface | ✅ Email REST router exists (triage, connectors); needs a published contract |
 | npm client | ❌ Does not exist — **this milestone** |
@@ -84,17 +85,17 @@ The npm package carries **only** the JS/TS client and a small fetch CLI — **no
 @gaia/agent-email                 ← npm: JS/TS client + `fetch` CLI + SHA-256 manifest. NO binaries.
         │  build-time: npx @gaia/agent-email fetch
         ▼
-R2 (canonical)                    ← per-platform binaries, immutable, versioned
-  agent-email/<version>/email-win32-x64.exe
-  agent-email/<version>/email-darwin-arm64
-  agent-email/<version>/email-darwin-x64
-  agent-email/<version>/email-linux-x64
+R2 via Agent Hub Worker           ← canonical, immutable, versioned (existing POST /publish + bucket)
+  agents/email/<version>/email-win32-x64.exe
+  agents/email/<version>/email-darwin-arm64
+  agents/email/<version>/email-darwin-x64
+  agents/email/<version>/email-linux-x64
         │  verified against pinned SHA-256, written to the host's resources dir
         ▼
 host app bundle (signed)          ← binary on disk at sign time → covered by the host signature
 ```
 
-The fetch CLI resolves `${process.platform}-${process.arch}`, downloads that one object from R2, **verifies it against a SHA-256 pinned in the package** (fail loudly on mismatch), and writes it to a host-specified resources directory:
+The binaries are stored under the **existing Agent Hub R2 layout** (`agents/<id>/<version>/…`) and served by the same Worker that already fronts the bucket. The fetch CLI resolves `${process.platform}-${process.arch}`, downloads that one object, **verifies it against a SHA-256 pinned in the package** (fail loudly on mismatch), and writes it to a host-specified resources directory:
 
 ```jsonc
 // @gaia/agent-email/package.json (the only published binary-bearing artifact is the manifest)
@@ -164,17 +165,19 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 **Exit criteria:** all four frozen binaries pass the no-Python smoke test and the lifecycle handshake.
 
-### Phase 3 — R2 distribution + thin npm package
+### Phase 3 — Fully-automated R2 distribution + thin npm package
 
-**Goal:** `npm install @gaia/agent-email` + one build-time fetch yields a working, signature-ready agent.
+**Goal:** a single version tag publishes everything — binaries to R2 and the thin npm package — with **zero manual steps**. `npm install @gaia/agent-email` + one build-time fetch then yields a working, signature-ready agent.
 
-- Publish the four per-platform binaries to **R2** under an immutable, versioned key layout (`agent-email/<version>/email-<os>-<arch>`), via the existing `workers/agent-hub/` backend.
+- **Fully-automated, tag-triggered publish workflow** (no `workflow_dispatch` gate): on a namespaced tag, the workflow builds every platform binary → computes SHA-256 → pushes each to R2 via the existing Worker `POST /publish` (Bearer `PUBLISH_TOKENS` from a GH Actions secret) → writes the pinned manifest → publishes the npm package. Re-running a published version is a **no-op** (the Worker's native version-immutability), not an overwrite.
+- Reuse the existing pipeline rather than forking: extend `build_agents.yml`'s release-bundle leg (it already produces per-platform binaries + checksums) to call `POST /publish` instead of stopping at GitHub-artifact upload.
+- Confirm/extend `POST /publish` to accept **multiple per-platform binaries under one `<id>/<version>`** (today it stores `gaia-agent.yaml` + an artifact; the four OS/arch binaries must coexist in one version without tripping per-version immutability).
 - Build the thin `@gaia/agent-email` npm package: JS/TS client + `fetch` CLI + a **`binaries.lock.json`** manifest pinning each platform's R2 key and **SHA-256**.
 - `fetch` CLI: resolve platform → download from R2 → **verify SHA-256 (fail loudly on mismatch)** → write to the host-specified resources dir → `chmod +x` on POSIX.
 - Document the host integration: run `npx @gaia/agent-email fetch` as a **build step before signing**, and (for Electron-style hosts) keep the fetched binary outside the `asar` (`extraResources`) so it can be spawned.
-- CI release matrix: build each binary → SHA → upload to R2 → publish the npm package, **atomically on one tag** (manifest SHAs must match the uploaded R2 objects or the release fails).
+- **Atomic release:** R2 upload → manifest write → npm publish on one tag; manifest SHAs must match the uploaded R2 objects, and the npm version must reference an R2 version that exists, or the whole release fails.
 
-**Exit criteria:** on three real OSes, `npm install` + `npx @gaia/agent-email fetch` retrieves the platform binary, SHA-256 verifies, and the lifecycle handshake succeeds; install works under `--ignore-scripts`.
+**Exit criteria:** pushing a version tag publishes binaries to R2 and the npm package end-to-end with no human step; on three real OSes, `npm install` + `npx @gaia/agent-email fetch` retrieves the platform binary, SHA-256 verifies, and the lifecycle handshake succeeds; install works under `--ignore-scripts`.
 
 ### Phase 4 — Code signing & notarization
 
@@ -201,11 +204,15 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 ## CI / Release Pipeline
 
-- **Build matrix** produces all four platform binaries per implementation, runs `chmod +x`, signs, and computes SHA-256.
-- **Atomic release:** upload binaries to R2 → write the pinned manifest → publish the thin npm package, on a single tag. The manifest's SHA-256s must match the uploaded R2 objects, and the npm package must reference an R2 version that exists, or the whole release fails — no client-without-binary or stale-SHA states.
-- **Canonical store = R2, mirror = GitHub:** R2 (`workers/agent-hub/`) is the programmatic source of truth for binaries; the `agent-pkg-email-*` GitHub release stays as the manual, no-login mirror.
+**Deployment and distribution are fully automated — a version tag is the only human action.** No `workflow_dispatch`, no manual upload, no manual npm publish.
+
+- **One tag-triggered workflow** does the whole release: build matrix → `chmod +x` + sign + SHA-256 → push each binary to R2 via the Worker `POST /publish` → write the pinned manifest → `npm publish`. The current manual `build_agent_package.yml` (`workflow_dispatch` → GitHub release) is demoted to a fallback mirror, not the release path.
+- **Reuse the existing legs:** extend `build_agents.yml` (C++ binaries + checksums, already tag-aware) and the `build-agent-wheel` action to push to R2 via `POST /publish` rather than stopping at GitHub-artifact upload — the workflow comment "R2 … handled by other issues" is exactly this work.
+- **Idempotent by construction:** the Worker rejects republishing an existing `<id>@<version>` (native version-immutability), so a re-run or an unchanged-version tag is a safe no-op — no custom overwrite logic.
+- **Atomic release:** R2 upload → manifest write → npm publish on a single tag. Manifest SHA-256s must match the uploaded R2 objects, and the npm version must reference an R2 version that exists, or the whole release fails — no client-without-binary or stale-SHA states.
+- **Auth:** the publish step authenticates to the Worker with a Bearer `PUBLISH_TOKENS` secret stored in GitHub Actions (scoped to the `email` author); never embedded in the package.
+- **Canonical store = R2, mirror = GitHub:** R2 (`workers/agent-hub/`) is the programmatic source of truth; the `agent-pkg-email-*` GitHub release stays as the manual, no-login mirror.
 - **Namespacing:** keep release tags namespaced (`agent-pkg-email-*`) so they never fire the paused PyPI workflows (`publish.yml` / `publish_agents.yml`).
-- **Reuse, don't fork:** extend the existing `build-agent-wheel` composite action and `util/list_agent_packages.py` discovery rather than adding a parallel recipe, so build logic can't drift.
 - **Distribution registries:** scoped npm (`@gaia/*`) — private during pre-GA, public at launch.
 
 ---
@@ -263,3 +270,4 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 4. The C++ binary passes the same contract suite as the Python binary and is a drop-in behind the same client.
 5. The thin npm package installs under `--ignore-scripts`; `fetch` fails loudly on a SHA-256 mismatch or when offline.
 6. The OpenAPI contract is published and enforced in CI across client + both servers.
+7. **Deployment is fully automated:** pushing a version tag publishes binaries to R2 and the npm package end-to-end with no manual step, and re-running the release is a safe no-op.
