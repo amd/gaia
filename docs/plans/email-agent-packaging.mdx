@@ -35,7 +35,7 @@ This milestone delivers that path: the email agent distributed through **npm** a
 
 - Re-enabling the paused PyPI publish path (tracked separately under #1179).
 - An in-process Node native addon (N-API). Captured as a future fast-path in [Deferred](#deferred), not built here.
-- Any host-app-specific UI, connector UX, or product integration code. We ship the agent + client + contract; the host owns its own glue.
+- Third-party host glue. We ship the agent + client + contract; an external host owns its own integration. **Exception:** the GAIA Agent UI is our *reference consumer* and its migration to the sidecar is in scope as the validation phase ([Phase 6](#phase-6-agent-ui-as-first-consumer-validation)).
 - New triage capabilities. This is a **packaging and distribution** milestone, not a feature milestone.
 
 ---
@@ -50,6 +50,7 @@ This milestone delivers that path: the email agent distributed through **npm** a
 | CI workflow that pushes binaries to R2 | ❌ Does not exist — `build_agents.yml` uploads only GitHub Actions artifacts ("R2 … handled by other issues"); `build_agent_package.yml` is **manual** → GitHub release — **this milestone** |
 | PyPI publish | ⏸ Paused (#1179) — out of scope here |
 | REST API surface | ✅ Email REST router exists (triage, connectors); needs a published contract |
+| Agent UI email integration | ⚠️ Today the UI backend imports the `gaia-agent-email` **Python wheel** (`amd-gaia[api]` auto-mounts its router); the React UI talks to it via the backend. Phase 6 migrates this to the npm sidecar. |
 | npm client | ❌ Does not exist — **this milestone** |
 | Frozen Python binary (no-interpreter) | ❌ Does not exist — **this milestone** |
 | C++ implementation + binary | ❌ `hub/agents/cpp/` is an empty placeholder — **this milestone** |
@@ -200,6 +201,18 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 **Exit criteria:** the C++ binary is a drop-in for the frozen Python binary behind the same client, validated by a shared contract test suite.
 
+### Phase 6 — Agent UI as first consumer (validation)
+
+**Goal:** dogfood the package. The GAIA Agent UI (`@amd-gaia/agent-ui`, Electron) consumes the email agent as the **npm-fetched binary sidecar** instead of importing the `gaia-agent-email` **Python wheel** into its backend. This is the milestone's real acceptance test — if our own app can install, fetch, spawn, and triage through the package, an external host can too.
+
+- Add `@amd-gaia/agent-email` as a dependency of the Electron app; run the build-time `fetch` in the app's build; spawn the sidecar via the client's lifecycle handshake (spawn → health → version → ready).
+- Re-point the UI's email features (`ChatView`, `EmailPreScanCard`, `EmailConnectCta`, `useConnectorsSSE` triage calls) at the sidecar instead of the backend's mounted `/v1/email` router.
+- **Connectors via shared OS keyring (no token handoff):** the backend keeps owning the OAuth connect flow and keyring writes (connect CTAs unchanged); the sidecar reads the **same OS keyring** through its bundled `gaia.connectors`. This relies on the connectors module's already-documented "two processes share the keyring" behavior — note the process-local token cache + concurrent-refresh caveat, but no new auth protocol.
+- **Remove the built-in path:** stop pulling the `gaia-agent-email` wheel into the UI backend's dependency/auto-mount chain, so the sidecar is the only email surface — proving the package fully replaces the in-process agent.
+- Keep the Python backend for everything non-email; only email migrates to the sidecar in this phase.
+
+**Exit criteria:** with the `gaia-agent-email` wheel removed from the UI backend, the Agent UI completes a triage + pre-scan flow through the spawned `@amd-gaia/agent-email` sidecar, and an existing Gmail/Outlook connection (granted via the unchanged connect flow) is picked up by the sidecar from the shared keyring.
+
 ---
 
 ## CI / Release Pipeline
@@ -272,3 +285,4 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 5. The thin npm package installs under `--ignore-scripts`; `fetch` fails loudly on a SHA-256 mismatch or when offline.
 6. The OpenAPI contract is published and enforced in CI across client + both servers.
 7. **Deployment is fully automated:** pushing a version tag publishes binaries to R2 and the npm package end-to-end with no manual step, and re-running the release is a safe no-op.
+8. **Dogfooded:** the GAIA Agent UI runs email triage through the `@amd-gaia/agent-email` sidecar with the `gaia-agent-email` Python wheel removed from its backend, picking up connector tokens from the shared OS keyring.
