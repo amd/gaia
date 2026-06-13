@@ -1,0 +1,812 @@
+{
+  "components": {
+    "schemas": {
+      "ActionItem": {
+        "additionalProperties": false,
+        "description": "A single extracted action the principal should take.",
+        "properties": {
+          "description": {
+            "description": "Imperative action, e.g. 'Reply to Bob'.",
+            "title": "Description",
+            "type": "string"
+          },
+          "due_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Free-text due hint as written ('Friday', 'EOD'); not parsed.",
+            "title": "Due Hint"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "title": "ActionItem",
+        "type": "object"
+      },
+      "DraftReply": {
+        "additionalProperties": false,
+        "description": "A drafted reply the agent proposes. Never sent without confirmation\n(#1264) — this is a proposal, not an action.",
+        "properties": {
+          "body": {
+            "description": "Proposed reply body.",
+            "title": "Body",
+            "type": "string"
+          },
+          "subject": {
+            "description": "Proposed subject line.",
+            "title": "Subject",
+            "type": "string"
+          },
+          "to": {
+            "description": "Proposed recipients (non-empty).",
+            "items": {
+              "$ref": "#/components/schemas/EmailAddress"
+            },
+            "minItems": 1,
+            "title": "To",
+            "type": "array"
+          }
+        },
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "title": "DraftReply",
+        "type": "object"
+      },
+      "EmailAddress": {
+        "additionalProperties": false,
+        "description": "A single email participant. ``name`` is optional (many headers carry a\nbare address); ``email`` is required and must look like an address.",
+        "properties": {
+          "email": {
+            "description": "Bare email address, e.g. 'a@b.com'.",
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Display name, e.g. 'Alice Example'.",
+            "title": "Name"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "EmailAddress",
+        "type": "object"
+      },
+      "EmailCategory": {
+        "description": "The frozen four-bucket triage taxonomy. Values MUST match\n``triage_heuristics.ALL_CATEGORIES`` — the contract tests assert this.",
+        "enum": [
+          "urgent",
+          "actionable",
+          "informational",
+          "low priority"
+        ],
+        "title": "EmailCategory",
+        "type": "string"
+      },
+      "EmailDraftRequest": {
+        "additionalProperties": false,
+        "description": "Propose a reply and obtain a confirmation token for it.",
+        "properties": {
+          "body": {
+            "description": "Proposed reply body.",
+            "title": "Body",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider binding ('google' or 'microsoft'). When set, the confirmation token is bound to this provider so the send routes to the correct mailbox even when multiple are connected.",
+            "title": "Provider"
+          },
+          "subject": {
+            "description": "Proposed subject line.",
+            "title": "Subject",
+            "type": "string"
+          },
+          "to": {
+            "description": "Proposed recipients (non-empty).",
+            "items": {
+              "$ref": "#/components/schemas/EmailAddress"
+            },
+            "minItems": 1,
+            "title": "To",
+            "type": "array"
+          }
+        },
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "title": "EmailDraftRequest",
+        "type": "object"
+      },
+      "EmailDraftResponse": {
+        "additionalProperties": false,
+        "description": "The proposed reply plus a single-use confirmation token bound to it.",
+        "properties": {
+          "confirmation_token": {
+            "description": "Echo this back to POST /v1/email/send to authorize sending exactly this payload. Single-use; bound to (to, subject, body).",
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/DraftReply",
+            "description": "The proposed reply (to / subject / body)."
+          }
+        },
+        "required": [
+          "draft",
+          "confirmation_token"
+        ],
+        "title": "EmailDraftResponse",
+        "type": "object"
+      },
+      "EmailMessage": {
+        "additionalProperties": false,
+        "description": "One email message. Shared by the single-email and thread inputs.",
+        "properties": {
+          "bcc": {
+            "description": "Blind-carbon-copy recipients.",
+            "items": {
+              "$ref": "#/components/schemas/EmailAddress"
+            },
+            "title": "Bcc",
+            "type": "array"
+          },
+          "body": {
+            "description": "Plain-text message body to analyze.",
+            "title": "Body",
+            "type": "string"
+          },
+          "cc": {
+            "description": "Carbon-copy recipients.",
+            "items": {
+              "$ref": "#/components/schemas/EmailAddress"
+            },
+            "title": "Cc",
+            "type": "array"
+          },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO-8601 timestamp of the message.",
+            "title": "Date"
+          },
+          "from": {
+            "$ref": "#/components/schemas/EmailAddress",
+            "description": "Sender. Aliased to 'from' (a Python keyword) on the wire."
+          },
+          "message_id": {
+            "description": "Provider message id (opaque).",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "subject": {
+            "default": "",
+            "description": "Subject line.",
+            "title": "Subject",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider thread id this message belongs to.",
+            "title": "Thread Id"
+          },
+          "to": {
+            "description": "Primary recipients (the 'To' line).",
+            "items": {
+              "$ref": "#/components/schemas/EmailAddress"
+            },
+            "title": "To",
+            "type": "array"
+          }
+        },
+        "required": [
+          "message_id",
+          "from",
+          "body"
+        ],
+        "title": "EmailMessage",
+        "type": "object"
+      },
+      "EmailSendRequest": {
+        "additionalProperties": false,
+        "description": "Send a reply. Requires a valid confirmation token for this payload.",
+        "properties": {
+          "body": {
+            "description": "Reply body.",
+            "title": "Body",
+            "type": "string"
+          },
+          "confirmation_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Confirmation token from POST /v1/email/draft. A send without a valid token for this exact payload is rejected (403).",
+            "title": "Confirmation Token"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider ('google' or 'microsoft'), used ONLY as the fallback when the confirmation token carries no provider binding. A token's bound provider always wins; with two mailboxes connected and neither a binding nor this field set, the send is rejected as ambiguous (400).",
+            "title": "Provider"
+          },
+          "subject": {
+            "description": "Subject line.",
+            "title": "Subject",
+            "type": "string"
+          },
+          "to": {
+            "description": "Recipients (non-empty).",
+            "items": {
+              "$ref": "#/components/schemas/EmailAddress"
+            },
+            "minItems": 1,
+            "title": "To",
+            "type": "array"
+          }
+        },
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "title": "EmailSendRequest",
+        "type": "object"
+      },
+      "EmailSendResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "sent": {
+            "default": true,
+            "description": "Always true on success.",
+            "title": "Sent",
+            "type": "boolean"
+          },
+          "sent_id": {
+            "description": "Provider message id of the sent email.",
+            "title": "Sent Id",
+            "type": "string"
+          },
+          "subject": {
+            "description": "Subject of the sent message.",
+            "title": "Subject",
+            "type": "string"
+          },
+          "to": {
+            "description": "Recipients the message was sent to.",
+            "items": {
+              "$ref": "#/components/schemas/EmailAddress"
+            },
+            "title": "To",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sent_id",
+          "to",
+          "subject"
+        ],
+        "title": "EmailSendResponse",
+        "type": "object"
+      },
+      "EmailTriageRequest": {
+        "additionalProperties": false,
+        "description": "Top-level request envelope shared by REST (#1229) and MCP stdio (#1104).",
+        "properties": {
+          "payload": {
+            "description": "The single-email or full-thread input.",
+            "discriminator": {
+              "mapping": {
+                "single": "#/components/schemas/SingleEmailInput",
+                "thread": "#/components/schemas/ThreadInput"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SingleEmailInput"
+              },
+              {
+                "$ref": "#/components/schemas/ThreadInput"
+              }
+            ],
+            "title": "Payload"
+          },
+          "schema_version": {
+            "default": "1.0",
+            "description": "Contract version. Mismatch lets a consumer fail loudly.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "payload"
+        ],
+        "title": "EmailTriageRequest",
+        "type": "object"
+      },
+      "EmailTriageResponse": {
+        "additionalProperties": false,
+        "description": "Top-level response envelope shared by REST (#1229) and MCP stdio (#1104).",
+        "properties": {
+          "request_kind": {
+            "description": "Which input shape produced this result.",
+            "enum": [
+              "single",
+              "thread"
+            ],
+            "title": "Request Kind",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/EmailTriageResult",
+            "description": "The structured analysis."
+          },
+          "schema_version": {
+            "default": "1.0",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_kind",
+          "result"
+        ],
+        "title": "EmailTriageResponse",
+        "type": "object"
+      },
+      "EmailTriageResult": {
+        "additionalProperties": false,
+        "description": "The structured analysis of a single email or thread.",
+        "properties": {
+          "action_items": {
+            "description": "Extracted actions (may be empty).",
+            "items": {
+              "$ref": "#/components/schemas/ActionItem"
+            },
+            "title": "Action Items",
+            "type": "array"
+          },
+          "category": {
+            "$ref": "#/components/schemas/EmailCategory",
+            "description": "One of the four buckets."
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DraftReply"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Proposed reply, or null when none is suggested."
+          },
+          "is_phishing": {
+            "default": false,
+            "description": "Phishing signal (independent of spam).",
+            "title": "Is Phishing",
+            "type": "boolean"
+          },
+          "is_spam": {
+            "default": false,
+            "description": "Spam signal (independent).",
+            "title": "Is Spam",
+            "type": "boolean"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Echoes the provider message-id from the request (SingleEmailInput.message or ThreadInput.thread_id). Null when the result was produced from a raw Gmail-API message (no contract message_id available).",
+            "title": "Message Id"
+          },
+          "summary": {
+            "description": "Plain-text summary of the email/thread.",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "summary"
+        ],
+        "title": "EmailTriageResult",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "additionalProperties": false,
+        "description": "Liveness/readiness probe for the email surface.\n\nDependency-light by design: it never touches a live mailbox or the LLM, so a\nhost can confirm the router is mounted and serving before any connector or\nmodel is configured.",
+        "properties": {
+          "service": {
+            "const": "gaia-agent-email",
+            "default": "gaia-agent-email",
+            "description": "Stable service identifier.",
+            "title": "Service",
+            "type": "string"
+          },
+          "status": {
+            "const": "ok",
+            "default": "ok",
+            "description": "Always 'ok' when the surface is serving.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "HealthResponse",
+        "type": "object"
+      },
+      "SingleEmailInput": {
+        "additionalProperties": false,
+        "description": "A single email to triage (AC3 — single-email path).",
+        "properties": {
+          "kind": {
+            "const": "single",
+            "default": "single",
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/components/schemas/EmailMessage",
+            "description": "The one message to analyze."
+          },
+          "principal": {
+            "$ref": "#/components/schemas/EmailAddress",
+            "description": "The recipient the agent acts on behalf of — whose inbox this is. Distinct from per-message 'to': the principal is the account owner, not necessarily a recipient of every message in a thread."
+          }
+        },
+        "required": [
+          "principal",
+          "message"
+        ],
+        "title": "SingleEmailInput",
+        "type": "object"
+      },
+      "ThreadInput": {
+        "additionalProperties": false,
+        "description": "A full conversation thread to triage (AC3 — thread path).",
+        "properties": {
+          "kind": {
+            "const": "thread",
+            "default": "thread",
+            "title": "Kind",
+            "type": "string"
+          },
+          "messages": {
+            "description": "Every message in the thread, oldest-first. Non-empty.",
+            "items": {
+              "$ref": "#/components/schemas/EmailMessage"
+            },
+            "minItems": 1,
+            "title": "Messages",
+            "type": "array"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/EmailAddress",
+            "description": "The recipient the agent acts on behalf of — whose inbox this is. Distinct from per-message 'to': the principal is the account owner, not necessarily a recipient of every message in a thread."
+          },
+          "thread_id": {
+            "description": "Provider thread id for the conversation.",
+            "title": "Thread Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal",
+          "thread_id",
+          "messages"
+        ],
+        "title": "ThreadInput",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "VersionResponse": {
+        "additionalProperties": false,
+        "description": "The two version numbers a host negotiates against.\n\n``apiVersion`` is the frozen REST/contract version (a contract bump bumps it);\n``agentVersion`` is the package build. Both come from\n``gaia_agent_email.version`` so this endpoint and the freeze server's\n``/version`` report identical values.",
+        "properties": {
+          "agentVersion": {
+            "description": "Package build version.",
+            "title": "Agentversion",
+            "type": "string"
+          },
+          "apiVersion": {
+            "description": "REST/contract version (contract.SCHEMA_VERSION).",
+            "title": "Apiversion",
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "agentVersion"
+        ],
+        "title": "VersionResponse",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
+    "title": "GAIA Email Agent API",
+    "version": "1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/email/draft": {
+      "post": {
+        "description": "Propose a reply and mint a confirmation token bound to its payload.\n\nThe returned token must be echoed to :func:`send_email` to authorize\nsending exactly this ``(to, subject, body)``. This is the explicit\nuser-confirmation step — the consuming app surfaces the draft to the\nuser, and only a user-approved send echoes the token back.",
+        "operationId": "draft_reply_v1_email_draft_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailDraftRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailDraftResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Draft Reply",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/health": {
+      "get": {
+        "description": "Report that the email REST surface is mounted and serving.\n\nDependency-light: no live mailbox, no LLM. A host uses this for the sidecar\nreadiness handshake and for liveness checks once mounted on the product app.",
+        "operationId": "email_health_v1_email_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Email Health",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/send": {
+      "post": {
+        "description": "Send a reply — gated on explicit confirmation (#1264).\n\nThe confirmation gate is enforced FIRST: a request without a valid,\npayload-bound confirmation token is rejected with HTTP 403 before any\nbackend call (or even backend resolution). This mirrors the agent's\n``TOOLS_REQUIRING_CONFIRMATION`` guard, translated to the API boundary,\nand guarantees the gate fires regardless of backend health. Never\nauto-confirms.",
+        "operationId": "send_email_v1_email_send_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailSendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSendResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/triage": {
+      "post": {
+        "description": "Triage a single email or a full thread.\n\nAccepts the FROZEN #1262 ``EmailTriageRequest`` (a single-email or\nthread payload, discriminated on ``kind``) and returns the structured\n``EmailTriageResponse`` — category, spam/phishing signals, a plain-text\nsummary, extracted action items, and an optional draft-reply proposal.\nNo mail is read or sent; this analyzes only the payload in the request.",
+        "operationId": "triage_email_v1_email_triage_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailTriageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTriageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Triage Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/version": {
+      "get": {
+        "description": "Report the REST/contract version and the package build version.\n\nBoth values come from ``gaia_agent_email.version`` — the same constants the\nfreeze server's root ``/version`` reads — so the product surface and the\nfrozen binary can never disagree on what contract they speak.",
+        "operationId": "email_version_v1_email_version_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Email Version",
+        "tags": [
+          "email"
+        ]
+      }
+    }
+  }
+}
