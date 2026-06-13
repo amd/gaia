@@ -220,7 +220,7 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 ## Versioning & Contract Governance
 
 - **`apiVersion`** (SemVer) is the host-facing contract version, advertised on `/version`. Breaking REST changes bump its major.
-- **Package version** tracks the agent build; the npm package, the R2 binary version (`agent-email/<version>/…`), and the pinned `binaries.lock.json` manifest always publish in lockstep — the manifest references the matching R2 version, never a floating one.
+- **Package version** tracks the agent build; the npm package, the R2 binary version (`agents/email/<version>/…`), and the pinned `binaries.lock.json` manifest always publish in lockstep — the manifest references the matching R2 version, never a floating one.
 - The **OpenAPI spec is the single source of truth** — client, Python server, and C++ server are all validated against it in CI. A change to the contract that isn't reflected in all three fails CI.
 - Client refuses a binary whose `apiVersion` major it doesn't support — **fail loudly**, never best-effort against an incompatible server.
 
