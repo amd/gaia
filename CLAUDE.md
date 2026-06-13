@@ -274,6 +274,16 @@ gaia mcp status
 python -m gaia.mcp.mcp_bridge
 ```
 
+### IMPORTANT: Test setup/download paths from a COLD state, and verify external-API call shape
+
+**Two failure modes let the #1655 NPU `gaia init` bug ship despite "passing" tests — guard against both whenever you touch a setup, install, download, or external-API path.**
+
+1. **Cold-state testing.** Setup and download paths (`gaia init`, `ensure_model_downloaded`, first-run wizards, backend installers) short-circuit when the artifact already exists. A warm cache returns success and hides a failure that only fires on the *first* run — i.e. for exactly the new users the feature targets ("works on my machine"). Force the cold path before claiming success: `gaia init --profile <p> --force-models`, delete the model/artifact first, or use a clean machine. And remember **runtime-verified ≠ setup-verified** — passing evals or inference proves the model *runs*; it says nothing about whether a new user can *download/register* it. They are different code paths; verify both.
+
+2. **Mocks prove "we called it," not "the call is valid."** When code calls an external API with a contract (required name prefixes, mutually-required fields, allowed value combinations), a mock returning a hardcoded `200` only proves the method was invoked. Add a unit test asserting the call *shape* (e.g. "the npu profile pulls by name, never `pull_model(recipe=...)`"), and — where the contract lives in the external service — one `require_lemonade` integration test that exercises it for real.
+
+**#1655 is the canonical case:** the model-pull sent `recipe=` for a *built-in* Lemonade model, which Lemonade 400s — but only on a *fresh* pull. Every unit test mocked the client, every manual check ran on a box that already had `gemma4-it-e2b-FLM` cached, and the PR's `gaia init --profile npu` test-plan item was checked off against that warm cache. `tests/test_lemonade_client.py::test_pull_model` even documented the correct `user.`-prefix-with-`recipe` pattern, but stubbed the HTTP layer, so it couldn't catch the profile that violated it.
+
 ### IMPORTANT: Run agent evals when changing LLM-affecting code paths — do NOT skip
 
 **Unit tests catch code paths; they don't catch LLM behavior.** When a change touches an LLM-affecting surface, you MUST run `gaia eval agent` against the relevant category and compare to the committed baseline before claiming the change is done. Skipping the eval is how regressions that pass every unit test still ship to users.
