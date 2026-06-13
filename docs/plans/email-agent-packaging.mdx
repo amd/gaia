@@ -24,7 +24,7 @@ This milestone delivers that path: the email agent distributed through **npm** a
 
 ### Goals
 
-- A host web app can run `npm install @gaia/agent-email` and, with one **build-time fetch** step, get a working local email agent — **no Python install, no C++ toolchain, no compile step**.
+- A host web app can run `npm install @amd-gaia/agent-email` and, with one **build-time fetch** step, get a working local email agent — **no Python install, no C++ toolchain, no compile step**.
 - The npm package stays **lightweight** (JS/TS client + fetch CLI only); the large binaries live in **R2** object storage, the single source of truth.
 - **One REST contract** backs both the Python and C++ implementations; the host integrates once and is implementation-agnostic.
 - The platform binary is **present on disk at build/sign time** (fetched before the host signs its app), so it's covered by the host's code signature and runs **fully offline at runtime**.
@@ -69,7 +69,7 @@ The agent runs as a **separate local process** the host app spawns, supervises, 
 ┌─────────────────────────┐        loopback REST          ┌──────────────────────────┐
 │  Host web app (Node)     │  ───────────────────────────▶ │  Email agent sidecar      │
 │                          │   POST /v1/email/triage        │  (frozen Python OR C++)   │
-│  @gaia/agent-email       │   GET  /health  /version       │  REST server + connectors │
+│  @amd-gaia/agent-email   │   GET  /health  /version       │  REST server + connectors │
 │  (JS/TS client)          │ ◀───────────────────────────  │                           │
 │   • spawns binary        │                                └──────────────────────────┘
 │   • health/version check │
@@ -82,8 +82,8 @@ The agent runs as a **separate local process** the host app spawns, supervises, 
 The npm package carries **only** the JS/TS client and a small fetch CLI — **no binaries**. The large per-platform binaries live in **R2** (the existing `workers/agent-hub/` backend), which becomes the single source of truth. The host pulls its platform binary with an **explicit build-time step**, before it signs its app.
 
 ```
-@gaia/agent-email                 ← npm: JS/TS client + `fetch` CLI + SHA-256 manifest. NO binaries.
-        │  build-time: npx @gaia/agent-email fetch
+@amd-gaia/agent-email             ← npm: JS/TS client + `fetch` CLI + SHA-256 manifest. NO binaries.
+        │  build-time: npx @amd-gaia/agent-email fetch
         ▼
 R2 via Agent Hub Worker           ← canonical, immutable, versioned (existing POST /publish + bucket)
   agents/email/<version>/email-win32-x64.exe
@@ -98,11 +98,11 @@ host app bundle (signed)          ← binary on disk at sign time → covered by
 The binaries are stored under the **existing Agent Hub R2 layout** (`agents/<id>/<version>/…`) and served by the same Worker that already fronts the bucket. The fetch CLI resolves `${process.platform}-${process.arch}`, downloads that one object, **verifies it against a SHA-256 pinned in the package** (fail loudly on mismatch), and writes it to a host-specified resources directory:
 
 ```jsonc
-// @gaia/agent-email/package.json (the only published binary-bearing artifact is the manifest)
+// @amd-gaia/agent-email/package.json (the only published binary-bearing artifact is the manifest)
 {
-  "name": "@gaia/agent-email",
+  "name": "@amd-gaia/agent-email",
   "version": "0.1.0",
-  "bin": { "agent-email": "./cli.js" },     // exposes `npx @gaia/agent-email fetch`
+  "bin": { "agent-email": "./cli.js" },     // exposes `npx @amd-gaia/agent-email fetch`
   "files": ["dist/", "binaries.lock.json"]  // SHA-256 + R2 keys per platform, no binaries
 }
 ```
@@ -149,7 +149,7 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 - Author the **OpenAPI spec** for the email agent REST surface (triage, connectors, health, version). Commit it to the repo as the source of truth.
 - Add `GET /version` (`{ apiVersion, agentVersion }`) and confirm `GET /health` semantics on the existing Python server.
-- Build `@gaia/agent-email` (TypeScript): typed REST client + lifecycle helpers (spawn, health-poll, version-check, shutdown). Full type defs, no runtime binary yet.
+- Build `@amd-gaia/agent-email` (TypeScript): typed REST client + lifecycle helpers (spawn, health-poll, version-check, shutdown). Full type defs, no runtime binary yet.
 - Unit + contract tests: client validated against the OpenAPI spec; lifecycle helpers tested against a stub server.
 
 **Exit criteria:** a Node script can `import` the client, point it at a manually-started Python server, and run a triage round-trip with types.
@@ -167,17 +167,17 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 ### Phase 3 — Fully-automated R2 distribution + thin npm package
 
-**Goal:** a single version tag publishes everything — binaries to R2 and the thin npm package — with **zero manual steps**. `npm install @gaia/agent-email` + one build-time fetch then yields a working, signature-ready agent.
+**Goal:** a single version tag publishes everything — binaries to R2 and the thin npm package — with **zero manual steps**. `npm install @amd-gaia/agent-email` + one build-time fetch then yields a working, signature-ready agent.
 
 - **Fully-automated, tag-triggered publish workflow** (no `workflow_dispatch` gate): on a namespaced tag, the workflow builds every platform binary → computes SHA-256 → pushes each to R2 via the existing Worker `POST /publish` (Bearer `PUBLISH_TOKENS` from a GH Actions secret) → writes the pinned manifest → publishes the npm package. Re-running a published version is a **no-op** (the Worker's native version-immutability), not an overwrite.
 - Reuse the existing pipeline rather than forking: extend `build_agents.yml`'s release-bundle leg (it already produces per-platform binaries + checksums) to call `POST /publish` instead of stopping at GitHub-artifact upload.
 - Confirm/extend `POST /publish` to accept **multiple per-platform binaries under one `<id>/<version>`** (today it stores `gaia-agent.yaml` + an artifact; the four OS/arch binaries must coexist in one version without tripping per-version immutability).
-- Build the thin `@gaia/agent-email` npm package: JS/TS client + `fetch` CLI + a **`binaries.lock.json`** manifest pinning each platform's R2 key and **SHA-256**.
+- Build the thin `@amd-gaia/agent-email` npm package: JS/TS client + `fetch` CLI + a **`binaries.lock.json`** manifest pinning each platform's R2 key and **SHA-256**.
 - `fetch` CLI: resolve platform → download from R2 → **verify SHA-256 (fail loudly on mismatch)** → write to the host-specified resources dir → `chmod +x` on POSIX.
-- Document the host integration: run `npx @gaia/agent-email fetch` as a **build step before signing**, and (for Electron-style hosts) keep the fetched binary outside the `asar` (`extraResources`) so it can be spawned.
+- Document the host integration: run `npx @amd-gaia/agent-email fetch` as a **build step before signing**, and (for Electron-style hosts) keep the fetched binary outside the `asar` (`extraResources`) so it can be spawned.
 - **Atomic release:** R2 upload → manifest write → npm publish on one tag; manifest SHAs must match the uploaded R2 objects, and the npm version must reference an R2 version that exists, or the whole release fails.
 
-**Exit criteria:** pushing a version tag publishes binaries to R2 and the npm package end-to-end with no human step; on three real OSes, `npm install` + `npx @gaia/agent-email fetch` retrieves the platform binary, SHA-256 verifies, and the lifecycle handshake succeeds; install works under `--ignore-scripts`.
+**Exit criteria:** pushing a version tag publishes binaries to R2 and the npm package end-to-end with no human step; on three real OSes, `npm install` + `npx @amd-gaia/agent-email fetch` retrieves the platform binary, SHA-256 verifies, and the lifecycle handshake succeeds; install works under `--ignore-scripts`.
 
 ### Phase 4 — Code signing & notarization
 
@@ -213,7 +213,7 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 - **Auth:** the publish step authenticates to the Worker with a Bearer `PUBLISH_TOKENS` secret stored in GitHub Actions (scoped to the `email` author); never embedded in the package.
 - **Canonical store = R2, mirror = GitHub:** R2 (`workers/agent-hub/`) is the programmatic source of truth; the `agent-pkg-email-*` GitHub release stays as the manual, no-login mirror.
 - **Namespacing:** keep release tags namespaced (`agent-pkg-email-*`) so they never fire the paused PyPI workflows (`publish.yml` / `publish_agents.yml`).
-- **Distribution registries:** scoped npm (`@gaia/*`) — private during pre-GA, public at launch.
+- **Distribution registries:** the existing **`@amd-gaia`** npm scope (already hosts `@amd-gaia/agent-ui`). The thin model needs **one package, `@amd-gaia/agent-email`** — no per-platform sub-packages. CI publishes with a granular **`NPM_TOKEN`** secret (`--access public` to match `agent-ui`).
 
 ---
 
@@ -264,7 +264,7 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 ## Exit Criteria (Milestone)
 
-1. `npm install @gaia/agent-email` + `npx @gaia/agent-email fetch` on each of the four target platforms yields a working agent with no Python/C++ prerequisites, pulling only that platform's binary from R2 and SHA-256-verifying it.
+1. `npm install @amd-gaia/agent-email` + `npx @amd-gaia/agent-email fetch` on each of the four target platforms yields a working agent with no Python/C++ prerequisites, pulling only that platform's binary from R2 and SHA-256-verifying it.
 2. The JS/TS client runs the full lifecycle handshake and a triage round-trip against the frozen Python binary.
 3. Binaries are signed/notarized and verified inside a test host app that fetched at build time; the agent then runs **offline**.
 4. The C++ binary passes the same contract suite as the Python binary and is a drop-in behind the same client.
