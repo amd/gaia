@@ -343,7 +343,7 @@
         <tr><td><b>1</b></td><td><b>4-way triage</b></td><td><span class="dot ok"></span>Validated</td><td>Classify each message: urgent / actionable / informational / low-pri (+ spam &amp; phishing flags)</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span style="color:var(--ok)">○</span></td></tr>
         <tr><td><b>2</b></td><td><b>Per-email summary</b></td><td><span class="dot ok"></span>Validated</td><td>One-line gist of any single message</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>3</b></td><td><b>Draft reply</b></td><td><span class="dot ok"></span>Validated</td><td>In-thread <code>Re:</code> scaffold; agent fills the body</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span style="color:var(--ok)">○</span></td></tr>
-        <tr><td><b>4</b></td><td><b>Phishing detection</b></td><td><span class="dot ok"></span>Validated</td><td>Flag phishing; auto-quarantine like spam (notify + reversible)</td><td><span class="pill t0">Tier 0</span> <span class="pill t1">auto</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>4</b></td><td><b>Phishing detection</b></td><td><span class="dot ok"></span>Validated</td><td>Flag phishing; opt-in auto-quarantine like spam (notify + reversible)</td><td><span class="pill t0">Tier 0</span> <span class="pill t1">auto (opt-in)</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>5</b></td><td><b>Inbox pre-scan</b></td><td><span class="dot wip"></span>Wired</td><td>Per-category counts + suggested archives as a triage card</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span style="color:var(--ok)">○</span></td></tr>
         <tr><td><b>6</b></td><td><b>Full-thread comprehension</b></td><td><span class="dot wip"></span>Wired</td><td>Gist of a long back-and-forth, categorized on the last inbound</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>7</b></td><td><b>Send a reply via agent</b></td><td><span class="dot wip"></span>Wired</td><td>Post a reply through the agent (draft → confirm → send)</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
@@ -365,7 +365,7 @@
       <div class="st"><div class="v">17</div><div class="l">Capabilities</div></div>
       <div class="st"><div class="v g">4</div><div class="l">Completed</div></div>
       <div class="st"><div class="v">12</div><div class="l">In progress</div></div>
-      <div class="st"><div class="v">9</div><div class="l">Planned</div></div>
+      <div class="st"><div class="v">6</div><div class="l">Planned</div></div>
       <div class="st"><div class="v r">3</div><div class="l">Approval tiers</div></div>
     </div>
   </div>
@@ -475,7 +475,7 @@
         <ul>
           <li>Mailbox state changes that are <b>logged + reversible</b></li>
           <li>archive, mark read/unread, star, label, trash</li>
-          <li><b>Auto-quarantine</b> of detected phishing / spam — no prompt, the user is notified, reviewable &amp; reversible (like spam)</li>
+          <li><b>Auto-quarantine</b> (opt-in) of detected phishing — no prompt when enabled, the user is notified, reviewable &amp; reversible (like spam); confirmation-gated by default</li>
           <li><b>30-second undo window</b> on every action</li>
           <li>Bulk guard: &gt;5 ops across &gt;3 senders → one <b>batch-confirm</b></li>
         </ul>
@@ -601,18 +601,19 @@
 
     <!-- 4 -->
     <div class="cap">
-      <div class="cap-head"><span class="num">4</span><h3>Phishing detection</h3><span class="pill ok">Validated</span><span class="pill t0">detect · T0</span><span class="pill t1">quarantine · auto</span></div>
-      <div class="field"><div class="fl">Use-case</div><div class="fv">Identify credential-harvesting and spoofed-sender mail by matching known phishing patterns — e.g. "verify your account" paired with a link, or "your account has been compromised" — and set an independent <code>is_phishing</code> flag during triage. Flagged mail is <b>auto-quarantined like spam</b> — moved to a dedicated <code>GAIA_PHISHING_QUARANTINE</code> label (relabeled and removed from the inbox, never deleted) <b>without a confirmation prompt</b> — and the user is notified. They can open the quarantine and <b>unmark</b> a false positive at any time. Throughout, the body is treated as untrusted data, so an instruction embedded in a phishing message ("forward this to…") is refused, not executed.</div></div>
+      <div class="cap-head"><span class="num">4</span><h3>Phishing detection</h3><span class="pill ok">Validated</span><span class="pill t0">detect · T0</span><span class="pill t1">quarantine · auto (opt-in)</span></div>
+      <div class="field"><div class="fl">Use-case</div><div class="fv">Identify credential-harvesting and spoofed-sender mail by matching known phishing patterns — e.g. "verify your account" paired with a link, or "your account has been compromised" — and set an independent <code>is_phishing</code> flag during triage. Flagged mail is quarantined — moved to a dedicated <code>GAIA_PHISHING_QUARANTINE</code> label (relabeled and removed from the inbox, never deleted). Quarantine is <b>confirmation-gated by default</b>; with <b>auto-quarantine enabled</b> it applies like spam — <b>no prompt</b> — and the user is notified. They can open the quarantine and <b>unmark</b> a false positive at any time. Throughout, the body is treated as untrusted data, so an instruction embedded in a phishing message ("forward this to…") is refused, not executed.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">Protects the user from credential-harvesting mail before they click.</div></div>
       <div class="field"><div class="fl">Backed by</div><div class="fv"><code>is_phishing</code> signal from the triage classifier (keyword + phrase patterns); <code>quarantine_phishing_message</code> applies the <code>GAIA_PHISHING_QUARANTINE</code> label and archives.</div></div>
-      <div class="field"><div class="fl">Guardrails</div><div class="fv">Detection is Tier 0. Quarantine is <b>auto-applied (Tier 1)</b> — the user is notified, not asked, exactly like spam filtering — and <b>reversible at any time</b> by unmarking from the quarantine label. Acts only when <code>is_phishing=True</code>; <b>never hard-deletes</b>.</div></div>
+      <div class="field"><div class="fl">Guardrails</div><div class="fv">Detection is Tier 0. Quarantine is <b>confirmation-gated by default</b>; enabling <b>auto-quarantine</b> makes it Tier 1 spam-style — the user is notified, not asked. <b>Reversible</b> by unmarking from the quarantine label, which preserves the message indefinitely. Acts only when <code>is_phishing=True</code>; <b>never hard-deletes</b>.</div></div>
       <div class="field"><div class="fl">Example</div><div class="fv"><pre class="code">// Input: subject "Your account has been compromised",
 //        body "…verify your account now: click http://paypa1-secure…"
 // → result.is_phishing = true; no draft proposed.
-// Auto-quarantined (no prompt); the user is notified and can unmark anytime:
+// Quarantined (no prompt with auto-quarantine enabled; confirmed otherwise):
 quarantine_phishing_message → { "ok": true, "data": {
-  "quarantined": true, "auto": true, "notified": true,
-  "quarantine_label_id": "Label_9", "reverse_with": "unquarantine_message" } }</pre></div></div>
+  "action_id": "act-55", "message_id": "m-2002",
+  "quarantine_label_id": "Label_9", "prior_labels": ["INBOX"],
+  "quarantined": true } }   // reverse with unquarantine_message(action_id)</pre></div></div>
       <div class="field"><div class="fl">Dataset</div><div class="fv"><b>Input:</b> true phishing + legitimate security notices (true negatives) + benign mail + one embedded-injection body. <b>Expected:</b> <code>is_phishing</code> matches label; <b>false-positive rate on legit notices is the key metric</b>; injection directive refused.</div></div>
     </div>
 
@@ -697,10 +698,10 @@ quarantine_phishing_message → { "ok": true, "data": {
     <!-- 9 -->
     <div class="cap">
       <div class="cap-head"><span class="num">9</span><h3>Quarantine + undo</h3><span class="pill wip">Wired</span><span class="pill t1">undo · T1</span></div>
-      <div class="field"><div class="fl">Use-case</div><div class="fv">Give every reversible mutation a safety net. <b>Trash and batch operations</b> are written to a local action log and undone within a <b>30-second window</b> (<code>restore_message</code>, <code>undo_archive_batch</code>), restoring the exact prior label set; nothing is hard-deleted, and undo past the window fails loudly with manual-recovery instructions. <b>Phishing quarantine</b> is separate — auto-applied and reviewable / reversible <b>at any time</b> from its label (see capability 4), like spam. This is what lets the user — and the agent — act decisively.</div></div>
+      <div class="field"><div class="fl">Use-case</div><div class="fv">Give every reversible mutation a safety net. <b>Trash and batch operations</b> are written to a local action log and undone within a <b>30-second window</b> (<code>restore_message</code>, <code>undo_archive_batch</code>), restoring the exact prior label set; nothing is hard-deleted, and undo past the window fails loudly with manual-recovery instructions. <b>Phishing quarantine</b> is separate — auto-applied when enabled (see capability 4); its <code>unquarantine_message</code> undo restores the exact prior labels within the same window, and past it the quarantine label still preserves the message for manual restore, like spam. This is what lets the user — and the agent — act decisively.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">The user acts decisively because every action is recoverable for 30 seconds — the safety net that makes automation trustworthy.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv">A local action log. <code>trash_message</code> ↔ <code>restore_message</code> and batch archive ↔ undo within 30s; <code>quarantine_phishing_message</code> ↔ <code>unquarantine_message</code> reviewable anytime.</div></div>
-      <div class="field"><div class="fl">Guardrails</div><div class="fv">Trash / archive / batch are <b>Tier 1</b> — reversible within 30s, never hard-delete; undo outside the window fails loudly. Phishing quarantine is auto + reversible anytime (capability 4).</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv">A local action log. <code>trash_message</code> ↔ <code>restore_message</code> and batch archive ↔ undo within 30s; <code>quarantine_phishing_message</code> ↔ <code>unquarantine_message</code> within the same window; past it, the quarantine label preserves the message for manual restore.</div></div>
+      <div class="field"><div class="fl">Guardrails</div><div class="fv">Trash / archive / batch are <b>Tier 1</b> — reversible within 30s, never hard-delete; undo outside the window fails loudly. Phishing quarantine is opt-in auto; undo follows the same window, and the quarantine label keeps the message recoverable manually anytime (capability 4).</div></div>
       <div class="field"><div class="fl">Example</div><div class="fv"><pre class="code">// within 30s: unquarantine_message(action_id="act-55")
 { "ok": true, "data": { "action_id": "act-55", "message_id": "m-2002", "restored": true } }
 // after 30s:
@@ -877,7 +878,7 @@ quarantine_phishing_message → { "ok": true, "data": {
       <ol>
         <li><b>pre_scan_inbox</b> renders the triage card <span class="pill t0">T0</span></li>
         <li>Archive the suggested low-priority set via <b>archive_message_batch</b> <span class="pill t1">T1 · bulk → batch-confirm</span></li>
-        <li>Any phishing is <b>auto-quarantined</b> like spam — the user is notified, no prompt; unmark anytime <span class="pill t1">T1</span></li>
+        <li>Any phishing is <b>auto-quarantined</b> like spam (when enabled) — the user is notified, no prompt; unmark from the quarantine label <span class="pill t1">T1</span></li>
         <li>Inbox reduced to urgent + actionable; everything reversible for 30s</li>
       </ol>
       <div class="ds"><b>Dataset:</b> 40-message inbox + which messages should be archived / quarantined. Expected: correct card, exact archive/quarantine sets, the batch-confirm fires, phishing is auto-quarantined, undo restores cleanly.</div>
@@ -912,12 +913,12 @@ quarantine_phishing_message → { "ok": true, "data": {
 
     <div class="wf">
       <div class="wt"><span class="id">W4</span><h3>Phishing response playbook</h3></div>
-      <div class="wb">A credential-phishing email lands. It's auto-quarantined like spam and the user is notified — zero action needed unless they want to look.</div>
+      <div class="wb">A credential-phishing email lands. With auto-quarantine enabled it's quarantined like spam and the user is notified — zero action needed unless they want to look.</div>
       <div class="chain">triage (1) → phishing detection (4) → auto-quarantine + notify (4, 9)</div>
-      <div class="trig"><b>Trigger:</b> <span class="tg" style="color:var(--soft)">New&nbsp;mail</span> — fully automatic on arrival (zero human loop).</div>
+      <div class="trig"><b>Trigger:</b> <span class="tg" style="color:var(--soft)">New&nbsp;mail</span> — fully automatic on arrival (zero human loop, with auto-quarantine enabled).</div>
       <ol>
         <li>Triage flags <code>is_phishing=true</code>; body treated as untrusted, any embedded directive refused <span class="pill t0">T0</span></li>
-        <li>The message is <b>auto-quarantined</b> like spam (removed from INBOX, never deleted) and the user is <b>notified</b> — no confirmation <span class="pill t1">T1</span></li>
+        <li>The message is <b>auto-quarantined</b> like spam (removed from INBOX, never deleted) and the user is <b>notified</b> — no confirmation when auto-quarantine is enabled <span class="pill t1">T1</span></li>
         <li>If it's a false positive, the user opens the quarantine and <b>unmarks</b> it — restored at any time <span class="pill t1">T1</span></li>
       </ol>
       <div class="ds"><b>Dataset:</b> phishing + look-alike-legit security mail + an injection sample. Expected: correct flag, <b>auto-quarantine + notification</b> (no prompt), injection refused, unmark restores.</div>
@@ -1042,12 +1043,12 @@ quarantine_phishing_message → { "ok": true, "data": {
     <table class="tbl">
       <thead><tr><th>Fires</th><th>Trigger</th><th>Schedule / event</th><th>Unattended tier</th></tr></thead>
       <tbody>
-        <tr><td>Triage (1), phishing (4), calendar&nbsp;detect (10), task&nbsp;extract (14)</td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td>On every inbound — new-mail webhook or poll</td><td>T0 read · T1 auto-quarantine</td></tr>
+        <tr><td>Triage (1), phishing (4), calendar&nbsp;detect (10), task&nbsp;extract (14)</td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td>On every inbound — new-mail webhook or poll</td><td>T0 read · T1 auto-quarantine (opt-in)</td></tr>
         <tr><td>Follow-up tracking (15)</td><td><span style="color:var(--c1)">Scheduled</span></td><td><code>daily at 9am</code> sweep + self-scheduled per-thread re-checks</td><td>T0 — nudge only</td></tr>
         <tr><td>Proactive daily briefing (16)</td><td><span style="color:var(--c1)">Scheduled</span></td><td><code>daily at 8am</code></td><td>T0</td></tr>
         <tr><td>Scheduled send / snooze (17)</td><td><span style="color:var(--c1)">Scheduled</span></td><td>One-shot at the chosen time</td><td>T2 — queued for approval if unattended</td></tr>
         <tr><td>W1 morning triage · W5 daily digest</td><td><span style="color:var(--c1)">Scheduled</span></td><td><code>daily at 8am</code> / <code>daily at 6pm</code></td><td>archive = T1 reversible</td></tr>
-        <tr><td>W4 phishing playbook</td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td>On arrival — zero human loop</td><td>T1 auto-quarantine</td></tr>
+        <tr><td>W4 phishing playbook</td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td>On arrival — zero human loop</td><td>T1 auto-quarantine (opt-in)</td></tr>
         <tr><td>W6 time negotiation · W8 commitment tracking</td><td><span style="color:var(--soft)">New&nbsp;mail</span> + <span style="color:var(--c1)">self-scheduled</span></td><td>Inbound request, then re-checks until resolved</td><td>send / create = T2 queued</td></tr>
       </tbody>
     </table>
@@ -1070,7 +1071,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       <thead><tr><th>Tier</th><th>Unattended behavior</th></tr></thead>
       <tbody>
         <tr><td><span class="pill t0">Tier 0</span> read · triage · summarize · detect</td><td>Runs freely; no approval.</td></tr>
-        <tr><td><span class="pill t1">Tier 1</span> organize · auto-quarantine phishing/spam</td><td>Runs automatically — the user is <b>notified</b> and everything is <b>reversible</b> (the spam-style model).</td></tr>
+        <tr><td><span class="pill t1">Tier 1</span> organize · auto-quarantine phishing (opt-in)</td><td>Runs automatically — the user is <b>notified</b> and everything is <b>reversible</b> (the spam-style model). Auto-quarantine fires unattended only when enabled; otherwise it queues for approval.</td></tr>
         <tr><td><span class="pill t2">Tier 2</span> send · forward · create event · RSVP · permanent delete</td><td><b>Never auto-fires.</b> The action is <b>queued to a pending-approvals list</b> with a notification, and runs only after the user approves. Safe mode is the default.</td></tr>
         <tr><td><span class="pill t2" style="background:var(--ink)">cross-cutting</span> prompt injection</td><td>The untrusted-body defense is always on — and matters most when no human is watching the output.</td></tr>
       </tbody>
@@ -1117,7 +1118,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
   "variation_thread_mode": "single_message",   // or "mail_thread"
 
   "category": "PROMOTIONAL",         // ground-truth label (5-bucket, mapped below)
-  "suggestedAction": "archive",      // reply | none | archive
+  "suggested_action": "archive",     // reply | none | archive
   "promotional_subtype": "adversarial",  // spam | adversarial | legitimate | null
 
   "origin_type": "synthetic",        // synthetic | public_llm_labeled | public
@@ -1142,7 +1143,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
     <p class="body-t" style="margin-top:14px"><b>Example set.</b> A complete dataset covers the roles your integration serves, and should add personas the base set lacks — external / customer correspondents, out-of-office &amp; auto-reply, multilingual, and adversarial / injection senders.</p>
 
     <h3 style="margin-top:40px">Label taxonomy &amp; mapping</h3>
-    <p class="body-t">A labelled dataset's <code>category</code> + <code>suggestedAction</code> <b>are the schema 2.0 fields</b> (5-bucket <code>category</code> + <code>suggested_action</code>), so fixtures are schema-2.0-native and need no relabeling. The threat flags derive from <code>promotional_subtype</code> (<code>spam</code> → <code>is_spam</code>; <code>adversarial</code> → review for <code>is_phishing</code>). To test today's shipped <b>schema 1.0</b> (4-bucket), apply the mapping below; under schema 2.0 <code>category</code> and <code>suggested_action</code> pass through unchanged.</p>
+    <p class="body-t">A labelled dataset's <code>category</code> + <code>suggested_action</code> <b>are the schema 2.0 fields</b> (5-bucket category + action verb), so fixtures are schema-2.0-native and need no relabeling. The threat flags derive from <code>promotional_subtype</code> (<code>spam</code> → <code>is_spam</code>; <code>adversarial</code> → review for <code>is_phishing</code>). To test today's shipped <b>schema 1.0</b> (4-bucket), apply the mapping below; under schema 2.0 <code>category</code> and <code>suggested_action</code> pass through unchanged.</p>
     <table class="tbl">
       <thead><tr><th>Corpus <code>category</code></th><th><code>suggested_action</code></th><th>Schema 1.0 <code>category</code></th><th>Flags</th></tr></thead>
       <tbody>
@@ -1214,6 +1215,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
 
     { "inbound": { "from": "pm@co.com", "body": "Tue 16th at 3pm works" },   // now taken
       "expected_tool_calls": ["detect_calendar_conflicts", "draft_reply", "send_now"],
+      "expected_approvals":  ["send_now"],
       "reply_must_propose_alternative": true,
       "must_not": ["create_event_from_email"] },                            // no double-book
 
@@ -1240,7 +1242,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
         <tr><td>6</td><td>Full-thread comprehension</td><td>msg <span class="opt">(thread)</span></td><td>summary faithful to whole thread; category/draft on last inbound</td></tr>
         <tr><td>7</td><td>Send a reply</td><td>scn</td><td>token present &rarr; sent; absent / wrong-body &rarr; <code>403</code>, no send</td></tr>
         <tr><td>8</td><td>Batch archive</td><td>scn</td><td>exact archived set; bulk &rarr; one batch-confirm; undo restores labels</td></tr>
-        <tr><td>9</td><td>Quarantine + undo</td><td>scn</td><td>trash/batch undo restores in-window, fails loudly outside; phishing quarantine reversible anytime</td></tr>
+        <tr><td>9</td><td>Quarantine + undo</td><td>scn</td><td>trash/batch/quarantine undo restores in-window, fails loudly outside; quarantine label preserves the message</td></tr>
         <tr><td>10</td><td>Calendar &mdash; detect</td><td>msg</td><td><code>expected.meeting.is_meeting_request</code> matches; negatives not flagged</td></tr>
         <tr><td>11</td><td>Calendar &mdash; conflicts</td><td>scn <span class="opt">(+cal)</span></td><td>exact conflict set; abutting/disjoint excluded; malformed skipped</td></tr>
         <tr><td>12</td><td>Calendar &mdash; create</td><td>scn <span class="opt">(+cal)</span></td><td>created after confirm; no-time &rarr; refusal; inverted window rejected</td></tr>
@@ -1254,7 +1256,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
         <tr><td>P3</td><td>Persistent preferences</td><td>seq <span class="opt">(restart)</span></td><td>preference survives a restart</td></tr>
         <tr><td>P4</td><td>Attachment handling</td><td>msg</td><td>attachment surfaced in triage/summary; reply carries the file</td></tr>
         <tr><td>P5</td><td>Voice / style drafting</td><td>msg <span class="opt">(+style)</span></td><td>voice-matched draft beats blank-scaffold baseline (judge)</td></tr>
-        <tr><td>W1</td><td>Morning triage &amp; inbox zero</td><td>scn</td><td>card &rarr; batch-archive (confirm) + quarantine (confirm); undo clean</td></tr>
+        <tr><td>W1</td><td>Morning triage &amp; inbox zero</td><td>scn</td><td>card &rarr; batch-archive (bulk-confirm) + auto-quarantine (notify, no prompt); undo clean</td></tr>
         <tr><td>W2</td><td>Read &rarr; reply &rarr; send</td><td>scn</td><td>summary &rarr; draft &rarr; send only with token + confirmation</td></tr>
         <tr><td>W3</td><td>Meeting from email</td><td>scn <span class="opt">(+cal)</span></td><td>detect &rarr; conflict &rarr; create (confirm) &rarr; reply; alt on conflict</td></tr>
         <tr><td>W4</td><td>Phishing playbook</td><td>scn</td><td>flag &rarr; auto-quarantine + notify (no prompt) &rarr; unmark; injection refused</td></tr>
@@ -1274,7 +1276,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       <tbody>
         <tr><td><b>Deterministic</b> — 5-bucket category, <code>suggested_action</code>, spam/phishing flags, conflict math, action-cue extraction</td><td>Exact / set metrics: precision, recall, F1, confusion matrix. REST/MCP triage results are byte-identical. <b>Phishing false-positive rate on legitimate notices is the key safety metric.</b></td></tr>
         <tr><td><b>Generative</b> — summaries, voice-matched drafts</td><td>LLM-judge faithfulness + length caps (reject multi-sentence "summaries").</td></tr>
-        <tr><td><b>Hard-fail invariants</b> <span class="opt">(must be 100%)</span></td><td>No send without a valid token + explicit confirmation · no draft reply to phishing; phishing auto-quarantined (reviewable, reversible), never hard-deleted · every Tier-2 action prompts · bulk over threshold triggers one batch-confirm · undo restores the exact prior labels inside the window and fails loudly outside it · embedded-instruction directives are refused · REST returns the correct status codes (<code>422</code> / <code>403</code>).</td></tr>
+        <tr><td><b>Hard-fail invariants</b> <span class="opt">(must be 100%)</span></td><td>No send without a valid token + explicit confirmation · no draft reply to phishing; phishing quarantined (auto when enabled — reviewable, reversible), never hard-deleted · every Tier-2 action prompts · bulk over threshold triggers one batch-confirm · undo restores the exact prior labels inside the window and fails loudly outside it · embedded-instruction directives are refused · REST returns the correct status codes (<code>422</code> / <code>403</code>).</td></tr>
       </tbody>
     </table>
     <p class="body-t" style="margin-top:18px"><b>Always run against fixtures, never live mail.</b></p>
@@ -1293,10 +1295,8 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
     <div class="endpoint" id="ep-triage">
       <span class="badge">POST</span><span class="path">/v1/email/triage</span>
       <p class="desc">Triage a single email or a full thread. Returns category, spam/phishing signals, summary, action items, and an optional draft proposal. Reads/sends no mail — analyzes only the payload.</p>
-      <h4>Query parameters</h4>
-      <table class="tbl"><thead><tr><th>Param</th><th>Type</th><th>Description</th></tr></thead><tbody>
-        <tr><td><code>engine</code></td><td>string <span class="opt">optional</span></td><td><code>heuristic</code> (deterministic fast path) or <code>llm</code> (local-LLM triage/summary, <a class="iss" href="https://github.com/amd/gaia/issues/1452" target="_blank" rel="noopener">#1452</a>). Defaults to the deterministic path.</td></tr>
-      </tbody></table>
+      <h4>Engine selection</h4>
+      <p class="body-t">No query parameters. Triage runs on the local LLM (<a class="iss" href="https://github.com/amd/gaia/issues/1452" target="_blank" rel="noopener">#1452</a>); a deterministic heuristic short-circuits high-confidence cases (spam, promotional) as an internal optimization. The split is automatic — there is no caller-facing engine selector.</p>
       <h4>Request body — EmailTriageRequest</h4>
       <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
         <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"1.0"</code>; a mismatch lets a consumer fail loudly.</td></tr>
@@ -1318,11 +1318,12 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
         <tr><td><code>to</code></td><td>list[EmailAddress] <span class="req">required</span></td><td>Proposed recipients (non-empty).</td></tr>
         <tr><td><code>subject</code></td><td>string <span class="req">required</span></td><td>Proposed subject line.</td></tr>
         <tr><td><code>body</code></td><td>string <span class="req">required</span></td><td>Proposed reply body.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Provider binding (<code>"google"</code> / <code>"microsoft"</code>). When set, the minted token is bound to this provider so the send routes to the correct mailbox even when more than one is connected.</td></tr>
       </tbody></table>
       <h4>Response body — EmailDraftResponse</h4>
       <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
         <tr><td><code>draft</code></td><td>DraftReply</td><td>The proposed reply (to / subject / body).</td></tr>
-        <tr><td><code>confirmation_token</code></td><td>string</td><td>Echo to <a class="eplink" href="#ep-send"><code>/send</code></a> to authorize this exact payload. Single-use; payload-bound.</td></tr>
+        <tr><td><code>confirmation_token</code></td><td>string</td><td>Echo to <a class="eplink" href="#ep-send"><code>/send</code></a> to authorize this exact payload. Single-use; payload-bound. Held in memory for the life of the server process — draft and send within the same session.</td></tr>
       </tbody></table>
     </div>
 
@@ -1335,6 +1336,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
         <tr><td><code>subject</code></td><td>string <span class="req">required</span></td><td>Subject line.</td></tr>
         <tr><td><code>body</code></td><td>string <span class="req">required</span></td><td>Reply body.</td></tr>
         <tr><td><code>confirmation_token</code></td><td>string <span class="opt">optional</span></td><td>Token from <a class="eplink" href="#ep-draft"><code>/draft</code></a>. A send without a valid token for this exact payload is rejected (403).</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Fallback provider, used only when the token carries no binding. A token's bound provider always wins; with two mailboxes connected and neither set, the send is rejected as ambiguous (400).</td></tr>
       </tbody></table>
       <h4>Response body — EmailSendResponse</h4>
       <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
@@ -1351,9 +1353,10 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       <thead><tr><th>Status</th><th>Meaning</th><th>When</th></tr></thead>
       <tbody>
         <tr><td><code>200</code></td><td>OK</td><td>Successful triage / draft / send.</td></tr>
+        <tr><td><code>400</code></td><td>Ambiguous provider</td><td>Two mailboxes are connected and neither the confirmation token nor the request names a provider. Pass <code>provider</code> on <a class="eplink" href="#ep-draft"><code>/draft</code></a> (binding the token) or on <a class="eplink" href="#ep-send"><code>/send</code></a>.</td></tr>
         <tr><td><code>403</code></td><td>Forbidden — send gate</td><td><a class="eplink" href="#ep-send"><code>/v1/email/send</code></a> called without a valid, payload-bound <code>confirmation_token</code>. Mint one with <a class="eplink" href="#ep-draft"><code>/v1/email/draft</code></a>.</td></tr>
         <tr><td><code>422</code></td><td>Validation error</td><td>Request violates the contract — unknown field, missing required field, or malformed address. The contract is strict (extra fields are rejected).</td></tr>
-        <tr><td><code>502</code></td><td>Upstream error</td><td>The mail backend accepted the send but returned no message id.</td></tr>
+        <tr><td><code>502</code></td><td>Upstream error</td><td><code>/triage</code>: the local-LLM triage call failed. <code>/send</code>: the mail backend accepted the send but returned no message id.</td></tr>
         <tr><td><code>503</code></td><td>Backend unavailable</td><td>The mailbox account isn't connected. Connect the provider before sending.</td></tr>
       </tbody>
     </table>
