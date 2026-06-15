@@ -111,7 +111,7 @@ def _build_agent(tmp_path: Path) -> EmailTriageAgent:
         return EmailTriageAgent(config=cfg)
 
 
-def _invoke_set_priority_sender(agent: EmailTriageAgent, email: str) -> dict:
+def _invoke_set_priority_sender(email: str) -> dict:
     """Call the set_priority_sender tool directly via the tool registry."""
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
@@ -121,7 +121,7 @@ def _invoke_set_priority_sender(agent: EmailTriageAgent, email: str) -> dict:
     return json.loads(result)
 
 
-def _invoke_set_low_priority_sender(agent: EmailTriageAgent, email: str) -> dict:
+def _invoke_set_low_priority_sender(email: str) -> dict:
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
     entry = _TOOL_REGISTRY.get("set_low_priority_sender")
@@ -130,9 +130,7 @@ def _invoke_set_low_priority_sender(agent: EmailTriageAgent, email: str) -> dict
     return json.loads(result)
 
 
-def _invoke_set_category_default(
-    agent: EmailTriageAgent, category: str, action: str
-) -> dict:
+def _invoke_set_category_default(category: str, action: str) -> dict:
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
     entry = _TOOL_REGISTRY.get("set_category_default")
@@ -141,7 +139,7 @@ def _invoke_set_category_default(
     return json.loads(result)
 
 
-def _invoke_clear_session_preferences(agent: EmailTriageAgent) -> dict:
+def _invoke_clear_session_preferences() -> dict:
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
     entry = _TOOL_REGISTRY.get("clear_session_preferences")
@@ -164,7 +162,7 @@ class TestPrioritySenderPersistsAcrossRestart:
         # Session A — set sender and close
         agent_a = _build_agent(tmp_path)
         try:
-            result = _invoke_set_priority_sender(agent_a, "boss@company.com")
+            result = _invoke_set_priority_sender("boss@company.com")
             assert result["ok"] is True, f"set_priority_sender failed: {result}"
         finally:
             agent_a.close_db()
@@ -185,7 +183,7 @@ class TestPrioritySenderPersistsAcrossRestart:
         """Set a low-priority sender in session A; it persists into session B."""
         agent_a = _build_agent(tmp_path)
         try:
-            result = _invoke_set_low_priority_sender(agent_a, "newsletter@stripe.com")
+            result = _invoke_set_low_priority_sender("newsletter@stripe.com")
             assert result["ok"] is True, f"set_low_priority_sender failed: {result}"
         finally:
             agent_a.close_db()
@@ -206,9 +204,9 @@ class TestPrioritySenderPersistsAcrossRestart:
         """Multiple priority and low-priority senders all persist."""
         agent_a = _build_agent(tmp_path)
         try:
-            _invoke_set_priority_sender(agent_a, "boss@company.com")
-            _invoke_set_priority_sender(agent_a, "cto@company.com")
-            _invoke_set_low_priority_sender(agent_a, "news@example.com")
+            _invoke_set_priority_sender("boss@company.com")
+            _invoke_set_priority_sender("cto@company.com")
+            _invoke_set_low_priority_sender("news@example.com")
         finally:
             agent_a.close_db()
 
@@ -231,7 +229,7 @@ class TestPrioritySenderPersistsAcrossRestart:
         try:
             # Write the same sender several times
             for _ in range(5):
-                _invoke_set_priority_sender(agent_a, "boss@company.com")
+                _invoke_set_priority_sender("boss@company.com")
         finally:
             agent_a.close_db()
 
@@ -252,7 +250,7 @@ class TestCategoryDefaultPersistsAcrossRestart:
         """Set informational→archive in session A; it's present in session B."""
         agent_a = _build_agent(tmp_path)
         try:
-            result = _invoke_set_category_default(agent_a, "informational", "archive")
+            result = _invoke_set_category_default("informational", "archive")
             assert result["ok"] is True, f"set_category_default failed: {result}"
         finally:
             agent_a.close_db()
@@ -271,8 +269,8 @@ class TestCategoryDefaultPersistsAcrossRestart:
         # Session A: set archive, then flip back to keep
         agent_a = _build_agent(tmp_path)
         try:
-            _invoke_set_category_default(agent_a, "informational", "archive")
-            _invoke_set_category_default(agent_a, "informational", "keep")
+            _invoke_set_category_default("informational", "archive")
+            _invoke_set_category_default("informational", "keep")
         finally:
             agent_a.close_db()
 
@@ -294,9 +292,9 @@ class TestClearPersistenceAcrossRestart:
         """Set sender + default, then clear; session B starts empty."""
         agent_a = _build_agent(tmp_path)
         try:
-            _invoke_set_priority_sender(agent_a, "boss@company.com")
-            _invoke_set_category_default(agent_a, "informational", "archive")
-            result = _invoke_clear_session_preferences(agent_a)
+            _invoke_set_priority_sender("boss@company.com")
+            _invoke_set_category_default("informational", "archive")
+            result = _invoke_clear_session_preferences()
             assert result["ok"] is True, f"clear_session_preferences failed: {result}"
         finally:
             agent_a.close_db()
@@ -332,7 +330,7 @@ class TestIncognitoGate:
         agent_a = _build_agent(tmp_path)
         try:
             agent_a._incognito = True
-            result = _invoke_set_priority_sender(agent_a, "secret@example.com")
+            result = _invoke_set_priority_sender("secret@example.com")
             assert result["ok"] is True, f"set_priority_sender failed: {result}"
             # In-process state is mutated even in incognito
             assert (
@@ -360,7 +358,7 @@ class TestIncognitoGate:
         try:
             # _incognito defaults to False; explicitly confirm
             agent_a._incognito = False
-            result = _invoke_set_priority_sender(agent_a, "visible@example.com")
+            result = _invoke_set_priority_sender("visible@example.com")
             assert result["ok"] is True, f"set_priority_sender failed: {result}"
         finally:
             agent_a.close_db()
@@ -403,7 +401,7 @@ class TestMemoryDisabledFallback:
                 assert agent._memory_store is None
 
                 # Preference tools should still work (in-process mutation)
-                result = _invoke_set_priority_sender(agent, "boss@company.com")
+                result = _invoke_set_priority_sender("boss@company.com")
                 assert result["ok"] is True, f"set_priority_sender failed: {result}"
                 assert (
                     "boss@company.com" in agent._session_preferences["priority_senders"]
