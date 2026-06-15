@@ -135,7 +135,7 @@ jobs:
 
       - name: Open Lemonade bump PR
         if: steps.detect.outputs.should_bump == 'true'
-        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
+        uses: anthropics/claude-code-action@d5726de019ec4498aa667642bc3a80fca83aa102  # v1.0.148
         with:
           # Prefer subscription OAuth, fall back to API key — same wiring as claude.yml.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
