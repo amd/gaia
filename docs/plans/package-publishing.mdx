@@ -1,0 +1,197 @@
+---
+title: "Package Publishing Architecture"
+description: "A registry-driven, idempotent publishing model for every shippable GAIA artifact — hub agents (npm + binary + wheel), the Agent UI npm package, and future packages like memory — with selective and coordinated releases."
+---
+
+## Why this exists
+
+GAIA is growing a fleet of independently-shippable artifacts: the email agent
+(npm client + frozen per-platform binary + PyPI wheel), the Agent UI npm
+package, a future `memory` npm package, and many more hub agents. Today each new
+shippable thing means a new bespoke workflow (`release_agent_email.yml` was the
+first). That does not scale, and it cannot express the releases we actually want:
+
+- **Selective release** — ship *only* the email agent for a bugfix, without
+  re-cutting Agent UI or core.
+- **Coordinated release** — ship Agent UI + email together at a milestone.
+- **Release-everything** — cut all packages at once, but **skip anything whose
+  version did not change** (no churn, no version bumps for untouched packages).
+
+This plan defines one model that covers all three, and a migration path from the
+current one-off `release_agent_email.yml`.
+
+## Decision (locked)
+
+We adopt **option (b)** from the design discussion:
+
+> A new **reusable** publishing workflow + a **declarative package registry**.
+> `publish.yml` stays the **core product** release (the `amd-gaia` wheel +
+> desktop installers). The paused `publish_agents.yml` (PyPI wheels, #1179) is
+> **left untouched** — the PyPI channel stays paused; the new publisher does
+> **npm + binary** first. Agent UI is **promoted to a registry package** so it
+> releases on its own cadence. R2 backend is **rclone → `assets.amd-gaia.ai`**.
+
+## Core principle: version-as-signal + idempotent publish
+
+Every shippable thing is a **package** that owns its version in its own manifest
+(`package.json` / `pyproject.toml` / `gaia-agent.yaml`). Publishing is
+**idempotent**: a publish job is a no-op if that exact version already exists on
+its registry. We already rely on this everywhere:
+
+| Channel | "already published" check |
+|---------|---------------------------|
+| npm     | `npm view <pkg>@<ver>` → skip |
+| PyPI    | `--skip-existing` (when un-paused) |
+| binary/R2 | content-addressed by pre-computed SHA-256; re-upload of identical bytes is a no-op |
+
+This gives **"no change → keep the same version → nothing republishes" for
+free**. The version in the manifest *is* the change signal — no git-diffing, no
+Changesets (which is npm-only and useless for our wheels + binaries anyway). A
+"release everything" run loops every package and only the bumped ones actually
+publish.
+
+## Three building blocks
+
+### 1. A package registry (one declarative file)
+
+`hub/packages.yaml` — single source of truth for what is publishable and on
+which channels. One block per package; adding a package is a one-block diff.
+
+```yaml
+# hub/packages.yaml
+packages:
+  email:
+    channels: [npm, binary]          # pypi added later when #1179 un-pauses
+    npm:
+      name: "@amd-gaia/agent-email"
+      dir: hub/agents/npm/agent-email
+    binary:
+      freeze: hub/agents/python/email/packaging/freeze.py
+      smoke:  hub/agents/python/email/packaging/smoke_test.py
+      lock:   hub/agents/npm/agent-email/binaries.lock.json
+      manifest: hub/agents/python/email/gaia-agent.yaml
+      platforms: [win32-x64, darwin-arm64, darwin-x64, linux-x64]
+    version_source: hub/agents/python/email/gaia-agent.yaml   # canonical version
+
+  agent-ui:
+    channels: [npm]
+    npm:
+      name: "@amd-gaia/agent-ui"
+      dir: src/gaia/apps/webui
+    version_source: src/gaia/apps/webui/package.json
+
+  # memory:  (future) one block, channels: [npm]
+```
+
+A Python resolver `util/package_registry.py` reads this file (mirroring the
+existing `util/list_agent_packages.py` pattern — logic in Python with tests, not
+in YAML steps). It exposes:
+
+- `list_packages()` → all package ids + channels
+- `resolve(id)` → the full block + canonical version (read from `version_source`)
+- `--format matrix` → the `fromJSON` build matrix for the workflow
+
+Per **No Silent Fallbacks**: a package whose `dir` / `version_source` is missing,
+a channel with no config block, or a version mismatch across a package's own
+manifests **raises** — it is never silently dropped from the release set.
+
+### 2. One reusable `workflow_call` publisher
+
+`.github/workflows/publish_packages.yml` — given **one package id + version**,
+it resolves the registry block and runs only that package's declared channels,
+idempotently:
+
+- `binary` channel → matrix-freeze on the declared platforms (no cross-compile),
+  smoke-test, SHA-256 + size, `rclone copyto` to
+  `R2:amd-gaia/hub/agents/python/<id>/<ver>/`, regenerate the lock with real
+  hashes, **fetch-verify every platform via the real `fetch` CLI** before
+  publishing the npm client that points at them.
+- `npm` channel → `npm ci && npm run build`, then `npm publish --access public
+  --provenance` via **npm trusted publishing (OIDC, no token)**, skipped if the
+  version already exists.
+- `pypi` channel → reserved; no-op until #1179 un-pauses (then build wheel +
+  `--skip-existing` upload via OIDC).
+
+All the publish *logic* that `release_agent_email.yml` proved (freeze →
+smoke → hash → R2 → lock → fetch-verify → npm) moves here verbatim, parameterized
+by the registry block instead of hardcoded to email.
+
+### 3. Two entry points (thin)
+
+`.github/workflows/release.yml` — the dispatcher, the only file maintainers
+interact with:
+
+- **Per-package tag** `pkg-<id>-vX.Y.Z` (e.g. `pkg-email-v0.1.1`) → resolves
+  `<id>`, validates the version matches the package's manifests, calls
+  `publish_packages.yml` for that one package. *This is the email-bugfix case.*
+- **`workflow_dispatch`** with a `packages` input (`email`, `email,agent-ui`, or
+  `all`) → fans out to `publish_packages.yml` per selected package via a
+  `fromJSON` matrix. `all` attempts every registry package; idempotency means
+  only the bumped ones publish. *This is the coordinated / release-everything
+  case.*
+
+```
+                         ┌─ tag  pkg-<id>-vX.Y.Z ──┐
+   maintainer ──────────►│                          ├──► release.yml (dispatch)
+                         └─ workflow_dispatch ──────┘          │  resolves registry
+                                                               ▼  matrix per package
+                                                   publish_packages.yml (reusable)
+                                                     ├─ binary channel (freeze→R2→lock→verify)
+                                                     ├─ npm channel    (build→publish OIDC)
+                                                     └─ pypi channel   (reserved, #1179)
+```
+
+## How it satisfies every scenario
+
+| You want… | How |
+|---|---|
+| Email bugfix only | bump email's version, push `pkg-email-v0.1.1` |
+| Agent UI + email together | dispatch `packages: email,agent-ui` (or push both tags) |
+| Everything at once | dispatch `packages: all` — fans out to every package |
+| No change → same version | don't bump it; its publish job no-ops (version already on registry) |
+
+## Tag namespace & collision safety
+
+- `v*` → `publish.yml` (core product). **Untouched.**
+- `pkg-<id>-v*` → `release.yml` (this plan). Generalizes the existing
+  `agent-pkg-email-*` from `release_agent_email.yml`; `pkg-` is inclusive of
+  non-agent packages (agent-ui, memory).
+- Note: `pypi.yml` fires on `tags-ignore: ['v*']`, so any `pkg-*` tag triggers
+  its build-check run. That run is a harmless no-op build (no publish) — call it
+  out so it isn't mistaken for a second publisher.
+
+## Where the existing workflows land
+
+| Workflow | Fate |
+|----------|------|
+| `publish.yml` (`v*`) | **Stays** — core `amd-gaia` wheel + desktop installers. Drops the Agent UI npm step (moves to the registry). |
+| `release_agent_email.yml` | **Collapses** into `release.yml` + `publish_packages.yml` + the `email` registry block. Deleted once parity is proven. |
+| `publish_agents.yml` (#1179, paused) | **Untouched.** PyPI stays paused; the `pypi` channel here is reserved until #1179 is resolved. |
+| `build_agent_package.yml` (`agent-pkg-*`, dispatch) | Unaffected; can be retired later if `release.yml` covers its share use-case. |
+
+## Migration order (no big-bang)
+
+1. Land registry + resolver + tests with **only** the `email` block — assert it
+   reproduces today's email release inputs exactly.
+2. Land `publish_packages.yml` (reusable) carrying the email logic verbatim;
+   prove a real `pkg-email-v*` release through it (npm + binary + R2).
+3. **Re-register the npm trusted publisher** for `@amd-gaia/agent-email` against
+   the new workflow filename — OIDC is bound to the exact filename, so this is a
+   required cutover step, not optional.
+4. Delete `release_agent_email.yml`.
+5. Add the `agent-ui` registry block; move the Agent UI npm publish out of
+   `publish.yml` into the registry; prove `pkg-agent-ui-v*`.
+6. `memory` and future packages = one registry block each.
+
+## Open items to resolve during implementation
+
+- **R2 backend** — confirm rclone → `assets.amd-gaia.ai` (bucket `amd-gaia`) as
+  the binary origin; the `binary` channel's upload + the lock `baseUrl` depend on
+  it. (Repo secrets `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` /
+  `R2_ACCOUNT_ID`; var `ASSETS_BASE_URL`.)
+- **Approval gate** — `publish.yml` uses a manual `publish` environment gate. Do
+  package releases need the same gate, or is the namespaced tag + idempotency
+  enough? (Recommendation: gate the `npm`/`pypi` publish step only, not the
+  build.)
+- **PyPI un-pause** (#1179) — out of scope here; the `pypi` channel is wired but
+  inert until that decision lands.
