@@ -105,9 +105,7 @@ def behavior_server(require_real_model, tmp_path_factory):
     )
 
     base_url = f"http://127.0.0.1:{port}"
-    # Cold first boot loads the RAG embedder + connects to Lemonade; 30s is too
-    # tight on slower self-hosted hardware, so the server is still coming up.
-    deadline = time.time() + 120
+    deadline = time.time() + 30
     while time.time() < deadline:
         try:
             resp = requests.get(f"{base_url}/api/health", timeout=2)
