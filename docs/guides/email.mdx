@@ -148,6 +148,10 @@ Preferences persist across agent restarts via the memory store (`email:preferenc
 
 `set_priority_sender`, `set_low_priority_sender`, `set_category_default`, `clear_session_preferences`
 
+### Inbox profiling
+
+`profile_inbox` — asks "who emails me most?" and returns a frequency ranking of senders with their dominant category (e.g. *urgent*, *informational*) and the timestamp of their most recent message. Profiling is built from the interaction history the agent accumulates during triage, so it improves the more you use the agent.
+
 ### Organize (reversible via the undo log)
 
 `archive_message`, `mark_read`, `mark_unread`, `add_star`, `remove_star`, `label_message`, `move_to_label`

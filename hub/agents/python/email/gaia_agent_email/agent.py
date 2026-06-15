@@ -53,6 +53,7 @@ from gaia_agent_email.tools.preference_tools import (
     PreferenceToolsMixin,
     init_session_preferences,
 )
+from gaia_agent_email.tools.profile_tools import ProfileToolsMixin
 from gaia_agent_email.tools.read_tools import ReadToolsMixin
 from gaia_agent_email.tools.reply_tools import ReplyToolsMixin
 from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
@@ -151,6 +152,7 @@ class EmailTriageAgent(
     CalendarToolsMixin,
     PreferenceToolsMixin,
     PhishingToolsMixin,
+    ProfileToolsMixin,
 ):
     """Email Triage Agent — Gmail + Calendar through the connectors
     framework, all body inference local on Lemonade.
@@ -326,6 +328,7 @@ class EmailTriageAgent(
         self._register_calendar_tools()
         self._register_preference_tools()
         self._register_phishing_tools()
+        self._register_profile_tools()
         self.register_memory_tools()
 
     # -- Phase 2 multi-inbox routing (#1603) -------------------------------
@@ -461,7 +464,10 @@ class EmailTriageAgent(
         ``mailbox`` tag and its id is remembered for downstream action routing.
         """
         from gaia_agent_email.tools import read_tools
-        from gaia_agent_email.tools.read_tools import triage_inbox_impl
+        from gaia_agent_email.tools.read_tools import (
+            extract_sender_email,
+            triage_inbox_impl,
+        )
         from gaia_agent_email.tools.triage_heuristics import group_by_category
 
         # Reference the factory via the read_tools module so the existing
@@ -495,6 +501,14 @@ class EmailTriageAgent(
                 # Thread ids share the provenance map so get_thread /
                 # summarize_thread route to the right mailbox too.
                 self._remember_message_mailbox(item.get("thread_id"), provider)
+                # Record interaction for inbox profiling (#1289). Memory-guarded
+                # inside _record_interaction — silently skips when disabled.
+                # Recorded BEFORE the max_messages cap below on purpose: triage
+                # already classified this item, so its sender history is real
+                # even if the cap drops it from the returned view.
+                sender_addr = extract_sender_email(item.get("from", ""))
+                if sender_addr:
+                    self._record_interaction(sender_addr, item.get("category", ""))
                 merged.append(item)
         merged = merged[:max_messages]
         # Re-group the merged, capped list so the bucketed view matches what the
