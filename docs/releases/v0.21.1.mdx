@@ -1,0 +1,38 @@
+---
+title: "v0.21.1"
+description: "Patch release: unblocks NPU setup — `gaia init --profile npu` was failing for every NPU user — and gives the email agent a persistent memory store to build personalization on."
+---
+
+# GAIA v0.21.1 Release Notes
+
+GAIA v0.21.1 is a patch release on top of v0.21.0. The headline fix unblocks NPU setup: `gaia init --profile npu` was failing at the model download with an HTTP 400, so no one on a Ryzen AI NPU could get set up — it now downloads, verifies, and runs inference on the NPU. The release also wires a persistent memory store into the email agent, the foundation the upcoming personalization features build on.
+
+**Why upgrade:**
+- **NPU setup works again** — `gaia init --profile npu` was dead on arrival, failing before any NPU user could finish setup. It now pulls the built-in model correctly and runs on the NPU.
+- **The email agent remembers across sessions** — `gaia email` now boots with a persistent memory store instead of forgetting everything on restart, the groundwork for inbox personalization landing in upcoming releases.
+
+---
+
+## What's New
+
+### Persistent memory for the email agent — `gaia email`
+
+The email agent used to start from scratch every session — anything it learned about your inbox was wiped on restart. It now boots with a persistent memory store and the tools to read and write it, so learned state survives across runs. This is the foundation for the inbox personalization (priority senders, profiling, behavioral learning) coming in upcoming releases — triage behavior itself is unchanged in this release (PR [#1632](https://github.com/amd/gaia/pull/1632)).
+
+---
+
+## Bug Fixes
+
+- **`gaia init --profile npu` failed before any NPU user could finish setup** (PR [#1658](https://github.com/amd/gaia/pull/1658)) — the NPU profile pulled its built-in model with a `recipe` argument, which Lemonade rejects with an HTTP 400 unless you're registering a new user model. The built-in model is now pulled by name only, so the NPU profile downloads, verifies, and runs inference on the NPU. The fix also adds a testing rule so this class of fresh-install bug can't slip past a warm cache and a mocked client again.
+
+---
+
+## Full Changelog
+
+**3 commits** since v0.21.0:
+
+- `cc6f2f39` — docs(plans): email agent packaging milestone (npm + sidecar binaries) (#1644)
+- `801a5c1d` — feat(email): wire MemoryMixin into the email agent (#1114) (#1632)
+- `a3e86b02` — fix(init): pull built-in NPU/FLM model by name, not recipe (#1655) (#1658)
+
+Full Changelog: [v0.21.0...v0.21.1](https://github.com/amd/gaia/compare/v0.21.0...v0.21.1)

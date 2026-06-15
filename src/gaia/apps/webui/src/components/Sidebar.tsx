@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, Brain, EyeOff, Clock } from 'lucide-react';
+import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, Brain, EyeOff, Clock, Loader2 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -34,9 +34,10 @@ interface SidebarProps {
 }
 
 /** Extracted session row to share between grouped and flat rendering. */
-function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSelect, onKeyDown, onDelete, formatTime }: {
+function SessionItem({ session: s, isActive, isRunning, isPendingDelete, isDeleting, onSelect, onKeyDown, onDelete, formatTime }: {
     session: Session;
     isActive: boolean;
+    isRunning: boolean;
     isPendingDelete: boolean;
     isDeleting: boolean;
     onSelect: (id: string) => void;
@@ -64,6 +65,13 @@ function SessionItem({ session: s, isActive, isPendingDelete, isDeleting, onSele
         >
             <span className="session-title">
                 {s.private && <EyeOff size={10} className="session-private-icon" aria-label="Private session" />}
+                {isRunning && (
+                    <Loader2
+                        size={11}
+                        className="session-running-spinner"
+                        aria-label="Agent running"
+                    />
+                )}
                 {s.title}
             </span>
             <a
@@ -110,6 +118,7 @@ export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobi
         sidebarCollapsed, toggleSidebarCollapsed,
         sidebarWidth, setSidebarWidth,
         addPendingDelete, removePendingDelete,
+        runningSessionIds,
     } = useChatStore();
 
     const [search, setSearch] = useState('');
@@ -403,6 +412,7 @@ export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobi
                                     key={s.id}
                                     session={s}
                                     isActive={s.id === currentSessionId}
+                                    isRunning={runningSessionIds.includes(s.id)}
                                     isPendingDelete={pendingDeleteId === s.id}
                                     isDeleting={deletingId === s.id}
                                     onSelect={handleSelect}
@@ -420,6 +430,7 @@ export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobi
                             key={s.id}
                             session={s}
                             isActive={s.id === currentSessionId}
+                            isRunning={runningSessionIds.includes(s.id)}
                             isPendingDelete={pendingDeleteId === s.id}
                             isDeleting={deletingId === s.id}
                             onSelect={handleSelect}
