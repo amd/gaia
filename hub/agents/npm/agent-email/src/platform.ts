@@ -8,7 +8,6 @@
  * and what its SHA-256 must be. Platform keys are `${process.platform}-${process.arch}`.
  */
 
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
@@ -115,7 +114,3 @@ export function resolveEntry(lock: BinaryLock, platformKey: string): BinaryLockE
 export function isPlaceholderSha(sha256: string): boolean {
   return /^0+$/.test(sha256) || sha256.toUpperCase().includes("PENDING");
 }
-
-// `createRequire` kept available for consumers that resolve the package dir via
-// require.resolve; not used internally but part of the resolution toolkit.
-export const _require = createRequire(import.meta.url);

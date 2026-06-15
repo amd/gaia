@@ -48,6 +48,8 @@ export interface FetchOptions {
   fetchImpl?: typeof fetch;
   /** Overwrite an existing verified binary. Default false (skip if hash matches). */
   force?: boolean;
+  /** Abort the download after this many ms. Default 120000. Prevents a hung connection from hanging a build. */
+  timeoutMs?: number;
 }
 
 export interface FetchResult {
@@ -148,24 +150,44 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
   }
 
   log.info(`downloading ${platformKey} binary from ${url}`);
-  const res = await fetchImpl(url, { headers: { accept: "application/octet-stream" } });
-  if (!res.ok) {
-    throw new Error(
-      `download failed: HTTP ${res.status} ${res.statusText} for ${url}. ` +
-        "Check the base URL (real R2 URL pending #1648) and that the artifact is published.",
-    );
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let buf: Buffer;
+  try {
+    const res = await fetchImpl(url, {
+      headers: { accept: "application/octet-stream" },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(
+        `download failed: HTTP ${res.status} ${res.statusText} for ${url}. ` +
+          "Check the base URL (real R2 URL pending #1648) and that the artifact is published.",
+      );
+    }
+    buf = Buffer.from(await res.arrayBuffer());
+  } catch (e) {
+    if ((e as Error).name === "AbortError") {
+      throw new Error(`download timed out after ${timeoutMs}ms for ${url}`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
   }
-  const arrayBuf = await res.arrayBuffer();
-  const buf = Buffer.from(arrayBuf);
   log.debug(`downloaded ${buf.length} bytes`);
 
   const sha = verifySha256(buf, entry.sha256, `${platformKey} (${url})`);
 
   // Write atomically-ish: write to a temp then rename so a crash mid-write
-  // never leaves a half-written "verified" binary.
+  // never leaves a half-written "verified" binary. Clean up the temp on failure.
   const tmp = `${binaryPath}.download.${process.pid}`;
-  await fsp.writeFile(tmp, buf);
-  await fsp.rename(tmp, binaryPath);
+  try {
+    await fsp.writeFile(tmp, buf);
+    await fsp.rename(tmp, binaryPath);
+  } catch (e) {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
+    throw e;
+  }
 
   if (process.platform !== "win32") {
     await fsp.chmod(binaryPath, 0o755);

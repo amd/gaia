@@ -22,14 +22,23 @@ interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
+// Flags that take a value (`--out <dir>`); everything else is a boolean switch.
+// Being explicit avoids the footgun where `--base-url --force` silently swallows
+// the next flag as a value (or drops the value).
+const VALUE_FLAGS = new Set(["out", "base-url", "platform"]);
+
 function parseArgs(argv: string[]): ParsedArgs {
   const out: ParsedArgs = { _: [], flags: {} };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a.startsWith("--")) {
       const key = a.slice(2);
-      const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith("--")) {
+      if (VALUE_FLAGS.has(key)) {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith("--")) {
+          process.stderr.write(`warning: --${key} expects a value; ignoring\n`);
+          continue;
+        }
         out.flags[key] = next;
         i++;
       } else {

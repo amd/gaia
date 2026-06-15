@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 """
 Frozen-binary entrypoint for the GAIA Email Triage agent REST sidecar
-(packaging spike for milestone #49, Phase 2 of email-agent-packaging).
+(milestone #49, Phase 2 of email-agent-packaging).
 
-This is the module PyInstaller (or Nuitka) freezes. It boots a **minimal**
+This is the module PyInstaller freezes (see `freeze.py` / `release_agent_email.yml`).
+It boots a **minimal**
 FastAPI app that mounts ONLY the email REST router (``/v1/email/*``) plus two
 dependency-free probes the sidecar lifecycle handshake needs:
 
@@ -19,11 +20,12 @@ surface. The sidecar only needs the email surface, so we mount just that router.
 The router import chain is identical to what ``openai_server`` mounts, so the
 served contract is byte-for-byte the same.
 
-``--stub-llm`` (default ON for the spike) swaps the triage service's local
-Lemonade chat client for a deterministic stub, so the frozen binary can prove
-it serves a contract-valid triage round-trip with NO live LLM and NO Gmail
-connector. In a real deployment the flag is off and triage uses the local
-Lemonade model.
+The LLM stub (default ON — see the note below) swaps the triage service's local
+Lemonade chat client for a deterministic stub, so the binary serves a
+contract-valid triage round-trip with NO live LLM and NO Gmail connector. This is
+what the smoke test, the npm demo, and CI exercise. **A production deployment
+must pass ``--no-stub-llm``** so triage uses the local Lemonade model — see
+`DEFAULT_STUB_LLM` and the host-side default in the npm lifecycle helpers.
 """
 
 from __future__ import annotations
@@ -39,13 +41,19 @@ logging.basicConfig(
 )
 log = logging.getLogger("gaia_agent_email.sidecar")
 
-# Default sidecar port for the spike. NOT 4001 (reserved). 8131 is unused here.
+# Default sidecar bind. NOT 4001 (reserved). 8131 is unused here.
 DEFAULT_PORT = 8131
 DEFAULT_HOST = "127.0.0.1"
 
+# Whether triage uses the deterministic stub by default. ON so the smoke test,
+# npm demo, and CI run with no live model/mailbox. Production passes
+# --no-stub-llm (and the npm lifecycle helper should set stubLlm=False) to use
+# the real local Lemonade model.
+DEFAULT_STUB_LLM = True
+
 
 # ---------------------------------------------------------------------------
-# Deterministic LLM stub (spike only)
+# Deterministic LLM stub (active under --stub-llm; default ON — see module docs)
 # ---------------------------------------------------------------------------
 
 
@@ -63,7 +71,7 @@ class _StubChat:
     ``chat.send_messages(messages, system_prompt=..., temperature=...)`` and
     read ``response.text``. We branch on the system prompt to return a
     contract-valid classification JSON or a plain-text summary — no model, no
-    network. This is ONLY wired in under ``--stub-llm`` for the spike.
+    network. Wired in only under ``--stub-llm``.
     """
 
     def send_messages(self, messages, system_prompt: str = "", **_kwargs):
@@ -105,7 +113,7 @@ def _install_llm_stub() -> None:
 # ---------------------------------------------------------------------------
 
 
-def build_app(stub_llm: bool = True):
+def build_app(stub_llm: bool = DEFAULT_STUB_LLM):
     """Build the minimal FastAPI app hosting the email REST surface."""
     from fastapi import FastAPI
     from gaia_agent_email import __version__ as agent_version
@@ -115,7 +123,7 @@ def build_app(stub_llm: bool = True):
     app = FastAPI(
         title="GAIA Email Agent Sidecar",
         version=agent_version,
-        description="Frozen-binary email triage REST sidecar (spike).",
+        description="Frozen-binary email triage REST sidecar.",
     )
 
     @app.get("/health", include_in_schema=True)
