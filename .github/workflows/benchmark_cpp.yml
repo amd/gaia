@@ -67,6 +67,8 @@ jobs:
           -DGAIA_BUILD_EXAMPLES=ON
           -DGAIA_BUILD_TESTS=OFF
           -DGAIA_BUILD_INTEGRATION_TESTS=OFF
+          -DGAIA_BUILD_TUI=OFF
+          -DGAIA_BUILD_BASH_AGENT=OFF
 
       - name: Build (static + benchmarks)
         run: cmake --build cpp/build-bench --config Release --parallel
@@ -80,6 +82,8 @@ jobs:
           -DGAIA_BUILD_TESTS=OFF
           -DGAIA_BUILD_EXAMPLES=OFF
           -DGAIA_BUILD_BENCHMARKS=OFF
+          -DGAIA_BUILD_TUI=OFF
+          -DGAIA_BUILD_BASH_AGENT=OFF
 
       - name: Build (shared library)
         run: cmake --build cpp/build-bench-shared --config Release --parallel
