@@ -52,6 +52,14 @@ jobs:
           # first and Python requests can hang on it even when the server is up
           # on IPv4 — that made the harness skip despite a loaded model.
           LEMONADE_BASE_URL: http://127.0.0.1:13305/api/v1
+          # Bypass any runner proxy for the loopback Lemonade server. Python
+          # requests honors HTTP(S)_PROXY even for 127.0.0.1, so a configured
+          # proxy made the harness "unreachable" and skip — while PowerShell's
+          # start-lemonade health check (which ignores proxy for loopback)
+          # passed. NO_PROXY covers the reachability check and the spawned
+          # gaia.ui.server (which inherits this env).
+          NO_PROXY: "localhost,127.0.0.1"
+          no_proxy: "localhost,127.0.0.1"
         run: |
           python -m pytest tests/integration/eval/test_behavior_e2e.py `
             -m real_model -v -rs --tb=short `
