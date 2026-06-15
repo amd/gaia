@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Smoke tests for the standalone gaia-agent-email package."""
 
+import pytest
+
 
 def test_build_registration_shape():
     import gaia_agent_email as m
@@ -194,3 +196,34 @@ def test_thread_newest_first():
     new_pos = captured["body"].index("NEW MESSAGE")
     old_pos = captured["body"].index("OLD MESSAGE")
     assert new_pos < old_pos, "thread body must be newest-first"
+
+
+def test_triage_fails_fast_when_lemonade_unreachable(monkeypatch):
+    """Unreachable Lemonade → prompt LLMTriageError, not a ~30s hang (#1677)."""
+    import requests
+
+    from gaia_agent_email.api_routes import EmailTriageService
+    from gaia_agent_email.tools.llm_triage import LLMTriageError
+
+    captured = {}
+
+    def _fake_get(url, *args, **kwargs):
+        captured["url"] = url
+        captured["timeout"] = kwargs.get("timeout")
+        raise requests.exceptions.ConnectionError("Connection refused")
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    service = EmailTriageService()
+    request = _make_single_request()
+
+    # No chat passed → _build_llm_chat runs the reachability probe.
+    with pytest.raises(LLMTriageError) as exc:
+        service.triage_request(request)
+
+    assert "not reachable" in str(exc.value)
+    assert captured["url"].endswith("/health")
+    # The probe must use a short *connect* timeout (a tuple), not the 900s
+    # scalar the real chat path uses.
+    assert isinstance(captured["timeout"], tuple)
+    assert captured["timeout"][0] <= 5

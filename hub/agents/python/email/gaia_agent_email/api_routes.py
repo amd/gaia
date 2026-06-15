@@ -116,6 +116,14 @@ _DUE_HINT_RE = re.compile(
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _MAX_SUMMARY_CHARS = 300
 
+# Fast pre-flight timeouts for the "is Lemonade even up?" probe (#1677). The
+# real chat path uses a 900s scalar timeout — correct for long generation, but
+# it also governs the TCP connect, so an unreachable server blocks on the OS
+# SYN timeout (~30s) before erroring. A short connect timeout turns "server
+# down" into a prompt 502 instead of a 30s hang.
+_LEMONADE_PROBE_CONNECT_TIMEOUT = 2.0
+_LEMONADE_PROBE_READ_TIMEOUT = 3.0
+
 
 def _split_sentences(text: str) -> List[str]:
     text = re.sub(r"\s+", " ", (text or "").strip())
@@ -177,6 +185,10 @@ class EmailTriageService:
         cfg = EmailAgentConfig(base_url=base_url)
         cfg.validate()
 
+        # Fail fast + loud if Lemonade isn't reachable, before the chat path's
+        # long-timeout connect can stall ~30s (#1677).
+        self._assert_lemonade_reachable(base_url)
+
         sdk_cfg = AgentConfig(
             base_url=base_url,
             use_local_llm=True,
@@ -187,6 +199,42 @@ class EmailTriageService:
             max_tokens=4096,
         )
         return AgentSDK(sdk_cfg)
+
+    def _assert_lemonade_reachable(self, base_url: Optional[str]) -> None:
+        """Probe Lemonade's /health with a short connect timeout (#1677).
+
+        Raises ``LLMTriageError`` (→ HTTP 502 at the route) when the local
+        server can't be reached, so "Lemonade is down" surfaces as a prompt,
+        actionable failure instead of a ~30s hang. Any HTTP response — even
+        an error status — means the server is up; only a connection/timeout
+        failure counts as unreachable (auth/model errors surface later on the
+        real chat call, where their messages are specific).
+        """
+        import requests
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        if base_url:
+            probe_base = base_url.rstrip("/")
+            if not probe_base.endswith("/api/v1"):
+                probe_base = f"{probe_base}/api/v1"
+        else:
+            _, _, probe_base = _get_lemonade_config()
+        health_url = f"{probe_base}/health"
+
+        try:
+            requests.get(
+                health_url,
+                timeout=(
+                    _LEMONADE_PROBE_CONNECT_TIMEOUT,
+                    _LEMONADE_PROBE_READ_TIMEOUT,
+                ),
+            )
+        except requests.exceptions.RequestException as exc:
+            raise LLMTriageError(
+                f"Local Lemonade Server is not reachable at {probe_base} "
+                f"({type(exc).__name__}: {exc}). Start it with "
+                "`lemonade-server serve` (or run `gaia init`), then retry."
+            ) from exc
 
     def triage_gmail_message(
         self, msg: dict, *, principal_email: str
