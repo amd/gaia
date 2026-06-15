@@ -48,10 +48,13 @@ jobs:
       - name: Run behavior E2E harness
         shell: powershell
         env:
-          LEMONADE_BASE_URL: http://localhost:13305/api/v1
+          # 127.0.0.1, not localhost: on Windows `localhost` resolves to ::1
+          # first and Python requests can hang on it even when the server is up
+          # on IPv4 — that made the harness skip despite a loaded model.
+          LEMONADE_BASE_URL: http://127.0.0.1:13305/api/v1
         run: |
           python -m pytest tests/integration/eval/test_behavior_e2e.py `
-            -m real_model -v --tb=short `
+            -m real_model -v -rs --tb=short `
             --basetemp="${{ runner.temp }}\pytest-behavior"
           if ($LASTEXITCODE -ne 0) { throw "behavior E2E harness failed" }
 
