@@ -7,8 +7,33 @@ icon: "brain"
 GAIA Agent Memory is a persistent knowledge system that gives your agent a **second brain**. It remembers facts, preferences, errors, and workflows across sessions -- so every conversation picks up where the last one left off. All data stays local on your machine in a single SQLite file.
 
 <Info>
-  **First time here?** Complete the [Setup](/setup) guide first, then come back to enable memory.
+  **First time here?** Complete the [Quickstart (For Developers)](/quickstart#for-developers)
+  or [Manual Install](/quickstart#manual-install) guide first, then come back to enable memory.
 </Info>
+
+## Prerequisites
+
+Before using Agent Memory, make sure you have the following in place:
+
+- **Install path:** Developer install — clone the repo and install from source:
+
+  ```bash
+  git clone https://github.com/amd/gaia.git
+  cd gaia
+  uv venv .venv --python 3.12
+  source .venv/bin/activate        # Windows: .venv\Scripts\activate
+  uv pip install -e ".[dev,rag]"
+  ```
+
+- **Extras required:** `[rag]` — needed for memory and document Q&A features
+
+- **Lemonade server** must be running before you start:
+
+  ```bash
+  lemonade-server serve
+  ```
+
+- **Example files** referenced in this guide are inside the cloned repo under `examples/`
 
 <Note>
   Memory is currently integrated into the Chat Agent. Any agent built on the GAIA Agent base class can add memory via the `MemoryMixin` -- see the [Memory SDK Reference](/sdk/sdks/memory) for developer details.
