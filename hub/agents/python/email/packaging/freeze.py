@@ -29,11 +29,11 @@ Design notes / gotchas baked in (see README.md for the why):
   pulls every agent + RAG + torch and explodes the binary). Static analysis from
   the email router pulls only the reachable core modules.
 - The triage path lazily imports ``gaia.chat.sdk`` (AgentSDK) inside
-  ``_build_llm_chat``, which statically reaches the ML stack (torch,
-  transformers, …). With ``--stub-llm`` that code never runs, so we EXCLUDE the
-  ML stack to keep the spike binary lean. A non-stub production binary that runs
-  real local triage talks to Lemonade Server over HTTP (no in-proc torch), but
-  if a future build needs these, drop them from ``EXCLUDES``.
+  ``_build_llm_chat``, whose static import graph reaches the ML stack (torch,
+  transformers, …). Real triage talks to the local Lemonade Server over HTTP and
+  never runs torch in-process, so we EXCLUDE the ML stack to keep the binary lean
+  (~90 MB vs ~2 GB). If a future build genuinely needs these, drop them from
+  ``EXCLUDES``.
 """
 
 from __future__ import annotations
@@ -53,8 +53,9 @@ REPO_ROOT = HERE.parents[4]
 # at the source roots directly: the email package and the core ``src`` tree.
 PATHEX = [REPO_ROOT / "hub" / "agents" / "python" / "email", REPO_ROOT / "src"]
 
-# Heavy ML stack reachable only through the lazily-imported, stubbed-out
-# real-LLM path. Excluded to keep the spike binary lean (torch alone is ~2 GB).
+# Heavy ML stack reached only via the lazily-imported triage import graph. Real
+# triage uses Lemonade over HTTP (no in-process torch), so these are excluded to
+# keep the binary lean (torch alone is ~2 GB).
 EXCLUDES = [
     "torch",
     "transformers",

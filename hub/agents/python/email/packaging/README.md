@@ -44,19 +44,17 @@ dependency; keep Nuitka only as a fallback if a future dep defeats the hooks.
 ## Launch
 
 ```bash
-dist/email-agent/email-agent.exe --host 127.0.0.1 --port 8131               # stubbed LLM (default)
-dist/email-agent/email-agent.exe --host 127.0.0.1 --port 8131 --no-stub-llm # real local Lemonade triage
+dist/email-agent/email-agent.exe --host 127.0.0.1 --port 8131
 ```
 
 Flags: `--host` (default `127.0.0.1`), `--port` (default **8131** — deliberately
-not 4001), `--no-stub-llm` (use the real local Lemonade model instead of the
-deterministic stub), `--print-openapi` (dump OpenAPI and exit — note `gaia.logger`
-prepends a stdout log line; read the last line or use `/openapi.json`).
+not 4001), `--print-openapi` (dump OpenAPI and exit — note `gaia.logger` prepends
+a stdout log line; read the last line or use `/openapi.json`).
 
-The default `--stub-llm` swaps the triage chat client for a deterministic,
-contract-valid stub so the binary serves with **no live model and no live
-mailbox** — the REST surface, routing, and contract validation run for real; only
-the model call is stubbed.
+`/health`, `/version`, and `/openapi.json` are dependency-free, so the binary
+boots and serves the contract surface with no model. `POST /v1/email/triage`
+uses the **real local Lemonade model** and requires a reachable Lemonade Server;
+if there is none it returns **HTTP 502 (`local LLM triage failed`)**.
 
 ## Smoke test
 
@@ -85,10 +83,9 @@ triage body is derived from `tests/fixtures/email/synthetic_inbox.mbox`.
 4. **Lazy tool imports on the triage path.** The router imports tool modules
    inside functions. Fix: `--collect-submodules gaia_agent_email`.
 5. **The ML stack bloats the freeze.** The triage path lazily reaches
-   `gaia.chat.sdk` → torch/transformers/faiss (~2 GB). `freeze.py` **excludes**
-   them, cutting the binary to <90 MB. Real (`--no-stub-llm`) triage talks to
-   Lemonade Server over HTTP (no in-process torch), so the excludes should hold
-   for production — confirm when building the `--no-stub-llm` binary.
+   `gaia.chat.sdk` → torch/transformers/faiss (~2 GB). Real triage talks to the
+   local Lemonade Server over HTTP (no in-process torch), so `freeze.py`
+   **excludes** them, cutting the binary to <90 MB.
 6. **One-file orphans its child on kill.** The one-file bootloader spawns a child;
    `terminate()` on the parent leaves the uvicorn child (and its socket) alive.
    The host sidecar supervisor MUST kill the process **tree** (`@amd-gaia/agent-email`

@@ -70,11 +70,6 @@ export interface SpawnOptions {
   host?: string;
   /** Bind port. Default 8131. NEVER use 4001. */
   port?: number;
-  /**
-   * Use the deterministic LLM stub (default true → triage works with no live
-   * model/mailbox). Pass false for real local-Lemonade triage (`--no-stub-llm`).
-   */
-  stubLlm?: boolean;
   /** Extra CLI args appended verbatim. */
   extraArgs?: string[];
   /** Extra env vars merged over process.env. */
@@ -107,13 +102,10 @@ export function spawnSidecar(opts: SpawnOptions): Sidecar {
   if (port === 4001) {
     throw new RangeError("port 4001 is reserved and must never be used");
   }
-  const stub = opts.stubLlm ?? true;
-
   const args = ["--host", host, "--port", String(port)];
-  if (!stub) args.push("--no-stub-llm");
   if (opts.extraArgs?.length) args.push(...opts.extraArgs);
 
-  log.info(`spawning ${opts.binaryPath} ${args.join(" ")} (stub_llm=${stub})`);
+  log.info(`spawning ${opts.binaryPath} ${args.join(" ")}`);
 
   const child = spawn(opts.binaryPath, args, {
     // detached on POSIX → the child becomes a process-group leader so we can

@@ -105,7 +105,7 @@ Typed wrapper over the five endpoints. Methods: `triage`, `draft`, `send`,
 
 ### Lifecycle
 - `resolveBinaryPath({ resourcesDir })` → locate a fetched binary (throws `BinaryNotFoundError` if absent).
-- `spawnSidecar({ binaryPath, host?, port?, stubLlm? })` → spawn (`--host 127.0.0.1 --port <p>`; `--no-stub-llm` when `stubLlm:false`).
+- `spawnSidecar({ binaryPath, host?, port?, extraArgs? })` → spawn (`--host 127.0.0.1 --port <p>`).
 - `waitForHealth(baseUrl, { timeoutMs })` → poll `/health`; throws `HealthTimeoutError` on timeout (never assumes ready).
 - `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
 - `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The frozen one-file binary orphans a child otherwise (packaging/README.md, gotcha 6).
@@ -157,7 +157,7 @@ on stderr, so machine-readable stdout stays clean).
 npm test     # vitest: client typing, fetch SHA verify (pass + tampered-fail), version-check
 ```
 
-## What's stubbed pending real R2 (#1648)
+## Pending real R2 (#1648)
 
 `binaries.lock.json` ships **placeholder** `baseUrl` and `sha256` values. While a
 hash is a placeholder, `fetch` is **intentionally blocked** (fails loudly) so a
@@ -166,9 +166,8 @@ bad binary can never be trusted. To wire #1648:
 2. Upload to the R2 bucket; set `baseUrl` to the real URL.
 3. Replace each `sha256` with the real artifact hash (and `size`).
 
-The triage backend itself runs with `--stub-llm` ON by default in the sidecar, so
-the demo works with no live model/mailbox; pass `stubLlm: false` for real local
-Lemonade triage.
+Triage uses the **real local Lemonade model.** With no Lemonade reachable,
+`POST /v1/email/triage` returns HTTP 502; start a Lemonade Server for live triage.
 
 ## Platforms
 
