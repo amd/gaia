@@ -336,7 +336,9 @@ class EmailTriageAgent(
 
     # -- Phase 2 multi-inbox routing (#1603) -------------------------------
 
-    def _remember_message_mailbox(self, message_id: Optional[str], provider: str) -> None:
+    def _remember_message_mailbox(
+        self, message_id: Optional[str], provider: str
+    ) -> None:
         """Record which mailbox a message_id came from, for action routing."""
         if message_id:
             self._message_mailbox[message_id] = provider
@@ -406,9 +408,7 @@ class EmailTriageAgent(
             )
         return backend
 
-    def _remember_draft_mailbox(
-        self, draft_id: Optional[str], provider: str
-    ) -> None:
+    def _remember_draft_mailbox(self, draft_id: Optional[str], provider: str) -> None:
         """Record which mailbox a draft was created in (for send_draft routing)."""
         if draft_id:
             self._draft_mailbox[draft_id] = provider
@@ -477,9 +477,7 @@ class EmailTriageAgent(
         # ``read_tools.make_llm_classifier`` test seam (the pre-scan canary)
         # keeps intercepting the expensive triage path.
         chat = getattr(self, "chat", None)
-        classifier = (
-            read_tools.make_llm_classifier(chat) if chat is not None else None
-        )
+        classifier = read_tools.make_llm_classifier(chat) if chat is not None else None
         prefs = getattr(self, "_session_preferences", None)
         force_llm = bool(getattr(self.config, "force_llm", False))
         debug_flag = bool(getattr(self.config, "debug", False))
