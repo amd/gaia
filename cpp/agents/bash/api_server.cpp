@@ -490,7 +490,18 @@ struct ApiServer::Impl {
             return;
         }
 
-        bool removed = sessionStore->remove(sessionId);
+        bool removed = false;
+        try {
+            removed = sessionStore->remove(sessionId);
+        } catch (const std::invalid_argument& e) {
+            // validateId() rejects IDs with path separators, dots, etc.
+            // Surface a 400 instead of letting it become an opaque 500.
+            res.status = 400;
+            res.set_content(
+                errorJson(e.what(), "invalid_request_error").dump(),
+                "application/json");
+            return;
+        }
         if (removed) {
             res.status = 200;
             res.set_content(
