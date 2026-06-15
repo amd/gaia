@@ -467,7 +467,10 @@ class EmailTriageAgent(
         ``mailbox`` tag and its id is remembered for downstream action routing.
         """
         from gaia_agent_email.tools import read_tools
-        from gaia_agent_email.tools.read_tools import extract_sender_email, triage_inbox_impl
+        from gaia_agent_email.tools.read_tools import (
+            extract_sender_email,
+            triage_inbox_impl,
+        )
         from gaia_agent_email.tools.triage_heuristics import group_by_category
 
         # Reference the factory via the read_tools module so the existing

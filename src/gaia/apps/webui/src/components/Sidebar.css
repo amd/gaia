@@ -335,6 +335,16 @@
     vertical-align: middle;
 }
 
+/* Spinner shown inline before the title while a session's agent is still
+   running in the background (#1580). Uses the global `spin` keyframe. */
+.session-running-spinner {
+    flex-shrink: 0;
+    margin-right: 4px;
+    color: var(--accent, var(--text-muted));
+    vertical-align: middle;
+    animation: spin 1s linear infinite;
+}
+
 /* Session hash link -- short permalink for troubleshooting */
 .session-hash {
     font-size: 9px;

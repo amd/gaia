@@ -35,6 +35,12 @@ interface ChatState {
     updateSessionInList: (id: string, updates: Partial<Session>) => void;
     addPendingDelete: (id: string) => void;
     removePendingDelete: (id: string) => void;
+    /** Session IDs with a chat turn still running server-side (#1580).
+     *  Backend-truth (polled from /api/chat/active), so it survives
+     *  navigating away, refresh, and revisit — drives the sidebar's
+     *  "still running" spinner on backgrounded sessions. */
+    runningSessionIds: string[];
+    setRunningSessions: (ids: string[]) => void;
 
     // Messages (for current session)
     messages: Message[];
@@ -143,6 +149,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     sessions: [],
     currentSessionId: null,
     pendingDeleteIds: [],
+    runningSessionIds: [],
+    setRunningSessions: (ids) =>
+        set((state) => {
+            // Reference-stable update: skip the set() when the running set is
+            // unchanged so the polled refresh doesn't re-render the sidebar.
+            const prev = state.runningSessionIds;
+            if (prev.length === ids.length && prev.every((id) => ids.includes(id))) {
+                return state;
+            }
+            return { runningSessionIds: ids };
+        }),
     setSessions: (sessions) =>
         set((state) => ({
             // Filter out any sessions that are pending backend deletion so poll
