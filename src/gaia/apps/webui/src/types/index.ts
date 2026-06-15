@@ -192,25 +192,6 @@ export interface ConnectorRequirement {
 }
 
 /**
- * Issue #915 — one stored OAuth connection.
- */
-export interface ConnectorInfo {
-    provider: string;
-    account_email: string;
-    scopes: string[];
-    connected_at: number | null;
-    error?: string;
-}
-
-/**
- * Issue #915 — a per-agent grant entry (provider → agent_id → scopes).
- */
-export interface ConnectorGrant {
-    agent_id: string;
-    scopes: string[];
-}
-
-/**
  * Connector row returned by GET /api/connectors (new framework, T-8b).
  * Merges ConnectorSpec fields with live state.
  */
