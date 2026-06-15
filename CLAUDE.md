@@ -274,6 +274,16 @@ gaia mcp status
 python -m gaia.mcp.mcp_bridge
 ```
 
+### IMPORTANT: Test from the user's real initial state, and verify call *validity* at boundaries — not just invocation
+
+**Two failure modes let bugs pass every "green" test and still break users. They are general — not specific to installers — so guard against both on any change, not just setup/download work.**
+
+1. **Hidden-state masking — test from the state the *user* is in, not your primed one.** Many bugs only fire from a specific starting state: an empty cache, an empty DB/list, a first run, a cleared session, no config/connector yet, an expired token, zero search results, a missing optional dependency. Your dev box and your mocks carry leftover state that returns success and hides the failure ("works on my machine") — and it breaks for exactly the new users a feature targets. Reproduce from the cold/empty state before claiming a fix: for setup/download use `gaia init --profile <p> --force-models`, delete the artifact, or use a clean machine; for runtime features use an empty index/DB/session. And **a passing runtime ≠ a passing setup** — evals or inference prove a model *runs*; they say nothing about whether a new user can *download/register/configure* it. These are different code paths; verify the one the bug actually lives in.
+
+2. **Mocks prove "we called it," not "the call is valid."** At any boundary with a contract — HTTP API, subprocess, SQL, file format, IPC — a stub returning a hardcoded success only proves the method was invoked, never that the request would be accepted. Assert the *shape* of the outgoing call (required prefixes, mutually-required fields, allowed value combinations), and where the contract lives in an external service add one real integration test (e.g. `require_lemonade`) that exercises it.
+
+**#1655 is the canonical case for both:** the model-pull sent `recipe=` for a *built-in* Lemonade model, which Lemonade 400s — but only on a *fresh* pull. Every unit test mocked the client, every manual check ran on a box that already had `gemma4-it-e2b-FLM` cached, and the PR's `gaia init --profile npu` test-plan item was checked off against that warm cache. `tests/test_lemonade_client.py::test_pull_model` even documented the correct `user.`-prefix-with-`recipe` pattern, but stubbed the HTTP layer, so it couldn't catch the profile that violated it.
+
 ### IMPORTANT: Run agent evals when changing LLM-affecting code paths — do NOT skip
 
 **Unit tests catch code paths; they don't catch LLM behavior.** When a change touches an LLM-affecting surface, you MUST run `gaia eval agent` against the relevant category and compare to the committed baseline before claiming the change is done. Skipping the eval is how regressions that pass every unit test still ship to users.
