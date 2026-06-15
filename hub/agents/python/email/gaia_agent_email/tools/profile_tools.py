@@ -352,9 +352,11 @@ class ProfileToolsMixin:
             Returns:
                 JSON envelope with ``{"ok": true, "data": {"top_senders": [...],
                 "total_messages": N}}`` where each top-senders element has
-                ``sender``, ``count``, ``dominant_category``, and
-                ``category_counts``. Returns an empty profile (ok=True,
-                top_senders=[]) when memory is disabled or no history exists.
+                ``sender``, ``count``, ``dominant_category``,
+                ``category_counts``, and ``last_ts`` (ISO-8601 timestamp of
+                the most recent interaction). Returns an empty profile
+                (ok=True, top_senders=[]) when memory is disabled or no
+                history exists.
             """
             try:
                 records = agent._read_interactions()
