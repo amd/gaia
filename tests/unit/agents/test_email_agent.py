@@ -151,6 +151,7 @@ class TestToolRegistry:
         "list_labels",
         "triage_inbox",
         "pre_scan_inbox",
+        "profile_inbox",
         # Organize
         "archive_message",
         "mark_read",
