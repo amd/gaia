@@ -284,7 +284,7 @@ Examples:
     parser.add_argument(
         "--base-url",
         default=None,
-        help="Lemonade server URL (default: http://localhost:8000/api/v1)",
+        help="Lemonade server URL (default: http://localhost:13305/api/v1)",
     )
     parser.add_argument(
         "--no-lemonade-check",
@@ -309,9 +309,26 @@ Examples:
         help="Number of results to return (default: 10)",
     )
 
+    search_p.add_argument(
+        "--repo",
+        default=None,
+        help="Path to repository root (overrides parent --repo)",
+    )
+
     sub.add_parser("status", help="Show index status")
     sub.add_parser("clear", help="Clear the index")
-    sub.add_parser("chat", help="Interactive code Q&A (CodeAgent + code_index tools)")
+
+    chat_p = sub.add_parser("chat", help="Interactive code Q&A (CodeAgent + code_index tools)")
+    chat_p.add_argument(
+        "--repo",
+        default=None,
+        help="Path to repository root (overrides parent --repo)",
+    )
+    chat_p.add_argument(
+        "--path",
+        default=None,
+        help="Alias for --repo (path to repository root)",
+    )
 
     return parser
 
