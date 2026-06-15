@@ -138,6 +138,12 @@ async def delete_session(
     """Delete a session and its messages."""
     if not db.delete_session(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    # Cancel any background run for this session before tearing it down —
+    # runs now outlive the SSE connection (#1580), so a run left going would
+    # try to persist its answer to a session that no longer exists.
+    from ..run_manager import run_manager
+
+    run_manager.cancel(session_id)
     # Remove the per-session lock to prevent memory leaks
     http_request.app.state.session_locks.pop(session_id, None)
     # Evict the cached ChatAgent for this session so a fresh one is created
