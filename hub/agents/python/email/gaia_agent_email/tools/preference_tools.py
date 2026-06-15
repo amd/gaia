@@ -26,11 +26,12 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
-from gaia.agents.base.tools import tool
 from gaia_agent_email.tools.triage_heuristics import (
     CATEGORY_INFORMATIONAL,
     CATEGORY_LOW_PRIORITY,
 )
+
+from gaia.agents.base.tools import tool
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -122,9 +123,13 @@ def _persist_preferences(agent: Any) -> None:
     ``GAIA_MEMORY_DISABLED=1`` or Lemonade unreachable at startup),
     the write is silently skipped — preferences remain in-process only.
     This is an explicit opt-out / degraded state, not a generic fallback.
+
+    When the agent is in incognito mode (``agent._incognito is True``),
+    the write is also skipped — incognito sessions never write to persistent
+    storage, matching the MemoryMixin invariant.
     """
     store = getattr(agent, "_memory_store", None)
-    if store is None:
+    if store is None or getattr(agent, "_incognito", False):
         return
 
     prefs = getattr(agent, "_session_preferences", None)
@@ -177,7 +182,7 @@ class PreferenceToolsMixin:
 
         try:
             data = json.loads(existing[0]["content"])
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, TypeError):
             log.warning(
                 "preference_tools: failed to parse persisted preferences; "
                 "starting with empty defaults"

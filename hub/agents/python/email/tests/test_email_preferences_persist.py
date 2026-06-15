@@ -86,19 +86,26 @@ def _build_agent(tmp_path: Path) -> EmailTriageAgent:
         debug=False,
     )
 
-    with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk, patch(
-        "gaia.agents.base.memory.MemoryMixin._get_embedder",
-        return_value=MagicMock(),
-    ), patch(
-        "gaia.agents.base.memory.MemoryMixin._embed_text",
-        side_effect=_fake_embed,
-    ), patch(
-        "gaia.agents.base.memory.MemoryMixin._backfill_embeddings",
-        return_value=0,
-    ), patch(
-        "gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index",
-    ), patch(
-        "gaia.agents.base.memory.MemoryMixin.init_system_context",
+    with (
+        patch("gaia.agents.base.agent.AgentSDK") as mock_sdk,
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._get_embedder",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._embed_text",
+            side_effect=_fake_embed,
+        ),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._backfill_embeddings",
+            return_value=0,
+        ),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index",
+        ),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin.init_system_context",
+        ),
     ):
         mock_sdk.return_value = MagicMock()
         return EmailTriageAgent(config=cfg)
@@ -165,7 +172,9 @@ class TestPrioritySenderPersistsAcrossRestart:
         # Session B — fresh instance, same db
         agent_b = _build_agent(tmp_path)
         try:
-            assert "boss@company.com" in agent_b._session_preferences["priority_senders"], (
+            assert (
+                "boss@company.com" in agent_b._session_preferences["priority_senders"]
+            ), (
                 "priority sender not restored from memory after restart. "
                 f"Got: {agent_b._session_preferences['priority_senders']}"
             )
@@ -183,7 +192,10 @@ class TestPrioritySenderPersistsAcrossRestart:
 
         agent_b = _build_agent(tmp_path)
         try:
-            assert "newsletter@stripe.com" in agent_b._session_preferences["low_priority_senders"], (
+            assert (
+                "newsletter@stripe.com"
+                in agent_b._session_preferences["low_priority_senders"]
+            ), (
                 "low_priority sender not restored from memory after restart. "
                 f"Got: {agent_b._session_preferences['low_priority_senders']}"
             )
@@ -202,9 +214,14 @@ class TestPrioritySenderPersistsAcrossRestart:
 
         agent_b = _build_agent(tmp_path)
         try:
-            assert "boss@company.com" in agent_b._session_preferences["priority_senders"]
+            assert (
+                "boss@company.com" in agent_b._session_preferences["priority_senders"]
+            )
             assert "cto@company.com" in agent_b._session_preferences["priority_senders"]
-            assert "news@example.com" in agent_b._session_preferences["low_priority_senders"]
+            assert (
+                "news@example.com"
+                in agent_b._session_preferences["low_priority_senders"]
+            )
         finally:
             agent_b.close_db()
 
@@ -223,9 +240,9 @@ class TestPrioritySenderPersistsAcrossRestart:
 
         store = MemoryStore(tmp_path / "memory.db")
         rows = store.get_by_entity(_PREF_ENTITY)
-        assert len(rows) == 1, (
-            f"Expected exactly 1 memory record for {_PREF_ENTITY!r}, got {len(rows)}: {rows}"
-        )
+        assert (
+            len(rows) == 1
+        ), f"Expected exactly 1 memory record for {_PREF_ENTITY!r}, got {len(rows)}: {rows}"
 
 
 class TestCategoryDefaultPersistsAcrossRestart:
@@ -243,9 +260,9 @@ class TestCategoryDefaultPersistsAcrossRestart:
         agent_b = _build_agent(tmp_path)
         try:
             defaults = agent_b._session_preferences["category_defaults"]
-            assert defaults.get("informational") == "archive", (
-                f"category_default not restored. Got: {defaults}"
-            )
+            assert (
+                defaults.get("informational") == "archive"
+            ), f"category_default not restored. Got: {defaults}"
         finally:
             agent_b.close_db()
 
@@ -303,6 +320,64 @@ class TestClearPersistenceAcrossRestart:
             agent_b.close_db()
 
 
+class TestIncognitoGate:
+    """When _incognito=True, preference mutations work in-process but are NOT persisted."""
+
+    def test_incognito_preferences_not_persisted(self, tmp_path):
+        """Setting a priority sender while incognito must NOT be written to the store.
+
+        A subsequent non-incognito session must NOT see the incognito-session sender.
+        """
+        # Session A — incognito; set a sender
+        agent_a = _build_agent(tmp_path)
+        try:
+            agent_a._incognito = True
+            result = _invoke_set_priority_sender(agent_a, "secret@example.com")
+            assert result["ok"] is True, f"set_priority_sender failed: {result}"
+            # In-process state is mutated even in incognito
+            assert (
+                "secret@example.com" in agent_a._session_preferences["priority_senders"]
+            )
+        finally:
+            agent_a.close_db()
+
+        # Session B — non-incognito; sender must NOT be present
+        agent_b = _build_agent(tmp_path)
+        try:
+            assert (
+                "secret@example.com"
+                not in agent_b._session_preferences["priority_senders"]
+            ), (
+                "Incognito session must not persist preferences to the memory store. "
+                f"Got: {agent_b._session_preferences['priority_senders']}"
+            )
+        finally:
+            agent_b.close_db()
+
+    def test_non_incognito_preferences_are_persisted(self, tmp_path):
+        """Sanity: a normal (non-incognito) session DOES persist the preference."""
+        agent_a = _build_agent(tmp_path)
+        try:
+            # _incognito defaults to False; explicitly confirm
+            agent_a._incognito = False
+            result = _invoke_set_priority_sender(agent_a, "visible@example.com")
+            assert result["ok"] is True, f"set_priority_sender failed: {result}"
+        finally:
+            agent_a.close_db()
+
+        agent_b = _build_agent(tmp_path)
+        try:
+            assert (
+                "visible@example.com"
+                in agent_b._session_preferences["priority_senders"]
+            ), (
+                "Non-incognito session must persist preference to the memory store. "
+                f"Got: {agent_b._session_preferences['priority_senders']}"
+            )
+        finally:
+            agent_b.close_db()
+
+
 class TestMemoryDisabledFallback:
     """When GAIA_MEMORY_DISABLED=1, preferences still work in-session but aren't persisted."""
 
@@ -330,7 +405,9 @@ class TestMemoryDisabledFallback:
                 # Preference tools should still work (in-process mutation)
                 result = _invoke_set_priority_sender(agent, "boss@company.com")
                 assert result["ok"] is True, f"set_priority_sender failed: {result}"
-                assert "boss@company.com" in agent._session_preferences["priority_senders"]
+                assert (
+                    "boss@company.com" in agent._session_preferences["priority_senders"]
+                )
             finally:
                 agent.close_db()
         finally:
