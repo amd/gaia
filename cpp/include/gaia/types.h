@@ -248,6 +248,26 @@ struct ToolInfo {
     std::optional<std::string> mcpToolName;
 };
 
+// ---- LLM Usage Statistics ----
+
+struct UsageStats {
+    int promptTokens = 0;
+    int completionTokens = 0;
+    int totalTokens = 0;
+
+    void operator+=(const UsageStats& other) {
+        promptTokens += other.promptTokens;
+        completionTokens += other.completionTokens;
+        totalTokens += other.totalTokens;
+    }
+
+    json toJson() const {
+        return {{"prompt_tokens", promptTokens},
+                {"completion_tokens", completionTokens},
+                {"total_tokens", totalTokens}};
+    }
+};
+
 // ---- Parsed LLM Response ----
 
 struct ParsedResponse {
@@ -297,6 +317,9 @@ struct AgentConfig {
     bool showPrompts = false;
     bool streaming = defaultStreaming();  // also controlled by GAIA_STREAMING=1
     bool silentMode = false;
+    bool structuredEvents = false;  // Always emit structured events (thought, goal, answer)
+                                    // even during streaming. Used by JsonEventOutputHandler
+                                    // so the TUI/WebUI gets both stream tokens AND agent events.
     double temperature = 0.7;  // LLM sampling temperature (0.0 = deterministic)
 
     /// Validate config fields; throws std::invalid_argument on violation.
