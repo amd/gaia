@@ -59,7 +59,6 @@ jobs:
           # passed. NO_PROXY covers the reachability check and the spawned
           # gaia.ui.server (which inherits this env).
           NO_PROXY: "localhost,127.0.0.1"
-          no_proxy: "localhost,127.0.0.1"
         run: |
           python -m pytest tests/integration/eval/test_behavior_e2e.py `
             -m real_model -v -rs --tb=short `
