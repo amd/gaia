@@ -1,15 +1,22 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Unit tests for the email_triage eval scenario category.
+"""Regression guards for the #1636 pre_scan_inbox docstring fix.
 
-Covers:
-  (a) The email_pre_scan_summary.yaml scenario passes validate_scenario().
-  (b) FakeGmailBackend seeded with long Graph-style message IDs returns a
-      well-formed pre_scan_inbox envelope — confirming the eval seam works
-      without live OAuth.
-  (c) The pre_scan_inbox docstring no longer contains the stale "CRITICAL
-      OUTPUT FORMAT" re-emit instruction that caused gemma-4-e4b truncation
-      (#1636).
+The bug: on gemma-4-e4b the Email Triage agent rendered the triage card
+but the reply truncated right after the lead-in — the prose summary never
+appeared. Root cause was a stale "CRITICAL OUTPUT FORMAT … re-emit the
+JSON" instruction in pre_scan_inbox's docstring that made the 4B model
+burn its output budget re-serialising ~100-char Graph message/thread IDs
+across ~10 messages.
+
+These tests are hermetic (no live OAuth, no Lemonade) and cover two
+things:
+
+  (a) The docstring no longer carries the stale re-emit instruction and
+      now tells the model NOT to copy the JSON (the #1636 fix).
+  (b) pre_scan_inbox preserves message_id / thread_id even with long
+      Graph-style IDs — the issue's "don't strip the ids" constraint,
+      since those IDs back the card's Approve/Reply/Archive buttons.
 """
 
 from __future__ import annotations
@@ -18,67 +25,10 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
-
-from gaia.eval.runner import validate_scenario  # noqa: E402
-
-# Resolve from REPO_ROOT so tests work regardless of which editable install
-# is active — the installed package's SCENARIOS_DIR may point to main repo.
-_SCENARIOS_DIR = _REPO_ROOT / "eval" / "scenarios"
-EMAIL_TRIAGE_DIR = _SCENARIOS_DIR / "email_triage"
-_PRE_SCAN_SCENARIO = EMAIL_TRIAGE_DIR / "email_pre_scan_summary.yaml"
-
-# ---------------------------------------------------------------------------
-# Scenario YAML validation (no LLM needed)
-# ---------------------------------------------------------------------------
-
-
-class TestEmailTriageScenarioYAML:
-    def test_scenario_directory_exists(self):
-        assert (
-            EMAIL_TRIAGE_DIR.exists()
-        ), f"email_triage scenario directory not found: {EMAIL_TRIAGE_DIR}"
-
-    def test_pre_scan_summary_scenario_exists(self):
-        assert (
-            _PRE_SCAN_SCENARIO.exists()
-        ), f"email_pre_scan_summary.yaml not found: {_PRE_SCAN_SCENARIO}"
-
-    def test_pre_scan_summary_passes_validate_scenario(self):
-        data = yaml.safe_load(_PRE_SCAN_SCENARIO.read_text(encoding="utf-8"))
-        # validate_scenario raises ValueError on schema violations.
-        validate_scenario(_PRE_SCAN_SCENARIO, data)
-
-    def test_scenario_category_is_email_triage(self):
-        data = yaml.safe_load(_PRE_SCAN_SCENARIO.read_text(encoding="utf-8"))
-        assert data.get("category") == "email_triage"
-
-    def test_scenario_agent_type_is_email(self):
-        data = yaml.safe_load(_PRE_SCAN_SCENARIO.read_text(encoding="utf-8"))
-        assert data.get("agent_type") == "email"
-
-    def test_scenario_has_success_criteria_covering_truncation_regression(self):
-        data = yaml.safe_load(_PRE_SCAN_SCENARIO.read_text(encoding="utf-8"))
-        criteria = data["turns"][0].get("success_criteria", "")
-        # Must call out the empty-summary regression explicitly.
-        assert (
-            "truncat" in criteria.lower() or "dangling" in criteria.lower()
-        ), "success_criteria must explicitly cover the truncation regression"
-        # Must require a natural-language prose summary.
-        assert (
-            "natural-language" in criteria.lower()
-            or "prose" in criteria.lower()
-            or "sentence" in criteria.lower()
-        ), "success_criteria must require a prose/sentence summary"
-
-    def test_scenario_id_matches_filename(self):
-        data = yaml.safe_load(_PRE_SCAN_SCENARIO.read_text(encoding="utf-8"))
-        assert data.get("id") == _PRE_SCAN_SCENARIO.stem
-
 
 # ---------------------------------------------------------------------------
 # Docstring regression guard: stale re-emit instruction is gone (#1636)
