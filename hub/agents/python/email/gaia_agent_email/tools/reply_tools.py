@@ -323,11 +323,15 @@ class ReplyToolsMixin:
                 if original_msg is not None:
                     try:
                         _record_reply_observation(agent, original_msg)
-                    except Exception as obs_exc:  # noqa: BLE001
+                    except (
+                        sqlite3.Error,
+                        json.JSONDecodeError,
+                        AttributeError,
+                    ) as obs_exc:
                         log.warning(
                             "draft_reply: reply observation failed (%s) — draft "
                             "DID succeed; behavioral signal skipped",
-                            type(obs_exc).__name__,
+                            obs_exc,
                         )
                 return _envelope_ok(result)
             except ConnectorsError as exc:
