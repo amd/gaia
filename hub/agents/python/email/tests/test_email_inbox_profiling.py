@@ -108,19 +108,25 @@ def _build_agent(tmp_path: Path, *, memory_disabled: bool = False) -> EmailTriag
             else:
                 os.environ["GAIA_MEMORY_DISABLED"] = old
     else:
-        with patch(
-            "gaia.agents.base.memory.MemoryMixin._get_embedder",
-            return_value=MagicMock(),
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin._embed_text",
-            side_effect=_fake_embed,
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin._backfill_embeddings",
-            return_value=0,
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index",
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin.init_system_context",
+        with (
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._get_embedder",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._embed_text",
+                side_effect=_fake_embed,
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._backfill_embeddings",
+                return_value=0,
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index",
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin.init_system_context",
+            ),
         ):
             return _do_build()
 
@@ -160,9 +166,9 @@ class TestProfileInboxToolRegistered:
 
         agent = _build_agent(tmp_path)
         try:
-            assert "profile_inbox" in _TOOL_REGISTRY, (
-                f"profile_inbox not in registry. Keys: {sorted(_TOOL_REGISTRY)}"
-            )
+            assert (
+                "profile_inbox" in _TOOL_REGISTRY
+            ), f"profile_inbox not in registry. Keys: {sorted(_TOOL_REGISTRY)}"
         finally:
             agent.close_db()
 
@@ -191,12 +197,12 @@ class TestProfileReflectsSeededHistory:
 
             data = result["data"]
             senders = {s["sender"]: s for s in data["top_senders"]}
-            assert "boss@company.com" in senders, (
-                f"boss@company.com not in top_senders: {data['top_senders']}"
-            )
-            assert senders["boss@company.com"]["count"] == 3, (
-                f"Expected count=3, got: {senders['boss@company.com']}"
-            )
+            assert (
+                "boss@company.com" in senders
+            ), f"boss@company.com not in top_senders: {data['top_senders']}"
+            assert (
+                senders["boss@company.com"]["count"] == 3
+            ), f"Expected count=3, got: {senders['boss@company.com']}"
         finally:
             agent.close_db()
 
@@ -211,9 +217,9 @@ class TestProfileReflectsSeededHistory:
 
             senders = {s["sender"]: s for s in result["data"]["top_senders"]}
             assert "newsletter@example.com" in senders
-            assert senders["newsletter@example.com"]["dominant_category"] == "low priority", (
-                f"Expected dominant_category=low priority: {senders['newsletter@example.com']}"
-            )
+            assert (
+                senders["newsletter@example.com"]["dominant_category"] == "low priority"
+            ), f"Expected dominant_category=low priority: {senders['newsletter@example.com']}"
         finally:
             agent.close_db()
 
@@ -240,9 +246,9 @@ class TestProfileReflectsSeededHistory:
         try:
             result = _invoke_profile_inbox(agent)
             assert result["ok"] is True
-            assert result["data"]["top_senders"] == [], (
-                f"Expected empty top_senders, got: {result['data']['top_senders']}"
-            )
+            assert (
+                result["data"]["top_senders"] == []
+            ), f"Expected empty top_senders, got: {result['data']['top_senders']}"
         finally:
             agent.close_db()
 
@@ -254,9 +260,9 @@ class TestProfileReflectsSeededHistory:
             _seed_interaction(agent, "bob@company.com", "informational", count=2)
             result = _invoke_profile_inbox(agent)
             assert result["ok"] is True
-            assert result["data"]["total_messages"] == 5, (
-                f"Expected total_messages=5: {result['data']}"
-            )
+            assert (
+                result["data"]["total_messages"] == 5
+            ), f"Expected total_messages=5: {result['data']}"
         finally:
             agent.close_db()
 
@@ -274,9 +280,9 @@ class TestRecordOnTriage:
 
             entity = f"{_INTERACTION_ENTITY_PREFIX}boss@company.com"
             rows = store.get_by_entity(entity)
-            assert len(rows) == 1, (
-                f"Expected 1 interaction record, got {len(rows)}: {rows}"
-            )
+            assert (
+                len(rows) == 1
+            ), f"Expected 1 interaction record, got {len(rows)}: {rows}"
             payload = json.loads(rows[0]["content"])
             assert payload["sender"] == "boss@company.com"
             assert payload["count"] == 1
@@ -328,9 +334,9 @@ class TestMemoryDisabled:
         try:
             assert agent._memory_store is None
             result = _invoke_profile_inbox(agent)
-            assert result["ok"] is True, (
-                f"Expected ok=True when memory disabled, got: {result}"
-            )
+            assert (
+                result["ok"] is True
+            ), f"Expected ok=True when memory disabled, got: {result}"
             data = result["data"]
             assert data["top_senders"] == []
             assert data["total_messages"] == 0
@@ -360,13 +366,13 @@ class TestBoundingAndIdempotency:
 
             entity = f"{_INTERACTION_ENTITY_PREFIX}repeat@company.com"
             rows = agent._memory_store.get_by_entity(entity)
-            assert len(rows) == 1, (
-                f"Expected exactly 1 record after 10 recordings, got {len(rows)}: {rows}"
-            )
+            assert (
+                len(rows) == 1
+            ), f"Expected exactly 1 record after 10 recordings, got {len(rows)}: {rows}"
             payload = json.loads(rows[0]["content"])
-            assert payload["count"] == 10, (
-                f"count should be 10, got: {payload['count']}"
-            )
+            assert (
+                payload["count"] == 10
+            ), f"count should be 10, got: {payload['count']}"
         finally:
             agent.close_db()
 
@@ -381,9 +387,9 @@ class TestBoundingAndIdempotency:
             for sender in ("a@company.com", "b@company.com", "c@company.com"):
                 entity = f"{_INTERACTION_ENTITY_PREFIX}{sender}"
                 rows = agent._memory_store.get_by_entity(entity)
-                assert len(rows) == 1, (
-                    f"Expected 1 record for {sender}, got {len(rows)}"
-                )
+                assert (
+                    len(rows) == 1
+                ), f"Expected 1 record for {sender}, got {len(rows)}"
         finally:
             agent.close_db()
 

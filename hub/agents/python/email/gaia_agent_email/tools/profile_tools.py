@@ -31,7 +31,7 @@ Tools registered:
 from __future__ import annotations
 
 import json
-from datetime import timezone, datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from gaia.agents.base.tools import tool
@@ -69,7 +69,7 @@ def _now_iso() -> str:
 
 
 def _dominant_category(category_counts: Dict[str, int]) -> str:
-    """Return the category with the highest count (ties: lexicographic order)."""
+    """Return the category with the highest count; ties broken by last alphabetically."""
     if not category_counts:
         return ""
     return max(category_counts, key=lambda cat: (category_counts[cat], cat))
@@ -177,7 +177,10 @@ class ProfileToolsMixin:
                     }
                 )
             except (json.JSONDecodeError, KeyError, TypeError):
-                log.warning("profile_tools: skipping malformed interaction record %s", row.get("id"))
+                log.warning(
+                    "profile_tools: skipping malformed interaction record %s",
+                    row.get("id"),
+                )
         return out
 
     def _register_profile_tools(self) -> None:
@@ -195,9 +198,11 @@ class ProfileToolsMixin:
             Returns:
                 JSON envelope with ``{"ok": true, "data": {"top_senders": [...],
                 "total_messages": N}}`` where each top-senders element has
-                ``sender``, ``count``, ``dominant_category``, and
-                ``category_counts``. Returns an empty profile (ok=True,
-                top_senders=[]) when memory is disabled or no history exists.
+                ``sender``, ``count``, ``dominant_category``,
+                ``category_counts``, and ``last_ts`` (ISO-8601 timestamp of
+                the most recent interaction). Returns an empty profile
+                (ok=True, top_senders=[]) when memory is disabled or no
+                history exists.
             """
             try:
                 records = agent._read_interactions()
@@ -218,7 +223,9 @@ class ProfileToolsMixin:
                     for r in sorted_records
                 ]
                 total = sum(r["count"] for r in records)
-                return _envelope_ok({"top_senders": top_senders, "total_messages": total})
+                return _envelope_ok(
+                    {"top_senders": top_senders, "total_messages": total}
+                )
             except Exception as exc:
                 log.exception("profile_inbox failed: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
