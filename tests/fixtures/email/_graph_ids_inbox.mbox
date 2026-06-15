@@ -1,0 +1,106 @@
+From MAILER-DAEMON Mon May  5 09:00:00 2026
+From: Boss <boss@company.example>
+To: User <user@example.com>
+Subject: URGENT: Q2 budget review - response needed today
+Date: Mon, 5 May 2026 09:00:00 -0700
+Message-ID: <AQMkADAwATM0MDAAMi0xMjM0LTU2NzgtOTAxMi0xMjM0NTY3ODkwMTIALgAAA001@exchange.example>
+X-Gmail-Labels: Inbox,Important
+
+The Q2 budget review is happening this afternoon and I need your headcount
+projections by 3pm. Please prioritize this.
+
+From MAILER-DAEMON Mon May  5 09:30:00 2026
+From: Direct Report <alex@company.example>
+To: User <user@example.com>
+Subject: Re: Project status - blocked on review
+Date: Mon, 5 May 2026 09:30:00 -0700
+Message-ID: <AQMkADAwATM0MDAAMi0xMjM0LTU2NzgtOTAxMi0xMjM0NTY3ODkwMTMALgAAA002@exchange.example>
+References: <AQMkADAwATM0MDAAMi0xMjM0LTU2NzgtOTAxMi0xMjM0NTY3ODkwMTMALgAAA002-thread@exchange.example>
+X-Gmail-Labels: Inbox
+
+I'm blocked on the architecture review you promised last week. Can you take a
+look today? I have one more day before the customer deadline.
+
+From MAILER-DAEMON Mon May  5 10:00:00 2026
+From: Customer <customer@external.example>
+To: User <user@example.com>
+Subject: Production outage - escalation needed
+Date: Mon, 5 May 2026 10:00:00 -0700
+Message-ID: <AQMkADAwATM0MDAAMi0xMjM0LTU2NzgtOTAxMi0xMjM0NTY3ODkwMTQALgAAA003@exchange.example>
+X-Gmail-Labels: Inbox
+
+Our production system has been down for 4 hours. Please escalate immediately.
+
+From MAILER-DAEMON Mon May  5 10:30:00 2026
+From: HR <hr@company.example>
+To: User <user@example.com>
+Subject: Reminder: Annual benefits enrollment open through May 15
+Date: Mon, 5 May 2026 10:30:00 -0700
+Message-ID: <AQMkADAwATM0MDAAMi0xMjM0LTU2NzgtOTAxMi0xMjM0NTY3ODkwMTUALgAAA004@exchange.example>
+X-Gmail-Labels: Inbox
+
+Annual benefits enrollment is open through May 15. Visit the HR portal to make
+your selections. No action required if you keep current selections.
+
+From MAILER-DAEMON Mon May  5 11:00:00 2026
+From: Newsletter <news@retailer.example>
+To: User <user@example.com>
+Subject: 50% off this weekend only - flash sale!
+Date: Mon, 5 May 2026 11:00:00 -0700
+Message-ID: <AQMkADAwATM0MDAAMi0xMjM0LTU2NzgtOTAxMi0xMjM0NTY3ODkwMTYALgAAA005@exchange.example>
+X-Gmail-Labels: Promotions
+
+Big sale! 50% off everything this weekend.
+
+From MAILER-DAEMON Mon May  5 11:30:00 2026
+From: Shipping <orders@store.example>
+To: User <user@example.com>
+Subject: Your order has shipped
+Date: Mon, 5 May 2026 11:30:00 -0700
+Message-ID: <AQMkADAwATM0MDAAMi0xMjM0LTU2NzgtOTAxMi0xMjM0NTY3ODkwMTcALgAAA006@exchange.example>
+X-Gmail-Labels: Updates
+
+Order #12345 has shipped. Tracking number: 1Z999AA10123456784.
+
+From MAILER-DAEMON Mon May  5 12:00:00 2026
+From: GitHub <noreply@github.example>
+To: User <user@example.com>
+Subject: [repo/proj] PR #42 merged
+Date: Mon, 5 May 2026 12:00:00 -0700
+Message-ID: <AQMkADAwATM0MDAAMi0xMjM0LTU2NzgtOTAxMi0xMjM0NTY3ODkwMTgALgAAA007@exchange.example>
+X-Gmail-Labels: Inbox
+
+Pull request #42 has been merged into main.
+
+From MAILER-DAEMON Mon May  5 12:30:00 2026
+From: Finance <finance@company.example>
+To: User <user@example.com>
+Subject: Monthly expense report due Friday
+Date: Mon, 5 May 2026 12:30:00 -0700
+Message-ID: <AQMkADAwATM0MDAAMi0xMjM0LTU2NzgtOTAxMi0xMjM0NTY3ODkwMTkALgAAA008@exchange.example>
+X-Gmail-Labels: Inbox
+
+Please submit your expense report by Friday end of day.
+
+From MAILER-DAEMON Mon May  5 13:00:00 2026
+From: Security <noreply@it.company.example>
+To: User <user@example.com>
+Subject: Action required: password expiring in 3 days
+Date: Mon, 5 May 2026 13:00:00 -0700
+Message-ID: <AQMkADAwATM0MDAAMi0xMjM0LTU2NzgtOTAxMi0xMjM0NTY3ODkwMjAALgAAA009@exchange.example>
+X-Gmail-Labels: Inbox
+
+Your corporate password expires in 3 days. Please update it via the IT portal.
+
+From MAILER-DAEMON Mon May  5 13:30:00 2026
+From: Calendar <calendar-noreply@google.example>
+To: User <user@example.com>
+Subject: Invitation: Architecture review @ Tue May 6, 2pm
+Date: Mon, 5 May 2026 13:30:00 -0700
+Message-ID: <AQMkADAwATM0MDAAMi0xMjM0LTU2NzgtOTAxMi0xMjM0NTY3ODkwMjEALgAAA010@exchange.example>
+X-Gmail-Labels: Inbox
+
+You have been invited to: Architecture review
+When: Tuesday, May 6, 2026 2:00pm
+Organizer: alex@company.example
+

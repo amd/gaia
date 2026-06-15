@@ -140,7 +140,7 @@ class TestConstruction:
 
 
 class TestToolRegistry:
-    """The agent must register all tools from the six mixins."""
+    """The agent must register all tools from its tool mixins."""
 
     EXPECTED_TOOLS = {
         # Read
@@ -197,6 +197,8 @@ class TestToolRegistry:
         "set_low_priority_sender",
         "set_category_default",
         "clear_session_preferences",
+        # Inbox profiling from memory (#1289)
+        "profile_inbox",
     }
 
     def test_every_expected_tool_is_registered(self, agent):
