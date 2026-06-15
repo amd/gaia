@@ -408,6 +408,7 @@
             "pages": [
               "plans/agent-hub",
               "plans/agent-hub-ui",
+              "plans/email-agent-packaging",
               "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
