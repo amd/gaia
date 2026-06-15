@@ -131,11 +131,7 @@ class BashEvalAdapter:
             # Extract response content
             content = ""
             if "choices" in response:
-                content = (
-                    response["choices"][0]
-                    .get("message", {})
-                    .get("content", "")
-                )
+                content = response["choices"][0].get("message", {}).get("content", "")
             result["content"] = content
 
             # Validate against ground truth if provided
@@ -170,9 +166,7 @@ class BashEvalAdapter:
                 elif not must_contain_any:
                     errors.append(f"Missing required content: '{term}'")
             if must_contain_any and not found_any:
-                errors.append(
-                    f"Must contain at least one of: {gt['must_contain']}"
-                )
+                errors.append(f"Must contain at least one of: {gt['must_contain']}")
 
         # Check must_not_contain
         for term in gt.get("must_not_contain", []):
@@ -206,7 +200,13 @@ class BashEvalAdapter:
             # Look for non-zero exit code indicators
             has_nonzero = any(
                 indicator in content_lower
-                for indicator in ["exit code", "exit_code", "non-zero", "failed", "error"]
+                for indicator in [
+                    "exit code",
+                    "exit_code",
+                    "non-zero",
+                    "failed",
+                    "error",
+                ]
             )
             if not has_nonzero:
                 errors.append("Expected non-zero exit code but not indicated")
@@ -329,9 +329,7 @@ def run_eval(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run bash agent eval scenarios"
-    )
+    parser = argparse.ArgumentParser(description="Run bash agent eval scenarios")
     parser.add_argument(
         "--url",
         default="http://localhost:8200",
@@ -348,7 +346,8 @@ def main():
         help="Run a specific scenario by ID",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Print detailed output",
     )
@@ -373,9 +372,7 @@ def main():
         print(f"\nResults written to {args.json_output}")
 
     # Exit with non-zero if any scenario failed
-    all_passed = all(
-        r.get("success") and not r.get("errors") for r in results
-    )
+    all_passed = all(r.get("success") and not r.get("errors") for r in results)
     sys.exit(0 if all_passed else 1)
 
 
