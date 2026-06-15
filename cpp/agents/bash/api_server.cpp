@@ -6,6 +6,7 @@
 
 #include "api_server.h"
 
+#include <atomic>
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
@@ -24,11 +25,15 @@ namespace gaia {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Generate a unique-enough ID for chat completion responses.
+/// Generate a unique ID for chat completion responses.
+/// Combines a millisecond timestamp with a monotonic counter so two
+/// requests landing in the same millisecond still get distinct IDs.
 static std::string generateCompletionId() {
+    static std::atomic<uint64_t> counter{0};
     auto now = std::chrono::system_clock::now().time_since_epoch();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
-    return "chatcmpl-" + std::to_string(ms);
+    return "chatcmpl-" + std::to_string(ms) + "-" +
+           std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
 }
 
 /// Return the current Unix timestamp.

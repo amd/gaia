@@ -18,7 +18,7 @@ icon: "terminal"
 
 - **Interactive TUI** — Claude Code-style terminal interface with markdown rendering, streaming, and split-pane layout
 - **Bash expertise** — system prompt tuned for POSIX compliance, `shellcheck` integration, BATS test generation
-- **16 built-in tools** — file I/O, git, process execution, linting, testing, and more
+- **10 built-in tools** — file I/O, git inspection, shell execution, and environment introspection (more planned: linting, testing, clipboard)
 - **REST API server** — OpenAI-compatible endpoint for external tool integration
 - **MCP server** — stdio transport for Claude Code, OpenCode, and other MCP-compatible agents
 - **Session persistence** — save and resume conversations across runs
@@ -172,7 +172,10 @@ The following slash commands are planned but not yet available.
 | `file_write` | CONFIRM | Write/create files (creates parent dirs) |
 | `file_edit` | CONFIRM | Surgical string replacement in files |
 | `file_search` | ALLOW | Search files by glob pattern and content |
-| `git_status` | ALLOW | Git status, diff, log, show |
+| `git_status` | ALLOW | Working tree status (porcelain) |
+| `git_diff` | ALLOW | Show working-tree or staged changes |
+| `git_log` | ALLOW | Recent commit history |
+| `git_show` | ALLOW | Show a commit or object |
 
 ### Bash-Specific Tools
 
@@ -237,6 +240,15 @@ curl http://localhost:8200/v1/chat/completions \
   }'
 ```
 
+<Note>
+Streaming is **simulated**: the response is delivered as a single SSE
+`data:` chunk followed by `data: [DONE]`, not token-by-token. The
+agent runs its full tool loop before emitting the final answer, so
+real incremental token streaming isn't available through this endpoint
+yet. The SSE envelope is OpenAI-compatible, so streaming clients work
+unchanged.
+</Note>
+
 #### `GET /v1/tools`
 
 List all registered tools with their parameter schemas:
@@ -265,7 +277,7 @@ Health check:
 
 ```bash
 curl http://localhost:8200/health
-# {"status":"ok","model":"Qwen3-Coder-Next","tools":16}
+# {"status":"ok","model":"Gemma-4-E4B-it-GGUF","tools":10}
 ```
 
 #### `GET /sessions`, `POST /sessions`, `DELETE /sessions/{id}`
@@ -501,7 +513,7 @@ ctest --output-on-failure
 │                    │                                     │
 │         ┌──────────┴──────────┐                          │
 │         │  BashAgent : Agent   │                          │
-│         │  16 bash tools       │                          │
+│         │  10 bash tools       │                          │
 │         │  Session persistence │                          │
 │         └──────────┬──────────┘                          │
 │                    │                                     │
