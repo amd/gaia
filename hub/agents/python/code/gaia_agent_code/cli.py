@@ -308,10 +308,10 @@ Examples:
         default=10,
         help="Number of results to return (default: 10)",
     )
-
+    # FIX 1: use SUPPRESS so the parent's default="." is preserved when --repo is omitted
     search_p.add_argument(
         "--repo",
-        default=None,
+        default=argparse.SUPPRESS,
         help="Path to repository root (overrides parent --repo)",
     )
 
@@ -319,14 +319,17 @@ Examples:
     sub.add_parser("clear", help="Clear the index")
 
     chat_p = sub.add_parser("chat", help="Interactive code Q&A (CodeAgent + code_index tools)")
+    # FIX 2: use SUPPRESS so the parent's default="." is preserved when --repo is omitted
     chat_p.add_argument(
         "--repo",
-        default=None,
+        default=argparse.SUPPRESS,
         help="Path to repository root (overrides parent --repo)",
     )
+    # FIX 3: dest="repo" makes --path a true alias for --repo, no changes needed in cmd_index
     chat_p.add_argument(
         "--path",
-        default=None,
+        dest="repo",
+        default=argparse.SUPPRESS,
         help="Alias for --repo (path to repository root)",
     )
 
@@ -526,7 +529,7 @@ Examples:
     parser.add_argument(
         "--path",
         "-p",
-        type=str,
+        type=str,   
         default=None,
         help="Project directory path. Creates directory if it doesn't exist.",
     )

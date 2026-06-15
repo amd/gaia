@@ -127,16 +127,16 @@ Each row carries inline action buttons:
 
 If you haven't connected Google yet, the agent surfaces a one-click **Connect Google** button inline in the chat — no need to navigate to Settings → Connections manually.
 
-### In-session preferences (in-memory, wiped on restart)
+### Cross-session preferences (persisted via memory store)
 
-Tell the agent how you want classification to behave for this session:
+Tell the agent how you want classification to behave:
 
-- *"Treat boss@company.com as urgent"* → calls `set_priority_sender`. That sender bypasses the heuristic and lands in **Urgent** for the rest of the session.
+- *"Treat boss@company.com as urgent"* → calls `set_priority_sender`. That sender bypasses the heuristic and lands in **Urgent** across all future sessions.
 - *"Treat newsletter@stripe.com as low priority"* → calls `set_low_priority_sender`. That sender lands in **Suggested archives**.
 - *"Default informational mail to archive"* → calls `set_category_default("informational", "archive")`. Informational items lift into **Suggested archives** until you reset.
 - *"Clear my preferences"* → calls `clear_session_preferences`.
 
-Preferences are stored in process memory only — restarting the agent (or quitting Agent UI) wipes them. This is deliberate: the goal is to prove the value of session-scoped learning before we wire up persistent memory. Once persistent memory ships, the same tools will write through to it without changing this surface.
+Preferences persist across agent restarts via the memory store (`email:preferences`). They fall back to session-only (lost on restart) when `GAIA_MEMORY_DISABLED=1` or when the embedding backend is unreachable at startup. Incognito sessions never write preferences to persistent storage.
 
 ## Action surface
 
@@ -144,9 +144,13 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 
 `list_inbox`, `get_message`, `get_thread`, `search_messages`, `list_labels`, `triage_inbox`, `pre_scan_inbox`
 
-### Session preferences (in-memory; wiped on agent restart)
+### Preferences (persisted across restarts via memory store)
 
 `set_priority_sender`, `set_low_priority_sender`, `set_category_default`, `clear_session_preferences`
+
+### Inbox profiling
+
+`profile_inbox` — asks "who emails me most?" and returns a frequency ranking of senders with their dominant category (e.g. *urgent*, *informational*) and the timestamp of their most recent message. Profiling is built from the interaction history the agent accumulates during triage, so it improves the more you use the agent.
 
 ### Organize (reversible via the undo log)
 
