@@ -108,13 +108,22 @@
     "versionEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "published_at", "publisher", "deprecated", "artifact"],
+      "required": ["version", "published_at", "publisher", "deprecated", "artifact", "artifacts"],
       "properties": {
         "version": { "type": "string" },
         "published_at": { "type": "string", "format": "date-time" },
         "publisher": { "type": "string" },
         "deprecated": { "type": "boolean" },
-        "artifact": { "$ref": "#/definitions/artifact" }
+        "artifact": {
+          "$ref": "#/definitions/artifact",
+          "description": "Primary artifact (first published for this version). Kept for catalog display and single-artifact (wheel) agents."
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Every artifact published under this version (one per platform for native binary releases). Append-only per distinct filename.",
+          "items": { "$ref": "#/definitions/artifact" }
+        }
       }
     }
   }

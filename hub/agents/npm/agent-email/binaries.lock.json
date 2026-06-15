@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1.0",
+  "agentVersion": "0.1.0",
+  "_comment": "Per-platform frozen email-agent binary manifest. baseUrl + sha256 values are PLACEHOLDERS pending real R2 publishing (issue #1648). fetch is intentionally blocked while sha256 is a placeholder so a bad binary can never be trusted. Override baseUrl at fetch time and replace these hashes once artifacts are published. NO binaries are committed to the repo or the npm tarball — this manifest + the fetch CLI pull them at build time.",
+  "baseUrl": "https://PENDING-R2-BUCKET.example/email-agent/0.1.0",
+  "binaries": {
+    "win32-x64": {
+      "filename": "email-agent-win32-x64.exe",
+      "executable": "email-agent.exe",
+      "sha256": "PENDING-1648-replace-with-real-sha256",
+      "size": 0
+    },
+    "darwin-arm64": {
+      "filename": "email-agent-darwin-arm64",
+      "executable": "email-agent",
+      "sha256": "PENDING-1648-replace-with-real-sha256",
+      "size": 0
+    },
+    "darwin-x64": {
+      "filename": "email-agent-darwin-x64",
+      "executable": "email-agent",
+      "sha256": "PENDING-1648-replace-with-real-sha256",
+      "size": 0
+    },
+    "linux-x64": {
+      "filename": "email-agent-linux-x64",
+      "executable": "email-agent",
+      "sha256": "PENDING-1648-replace-with-real-sha256",
+      "size": 0
+    }
+  }
+}
