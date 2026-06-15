@@ -31,11 +31,19 @@ jobs:
           # boot — the harness spawns that server, so [dev] alone fails at import.
           install-package: ".[dev,ui]"
 
-      - name: Ensure Lemonade
+      - name: Start Lemonade Server
         shell: powershell
         run: |
-          gaia init --skip-lemonade
-          if ($LASTEXITCODE -ne 0) { throw "gaia init failed" }
+          # Start Lemonade and load the builder agent's model so the harness
+          # runs for real. The previous `gaia init --skip-lemonade` step blocked
+          # on an interactive "Press Enter" prompt when the server was down,
+          # failing every run before the harness (#1639). Mirrors the proven
+          # start pattern in test_examples.yml.
+          .\installer\scripts\start-lemonade.ps1 `
+            -ModelName "Qwen3.5-35B-A3B-GGUF" `
+            -Port 13305 `
+            -CtxSize 32768 `
+            -InitWaitTime 15
 
       - name: Run behavior E2E harness
         shell: powershell
@@ -46,6 +54,15 @@ jobs:
             -m real_model -v --tb=short `
             --basetemp="${{ runner.temp }}\pytest-behavior"
           if ($LASTEXITCODE -ne 0) { throw "behavior E2E harness failed" }
+
+      - name: Stop Lemonade Server
+        if: always()
+        shell: powershell
+        run: |
+          if ($env:LEMONADE_PROCESS_ID) {
+            Write-Host "Stopping Lemonade server (pid $env:LEMONADE_PROCESS_ID)..."
+            Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Upload artifacts on failure
         if: failure()
