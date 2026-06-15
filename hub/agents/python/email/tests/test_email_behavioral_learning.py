@@ -27,6 +27,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -110,19 +111,25 @@ def _build_agent(tmp_path: Path, *, memory_disabled: bool = False) -> EmailTriag
             else:
                 os.environ["GAIA_MEMORY_DISABLED"] = old
     else:
-        with patch(
-            "gaia.agents.base.memory.MemoryMixin._get_embedder",
-            return_value=MagicMock(),
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin._embed_text",
-            side_effect=_fake_embed,
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin._backfill_embeddings",
-            return_value=0,
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index",
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin.init_system_context",
+        with (
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._get_embedder",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._embed_text",
+                side_effect=_fake_embed,
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._backfill_embeddings",
+                return_value=0,
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index",
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin.init_system_context",
+            ),
         ):
             return _do_build()
 
@@ -185,6 +192,7 @@ def _build_agent_with_fake_gmail(
     observation is recorded from the ORIGINAL message's internalDate anchor.
     """
     from gaia_agent_email.config import EmailAgentConfig
+
     from tests.fixtures.email.fake_gmail import FakeGmailBackend
 
     backend = FakeGmailBackend(user_email="me@example.com")
@@ -199,19 +207,26 @@ def _build_agent_with_fake_gmail(
         debug=False,
     )
 
-    with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk, patch(
-        "gaia.agents.base.memory.MemoryMixin._get_embedder",
-        return_value=MagicMock(),
-    ), patch(
-        "gaia.agents.base.memory.MemoryMixin._embed_text",
-        side_effect=_fake_embed,
-    ), patch(
-        "gaia.agents.base.memory.MemoryMixin._backfill_embeddings",
-        return_value=0,
-    ), patch(
-        "gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index",
-    ), patch(
-        "gaia.agents.base.memory.MemoryMixin.init_system_context",
+    with (
+        patch("gaia.agents.base.agent.AgentSDK") as mock_sdk,
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._get_embedder",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._embed_text",
+            side_effect=_fake_embed,
+        ),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._backfill_embeddings",
+            return_value=0,
+        ),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index",
+        ),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin.init_system_context",
+        ),
     ):
         mock_sdk.return_value = MagicMock()
         return EmailTriageAgent(config=cfg)
@@ -309,7 +324,10 @@ class TestRecordReplyInteraction:
         try:
             agent._record_reply_interaction("", latency_seconds=30.0)
             # No record should be written
-            from gaia_agent_email.tools.profile_tools import _REPLY_ENTITY_PREFIX as PREFIX
+            from gaia_agent_email.tools.profile_tools import (
+                _REPLY_ENTITY_PREFIX as PREFIX,
+            )
+
             rows = agent._memory_store.get_by_entity(f"{PREFIX}")
             # get_by_entity with a bare prefix should return nothing for empty sender
             # (entity would be "email:reply:" which we never write)
@@ -331,9 +349,10 @@ class TestEvaluatePromotions:
         agent = _build_agent(tmp_path)
         try:
             from gaia_agent_email.tools.profile_tools import (
-                REPLY_PROMOTION_MIN_REPLIES,
                 REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS,
+                REPLY_PROMOTION_MIN_REPLIES,
             )
+
             _seed_fast_replies(
                 agent,
                 "boss@example.com",
@@ -341,9 +360,9 @@ class TestEvaluatePromotions:
                 latency_seconds=REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS / 2,
             )
             promoted = _run_evaluate_promotions(agent)
-            assert "boss@example.com" in promoted, (
-                f"Expected boss@example.com in promoted, got: {promoted}"
-            )
+            assert (
+                "boss@example.com" in promoted
+            ), f"Expected boss@example.com in promoted, got: {promoted}"
         finally:
             agent.close_db()
 
@@ -352,9 +371,10 @@ class TestEvaluatePromotions:
         agent = _build_agent(tmp_path)
         try:
             from gaia_agent_email.tools.profile_tools import (
-                REPLY_PROMOTION_MIN_REPLIES,
                 REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS,
+                REPLY_PROMOTION_MIN_REPLIES,
             )
+
             # One fewer than the minimum — should not qualify.
             if REPLY_PROMOTION_MIN_REPLIES > 1:
                 _seed_fast_replies(
@@ -375,19 +395,17 @@ class TestEvaluatePromotions:
         """A sender whose median reply latency exceeds the threshold is not promoted."""
         agent = _build_agent(tmp_path)
         try:
-            from gaia_agent_email.tools.profile_tools import (
-                REPLY_PROMOTION_MIN_REPLIES,
-                REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS,
-            )
+            from gaia_agent_email.tools.profile_tools import REPLY_PROMOTION_MIN_REPLIES
+
             _seed_slow_replies(
                 agent,
                 "slow@example.com",
                 count=REPLY_PROMOTION_MIN_REPLIES + 2,
             )
             promoted = _run_evaluate_promotions(agent)
-            assert "slow@example.com" not in promoted, (
-                f"slow@example.com (slow replier) should not be promoted: {promoted}"
-            )
+            assert (
+                "slow@example.com" not in promoted
+            ), f"slow@example.com (slow replier) should not be promoted: {promoted}"
         finally:
             agent.close_db()
 
@@ -463,9 +481,10 @@ class TestPromotionOnDemandAtTriage:
         agent = _build_agent(tmp_path)
         try:
             from gaia_agent_email.tools.profile_tools import (
-                REPLY_PROMOTION_MIN_REPLIES,
                 REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS,
+                REPLY_PROMOTION_MIN_REPLIES,
             )
+
             sender = "boss@example.com"
             # Seed fast-reply history directly in memory.
             _seed_fast_replies(
@@ -476,17 +495,18 @@ class TestPromotionOnDemandAtTriage:
             )
 
             # BEFORE triage: must not be in priority_senders yet.
-            assert sender not in agent._session_preferences["priority_senders"], (
-                "Sender must NOT be priority before triage — promotion must be on-demand"
-            )
+            assert (
+                sender not in agent._session_preferences["priority_senders"]
+            ), "Sender must NOT be priority before triage — promotion must be on-demand"
 
             # Run triage with thread/timer constructors patched. If any
             # scheduler or background worker were started, it would have to
             # instantiate one of these — and the assertions below would fail.
             msgs = [self._message_from(sender, "urgent")]
-            with patch("threading.Thread") as mock_thread, patch(
-                "threading.Timer"
-            ) as mock_timer:
+            with (
+                patch("threading.Thread") as mock_thread,
+                patch("threading.Timer") as mock_timer,
+            ):
                 _triage_messages(agent, msgs)
                 assert not mock_thread.called, (
                     "threading.Thread was constructed during triage — promotion "
@@ -516,9 +536,10 @@ class TestPromotionOnDemandAtTriage:
         agent = _build_agent(tmp_path)
         try:
             from gaia_agent_email.tools.profile_tools import (
-                REPLY_PROMOTION_MIN_REPLIES,
                 REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS,
+                REPLY_PROMOTION_MIN_REPLIES,
             )
+
             sender = "boss@example.com"
             _seed_fast_replies(
                 agent,
@@ -547,9 +568,9 @@ class TestPromotionOnDemandAtTriage:
                 f"_apply_behavioral_promotions should be called exactly once per "
                 f"triage, got {calls['n']}"
             )
-            assert calls["promoted_when_returned"], (
-                "promotion must be applied synchronously within the triage call"
-            )
+            assert calls[
+                "promoted_when_returned"
+            ], "promotion must be applied synchronously within the triage call"
         finally:
             agent.close_db()
 
@@ -564,9 +585,10 @@ class TestPromotionOnDemandAtTriage:
         agent = _build_agent(tmp_path)
         try:
             from gaia_agent_email.tools.profile_tools import (
-                REPLY_PROMOTION_MIN_REPLIES,
                 REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS,
+                REPLY_PROMOTION_MIN_REPLIES,
             )
+
             sender = "boss@example.com"
             _seed_fast_replies(
                 agent,
@@ -616,9 +638,10 @@ class TestPromotionOnDemandAtTriage:
         agent = _build_agent(tmp_path)
         try:
             from gaia_agent_email.tools.profile_tools import (
-                REPLY_PROMOTION_MIN_REPLIES,
                 REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS,
+                REPLY_PROMOTION_MIN_REPLIES,
             )
+
             sender = "boss@example.com"
             _seed_fast_replies(
                 agent,
@@ -663,9 +686,10 @@ class TestPromotionPersistsAcrossRestart:
     def test_promotion_persists_after_restart(self, tmp_path):
         """Promote a sender via triage; restart agent; sender is still priority."""
         from gaia_agent_email.tools.profile_tools import (
-            REPLY_PROMOTION_MIN_REPLIES,
             REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS,
+            REPLY_PROMOTION_MIN_REPLIES,
         )
+
         sender = "boss@example.com"
 
         # Session A — seed behavior, run triage (triggers promotion).
@@ -732,9 +756,9 @@ class TestMemoryDisabledNoPromotion:
         try:
             msgs = [self._message_from("anyone@example.com")]
             _triage_messages(agent, msgs)
-            assert len(agent._session_preferences["priority_senders"]) == 0, (
-                "No promotions should happen when memory is disabled"
-            )
+            assert (
+                len(agent._session_preferences["priority_senders"]) == 0
+            ), "No promotions should happen when memory is disabled"
         finally:
             agent.close_db()
 
@@ -768,9 +792,7 @@ class TestReplyObservationEndToEnd:
         the agent OBSERVES reply behavior, not just consumes pre-seeded data.
         """
         sender = "boss@example.com"
-        received = _received_message(
-            "msg1", sender, received_seconds_ago=120.0
-        )
+        received = _received_message("msg1", sender, received_seconds_ago=120.0)
         agent = _build_agent_with_fake_gmail(tmp_path, received)
         try:
             # No reply records exist before the reply.
@@ -786,20 +808,18 @@ class TestReplyObservationEndToEnd:
             assert "_original_msg" not in result["data"]
 
             # A reply observation was recorded for the original sender.
-            rows = agent._memory_store.get_by_entity(
-                f"{_REPLY_ENTITY_PREFIX}{sender}"
-            )
-            assert len(rows) == 1, (
-                f"Expected 1 reply record after replying through agent, got {len(rows)}"
-            )
+            rows = agent._memory_store.get_by_entity(f"{_REPLY_ENTITY_PREFIX}{sender}")
+            assert (
+                len(rows) == 1
+            ), f"Expected 1 reply record after replying through agent, got {len(rows)}"
             payload = json.loads(rows[0]["content"])
             latencies = payload["reply_latencies_seconds"]
             assert len(latencies) == 1
             # Latency should be close to the 120 s receipt anchor (allow drift
             # for test execution time).
-            assert 110.0 <= latencies[0] <= 200.0, (
-                f"Computed latency {latencies[0]} not near the 120 s anchor"
-            )
+            assert (
+                110.0 <= latencies[0] <= 200.0
+            ), f"Computed latency {latencies[0]} not near the 120 s anchor"
         finally:
             agent.close_db()
 
@@ -851,9 +871,9 @@ class TestReplyObservationEndToEnd:
                 "mailbox": "google",
             }
             _triage_messages(agent, [triage_msg])
-            assert sender in agent._session_preferences["priority_senders"], (
-                "Triage should promote a sender with observed fast-reply behavior"
-            )
+            assert (
+                sender in agent._session_preferences["priority_senders"]
+            ), "Triage should promote a sender with observed fast-reply behavior"
         finally:
             agent.close_db()
 
@@ -865,7 +885,9 @@ class TestReplyObservationEndToEnd:
         from gaia.agents.base.tools import _TOOL_REGISTRY
 
         # Build an agent with a fake backend (one unrelated received message).
-        received = _received_message("other", "someone@example.com", received_seconds_ago=60.0)
+        received = _received_message(
+            "other", "someone@example.com", received_seconds_ago=60.0
+        )
         agent = _build_agent_with_fake_gmail(tmp_path, received)
         try:
             entry = _TOOL_REGISTRY.get("send_now")
@@ -879,8 +901,123 @@ class TestReplyObservationEndToEnd:
             rows = agent._memory_store.get_by_entity(
                 f"{_REPLY_ENTITY_PREFIX}newcontact@example.com"
             )
-            assert len(rows) == 0, (
-                "send_now (fresh compose) must not record a reply observation"
-            )
+            assert (
+                len(rows) == 0
+            ), "send_now (fresh compose) must not record a reply observation"
         finally:
             agent.close_db()
+
+
+# ---------------------------------------------------------------------------
+# Tests — Outlook ISO-8601 internalDate anchor
+# ---------------------------------------------------------------------------
+
+
+class TestOutlookReplyLatency:
+    """_compute_reply_latency_seconds parses Outlook receivedDateTime ISO anchors."""
+
+    def test_outlook_iso_anchor_returns_latency(self, tmp_path):
+        """An Outlook-shaped message with an ISO internalDate ~120 s ago returns ~120 s.
+
+        The Outlook backend maps ``receivedDateTime`` (ISO-8601 string) into
+        ``internalDate``.  ``_compute_reply_latency_seconds`` must parse this
+        format and return a numeric latency rather than None.
+        """
+        from gaia_agent_email.tools.reply_tools import _compute_reply_latency_seconds
+
+        received_seconds_ago = 120.0
+        # Build an ISO-8601 anchor the way Outlook does (trailing Z).
+        received_utc = datetime.fromtimestamp(
+            time.time() - received_seconds_ago, tz=timezone.utc
+        )
+        iso_anchor = received_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        original_msg = {
+            "id": "outlook-msg-1",
+            "internalDate": iso_anchor,  # Outlook-style ISO string
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "Boss <boss@example.com>"},
+                    {"name": "Subject", "value": "Quarterly review"},
+                ],
+            },
+        }
+
+        latency = _compute_reply_latency_seconds(original_msg)
+        assert (
+            latency is not None
+        ), f"Expected a numeric latency for ISO anchor '{iso_anchor}', got None"
+        # Allow generous drift for test execution time (±30 s around 120 s).
+        assert (
+            90.0 <= latency <= 200.0
+        ), f"Expected latency ~120 s for Outlook ISO anchor, got {latency}"
+
+    def test_outlook_reply_observation_recorded(self, tmp_path):
+        """An Outlook-shaped original_msg with ISO internalDate records an observation.
+
+        Drives _record_reply_observation with an Outlook-shaped message and
+        asserts the reply interaction is written for the sender — proving the
+        Outlook path is wired end-to-end, not just parsed in isolation.
+        """
+        from gaia_agent_email.tools.reply_tools import _record_reply_observation
+
+        received_seconds_ago = 120.0
+        received_utc = datetime.fromtimestamp(
+            time.time() - received_seconds_ago, tz=timezone.utc
+        )
+        iso_anchor = received_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        original_msg = {
+            "id": "outlook-msg-2",
+            "internalDate": iso_anchor,
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "Boss <boss@outlook.com>"},
+                    {"name": "Subject", "value": "Update"},
+                ],
+            },
+        }
+
+        agent = _build_agent(tmp_path)
+        try:
+            # No record before the observation.
+            before = agent._memory_store.get_by_entity(
+                f"{_REPLY_ENTITY_PREFIX}boss@outlook.com"
+            )
+            assert len(before) == 0
+
+            _record_reply_observation(agent, original_msg)
+
+            # Observation was recorded for the Outlook sender.
+            rows = agent._memory_store.get_by_entity(
+                f"{_REPLY_ENTITY_PREFIX}boss@outlook.com"
+            )
+            assert (
+                len(rows) == 1
+            ), f"Expected 1 reply record for Outlook sender, got {len(rows)}"
+            payload = json.loads(rows[0]["content"])
+            latencies = payload["reply_latencies_seconds"]
+            assert len(latencies) == 1
+            # Latency should be close to 120 s (allow drift for test execution).
+            assert (
+                90.0 <= latencies[0] <= 200.0
+            ), f"Computed Outlook latency {latencies[0]} not near 120 s anchor"
+        finally:
+            agent.close_db()
+
+    def test_gmail_numeric_millis_still_works(self):
+        """Gmail numeric-millis internalDate is still parsed correctly.
+
+        Regression guard: the ISO path must not break the existing Gmail path.
+        """
+        from gaia_agent_email.tools.reply_tools import _compute_reply_latency_seconds
+
+        received_seconds_ago = 120.0
+        internal_ms = int((time.time() - received_seconds_ago) * 1000)
+        original_msg = {"internalDate": str(internal_ms)}
+
+        latency = _compute_reply_latency_seconds(original_msg)
+        assert latency is not None, "Gmail numeric millis must produce a latency"
+        assert (
+            90.0 <= latency <= 200.0
+        ), f"Gmail millis latency {latency} not near 120 s"

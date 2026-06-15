@@ -72,6 +72,13 @@ REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS: float = 300.0  # 5 minutes
 # is computed over this window. Far beyond any realistic weekly reply volume.
 _REPLY_LATENCY_WINDOW: int = 100
 
+# Ceiling on how many distinct-sender reply records we read in one promotion
+# pass. Mirrors _MAX_INTERACTION_RECORDS: not silent — if the ceiling is hit
+# we log a WARNING so coverage loss is explicit (per the repo's
+# no-silent-fallbacks rule) and the value can be raised deliberately.
+# 50k senders is far beyond any realistic mailbox.
+_MAX_REPLY_RECORDS: int = 50000
+
 # Sanity ceiling on how many distinct-sender interaction records we read in
 # one profiling pass. This is NOT a silent truncation cap: if a real inbox
 # ever has more distinct senders than this, ``_read_interactions`` logs a
@@ -94,7 +101,7 @@ def _now_iso() -> str:
 
 
 def _dominant_category(category_counts: Dict[str, int]) -> str:
-    """Return the category with the highest count; ties broken by last alphabetically."""
+    """Return the category with the highest count (ties: lexicographic order)."""
     if not category_counts:
         return ""
     return max(category_counts, key=lambda cat: (category_counts[cat], cat))
@@ -116,9 +123,7 @@ class ProfileToolsMixin:
     ``_triage_all_backends`` in ``agent.py``.
     """
 
-    def _record_reply_interaction(
-        self, sender: str, *, latency_seconds: float
-    ) -> None:
+    def _record_reply_interaction(self, sender: str, *, latency_seconds: float) -> None:
         """Append a reply latency data point for *sender*.
 
         Keeps a single rolling record per sender (upsert — never unbounded).
@@ -199,8 +204,15 @@ class ProfileToolsMixin:
         rows = store.get_by_category(
             _REPLY_CATEGORY,
             domain=_REPLY_DOMAIN,
-            limit=50000,
+            limit=_MAX_REPLY_RECORDS,
         )
+        if len(rows) >= _MAX_REPLY_RECORDS:
+            log.warning(
+                "profile_tools: reply-record read hit the %d-record ceiling; "
+                "some senders excluded from promotion evaluation. Raise "
+                "_MAX_REPLY_RECORDS to cover all senders.",
+                _MAX_REPLY_RECORDS,
+            )
         qualified: List[str] = []
         for row in rows:
             try:
@@ -212,7 +224,12 @@ class ProfileToolsMixin:
                 median_latency = statistics.median(latencies)
                 if median_latency <= REPLY_PROMOTION_LATENCY_THRESHOLD_SECONDS:
                     qualified.append(sender)
-            except (json.JSONDecodeError, KeyError, TypeError, statistics.StatisticsError):
+            except (
+                json.JSONDecodeError,
+                KeyError,
+                TypeError,
+                statistics.StatisticsError,
+            ):
                 log.warning(
                     "profile_tools: skipping malformed reply record %s",
                     row.get("id"),
@@ -335,11 +352,9 @@ class ProfileToolsMixin:
             Returns:
                 JSON envelope with ``{"ok": true, "data": {"top_senders": [...],
                 "total_messages": N}}`` where each top-senders element has
-                ``sender``, ``count``, ``dominant_category``,
-                ``category_counts``, and ``last_ts`` (ISO-8601 timestamp of
-                the most recent interaction). Returns an empty profile
-                (ok=True, top_senders=[]) when memory is disabled or no
-                history exists.
+                ``sender``, ``count``, ``dominant_category``, and
+                ``category_counts``. Returns an empty profile (ok=True,
+                top_senders=[]) when memory is disabled or no history exists.
             """
             try:
                 records = agent._read_interactions()
