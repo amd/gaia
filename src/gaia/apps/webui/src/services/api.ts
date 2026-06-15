@@ -196,7 +196,7 @@ export async function rollbackAgent(agentId: string): Promise<InstallStatus> {
 
 // -- Connections (issue #915) ---------------------------------------------------
 
-import type { AgentMcpServer, ConnectorInfo, ConnectorRow } from '../types';
+import type { AgentMcpServer, ConnectorRow } from '../types';
 
 // New framework endpoints (T-8b) — /api/connectors
 const UI_HEADER = { 'x-gaia-ui': '1' };
@@ -364,53 +364,6 @@ export async function deactivateConnectorAgent(
     );
 }
 
-export async function listConnections(): Promise<{ connections: ConnectorInfo[] }> {
-    return apiFetch('GET', '/connections');
-}
-
-export async function getConnection(provider: string): Promise<ConnectorInfo> {
-    return apiFetch('GET', `/connections/${provider}`);
-}
-
-export async function authorizeConnection(
-    provider: string,
-    scopes: string[],
-): Promise<{ flow_id: string; authorization_url: string }> {
-    return apiFetch('POST', `/connections/${provider}/authorize`, { scopes });
-}
-
-export async function revokeConnection(provider: string): Promise<void> {
-    await apiFetch<unknown>('DELETE', `/connections/${provider}`);
-}
-
-export async function listAgentGrants(provider: string): Promise<{
-    grants: Record<string, string[]>;
-}> {
-    return apiFetch('GET', `/connections/${provider}/grants`);
-}
-
-export async function grantAgent(
-    provider: string,
-    agentId: string,
-    scopes: string[],
-): Promise<{ provider: string; agent_id: string; scopes: string[] }> {
-    return apiFetch(
-        'PUT',
-        `/connections/${provider}/grants/${encodeURIComponent(agentId)}`,
-        { scopes },
-    );
-}
-
-export async function revokeAgentGrant(
-    provider: string,
-    agentId: string,
-): Promise<void> {
-    await apiFetch<unknown>(
-        'DELETE',
-        `/connections/${provider}/grants/${encodeURIComponent(agentId)}`,
-    );
-}
-
 // -- Sessions ------------------------------------------------------------------
 
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
@@ -425,7 +378,7 @@ export async function getSession(id: string): Promise<Session> {
     return apiFetch('GET', `/sessions/${id}`);
 }
 
-export async function updateSession(id: string, data: { title?: string; system_prompt?: string; private?: boolean; agent_type?: string; mail_provider?: string }): Promise<Session> {
+export async function updateSession(id: string, data: { title?: string; system_prompt?: string; private?: boolean; agent_type?: string }): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}`, data);
 }
 
@@ -813,7 +766,7 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
 // -- MCP Server Management -------------------------------------------------------
 
 // MCP server configuration moved to the connectors framework (#927):
-//   - Catalog tiles  → POST /api/connectors/{id}/configure (see connectorsStore)
+//   - Catalog tiles  → POST /api/connectors/{id}/configure
 //   - Custom servers → CLI `gaia connectors mcp add` today; UI in #977
 //   - Catalog list   → GET /api/connectors/catalog (filter by type='mcp_server')
 // Only read-only runtime endpoints remain:
