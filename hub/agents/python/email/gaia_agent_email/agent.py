@@ -59,6 +59,7 @@ from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
@@ -140,6 +141,7 @@ the user — do not recite raw JSON.
 
 class EmailTriageAgent(
     Agent,
+    MemoryMixin,
     DatabaseMixin,
     ReadToolsMixin,
     OrganizeToolsMixin,
@@ -159,6 +161,10 @@ class EmailTriageAgent(
     and ``self._calendar`` BEFORE invoking the parent ``Agent.__init__``,
     so when ``_register_tools`` is later called by the base class, every
     closure has the backends ready.
+
+    Exception: ``MemoryMixin`` is NOT state-free — it requires an explicit
+    ``self.init_memory(...)`` call BEFORE ``super().__init__()``, which is
+    exactly where it is placed in this ``__init__``.
     """
 
     AGENT_ID = "email"
@@ -256,6 +262,14 @@ class EmailTriageAgent(
         self.init_db(db_path)
         action_store.init_schema(self)
 
+        # Memory subsystem. Must be called BEFORE super().__init__() because
+        # Agent.__init__() calls _register_tools(), and register_memory_tools()
+        # needs _memory_store to be set. Default path: ~/.gaia/email/memory.db
+        # (namespaced so it coexists with state.db without conflict).
+        memory_db = Path(config.resolved_memory_db_path())
+        memory_db.parent.mkdir(parents=True, exist_ok=True)
+        self.init_memory(db_path=memory_db, context="email")
+
         # LLM connection. Default to Lemonade — the config's base_url
         # allowlist guarantees the host is local.
         effective_model_id = config.model_id or DEFAULT_MODEL_NAME
@@ -307,6 +321,7 @@ class EmailTriageAgent(
         self._register_calendar_tools()
         self._register_preference_tools()
         self._register_phishing_tools()
+        self.register_memory_tools()
 
     # -- Phase 2 multi-inbox routing (#1603) -------------------------------
 

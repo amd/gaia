@@ -115,6 +115,7 @@ class EmailAgentConfig:
     output_dir: Optional[str] = None
     undo_window_seconds: int = 30
     db_path: Optional[str] = None
+    memory_db_path: Optional[str] = None
     mail_provider: Optional[str] = None
     calendar_provider: Optional[str] = None
     gmail_backend: Optional[Any] = None
@@ -152,6 +153,20 @@ class EmailAgentConfig:
         from pathlib import Path
 
         return str(Path.home() / ".gaia" / "email" / "state.db")
+
+    def resolved_memory_db_path(self) -> str:
+        """Return the SQLite path for the memory store with ``$HOME`` expanded.
+
+        When ``memory_db_path`` is None, defaults to ``~/.gaia/email/memory.db``
+        (namespaced under email/ so it coexists with state.db without conflict).
+        ``Path.home()`` resolution at call time ensures test tmp_path fixtures
+        are honored.
+        """
+        if self.memory_db_path:
+            return self.memory_db_path
+        from pathlib import Path
+
+        return str(Path.home() / ".gaia" / "email" / "memory.db")
 
     def resolve_mail_backend(self) -> Any:
         """Return the mailbox backend for the configured ``mail_provider``.
