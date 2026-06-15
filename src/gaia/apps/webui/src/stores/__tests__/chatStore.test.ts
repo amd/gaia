@@ -52,3 +52,41 @@ describe('chatStore streaming state', () => {
         expect(after.agentSteps).toEqual([]);
     });
 });
+
+describe('chatStore running-sessions registry (#1580)', () => {
+    beforeEach(() => {
+        useChatStore.setState({ runningSessionIds: [] });
+    });
+
+    it('setRunningSessions stores the polled active set', () => {
+        useChatStore.getState().setRunningSessions(['a', 'b']);
+        expect(useChatStore.getState().runningSessionIds).toEqual(['a', 'b']);
+    });
+
+    it('setRunningSessions keeps a stable reference when the set is unchanged', () => {
+        useChatStore.getState().setRunningSessions(['a', 'b']);
+        const first = useChatStore.getState().runningSessionIds;
+
+        // Same membership (order-insensitive) must not produce a new array, so
+        // the 2.6s poll doesn't re-render the sidebar every tick.
+        useChatStore.getState().setRunningSessions(['b', 'a']);
+        expect(useChatStore.getState().runningSessionIds).toBe(first);
+    });
+
+    it('setRunningSessions replaces the array when membership changes', () => {
+        useChatStore.getState().setRunningSessions(['a']);
+        const first = useChatStore.getState().runningSessionIds;
+
+        useChatStore.getState().setRunningSessions(['a', 'c']);
+        const second = useChatStore.getState().runningSessionIds;
+
+        expect(second).not.toBe(first);
+        expect(second).toEqual(['a', 'c']);
+    });
+
+    it('clears to empty when no runs are active', () => {
+        useChatStore.getState().setRunningSessions(['a']);
+        useChatStore.getState().setRunningSessions([]);
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+    });
+});

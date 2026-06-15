@@ -38,6 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # expose these names at module level.  The canonical implementations live
 # in ``_chat_helpers`` (shared by both server.py and the router modules).
 # pylint: disable=unused-import
+from ._chat_helpers import _attach_chat_stream  # noqa: F401
 from ._chat_helpers import _build_history_pairs  # noqa: F401
 from ._chat_helpers import _compute_allowed_paths  # noqa: F401
 from ._chat_helpers import _get_chat_response  # noqa: F401
