@@ -39,14 +39,14 @@ _PRE_SCAN_SCENARIO = EMAIL_TRIAGE_DIR / "email_pre_scan_summary.yaml"
 
 class TestEmailTriageScenarioYAML:
     def test_scenario_directory_exists(self):
-        assert EMAIL_TRIAGE_DIR.exists(), (
-            f"email_triage scenario directory not found: {EMAIL_TRIAGE_DIR}"
-        )
+        assert (
+            EMAIL_TRIAGE_DIR.exists()
+        ), f"email_triage scenario directory not found: {EMAIL_TRIAGE_DIR}"
 
     def test_pre_scan_summary_scenario_exists(self):
-        assert _PRE_SCAN_SCENARIO.exists(), (
-            f"email_pre_scan_summary.yaml not found: {_PRE_SCAN_SCENARIO}"
-        )
+        assert (
+            _PRE_SCAN_SCENARIO.exists()
+        ), f"email_pre_scan_summary.yaml not found: {_PRE_SCAN_SCENARIO}"
 
     def test_pre_scan_summary_passes_validate_scenario(self):
         data = yaml.safe_load(_PRE_SCAN_SCENARIO.read_text(encoding="utf-8"))
@@ -65,9 +65,9 @@ class TestEmailTriageScenarioYAML:
         data = yaml.safe_load(_PRE_SCAN_SCENARIO.read_text(encoding="utf-8"))
         criteria = data["turns"][0].get("success_criteria", "")
         # Must call out the empty-summary regression explicitly.
-        assert "truncat" in criteria.lower() or "dangling" in criteria.lower(), (
-            "success_criteria must explicitly cover the truncation regression"
-        )
+        assert (
+            "truncat" in criteria.lower() or "dangling" in criteria.lower()
+        ), "success_criteria must explicitly cover the truncation regression"
         # Must require a natural-language prose summary.
         assert (
             "natural-language" in criteria.lower()
@@ -139,9 +139,7 @@ class TestPreScanInboxDocstring:
 # FakeGmailBackend seam: pre_scan_inbox works with long Graph-style IDs
 # ---------------------------------------------------------------------------
 
-_GRAPH_IDS_MBOX = (
-    _REPO_ROOT / "tests" / "fixtures" / "email" / "_graph_ids_inbox.mbox"
-)
+_GRAPH_IDS_MBOX = _REPO_ROOT / "tests" / "fixtures" / "email" / "_graph_ids_inbox.mbox"
 
 
 @pytest.mark.skipif(
@@ -203,9 +201,9 @@ class TestPreScanInboxWithGraphStyleIds:
         )
         assert all_items, "Pre-scan returned no categorised items from Graph-ID fixture"
         for item in all_items:
-            assert item.get("message_id"), (
-                f"message_id must be non-empty for item: {item}"
-            )
+            assert item.get(
+                "message_id"
+            ), f"message_id must be non-empty for item: {item}"
 
     def test_pre_scan_processes_all_inbox_messages(self, fake_gmail_with_graph_ids):
         """The fixture has 10 messages; all INBOX-labelled ones must be scanned."""
@@ -215,9 +213,9 @@ class TestPreScanInboxWithGraphStyleIds:
         out = pre_scan_inbox_impl(fake_gmail_with_graph_ids, max_messages=25)
         totals = out.get("totals", {})
         total = sum(totals.values())
-        assert total >= 7, (
-            f"Expected at least 7 inbox messages processed, got totals={totals}"
-        )
+        assert (
+            total >= 7
+        ), f"Expected at least 7 inbox messages processed, got totals={totals}"
 
     def test_fake_backend_requires_no_live_oauth(self):
         """FakeGmailBackend should construct without touching keyring / OAuth."""
@@ -226,6 +224,6 @@ class TestPreScanInboxWithGraphStyleIds:
 
         # Construction must not raise (no OAuth attempted).
         backend = FakeGmailBackend(_GRAPH_IDS_MBOX)
-        assert len(backend._messages) == 10, (
-            f"Expected 10 messages in Graph-ID fixture, got {len(backend._messages)}"
-        )
+        assert (
+            len(backend._messages) == 10
+        ), f"Expected 10 messages in Graph-ID fixture, got {len(backend._messages)}"
