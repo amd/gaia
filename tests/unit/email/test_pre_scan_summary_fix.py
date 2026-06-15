@@ -14,9 +14,11 @@ things:
 
   (a) The docstring no longer carries the stale re-emit instruction and
       now tells the model NOT to copy the JSON (the #1636 fix).
-  (b) pre_scan_inbox preserves message_id / thread_id even with long
-      Graph-style IDs — the issue's "don't strip the ids" constraint,
-      since those IDs back the card's Approve/Reply/Archive buttons.
+  (b) pre_scan_inbox preserves message_id — the issue's "don't strip the
+      ids" constraint, since those IDs back the card's Approve/Reply/Archive
+      buttons. Note: FakeGmailBackend SHA256-truncates Message-IDs to 16
+      chars, so (b) is a hermetic contract check, not a long-ID truncation
+      repro (that needs a live Outlook/Exchange mailbox — see #1636).
 """
 
 from __future__ import annotations
@@ -67,9 +69,7 @@ class TestPreScanInboxDocstring:
             "Stale 'CRITICAL OUTPUT FORMAT' re-emit instruction must be "
             "removed from pre_scan_inbox docstring (see #1636)"
         )
-        assert (
-            "your response MUST be a\n            single fenced code block" not in src
-        ), (
+        assert "single fenced code block" not in src, (
             "Stale fenced-block re-emit instruction still present in "
             "pre_scan_inbox docstring (see #1636)"
         )
@@ -86,7 +86,7 @@ class TestPreScanInboxDocstring:
 
 
 # ---------------------------------------------------------------------------
-# FakeGmailBackend seam: pre_scan_inbox works with long Graph-style IDs
+# FakeGmailBackend seam: pre_scan_inbox envelope + message_id contract (hermetic)
 # ---------------------------------------------------------------------------
 
 _GRAPH_IDS_MBOX = _REPO_ROOT / "tests" / "fixtures" / "email" / "_graph_ids_inbox.mbox"
@@ -96,14 +96,19 @@ _GRAPH_IDS_MBOX = _REPO_ROOT / "tests" / "fixtures" / "email" / "_graph_ids_inbo
     not _GRAPH_IDS_MBOX.exists(),
     reason="_graph_ids_inbox.mbox fixture not found",
 )
-class TestPreScanInboxWithGraphStyleIds:
-    """Confirm that pre_scan_inbox_impl works correctly when the mailbox
-    contains long Graph-style Message-ID headers (as Outlook/Exchange uses).
+class TestPreScanInboxContract:
+    """Hermetic contract test for pre_scan_inbox_impl via FakeGmailBackend.
 
-    This verifies:
-    - The FakeGmailBackend seam works hermetically (no live OAuth).
+    Verifies (no live OAuth, no Lemonade):
     - pre_scan_inbox_impl returns a valid email_pre_scan envelope.
-    - The message_id / thread_id fields are populated (not stripped).
+    - message_id is populated (not stripped) — the card's Approve/Reply/Archive
+      buttons depend on it (the issue's "don't strip the ids" constraint).
+
+    NOTE: this does NOT reproduce the #1636 long-ID truncation. FakeGmailBackend
+    SHA256-truncates every Message-ID to a 16-char hash, so the ~100-char Graph
+    IDs in the fixture never reach the tool; the real repro needs a live
+    Outlook/Exchange mailbox. The TestPreScanInboxDocstring assertions are the
+    hermetic regression guard for the fix itself.
     """
 
     @pytest.fixture
