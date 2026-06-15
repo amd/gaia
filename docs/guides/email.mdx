@@ -127,16 +127,20 @@ Each row carries inline action buttons:
 
 If you haven't connected Google yet, the agent surfaces a one-click **Connect Google** button inline in the chat — no need to navigate to Settings → Connections manually.
 
-### Cross-session preferences (persisted via memory store)
+### In-session preferences (in-memory, wiped on restart)
 
-Tell the agent how you want classification to behave:
+Tell the agent how you want classification to behave for this session:
 
-- *"Treat boss@company.com as urgent"* → calls `set_priority_sender`. That sender bypasses the heuristic and lands in **Urgent** across all future sessions.
+- *"Treat boss@company.com as urgent"* → calls `set_priority_sender`. That sender bypasses the heuristic and lands in **Urgent** for the rest of the session.
 - *"Treat newsletter@stripe.com as low priority"* → calls `set_low_priority_sender`. That sender lands in **Suggested archives**.
 - *"Default informational mail to archive"* → calls `set_category_default("informational", "archive")`. Informational items lift into **Suggested archives** until you reset.
 - *"Clear my preferences"* → calls `clear_session_preferences`.
 
-Preferences persist across agent restarts via the memory store (`email:preferences`). They fall back to session-only (lost on restart) when `GAIA_MEMORY_DISABLED=1` or when the embedding backend is unreachable at startup. Incognito sessions never write preferences to persistent storage.
+Preferences are stored in process memory only — restarting the agent (or quitting Agent UI) wipes them. This is deliberate: the goal is to prove the value of session-scoped learning before we wire up persistent memory. Once persistent memory ships, the same tools will write through to it without changing this surface.
+
+### Behavioral learning (auto-promotion)
+
+Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
 
 ## Action surface
 
@@ -144,7 +148,7 @@ Preferences persist across agent restarts via the memory store (`email:preferenc
 
 `list_inbox`, `get_message`, `get_thread`, `search_messages`, `list_labels`, `triage_inbox`, `pre_scan_inbox`
 
-### Preferences (persisted across restarts via memory store)
+### Session preferences (in-memory; wiped on agent restart)
 
 `set_priority_sender`, `set_low_priority_sender`, `set_category_default`, `clear_session_preferences`
 
