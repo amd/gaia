@@ -13,6 +13,10 @@
 
     <!-- Desktop Navigation Links -->
     <div class="hidden sm:flex items-center gap-6">
+      <a href="/hub"
+         class="text-gaia-muted hover:text-white transition-colors text-sm font-medium">
+        Agent Hub
+      </a>
       <a href="https://amd-gaia.ai/docs" target="_blank" rel="noopener noreferrer"
          class="text-gaia-muted hover:text-white transition-colors text-sm font-medium">
         Docs
@@ -52,6 +56,10 @@
   <!-- Mobile Menu -->
   <div id="mobile-menu" class="sm:hidden hidden border-t border-gaia-border bg-gaia-bg/95 backdrop-blur-md">
     <div class="px-4 py-4 space-y-3">
+      <a href="/hub"
+         class="block text-gaia-muted hover:text-white transition-colors text-base font-medium py-2">
+        Agent Hub
+      </a>
       <a href="https://amd-gaia.ai/docs" target="_blank" rel="noopener noreferrer"
          class="block text-gaia-muted hover:text-white transition-colors text-base font-medium py-2">
         Docs
@@ -89,7 +97,8 @@
 
   // Close menu when clicking outside
   document.addEventListener('click', (e) => {
-    if (!menuBtn?.contains(e.target) && !mobileMenu?.contains(e.target)) {
+    const target = e.target as Node | null;
+    if (!menuBtn?.contains(target) && !mobileMenu?.contains(target)) {
       mobileMenu?.classList.add('hidden');
       menuBtn?.setAttribute('aria-expanded', 'false');
       menuIcon?.classList.remove('hidden');

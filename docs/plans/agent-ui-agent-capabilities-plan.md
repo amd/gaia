@@ -63,7 +63,7 @@
 | **JiraAgent** | `JiraAgent(Agent)` | `agents/jira/agent.py` | Jira issue management |
 | **DockerAgent** | `DockerAgent(MCPAgent)` | `agents/docker/agent.py` | Docker container management via MCP |
 | **SDAgent** | `SDAgent(Agent, SDToolsMixin, VLMToolsMixin)` | `agents/sd/agent.py` | Image generation + visual analysis |
-| **MedicalIntakeAgent** | `MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin)` | `agents/emr/agent.py` | Medical form processing with VLM |
+| **MedicalIntakeAgent** | `MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin)` | `hub/agents/python/emr/gaia_agent_emr/agent.py` | Medical form processing with VLM |
 | **RoutingAgent** | `RoutingAgent` | `agents/routing/agent.py` | Intelligent agent selection |
 | **SummarizerAgent** | `SummarizerAgent(Agent)` | `agents/summarize/agent.py` | Document summarization |
 
@@ -360,7 +360,7 @@ GAIA already has a robust MCP client infrastructure:
 
 ### 7.2 Most Popular MCP Servers (2026 Ecosystem)
 
-Based on real usage data from [FastMCP](https://fastmcp.me/blog/top-10-most-popular-mcp-servers) (1,864+ servers tracked) and [mcpservers.org](https://mcpservers.org/):
+Based on real usage data from [MCP Directory](https://mcp.directory/blog/top-10-most-popular-mcp-servers) and [mcpservers.org](https://mcpservers.org/):
 
 #### Tier 1 — Essential (High demand, directly useful for Agent UI)
 

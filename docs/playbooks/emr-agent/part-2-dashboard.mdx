@@ -5,7 +5,7 @@ icon: "chart-line"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/emr/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/emr/)
+  **Source Code:** [`hub/agents/python/emr/`](https://github.com/amd/gaia/blob/main/hub/agents/python/emr/)
 </Info>
 
 <Note>
@@ -77,7 +77,7 @@ flowchart TB
 
 ```bash
 # Build frontend (first time only)
-cd src/gaia/agents/emr/dashboard/frontend
+cd hub/agents/python/emr/gaia_agent_emr/dashboard/frontend
 npm install && npm run build
 cd -
 
@@ -512,7 +512,7 @@ gaia-emr dashboard --port 8080
 ### Terminal 2: Vite Dev Server
 
 ```bash
-cd src/gaia/agents/emr/dashboard/frontend
+cd hub/agents/python/emr/gaia_agent_emr/dashboard/frontend
 npm install
 npm run dev
 ```
@@ -522,7 +522,7 @@ Access http://localhost:3000 for the Vite dev server (proxies API to port 8080).
 ### Project Structure
 
 ```
-src/gaia/agents/emr/dashboard/
+hub/agents/python/emr/gaia_agent_emr/dashboard/
 ├── server.py           # FastAPI server with SSE
 ├── electron/           # Electron wrapper
 │   ├── main.js         # Electron entry point
@@ -580,7 +580,7 @@ Let's understand how the backend is built.
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
-from gaia.agents.emr import MedicalIntakeAgent
+from gaia_agent_emr import MedicalIntakeAgent
 import asyncio
 import json
 

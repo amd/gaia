@@ -16,9 +16,20 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Literal, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+)
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
@@ -37,6 +48,91 @@ logger = logging.getLogger(__name__)
 # Content truncation thresholds
 CHUNK_TRUNCATION_THRESHOLD = 5000
 CHUNK_TRUNCATION_SIZE = 2500
+
+# Global default for how many reasoning/tool steps an agent may take before it
+# stops and reports progress. This is the single knob for the whole fleet:
+# change DEFAULT_MAX_STEPS here, or set GAIA_AGENT_MAX_STEPS=<n> at runtime to
+# override every agent at once. Agents that genuinely need more (e.g. CodeAgent
+# for multi-file generation) override it explicitly in their own config.
+DEFAULT_MAX_STEPS = 50
+
+
+def default_max_steps() -> int:
+    """Resolve the global default agent step limit.
+
+    Reads ``GAIA_AGENT_MAX_STEPS`` at call time (not import) so the env var can
+    be set after this module is imported and still take effect. Returns
+    ``DEFAULT_MAX_STEPS`` when the var is unset; raises on a present-but-invalid
+    value so a typo surfaces immediately instead of silently capping agents.
+    """
+    raw = os.environ.get("GAIA_AGENT_MAX_STEPS")
+    if raw is None or raw == "":
+        return DEFAULT_MAX_STEPS
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {raw!r}. "
+            f"Unset it to use the default ({DEFAULT_MAX_STEPS})."
+        ) from e
+    if value <= 0:
+        raise ValueError(
+            f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {value}. "
+            f"Unset it to use the default ({DEFAULT_MAX_STEPS})."
+        )
+    return value
+
+
+# Default per-tool execution limit (seconds). Bounds a single ``tool(**args)``
+# call so a hung tool (e.g. a stuck connector/network call) surfaces an
+# actionable error in a sensible window instead of blocking the agent loop —
+# and the producer thread — indefinitely. Well under the UI's 600s consumer cap.
+# Tools that legitimately run longer (e.g. ``generate_image``, which may
+# download a model) opt out via ``@tool(timeout=...)``.
+DEFAULT_TOOL_TIMEOUT = 180.0
+
+
+def tool_execution_timeout() -> float:
+    """Resolve the global default per-tool execution timeout in seconds.
+
+    Reads ``GAIA_AGENT_TOOL_TIMEOUT`` at call time (not import) so the env var
+    can be set after this module is imported and still take effect. Returns
+    ``DEFAULT_TOOL_TIMEOUT`` when the var is unset; raises on a present-but-
+    invalid value so a typo surfaces immediately instead of silently removing
+    the guard.
+    """
+    raw = os.environ.get("GAIA_AGENT_TOOL_TIMEOUT")
+    if raw is None or raw == "":
+        return DEFAULT_TOOL_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"GAIA_AGENT_TOOL_TIMEOUT must be a positive number of seconds, "
+            f"got {raw!r}. Unset it to use the default ({DEFAULT_TOOL_TIMEOUT})."
+        ) from e
+    if value <= 0:
+        raise ValueError(
+            f"GAIA_AGENT_TOOL_TIMEOUT must be a positive number of seconds, "
+            f"got {value}. Unset it to use the default ({DEFAULT_TOOL_TIMEOUT})."
+        )
+    return value
+
+
+class ToolExecutionTimeout(Exception):
+    """Raised when a tool body exceeds its bounded execution window.
+
+    Caught inside ``Agent._execute_tool`` and converted into a fail-loud,
+    actionable error result; it is not meant to propagate to callers.
+    """
+
+    def __init__(self, tool_name: str, timeout: float):
+        self.tool_name = tool_name
+        self.timeout = timeout
+        super().__init__(
+            f"Tool '{tool_name}' exceeded its {timeout:g}s execution limit"
+        )
+
 
 # Tools that require explicit user confirmation before execution.
 # Adding a tool name here causes _execute_tool() to call
@@ -62,6 +158,10 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "accept_invite",
     "decline_invite",
     "create_event_from_email",
+    # Phishing quarantine (#1271) — mutates message state (removes from INBOX
+    # and applies a quarantine label). Reversible via unquarantine_message but
+    # must not auto-execute without explicit user confirmation.
+    "quarantine_phishing_message",
 }
 
 
@@ -81,6 +181,26 @@ class HardwareRequirement:
 # Prefixes for tools that represent SD (Stable Diffusion) capability.
 # Used to detect whether the agent has attempted image-generation tools.
 _SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
+
+
+# Tools that mutate external state (mark read, archive, star, …). A small
+# model that loses track of sequential state may re-issue an identical
+# mutation (same tool + same id). Unlike query dedup we key on the *args*,
+# not the result — re-issuing mark_read on the same id returns a *different*
+# result ("already read"), so a result hash would miss the repeat (#1317).
+_MUTATION_TOOLS: Tuple[str, ...] = (
+    "mark_read",
+    "mark_read_batch",
+    "mark_unread",
+    "mark_unread_batch",
+    "archive_message",
+    "archive_message_batch",
+    "add_star",
+    "add_star_batch",
+    "remove_star",
+    "remove_star_batch",
+    "trash_message",
+)
 
 
 def _repair_invalid_json_escapes(s: str) -> str:
@@ -238,7 +358,7 @@ Do NOT wrap conversational replies in JSON.
         claude_model: str = "claude-sonnet-4-20250514",
         base_url: Optional[str] = None,
         model_id: str = None,
-        max_steps: int = 20,
+        max_steps: Optional[int] = None,
         debug_prompts: bool = False,
         show_prompts: bool = False,
         output_dir: str = None,
@@ -262,7 +382,9 @@ Do NOT wrap conversational replies in JSON.
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-4-20250514")
             base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
             model_id: The ID of the model to use with LLM server (default for local)
-            max_steps: Maximum number of steps the agent can take before terminating
+            max_steps: Maximum number of steps the agent can take before terminating.
+                When None, falls back to the global default_max_steps() (env
+                GAIA_AGENT_MAX_STEPS, else DEFAULT_MAX_STEPS).
             debug_prompts: If True, includes prompts in the conversation history
             show_prompts: If True, displays prompts sent to LLM in console (default: False)
             output_dir: Directory for storing JSON output files (default: current directory)
@@ -288,7 +410,7 @@ Do NOT wrap conversational replies in JSON.
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
-        self.max_steps = max_steps
+        self.max_steps = max_steps if max_steps is not None else default_max_steps()
         self.debug_prompts = debug_prompts
         self.show_prompts = show_prompts  # Separate flag for displaying prompts
         self.output_dir = output_dir if output_dir else os.getcwd()
@@ -302,6 +424,10 @@ Do NOT wrap conversational replies in JSON.
         self._current_query: Optional[str] = (
             None  # Store current query for error context
         )
+        # Optional cooperative cancel signal. When set (e.g. by the Agent UI's
+        # stream-timeout/disconnect cleanup), the process_query loop bails at the
+        # next step boundary so the producer thread is torn down, not leaked.
+        self._cancel_event: Optional[threading.Event] = None
 
         # Read base_url from environment if not provided
         if base_url is None:
@@ -445,8 +571,14 @@ Do NOT wrap conversational replies in JSON.
                     fragment = getattr(self, attr_name)()
                     if fragment:
                         prompts.append(fragment)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # A raising fragment is dropped from the composed prompt; surface it
+                    # so a silently degraded system prompt is diagnosable.
+                    logger.warning(
+                        "system-prompt fragment %s() raised, skipping it: %s",
+                        attr_name,
+                        e,
+                    )
 
         return prompts
 
@@ -695,6 +827,13 @@ Do NOT wrap conversational replies in JSON.
         "Let me search for that.\n{"thought": "...", "tool": "query_documents",
          "tool_args": {"query": "..."}}"
 
+        Decision logic over all {…} candidates that contain a "tool" key,
+        each tagged fenced/unfenced:
+          1. ≥1 unfenced candidate → return the first (unchanged — zero regression).
+          2. else exactly one fenced candidate → return it (the fix for #1428).
+          3. else >1 fenced, 0 unfenced → ambiguous (looks like docs) → None + warning.
+          4. else → None.
+
         This method finds the JSON block using brace-depth matching and returns
         the parsed tool call if it contains a "tool" key.  Returns None if no
         embedded tool call is found, allowing the caller to treat the response
@@ -705,7 +844,6 @@ Do NOT wrap conversational replies in JSON.
             return None
 
         # Build a set of character ranges inside code fences (```...```)
-        # so we don't accidentally extract example JSON from markdown.
         _code_ranges: list[tuple[int, int]] = []
         _search_from = 0
         while True:
@@ -723,17 +861,31 @@ Do NOT wrap conversational replies in JSON.
         def _inside_code_fence(pos: int) -> bool:
             return any(start <= pos < end for start, end in _code_ranges)
 
-        # Walk through looking for { that starts a JSON-like block with "tool"
+        def _parse_candidate(raw: str) -> Optional[Dict[str, Any]]:
+            """Return the parsed dict if raw is valid JSON with a 'tool' key, else None."""
+            try:
+                fixed = re.sub(r",\s*}", "}", raw)
+                fixed = re.sub(r",\s*]", "]", fixed)
+                parsed = json.loads(fixed)
+                if isinstance(parsed, dict) and "tool" in parsed:
+                    if "tool_args" not in parsed:
+                        parsed["tool_args"] = {}
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+            return None
+
+        # Collect all tool-call candidates, tagged by whether they are inside a fence
+        unfenced: list[Dict[str, Any]] = []
+        fenced: list[Dict[str, Any]] = []
+
         idx = 0
         while idx < len(response):
             brace_pos = response.find("{", idx)
             if brace_pos == -1:
                 break
 
-            # Skip JSON inside markdown code fences (example/documentation)
-            if _inside_code_fence(brace_pos):
-                idx = brace_pos + 1
-                continue
+            is_fenced = _inside_code_fence(brace_pos)
 
             # Look ahead for "tool" near this brace (within 200 chars)
             look_ahead = response[brace_pos : brace_pos + 200]
@@ -766,30 +918,42 @@ Do NOT wrap conversational replies in JSON.
                             break
 
             if depth != 0:
-                # Unclosed braces — skip
                 idx = brace_pos + 1
                 continue
 
-            candidate = response[brace_pos : end_pos + 1]
-            try:
-                # Fix common trailing comma issues
-                fixed = re.sub(r",\s*}", "}", candidate)
-                fixed = re.sub(r",\s*]", "]", fixed)
-                parsed = json.loads(fixed)
-
-                # Only accept if it has a "tool" key (it's a tool call)
-                if isinstance(parsed, dict) and "tool" in parsed:
-                    if "tool_args" not in parsed:
-                        parsed["tool_args"] = {}
-                    logger.debug(
-                        f"[PARSE] Extracted embedded tool call: "
-                        f"{parsed.get('tool')}"
-                    )
-                    return parsed
-            except json.JSONDecodeError:
-                pass
+            raw = response[brace_pos : end_pos + 1]
+            parsed = _parse_candidate(raw)
+            if parsed is not None:
+                if is_fenced:
+                    fenced.append(parsed)
+                else:
+                    unfenced.append(parsed)
 
             idx = brace_pos + 1
+
+        # Decision logic
+        if unfenced:
+            # Rule 1: prefer unfenced (unchanged behaviour — zero regression)
+            logger.debug(
+                "[PARSE] Extracted embedded tool call: %s", unfenced[0].get("tool")
+            )
+            return unfenced[0]
+
+        if len(fenced) == 1:
+            # Rule 2: exactly one fenced call — trust it (fix for #1428)
+            logger.debug(
+                "[PARSE] Extracted fenced tool call: %s", fenced[0].get("tool")
+            )
+            return fenced[0]
+
+        if len(fenced) > 1:
+            # Rule 3: multiple fenced calls — ambiguous, likely documentation examples
+            logger.warning(
+                "[PARSE] ambiguous: %d fenced tool-call candidates found and no "
+                "unfenced call; cannot determine which is real — returning None",
+                len(fenced),
+            )
+            return None
 
         return None
 
@@ -1590,6 +1754,49 @@ Do NOT wrap conversational replies in JSON.
             return matches[0]
         return None
 
+    def _resolve_tool_timeout(self, tool_name: str) -> float:
+        """Resolve the execution timeout (seconds) for a tool.
+
+        A per-tool ``@tool(timeout=...)`` override wins; otherwise the global
+        ``GAIA_AGENT_TOOL_TIMEOUT`` default applies.
+        """
+        entry = self._tools_registry.get(tool_name) or {}
+        override = entry.get("timeout")
+        if override is not None:
+            return float(override)
+        return tool_execution_timeout()
+
+    def _call_tool_bounded(
+        self, tool: Callable, tool_args: Dict[str, Any], tool_name: str
+    ) -> Any:
+        """Run a tool body under a bounded execution window.
+
+        The tool runs in a daemon worker thread joined with the resolved
+        timeout. On success the worker's return value is returned and any
+        exception it raised is re-raised in the caller (so the existing
+        ``_execute_tool`` error handling applies unchanged). On timeout a
+        ``ToolExecutionTimeout`` is raised — the worker keeps running (Python
+        cannot kill a thread) but it is a daemon, so it cannot block process
+        exit and the agent loop is freed immediately.
+        """
+        timeout = self._resolve_tool_timeout(tool_name)
+        holder: Dict[str, Any] = {}
+
+        def _target():
+            try:
+                holder["result"] = tool(**tool_args)
+            except BaseException as exc:  # noqa: BLE001 — re-raised in caller
+                holder["exc"] = exc
+
+        worker = threading.Thread(target=_target, name=f"tool:{tool_name}", daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            raise ToolExecutionTimeout(tool_name, timeout)
+        if "exc" in holder:
+            raise holder["exc"]
+        return holder.get("result")
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
@@ -1693,9 +1900,29 @@ Do NOT wrap conversational replies in JSON.
             return {"status": "error", "error": error_msg}
 
         try:
-            result = tool(**tool_args)
+            result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
             return result
+        except ToolExecutionTimeout as e:
+            # Bounded-execution guard fired: the tool body blocked past its
+            # limit. Fail loud with an actionable message — name the tool, the
+            # window, and the override knob — instead of hanging the agent loop.
+            error_msg = (
+                f"Tool '{tool_name}' did not return within {e.timeout:g}s and "
+                f"was abandoned. The call may be hung (e.g. an unreachable "
+                f"service or stuck network request). Check the tool/connector, "
+                f"or raise GAIA_AGENT_TOOL_TIMEOUT if it legitimately needs "
+                f"longer."
+            )
+            logger.error(error_msg)
+            self.error_history.append(error_msg)
+            self.console.print_error(error_msg)
+            return {
+                "status": "error",
+                "error": error_msg,
+                "timeout": True,
+                "tool_name": tool_name,
+            }
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout specifically
             error_msg = f"Tool {tool_name} timed out: {str(e)}"
@@ -2329,6 +2556,9 @@ Do NOT wrap conversational replies in JSON.
         query_result_cache: dict[str, int] = (
             {}
         )  # result_hash → call count (result-based dedup)
+        mutation_call_cache: dict[str, int] = (
+            {}
+        )  # (tool, normalized args) → call count (input-based dedup, #1317)
         last_error = None  # Track the last error to handle it properly
         previous_outputs = []  # Track previous tool outputs (truncated for context)
         step_results = []  # Track full tool results for parameter substitution
@@ -2368,6 +2598,25 @@ Do NOT wrap conversational replies in JSON.
 
         # Process the query in steps, allowing for multiple tool usages
         while steps_taken < steps_limit and final_answer is None:
+            # Cooperative cancellation: if a consumer (e.g. the Agent UI's
+            # stream-timeout/disconnect cleanup) signalled cancel, stop here so
+            # the producer thread is torn down rather than left running. Checked
+            # at the step boundary; per-tool timeouts keep each step bounded so
+            # this point is always reached in finite time.
+            cancel_event = getattr(self, "_cancel_event", None)
+            if cancel_event is not None and cancel_event.is_set():
+                logger.warning(
+                    "Agent run cancelled at step %d/%d via cancel_event",
+                    steps_taken,
+                    steps_limit,
+                )
+                final_answer = (
+                    "The request was stopped because it exceeded the allowed "
+                    "time before completing. Try a simpler request or break it "
+                    "into smaller steps."
+                )
+                break
+
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
             steps_taken += 1
@@ -3451,6 +3700,12 @@ Do NOT wrap conversational replies in JSON.
                             )
                             messages.append({"role": "user", "content": dedup_msg})
 
+                    # Input-based dedup for mutation tools (#1317): catch an
+                    # identical mutation re-issue at the first repeat.
+                    self._dedup_mutation_call(
+                        tool_name, tool_args, mutation_call_cache, messages
+                    )
+
                     # Domain hooks. A returned plan switches the agent into
                     # STATE_EXECUTING_PLAN for prereq-style recovery. The
                     # base impl returns None but the hook's annotation is
@@ -3670,6 +3925,12 @@ Do NOT wrap conversational replies in JSON.
                             "OR state that the information was not found in the document."
                         )
                         messages.append({"role": "user", "content": dedup_msg})
+
+                # Input-based dedup for mutation tools (#1317): catch an
+                # identical mutation re-issue at the first repeat.
+                self._dedup_mutation_call(
+                    tool_name, tool_args, mutation_call_cache, messages
+                )
 
                 # Handle domain-specific post-processing.
                 # A returned plan switches into STATE_EXECUTING_PLAN. The
@@ -4282,6 +4543,51 @@ Do NOT wrap conversational replies in JSON.
                 "or check that the underlying service is running."
             )
         return f"Task completed with {tool_name}. No further action needed."
+
+    def _dedup_mutation_call(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        mutation_call_cache: Dict[str, int],
+        messages: List[Dict[str, Any]],
+    ) -> None:
+        """Catch a repeated identical mutation at the FIRST repeat (#1317).
+
+        Query dedup hashes the *result*; mutations must key on the *args*
+        instead — re-issuing the same mutation (e.g. ``mark_read`` on an
+        already-read id) returns a *different* result the second time, so a
+        result hash would miss the repeat. Keying on ``(tool, normalized
+        args)`` also leaves mutations on *different* ids untouched. Mirrors
+        the query-dedup corrective signal: inject a re-plan prompt rather
+        than silently dropping the call, so the model gets a chance to move
+        on instead of waiting for the slow reactive loop-detector.
+        """
+        if tool_name not in _MUTATION_TOOLS:
+            return
+        # Normalize so {"a":1,"b":2} and {"b":2,"a":1} hash identically.
+        try:
+            normalized = json.dumps(tool_args, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            normalized = str(tool_args)
+        call_key = f"{tool_name}:{normalized}"
+        mutation_call_cache[call_key] = mutation_call_cache.get(call_key, 0) + 1
+        if mutation_call_cache[call_key] >= 2:
+            logger.debug(
+                "[DEDUP] Identical mutation %s issued %d times — injecting re-plan signal",
+                tool_name,
+                mutation_call_cache[call_key],
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"[SYSTEM] You already called {tool_name} with these exact "
+                        f"arguments {mutation_call_cache[call_key]} times. The change "
+                        "is already applied — repeating it has no effect. Move on to "
+                        "the next item in your plan, or finish if nothing is left."
+                    ),
+                }
+            )
 
     def _post_process_tool_result(
         self, _tool_name: str, _tool_args: Dict[str, Any], _tool_result: Dict[str, Any]

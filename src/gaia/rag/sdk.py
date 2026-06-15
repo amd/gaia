@@ -30,14 +30,19 @@ except ImportError:
     except ImportError:
         PdfReader = None
 
+# Not just ImportError: a broken native dependency (e.g. torchcodec/FFmpeg
+# pulled in by sentence-transformers, or an arch-mismatched faiss build) raises
+# RuntimeError/OSError at import. Treat that the same as "not installed" so a
+# bad install can't crash every module that transitively imports RAG; the loud,
+# actionable error is deferred to RAGSDK._check_dependencies() at point of use.
 try:
     from sentence_transformers import SentenceTransformer
-except ImportError:
+except Exception:  # pylint: disable=broad-except
     SentenceTransformer = None
 
 try:
     import faiss
-except ImportError:
+except Exception:  # pylint: disable=broad-except
     faiss = None
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
@@ -225,6 +230,38 @@ class RAGSDK:
                 f"Or install packages directly:\n"
                 f"  uv pip install {' '.join(missing)}\n"
             )
+            # A package that is installed but failed to import (broken native
+            # deps) needs a different fix than a missing one — name the cause.
+            # Re-import on this (already-failing) path to recover the reason,
+            # skipping genuinely-missing packages (ImportError) which the
+            # install instructions above already cover.
+            broken = []
+            for pkg, label in (
+                ("sentence_transformers", "sentence-transformers"),
+                ("faiss", "faiss"),
+            ):
+                if (pkg == "sentence_transformers" and SentenceTransformer is None) or (
+                    pkg == "faiss" and faiss is None
+                ):
+                    try:
+                        # Use the import statement (__import__), not
+                        # importlib.import_module — the latter bypasses
+                        # builtins.__import__, so this path can't be exercised
+                        # by tests that intercept imports, and re-running the
+                        # real import is what re-surfaces the native cause.
+                        __import__(pkg)
+                    except ImportError:
+                        pass  # genuinely missing → covered by install instructions
+                    except Exception as exc:  # pylint: disable=broad-except
+                        broken.append(f"  {label}: {exc}")
+            if broken:
+                error_msg += (
+                    "\nThe package(s) below are installed but failed to load — "
+                    "reinstalling won't help until the underlying error is fixed "
+                    "(e.g. a missing FFmpeg for torchcodec):\n"
+                    + "\n".join(broken)
+                    + "\n"
+                )
             raise ImportError(error_msg)
 
     def _safe_open(self, file_path: str, mode="rb"):
@@ -433,9 +470,12 @@ class RAGSDK:
     def _load_embedder(self):
         """Load embedding model via Lemonade server for hardware acceleration.
 
-        Forces a fresh load with --ubatch-size 2048 to prevent llama.cpp issues
-        after VLM processing. Must unload first since Lemonade skips reload
-        if model already loaded.
+        Model-scoped refresh: unload ONLY the embedder slot, then reload it
+        with --ubatch-size 2048 (a fresh load avoids llama.cpp issues after VLM
+        processing). Lemonade holds the chat model and embedder at the same
+        time, so the chat model is never evicted (issue #1544). A scoped-unload
+        or load failure surfaces — no fall-back to a global unload, which would
+        evict the co-resident chat model and trigger a ~100s cold reload.
         """
         if self.embedder is None:
             self.log.info(
@@ -447,25 +487,25 @@ class RAGSDK:
             if not hasattr(self, "llm_client") or self.llm_client is None:
                 self.llm_client = LemonadeClient()
 
-            # Force fresh load - must unload first
-            try:
-                self.llm_client.unload_model()
-            except Exception:
-                pass  # Ignore if nothing to unload
-
-            try:
-                self.llm_client.load_model(
-                    self.config.embedding_model,
-                    llamacpp_args="--ubatch-size 2048",
-                )
-                self.log.info("Loaded embedding model with ubatch-size=2048")
-            except Exception as e:
-                self.log.warning(f"Could not pre-load embedding model: {e}")
+            # Scoped unload of the embedder ONLY — a global /unload would evict
+            # the co-resident chat model and trigger a ~100s cold reload (#1544).
+            # ignore_if_not_loaded: on a cold start the embedder slot is empty
+            # and Lemonade 404s "Model not loaded" — a benign no-op here, since
+            # we reload it on the next line anyway.
+            self.llm_client.unload_model(
+                self.config.embedding_model, ignore_if_not_loaded=True
+            )
+            self.llm_client.load_model(
+                self.config.embedding_model,
+                llamacpp_args="--ubatch-size 2048",
+            )
 
             self.embedder = self.llm_client
             self.use_lemonade_embeddings = True
 
-            self.log.info("Using Lemonade server for hardware-accelerated embeddings")
+            self.log.info(
+                "Loaded embedding model (ubatch-size=2048); chat model left resident"
+            )
 
     def _encode_texts(
         self, texts: List[str], show_progress: bool = False

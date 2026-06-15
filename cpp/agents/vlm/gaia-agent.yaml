@@ -1,0 +1,41 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Packaging manifest for the native (C++) VLM agent. Built from
+# cpp/examples/vlm_agent.cpp by .github/workflows/build_agents.yml. Cross-platform.
+id: vlm
+name: Vision LLM
+version: 0.1.0
+description: "Ask a vision model about a local image via the OpenAI-compatible API."
+author: AMD
+license: MIT
+
+category: vision
+tags: [vlm, vision, image, cross-platform]
+icon: image
+
+language: cpp
+min_gaia_version: "0.18.0"
+models: [Qwen3-VL-4B-Instruct-GGUF]
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+cpp:
+  static_linked: true
+  binaries:
+    win-x64: vlm-win-x64.exe
+    linux-x64: vlm-linux-x64
+    darwin-arm64: vlm-darwin-arm64
+
+permissions:
+  - filesystem:read
+  - network:read
+
+interfaces:
+  tui: false
+  cli: true
+  pipe: true
+  api_server: false
+  mcp_server: false

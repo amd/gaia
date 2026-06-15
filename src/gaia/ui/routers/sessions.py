@@ -61,6 +61,7 @@ async def create_session(
             private=request.private,
             agent_type=request.agent_type,
             device=request.device,
+            mail_provider=request.mail_provider,
         )
         return session_to_response(session)
     except Exception as e:
@@ -87,7 +88,11 @@ async def update_session(
     db: ChatDatabase = Depends(get_db),
 ):
     """Update session title, system prompt, or linked documents."""
-    if request.agent_type is not None or request.device is not None:
+    if (
+        request.agent_type is not None
+        or request.device is not None
+        or request.mail_provider is not None
+    ):
         evict_session_agent(session_id)
 
     # On a device switch, rewrite the session's model to that device's
@@ -117,6 +122,7 @@ async def update_session(
         agent_type=request.agent_type,
         device=request.device,
         model=device_model,
+        mail_provider=request.mail_provider,
     )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -132,6 +138,12 @@ async def delete_session(
     """Delete a session and its messages."""
     if not db.delete_session(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+    # Cancel any background run for this session before tearing it down —
+    # runs now outlive the SSE connection (#1580), so a run left going would
+    # try to persist its answer to a session that no longer exists.
+    from ..run_manager import run_manager
+
+    run_manager.cancel(session_id)
     # Remove the per-session lock to prevent memory leaks
     http_request.app.state.session_locks.pop(session_id, None)
     # Evict the cached ChatAgent for this session so a fresh one is created

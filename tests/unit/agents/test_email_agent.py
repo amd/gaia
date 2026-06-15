@@ -23,9 +23,18 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email.agent import EmailTriageAgent  # noqa: E402
-from gaia.agents.email.config import EmailAgentConfig  # noqa: E402
-from gaia.agents.email.scopes import AGENT_NAMESPACED_ID, ALL_SCOPES  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
+from gaia_agent_email.config import EmailAgentConfig  # noqa: E402
+from gaia_agent_email.outlook_scopes import (  # noqa: E402
+    OUTLOOK_CALENDAR_SCOPES,
+    OUTLOOK_MAIL_SCOPES,
+)
+from gaia_agent_email.scopes import AGENT_NAMESPACED_ID, ALL_SCOPES  # noqa: E402
+
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeCalendarBackend,
     FakeGmailBackend,
@@ -73,19 +82,41 @@ class TestConstruction:
         assert agent.AGENT_NAME == "Email Triage"
 
     def test_namespaced_id_constant(self):
-        assert AGENT_NAMESPACED_ID == "builtin:email"
+        assert AGENT_NAMESPACED_ID == "installed:email"
 
     def test_required_connectors_well_formed(self):
-        reqs = EmailTriageAgent.REQUIRED_CONNECTORS
-        assert len(reqs) == 1
-        google = reqs[0]
-        assert google.connector_id == "google"
+        # Two providers are declared: Google (Gmail #962 + Calendar) and
+        # Microsoft (Outlook.com mailbox #1275 + calendar #1276). They coexist —
+        # the active mail/calendar backend is chosen by ``config.mail_provider``
+        # / ``config.calendar_provider``.
+        reqs = {c.connector_id: c for c in EmailTriageAgent.REQUIRED_CONNECTORS}
+        assert set(reqs) == {"google", "microsoft"}
+
+        google = reqs["google"]
         # Tuple form (frozen dataclass normalizes).
         assert google.scopes == ALL_SCOPES
         assert google.reason  # non-empty
 
+        microsoft = reqs["microsoft"]
+        # Mail (#1275) + calendar (#1276) scopes, mirroring how the Google
+        # requirement bundles Gmail + Calendar in ALL_SCOPES.
+        assert microsoft.scopes == OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES
+        assert microsoft.reason  # non-empty
+
     def test_response_mode_is_conversational(self, agent):
         assert agent.response_mode == "conversational"
+
+    def test_injected_single_fake_builds_backends_map(self, agent, fake_gmail):
+        # Phase 2 (#1603 D2): the agent binds a provider→backend map. An
+        # injected single fake (no provider) tags as "google" to preserve the
+        # shipped Gmail fixtures, and ``self._gmail`` stays the primary backend.
+        assert agent._backends == {"google": fake_gmail}
+        assert agent._gmail is fake_gmail
+
+    def test_primary_backend_is_first_in_map(self, agent):
+        # self._gmail must be the first value in self._backends so existing
+        # single-backend tool closures keep working unchanged.
+        assert agent._gmail is next(iter(agent._backends.values()))
 
     def test_system_prompt_pre_scan_canary(self, agent):
         """Canary against silent prompt drift.
@@ -109,7 +140,7 @@ class TestConstruction:
 
 
 class TestToolRegistry:
-    """The agent must register all tools from the six mixins."""
+    """The agent must register all tools from its tool mixins."""
 
     EXPECTED_TOOLS = {
         # Read
@@ -120,6 +151,7 @@ class TestToolRegistry:
         "list_labels",
         "triage_inbox",
         "pre_scan_inbox",
+        "profile_inbox",
         # Organize
         "archive_message",
         "mark_read",
@@ -134,6 +166,7 @@ class TestToolRegistry:
         "add_star_batch",
         "remove_star_batch",
         "archive_message_batch",
+        "undo_archive_batch",
         "label_message_batch",
         "move_to_label_batch",
         # Reply / send / forward
@@ -146,16 +179,26 @@ class TestToolRegistry:
         "trash_message",
         "restore_message",
         "permanent_delete",
+        # Phishing quarantine (#1271)
+        "quarantine_phishing_message",
+        "unquarantine_message",
         # Calendar
         "list_calendar_events",
         "accept_invite",
         "decline_invite",
         "create_event_from_email",
+        "detect_meeting_request",
+        "detect_calendar_conflicts",
+        # Summarize (#1267, #1268)
+        "summarize_message",
+        "summarize_thread",
         # Session preferences (in-memory; wiped on agent restart)
         "set_priority_sender",
         "set_low_priority_sender",
         "set_category_default",
         "clear_session_preferences",
+        # Inbox profiling from memory (#1289)
+        "profile_inbox",
     }
 
     def test_every_expected_tool_is_registered(self, agent):
@@ -228,7 +271,7 @@ class TestAC3LocalLLMOnly:
     def test_remote_base_url_rejected_at_construction(
         self, fake_gmail, fake_calendar, tmp_path
     ):
-        from gaia.agents.email.config import ConfigurationError
+        from gaia_agent_email.config import ConfigurationError
 
         cfg = EmailAgentConfig(
             base_url="https://api.openai.com/v1",
@@ -248,7 +291,9 @@ class TestRegistryIntegration:
         from gaia.agents.registry import AgentRegistry
 
         reg = AgentRegistry()
-        reg._register_builtin_agents()
+        # email ships as the standalone gaia-agent-email wheel (#1102); it is
+        # registered via entry-point discovery, not as a built-in.
+        reg.discover()
         assert "email" in {r.id for r in reg.list()}
 
         with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:

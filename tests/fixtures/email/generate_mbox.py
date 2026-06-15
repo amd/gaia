@@ -18,6 +18,7 @@ import json
 import mailbox
 import random
 import re
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -27,14 +28,60 @@ from email.utils import format_datetime
 from pathlib import Path
 from typing import Any
 
+# Keep the corpus runnable standalone (``python generate_mbox.py``) even
+# when launched from this directory by putting the repo root (for
+# ``tests.fixtures``) AND the standalone ``gaia_agent_email`` hub package on
+# the path — the category taxonomy moved into that wheel (#1102) and is not
+# reachable from the repo root alone. We import the *production* taxonomy so
+# generated labels can never drift from what the agent emits and scores against.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+_HUB_EMAIL = _REPO_ROOT / "hub" / "agents" / "python" / "email"
+if _HUB_EMAIL.is_dir() and str(_HUB_EMAIL) not in sys.path:
+    sys.path.insert(0, str(_HUB_EMAIL))
+
+from gaia_agent_email.tools.triage_heuristics import (  # noqa: E402
+    ALL_CATEGORIES,
+    CATEGORY_ACTIONABLE,
+    CATEGORY_INFORMATIONAL,
+    CATEGORY_LOW_PRIORITY,
+    CATEGORY_URGENT,
+)
+
+from tests.fixtures.email.fake_gmail import (  # noqa: E402
+    mbox_message_to_gmail_payload,
+)
+
 SEED = 23023
 TOTAL_MESSAGES = 220
+SCHEMA_VERSION = 2
 
 OUT_DIR = Path(__file__).resolve().parent
 OUT_MBOX = OUT_DIR / "synthetic_inbox.mbox"
 OUT_GT = OUT_DIR / "ground_truth.json"
 
-CATEGORIES = ["urgent", "actionable", "informational", "low_priority"]
+# Internal generator bucket keys -> the exact category strings the
+# production heuristic emits (``ALL_CATEGORIES``). The low bucket is the
+# only one that differs ("low_priority" internally vs "low priority" on
+# disk); routing every label through this map guarantees the committed
+# ground_truth matches what ``triage_inbox`` / the eval compares against.
+_BUCKET_TO_CATEGORY = {
+    "urgent": CATEGORY_URGENT,
+    "actionable": CATEGORY_ACTIONABLE,
+    "informational": CATEGORY_INFORMATIONAL,
+    "low_priority": CATEGORY_LOW_PRIORITY,
+}
+CATEGORIES = list(_BUCKET_TO_CATEGORY.keys())
+
+# Fail loudly if the production taxonomy ever changes shape — better a
+# generator error than a silently mislabelled corpus.
+if set(_BUCKET_TO_CATEGORY.values()) != set(ALL_CATEGORIES):
+    raise ValueError(
+        "generate_mbox bucket map is out of sync with "
+        f"triage_heuristics.ALL_CATEGORIES: map={sorted(_BUCKET_TO_CATEGORY.values())} "
+        f"taxonomy={sorted(ALL_CATEGORIES)}. Update _BUCKET_TO_CATEGORY."
+    )
 
 TARGET_COUNTS = {
     "urgent": 24,
@@ -150,6 +197,18 @@ class IdFactory:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _gmail_id(message_id_header: str) -> str:
+    """Derive the Gmail-API id the way ``fake_gmail`` does.
+
+    ``ground_truth.json`` MUST be keyed by this id (not the raw RFC
+    ``Message-ID``) so it aligns 1:1 with ``FakeGmailBackend`` when the
+    eval loads the corpus.
+    """
+    return hashlib.sha256(
+        message_id_header.encode("utf-8", errors="replace")
+    ).hexdigest()[:16]
 
 
 def _weekday_weighted_datetimes(rng: random.Random, count: int) -> list[datetime]:
@@ -301,7 +360,7 @@ def _base_message(
         msg.attach(forwarded)
 
     meta = {
-        "category": category,
+        "category": _BUCKET_TO_CATEGORY.get(category, category),
         "priority": "high" if category == "urgent" else "normal",
         "is_thread_root": in_reply_to is None,
         "thread_id": (
@@ -391,28 +450,66 @@ def _mailbox_from_records(
         out_mbox.unlink()
 
     box = mailbox.mbox(str(out_mbox), create=True)
-    gt: dict[str, Any] = {}
+    gt: dict[str, Any] = {
+        "_meta": {
+            "fixture": out_mbox.name,
+            "fixture_kind": "synthetic",
+            "schema_version": SCHEMA_VERSION,
+            "taxonomy": list(ALL_CATEGORIES),
+            "key": "gmail-id (sha256(Message-ID)[:16]) — aligns with FakeGmailBackend",
+            "comment": (
+                "Synthetic email-triage corpus (#1230). RFC 2606 domains only, "
+                "deterministic. Regenerate with tests/fixtures/email/generate_mbox.py."
+            ),
+        }
+    }
 
-    for msg, meta, message_id in records:
-        box.add(msg)
-        gt[message_id] = meta
+    # ``mailbox.mbox.add`` stamps each ``From `` separator with the current
+    # wall-clock time when the message has no envelope sender — another
+    # source of non-reproducible bytes. Set a FIXED ``From_`` line so the
+    # corpus is byte-for-byte deterministic across runs.
+    fixed_from = "MAILER-DAEMON Mon Mar  2 08:00:00 2026"
+
+    for msg, meta, _raw_message_id in records:
+        mbox_msg = mailbox.mboxMessage(msg)
+        mbox_msg.set_from(fixed_from)
+        box.add(mbox_msg)
+        # Key by the SAME Gmail-derived id FakeGmailBackend produces so the
+        # corpus and ground truth align 1:1 when the eval loads it. Also
+        # surface the backend threadId so thread-aware scoring matches.
+        payload = mbox_message_to_gmail_payload(msg)
+        gid = payload["id"]
+        if gid in gt:
+            raise ValueError(f"Gmail-id collision for {gid} (Message-ID reuse?)")
+        meta = dict(meta)
+        meta["thread_id"] = payload["threadId"]
+        gt[gid] = meta
 
     box.flush()
     box.close()
 
-    # Append malformed messages directly as raw mbox entries.
+    # Append malformed messages directly as raw mbox entries. The mbox
+    # ``From `` envelope line carries a date that is cosmetic (it is the
+    # separator, not message content) — use a FIXED timestamp so the
+    # generated corpus is byte-for-byte reproducible (``--verify``).
+    envelope_date = datetime(2026, 3, 2, 8, 0, tzinfo=timezone.utc).ctime()
     with out_mbox.open("ab") as f:
-        for raw_msg, meta, message_id in malformed_raw:
-            from_line = (
-                "From malformed@example.com " f"{datetime.now(timezone.utc).ctime()}\n"
-            )
+        for raw_msg, meta, raw_message_id in malformed_raw:
+            from_line = f"From malformed@example.com {envelope_date}\n"
             payload = raw_msg.replace("\n", "\n").encode("utf-8", errors="replace")
             if not payload.endswith(b"\n"):
                 payload += b"\n"
             f.write(from_line.encode("utf-8"))
             f.write(payload)
             f.write(b"\n")
-            gt[message_id] = meta
+            # Malformed entries have no References/In-Reply-To, so the
+            # backend's threadId == gid (see mbox_message_to_gmail_payload).
+            gid = _gmail_id(raw_message_id)
+            if gid in gt:
+                raise ValueError(f"Gmail-id collision for {gid} (Message-ID reuse?)")
+            meta = dict(meta)
+            meta["thread_id"] = gid
+            gt[gid] = meta
 
     out_gt.write_text(json.dumps(gt, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -424,6 +521,12 @@ def _build_dataset(
     list[tuple[str, dict[str, Any], str]],
 ]:
     rng = random.Random(seed)
+    # MIME multipart boundaries are generated by the stdlib ``email`` package
+    # via the GLOBAL ``random`` module, not our seeded ``rng`` — without this
+    # the boundary strings (and thus the mbox bytes) differ every run, which
+    # makes the committed corpus non-reproducible. Seed the global RNG so the
+    # boundaries are deterministic too.
+    random.seed(seed)
     id_factory = IdFactory(rng)
     date_pool = _weekday_weighted_datetimes(rng, TOTAL_MESSAGES)
     date_idx = 0
@@ -811,7 +914,9 @@ def _build_dataset(
             disposition="attachment",
         )
         meta = {
-            "category": rng.choice(["informational", "low_priority"]),
+            "category": _BUCKET_TO_CATEGORY[
+                rng.choice(["informational", "low_priority"])
+            ],
             "priority": "low",
             "is_thread_root": True,
             "thread_id": message_id,
@@ -967,7 +1072,7 @@ def _build_dataset(
             raise ValueError("Malformed raw message missing Message-ID")
         message_id = mid_match.group(1)
         meta = {
-            "category": extras["category"],
+            "category": _BUCKET_TO_CATEGORY.get(extras["category"], extras["category"]),
             "priority": "normal",
             "is_thread_root": True,
             "thread_id": message_id,

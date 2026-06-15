@@ -72,8 +72,10 @@ class TestConnectorRequirement:
 
 class TestRegistry:
     def test_get_unknown_provider_raises_keyerror(self):
+        # "microsoft" is a known lazy-registered provider since #1105; use an
+        # id that is genuinely absent from the registry's lazy-init branches.
         with pytest.raises(KeyError):
-            providers.get("microsoft")
+            providers.get("definitely-not-a-provider")
 
     def test_register_then_get_round_trip(self):
         class FakeProvider:

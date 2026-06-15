@@ -57,6 +57,21 @@ def _parse_setup_entry_points():
     return result
 
 
+def _parse_setup_install_requires():
+    """Extract the base install_requires package names (lowercased) from setup.py."""
+    content = SETUP_PY.read_text()
+    match = re.search(r"install_requires\s*=\s*\[(.*?)\]", content, re.DOTALL)
+    assert match, "Could not find install_requires=[] in setup.py"
+    raw = match.group(1)
+    names = set()
+    for spec in re.findall(r'"([^"]+)"', raw):
+        # Strip version specifiers / markers; keep just the distribution name.
+        name = re.split(r"[<>=!~; ]", spec, maxsplit=1)[0].strip().lower()
+        if name:
+            names.add(name)
+    return names
+
+
 def _find_filesystem_packages():
     """Find all directories under src/gaia/ that contain __init__.py."""
     packages = set()
@@ -189,3 +204,30 @@ class TestEntryPoints:
         assert (
             not failures
         ), f"Entry point parent packages missing from setup.py:\n" + "\n".join(failures)
+
+
+class TestBaseDependencies:
+    """Base console_scripts must work on a plain `pip install amd-gaia`."""
+
+    def test_gaia_mcp_module_imports_are_base_deps(self):
+        """`gaia-mcp` is a base console_script whose module imports
+        ``python_multipart`` at load time. The dist must be in base
+        install_requires (not only extras), or a plain `pip install amd-gaia`
+        ships a broken gaia-mcp. Regression for the v0.20.0 post-publish smoke
+        failure (ModuleNotFoundError: python_multipart)."""
+        bridge = (SRC_DIR / "gaia" / "mcp" / "mcp_bridge.py").read_text(
+            encoding="utf-8"
+        )
+        base = _parse_setup_install_requires()
+        # Only enforce while the import is top-level; a future lazy import would
+        # legitimately move the dep into an extra.
+        top_level_multipart = re.search(
+            r"^(from|import) python_multipart", bridge, re.MULTILINE
+        )
+        if top_level_multipart:
+            assert "python-multipart" in base, (
+                "gaia.mcp.mcp_bridge imports python_multipart at module top level "
+                "and gaia-mcp is a base console_script, but 'python-multipart' is "
+                "not in setup.py install_requires (only extras). A plain "
+                "`pip install amd-gaia` would ship a broken gaia-mcp entry point."
+            )

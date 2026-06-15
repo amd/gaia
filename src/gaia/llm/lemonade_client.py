@@ -214,6 +214,28 @@ MODELS = {
         min_ctx_size=65536,
         tool_calling=True,
     ),
+    # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
+    # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
+    # ``gemma4-it:e2b``), NOT the llama.cpp GGUF variant — only the FLM build
+    # runs on the Strix Halo NPU. Validated on hardware: device=npu,
+    # recipe=flm, served at :13305, ctx_size=4096 (the NPU window). The triage
+    # classifier clips email bodies to 4000 chars, so a single email + the
+    # triage system prompt fit. The E2B *FLM* accuracy baseline is a follow-up:
+    # baseline_accuracy_e2b.json was recorded on the GGUF build, a different
+    # variant.
+    # tool_calling=False: unlike the GGUF builds (native tool calls via
+    # --jinja), the FLM/NPU server 500-errors on an OpenAI ``tools`` payload
+    # ("type must be string, but is object" — verified on hardware). The agent
+    # therefore uses the embedded-JSON tool path for this model. Email triage
+    # itself parses a JSON object from a plain completion (no native tool
+    # calls), so triage is unaffected.
+    "gemma-4-e2b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id="gemma4-it-e2b-FLM",
+        display_name="Gemma 4 E2B (NPU/FLM)",
+        min_ctx_size=4096,
+        tool_calling=False,
+    ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
     "qwen3.5-35b": ModelRequirement(
         model_type=ModelType.LLM,
@@ -3048,16 +3070,40 @@ class LemonadeClient:
                 with self._downloads_lock:
                     self.active_downloads.pop(model_name, None)
 
-    def unload_model(self) -> Dict[str, Any]:
+    def unload_model(
+        self,
+        model_name: Optional[str] = None,
+        *,
+        ignore_if_not_loaded: bool = False,
+    ) -> Dict[str, Any]:
         """
-        Unload the current model from the server.
+        Unload a model from the server.
+
+        Args:
+            model_name: Unload ONLY this model — Lemonade's /unload leaves any
+                other loaded models resident. If None, unload all models
+                (global), the historical behavior other callers rely on.
+            ignore_if_not_loaded: When True and a scoped unload targets a model
+                that isn't currently loaded, treat Lemonade's 404 "Model not
+                loaded" as a successful no-op instead of raising. For callers
+                that unload only to force a fresh reload (e.g. RAG's embedder
+                refresh), an empty slot on a cold start is expected, not an
+                error. Any other failure (server down, auth, 500) still raises.
 
         Returns:
             Dict containing the status of the unload operation
         """
         url = f"{self.base_url}/unload"
-        response = self._send_request("post", url)
-        self.model = None
+        data = {"model_name": model_name} if model_name else None
+        try:
+            response = self._send_request("post", url, data)
+        except LemonadeClientError as e:
+            if ignore_if_not_loaded and model_name and "not loaded" in str(e).lower():
+                self.log.info("Model %s not loaded; nothing to unload", model_name)
+                return {"status": "not_loaded", "model_name": model_name}
+            raise
+        if model_name is None or self.model == model_name:
+            self.model = None
         self.log.info(f"Model unloaded successfully: {response}")
         return response
 

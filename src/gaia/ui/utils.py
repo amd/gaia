@@ -141,6 +141,9 @@ def session_to_response(session: dict) -> SessionResponse:
         private=bool(session.get("private", 0)),
         agent_type=session.get("agent_type") or "chat",
         device=session.get("device") or "gpu",
+        # Filter semantics (#1596): null = "every connected mailbox" — must
+        # reach the frontend as null so the selector shows no phantom pick.
+        mail_provider=session.get("mail_provider"),
     )
 
 

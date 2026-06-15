@@ -268,14 +268,21 @@ jobs:
         run: |
           PY_VERSION=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/gaia/version.py)
           ESCAPED=$(echo "$PY_VERSION" | sed 's/\./\\./g')
-          APP_VERSION=$(grep -o "\"${ESCAPED}\"" src/gaia/apps/webui/dist/assets/index-*.js | head -1 | tr -d '"' || echo "NOT_FOUND")
-          echo "  version.py: $PY_VERSION"
-          echo "  Built app:  $APP_VERSION"
-          if [ "$APP_VERSION" != "$PY_VERSION" ]; then
-            echo "FAIL: Built app version ($APP_VERSION) != version.py ($PY_VERSION)"
+          # __APP_VERSION__ is injected by Vite's define as a quoted string
+          # literal. The minifier's quote char depends on the Vite/esbuild
+          # version (Vite 8 emits backticks, Vite 5 emitted double quotes),
+          # and the entry chunk is not always named index-*.js, so match any
+          # quote char (" ' `) across every emitted chunk.
+          if grep -rqE "[\"'\`]${ESCAPED}[\"'\`]" src/gaia/apps/webui/dist/assets/*.js; then
+            echo "  version.py: $PY_VERSION"
+            echo "Built app version verified ($PY_VERSION)"
+          else
+            echo "  version.py: $PY_VERSION"
+            echo "FAIL: version $PY_VERSION not found as a quoted literal in any src/gaia/apps/webui/dist/assets/*.js"
+            echo "Version-like strings present in the bundle:"
+            grep -hoE "[0-9]+\.[0-9]+\.[0-9]+" src/gaia/apps/webui/dist/assets/*.js | sort -u | head
             exit 1
           fi
-          echo "Built app version verified"
 
       - name: Run backend tests
         run: |
@@ -353,6 +360,11 @@ jobs:
           path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Make re-runs idempotent: if this version is already on PyPI
+          # (e.g. a later stage failed and the workflow is re-run), skip the
+          # already-uploaded files instead of failing on a duplicate upload.
+          skip-existing: true
 
   publish-npm:
     name: Publish to npm
@@ -441,10 +453,11 @@ jobs:
 
       - name: Verify CLI entry points
         run: |
+          # Only core-wheel console_scripts belong here. gaia-emr / gaia-code
+          # moved to the standalone gaia-agent-emr / gaia-agent-code hub
+          # packages and are no longer installed by ``pip install amd-gaia``.
           gaia --help
-          gaia-code --help
           gaia-mcp --help
-          gaia-emr --help
 
       - name: Verify Python import
         env:

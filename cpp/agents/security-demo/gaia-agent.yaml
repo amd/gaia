@@ -1,0 +1,38 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Packaging manifest for the native (C++) security demo. Built from
+# cpp/examples/security_demo.cpp by .github/workflows/build_agents.yml. This is
+# the cross-platform smoke target proving the linux-x64 and darwin-arm64 legs
+# of the static-binary matrix.
+id: security-demo
+name: Security Demo
+version: 0.1.0
+description: "Interactive demo of the GAIA C++ tool-security system (no LLM server required)."
+author: AMD
+license: MIT
+
+category: developer
+tags: [security, demo, tools, cross-platform]
+icon: shield-check
+
+language: cpp
+min_gaia_version: "0.18.0"
+
+requirements:
+  min_memory_gb: 2
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+cpp:
+  static_linked: true
+  binaries:
+    win-x64: security-demo-win-x64.exe
+    linux-x64: security-demo-linux-x64
+    darwin-arm64: security-demo-darwin-arm64
+
+interfaces:
+  tui: true
+  cli: false
+  pipe: false
+  api_server: false
+  mcp_server: false

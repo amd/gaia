@@ -5,7 +5,7 @@ icon: "notes-medical"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/emr/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/emr/)
+  **Source Code:** [`hub/agents/python/emr/`](https://github.com/amd/gaia/blob/main/hub/agents/python/emr/)
 </Info>
 
 <Info>
@@ -43,7 +43,7 @@ graph TD
     E[/"New Intake Form"/] --> C
     C --> F["File Created Event"]
     F --> G["VLM Extraction"]
-    G --> H[("VLM Model<br/>on NPU")]
+    G --> H[("VLM Model<br/>on iGPU (Vulkan)")]
     H --> I["Structured JSON"]
     I --> D
     D --> J[("SQLite DB")]
@@ -61,7 +61,7 @@ graph TD
 **Flow:**
 1. New form dropped in watched folder
 2. FileWatcherMixin triggers callback → `_on_file_created()`
-3. VLM extracts patient data (running on NPU for speed)
+3. VLM extracts patient data (Qwen3-VL GGUF runs on the iGPU via llama.cpp/Vulkan)
 4. JSON parsed and validated
 5. DatabaseMixin stores structured record in SQLite
 6. Agent can now query patients via natural language
@@ -128,7 +128,7 @@ Get a working intake agent running to understand the basic flow.
     Create `intake_agent.py` in your project folder:
 
     ```python title="intake_agent.py"
-    from gaia.agents.emr import MedicalIntakeAgent
+    from gaia_agent_emr import MedicalIntakeAgent
 
     # Create agent watching a directory
     agent = MedicalIntakeAgent(
@@ -368,7 +368,7 @@ Add VLM to extract patient data from images.
 process_intake_form("patient1.jpg")
   → Read image file as bytes
   → Send to VLM with extraction prompt
-  → VLM processes image (running on NPU for speed)
+  → VLM processes image (Qwen3-VL GGUF runs on the iGPU via llama.cpp/Vulkan)
   → Returns JSON string: {"first_name": "John", ...}
   → Parse JSON to dict
   → Insert into database
@@ -658,7 +658,7 @@ with IntakeAgent() as agent:
 The complete `MedicalIntakeAgent` implementation is available in GAIA:
 
 ```python
-from gaia.agents.emr import MedicalIntakeAgent
+from gaia_agent_emr import MedicalIntakeAgent
 
 # All features included:
 # - Automatic file watching
@@ -678,7 +678,7 @@ agent.process_query("Show me patient #5")
 agent.process_query("What are the stats?")
 ```
 
-**Source code:** [`src/gaia/agents/emr/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/emr/agent.py)
+**Source code:** [`hub/agents/python/emr/gaia_agent_emr/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/emr/gaia_agent_emr/agent.py)
 
 ---
 

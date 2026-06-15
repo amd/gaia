@@ -144,6 +144,12 @@ class InitCommand:
     4. Verify setup
     """
 
+    # Per-model context verification state, set dynamically during model
+    # verification. Declared here (without assignment) so its *absence* on the
+    # instance keeps meaning "verification not attempted" while satisfying the
+    # pylint attribute-defined-outside-init check.
+    _ctx_verified: "Optional[int]"
+
     def __init__(
         self,
         profile: str = "chat",
@@ -215,8 +221,9 @@ class InitCommand:
             console=self.console,
         )
 
-        # Context verification state (set during model loading)
-        self._ctx_verified = None
+        # Context verification state. _ctx_verified is set per-model during
+        # verification (only for LLM models with a min context size); its
+        # absence means verification was not attempted for that model.
         self._ctx_warning = None
 
     def _print(self, message: str, end: str = "\n"):
@@ -385,42 +392,51 @@ class InitCommand:
 
         extras_str = ",".join(pip_extras)
 
-        # Detect editable vs package install
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "show", "amd-gaia"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            editable = False
-            location = ""
+        # Package-manager frontends to try, most-preferred first. The standalone
+        # ``uv`` binary leads because uv-created venvs ship neither ``pip`` nor
+        # the ``uv`` module, so ``python -m uv`` / ``python -m pip`` both fail
+        # there; the standalone binary honours the active VIRTUAL_ENV instead.
+        frontends = [
+            ["uv", "pip"],
+            [sys.executable, "-m", "uv", "pip"],
+            [sys.executable, "-m", "pip"],
+        ]
+
+        # Detect editable vs package install using whichever frontend responds.
+        editable = False
+        location = ""
+        for frontend in frontends:
+            try:
+                result = subprocess.run(
+                    frontend + ["show", "amd-gaia"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except (FileNotFoundError, OSError):
+                continue
+            if result.returncode != 0:
+                continue
             for line in result.stdout.splitlines():
                 if line.startswith("Editable project location:"):
                     editable = True
                     location = line.split(":", 1)[1].strip()
                     break
-        except Exception:
-            editable = False
-            location = ""
+            break
 
         if editable and location:
             install_spec = f'uv pip install -e ".[{extras_str}]"'
-            install_args = ["-e", f"{location}[{extras_str}]"]
+            install_args = ["install", "-e", f"{location}[{extras_str}]"]
         else:
-            install_spec = f'pip install "amd-gaia[{extras_str}]"'
-            install_args = [f"amd-gaia[{extras_str}]"]
+            install_spec = f'uv pip install "amd-gaia[{extras_str}]"'
+            install_args = ["install", f"amd-gaia[{extras_str}]"]
 
         self._print_success(f"Installing extras: {extras_str}")
 
-        # Try uv pip first, fall back to regular pip
-        for pip_cmd in [
-            [sys.executable, "-m", "uv", "pip", "install"] + install_args,
-            [sys.executable, "-m", "pip", "install"] + install_args,
-        ]:
+        for frontend in frontends:
             try:
                 result = subprocess.run(
-                    pip_cmd,
+                    frontend + install_args,
                     capture_output=True,
                     text=True,
                     timeout=300,
@@ -429,7 +445,7 @@ class InitCommand:
                 if result.returncode == 0:
                     self._print_success(f"Installed [{extras_str}] dependencies")
                     return True
-            except FileNotFoundError:
+            except (FileNotFoundError, OSError):
                 continue
             except subprocess.TimeoutExpired:
                 self._print_warning(
@@ -441,7 +457,7 @@ class InitCommand:
 
         self._print_warning(
             f"Could not install [{extras_str}] extras automatically. "
-            f"Please run: pip install {install_spec}"
+            f"Please run: {install_spec}"
         )
         return True  # Warn but don't fail
 
@@ -1471,9 +1487,11 @@ class InitCommand:
                             self._print_error(f"Failed to delete {model_id}: {e}")
 
             # Download each model via LemonadeClient API.
-            # For profiles with a recipe (e.g. NPU/FLM), use pull_model()
-            # with the recipe so Lemonade registers the model with the
-            # correct inference engine.
+            # NPU/FLM models (e.g. ``gemma4-it-e2b-FLM``) are built-in Lemonade
+            # models — pull them by name only. Passing ``recipe`` makes Lemonade
+            # treat the call as a *new* model registration, which requires the
+            # ``user.`` prefix and 400s on built-in names (#1655). The recipe is
+            # baked into the built-in model and applied at load time.
             recipe = profile_config.get("recipe")
             success = True
             for model_id in model_ids:
@@ -1482,14 +1500,7 @@ class InitCommand:
                 self.agent_console.print(
                     f"   [bold cyan]Downloading:[/bold cyan] {label}"
                 )
-                if recipe:
-                    try:
-                        client.pull_model(model_id, recipe=recipe)
-                        self._print_success(f"Downloaded {model_id}")
-                    except Exception as e:
-                        self._print_error(f"Failed to download {model_id}: {e}")
-                        success = False
-                elif client.ensure_model_downloaded(model_id):
+                if client.ensure_model_downloaded(model_id):
                     self._print_success(f"Downloaded {model_id}")
                 else:
                     self._print_error(f"Failed to download {model_id}")
@@ -1731,10 +1742,20 @@ class InitCommand:
                         )
                         continue
 
+                    # Reset per-model context state. _test_model_inference
+                    # sets _ctx_verified only for LLM models that declare a min
+                    # context size; SD/embedding models leave verification N/A
+                    # and must not inherit a stale "unverified" flag from
+                    # __init__ or a prior model.
+                    if hasattr(self, "_ctx_verified"):
+                        delattr(self, "_ctx_verified")
+                    self._ctx_warning = None
+
                     # Test the model
                     success, error = self._test_model_inference(client, model_id)
                     if success:
-                        # Check if context was verified
+                        # Show context only when verification was attempted
+                        # (LLM models with a min_ctx requirement).
                         ctx_msg = ""
                         if hasattr(self, "_ctx_verified"):
                             if self._ctx_verified:
@@ -1748,8 +1769,6 @@ class InitCommand:
                             elif self._ctx_verified is None:
                                 # Context could not be verified
                                 ctx_msg = " [yellow]⚠️ Context unverified![/yellow]"
-
-                            delattr(self, "_ctx_verified")  # Reset for next model
 
                         self.console.print(
                             f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]{ctx_msg}"
@@ -1807,8 +1826,10 @@ class InitCommand:
                             f"     [cyan]{model_id}[/cyan]: [dim]{model_path}[/dim]"
                         )
                         if sys.platform == "win32":
+                            # PowerShell is GAIA's assumed Windows shell; cmd's
+                            # `rmdir /s /q` is not valid PowerShell syntax.
                             self.console.print(
-                                f'       [yellow]rmdir /s /q[/yellow] [cyan]"{model_path}"[/cyan]'
+                                f'       [yellow]Remove-Item -Recurse -Force[/yellow] [cyan]"{model_path}"[/cyan]'
                             )
                         else:
                             self.console.print(
@@ -1866,6 +1887,9 @@ class InitCommand:
                 self.console.print(
                     "    [cyan]gaia chat --watch ./docs[/cyan]             Auto-index a folder of docs"
                 )
+                self.console.print(
+                    "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
+                )
             elif self.profile == "npu":
                 self.console.print(
                     "    [cyan]gaia chat --device npu[/cyan]             Chat using Ryzen AI NPU"
@@ -1898,6 +1922,9 @@ class InitCommand:
                 # Default commands for other profiles
                 self.console.print(
                     "    [cyan]gaia chat[/cyan]              Start interactive chat"
+                )
+                self.console.print(
+                    "    [cyan]gaia chat --ui[/cyan]         Launch the Agent UI (browser-based)"
                 )
                 self.console.print(
                     "    [cyan]gaia llm 'Hello'[/cyan]       Quick LLM query"
@@ -1933,6 +1960,9 @@ class InitCommand:
                 self._print(
                     "    gaia chat --watch ./docs             # Auto-index a folder of docs"
                 )
+                self._print(
+                    "    gaia chat --ui                       # Launch the Agent UI (browser-based)"
+                )
             elif self.profile == "npu":
                 self._print(
                     "    gaia chat --device npu             # Chat using Ryzen AI NPU"
@@ -1963,6 +1993,9 @@ class InitCommand:
             else:
                 # Default commands for other profiles
                 self._print("    gaia chat              # Start interactive chat")
+                self._print(
+                    "    gaia chat --ui         # Launch the Agent UI (browser-based)"
+                )
                 self._print("    gaia llm 'Hello'       # Quick LLM query")
                 self._print("    gaia talk              # Voice interaction")
             self._print("")

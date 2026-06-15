@@ -90,6 +90,7 @@
                 "pages": [
                   "connectors/index",
                   "connectors/google",
+                  "connectors/microsoft",
                   "connectors/github",
                   "security/connections",
                   "security/connectors"
@@ -315,6 +316,7 @@
               "spec/docker-agent",
               "spec/jira-agent",
               "spec/blender-agent",
+              "spec/email-contract",
               "spec/summarizer-app",
               "spec/component-status"
             ]
@@ -407,7 +409,9 @@
             "pages": [
               "plans/agent-hub",
               "plans/agent-hub-ui",
+              "plans/email-agent-packaging",
               "spec/agent-hub-restructure",
+              "spec/agent-skills",
               "plans/skill-format",
               "plans/oem-bundling"
             ]
@@ -418,7 +422,8 @@
               "plans/cua",
               "plans/docker-containers",
               "plans/mcp-docs",
-              "plans/desktop-installer"
+              "plans/desktop-installer",
+              "plans/tool-loader"
             ]
           },
           {
@@ -437,6 +442,9 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.21.1",
+              "releases/v0.21.0",
+              "releases/v0.20.1",
               "releases/v0.20.0",
               "releases/v0.19.0",
               "releases/v0.18.1",
@@ -491,7 +499,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.20.0 \u00b7 Lemonade 10.2.0",
+        "label": "v0.21.1 \u00b7 Lemonade 10.2.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

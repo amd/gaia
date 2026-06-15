@@ -184,7 +184,12 @@ class TelegramAdapter:
                 with open(pid_path, "w", encoding="utf-8") as f:
                     f.write(str(os.getpid()))
             except OSError as e:
-                log.exception("Failed to write PID file for telegram adapter: %s", e)
+                # The PID file is load-bearing in background mode: without it a
+                # supervisor cannot find or kill the process. Fail loudly.
+                raise RuntimeError(
+                    f"Failed to write telegram PID file at {pid_path}: {e}. "
+                    f"Ensure ~/.gaia is writable, or start without --background."
+                ) from e
 
             log_path = os.path.join(pid_dir, "telegram.log")
             try:

@@ -13,11 +13,11 @@ import json
 import os
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import tool
 from gaia.logger import get_logger
@@ -65,14 +65,22 @@ def _name_to_class_name(name: str) -> str:
 
 
 def _split_camel_case(name: str) -> str:
-    """Split PascalCase/camelCase into space-separated words.
+    """Split single-token PascalCase/camelCase into space-separated words.
+
+    Only expands single-token input (``WidgetAgent`` → ``Widget Agent``). When
+    the name already contains a space the user typed the words deliberately, so
+    there is nothing to expand — return it unchanged to preserve intentional
+    internal caps (``Daily arXiv Summary``, ``iOS Helper``).
 
     Examples:
-        "AlphaAgent"    → "Alpha Agent"
-        "MCPAgent"      → "MCP Agent"
-        "myTool"        → "my Tool"
-        "already split" → "already split"
+        "AlphaAgent"          → "Alpha Agent"
+        "MCPAgent"            → "MCP Agent"
+        "myTool"              → "my Tool"
+        "Daily arXiv Summary" → "Daily arXiv Summary"
+        "already split"       → "already split"
     """
+    if " " in name:
+        return name
     s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", name)
     return re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", s)
 
@@ -98,7 +106,7 @@ class BuilderAgentConfig:
 
     base_url: Optional[str] = None
     model_id: Optional[str] = None
-    max_steps: int = 10
+    max_steps: int = field(default_factory=default_max_steps)
     streaming: bool = False
     debug: bool = False
     show_stats: bool = False
@@ -165,7 +173,8 @@ class BuilderAgent(Agent):
             name: str,
             description: str = "",
             enable_mcp: bool = False,
-            tools: Optional[List[str]] = None,
+            system_prompt: str = "",
+            conversation_starters: Optional[List[str]] = None,
         ) -> str:
             """Create a new custom agent in the user's GAIA agents directory.
 
@@ -173,18 +182,24 @@ class BuilderAgent(Agent):
                 name: Human-readable agent name, e.g. "Widget Agent".
                 description: One-sentence description of what the agent does.
                 enable_mcp: If True, scaffold MCP support with a local mcp_servers.json.
-                tools: Optional list of built-in tool mixin names to include.
-                    Valid options: "rag" (document Q&A), "file_search" (fuzzy file
-                    search), "file_io" (read/write/edit files), "shell" (sandboxed
-                    shell), "screenshot" (screen capture), "sd" (image generation),
-                    "vlm" (vision LLM). Combine freely; they are added to the
-                    class's base list alongside Agent.
+                system_prompt: The generated agent's own system prompt — its
+                    personality and instructions, tailored to what the user asked it
+                    to do. Author this from the described purpose. If omitted, a
+                    minimal purpose-derived prompt is generated (never a placeholder
+                    persona).
+                conversation_starters: 2-3 suggestion chips shown in the GAIA UI,
+                    matching the agent's purpose. If omitted, generic on-topic
+                    starters are generated.
 
             Returns:
                 Confirmation message with the path to the created agent.py.
             """
             result = _create_agent_impl(
-                name, description, enable_mcp=enable_mcp, tools=tools
+                name,
+                description,
+                enable_mcp=enable_mcp,
+                system_prompt=system_prompt,
+                conversation_starters=conversation_starters,
             )
             if not result.startswith("Error:"):
                 # Notify the UI — triggers an immediate agent-list refresh
@@ -287,24 +302,77 @@ class BuilderAgent(Agent):
                     if isinstance(tool_result, dict)
                     else str(tool_result)
                 )
+                # Fail loudly: if create_agent returned an error, end immediately.
+                if tool_name == "create_agent" and (
+                    (
+                        isinstance(tool_result, dict)
+                        and tool_result.get("status") == "error"
+                    )
+                    or str(tool_result).startswith("Error:")
+                ):
+                    # Extract a clean detail so a raw dict never leaks into the
+                    # user-facing message. _execute_tool uses "error" for most
+                    # error returns and "error_brief" for the exception path.
+                    if isinstance(tool_result, dict):
+                        detail = (
+                            tool_result.get("error")
+                            or tool_result.get("error_brief")
+                            or str(tool_result)
+                        )
+                    else:
+                        detail = tool_result
+                    final_answer = (
+                        f"I was unable to create the agent: {detail}\n\n"
+                        "Please check the name is valid and try again."
+                    )
+                    break
+                # Deterministic confirmation: return the tool result directly so
+                # the demo framing and docs link reach the user verbatim without
+                # an extra LLM summarization turn.
+                if tool_name == "create_agent":
+                    final_answer = result_str
+                    break
                 messages.append(
                     {
                         "role": "user",
                         "content": f"Tool '{tool_name}' returned:\n{result_str}",
                     }
                 )
-                # Continue loop so the LLM can summarize the result
+                # Continue loop so the LLM can handle other tool results
             else:
-                final_answer = (
-                    parsed.get("answer")
-                    or response.strip()
-                    or ("I wasn't able to generate a response. Please try again.")
-                )
+                # No tool call was extracted — check for fabricated success markers.
+                if any(
+                    m in (parsed.get("answer") or response.strip())
+                    for m in ("Agent Created", "✅", "File location")
+                ):
+                    # The model wrote a fake success — push a corrective turn and
+                    # loop again (steps_limit guards infinite recursion).
+                    logger.warning(
+                        "BuilderAgent: fabricated success detected without tool call; "
+                        "injecting corrective user turn"
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You did not actually call create_agent. "
+                                "Output ONLY the bare JSON tool call, no prose, "
+                                "no code fences."
+                            ),
+                        }
+                    )
+                    # Do not set final_answer — the loop will continue
+                else:
+                    final_answer = (
+                        parsed.get("answer")
+                        or response.strip()
+                        or "I wasn't able to generate a response. Please try again."
+                    )
 
         if final_answer is None:
             final_answer = (
-                "I've used the maximum number of steps. "
-                "Check ~/.gaia/agents/ for any agents that were created."
+                "I was unable to create the agent after several attempts. "
+                "Please try again with a clear agent name."
             )
 
         self.console.print_final_answer(final_answer, streaming=self.streaming)
@@ -344,12 +412,14 @@ def _create_agent_impl(
     name: str,
     description: str = "",
     enable_mcp: bool = False,
-    tools: Optional[List[str]] = None,
+    system_prompt: str = "",
+    conversation_starters: Optional[List[str]] = None,
 ) -> str:
     """Core implementation of the create_agent tool, separated for testability."""
     from gaia.agents.builder.template import (
-        TEMPLATE_INSTRUCTIONS,
-        TEMPLATE_STARTERS,
+        STARTER_CAVEAT,
+        default_conversation_starters,
+        default_system_prompt,
         generate_agent_source,
     )
 
@@ -396,16 +466,38 @@ def _create_agent_impl(
     desc = (
         description.strip() if description.strip() else f"Custom agent: {display_name}"
     )
+    # ``desc`` stays clean (used for the class docstring + fallback persona);
+    # ``card_desc`` carries the "(alpha template)" tag for AGENT_DESCRIPTION only,
+    # so the Hub card reads honestly without polluting IDE tooltips / help().
+    card_desc = f"{desc} (alpha template)"
+    # No silent zoo: derive a generic-but-correct persona from the described
+    # purpose when the Builder doesn't author one (CLAUDE.md: no silent fallbacks).
+    effective_prompt = (
+        system_prompt.strip()
+        if system_prompt and system_prompt.strip()
+        else default_system_prompt(display_name, desc)
+    )
+    # Append the honest starter-template caveat so the scaffolded agent itself
+    # sets expectations: it can converse but has no real tools yet.
+    # Caveat is unconditional because the Builder attaches no tools today. If
+    # tool-mixin re-exposure is added to this path later, gate it so a
+    # tool-equipped agent doesn't keep disclaiming "no tools yet".
+    effective_prompt = effective_prompt + STARTER_CAVEAT
+    effective_starters = [
+        s.strip()
+        for s in (conversation_starters or [])
+        if isinstance(s, str) and s.strip()
+    ] or default_conversation_starters(display_name)
     try:
         source = generate_agent_source(
             agent_id=agent_id,
             agent_name=display_name,
             description=desc,
+            card_description=card_desc,
             class_name=class_name,
-            starters=TEMPLATE_STARTERS,
-            system_prompt=TEMPLATE_INSTRUCTIONS,
+            starters=effective_starters,
+            system_prompt=effective_prompt,
             enable_mcp=enable_mcp,
-            tools=tools,
         )
     except ValueError as exc:
         return f"Error: {exc}"
@@ -455,27 +547,32 @@ def _create_agent_impl(
 
     if enable_mcp:
         return (
-            f"Done! I've created your '{display_name}' agent at:\n\n"
-            f"  {py_path}\n\n"
-            "MCP support is wired up and ready. Edit mcp_servers.json to add your\n"
-            "servers, for example:\n\n"
-            '  {\n    "mcpServers": {\n      "time": {\n'
-            '        "command": "uvx",\n        "args": ["mcp-server-time"]\n'
-            "      }\n    }\n  }\n\n"
-            "The agent is already loaded — you'll see it in the agent selector in "
-            "the GAIA UI.\n\n"
-            "To customize it, open agent.py and:\n"
-            "  - Edit `_get_system_prompt()` to change the agent's personality\n"
-            "  - Add `@tool` functions above `self.load_mcp_servers_from_config()`\n"
-            "    in `_register_tools()` to add Python tools alongside MCP tools"
+            f"Done! I've created your '{display_name}' as a simple starter agent "
+            f"with MCP support:\n\n"
+            f"  `{py_path}`\n\n"
+            "It's already loaded — you'll see it in the agent selector in the GAIA UI. "
+            "Its personality and conversation starters are tailored to what you described.\n\n"
+            "To connect MCP servers, edit `mcp_servers.json` in the same directory, "
+            "for example:\n\n"
+            "```json\n"
+            "{\n"
+            '  "mcpServers": {\n'
+            '    "time": { "command": "uvx", "args": ["mcp-server-time"] }\n'
+            "  }\n"
+            "}\n"
+            "```\n\n"
+            "This is a starter template, and the agent builder is an alpha feature. Your new "
+            "agent can chat about its topic, but it won't fetch data or perform that task on its "
+            "own until you add tools or MCP — the custom-agent guide shows how: "
+            "https://amd-gaia.ai/docs/guides/custom-agent"
         )
     return (
-        f"Done! I've created your '{display_name}' agent at:\n\n"
-        f"  {py_path}\n\n"
-        "The agent is already loaded and ready to use — you'll see it in the "
-        "agent selector in the GAIA UI.\n\n"
-        "To customize it, open agent.py and:\n"
-        "  - Edit `_get_system_prompt()` to change the agent's personality\n"
-        "  - Add `@tool` functions in `_register_tools()` to give it capabilities\n"
-        "  - See the 'Advanced' section at the bottom for model and MCP options"
+        f"Done! I've created your '{display_name}' as a simple starter agent:\n\n"
+        f"  `{py_path}`\n\n"
+        "It's already loaded — you'll see it in the agent selector in the GAIA UI. "
+        "Its personality and conversation starters are tailored to what you described.\n\n"
+        "This is a starter template, and the agent builder is an alpha feature. Your new "
+        "agent can chat about its topic, but it won't fetch data or perform that task on its "
+        "own until you add tools or MCP — the custom-agent guide shows how: "
+        "https://amd-gaia.ai/docs/guides/custom-agent"
     )

@@ -5,8 +5,8 @@ Chat Agent Tools - Mixins for RAG, file operations, and shell commands.
 """
 
 from gaia.agents.chat.tools.file_tools import FileToolsMixin
-from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
-from gaia.agents.chat.tools.shell_tools import ShellToolsMixin
+from gaia.agents.tools.rag_tools import RAGToolsMixin
+from gaia.agents.tools.shell_tools import ShellToolsMixin
 
 __all__ = [
     "RAGToolsMixin",

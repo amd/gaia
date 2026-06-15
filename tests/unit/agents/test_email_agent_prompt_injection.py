@@ -22,13 +22,18 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from gaia.agents.email.agent import EmailTriageAgent  # noqa: E402
-from gaia.agents.email.config import EmailAgentConfig  # noqa: E402
-from gaia.agents.email.tools.read_tools import (  # noqa: E402
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
+from gaia_agent_email.config import EmailAgentConfig  # noqa: E402
+from gaia_agent_email.tools.read_tools import (  # noqa: E402
     UNTRUSTED_BODY_CLOSE,
     UNTRUSTED_BODY_OPEN,
     list_inbox_impl,
 )
+
 from tests.fixtures.email.fake_gmail import (  # noqa: E402
     FakeCalendarBackend,
     FakeGmailBackend,
@@ -149,6 +154,45 @@ class TestI3BatchThreshold:
         agent._reset_organize_counter()
         assert agent._organize_op_count == 0
         assert agent._organize_distinct_senders == set()
+
+    def test_counter_resets_across_process_query_calls(self, agent):
+        """Issue #1106 — cold-run correctness.
+
+        The batch-organize counter must be zeroed at the START of every
+        ``process_query`` call, not just once at construction. Otherwise a
+        long-lived agent instance carries stale per-turn state into the next
+        turn and the batch-confirm threshold misfires.
+
+        We don't run the LLM loop: ``_process_query_impl`` is stubbed to
+        record the counter value it observes on entry and to simulate the
+        organize mutations that a real turn would accumulate. The first turn
+        pushes the counter well past the batch threshold; the second turn
+        must still see a zeroed counter on entry.
+        """
+        seen_op_counts: list[int] = []
+        seen_sender_sets: list[set[str]] = []
+
+        def fake_impl(user_input, max_steps=None, trace=False, filename=None):
+            # Capture the per-turn state the agent loop would actually see.
+            seen_op_counts.append(agent._organize_op_count)
+            seen_sender_sets.append(set(agent._organize_distinct_senders))
+            # Simulate a turn that trips the batch threshold (6 ops / 4 senders).
+            for sender in ("a", "b", "c", "d"):
+                agent._record_organize_op(f"m-{sender}", sender)
+            agent._record_organize_op("m-extra-1", "a")
+            agent._record_organize_op("m-extra-2", "b")
+            assert agent._organize_batch_threshold_exceeded() is True
+            return {"status": "completed", "result": "ok"}
+
+        with patch.object(agent, "_process_query_impl", side_effect=fake_impl):
+            agent.process_query("triage my inbox")
+            # After turn 1 the within-run mutations are still on the instance.
+            assert agent._organize_op_count > agent.ORGANIZE_BATCH_OP_THRESHOLD
+            agent.process_query("triage my inbox again")
+
+        # Both turns must have STARTED from a zeroed counter.
+        assert seen_op_counts == [0, 0]
+        assert seen_sender_sets == [set(), set()]
 
 
 # ---------------------------------------------------------------------------

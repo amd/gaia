@@ -12,7 +12,7 @@ on:
     branches: ["main"]
     paths:
       - "src/gaia/sd/**"  # SD mixin and tools
-      - "src/gaia/agents/sd/**"  # SD agent
+      - "hub/agents/python/sd/**"  # SD agent (standalone wheel #1102)
       - "src/gaia/llm/lemonade_client.py"
       - "src/gaia/cli.py"
       - "tests/integration/test_sd_integration.py"
@@ -22,7 +22,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "src/gaia/sd/**"  # SD mixin and tools
-      - "src/gaia/agents/sd/**"  # SD agent
+      - "hub/agents/python/sd/**"  # SD agent (standalone wheel #1102)
       - "src/gaia/llm/lemonade_client.py"
       - "src/gaia/cli.py"
       - "tests/integration/test_sd_integration.py"

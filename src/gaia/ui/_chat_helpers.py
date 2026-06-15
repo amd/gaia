@@ -577,6 +577,25 @@ def _disconnect_cached_agent(entry) -> None:
             logger.warning("MCP disconnect failed during cache eviction: %s", exc)
 
 
+def _agent_unavailable_message(requested: str, registry) -> str:
+    """Return a user-friendly error message for an agent that could not be loaded.
+
+    Mirrors the fail-loudly precedent at _chat_helpers.py around line 589 — no
+    silent swap to chat, just a clear message the user can act on.
+    """
+    reason_suffix = ""
+    if registry is not None:
+        reason = registry.get_load_error(requested)
+        if reason:
+            reason_suffix = f": {reason}"
+
+    return (
+        f"I couldn't load the agent **'{requested}'**. "
+        f"It may have failed to install or contains an error{reason_suffix}. "
+        f"Try re-creating it, or pick another agent from the selector."
+    )
+
+
 def _canonical_agent_type(agent_type: str) -> str:
     """Resolve legacy agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``).
 
@@ -909,6 +928,19 @@ def _session_agent_kwargs(
     }
 
 
+def _session_mail_provider(session: dict) -> str | None:
+    """Session mailbox FILTER for the email agent (#1596 / #1603 Phase 2).
+
+    ``None`` (unset, null, or empty string from the frontend) means "every
+    connected mailbox" — the email agent scans all of them and fails loudly
+    when none is connected. An explicit ``"google"`` / ``"microsoft"``
+    restricts to that provider. Never coerce a missing pick to "google":
+    that silently triaged Gmail for sessions that never chose a provider
+    and ignored a connected Outlook.
+    """
+    return session.get("mail_provider") or None
+
+
 def _find_last_tool_step(steps: list) -> dict | None:
     """Find the last tool step in captured_steps, searching backwards."""
     for i in range(len(steps) - 1, -1, -1):
@@ -1125,11 +1157,12 @@ async def _get_chat_response(
         registry = _agent_registry
         if agent_type != "chat" and registry and not registry.get(agent_type):
             logger.warning(
-                "chat: Session %s requested unknown agent_type '%s', falling back to chat",
+                "chat: Session %s requested unknown agent_type '%s'; "
+                "returning unavailable-agent error",
                 session_id[:8],
                 agent_type,
             )
-            agent_type = "chat"
+            return _agent_unavailable_message(agent_type, registry)
 
         if agent_type != stored_agent_type:
             db.update_session(session_id, agent_type=agent_type)
@@ -1196,7 +1229,6 @@ async def _get_chat_response(
             )
             config = ChatAgentConfig(
                 model_id=model_id,
-                max_steps=10,
                 silent_mode=True,
                 debug=False,
                 device=device,
@@ -1211,39 +1243,22 @@ async def _get_chat_response(
             # Non-chat agent: create via registry
             registry = _agent_registry
             if registry is None or registry.get(agent_type) is None:
-                # Registry unavailable or agent_type unknown (e.g. stale client state).
-                # Fall back to chat agent rather than permanently breaking the session.
+                # Registry unavailable or agent_type unknown — return a user-friendly
+                # error rather than silently falling back to a ChatAgent.
                 if registry is None:
                     logger.warning(
-                        "chat: Agent registry not initialized; falling back to chat for session %s",
+                        "chat: Agent registry not initialized for session %s; "
+                        "returning unavailable-agent error",
                         session_id[:8],
                     )
                 else:
                     logger.warning(
-                        "chat: Unknown agent_type '%s' for session %s; falling back to chat",
+                        "chat: Unknown agent_type '%s' for session %s; "
+                        "returning unavailable-agent error",
                         agent_type,
                         session_id[:8],
                     )
-                agent_type = "chat"
-                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-                _session_kwargs = _session_agent_kwargs(
-                    rag_file_paths=rag_file_paths,
-                    library_paths=library_paths,
-                    allowed=allowed,
-                    session_id=session_id,
-                )
-                config = ChatAgentConfig(
-                    model_id=model_id,
-                    max_steps=10,
-                    silent_mode=True,
-                    debug=False,
-                    **_session_kwargs,
-                )
-                _stamp_builtin_chat_identity(config)
-                agent = ChatAgent(config)
-                _store_agent(session_id, model_id, document_ids, agent, agent_type)
-                _register_agent_memory_ops(agent)
+                return _agent_unavailable_message(agent_type, registry)
             else:
                 logger.info(
                     "chat: Creating new %s agent for session %s",
@@ -1278,6 +1293,11 @@ async def _get_chat_response(
                         allowed=allowed,
                         session_id=session_id,
                     ),
+                    # Forwarded only here (not via _session_agent_kwargs, which
+                    # also feeds the strict ChatAgentConfig). Non-email factories
+                    # drop it via dataclasses.fields filtering. None = scan every
+                    # connected mailbox (#1596).
+                    mail_provider=_session_mail_provider(session),
                 )
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
@@ -1393,12 +1413,20 @@ async def _get_chat_response(
 # ── Streaming Chat ───────────────────────────────────────────────────────────
 
 
-async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):
-    """Stream chat response as Server-Sent Events.
+async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatRequest):
+    """Produce chat-response SSE events for a single run.
 
     Uses ChatAgent with SSEOutputHandler to emit agent activity events
     (steps, tool calls, thinking) alongside text chunks, giving the
     frontend visibility into what the agent is doing.
+
+    This is the run *producer*: it is driven by ``_run_chat_lifecycle``
+    inside a detached task that owns the run for its full duration,
+    independent of any HTTP/SSE client connection. Yielded ``data: ...``
+    strings are buffered and fanned out to attached subscribers by the
+    lifecycle; DB persistence happens here regardless of whether a client
+    is still listening, so navigating away never loses the run (issue
+    #1580 follow-up).
     """
     import queue
 
@@ -1408,12 +1436,17 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     sse_handler = None
     producer = None
     cleanup_done = False
+    # Cooperative cancel signal for the producer's agent loop. Set on stream
+    # timeout / client disconnect so the agent bails at its next step boundary
+    # and the producer thread is actually reaped (see agent._cancel_event).
+    cancel_event = threading.Event()
 
     def _cleanup_stream():
         nonlocal cleanup_done
         if cleanup_done:
             return
         cleanup_done = True
+        cancel_event.set()
         if sse_handler is not None:
             sse_handler.cancelled.set()
         _active_sse_handlers.pop(session_id, None)
@@ -1425,6 +1458,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     try:
         # Create SSE handler for streaming events
         sse_handler = SSEOutputHandler()
+        # Expose the handler on the run so an external Stop can signal the
+        # producer to bail even after every client has detached (#1580).
+        run.handler = sse_handler
         # Register so /api/chat/confirm-tool can find this handler.
         _active_sse_handlers[session_id] = sse_handler
 
@@ -1488,11 +1524,14 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         registry = _agent_registry
         if agent_type != "chat" and registry and not registry.get(agent_type):
             logger.warning(
-                "chat: Session %s requested unknown agent_type '%s', falling back to chat (streaming)",
+                "chat: Session %s requested unknown agent_type '%s' (streaming); "
+                "returning unavailable-agent error",
                 session_id[:8],
                 agent_type,
             )
-            agent_type = "chat"
+            error_msg = _agent_unavailable_message(agent_type, registry)
+            yield f"data: {json.dumps({'type': 'answer', 'content': error_msg})}\n\n"
+            return
 
         if agent_type != stored_agent_type:
             db.update_session(session_id, agent_type=agent_type)
@@ -1593,7 +1632,6 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     )
                     config = ChatAgentConfig(
                         model_id=model_id,
-                        max_steps=10,
                         streaming=True,
                         silent_mode=False,
                         debug=False,
@@ -1679,46 +1717,25 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                     # -- Cache miss: non-chat agent via registry --
                     registry = _agent_registry
                     if registry is None or registry.get(agent_type) is None:
-                        # Registry unavailable or agent_type unknown (e.g. stale client
-                        # state). Fall back to chat to avoid breaking the session.
+                        # Registry unavailable or agent_type unknown — emit a
+                        # user-friendly error rather than silently falling back to chat.
                         if registry is None:
                             logger.warning(
-                                "chat: Agent registry not initialized; falling back to chat for session %s",
+                                "chat: Agent registry not initialized for session %s (streaming); "
+                                "returning unavailable-agent error",
                                 session_id[:8],
                             )
                         else:
                             logger.warning(
-                                "chat: Unknown agent_type '%s' for session %s; falling back to chat",
+                                "chat: Unknown agent_type '%s' for session %s (streaming); "
+                                "returning unavailable-agent error",
                                 agent_type,
                                 session_id[:8],
                             )
-                        _fallback_type = "chat"
-                        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-                        config = ChatAgentConfig(
-                            model_id=model_id,
-                            max_steps=10,
-                            streaming=True,
-                            silent_mode=False,
-                            debug=False,
-                            device=device,
-                            min_context_size=device_ctx,
-                            **_session_agent_kwargs(
-                                rag_file_paths=[],
-                                library_paths=library_paths,
-                                allowed=allowed,
-                                session_id=session_id,
-                            ),
-                        )
-                        _stamp_builtin_chat_identity(config)
-                        agent = ChatAgent(config)
-                        agent.console = sse_handler
-                        _register_agent_memory_ops(agent)
-                        if rag_file_paths and agent.rag:
-                            _index_rag_with_progress(agent, rag_file_paths, sse_handler)
-                        _store_agent(
-                            session_id, model_id, document_ids, agent, _fallback_type
-                        )
+                        error_msg = _agent_unavailable_message(agent_type, registry)
+                        sse_handler._emit({"type": "answer", "content": error_msg})
+                        result_holder["answer"] = error_msg
+                        return
                     else:
                         logger.info(
                             "chat: Creating new %s agent for session %s",
@@ -1753,6 +1770,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                 allowed=allowed,
                                 session_id=session_id,
                             ),
+                            # See the non-streaming path: email-only kwarg,
+                            # filtered out by non-email factories. None = scan
+                            # every connected mailbox (#1596).
+                            mail_provider=_session_mail_provider(session),
                         )
                         agent.console = sse_handler
                         logger.info(
@@ -1833,6 +1854,10 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 # Early-exit if consumer disconnected
                 if sse_handler.cancelled.is_set():
                     return
+
+                # Let the agent loop observe stream-timeout/disconnect so a hung
+                # turn is torn down instead of leaking this producer thread.
+                agent._cancel_event = cancel_event
 
                 # Pre-flight on agent's ACTUAL effective model. When model_id kwarg was
                 # omitted, the agent's __init__ set model_id via kwargs.setdefault — a value
@@ -1958,12 +1983,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                 return None
 
             persisted_policy_block_content = _policy_block_response(blocked_steps)
-            if persisted_policy_block_msg_id is not None:
-                # ChatDatabase is single-writer SQLite today; make this replacement
-                # transactional before moving the chat DB to a multi-writer backend.
-                db.delete_message(request.session_id, persisted_policy_block_msg_id)
-            persisted_policy_block_msg_id = db.add_message(
+            persisted_policy_block_msg_id = db.upsert_message(
                 request.session_id,
+                persisted_policy_block_msg_id,
                 "assistant",
                 persisted_policy_block_content,
                 agent_steps=captured_steps if captured_steps else None,
@@ -2303,12 +2325,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
             ):
                 msg_id = persisted_policy_block_msg_id
             else:
-                if persisted_policy_block_msg_id is not None:
-                    # ChatDatabase is single-writer SQLite today; make this replacement
-                    # transactional before moving the chat DB to a multi-writer backend.
-                    db.delete_message(request.session_id, persisted_policy_block_msg_id)
-                msg_id = db.add_message(
+                msg_id = db.upsert_message(
                     request.session_id,
+                    persisted_policy_block_msg_id,
                     "assistant",
                     full_response,
                     agent_steps=captured_steps if captured_steps else None,
@@ -2380,6 +2399,84 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         yield f"data: {error_data}\n\n"
     finally:
         _cleanup_stream()
+
+
+async def _run_chat_lifecycle(
+    run, db: ChatDatabase, session: dict, request: ChatRequest
+):
+    """Drive a single chat run to completion, independent of any client.
+
+    Runs inside a detached task owned by ``RunManager``. Pumps every SSE
+    event from ``_stream_chat_impl`` into the run's replay buffer / live
+    subscribers via ``run.emit``. Because this task is not the HTTP
+    response, a client disconnect cannot cancel it — the producer finishes
+    and persists server-side (#1580 follow-up).
+    """
+    async for data in _stream_chat_impl(run, db, session, request):
+        run.emit(data)
+    # Notify the AgentLoop that a user turn completed (best-effort; no-op if
+    # the autonomy loop isn't running). Fires on real run completion rather
+    # than on subscriber detach.
+    try:
+        from gaia.ui.agent_loop import agent_loop
+
+        agent_loop.notify_user_message(request.session_id)
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+
+async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):
+    """Stream a chat turn as SSE for the ``/api/chat/send`` client.
+
+    Starts the run's detached lifecycle (the chat router guarantees no run
+    is already active for this session — it returns 409 otherwise) and
+    subscribes this HTTP connection to it. Yields the replay buffer (empty
+    for a fresh run) followed by live events until the run completes or the
+    client disconnects. Disconnecting only detaches this subscriber; the
+    run keeps going in the background.
+    """
+    from gaia.ui.run_manager import DONE, run_manager
+
+    session_id = request.session_id
+    run = run_manager.get(session_id)
+    if run is None:
+        run = run_manager.start(
+            session_id,
+            lambda r: _run_chat_lifecycle(r, db, session, request),
+        )
+    q = run.subscribe()
+    try:
+        while True:
+            item = await q.get()
+            if item is DONE:
+                break
+            yield item
+    finally:
+        run.unsubscribe(q)
+
+
+async def _attach_chat_stream(session_id: str):
+    """Re-attach an SSE client to an already-running background run (#1580).
+
+    Used by ``GET /api/chat/attach`` when the user revisits a session whose
+    turn is still in flight. Replays everything emitted so far, then streams
+    live events to completion. The caller is responsible for returning 404
+    when no run is active.
+    """
+    from gaia.ui.run_manager import DONE, run_manager
+
+    run = run_manager.get(session_id)
+    if run is None:
+        return
+    q = run.subscribe()
+    try:
+        while True:
+            item = await q.get()
+            if item is DONE:
+                break
+            yield item
+    finally:
+        run.unsubscribe(q)
 
 
 # ── Document Indexing ────────────────────────────────────────────────────────

@@ -30,7 +30,7 @@ def clean_tool_registry():
 # ---------------------------------------------------------------------------
 
 try:
-    from gaia.agents.code_index.tools.mixin import CodeIndexToolsMixin
+    from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 
     MIXIN_AVAILABLE = True
 except ImportError:
@@ -114,21 +114,21 @@ class TestToolRegistration:
 
 class TestToolsWhenCodeIndexUnavailable:
     def test_index_codebase_returns_error_json_when_unavailable(self, tmp_path):
-        with patch("gaia.agents.code_index.tools.mixin._CODE_INDEX_AVAILABLE", False):
+        with patch("gaia.agents.tools.code_index_tools._CODE_INDEX_AVAILABLE", False):
             make_harness(tmp_path)
             fn = _TOOL_REGISTRY["index_codebase"]["function"]
             result = json.loads(fn())
             assert "error" in result
 
     def test_search_code_index_returns_error_json_when_unavailable(self, tmp_path):
-        with patch("gaia.agents.code_index.tools.mixin._CODE_INDEX_AVAILABLE", False):
+        with patch("gaia.agents.tools.code_index_tools._CODE_INDEX_AVAILABLE", False):
             make_harness(tmp_path)
             fn = _TOOL_REGISTRY["search_code_index"]["function"]
             result = json.loads(fn(query="test"))
             assert "error" in result
 
     def test_error_message_includes_install_hint(self, tmp_path):
-        with patch("gaia.agents.code_index.tools.mixin._CODE_INDEX_AVAILABLE", False):
+        with patch("gaia.agents.tools.code_index_tools._CODE_INDEX_AVAILABLE", False):
             make_harness(tmp_path)
             fn = _TOOL_REGISTRY["index_codebase"]["function"]
             result = json.loads(fn())
@@ -147,4 +147,4 @@ class TestRegistryEntry:
         assert "code_index" in KNOWN_TOOLS
         module_path, class_name = KNOWN_TOOLS["code_index"]
         assert class_name == "CodeIndexToolsMixin"
-        assert module_path.endswith("code_index.tools.mixin")
+        assert module_path == "gaia.agents.tools.code_index_tools"

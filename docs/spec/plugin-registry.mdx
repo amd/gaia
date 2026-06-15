@@ -59,11 +59,11 @@ when scaffolding a new `agent.py` so users can opt into a mixin by name.
 
 ```python
 KNOWN_TOOLS = {
-    "rag":         ("gaia.agents.chat.tools.rag_tools",  "RAGToolsMixin"),
-    "code_index":  ("gaia.agents.code_index.tools.mixin","CodeIndexToolsMixin"),
+    "rag":         ("gaia.agents.tools.rag_tools",  "RAGToolsMixin"),
+    "code_index":  ("gaia.agents.tools.code_index_tools","CodeIndexToolsMixin"),
     "file_search": ("gaia.agents.tools.file_tools",      "FileSearchToolsMixin"),
-    "file_io":     ("gaia.agents.code.tools.file_io",    "FileIOToolsMixin"),
-    "shell":       ("gaia.agents.chat.tools.shell_tools","ShellToolsMixin"),
+    "file_io":     ("gaia.agents.tools.file_io_tools",    "FileIOToolsMixin"),
+    "shell":       ("gaia.agents.tools.shell_tools","ShellToolsMixin"),
     "screenshot":  ("gaia.agents.tools.screenshot_tools","ScreenshotToolsMixin"),
     "sd":          ("gaia.sd.mixin",                     "SDToolsMixin"),
     "vlm":         ("gaia.vlm.mixin",                    "VLMToolsMixin"),

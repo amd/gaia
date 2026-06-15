@@ -105,7 +105,7 @@ Pick the install path that fits you best:
     gaia-ui
     ```
 
-    The Agent UI opens automatically at [http://localhost:4200](http://localhost:4200).
+    The Agent UI opens automatically at [http://127.0.0.1:4200](http://127.0.0.1:4200).
 
     | Flag | Description |
     |------|-------------|
@@ -130,7 +130,7 @@ Pick the install path that fits you best:
 
     Or equivalently: `gaia chat --ui`
 
-    The Agent UI starts on [http://localhost:4200](http://localhost:4200).
+    The Agent UI starts on [http://127.0.0.1:4200](http://127.0.0.1:4200).
 
     | Flag | Description |
     |------|-------------|
@@ -220,6 +220,33 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 ## Memory
 
 The agent can remember facts, preferences, and decisions across sessions. Memory is **opt-in (beta)** and disabled by default — see the [Agent Memory guide](/guides/memory) to enable it and learn what the **Brain** icon's dashboard exposes.
+
+---
+
+## Scheduled Tasks
+
+Run a prompt on a recurring schedule — "every morning at 9, summarize my inbox" — without leaving the UI. Click the **Clock** icon in the sidebar to open the Schedule Manager.
+
+Describe the schedule in natural language; the parser previews the interpretation live before you create it:
+
+| Input | Meaning |
+|-------|---------|
+| `every 30m` | Every 30 minutes |
+| `every 6 hours` | Every 6 hours |
+| `daily at 9pm` | Once a day at 21:00 |
+| `every monday at 8am` | Weekly on Mondays at 08:00 |
+| `every hour from 8am to 6pm` | Hourly inside a time window |
+
+Each schedule runs in its own chat session, so the full history of runs (prompt + response per run) is one click away via the session list. Pause, resume, or delete schedules from the panel; run counts and the next-run countdown update live.
+
+Behavior notes:
+
+- Scheduled runs execute through the local LLM — nothing leaves your machine.
+- Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
+- One run executes at a time; overlapping schedules queue.
+- Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`.
+
+The REST API lives at `/api/schedules` (create/list/get), `/api/schedules/{name}` (pause/resume/cancel via `PUT`, delete via `DELETE`), `/api/schedules/{name}/results` (run history), and `/api/schedules/parse` (natural-language preview).
 
 ---
 

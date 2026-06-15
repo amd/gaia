@@ -36,7 +36,21 @@ There are two ways to connect Google depending on how you use GAIA.
     If you have an existing Google connection that predates GAIA v0.23, click **Reconnect** to grant the additional Gmail and Calendar scopes.
   </Tab>
   <Tab title="CLI (developer flow)">
-    The CLI connector flow is intended for developers and headless environments where a browser window cannot open automatically.
+    The CLI connector flow is fully self-contained — you do **not** need to open the Agent UI to set your OAuth client credentials. It is intended for developers and headless environments.
+
+    First, create an OAuth **Desktop-app** client in the Google Cloud Console and note its Client ID and Client Secret. See the [Google OAuth client runbook](https://github.com/amd/gaia/blob/main/docs/runbooks/google-oauth-client.md) for step-by-step instructions.
+
+    **Step 1 — Configure the OAuth client credentials** (persists them to your OS keyring, encrypted at rest):
+
+    ```bash
+    gaia connectors configure google \
+      --client-id <YOUR_CLIENT_ID>.apps.googleusercontent.com \
+      --client-secret <YOUR_CLIENT_SECRET>
+    ```
+
+    Both flags are required together — Google rejects token requests that omit the secret even for Desktop-app PKCE clients.
+
+    **Step 2 — Sign in and authorize:**
 
     ```bash
     gaia connectors connect google
@@ -48,6 +62,10 @@ There are two ways to connect Google depending on how you use GAIA.
     - `calendar.events`, `calendar.readonly`
 
     If you connected Google before GAIA v0.23, run `gaia connectors connect google --force` to trigger a fresh consent screen with the updated scope list.
+
+    <Note>
+      Power users can skip Step 1 by exporting `GAIA_GOOGLE_CLIENT_ID` and `GAIA_GOOGLE_CLIENT_SECRET` before launching GAIA — but `gaia connectors configure google` is the recommended path, since it stores the credentials securely and reuses them across connect/disconnect cycles.
+    </Note>
   </Tab>
 </Tabs>
 
@@ -120,6 +138,10 @@ Tell the agent how you want classification to behave for this session:
 
 Preferences are stored in process memory only — restarting the agent (or quitting Agent UI) wipes them. This is deliberate: the goal is to prove the value of session-scoped learning before we wire up persistent memory. Once persistent memory ships, the same tools will write through to it without changing this surface.
 
+### Behavioral learning (auto-promotion)
+
+Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
+
 ## Action surface
 
 ### Read
@@ -129,6 +151,10 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 ### Session preferences (in-memory; wiped on agent restart)
 
 `set_priority_sender`, `set_low_priority_sender`, `set_category_default`, `clear_session_preferences`
+
+### Inbox profiling
+
+`profile_inbox` — asks "who emails me most?" and returns a frequency ranking of senders with their dominant category (e.g. *urgent*, *informational*) and the timestamp of their most recent message. Profiling is built from the interaction history the agent accumulates during triage, so it improves the more you use the agent.
 
 ### Organize (reversible via the undo log)
 
@@ -146,6 +172,18 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 
 `list_calendar_events`, `accept_invite`, `decline_invite`, `create_event_from_email`
 
+## Sending email — safety
+
+**The agent never sends email on its own. A send always requires your explicit confirmation, and this holds no matter how you drive the agent.** Drafting a reply is harmless and unconfirmed; turning a draft into a sent message is the only step that asks for your approval, and it always asks.
+
+This guarantee is enforced independently on every surface, so a missing confirmation on one path can't be a back door on another:
+
+- **Chat / Agent UI / CLI** — `send_draft`, `send_now`, and `forward_message` are confirmation-gated in the agent loop. Before the send runs, you're shown the **literal** recipient, subject, and body (not an LLM paraphrase) and must approve. Decline, and nothing is sent. In unattended/background mode there's no one to approve, so the send is refused outright rather than run silently.
+- **REST API** (`POST /v1/email/send`) — rejected with **HTTP 403** unless you supply a single-use confirmation token. You get that token from `POST /v1/email/draft`, and it is **bound to the exact `(to, subject, body)`**: a token minted for one message can't be replayed to send different content, and it's consumed on first use.
+- **MCP server** (`send_email`) — same rule as REST: a send without a valid, payload-bound token returns a structured error and sends nothing.
+
+There is no setting, flag, or "auto-send" mode that bypasses this — it's a safety invariant, not a preference. A consolidated regression test (`tests/integration/test_never_auto_send.py`) exercises all three surfaces together so the guarantee can't be quietly weakened on any one of them.
+
 ## Privacy guarantees
 
 - **Local LLM only** — email body content never leaves your machine. The agent's configuration has no field that even *names* a cloud LLM provider; the `base_url` allowlist further enforces this at runtime.
@@ -154,7 +192,17 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 
 ## Phishing handling
 
-The agent's heuristic flags messages that match conservative phishing patterns (verify-your-account + click, "we detected unusual sign-in activity"). Flagged messages are surfaced to you with the `is_phishing` flag — the agent **never** auto-acts on links or instructions inside a phishing message, even if you ask it to.
+The agent uses a multi-signal detector — subject keyword pairs, suspicious sender domain, and body-level phrases — to set `is_phishing` on every triage result. Detection is heuristic-only (no LLM, deterministic), precision-first, and never auto-acts.
+
+When you ask the agent to quarantine a flagged message, it:
+
+1. **Asks for your confirmation** before touching anything.
+2. Applies a `GAIA_PHISHING_QUARANTINE` label and archives the message (two Gmail calls; the undo record is written only after both succeed).
+3. Records an undo row so you can reverse within the undo window.
+
+To reverse: ask the agent to unquarantine the message. It restores the original labels and moves the message back to INBOX. Undo is only possible within the undo window; after expiry the agent says so explicitly.
+
+The agent **never** auto-acts on links or instructions inside a phishing message, even if you ask it to.
 
 ## Troubleshooting
 

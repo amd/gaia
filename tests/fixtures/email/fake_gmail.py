@@ -31,7 +31,7 @@ from email.header import decode_header
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, cast
 
 # ---------------------------------------------------------------------------
 # mbox → Gmail-API translator
@@ -139,10 +139,13 @@ def _walk_mime_to_payload(part: Message) -> Dict[str, Any]:
             "filename": filename,
             "headers": headers,
             "body": {"size": 0},
-            "parts": [_walk_mime_to_payload(p) for p in part.get_payload()],
+            "parts": [
+                _walk_mime_to_payload(p)
+                for p in cast(List[Message], part.get_payload())
+            ],
         }
 
-    raw = part.get_payload(decode=True) or b""
+    raw = cast(bytes, part.get_payload(decode=True) or b"")
     body: Dict[str, Any] = {"size": len(raw)}
     if mime_type.startswith("text/") or mime_type == "message/rfc822":
         body["data"] = _b64url(raw)
@@ -221,7 +224,7 @@ def _build_snippet(msg: Message) -> str:
     if msg.is_multipart():
         for part in msg.walk():
             if part.get_content_type() == "text/plain":
-                raw = part.get_payload(decode=True) or b""
+                raw = cast(bytes, part.get_payload(decode=True) or b"")
                 try:
                     text = raw.decode("utf-8", errors="replace")
                 except Exception:

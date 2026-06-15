@@ -2,11 +2,28 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useCallback } from 'react';
-import { Wrench, Cpu, Shield, X, HardDrive } from 'lucide-react';
+import { Wrench, Cpu, Shield, X, HardDrive, CheckCircle2, FlaskConical, AlertTriangle } from 'lucide-react';
 import { getAgentIcon } from './agentIcons';
 import type { AgentInfo } from '../types';
 
 const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI;
+
+const TIER_META: Record<string, { Icon: typeof Shield; label: string }> = {
+    verified: { Icon: CheckCircle2, label: 'Verified' },
+    community: { Icon: Shield, label: 'Community' },
+    experimental: { Icon: FlaskConical, label: 'Experimental' },
+};
+
+function tierBadge(tier?: string) {
+    const meta = tier ? TIER_META[tier] : undefined;
+    if (!meta) return null;
+    const { Icon, label } = meta;
+    return (
+        <span className={`agent-badge agent-badge-tier-${tier}`} title={`${label} security tier`}>
+            <Icon size={10} /> {label}
+        </span>
+    );
+}
 
 interface AgentDetailModalProps {
     agent: AgentInfo;
@@ -55,6 +72,12 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                             {agent.source === 'native' && <span className="agent-badge agent-badge-native">Native</span>}
                             {agent.source === 'custom_python' && <span className="agent-badge agent-badge-custom">Custom</span>}
                             {agent.source === 'installed' && <span className="agent-badge agent-badge-installed">Installed</span>}
+                            {tierBadge(agent.security_tier)}
+                            {agent.deprecated && (
+                                <span className="agent-badge agent-badge-deprecated" title="Deprecated by the publisher — may be unmaintained">
+                                    <AlertTriangle size={10} /> Deprecated
+                                </span>
+                            )}
                             {agent.language && agent.language !== 'python' && (
                                 <span className="agent-badge agent-badge-native">{agent.language.toUpperCase()}</span>
                             )}

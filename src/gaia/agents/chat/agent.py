@@ -16,18 +16,23 @@ try:
 except ImportError:
     Observer = None
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.chat.session import SessionManager
-from gaia.agents.chat.tools import FileToolsMixin, RAGToolsMixin, ShellToolsMixin
-from gaia.agents.code.tools.file_io import FileIOToolsMixin
-from gaia.agents.tools import BrowserToolsMixin  # Web browsing and search
+from gaia.agents.chat.tools import FileToolsMixin
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
-from gaia.agents.tools import FileSearchToolsMixin, ScreenshotToolsMixin  # Shared tools
+from gaia.agents.tools import (  # Web browsing and search; Shared tools
+    BrowserToolsMixin,
+    FileIOToolsMixin,
+    FileSearchToolsMixin,
+    RAGToolsMixin,
+    ScreenshotToolsMixin,
+    ShellToolsMixin,
+)
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
@@ -52,7 +57,7 @@ class ChatAgentConfig:
     model_id: Optional[str] = None  # None = use default model (Gemma)
 
     # Execution settings
-    max_steps: int = 10
+    max_steps: int = field(default_factory=default_max_steps)
     streaming: bool = False  # Use --streaming to enable
 
     # NPU's FLM build runs at 4K, so a device config can override the 32K ctx.

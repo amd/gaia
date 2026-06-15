@@ -102,10 +102,18 @@ class TestBuiltinPath:
         registry = AgentRegistry()
         registry._register_builtin_agents()
         registered = {r.id for r in registry.list()}
-        # Every reserved id is actually registered. (If we ever drop one,
-        # the reserved set must drop with it — otherwise custom agents are
-        # blocked from a name that no longer belongs to anyone.)
-        assert _RESERVED_BUILTIN_IDS <= registered
+        # Every reserved id must still belong to a real built-in: either it is
+        # registered directly, or it is a legacy "-lite"/gaia-lite alias that
+        # resolves to a registered agent (#1162 — lite variants are now a model
+        # tier, not a separate card, but stay reserved so a custom agent can't
+        # claim the old id and shadow alias resolution).
+        for reserved in _RESERVED_BUILTIN_IDS:
+            resolved = AgentRegistry._LEGACY_ID_ALIASES.get(reserved, reserved)
+            assert resolved in registered, (
+                f"Reserved id {reserved!r} resolves to {resolved!r}, which is "
+                f"not a registered built-in — drop it from _RESERVED_BUILTIN_IDS "
+                f"or restore the agent/alias."
+            )
 
 
 CUSTOM_MCP_CONSUMER_TEMPLATE = textwrap.dedent("""

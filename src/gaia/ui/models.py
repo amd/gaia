@@ -212,6 +212,11 @@ class AgentInfo(BaseModel):
     # Multi-device support (issue #1220): declared device configurations.
     # Each entry is a serialized ``DeviceConfig`` from the registry.
     device_configs: List[dict] = Field(default_factory=list)
+    # Model-size tiers (issue #1162): "full" vs "lite" (~4B). Each entry is a
+    # serialized ``ModelTier``. The frontend renders a single agent card with a
+    # model-size selector instead of duplicate "… Lite" cards. Empty for agents
+    # that expose only one model size.
+    model_tiers: List[dict] = Field(default_factory=list)
 
 
 class AgentListResponse(BaseModel):
@@ -251,6 +256,9 @@ class CreateSessionRequest(BaseModel):
     private: bool = False
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     device: Optional[str] = None
+    # Mailbox provider for email-backed agents. Gmail by default; "microsoft"
+    # routes the email agent to the Outlook backend (see EmailAgentConfig).
+    mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
 
 
 class UpdateSessionRequest(BaseModel):
@@ -262,6 +270,7 @@ class UpdateSessionRequest(BaseModel):
     private: Optional[bool] = None
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     device: Optional[str] = None
+    mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
 
 
 class SessionResponse(BaseModel):
@@ -278,6 +287,8 @@ class SessionResponse(BaseModel):
     private: bool = False
     agent_type: str = "chat"
     device: str = "gpu"
+    # Mailbox FILTER (#1596): None = every connected mailbox (no pick).
+    mail_provider: Optional[str] = None
 
 
 class SessionListResponse(BaseModel):

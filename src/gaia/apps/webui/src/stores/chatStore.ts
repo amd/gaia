@@ -19,6 +19,10 @@ interface ChatState {
     detectedDevices: string[];
     setDetectedDevices: (devices: string[]) => void;
 
+    // Model-size tier selection (issue #1162): "full" | "lite"
+    activeModelTier: string;
+    setActiveModelTier: (tier: string) => void;
+
     // Sessions
     sessions: Session[];
     currentSessionId: string | null;
@@ -31,6 +35,12 @@ interface ChatState {
     updateSessionInList: (id: string, updates: Partial<Session>) => void;
     addPendingDelete: (id: string) => void;
     removePendingDelete: (id: string) => void;
+    /** Session IDs with a chat turn still running server-side (#1580).
+     *  Backend-truth (polled from /api/chat/active), so it survives
+     *  navigating away, refresh, and revisit — drives the sidebar's
+     *  "still running" spinner on backgrounded sessions. */
+    runningSessionIds: string[];
+    setRunningSessions: (ids: string[]) => void;
 
     // Messages (for current session)
     messages: Message[];
@@ -46,6 +56,10 @@ interface ChatState {
     appendStreamContent: (content: string) => void;
     setStreamContent: (content: string) => void;
     clearStreamContent: () => void;
+    /** Atomically clear all streaming state (streaming flag, content, steps).
+     *  Used when switching sessions so the incoming view never mirrors the
+     *  previous session's in-flight stream (issue #1580). */
+    resetStreaming: () => void;
 
     // Agent activity (steps during current response)
     agentSteps: AgentStep[];
@@ -74,6 +88,7 @@ interface ChatState {
     showFileBrowser: boolean;
     showSettings: boolean;
     showMemoryDashboard: boolean;
+    showSchedules: boolean;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     sidebarWidth: number;
@@ -85,6 +100,7 @@ interface ChatState {
     setShowFileBrowser: (show: boolean) => void;
     setShowSettings: (show: boolean) => void;
     setShowMemoryDashboard: (show: boolean) => void;
+    setShowSchedules: (show: boolean) => void;
     toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebarCollapsed: () => void;
@@ -119,10 +135,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
     detectedDevices: ['gpu'],
     setDetectedDevices: (devices) => set({ detectedDevices: devices }),
 
+    // Model-size tier selection (#1162)
+    activeModelTier: (() => {
+        try { return localStorage.getItem('gaia-active-model-tier') || 'full'; }
+        catch { return 'full'; }
+    })(),
+    setActiveModelTier: (tier) => {
+        try { localStorage.setItem('gaia-active-model-tier', tier); } catch { /* noop */ }
+        set({ activeModelTier: tier });
+    },
+
     // Sessions
     sessions: [],
     currentSessionId: null,
     pendingDeleteIds: [],
+    runningSessionIds: [],
+    setRunningSessions: (ids) =>
+        set((state) => {
+            // Reference-stable update: skip the set() when the running set is
+            // unchanged so the polled refresh doesn't re-render the sidebar.
+            const prev = state.runningSessionIds;
+            if (prev.length === ids.length && prev.every((id) => ids.includes(id))) {
+                return state;
+            }
+            return { runningSessionIds: ids };
+        }),
     setSessions: (sessions) =>
         set((state) => ({
             // Filter out any sessions that are pending backend deletion so poll
@@ -173,6 +210,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => ({ streamingContent: state.streamingContent + content })),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [] }),
 
     // Agent activity
     agentSteps: [],
@@ -239,6 +277,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showFileBrowser: false,
     showSettings: false,
     showMemoryDashboard: false,
+    showSchedules: false,
     toggleTheme: () =>
         set((state) => {
             const next = state.theme === 'dark' ? 'light' : 'dark';
@@ -260,9 +299,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
     setShowSettings: (show) =>
-        set(show ? { showSettings: true, showMemoryDashboard: false } : { showSettings: false }),
+        set(show ? { showSettings: true, showMemoryDashboard: false, showSchedules: false } : { showSettings: false }),
     setShowMemoryDashboard: (show) =>
-        set(show ? { showMemoryDashboard: true, showSettings: false } : { showMemoryDashboard: false }),
+        set(show ? { showMemoryDashboard: true, showSettings: false, showSchedules: false } : { showMemoryDashboard: false }),
+    setShowSchedules: (show) =>
+        set(show ? { showSchedules: true, showSettings: false, showMemoryDashboard: false } : { showSchedules: false }),
     toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>

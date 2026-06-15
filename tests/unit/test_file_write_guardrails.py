@@ -870,7 +870,7 @@ class TestCodeAgentWriteFileGuardrails:
     def mixin_and_registry(self, tmp_path):
         """Set up a FileIOToolsMixin with validator and register tools."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
-        from gaia.agents.code.tools.file_io import FileIOToolsMixin
+        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
         mixin = FileIOToolsMixin()
         mixin.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
@@ -965,7 +965,7 @@ class TestCodeAgentEditFileGuardrails:
     def mixin_and_registry(self, tmp_path):
         """Set up a FileIOToolsMixin with validator and register tools."""
         from gaia.agents.base.tools import _TOOL_REGISTRY
-        from gaia.agents.code.tools.file_io import FileIOToolsMixin
+        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
         mixin = FileIOToolsMixin()
         mixin.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
