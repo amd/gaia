@@ -17,7 +17,10 @@ jobs:
   benchmark:
     name: C++ Benchmarks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Windows MSVC does two cold builds (static + shared) of gaia_core from an
+    # unpopulated FetchContent cache (PR runs don't restore the main-only cache),
+    # which now exceeds 15 min after gaia_core grew. Linux finishes in ~4 min.
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
