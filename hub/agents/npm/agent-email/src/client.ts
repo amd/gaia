@@ -16,6 +16,7 @@
 
 import { HttpError } from "./errors.js";
 import { createLogger } from "./logger.js";
+import { stripTrailingSlashes } from "./url.js";
 import type {
   EmailDraftRequest,
   EmailDraftResponse,
@@ -51,8 +52,8 @@ export class EmailClient {
         "EmailClient requires a baseUrl, e.g. { baseUrl: 'http://127.0.0.1:8131' }",
       );
     }
-    // Normalize: strip a single trailing slash so path joins are predictable.
-    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
+    // Normalize: strip trailing slashes so path joins are predictable.
+    this.baseUrl = stripTrailingSlashes(opts.baseUrl);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     if (typeof this.fetchImpl !== "function") {

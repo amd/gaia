@@ -19,6 +19,7 @@ import path from "node:path";
 
 import { IntegrityError, PlatformError } from "./errors.js";
 import { createLogger } from "./logger.js";
+import { joinUrl } from "./url.js";
 import {
   type BinaryLock,
   type BinaryLockEntry,
@@ -60,10 +61,6 @@ export interface FetchResult {
   url: string;
   /** True when the existing on-disk binary was reused (hash already matched). */
   cached: boolean;
-}
-
-function joinUrl(base: string, file: string): string {
-  return `${base.replace(/\/+$/, "")}/${file.replace(/^\/+/, "")}`;
 }
 
 function sha256Hex(buf: Buffer): string {

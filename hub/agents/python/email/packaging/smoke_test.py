@@ -291,8 +291,8 @@ def main(argv=None) -> int:
             try:
                 out = proc.stdout.read() if proc.stdout else ""
                 log(f"server output:\n{out}")
-            except Exception:
-                pass
+            except OSError as exc:
+                log(f"could not drain server output: {exc}")
             return 3
         results["openapi"] = check_openapi()
         results["version"] = check_version()
@@ -306,8 +306,8 @@ def main(argv=None) -> int:
                 tail = proc.stdout.read()
                 if tail:
                     log(f"server output tail:\n{tail[-2000:]}")
-        except Exception:
-            pass
+        except OSError as exc:
+            log(f"could not drain server output tail: {exc}")
 
     log(f"results: {results}")
     ok = all(results.values()) and len(results) == 3
