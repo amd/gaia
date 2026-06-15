@@ -11,7 +11,7 @@ and helpers to spawn / health-check / version-check / shut down the sidecar.
 > Milestone #49 (issues #1646 + #1652). The packaging spike already proved the
 > frozen `email-agent` binary boots a FastAPI server and answers a contract-valid
 > triage round-trip with **no Python present** — see
-> `hub/agents/python/email/packaging/FINDINGS.md`. This package is the npm side.
+> `hub/agents/python/email/packaging/README.md`. This package is the npm side.
 
 ## Why this location
 
@@ -108,7 +108,7 @@ Typed wrapper over the five endpoints. Methods: `triage`, `draft`, `send`,
 - `spawnSidecar({ binaryPath, host?, port?, stubLlm? })` → spawn (`--host 127.0.0.1 --port <p>`; `--no-stub-llm` when `stubLlm:false`).
 - `waitForHealth(baseUrl, { timeoutMs })` → poll `/health`; throws `HealthTimeoutError` on timeout (never assumes ready).
 - `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
-- `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The frozen one-file binary orphans a child otherwise (FINDINGS.md gotcha #6).
+- `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The frozen one-file binary orphans a child otherwise (packaging/README.md, gotcha 6).
 - `startSidecar(opts)` → `spawn` → `waitForHealth` → `checkVersion` in one call; shuts down on any failure so a failed start never leaks a process.
 
 ## Types

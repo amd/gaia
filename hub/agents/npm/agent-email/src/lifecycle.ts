@@ -5,7 +5,7 @@
  * check the contract version, and shut it down cleanly (killing the whole
  * process tree).
  *
- * Tree-kill matters: the spike (FINDINGS.md gotcha #6) showed a PyInstaller
+ * Tree-kill matters: the spike (packaging/README.md, gotcha 6) showed a PyInstaller
  * one-file build spawns a child uvicorn process that `child.kill()` on the
  * parent does NOT reap — leaving the port held. We always kill the tree
  * (`taskkill /F /T` on Windows; a detached process-group kill on POSIX).
@@ -223,7 +223,7 @@ export async function checkVersion(
 }
 
 /**
- * Shut down the sidecar, killing the whole process tree (FINDINGS.md gotcha #6).
+ * Shut down the sidecar, killing the whole process tree (packaging/README.md, gotcha 6).
  * Resolves once the process has exited (or immediately if already dead).
  */
 export async function shutdown(sidecar: Sidecar, timeoutMs = 5000): Promise<void> {

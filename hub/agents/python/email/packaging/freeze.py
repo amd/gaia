@@ -16,7 +16,7 @@ Output:
     one-dir:  hub/agents/python/email/packaging/dist/email-agent/email-agent[.exe]
     one-file: hub/agents/python/email/packaging/dist/email-agent[.exe]
 
-Design notes / gotchas baked in (see FINDINGS.md for the why):
+Design notes / gotchas baked in (see README.md for the why):
 - ``uvicorn`` loads its loops/protocols/lifespan impls by string import, so its
   submodules are invisible to static analysis -> ``--collect-submodules uvicorn``.
 - ``keyring`` resolves OS backends through entry points -> collect its submodules
