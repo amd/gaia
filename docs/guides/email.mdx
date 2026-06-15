@@ -138,6 +138,10 @@ Tell the agent how you want classification to behave:
 
 Preferences persist across agent restarts via the memory store (`email:preferences`). They fall back to session-only (lost on restart) when `GAIA_MEMORY_DISABLED=1` or when the embedding backend is unreachable at startup. Incognito sessions never write preferences to persistent storage.
 
+### Behavioral learning (auto-promotion)
+
+Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
+
 ## Action surface
 
 ### Read
