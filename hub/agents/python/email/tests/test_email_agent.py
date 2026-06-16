@@ -35,7 +35,9 @@ def test_required_connectors_match_agent():
     from gaia_agent_email.agent import EmailTriageAgent
 
     reg = m.build_registration()
-    built = [(c.connector_id, tuple(c.scopes), c.reason) for c in reg.required_connections]
+    built = [
+        (c.connector_id, tuple(c.scopes), c.reason) for c in reg.required_connections
+    ]
     expected = [
         (c.connector_id, tuple(c.scopes), c.reason)
         for c in EmailTriageAgent.REQUIRED_CONNECTORS
@@ -95,7 +97,7 @@ def _make_single_request():
     return EmailTriageRequest(payload=payload)
 
 
-def _fake_chat(category="actionable", summary="Alice invites Bob to lunch."):
+def _fake_chat(category="NEEDS_RESPONSE", summary="Alice invites Bob to lunch."):
     """Minimal stub that makes classify_email_llm and summarize_email_llm succeed."""
     import json
     import types
@@ -121,11 +123,11 @@ def test_triage_service_uses_llm():
 
     service = EmailTriageService()
     request = _make_single_request()
-    chat = _fake_chat(category="actionable", summary="Alice invites Bob to lunch.")
+    chat = _fake_chat(category="NEEDS_RESPONSE", summary="Alice invites Bob to lunch.")
 
     response = service.triage_request(request, chat=chat)
 
-    assert response.result.category == "actionable"
+    assert response.result.category == "NEEDS_RESPONSE"
     assert "Alice" in response.result.summary or "lunch" in response.result.summary
     assert response.result.message_id == "msg-001"
 
@@ -186,7 +188,7 @@ def test_thread_newest_first():
             captured["body"] = body
             return super()._build_result_llm(body=body, **kwargs)
 
-    chat = _fake_chat(category="actionable", summary="Project update thread.")
+    chat = _fake_chat(category="NEEDS_RESPONSE", summary="Project update thread.")
     service = _CapturingService()
     response = service.triage_request(request, chat=chat)
 

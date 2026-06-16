@@ -98,7 +98,7 @@ def _single_response() -> dict:
         "schema_version": SCHEMA_VERSION,
         "request_kind": "single",
         "result": {
-            "category": "actionable",
+            "category": "NEEDS_RESPONSE",
             "is_spam": False,
             "is_phishing": False,
             "summary": "Vendor invoice needs review by Friday.",
@@ -119,7 +119,7 @@ def _thread_response() -> dict:
         "schema_version": SCHEMA_VERSION,
         "request_kind": "thread",
         "result": {
-            "category": "actionable",
+            "category": "NEEDS_RESPONSE",
             "is_spam": False,
             "is_phishing": False,
             "summary": "Bob wants a renewal call; Alice proposed Thursday 2pm.",
@@ -198,7 +198,7 @@ def test_request_round_trips_through_dump():
 def test_valid_single_response_validates():
     resp = EmailTriageResponse.model_validate(_single_response())
     assert resp.request_kind == "single"
-    assert resp.result.category == EmailCategory.ACTIONABLE
+    assert resp.result.category == EmailCategory.NEEDS_RESPONSE
     assert resp.result.draft is not None
     assert resp.result.action_items[0].due_hint == "Friday"
 
@@ -260,7 +260,7 @@ def test_unknown_kind_rejected():
 
 def test_bad_category_rejected():
     payload = _single_response()
-    payload["result"]["category"] = "NEEDS_RESPONSE"  # old PR#916 taxonomy
+    payload["result"]["category"] = "actionable"  # old 4-bucket taxonomy value
     with pytest.raises(ValidationError):
         EmailTriageResponse.model_validate(payload)
 
@@ -329,14 +329,13 @@ def test_result_summary_required():
 
 
 def test_schema_version_unchanged_by_multi_inbox():
-    """Multi-inbox (#1603 Phase 2) must NOT bump the frozen contract.
+    """Schema 2.0 (#1615) is the current frozen contract version.
 
-    The REST /triage endpoint analyzes a single caller-supplied payload — it
-    never reads mailboxes, so it needs no source-mailbox field and no version
-    bump. If this fails, someone changed the frozen contract; that requires an
-    explicit version negotiation, not a drive-by edit.
+    The REST /triage endpoint version is "2.0" after the 5-bucket taxonomy
+    upgrade. If this fails, someone changed the version unexpectedly; that
+    requires an explicit version negotiation, not a drive-by edit.
     """
-    assert SCHEMA_VERSION == "1.0"
+    assert SCHEMA_VERSION == "2.0"
 
 
 def test_triage_result_gained_no_new_required_field():
@@ -352,6 +351,42 @@ def test_triage_result_gained_no_new_required_field():
         "Adding a required field is a breaking contract change — it needs a "
         "SCHEMA_VERSION bump and a migration plan, not a drive-by edit."
     )
+
+
+def test_suggested_action_defaults_to_none():
+    """suggested_action defaults to 'none' when not provided."""
+    result = EmailTriageResult.model_validate(
+        {
+            "category": "FYI",
+            "summary": "Just an update.",
+        }
+    )
+    assert result.suggested_action == "none"
+
+
+def test_suggested_action_accepts_valid_literals():
+    """suggested_action accepts reply, none, and archive."""
+    for action in ("reply", "none", "archive"):
+        result = EmailTriageResult.model_validate(
+            {
+                "category": "URGENT",
+                "summary": "Critical issue.",
+                "suggested_action": action,
+            }
+        )
+        assert result.suggested_action == action
+
+
+def test_suggested_action_rejects_invalid_value():
+    """suggested_action rejects values outside reply/none/archive."""
+    with pytest.raises(ValidationError):
+        EmailTriageResult.model_validate(
+            {
+                "category": "URGENT",
+                "summary": "Critical issue.",
+                "suggested_action": "forward",
+            }
+        )
 
 
 def test_triage_result_has_no_mailbox_field():
