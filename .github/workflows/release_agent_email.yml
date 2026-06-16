@@ -5,18 +5,24 @@
 # (milestone #49, issue #1648). One namespaced tag does the WHOLE release:
 #
 #   1. build   — freeze the email REST sidecar into a native one-file binary on
-#                each of the 4 target platforms (no cross-compile), compute its
-#                SHA-256 + size, upload the binary + a meta sidecar.
-#   2. publish — POST /publish every binary to the Agent Hub R2 Worker (Bearer
-#                token from a repo secret), regenerate binaries.lock.json with
-#                the REAL hashes, then `npm publish` via npm trusted publishing
-#                (OIDC, provenance — NO npm token).
+#                each of the 4 target platforms (no cross-compile), smoke-test it,
+#                compute SHA-256 + size, upload the binary + a meta sidecar.
+#   2. publish — upload every binary to the GAIA assets R2 bucket (amd-gaia,
+#                served at assets.amd-gaia.ai) under the hub/ prefix via rclone,
+#                regenerate binaries.lock.json with the REAL hashes, verify every
+#                published object is fetchable + hash-matches via the real fetch
+#                CLI, then `npm publish` via npm trusted publishing (OIDC,
+#                provenance — NO npm token).
 #
-# Atomic + idempotent: the Worker computes SHA-256 server-side and rejects any
-# attempt to overwrite a published filename, so a re-run of an already-published
-# version is a no-op (publish_to_r2.py treats 409-with-identical-bytes as
-# success and fails loudly only on a genuine hash divergence). The npm publish
-# is skipped if that exact version already exists on the registry.
+# Distribution model: the amd-gaia R2 bucket is a public static object store
+# (same one that serves the docs videos). Binaries are served by a plain public
+# GET at assets.amd-gaia.ai/hub/...; the SHA-256 in binaries.lock.json is the
+# integrity gate the fetch CLI enforces on download (no server-side checksum).
+#
+# Atomic + idempotent: rclone copy is content-addressed by our pre-computed
+# SHA-256 (re-uploading identical bytes is a no-op); the post-upload fetch-verify
+# fails the release if any object's bytes don't match the lock; npm publish is
+# skipped if that exact version already exists on the registry.
 #
 # Tag namespace: `agent-pkg-email-*` (NOT `v*`). This is the established Agent
 # Hub package-share namespace (see build_agent_package.yml) and deliberately
@@ -24,12 +30,16 @@
 # trigger). Example: `git tag agent-pkg-email-v0.1.0 && git push origin --tags`.
 #
 # Maintainer setup (one-time):
-#   * Repo secret  AGENT_HUB_PUBLISH_TOKEN  — Bearer token for POST /publish.
-#   * Repo variable AGENT_HUB_BASE_URL      — Worker origin, e.g.
-#       https://gaia-agent-hub.<acct>.workers.dev  (no trailing slash, no /publish).
-#   * npm trusted publisher for @amd-gaia/agent-email registered against THIS
-#     workflow file name: release_agent_email.yml (repo amd/gaia). The OIDC
-#     subject is tied to the exact filename — renaming this file breaks publish.
+#   Secrets:
+#     R2_ACCESS_KEY_ID       — R2 S3 API token (Object Read & Write on amd-gaia).
+#     R2_SECRET_ACCESS_KEY   — its secret.
+#     R2_ACCOUNT_ID          — Cloudflare account id (for the R2 S3 endpoint).
+#   Variables:
+#     ASSETS_BASE_URL        — public origin, default https://assets.amd-gaia.ai
+#                              (set only to override).
+#   npm trusted publisher for @amd-gaia/agent-email registered against THIS
+#   workflow file name: release_agent_email.yml (repo amd/gaia). The OIDC subject
+#   is tied to the exact filename — renaming this file breaks publish.
 
 name: Release Agent (email)
 
@@ -55,6 +65,9 @@ env:
   PKG_DIR: hub/agents/npm/agent-email
   MANIFEST: hub/agents/python/email/gaia-agent.yaml
   FREEZE_DIST: hub/agents/python/email/packaging/dist
+  # R2 bucket + key prefix (layout mirrors the GitHub hub/agents/<lang>/<id> tree).
+  R2_BUCKET: amd-gaia
+  HUB_PREFIX: hub/agents/python/email
 
 jobs:
   # ── Stage 1: native freeze on every platform ───────────────────────
@@ -144,7 +157,7 @@ jobs:
             staging/${{ matrix.platform }}.meta.json
           if-no-files-found: error
 
-  # ── Stage 2: publish to R2 + npm (single atomic step) ──────────────
+  # ── Stage 2: upload to R2 + publish to npm (single atomic step) ─────
   publish:
     name: Publish to R2 + npm
     runs-on: ubuntu-latest
@@ -169,40 +182,37 @@ jobs:
       - name: Resolve + validate release version
         id: ver
         shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          # Routed through env (never inlined into the script) so an input value
-          # cannot inject shell — GitHub Actions script-injection hardening.
-          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            VERSION="$INPUT_VERSION"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
           else
-            # Strip the agent-pkg-email- prefix and an optional leading 'v'.
             TAG="${GITHUB_REF_NAME}"
             VERSION="${TAG#agent-pkg-email-}"
             VERSION="${VERSION#v}"
           fi
           PKG_VER="$(node -p "require('./${PKG_DIR}/package.json').version")"
-          MAN_VER="$(python -c "import yaml,sys; print(yaml.safe_load(open('${MANIFEST}'))['version'])")"
+          MAN_VER="$(python -c "import yaml; print(yaml.safe_load(open('${MANIFEST}'))['version'])")"
           echo "release version: ${VERSION} (package.json=${PKG_VER}, manifest=${MAN_VER})"
           if [ "$VERSION" != "$PKG_VER" ] || [ "$VERSION" != "$MAN_VER" ]; then
             echo "::error::version mismatch — tag/input=${VERSION}, package.json=${PKG_VER}, gaia-agent.yaml=${MAN_VER}. Align all three before tagging."
             exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base_url=${ASSETS_BASE_URL:-https://assets.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
+        env:
+          ASSETS_BASE_URL: ${{ vars.ASSETS_BASE_URL }}
 
-      - name: Assert release config present
+      - name: Assert R2 credentials present
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "${{ vars.AGENT_HUB_BASE_URL }}" ]; then
-            echo "::error::repo variable AGENT_HUB_BASE_URL is not set (Worker origin, e.g. https://hub.example)."
-            exit 1
-          fi
-          if [ -z "${{ secrets.AGENT_HUB_PUBLISH_TOKEN }}" ]; then
-            echo "::error::repo secret AGENT_HUB_PUBLISH_TOKEN is not set (Bearer publish token)."
+          missing=""
+          [ -z "${{ secrets.R2_ACCESS_KEY_ID }}" ] && missing="$missing R2_ACCESS_KEY_ID"
+          [ -z "${{ secrets.R2_SECRET_ACCESS_KEY }}" ] && missing="$missing R2_SECRET_ACCESS_KEY"
+          [ -z "${{ secrets.R2_ACCOUNT_ID }}" ] && missing="$missing R2_ACCOUNT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::missing repo secret(s):$missing — needed to upload to the amd-gaia R2 bucket."
             exit 1
           fi
 
@@ -212,56 +222,55 @@ jobs:
           pattern: email-agent-*
           path: artifacts
 
-      - name: Install publish deps
-        run: python -m pip install --upgrade requests pyyaml
+      - name: Install deps (PyYAML for the lock generator) + rclone
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pyyaml
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          rclone version | head -1
 
-      - name: Collect binaries
-        id: collect
+      - name: Collect binaries + metas
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p bins
-          # Each artifact dir holds the binary + a <platform>.meta.json.
           find artifacts -type f ! -name '*.meta.json' -exec cp {} bins/ \;
           find artifacts -name '*.meta.json' -exec cp {} bins/ \;
+          cp "${MANIFEST}" bins/gaia-agent.yaml
           echo "=== collected ==="
           ls -la bins/
-          # Build the repeatable --artifact arg list (path=platform from meta).
-          ARGS=""
-          for meta in bins/*.meta.json; do
-            plat="$(python -c "import json,sys; print(json.load(open(sys.argv[1]))[0]['platform'])" "$meta")"
-            fn="$(python -c "import json,sys; print(json.load(open(sys.argv[1]))[0]['filename'])" "$meta")"
-            ARGS="$ARGS --artifact bins/${fn}=${plat}"
-          done
-          echo "artifact_args=$ARGS" >> "$GITHUB_OUTPUT"
 
-      - name: Publish binaries to R2
-        env:
-          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.AGENT_HUB_PUBLISH_TOKEN }}
-          AGENT_HUB_BASE_URL: ${{ vars.AGENT_HUB_BASE_URL }}
+      - name: Upload binaries to R2 (rclone)
         shell: bash
+        env:
+          # rclone reads the remote 'R2' entirely from env — nothing on disk.
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -euo pipefail
-          # artifact_args is generated by the previous step from the build job's
-          # own meta files (platform keys + filenames) — intentionally word-split.
-          python hub/agents/python/email/packaging/publish_to_r2.py \
-            --base-url "$AGENT_HUB_BASE_URL" \
-            --manifest "${MANIFEST}" \
-            ${{ steps.collect.outputs.artifact_args }} \
-            --summary-out published.json
+          DEST="R2:${R2_BUCKET}/${HUB_PREFIX}/${{ steps.ver.outputs.version }}"
+          echo "uploading binaries + manifest -> ${DEST}/"
+          # Upload only the binaries + manifest (not the *.meta.json sidecars).
+          for f in bins/email-agent-* bins/gaia-agent.yaml; do
+            [ -f "$f" ] || continue
+            rclone copyto "$f" "${DEST}/$(basename "$f")" --s3-no-check-bucket
+          done
+          echo "=== R2 listing ==="
+          rclone lsl "${DEST}/" --s3-no-check-bucket
 
       - name: Regenerate binaries.lock.json with real hashes
         shell: bash
-        env:
-          AGENT_HUB_BASE_URL: ${{ vars.AGENT_HUB_BASE_URL }}
-          REL_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
           python hub/agents/python/email/packaging/gen_binaries_lock.py \
-            --base-url "$AGENT_HUB_BASE_URL" \
-            --version "$REL_VERSION" \
+            --base-url "${{ steps.ver.outputs.base_url }}" \
+            --version "${{ steps.ver.outputs.version }}" \
             --lock "${PKG_DIR}/binaries.lock.json" \
-            $(for m in bins/*.meta.json; do echo --summary "$m"; done)
+            $(for m in bins/*.meta.json; do echo --meta "$m"; done)
           echo "=== regenerated lock ==="
           cat "${PKG_DIR}/binaries.lock.json"
 
@@ -271,17 +280,27 @@ jobs:
           npm ci
           npm run build
 
+      - name: Verify every published object via the real fetch CLI
+        working-directory: ${{ env.PKG_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Atomicity gate: the public object's bytes must hash to the lock value
+          # for EVERY platform before we publish the package that points at them.
+          for plat in win32-x64 darwin-arm64 darwin-x64 linux-x64; do
+            echo "--- verifying $plat ---"
+            node dist/cli.js fetch --out "/tmp/verify-$plat" --platform "$plat"
+          done
+
       - name: Upgrade npm (trusted publishing support)
         run: npm install -g npm@latest
 
       - name: Publish to npm (OIDC trusted publishing, provenance)
         working-directory: ${{ env.PKG_DIR }}
         shell: bash
-        env:
-          REL_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="$REL_VERSION"
+          VERSION="${{ steps.ver.outputs.version }}"
           if npm view "@amd-gaia/agent-email@${VERSION}" version >/dev/null 2>&1; then
             echo "@amd-gaia/agent-email@${VERSION} already on npm — skipping (idempotent)."
             exit 0
