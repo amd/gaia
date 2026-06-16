@@ -86,7 +86,7 @@ A standard runtime reads the base and ignores `metadata.gaia`; GAIA reads both.
 |---|:---:|:---:|---|
 | `name` | required | required | ≤64 chars, lowercase alphanumeric + single hyphens, no leading/trailing/consecutive hyphen, **must match the skill's directory name**. |
 | `description` | required | required | ≤1024 chars. The trigger signal the model reads to decide relevance. |
-| `license` | optional | optional | SPDX identifier. |
+| `license` | optional | optional | Always `MIT` for GAIA skills (matches the repository license). |
 | `metadata` | optional | optional | Arbitrary map. GAIA's fields live under `metadata.gaia`. |
 | `version` | — | **superset** | Top-level. The standard has no top-level `version`; GAIA adds one (Hermes/OpenClaw also carry it). A tolerated superset key — standard runtimes ignore it. |
 
@@ -133,7 +133,7 @@ metadata:
 #### `tools` vs `tools_required` — never conflate them
 
 These are two different fields with two different consumers, and collapsing them
-was a latent bug in the prior draft:
+breaks the recipe contract:
 
 | Field | Meaning | Who reads it |
 |---|---|---|
@@ -149,7 +149,7 @@ The field name **`tools_required` is locked** as the cross-spec contract with
 |---|---|---|---|
 | `name` | string | yes | Skill identifier; matches directory name. See [naming](#naming). |
 | `description` | string | yes | Trigger signal (≤1024 chars). |
-| `license` | string | no | SPDX identifier. |
+| `license` | string | no | Always `MIT` for GAIA skills. |
 | `version` | string | no (recommended) | SemVer. Top-level GAIA superset, recommended for publishing; `0.0.0` (unversioned) blocks publishing. |
 | `metadata.gaia.security_tier` | string | no | `verified` \| `community` \| `experimental`. Default `experimental`. |
 | `metadata.gaia.permissions` | list | no | `<domain>:<level>[:scope]` grants. Default: none. |
