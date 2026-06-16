@@ -17,7 +17,9 @@ The binary serves the full email REST surface — `/v1/email/triage`, `/draft`,
 | `freeze.py` | PyInstaller build. Bakes in the gotcha fixes below. |
 | `smoke_test.py` | Launches the built binary as a subprocess and checks `/health`, OpenAPI, `/version`, and a triage round-trip. Used by `release_agent_email.yml`. |
 | `gen_binaries_lock.py` | Regenerates `hub/agents/npm/agent-email/binaries.lock.json` from built binaries (R2 keys + SHA-256). |
-| `publish_to_r2.py` | Uploads a built binary to R2 via the Agent Hub Worker `POST /publish`. |
+| `upload_to_r2.sh` | Hand-upload binaries to the assets R2 bucket via rclone + regenerate the lock (the "I run rclone myself" path). See [`HUB-UPLOAD.md`](HUB-UPLOAD.md). |
+| `HUB-UPLOAD.md` | Manual R2 upload guide — layout, one-command upload, verify, npm publish. |
+| `publish_to_r2.py` | Testing helper for the alternate Agent Hub Worker `POST /publish` path (not the rclone release path). |
 
 Build artifacts (`build/`, `dist/`, `*.spec`) are git-ignored; binaries are never committed.
 
