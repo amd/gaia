@@ -62,12 +62,18 @@ def _load_metas(paths: list[Path]) -> dict[str, dict]:
                     f"error: {p} platform '{plat}' has a non-sha256 / placeholder "
                     f"hash '{sha}'. Refusing to write a lock with a bad hash."
                 )
-            merged[plat] = {
-                "filename": rec["filename"],
-                "executable": rec["executable"],
-                "sha256": sha,
-                "size": int(rec["size"]),
-            }
+            try:
+                merged[plat] = {
+                    "filename": rec["filename"],
+                    "executable": rec["executable"],
+                    "sha256": sha,
+                    "size": int(rec["size"]),
+                }
+            except (KeyError, TypeError, ValueError) as e:
+                raise SystemExit(
+                    f"error: {p} platform '{plat}' is missing or has an invalid "
+                    f"filename/executable/size field: {e}."
+                ) from e
     if not merged:
         raise SystemExit("error: no artifact records found in the given metas.")
     return merged

@@ -19,7 +19,7 @@ The binary serves the full email REST surface — `/v1/email/triage`, `/draft`,
 | `gen_binaries_lock.py` | Regenerates `hub/agents/npm/agent-email/binaries.lock.json` from built binaries (R2 keys + SHA-256). |
 | `upload_to_r2.sh` | Hand-upload binaries to the assets R2 bucket via rclone + regenerate the lock (the "I run rclone myself" path). See [`HUB-UPLOAD.md`](HUB-UPLOAD.md). |
 | `HUB-UPLOAD.md` | Manual R2 upload guide — layout, one-command upload, verify, npm publish. |
-| `publish_to_r2.py` | Testing helper for the alternate Agent Hub Worker `POST /publish` path (not the rclone release path). |
+| `publish_to_r2.py` | Testing helper — uploads a binary via the legacy Agent Hub Worker `POST /publish`. The release now uploads via `rclone` (`release_agent_email.yml` / `upload_to_r2.sh`); this is not the release path. |
 
 Build artifacts (`build/`, `dist/`, `*.spec`) are git-ignored; binaries are never committed.
 

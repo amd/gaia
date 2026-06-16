@@ -19,10 +19,11 @@
 # GET at assets.amd-gaia.ai/hub/...; the SHA-256 in binaries.lock.json is the
 # integrity gate the fetch CLI enforces on download (no server-side checksum).
 #
-# Atomic + idempotent: rclone copy is content-addressed by our pre-computed
-# SHA-256 (re-uploading identical bytes is a no-op); the post-upload fetch-verify
-# fails the release if any object's bytes don't match the lock; npm publish is
-# skipped if that exact version already exists on the registry.
+# Atomic + idempotent: rclone copy is overwrite-by-key (re-uploading identical
+# bytes is a no-op); the post-upload fetch-verify — not rclone's own size/ETag
+# skip check — is the real integrity gate and fails the release if any object's
+# bytes don't match the lock; npm publish is skipped if that exact version
+# already exists on the registry.
 #
 # Tag namespace: `agent-pkg-email-*` (NOT `v*`). This is the established Agent
 # Hub package-share namespace (see build_agent_package.yml) and deliberately
@@ -182,10 +183,18 @@ jobs:
       - name: Resolve + validate release version
         id: ver
         shell: bash
+        # User-controlled inputs go through env (never inlined into the script)
+        # so a value can't inject shell — GitHub Actions script-injection
+        # hardening. The tag path uses GITHUB_REF_NAME (also env), and the
+        # version is still triple-checked against package.json + manifest below.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          ASSETS_BASE_URL: ${{ vars.ASSETS_BASE_URL }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
           else
             TAG="${GITHUB_REF_NAME}"
             VERSION="${TAG#agent-pkg-email-}"
@@ -200,8 +209,6 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "base_url=${ASSETS_BASE_URL:-https://assets.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
-        env:
-          ASSETS_BASE_URL: ${{ vars.ASSETS_BASE_URL }}
 
       - name: Assert R2 credentials present
         shell: bash
