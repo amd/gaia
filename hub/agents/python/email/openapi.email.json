@@ -21,6 +21,28 @@
             ],
             "description": "Free-text due hint as written ('Friday', 'EOD'); not parsed.",
             "title": "Due Hint"
+          },
+          "type": {
+            "default": "text",
+            "description": "Discriminator: 'text' for a plain imperative action; 'link' when the action involves following a URL (url is then required and non-empty).",
+            "enum": [
+              "text",
+              "link"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The URL to follow for a 'link' action item; None for 'text'.",
+            "title": "Url"
           }
         },
         "required": [
