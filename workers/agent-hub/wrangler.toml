@@ -20,8 +20,8 @@ compatibility_date = "2025-01-29"
 # (env.BUCKET); `bucket_name` is the real bucket the maintainer creates.
 [[r2_buckets]]
 binding = "BUCKET"
-bucket_name = "gaia-agent-hub"
-preview_bucket_name = "gaia-agent-hub-preview"
+bucket_name = "gaia-hub"
+preview_bucket_name = "gaia-hub-preview"
 
 [vars]
 # Reject artifacts larger than this many bytes (default 250 MiB). Override per

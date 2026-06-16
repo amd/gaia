@@ -68,7 +68,7 @@ env:
   FREEZE_DIST: hub/agents/python/email/packaging/dist
   # R2 bucket + key prefix (layout mirrors the GitHub hub/agents/<lang>/<id> tree).
   R2_BUCKET: gaia-hub
-  HUB_PREFIX: agents/python/email
+  HUB_PREFIX: agents/email
 
 jobs:
   # ── Stage 1: native freeze on every platform ───────────────────────

@@ -34,7 +34,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 
 REMOTE="${R2_REMOTE:-gaia}"
 BUCKET="${R2_BUCKET:-gaia-hub}"
-HUB_PREFIX="agents/python/email"
+HUB_PREFIX="agents/email"
 HUB_BASE_URL="${HUB_BASE_URL:-https://hub.amd-gaia.ai}"
 
 PKG_JSON="${REPO_ROOT}/hub/agents/npm/agent-email/package.json"

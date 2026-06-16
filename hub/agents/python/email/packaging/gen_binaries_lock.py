@@ -16,7 +16,7 @@ step) plus the exact ``--base-url`` (the public directory the fetch CLI joins
 each per-platform ``filename`` onto) and ``--version``, and writes the lock with:
 
   * ``baseUrl``  = the ``--base-url`` verbatim, e.g.
-      ``https://hub.amd-gaia.ai/agents/python/email/0.1.0``
+      ``https://hub.amd-gaia.ai/agents/email/0.1.0``
   * ``agentVersion`` = ``--version``
   * ``binaries.<platform>`` = real ``filename``/``executable``/``sha256``/``size``
     for every platform present in the metas.
@@ -87,7 +87,7 @@ def main(argv=None) -> int:
         "--base-url",
         required=True,
         help="Exact public directory the fetch CLI joins filenames onto, e.g. "
-        "https://hub.amd-gaia.ai/agents/python/email/0.1.0",
+        "https://hub.amd-gaia.ai/agents/email/0.1.0",
     )
     parser.add_argument("--version", required=True, help="Agent version, e.g. 0.1.0.")
     parser.add_argument(
