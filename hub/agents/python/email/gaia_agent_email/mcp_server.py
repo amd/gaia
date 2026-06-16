@@ -63,7 +63,9 @@ _FAKE_SEND_ENV = "GAIA_EMAIL_MCP_FAKE_SEND"
 # ---------------------------------------------------------------------------
 
 # triage_email accepts a contract EmailTriageRequest. ``payload`` is the
-# discriminated single|thread union; ``schema_version`` is optional.
+# discriminated single|thread union; ``schema_version`` and ``context`` are
+# optional. ``context`` is validated by EmailTriageRequest.model_validate — no
+# parse-code change here (#1541).
 _TRIAGE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -78,6 +80,20 @@ _TRIAGE_SCHEMA = {
         "schema_version": {
             "type": "string",
             "description": "Contract version. Defaults to the frozen current revision.",
+        },
+        "context": {
+            "type": "object",
+            "description": (
+                "Optional context that biases categorization/summary (#1541): "
+                "people (list), projects (list), tone (string), self_email "
+                "(string). Absent → behavior unchanged."
+            ),
+            "properties": {
+                "people": {"type": "array", "items": {"type": "string"}},
+                "projects": {"type": "array", "items": {"type": "string"}},
+                "tone": {"type": "string"},
+                "self_email": {"type": "string"},
+            },
         },
     },
     "required": ["payload"],
