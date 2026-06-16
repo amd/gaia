@@ -117,6 +117,7 @@ _DUE_HINT_RE = re.compile(
 )
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_URL_RE = re.compile(r"https?://[^\s>\"']+", re.IGNORECASE)
 _MAX_SUMMARY_CHARS = 300
 
 # Fast pre-flight timeouts for the "is Lemonade even up?" probe (#1677). The
@@ -432,7 +433,21 @@ class EmailTriageService:
             seen.add(key)
             due_match = _DUE_HINT_RE.search(sentence)
             due_hint = due_match.group(1) if due_match else None
-            items.append(ActionItem(description=normalized, due_hint=due_hint))
+            url_match = _URL_RE.search(sentence)
+            if url_match:
+                # Trim trailing sentence punctuation the greedy match grabs
+                # ("...report." → "...report") so the link is well-formed.
+                url = url_match.group(0).rstrip(".,;:!?)]}\"'")
+                items.append(
+                    ActionItem(
+                        description=normalized,
+                        due_hint=due_hint,
+                        type="link",
+                        url=url,
+                    )
+                )
+            else:
+                items.append(ActionItem(description=normalized, due_hint=due_hint))
         return items
 
     def _build_draft(

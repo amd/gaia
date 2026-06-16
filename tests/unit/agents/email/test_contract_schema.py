@@ -393,3 +393,100 @@ def test_triage_result_has_no_mailbox_field():
     """The 'mailbox' tag is internal to the agent tools; the frozen REST result
     must not grow one implicitly."""
     assert "mailbox" not in EmailTriageResult.model_fields
+
+
+# ---------------------------------------------------------------------------
+# ActionItem type discriminator (#1538)
+# ---------------------------------------------------------------------------
+
+
+def test_action_item_defaults_to_text():
+    """ActionItem without a type field defaults to 'text' and url is None."""
+    item = ActionItem.model_validate({"description": "Reply to Alice"})
+    assert item.type == "text"
+    assert item.url is None
+
+
+def test_action_item_due_hint_still_optional():
+    """Existing due_hint behaviour is unchanged."""
+    item = ActionItem.model_validate({"description": "do thing"})
+    assert item.due_hint is None
+
+
+def test_action_item_link_requires_url():
+    """type='link' without a url raises ValidationError."""
+    with pytest.raises(ValidationError):
+        ActionItem.model_validate({"description": "Visit site", "type": "link"})
+
+
+def test_action_item_link_with_empty_url_rejected():
+    """type='link' with an empty url string raises ValidationError."""
+    with pytest.raises(ValidationError):
+        ActionItem.model_validate(
+            {"description": "Visit site", "type": "link", "url": ""}
+        )
+
+
+def test_action_item_text_rejects_url():
+    """type='text' (or default) with a url raises ValidationError."""
+    with pytest.raises(ValidationError):
+        ActionItem.model_validate(
+            {"description": "Do thing", "type": "text", "url": "https://example.com"}
+        )
+
+
+def test_action_item_link_valid():
+    """A valid link action item with description and url validates."""
+    item = ActionItem.model_validate(
+        {
+            "description": "Check the report",
+            "type": "link",
+            "url": "https://example.com/report",
+        }
+    )
+    assert item.type == "link"
+    assert item.url == "https://example.com/report"
+    assert item.description == "Check the report"
+
+
+# ---------------------------------------------------------------------------
+# _extract_action_items URL detection (#1538)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_action_items_detects_link():
+    """A sentence with an https URL in an action-cue context yields a link item."""
+    pytest.importorskip("gaia_agent_email.api_routes")
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    svc = EmailTriageService()
+    body = "Please review the report at https://example.com/report by Friday."
+    items = svc._extract_action_items(body)
+    link_items = [i for i in items if i.type == "link"]
+    assert link_items, "expected at least one link action item"
+    assert link_items[0].url == "https://example.com/report"
+
+
+def test_extract_action_items_plain_imperative_is_text():
+    """A plain imperative sentence without a URL yields a text item."""
+    pytest.importorskip("gaia_agent_email.api_routes")
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    svc = EmailTriageService()
+    body = "Please confirm the meeting time by Monday."
+    items = svc._extract_action_items(body)
+    assert items
+    assert all(i.type == "text" for i in items)
+    assert all(i.url is None for i in items)
+
+
+def test_extract_action_items_link_strips_trailing_punctuation():
+    """A URL ending a sentence keeps no trailing punctuation in the link."""
+    pytest.importorskip("gaia_agent_email.api_routes")
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    svc = EmailTriageService()
+    body = "Please review the doc at https://example.com/report."
+    link_items = [i for i in svc._extract_action_items(body) if i.type == "link"]
+    assert link_items
+    assert link_items[0].url == "https://example.com/report"

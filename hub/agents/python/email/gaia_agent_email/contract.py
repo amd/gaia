@@ -38,7 +38,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import List, Literal, Optional, Union, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Category strings — kept in sync with ``triage_heuristics.ALL_CATEGORIES`` by
 # ``test_contract_schema.test_categories_match_agent_taxonomy``. Duplicated
@@ -213,6 +213,17 @@ class ActionItem(_Strict):
         default=None,
         description="Free-text due hint as written ('Friday', 'EOD'); not parsed.",
     )
+    type: Literal["text", "link"] = Field(
+        default="text",
+        description=(
+            "Discriminator: 'text' for a plain imperative action; 'link' when the "
+            "action involves following a URL (url is then required and non-empty)."
+        ),
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description="The URL to follow for a 'link' action item; None for 'text'.",
+    )
 
     @field_validator("description")
     @classmethod
@@ -220,6 +231,18 @@ class ActionItem(_Strict):
         if not (v or "").strip():
             raise ValueError("action item description must be non-empty")
         return v
+
+    @model_validator(mode="after")
+    def _url_consistent_with_type(self) -> "ActionItem":
+        if self.type == "link":
+            if not (self.url or "").strip():
+                raise ValueError(
+                    "url is required and must be non-empty when type='link'"
+                )
+        else:
+            if self.url is not None:
+                raise ValueError("url must be None when type='text'")
+        return self
 
 
 class DraftReply(_Strict):
