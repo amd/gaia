@@ -1345,7 +1345,7 @@ class TestEmailTriageEndpoint:
                 if "Classify" in content:
                     resp.text = json.dumps(
                         {
-                            "category": "actionable",
+                            "category": "NEEDS_RESPONSE",
                             "confidence": 0.9,
                             "reasoning": "test",
                         }
