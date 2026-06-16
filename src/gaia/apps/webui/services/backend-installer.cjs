@@ -510,6 +510,27 @@ function isTransientNetworkError(output) {
   );
 }
 
+/**
+ * Detect a TLS trust failure in `uv pip install` output. Behind a corporate
+ * MITM proxy, PyPI is presented with a certificate signed by a custom root CA
+ * that uv's bundled webpki roots don't include, so uv reports
+ * "invalid peer certificate: UnknownIssuer" (issue #1693). It surfaces wrapped
+ * in "Failed to fetch" / "error sending request", so isTransientNetworkError
+ * also matches it — the install loop MUST check this first and retry with
+ * --native-tls (the OS trust store, where IT installs the corporate CA) rather
+ * than burning the transient retries on the same bundled roots.
+ */
+function isTlsCertError(output) {
+  if (!output) return false;
+  return (
+    /invalid peer certificate/i.test(output) ||
+    /unknownissuer/i.test(output) ||
+    /certificate verify failed/i.test(output) ||
+    /unable to get local issuer certificate/i.test(output) ||
+    /self[- ]signed certificate/i.test(output)
+  );
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1198,10 +1219,29 @@ async function installBackend(opts = {}) {
   // would otherwise fail the whole bootstrap (and block a release). File-lock
   // failures (Windows os-error-32) are NOT retried — they need user action.
   let installResult;
+  let useNativeTls = false;
   for (let attempt = 1; attempt <= INSTALL_MAX_ATTEMPTS; attempt++) {
-    installResult = await runCommand("uv", pipArgs, { stageLabel: "pip" });
+    const attemptArgs = useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs;
+    installResult = await runCommand("uv", attemptArgs, { stageLabel: "pip" });
     if (installResult.code === 0) break;
     const attemptOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
+    // A corporate proxy's custom root CA isn't in uv's bundled webpki roots, so
+    // the fetch fails with UnknownIssuer. This LOOKS transient ("Failed to
+    // fetch") but retrying the bundled roots can't fix it — retry once with
+    // --native-tls so uv trusts the OS certificate store instead (issue #1693).
+    if (!useNativeTls && isTlsCertError(attemptOutput)) {
+      useNativeTls = true;
+      log(
+        "TLS trust failure (corporate proxy CA not in uv's bundled roots) — " +
+          "retrying install with --native-tls to use the OS certificate store"
+      );
+      report(
+        STAGES.INSTALL_PACKAGE,
+        0,
+        "Certificate trust issue — retrying with the system certificate store"
+      );
+      continue;
+    }
     const canRetry =
       attempt < INSTALL_MAX_ATTEMPTS &&
       isTransientNetworkError(attemptOutput) &&
@@ -1225,11 +1265,20 @@ async function installBackend(opts = {}) {
     // main.cjs should have killed it first; if the lock persists, point the
     // user at the live process rather than the generic manual-install hint.
     const output = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
-    const suggestion = isFileLockedError(output)
-      ? "A running GAIA process is locking the install. Close GAIA completely (including any leftover gaia.exe in Task Manager), then relaunch."
-      : `Try installing manually:\n  uv pip install ${pipPackage} --python ${
-          IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
-        }\nThen restart GAIA. See https://amd-gaia.ai/quickstart#cli-install`;
+    let suggestion;
+    if (isFileLockedError(output)) {
+      suggestion =
+        "A running GAIA process is locking the install. Close GAIA completely (including any leftover gaia.exe in Task Manager), then relaunch.";
+    } else if (isTlsCertError(output)) {
+      suggestion =
+        "PyPI's certificate isn't trusted on this network — usually a corporate proxy presenting its own root CA. " +
+        "GAIA retried with the OS certificate store and it still failed. Ask IT to install the proxy's root CA in " +
+        "your system's trusted certificate store, then relaunch GAIA. See https://amd-gaia.ai/quickstart#cli-install";
+    } else {
+      suggestion = `Try installing manually:\n  uv pip install ${pipPackage} --python ${
+        IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
+      }\nThen restart GAIA. See https://amd-gaia.ai/quickstart#cli-install`;
+    }
     throw new InstallError(
       `Failed to install ${pipPackage} (pip exit ${installResult.code}).`,
       {
@@ -1521,6 +1570,7 @@ module.exports = {
   checkNetwork,
   isFileLockedError,
   isTransientNetworkError,
+  isTlsCertError,
 
   // State machine
   getState,
