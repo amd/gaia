@@ -33,6 +33,7 @@ from gaia_agent_email.contract import (
     EmailTriageRequest,
     EmailTriageResponse,
     EmailTriageResult,
+    TriageContext,
     TriageUsage,
     parse_request,
 )
@@ -559,3 +560,70 @@ def test_usage_is_not_a_required_field():
         if field.is_required()
     }
     assert "usage" not in required
+
+
+# ---------------------------------------------------------------------------
+# TriageContext / EmailTriageRequest.context (#1541)
+# ---------------------------------------------------------------------------
+
+
+def test_triage_context_defaults_are_empty():
+    """TriageContext validates with empty defaults."""
+    ctx = TriageContext()
+    assert ctx.people == []
+    assert ctx.projects == []
+    assert ctx.tone is None
+    assert ctx.self_email is None
+
+
+def test_triage_context_populated_validates():
+    """A populated TriageContext validates and round-trips."""
+    ctx = TriageContext.model_validate(
+        {
+            "people": ["Boss", "Alice"],
+            "projects": ["Apollo"],
+            "tone": "concise",
+            "self_email": "me@example.com",
+        }
+    )
+    assert ctx.people == ["Boss", "Alice"]
+    assert ctx.projects == ["Apollo"]
+    assert ctx.tone == "concise"
+    assert ctx.self_email == "me@example.com"
+    again = TriageContext.model_validate(ctx.model_dump())
+    assert again == ctx
+
+
+def test_triage_context_rejects_unknown_field():
+    """TriageContext forbids extra fields (strict)."""
+    with pytest.raises(ValidationError):
+        TriageContext.model_validate({"people": [], "unknown_field": "x"})
+
+
+def test_request_without_context_validates():
+    """A request with no context validates and context is None (unchanged)."""
+    req = EmailTriageRequest.model_validate(_single_email_request())
+    assert req.context is None
+
+
+def test_request_with_context_validates():
+    """A request carrying a populated context validates."""
+    payload = _single_email_request()
+    payload["context"] = {
+        "people": ["Boss"],
+        "projects": ["Apollo"],
+        "tone": "friendly",
+        "self_email": "alice@example.com",
+    }
+    req = EmailTriageRequest.model_validate(payload)
+    assert req.context is not None
+    assert req.context.people == ["Boss"]
+    assert req.context.tone == "friendly"
+
+
+def test_request_context_unknown_subfield_rejected():
+    """An unknown sub-field of context is rejected loudly (extra='forbid')."""
+    payload = _single_email_request()
+    payload["context"] = {"people": ["Boss"], "bogus": True}
+    with pytest.raises(ValidationError):
+        EmailTriageRequest.model_validate(payload)

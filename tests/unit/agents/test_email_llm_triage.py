@@ -589,3 +589,58 @@ class TestSuggestedAction:
             chat, subject="s", sender="f", body="b", message_id="m"
         )
         assert out["suggested_action"] == "reply"
+
+
+# --------------------------------------------------------------------------
+# Request context threading into the classify prompt (#1541)
+# --------------------------------------------------------------------------
+
+
+class TestContextThreading:
+    """The optional triage context, when supplied, is woven into the classify
+    user prompt; when absent, the prompt is unchanged."""
+
+    def test_context_present_appears_in_prompt(self):
+        from gaia_agent_email.contract import TriageContext
+
+        chat = _CapturingChat("NEEDS_RESPONSE")
+        ctx = TriageContext(
+            people=["Boss", "Alice"],
+            projects=["Apollo"],
+            tone="concise",
+            self_email="me@example.com",
+        )
+        classify_email_llm(
+            chat,
+            subject="s",
+            sender="f",
+            body="b",
+            message_id="m",
+            context=ctx,
+        )
+        prompt = chat.last_user_content
+        assert "Boss" in prompt
+        assert "Alice" in prompt
+        assert "Apollo" in prompt
+        assert "concise" in prompt
+        assert "me@example.com" in prompt
+
+    def test_no_context_prompt_unchanged(self):
+        """Absent context → the prompt is byte-identical to the no-context call
+        (behavior-unchanged guard)."""
+        from gaia_agent_email.tools.llm_triage import _build_user_prompt
+
+        baseline = _build_user_prompt("subj", "alice@x.com", "the body")
+        with_none = _build_user_prompt("subj", "alice@x.com", "the body", context=None)
+        assert with_none == baseline
+
+    def test_empty_context_prompt_unchanged(self):
+        """A context with no populated fields adds nothing to the prompt."""
+        from gaia_agent_email.contract import TriageContext
+        from gaia_agent_email.tools.llm_triage import _build_user_prompt
+
+        baseline = _build_user_prompt("subj", "alice@x.com", "the body")
+        with_empty = _build_user_prompt(
+            "subj", "alice@x.com", "the body", context=TriageContext()
+        )
+        assert with_empty == baseline

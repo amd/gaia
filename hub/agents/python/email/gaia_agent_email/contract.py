@@ -186,6 +186,29 @@ class ThreadInput(_BaseInput):
 EmailInput = Union[SingleEmailInput, ThreadInput]
 
 
+class TriageContext(_Strict):
+    """Optional caller-supplied context that biases categorization/summary
+    (#1541). Absent → behavior is identical to today. Coexists with gaia
+    memory (#1114) without requiring it.
+    """
+
+    people: List[str] = Field(
+        default_factory=list,
+        description="Important people whose mail should weigh higher.",
+    )
+    projects: List[str] = Field(
+        default_factory=list,
+        description="Active projects the principal cares about.",
+    )
+    tone: Optional[str] = Field(
+        default=None, description="Preferred summary/draft tone, e.g. 'concise'."
+    )
+    self_email: Optional[str] = Field(
+        default=None,
+        description="The principal's own address, so the model knows who 'I' is.",
+    )
+
+
 class EmailTriageRequest(_Strict):
     """Top-level request envelope shared by REST (#1229) and MCP stdio (#1104)."""
 
@@ -197,6 +220,13 @@ class EmailTriageRequest(_Strict):
         ...,
         discriminator="kind",
         description="The single-email or full-thread input.",
+    )
+    context: Optional[TriageContext] = Field(
+        default=None,
+        description=(
+            "Optional context (people/projects/tone/self-email) that biases "
+            "categorization and summary. Absent → behavior unchanged."
+        ),
     )
 
 
@@ -362,6 +392,7 @@ __all__ = [
     "SingleEmailInput",
     "ThreadInput",
     "EmailInput",
+    "TriageContext",
     "EmailTriageRequest",
     "ActionItem",
     "DraftReply",

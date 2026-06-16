@@ -194,12 +194,13 @@ class EmailTriageService:
         """
         payload = request.payload
         resolved_chat = chat or self._build_llm_chat()
+        context = request.context
         if isinstance(payload, SingleEmailInput):
             kind = "single"
-            result = self._triage_single_llm(payload, resolved_chat)
+            result = self._triage_single_llm(payload, resolved_chat, context=context)
         elif isinstance(payload, ThreadInput):
             kind = "thread"
-            result = self._triage_thread_llm(payload, resolved_chat)
+            result = self._triage_thread_llm(payload, resolved_chat, context=context)
         else:  # pragma: no cover - discriminated union guarantees one of the two
             raise HTTPException(
                 status_code=422,
@@ -306,7 +307,7 @@ class EmailTriageService:
         )
 
     def _triage_single_llm(
-        self, payload: SingleEmailInput, chat: Any
+        self, payload: SingleEmailInput, chat: Any, context: Any = None
     ) -> EmailTriageResult:
         msg = payload.message
         return self._build_result_llm(
@@ -318,9 +319,12 @@ class EmailTriageService:
             reply_to=msg.from_,
             chat=chat,
             message_id=msg.message_id,
+            context=context,
         )
 
-    def _triage_thread_llm(self, payload: ThreadInput, chat: Any) -> EmailTriageResult:
+    def _triage_thread_llm(
+        self, payload: ThreadInput, chat: Any, context: Any = None
+    ) -> EmailTriageResult:
         messages: List[EmailMessage] = payload.messages
         last = messages[-1]
         # Join newest-first so the model sees the most recent context first.
@@ -337,6 +341,7 @@ class EmailTriageService:
             summary_prefix=f"Thread of {len(messages)} messages. ",
             chat=chat,
             message_id=payload.thread_id,
+            context=context,
         )
 
     def _build_result_llm(
@@ -351,6 +356,7 @@ class EmailTriageService:
         summary_prefix: str = "",
         chat: Any,
         message_id: Optional[str] = None,
+        context: Any = None,
     ) -> EmailTriageResult:
         """Build a result using LLM escalation when heuristic confidence is low."""
         from gaia_agent_email.tools.llm_triage import classify_email_llm
@@ -373,6 +379,7 @@ class EmailTriageService:
                 sender=sender_raw,
                 body=body,
                 collect_stats=call_stats,
+                context=context,
             )
             category = EmailCategory(llm_result["category"])
 
@@ -382,6 +389,7 @@ class EmailTriageService:
             sender=sender_raw,
             body=body,
             collect_stats=call_stats,
+            context=context,
         )
         summary = summary_prefix + llm_summary
 

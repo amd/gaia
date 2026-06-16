@@ -93,8 +93,15 @@ def _envelope_err(message: str) -> str:
     return json.dumps({"ok": False, "error": message})
 
 
-def _build_user_prompt(subject: str, sender: str, body: str) -> str:
+def _build_user_prompt(
+    subject: str, sender: str, body: str, context: Any = None
+) -> str:
+    # Reuse the triage context formatter so the summary factors in the same
+    # caller-supplied people/projects/tone (#1541). Absent → prompt unchanged.
+    from gaia_agent_email.tools.llm_triage import _format_context_block
+
     return (
+        f"{_format_context_block(context)}"
         "Summarize this email.\n\n"
         f"Subject: {subject}\n"
         f"From: {sender}\n"
@@ -130,6 +137,7 @@ def summarize_email_llm(
     message_id: str = "",
     max_chars: int = DEFAULT_SUMMARY_CHAR_LIMIT,
     collect_stats: Optional[List[dict]] = None,
+    context: Any = None,
 ) -> str:
     """Summarize one email via the LLM. Raises ``EmailSummarizeError`` on failure.
 
@@ -141,8 +149,17 @@ def summarize_email_llm(
     When ``collect_stats`` is a list, the response's ``.stats`` dict (the reused
     ``AgentResponse.stats`` measurement) is appended to it so a caller can
     aggregate usage across calls — no new measurement path.
+
+    ``context`` is an optional ``TriageContext`` (#1541): when supplied, a short
+    context block is prepended so the summary factors in the caller's
+    people/projects/tone. Absent → prompt unchanged.
     """
-    messages = [{"role": "user", "content": _build_user_prompt(subject, sender, body)}]
+    messages = [
+        {
+            "role": "user",
+            "content": _build_user_prompt(subject, sender, body, context=context),
+        }
+    ]
     try:
         response = chat.send_messages(
             messages, system_prompt=_SYSTEM_PROMPT, temperature=0.0
