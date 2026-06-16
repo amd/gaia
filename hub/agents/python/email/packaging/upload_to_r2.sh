@@ -63,8 +63,14 @@ if [ "${VERSION}" != "${PKG_VER}" ] || [ "${VERSION}" != "${MAN_VER}" ]; then
   die "version mismatch — given=${VERSION}, package.json=${PKG_VER}, gaia-agent.yaml=${MAN_VER}. Align all three first."
 fi
 
-# Discover the binaries to upload (exclude any *.json sidecars).
-mapfile -t BINS < <(find "${STAGING}" -maxdepth 1 -type f -name 'email-agent-*' ! -name '*.json' | sort)
+# Discover the binaries to upload (top-level email-agent-*, excluding *.json
+# sidecars). Plain glob loop — portable to bash 3.2 (macOS) unlike mapfile.
+BINS=()
+for f in "${STAGING}"/email-agent-*; do
+  [ -f "${f}" ] || continue          # literal glob (no match) or non-file -> skip
+  case "${f}" in *.json) continue ;; esac
+  BINS+=("${f}")
+done
 [ "${#BINS[@]}" -gt 0 ] || die "no email-agent-<platform> binaries found in ${STAGING}."
 
 DEST="${REMOTE}:${BUCKET}/${HUB_PREFIX}/${VERSION}"
@@ -116,6 +122,6 @@ Done. ${#BINS[@]} binary(ies) live at:
 Next — verify the published bytes match the lock, then publish npm:
   cd hub/agents/npm/agent-email
   npm ci && npm run build
-  node dist/cli.js fetch --platform win32-x64   # repeat per uploaded platform
-  npm publish --access public                   # if not using CI/OIDC
+  node dist/cli.js fetch --out ./verify --platform win32-x64   # repeat per platform
+  npm publish --access public                                  # if not using CI/OIDC
 EOF

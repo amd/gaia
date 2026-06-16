@@ -66,8 +66,8 @@ This is the clean split: **CI builds, you publish.**
 ```bash
 cd hub/agents/npm/agent-email
 npm ci && npm run build
-node dist/cli.js fetch --platform win32-x64   # repeat per uploaded platform — downloads + checks SHA-256
-npm publish --access public                   # or let CI do it via OIDC trusted publishing
+node dist/cli.js fetch --out ./verify --platform win32-x64   # --out is required; repeat per platform — downloads + checks SHA-256
+npm publish --access public                                  # or let CI do it via OIDC trusted publishing
 ```
 
 If `fetch` errors with a hash mismatch, the uploaded bytes don't match the lock —
@@ -79,8 +79,9 @@ Equivalent raw commands (the script just wraps these + the hashing + lock regen)
 
 ```bash
 VER=0.1.0
+# --exclude '*.json' keeps the *.meta.json sidecars out of the public dir.
 rclone copy ./staging/ "gaia:amd-gaia/hub/agents/python/email/$VER/" \
-  --s3-no-check-bucket --progress
+  --s3-no-check-bucket --progress --exclude '*.json'
 python hub/agents/python/email/packaging/gen_binaries_lock.py \
   --base-url "https://assets.amd-gaia.ai/hub/agents/python/email/$VER" \
   --version "$VER" --lock hub/agents/npm/agent-email/binaries.lock.json \
