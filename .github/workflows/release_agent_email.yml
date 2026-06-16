@@ -166,6 +166,9 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Install publish deps
+        run: python -m pip install --upgrade requests pyyaml
+
       - name: Resolve + validate release version
         id: ver
         shell: bash
@@ -211,9 +214,6 @@ jobs:
         with:
           pattern: email-agent-*
           path: artifacts
-
-      - name: Install publish deps
-        run: python -m pip install --upgrade requests pyyaml
 
       - name: Collect binaries
         id: collect
