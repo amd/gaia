@@ -43,9 +43,10 @@ if _HUB_EMAIL.is_dir() and str(_HUB_EMAIL) not in sys.path:
 
 from gaia_agent_email.tools.triage_heuristics import (  # noqa: E402
     ALL_CATEGORIES,
-    CATEGORY_ACTIONABLE,
-    CATEGORY_INFORMATIONAL,
-    CATEGORY_LOW_PRIORITY,
+    CATEGORY_FYI,
+    CATEGORY_NEEDS_RESPONSE,
+    CATEGORY_PERSONAL,
+    CATEGORY_PROMOTIONAL,
     CATEGORY_URGENT,
 )
 
@@ -68,9 +69,10 @@ OUT_GT = OUT_DIR / "ground_truth.json"
 # ground_truth matches what ``triage_inbox`` / the eval compares against.
 _BUCKET_TO_CATEGORY = {
     "urgent": CATEGORY_URGENT,
-    "actionable": CATEGORY_ACTIONABLE,
-    "informational": CATEGORY_INFORMATIONAL,
-    "low_priority": CATEGORY_LOW_PRIORITY,
+    "actionable": CATEGORY_NEEDS_RESPONSE,
+    "informational": CATEGORY_FYI,
+    "low_priority": CATEGORY_PROMOTIONAL,
+    "personal": CATEGORY_PERSONAL,
 }
 CATEGORIES = list(_BUCKET_TO_CATEGORY.keys())
 

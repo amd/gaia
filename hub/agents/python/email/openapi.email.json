@@ -90,12 +90,13 @@
         "type": "object"
       },
       "EmailCategory": {
-        "description": "The frozen four-bucket triage taxonomy. Values MUST match\n``triage_heuristics.ALL_CATEGORIES`` — the contract tests assert this.",
+        "description": "The five-bucket triage taxonomy (schema 2.0, #1615). Values MUST match\n``triage_heuristics.ALL_CATEGORIES`` — the contract tests assert this.",
         "enum": [
-          "urgent",
-          "actionable",
-          "informational",
-          "low priority"
+          "URGENT",
+          "NEEDS_RESPONSE",
+          "FYI",
+          "PROMOTIONAL",
+          "PERSONAL"
         ],
         "title": "EmailCategory",
         "type": "string"
@@ -362,7 +363,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "1.0",
+            "default": "2.0",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -392,7 +393,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "1.0",
+            "default": "2.0",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -419,7 +420,7 @@
           },
           "category": {
             "$ref": "#/components/schemas/EmailCategory",
-            "description": "One of the four buckets."
+            "description": "One of the five taxonomy buckets (schema 2.0)."
           },
           "draft": {
             "anyOf": [
@@ -455,6 +456,17 @@
             ],
             "description": "Echoes the provider message-id from the request (SingleEmailInput.message or ThreadInput.thread_id). Null when the result was produced from a raw Gmail-API message (no contract message_id available).",
             "title": "Message Id"
+          },
+          "suggested_action": {
+            "default": "none",
+            "description": "Suggested next action: reply (URGENT/NEEDS_RESPONSE), archive (PROMOTIONAL), or none (FYI/PERSONAL). Derived by precedence rule -- never required so existing consumers are unaffected.",
+            "enum": [
+              "reply",
+              "none",
+              "archive"
+            ],
+            "title": "Suggested Action",
+            "type": "string"
           },
           "summary": {
             "description": "Plain-text summary of the email/thread.",
@@ -634,7 +646,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "1.0"
+    "version": "2.0"
   },
   "openapi": "3.1.0",
   "paths": {

@@ -1408,7 +1408,7 @@ class TestEmailTriageEndpoint:
         """The agent's real heuristic categorizer drives the result —
         a promo subject lands in 'low priority' deterministically."""
         from gaia_agent_email.contract import parse_response
-        from gaia_agent_email.tools.triage_heuristics import CATEGORY_LOW_PRIORITY
+        from gaia_agent_email.tools.triage_heuristics import CATEGORY_PROMOTIONAL
 
         payload = _single_email_payload(
             subject="50% off — sale ends tonight!",
@@ -1418,7 +1418,7 @@ class TestEmailTriageEndpoint:
         resp = self.client.post("/v1/email/triage", json=payload)
         assert resp.status_code == 200, resp.text
         parsed = parse_response(resp.json())
-        assert parsed.result.category.value == CATEGORY_LOW_PRIORITY
+        assert parsed.result.category.value == CATEGORY_PROMOTIONAL
 
     def test_response_matches_contract_schema_shape(self):
         """The response body has exactly the #1262 top-level keys."""

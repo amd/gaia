@@ -27,8 +27,8 @@ import json
 from typing import Any, Dict
 
 from gaia_agent_email.tools.triage_heuristics import (
-    CATEGORY_INFORMATIONAL,
-    CATEGORY_LOW_PRIORITY,
+    CATEGORY_FYI,
+    CATEGORY_PROMOTIONAL,
 )
 
 from gaia.agents.base.tools import tool
@@ -47,7 +47,7 @@ _PREF_CATEGORY = "preference"
 # Categories that accept a session-level default action. Keep this set
 # small on purpose — defaulting "urgent" or "actionable" to "archive"
 # would silently drop important mail.
-_CATEGORIES_WITH_DEFAULTS = (CATEGORY_INFORMATIONAL, CATEGORY_LOW_PRIORITY)
+_CATEGORIES_WITH_DEFAULTS = (CATEGORY_FYI, CATEGORY_PROMOTIONAL)
 _VALID_ACTIONS = ("archive", "keep")
 
 
@@ -287,22 +287,23 @@ class PreferenceToolsMixin:
         def set_category_default(category: str, action: str) -> str:
             """Set a default action for a triage category, persisted across restarts.
 
-            Currently supports two categories — ``informational`` and
-            ``low priority`` — with two possible actions: ``archive``
+            Currently supports two categories — ``FYI`` and
+            ``PROMOTIONAL`` — with two possible actions: ``archive``
             (lift items into ``suggested_archives``) or ``keep`` (the
-            default; no archive suggestion). ``urgent`` and
-            ``actionable`` cannot be defaulted to anything other than
+            default; no archive suggestion). ``URGENT`` and
+            ``NEEDS_RESPONSE`` cannot be defaulted to anything other than
             ``keep``: the safety cost of silently archiving important
             mail is too high.
 
             Preferences persist across agent restarts.
 
             Args:
-                category: One of ``"informational"`` or ``"low priority"``.
+                category: One of ``"FYI"`` or ``"PROMOTIONAL"``.
                 action: One of ``"archive"`` or ``"keep"``.
             """
             try:
-                cat = (category or "").strip().lower()
+                # Normalize: category is UPPERCASE (schema 2.0), action is lowercase.
+                cat = (category or "").strip().upper()
                 act = (action or "").strip().lower()
                 if cat not in _CATEGORIES_WITH_DEFAULTS:
                     return _envelope_err(
