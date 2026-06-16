@@ -17,9 +17,12 @@ and merges the remote catalog with the live :class:`AgentRegistry` to produce a
 unified per-agent view with a ``status`` of ``installed`` / ``available`` /
 ``update_available``.
 
-Fail-loudly (CLAUDE.md): a network failure with *no* usable cache raises
-:class:`CatalogError` naming what to try. The only soft-degrade is the explicit
-offline path — and it is flagged (`offline=True`) rather than hidden.
+Fail-loudly (CLAUDE.md): :func:`load_index` raises :class:`CatalogError` naming
+what to try when it can produce no remote catalog at all. The unified
+:func:`build_catalog` then degrades to the *local registry alone* so the UI
+stays usable offline — and every offline path is flagged (`offline=True`)
+rather than hidden. Installing from the hub still fails loudly (you cannot pull
+an artifact from an unreachable hub).
 """
 
 from __future__ import annotations
@@ -468,18 +471,38 @@ def build_catalog(
     force: bool = False,
     include_deprecated: bool = False,
 ) -> UnifiedCatalog:
-    """Fetch the catalog and merge it with the registry into a unified view."""
-    result = load_index(
-        base_url=base_url, fetcher=fetcher, cache_path=cache_path, force=force
-    )
+    """Fetch the catalog and merge it with the registry into a unified view.
+
+    When the hub is unreachable and no offline cache exists, the catalog
+    degrades to the local registry alone (builtin/installed agents), flagged
+    ``offline=True`` — the UI stays usable instead of erroring out. Remote-only
+    "available" agents simply aren't listed until the hub is reachable again.
+    """
+    try:
+        result = load_index(
+            base_url=base_url, fetcher=fetcher, cache_path=cache_path, force=force
+        )
+        index_agents = result.agents
+        offline = result.offline
+        generated_at = result.generated_at
+    except CatalogError as exc:
+        # No remote catalog AND no cache: still show what's installed locally.
+        logger.warning(
+            "catalog: no remote catalog available (%s); showing local registry only",
+            exc,
+        )
+        index_agents = []
+        offline = True
+        generated_at = None
+
     merged = merge_with_registry(
-        result.agents,
+        index_agents,
         registry,
         installed_versions,
         include_deprecated=include_deprecated,
     )
     return UnifiedCatalog(
         agents=merged,
-        offline=result.offline,
-        generated_at=result.generated_at,
+        offline=offline,
+        generated_at=generated_at,
     )
