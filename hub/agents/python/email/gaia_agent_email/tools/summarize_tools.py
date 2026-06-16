@@ -25,10 +25,11 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.base.tools import tool
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 from gaia_agent_email.verbose import log_tool_call
+
+from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
