@@ -147,7 +147,7 @@ def test_action_item_field_description_present():
 # ---------------------------------------------------------------------------
 
 
-def test_all_four_category_values_present():
+def test_all_category_values_present():
     html = _html()
     for cat in EmailCategory:
         assert cat.value in html, f"Category value {cat.value!r} missing from spec"
@@ -157,16 +157,20 @@ def test_category_urgent_present():
     assert EmailCategory.URGENT.value in _html()
 
 
-def test_category_actionable_present():
-    assert EmailCategory.ACTIONABLE.value in _html()
+def test_category_needs_response_present():
+    assert EmailCategory.NEEDS_RESPONSE.value in _html()
 
 
-def test_category_informational_present():
-    assert EmailCategory.INFORMATIONAL.value in _html()
+def test_category_fyi_present():
+    assert EmailCategory.FYI.value in _html()
 
 
-def test_category_low_priority_present():
-    assert EmailCategory.LOW_PRIORITY.value in _html()
+def test_category_promotional_present():
+    assert EmailCategory.PROMOTIONAL.value in _html()
+
+
+def test_category_personal_present():
+    assert EmailCategory.PERSONAL.value in _html()
 
 
 # ---------------------------------------------------------------------------

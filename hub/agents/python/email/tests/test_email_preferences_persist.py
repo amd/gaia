@@ -247,10 +247,10 @@ class TestCategoryDefaultPersistsAcrossRestart:
     """AC: category-default action persists across restarts."""
 
     def test_category_default_survives_restart(self, tmp_path):
-        """Set informational→archive in session A; it's present in session B."""
+        """Set FYI→archive in session A; it's present in session B."""
         agent_a = _build_agent(tmp_path)
         try:
-            result = _invoke_set_category_default("informational", "archive")
+            result = _invoke_set_category_default("FYI", "archive")
             assert result["ok"] is True, f"set_category_default failed: {result}"
         finally:
             agent_a.close_db()
@@ -259,7 +259,7 @@ class TestCategoryDefaultPersistsAcrossRestart:
         try:
             defaults = agent_b._session_preferences["category_defaults"]
             assert (
-                defaults.get("informational") == "archive"
+                defaults.get("FYI") == "archive"
             ), f"category_default not restored. Got: {defaults}"
         finally:
             agent_b.close_db()
@@ -269,16 +269,16 @@ class TestCategoryDefaultPersistsAcrossRestart:
         # Session A: set archive, then flip back to keep
         agent_a = _build_agent(tmp_path)
         try:
-            _invoke_set_category_default("informational", "archive")
-            _invoke_set_category_default("informational", "keep")
+            _invoke_set_category_default("FYI", "archive")
+            _invoke_set_category_default("FYI", "keep")
         finally:
             agent_a.close_db()
 
         agent_b = _build_agent(tmp_path)
         try:
             defaults = agent_b._session_preferences["category_defaults"]
-            assert "informational" not in defaults, (
-                f"'keep' should remove informational from category_defaults, "
+            assert "FYI" not in defaults, (
+                f"'keep' should remove FYI from category_defaults, "
                 f"but got: {defaults}"
             )
         finally:
@@ -293,7 +293,7 @@ class TestClearPersistenceAcrossRestart:
         agent_a = _build_agent(tmp_path)
         try:
             _invoke_set_priority_sender("boss@company.com")
-            _invoke_set_category_default("informational", "archive")
+            _invoke_set_category_default("FYI", "archive")
             result = _invoke_clear_session_preferences()
             assert result["ok"] is True, f"clear_session_preferences failed: {result}"
         finally:

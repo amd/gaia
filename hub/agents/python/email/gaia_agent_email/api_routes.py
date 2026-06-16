@@ -66,7 +66,10 @@ from gaia_agent_email.contract import (
 )
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
-from gaia_agent_email.tools.triage_heuristics import classify_category_heuristic
+from gaia_agent_email.tools.triage_heuristics import (
+    classify_category_heuristic,
+    default_action_for,
+)
 from gaia_agent_email.version import AGENT_VERSION, API_VERSION
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -347,6 +350,11 @@ class EmailTriageService:
             is_spam=heuristic.is_spam,
             is_phishing=heuristic.is_phishing,
         )
+        suggested_action = (
+            llm_result.get("suggested_action")
+            if not heuristic.confident
+            else default_action_for(category.value)
+        ) or default_action_for(category.value)
         return EmailTriageResult(
             category=category,
             is_spam=heuristic.is_spam,
@@ -355,6 +363,7 @@ class EmailTriageService:
             action_items=action_items,
             draft=draft,
             message_id=message_id,
+            suggested_action=suggested_action,
         )
 
     def _build_result(
@@ -382,6 +391,7 @@ class EmailTriageService:
             is_spam=heuristic.is_spam,
             is_phishing=heuristic.is_phishing,
         )
+        suggested_action = default_action_for(category.value)
         return EmailTriageResult(
             category=category,
             is_spam=heuristic.is_spam,
@@ -390,6 +400,7 @@ class EmailTriageService:
             action_items=action_items,
             draft=draft,
             message_id=message_id,
+            suggested_action=suggested_action,
         )
 
     def _summarize(self, subject: str, body: str) -> str:
