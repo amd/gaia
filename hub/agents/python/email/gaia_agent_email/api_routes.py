@@ -63,6 +63,7 @@ from gaia_agent_email.contract import (
     EmailTriageResult,
     SingleEmailInput,
     ThreadInput,
+    TriageUsage,
 )
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
@@ -136,6 +137,37 @@ def _split_sentences(text: str) -> List[str]:
     return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
 
 
+def _aggregate_usage(call_stats: List[dict]) -> Optional[TriageUsage]:
+    """Sum the per-call ``AgentResponse.stats`` (#1277/#1278) across the
+    classify + summarize LLM calls into a single :class:`TriageUsage`.
+
+    prompt_tokens = Σ input_tokens; total_tokens = Σ(input + output);
+    tokens_per_second = Σ output / Σ decode_time, where each call's decode time
+    is output_tokens / tokens_per_second (so the aggregate is total output
+    tokens over total decode time, not a naive TPS average). Returns ``None``
+    when no LLM call produced stats (the heuristic-only path).
+    """
+    if not call_stats:
+        return None
+    total_input = 0
+    total_output = 0
+    total_decode_time = 0.0
+    for s in call_stats:
+        inp = int(s.get("input_tokens") or 0)
+        out = int(s.get("output_tokens") or 0)
+        tps = float(s.get("tokens_per_second") or 0.0)
+        total_input += inp
+        total_output += out
+        if out and tps > 0:
+            total_decode_time += out / tps
+    agg_tps = total_output / total_decode_time if total_decode_time > 0 else 0.0
+    return TriageUsage(
+        prompt_tokens=total_input,
+        total_tokens=total_input + total_output,
+        tokens_per_second=agg_tps,
+    )
+
+
 class EmailTriageService:
     """Convert contract inputs (or raw Gmail-API messages) into a contract
     :class:`EmailTriageResult`.
@@ -201,6 +233,10 @@ class EmailTriageService:
             # Output cap (not input); context window governs what fits.
             # 4096 gives Gemma-4-E4B room for its reasoning chain + JSON.
             max_tokens=4096,
+            # Surface per-call token/TPS stats on AgentResponse.stats so the
+            # triage result can report usage metrics (#1540) — reuses the
+            # existing measurement; no new path.
+            show_stats=True,
         )
         return AgentSDK(sdk_cfg)
 
@@ -324,6 +360,10 @@ class EmailTriageService:
             subject=subject, sender=sender_raw, label_ids=label_ids
         )
 
+        # Per-call LLM stats accumulate here so the result can report aggregate
+        # usage (#1540). Reuses AgentResponse.stats — no new measurement.
+        call_stats: List[dict] = []
+
         if heuristic.confident:
             category = EmailCategory(heuristic.category)
         else:
@@ -332,6 +372,7 @@ class EmailTriageService:
                 subject=subject,
                 sender=sender_raw,
                 body=body,
+                collect_stats=call_stats,
             )
             category = EmailCategory(llm_result["category"])
 
@@ -340,6 +381,7 @@ class EmailTriageService:
             subject=subject,
             sender=sender_raw,
             body=body,
+            collect_stats=call_stats,
         )
         summary = summary_prefix + llm_summary
 
@@ -365,6 +407,7 @@ class EmailTriageService:
             draft=draft,
             message_id=message_id,
             suggested_action=suggested_action,
+            usage=_aggregate_usage(call_stats),
         )
 
     def _build_result(

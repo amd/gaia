@@ -494,6 +494,17 @@
             "description": "Plain-text summary of the email/thread.",
             "title": "Summary",
             "type": "string"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriageUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on the heuristic-only path where no LLM call was made."
           }
         },
         "required": [
@@ -599,6 +610,32 @@
           "messages"
         ],
         "title": "ThreadInput",
+        "type": "object"
+      },
+      "TriageUsage": {
+        "additionalProperties": false,
+        "description": "LLM usage metrics for a triage, aggregated across the classify +\nsummarize calls. Reuses the existing ``AgentResponse.stats`` measurement\n(#1277/#1278) — no new measurement path. ``None`` on the heuristic-only\npath where no LLM call is made.",
+        "properties": {
+          "prompt_tokens": {
+            "default": 0,
+            "description": "Sum of input tokens across the LLM calls.",
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "tokens_per_second": {
+            "default": 0.0,
+            "description": "Aggregate decode throughput (total output tokens / total decode time).",
+            "title": "Tokens Per Second",
+            "type": "number"
+          },
+          "total_tokens": {
+            "default": 0,
+            "description": "Sum of input + output tokens across the LLM calls.",
+            "title": "Total Tokens",
+            "type": "integer"
+          }
+        },
+        "title": "TriageUsage",
         "type": "object"
       },
       "ValidationError": {

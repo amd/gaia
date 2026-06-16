@@ -257,6 +257,25 @@ class DraftReply(_Strict):
     body: str = Field(..., description="Proposed reply body.")
 
 
+class TriageUsage(_Strict):
+    """LLM usage metrics for a triage, aggregated across the classify +
+    summarize calls. Reuses the existing ``AgentResponse.stats`` measurement
+    (#1277/#1278) — no new measurement path. ``None`` on the heuristic-only
+    path where no LLM call is made.
+    """
+
+    prompt_tokens: int = Field(
+        default=0, description="Sum of input tokens across the LLM calls."
+    )
+    total_tokens: int = Field(
+        default=0, description="Sum of input + output tokens across the LLM calls."
+    )
+    tokens_per_second: float = Field(
+        default=0.0,
+        description="Aggregate decode throughput (total output tokens / total decode time).",
+    )
+
+
 class EmailTriageResult(_Strict):
     """The structured analysis of a single email or thread."""
 
@@ -288,6 +307,13 @@ class EmailTriageResult(_Strict):
             "Echoes the provider message-id from the request (SingleEmailInput.message "
             "or ThreadInput.thread_id). Null when the result was produced from a "
             "raw Gmail-API message (no contract message_id available)."
+        ),
+    )
+    usage: Optional[TriageUsage] = Field(
+        default=None,
+        description=(
+            "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on "
+            "the heuristic-only path where no LLM call was made."
         ),
     )
 
@@ -339,6 +365,7 @@ __all__ = [
     "EmailTriageRequest",
     "ActionItem",
     "DraftReply",
+    "TriageUsage",
     "EmailTriageResult",
     "EmailTriageResponse",
     "parse_request",
