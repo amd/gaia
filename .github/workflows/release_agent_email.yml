@@ -7,16 +7,16 @@
 #   1. build   — freeze the email REST sidecar into a native one-file binary on
 #                each of the 4 target platforms (no cross-compile), smoke-test it,
 #                compute SHA-256 + size, upload the binary + a meta sidecar.
-#   2. publish — upload every binary to the GAIA assets R2 bucket (amd-gaia,
-#                served at assets.amd-gaia.ai) under the hub/ prefix via rclone,
+#   2. publish — upload every binary to the GAIA hub R2 bucket (gaia-hub,
+#                served at hub.amd-gaia.ai) via rclone,
 #                regenerate binaries.lock.json with the REAL hashes, verify every
 #                published object is fetchable + hash-matches via the real fetch
 #                CLI, then `npm publish` via npm trusted publishing (OIDC,
 #                provenance — NO npm token).
 #
-# Distribution model: the amd-gaia R2 bucket is a public static object store
-# (same one that serves the docs videos). Binaries are served by a plain public
-# GET at assets.amd-gaia.ai/hub/...; the SHA-256 in binaries.lock.json is the
+# Distribution model: the gaia-hub R2 bucket is a public static object store.
+# Binaries are served by a plain public
+# GET at hub.amd-gaia.ai/...; the SHA-256 in binaries.lock.json is the
 # integrity gate the fetch CLI enforces on download (no server-side checksum).
 #
 # Atomic + idempotent: rclone copy is overwrite-by-key (re-uploading identical
@@ -32,11 +32,11 @@
 #
 # Maintainer setup (one-time):
 #   Secrets:
-#     R2_ACCESS_KEY_ID       — R2 S3 API token (Object Read & Write on amd-gaia).
+#     R2_ACCESS_KEY_ID       — R2 S3 API token (Object Read & Write on gaia-hub).
 #     R2_SECRET_ACCESS_KEY   — its secret.
 #     R2_ACCOUNT_ID          — Cloudflare account id (for the R2 S3 endpoint).
 #   Variables:
-#     ASSETS_BASE_URL        — public origin, default https://assets.amd-gaia.ai
+#     HUB_BASE_URL           — public origin, default https://hub.amd-gaia.ai
 #                              (set only to override).
 #   npm trusted publisher for @amd-gaia/agent-email registered against THIS
 #   workflow file name: release_agent_email.yml (repo amd/gaia). The OIDC subject
@@ -67,8 +67,8 @@ env:
   MANIFEST: hub/agents/python/email/gaia-agent.yaml
   FREEZE_DIST: hub/agents/python/email/packaging/dist
   # R2 bucket + key prefix (layout mirrors the GitHub hub/agents/<lang>/<id> tree).
-  R2_BUCKET: amd-gaia
-  HUB_PREFIX: hub/agents/python/email
+  R2_BUCKET: gaia-hub
+  HUB_PREFIX: agents/python/email
 
 jobs:
   # ── Stage 1: native freeze on every platform ───────────────────────
@@ -190,7 +190,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
-          ASSETS_BASE_URL: ${{ vars.ASSETS_BASE_URL }}
+          HUB_BASE_URL: ${{ vars.HUB_BASE_URL }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
@@ -208,7 +208,7 @@ jobs:
             exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "base_url=${ASSETS_BASE_URL:-https://assets.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base_url=${HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Assert R2 credentials present
         shell: bash
@@ -226,7 +226,7 @@ jobs:
           [ -z "${R2_SECRET_ACCESS_KEY:-}" ] && missing="$missing R2_SECRET_ACCESS_KEY"
           [ -z "${R2_ACCOUNT_ID:-}" ] && missing="$missing R2_ACCOUNT_ID"
           if [ -n "$missing" ]; then
-            echo "::error::missing repo secret(s):$missing — needed to upload to the amd-gaia R2 bucket."
+            echo "::error::missing repo secret(s):$missing — needed to upload to the gaia-hub R2 bucket."
             exit 1
           fi
 
@@ -302,7 +302,7 @@ jobs:
           # Atomicity gate: the public object's bytes must hash to the lock value
           # for EVERY platform before we publish the package that points at them.
           # Bounded retry: a just-uploaded object can briefly 404 / serve a stale
-          # negative cache at the Cloudflare edge (assets.amd-gaia.ai) before it
+          # negative cache at the Cloudflare edge (hub.amd-gaia.ai) before it
           # propagates — that edge is separate from R2's read-after-write store.
           # Explicit, caller-requested retry that still fails loudly once exhausted.
           for plat in win32-x64 darwin-arm64 darwin-x64 linux-x64; do

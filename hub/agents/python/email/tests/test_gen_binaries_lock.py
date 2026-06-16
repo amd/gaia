@@ -76,7 +76,7 @@ def _win_meta(tmp_path: Path, sha: str = _VALID_SHA, size: int = 123) -> Path:
 
 def test_meta_drives_entry_and_base_url_is_verbatim(tmp_path):
     lock = _lock(tmp_path)
-    base = "https://assets.amd-gaia.ai/hub/agents/python/email/1.2.3"
+    base = "https://hub.amd-gaia.ai/agents/python/email/1.2.3"
     rc = gen.main(
         [
             "--base-url",

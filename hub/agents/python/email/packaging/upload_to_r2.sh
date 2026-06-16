@@ -2,7 +2,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Manually upload frozen email-agent binaries to the GAIA assets R2 bucket and
+# Manually upload frozen email-agent binaries to the GAIA hub R2 bucket and
 # regenerate binaries.lock.json with their real hashes — the "I run rclone
 # myself" path. Uses the SAME bucket, prefix, and public origin as the CI
 # release (release_agent_email.yml), so the published objects and the lock
@@ -22,8 +22,8 @@
 #                  of platforms may be present — absent ones keep their existing
 #                  lock entry (so a Windows-only hand-upload won't wipe mac/linux).
 #
-# Env overrides: R2_REMOTE (default gaia), R2_BUCKET (default amd-gaia),
-#                ASSETS_BASE_URL (default https://assets.amd-gaia.ai).
+# Env overrides: R2_REMOTE (default gaia), R2_BUCKET (default gaia-hub),
+#                HUB_BASE_URL (default https://hub.amd-gaia.ai).
 #
 # No silent fallback: a missing rclone/remote, a version mismatch, or no
 # binaries found is a hard error.
@@ -33,9 +33,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 
 REMOTE="${R2_REMOTE:-gaia}"
-BUCKET="${R2_BUCKET:-amd-gaia}"
-HUB_PREFIX="hub/agents/python/email"
-ASSETS_BASE_URL="${ASSETS_BASE_URL:-https://assets.amd-gaia.ai}"
+BUCKET="${R2_BUCKET:-gaia-hub}"
+HUB_PREFIX="agents/python/email"
+HUB_BASE_URL="${HUB_BASE_URL:-https://hub.amd-gaia.ai}"
 
 PKG_JSON="${REPO_ROOT}/hub/agents/npm/agent-email/package.json"
 LOCK="${REPO_ROOT}/hub/agents/npm/agent-email/binaries.lock.json"
@@ -113,7 +113,7 @@ rclone lsl "${DEST}/" --s3-no-check-bucket
 
 echo "==> regenerating ${LOCK}"
 "${PY}" "${SCRIPT_DIR}/gen_binaries_lock.py" \
-  --base-url "${ASSETS_BASE_URL}/${HUB_PREFIX}/${VERSION}" \
+  --base-url "${HUB_BASE_URL}/${HUB_PREFIX}/${VERSION}" \
   --version "${VERSION}" \
   --lock "${LOCK}" \
   $(for m in "${META_DIR}"/*.meta.json; do echo --meta "${m}"; done)
@@ -121,7 +121,7 @@ echo "==> regenerating ${LOCK}"
 cat <<EOF
 
 Done. ${#BINS[@]} binary(ies) live at:
-  ${ASSETS_BASE_URL}/${HUB_PREFIX}/${VERSION}/
+  ${HUB_BASE_URL}/${HUB_PREFIX}/${VERSION}/
 
 Next — verify the published bytes match the lock, then publish npm:
   cd hub/agents/npm/agent-email

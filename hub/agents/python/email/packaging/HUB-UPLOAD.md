@@ -1,15 +1,16 @@
 # Manual R2 upload — email agent binaries
 
-How to publish frozen email-agent binaries to the GAIA assets bucket **by hand**
+How to publish frozen email-agent binaries to the GAIA hub bucket **by hand**
 (the "I run rclone myself" path). This produces the exact same objects and lock
 as the CI release (`.github/workflows/release_agent_email.yml`) — same bucket,
-same `hub/` prefix, same `assets.amd-gaia.ai` origin — so a hand-upload and a CI
-release are interchangeable.
+same `agents/python/email` prefix, same `hub.amd-gaia.ai` origin — so a hand-upload
+and a CI release are interchangeable.
 
-> **One-time rclone setup** (remote name, R2 credentials, endpoint) is in
-> [`scripts/video-demo/R2-SETUP.md`](../../../../../scripts/video-demo/R2-SETUP.md).
-> That guide configures a remote named `gaia` against the `amd-gaia` bucket — the
-> same bucket the docs videos use. This page assumes that remote exists.
+> **One-time rclone setup** (remote name, R2 credentials, endpoint) follows the
+> same steps as [`scripts/video-demo/R2-SETUP.md`](../../../../../scripts/video-demo/R2-SETUP.md),
+> but targets the dedicated `gaia-hub` bucket (custom domain `hub.amd-gaia.ai`)
+> rather than `amd-gaia`/`assets.amd-gaia.ai`. Configure a remote named `gaia`
+> against `gaia-hub`. This page assumes that remote exists.
 
 ## Layout
 
@@ -17,8 +18,8 @@ Binaries are served by a plain public GET; the SHA-256 in `binaries.lock.json`
 is the integrity gate the npm `fetch` CLI enforces (no server-side checksum).
 
 ```
-R2:  amd-gaia/hub/agents/python/email/<version>/email-agent-<platform>[.exe]
-URL: https://assets.amd-gaia.ai/hub/agents/python/email/<version>/email-agent-<platform>[.exe]
+R2:  gaia-hub/agents/python/email/<version>/email-agent-<platform>[.exe]
+URL: https://hub.amd-gaia.ai/agents/python/email/<version>/email-agent-<platform>[.exe]
 ```
 
 Platforms: `win32-x64` (`.exe`), `darwin-arm64`, `darwin-x64`, `linux-x64`.
@@ -37,14 +38,14 @@ The script:
 
 1. asserts the version matches `package.json` **and** `gaia-agent.yaml` (fails loudly otherwise),
 2. hashes each binary it is about to upload (so the lock can never drift from the bytes),
-3. `rclone copyto`s each binary + `gaia-agent.yaml` to `gaia:amd-gaia/hub/agents/python/email/<version>/`,
+3. `rclone copyto`s each binary + `gaia-agent.yaml` to `gaia:gaia-hub/agents/python/email/<version>/`,
 4. regenerates `hub/agents/npm/agent-email/binaries.lock.json` with the real hashes.
 
 Absent platforms keep their existing lock entry, so a **Windows-only** hand-upload
 won't wipe the mac/linux entries — upload the rest later and rerun.
 
-Env overrides: `R2_REMOTE` (default `gaia`), `R2_BUCKET` (default `amd-gaia`),
-`ASSETS_BASE_URL` (default `https://assets.amd-gaia.ai`).
+Env overrides: `R2_REMOTE` (default `gaia`), `R2_BUCKET` (default `gaia-hub`),
+`HUB_BASE_URL` (default `https://hub.amd-gaia.ai`).
 
 ## Where the binaries come from
 
@@ -79,14 +80,14 @@ Equivalent raw commands (the script just wraps these + the hashing + lock regen)
 
 ```bash
 VER=0.1.0
-DEST="gaia:amd-gaia/hub/agents/python/email/$VER"
+DEST="gaia:gaia-hub/agents/python/email/$VER"
 # --exclude '*.json' keeps the *.meta.json sidecars out of the public dir.
 rclone copy ./staging/ "$DEST/" --s3-no-check-bucket --progress --exclude '*.json'
 # Upload the manifest too, so the hand path matches CI byte-for-byte.
 rclone copyto hub/agents/python/email/gaia-agent.yaml "$DEST/gaia-agent.yaml" \
   --s3-no-check-bucket
 python hub/agents/python/email/packaging/gen_binaries_lock.py \
-  --base-url "https://assets.amd-gaia.ai/hub/agents/python/email/$VER" \
+  --base-url "https://hub.amd-gaia.ai/agents/python/email/$VER" \
   --version "$VER" --lock hub/agents/npm/agent-email/binaries.lock.json \
   --meta staging/<platform>.meta.json   # one --meta per platform
 ```

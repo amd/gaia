@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: MIT
 """
 Regenerate ``hub/agents/npm/agent-email/binaries.lock.json`` from real artifacts
-published to the GAIA assets R2 bucket (milestone #49, issue #1648).
+published to the GAIA hub R2 bucket (milestone #49, issue #1648).
 
 Distribution is direct-to-R2: the frozen per-platform binaries are uploaded with
-``rclone`` to the ``amd-gaia`` bucket under a ``hub/`` prefix and served publicly
-at ``assets.amd-gaia.ai``. The npm ``fetch`` CLI downloads each binary by a plain
+``rclone`` to the ``gaia-hub`` bucket and served publicly
+at ``hub.amd-gaia.ai``. The npm ``fetch`` CLI downloads each binary by a plain
 public GET and verifies its SHA-256 against this lock — so the lock's hashes are
 the integrity gate (there is no server-side checksum on a static object store).
 
@@ -16,7 +16,7 @@ step) plus the exact ``--base-url`` (the public directory the fetch CLI joins
 each per-platform ``filename`` onto) and ``--version``, and writes the lock with:
 
   * ``baseUrl``  = the ``--base-url`` verbatim, e.g.
-      ``https://assets.amd-gaia.ai/hub/agents/python/email/0.1.0``
+      ``https://hub.amd-gaia.ai/agents/python/email/0.1.0``
   * ``agentVersion`` = ``--version``
   * ``binaries.<platform>`` = real ``filename``/``executable``/``sha256``/``size``
     for every platform present in the metas.
@@ -87,7 +87,7 @@ def main(argv=None) -> int:
         "--base-url",
         required=True,
         help="Exact public directory the fetch CLI joins filenames onto, e.g. "
-        "https://assets.amd-gaia.ai/hub/agents/python/email/0.1.0",
+        "https://hub.amd-gaia.ai/agents/python/email/0.1.0",
     )
     parser.add_argument("--version", required=True, help="Agent version, e.g. 0.1.0.")
     parser.add_argument(

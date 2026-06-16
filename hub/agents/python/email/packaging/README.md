@@ -17,7 +17,7 @@ The binary serves the full email REST surface — `/v1/email/triage`, `/draft`,
 | `freeze.py` | PyInstaller build. Bakes in the gotcha fixes below. |
 | `smoke_test.py` | Launches the built binary as a subprocess and checks `/health`, OpenAPI, `/version`, and a triage round-trip. Used by `release_agent_email.yml`. |
 | `gen_binaries_lock.py` | Regenerates `hub/agents/npm/agent-email/binaries.lock.json` from built binaries (R2 keys + SHA-256). |
-| `upload_to_r2.sh` | Hand-upload binaries to the assets R2 bucket via rclone + regenerate the lock (the "I run rclone myself" path). See [`HUB-UPLOAD.md`](HUB-UPLOAD.md). |
+| `upload_to_r2.sh` | Hand-upload binaries to the `gaia-hub` R2 bucket via rclone + regenerate the lock (the "I run rclone myself" path). See [`HUB-UPLOAD.md`](HUB-UPLOAD.md). |
 | `HUB-UPLOAD.md` | Manual R2 upload guide — layout, one-command upload, verify, npm publish. |
 | `publish_to_r2.py` | Testing helper — uploads a binary via the legacy Agent Hub Worker `POST /publish`. The release now uploads via `rclone` (`release_agent_email.yml` / `upload_to_r2.sh`); this is not the release path. |
 
