@@ -48,17 +48,21 @@ die() { echo "error: $*" >&2; exit 1; }
 
 [ -n "${VERSION}" ] || die "version required. Usage: $(basename "$0") <version> [staging-dir]"
 command -v rclone >/dev/null 2>&1 || die "rclone not found — install it (see scripts/video-demo/R2-SETUP.md)."
-command -v python >/dev/null 2>&1 || die "python not found — needed to hash binaries + regenerate the lock."
+# Prefer 'python', fall back to 'python3' (stock macOS/Linux often ship only python3).
+if command -v python >/dev/null 2>&1; then PY=python
+elif command -v python3 >/dev/null 2>&1; then PY=python3
+else die "python or python3 not found — needed to hash binaries + regenerate the lock."; fi
 [ -d "${STAGING}" ] || die "staging dir not found: ${STAGING}"
 
-# rclone remote must exist (or be supplied inline via RCLONE_CONFIG_* env).
+# rclone remote must exist. This helper targets an 'rclone config' remote (default
+# 'gaia', see scripts/video-demo/R2-SETUP.md); CI uses an env-only remote instead.
 if ! rclone listremotes 2>/dev/null | grep -qx "${REMOTE}:"; then
   die "rclone remote '${REMOTE}:' not configured. Run 'rclone config' (see scripts/video-demo/R2-SETUP.md) or set R2_REMOTE."
 fi
 
 # Version must agree across the npm package and the agent manifest.
-PKG_VER="$(python -c "import json;print(json.load(open(r'${PKG_JSON}'))['version'])")"
-MAN_VER="$(python -c "import yaml;print(yaml.safe_load(open(r'${MANIFEST}'))['version'])")"
+PKG_VER="$("${PY}" -c "import json;print(json.load(open(r'${PKG_JSON}'))['version'])")"
+MAN_VER="$("${PY}" -c "import yaml;print(yaml.safe_load(open(r'${MANIFEST}'))['version'])")"
 if [ "${VERSION}" != "${PKG_VER}" ] || [ "${VERSION}" != "${MAN_VER}" ]; then
   die "version mismatch — given=${VERSION}, package.json=${PKG_VER}, gaia-agent.yaml=${MAN_VER}. Align all three first."
 fi
@@ -81,7 +85,7 @@ echo "==> uploading ${#BINS[@]} binary(ies) + manifest to ${DEST}/"
 for bin in "${BINS[@]}"; do
   name="$(basename "${bin}")"
   # Hash the exact bytes we upload so the lock can never drift from the object.
-  python - "${bin}" "${name}" "${META_DIR}" <<'PY'
+  "${PY}" - "${bin}" "${name}" "${META_DIR}" <<'PY'
 import hashlib, json, sys
 from pathlib import Path
 path, name, meta_dir = sys.argv[1:4]
@@ -108,7 +112,7 @@ echo "==> R2 listing"
 rclone lsl "${DEST}/" --s3-no-check-bucket
 
 echo "==> regenerating ${LOCK}"
-python "${SCRIPT_DIR}/gen_binaries_lock.py" \
+"${PY}" "${SCRIPT_DIR}/gen_binaries_lock.py" \
   --base-url "${ASSETS_BASE_URL}/${HUB_PREFIX}/${VERSION}" \
   --version "${VERSION}" \
   --lock "${LOCK}" \

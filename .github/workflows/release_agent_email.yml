@@ -205,12 +205,19 @@ jobs:
 
       - name: Assert R2 credentials present
         shell: bash
+        # Secrets go through env (never inlined into the script text) — same as
+        # the rclone step — so a value with shell metacharacters can't break
+        # parsing or defeat log masking.
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           missing=""
-          [ -z "${{ secrets.R2_ACCESS_KEY_ID }}" ] && missing="$missing R2_ACCESS_KEY_ID"
-          [ -z "${{ secrets.R2_SECRET_ACCESS_KEY }}" ] && missing="$missing R2_SECRET_ACCESS_KEY"
-          [ -z "${{ secrets.R2_ACCOUNT_ID }}" ] && missing="$missing R2_ACCOUNT_ID"
+          [ -z "${R2_ACCESS_KEY_ID:-}" ] && missing="$missing R2_ACCESS_KEY_ID"
+          [ -z "${R2_SECRET_ACCESS_KEY:-}" ] && missing="$missing R2_SECRET_ACCESS_KEY"
+          [ -z "${R2_ACCOUNT_ID:-}" ] && missing="$missing R2_ACCOUNT_ID"
           if [ -n "$missing" ]; then
             echo "::error::missing repo secret(s):$missing — needed to upload to the amd-gaia R2 bucket."
             exit 1
@@ -287,9 +294,21 @@ jobs:
           set -euo pipefail
           # Atomicity gate: the public object's bytes must hash to the lock value
           # for EVERY platform before we publish the package that points at them.
+          # Bounded retry: a just-uploaded object can briefly 404 / serve a stale
+          # negative cache at the Cloudflare edge (assets.amd-gaia.ai) before it
+          # propagates — that edge is separate from R2's read-after-write store.
+          # Explicit, caller-requested retry that still fails loudly once exhausted.
           for plat in win32-x64 darwin-arm64 darwin-x64 linux-x64; do
             echo "--- verifying $plat ---"
-            node dist/cli.js fetch --out "/tmp/verify-$plat" --platform "$plat"
+            attempt=1; max=5
+            until node dist/cli.js fetch --out "/tmp/verify-$plat" --platform "$plat"; do
+              if [ "$attempt" -ge "$max" ]; then
+                echo "::error::fetch-verify failed for $plat after ${max} attempts — the published object never became fetchable/valid at the public origin."
+                exit 1
+              fi
+              echo "attempt ${attempt}/${max} failed; object may not have propagated to the edge yet — retrying in 10s."
+              attempt=$((attempt + 1)); sleep 10
+            done
           done
 
       - name: Upgrade npm (trusted publishing support)

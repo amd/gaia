@@ -79,9 +79,12 @@ Equivalent raw commands (the script just wraps these + the hashing + lock regen)
 
 ```bash
 VER=0.1.0
+DEST="gaia:amd-gaia/hub/agents/python/email/$VER"
 # --exclude '*.json' keeps the *.meta.json sidecars out of the public dir.
-rclone copy ./staging/ "gaia:amd-gaia/hub/agents/python/email/$VER/" \
-  --s3-no-check-bucket --progress --exclude '*.json'
+rclone copy ./staging/ "$DEST/" --s3-no-check-bucket --progress --exclude '*.json'
+# Upload the manifest too, so the hand path matches CI byte-for-byte.
+rclone copyto hub/agents/python/email/gaia-agent.yaml "$DEST/gaia-agent.yaml" \
+  --s3-no-check-bucket
 python hub/agents/python/email/packaging/gen_binaries_lock.py \
   --base-url "https://assets.amd-gaia.ai/hub/agents/python/email/$VER" \
   --version "$VER" --lock hub/agents/npm/agent-email/binaries.lock.json \
