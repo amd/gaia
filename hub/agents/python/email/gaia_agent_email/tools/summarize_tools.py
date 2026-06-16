@@ -23,7 +23,7 @@ summarizer (Phase I1, mirroring ``llm_triage.py``).
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.tools import tool
 from gaia_agent_email.gmail_backend import decode_message_body
@@ -129,6 +129,7 @@ def summarize_email_llm(
     body: str,
     message_id: str = "",
     max_chars: int = DEFAULT_SUMMARY_CHAR_LIMIT,
+    collect_stats: Optional[List[dict]] = None,
 ) -> str:
     """Summarize one email via the LLM. Raises ``EmailSummarizeError`` on failure.
 
@@ -136,6 +137,10 @@ def summarize_email_llm(
     ``send_messages(messages, system_prompt=...) -> response`` with a ``.text``
     attribute). The returned summary is guaranteed non-empty and at most
     ``max_chars`` characters long.
+
+    When ``collect_stats`` is a list, the response's ``.stats`` dict (the reused
+    ``AgentResponse.stats`` measurement) is appended to it so a caller can
+    aggregate usage across calls — no new measurement path.
     """
     messages = [{"role": "user", "content": _build_user_prompt(subject, sender, body)}]
     try:
@@ -148,6 +153,11 @@ def summarize_email_llm(
             f"{type(exc).__name__}: {exc}",
             message_id=message_id,
         ) from exc
+
+    if collect_stats is not None:
+        stats = getattr(response, "stats", None)
+        if stats:
+            collect_stats.append(stats)
 
     text = getattr(response, "text", None)
     if text is None:

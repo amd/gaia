@@ -33,6 +33,7 @@ from gaia_agent_email.contract import (
     EmailTriageRequest,
     EmailTriageResponse,
     EmailTriageResult,
+    TriageUsage,
     parse_request,
 )
 from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
@@ -490,3 +491,71 @@ def test_extract_action_items_link_strips_trailing_punctuation():
     link_items = [i for i in svc._extract_action_items(body) if i.type == "link"]
     assert link_items
     assert link_items[0].url == "https://example.com/report"
+
+
+# ---------------------------------------------------------------------------
+# TriageUsage / EmailTriageResult.usage (#1540)
+# ---------------------------------------------------------------------------
+
+
+def test_triage_usage_defaults_are_zero():
+    """TriageUsage validates with zero defaults."""
+    usage = TriageUsage()
+    assert usage.prompt_tokens == 0
+    assert usage.total_tokens == 0
+    assert usage.tokens_per_second == 0.0
+
+
+def test_triage_usage_populated_round_trips():
+    """A populated TriageUsage validates and round-trips."""
+    usage = TriageUsage.model_validate(
+        {"prompt_tokens": 120, "total_tokens": 200, "tokens_per_second": 42.5}
+    )
+    assert usage.prompt_tokens == 120
+    assert usage.total_tokens == 200
+    assert usage.tokens_per_second == 42.5
+    again = TriageUsage.model_validate(usage.model_dump())
+    assert again == usage
+
+
+def test_triage_usage_rejects_unknown_field():
+    """TriageUsage forbids extra fields (strict)."""
+    with pytest.raises(ValidationError):
+        TriageUsage.model_validate({"prompt_tokens": 1, "bogus": 2})
+
+
+def test_triage_result_usage_defaults_to_none():
+    """EmailTriageResult.usage defaults to None (heuristic-only path)."""
+    result = EmailTriageResult.model_validate(
+        {"category": "FYI", "summary": "Just an update."}
+    )
+    assert result.usage is None
+
+
+def test_triage_result_accepts_usage():
+    """EmailTriageResult accepts a populated usage object and round-trips."""
+    result = EmailTriageResult.model_validate(
+        {
+            "category": "URGENT",
+            "summary": "Critical issue.",
+            "usage": {
+                "prompt_tokens": 50,
+                "total_tokens": 90,
+                "tokens_per_second": 30.0,
+            },
+        }
+    )
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 50
+    assert result.usage.total_tokens == 90
+    assert result.usage.tokens_per_second == 30.0
+
+
+def test_usage_is_not_a_required_field():
+    """usage must not become a required field (required set guard)."""
+    required = {
+        name
+        for name, field in EmailTriageResult.model_fields.items()
+        if field.is_required()
+    }
+    assert "usage" not in required

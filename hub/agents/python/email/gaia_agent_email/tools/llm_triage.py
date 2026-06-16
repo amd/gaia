@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, List, Mapping, Optional
 
 from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
 
@@ -193,12 +193,17 @@ def classify_email_llm(
     sender: str,
     body: str,
     message_id: str = "",
+    collect_stats: Optional[List[dict]] = None,
 ) -> dict[str, Any]:
     """Classify one email via the LLM. Raises ``LLMTriageError`` on any failure.
 
     ``chat`` is the agent's ``AgentSDK`` (or anything exposing
     ``send_messages(messages, system_prompt=...) -> response`` with a ``.text``
     attribute).
+
+    When ``collect_stats`` is a list, the response's ``.stats`` dict (the reused
+    ``AgentResponse.stats`` measurement, #1277/#1278) is appended to it so a
+    caller can aggregate usage across calls — no new measurement path.
     """
     messages = [{"role": "user", "content": _build_user_prompt(subject, sender, body)}]
     try:
@@ -211,6 +216,11 @@ def classify_email_llm(
             f"{type(exc).__name__}: {exc}",
             message_id=message_id,
         ) from exc
+
+    if collect_stats is not None:
+        stats = getattr(response, "stats", None)
+        if stats:
+            collect_stats.append(stats)
 
     text = getattr(response, "text", None)
     if text is None:
