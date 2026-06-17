@@ -76,28 +76,60 @@ env:
 jobs:
   # ── Stage 1: native freeze on every platform ───────────────────────
   build:
-    name: Freeze (${{ matrix.platform }})
+    name: Freeze (${{ matrix.key }})
     runs-on: ${{ matrix.os }}
+    # darwin-x64 (Intel) is BEST-EFFORT, built on BOTH supported Intel images
+    # (macos-15-intel + macos-26-intel) for redundancy. macos-13 was retired
+    # (Dec 2025); these are GitHub's recommended Intel replacements (supported
+    # through Aug 2027). PyInstaller can't cross-compile, so an Intel binary
+    # needs an Intel host — we won't fake one. Either Intel leg may fail/time out
+    # without failing the job (continue-on-error + required:false); `publish`
+    # gates only on the 3 REQUIRED platforms and keeps whichever Intel binary
+    # arrived. A total Intel miss is announced LOUDLY (::warning:: + job summary)
+    # and Intel users still fail loudly at install (fetch.ts rejects a missing /
+    # placeholder lock entry) — explicit degradation, never a silent one.
+    continue-on-error: ${{ !matrix.required }}
+    timeout-minutes: ${{ matrix.required && 30 || 60 }}
     strategy:
-      fail-fast: true
+      # Never let one slow/stuck leg cancel the others — each platform freezes
+      # independently and `publish` reconciles whatever arrived.
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
             platform: win32-x64
+            key: win32-x64
             artifact: email-agent-win32-x64.exe
             frozen: email-agent.exe
+            required: true
           - os: macos-14
             platform: darwin-arm64
+            key: darwin-arm64
             artifact: email-agent-darwin-arm64
             frozen: email-agent
-          - os: macos-13
-            platform: darwin-x64
-            artifact: email-agent-darwin-x64
-            frozen: email-agent
+            required: true
           - os: ubuntu-latest
             platform: linux-x64
+            key: linux-x64
             artifact: email-agent-linux-x64
             frozen: email-agent
+            required: true
+          # darwin-x64 (Intel) BEST-EFFORT on BOTH supported Intel images for
+          # redundancy — whichever lands provides the binary; neither blocks the
+          # release. They write the same filename, so a later publish step keeps
+          # one. (macos-13 retired Dec 2025; these are GitHub's Intel images.)
+          - os: macos-15-intel
+            platform: darwin-x64
+            key: darwin-x64-macos15
+            artifact: email-agent-darwin-x64
+            frozen: email-agent
+            required: false
+          - os: macos-26-intel
+            platform: darwin-x64
+            key: darwin-x64-macos26
+            artifact: email-agent-darwin-x64
+            frozen: email-agent
+            required: false
     steps:
       - uses: actions/checkout@v6
 
@@ -155,7 +187,7 @@ jobs:
       - name: Upload platform artifact
         uses: actions/upload-artifact@v7
         with:
-          name: email-agent-${{ matrix.platform }}
+          name: email-agent-${{ matrix.key }}
           path: |
             staging/${{ matrix.artifact }}
             staging/${{ matrix.platform }}.meta.json
@@ -238,7 +270,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade requests pyyaml
 
-      - name: Collect binaries
+      - name: Collect binaries + assert required platforms present
         shell: bash
         run: |
           set -euo pipefail
@@ -248,6 +280,36 @@ jobs:
           find artifacts -type f -name 'email-agent-*' ! -name '*.meta.json' -exec cp {} bins/ \;
           echo "=== collected ==="
           ls -la bins/
+
+          # The 3 non-Intel platforms are REQUIRED — a missing one is a real build
+          # failure, not best-effort, so fail the release loudly here.
+          missing=()
+          for req in win32-x64 darwin-arm64 linux-x64; do
+            case "$req" in win32-x64) f="email-agent-win32-x64.exe" ;; *) f="email-agent-$req" ;; esac
+            [ -f "bins/$f" ] || missing+=("$req")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::required platform binaries missing: ${missing[*]}. Their build leg failed — release cannot proceed. Re-run those build jobs."
+            exit 1
+          fi
+
+          # darwin-x64 (Intel) is BEST-EFFORT. Announce its absence LOUDLY so the
+          # gap is visible in the run, not discovered later from a user bug report.
+          if [ -f "bins/email-agent-darwin-x64" ]; then
+            echo "DARWIN_X64_PUBLISHED=true" >> "$GITHUB_ENV"
+            echo "darwin-x64 (Intel) binary present — full 4-platform release."
+          else
+            echo "DARWIN_X64_PUBLISHED=false" >> "$GITHUB_ENV"
+            echo "::warning::darwin-x64 (Intel macOS) binary is ABSENT — neither Intel build leg (macos-15-intel, macos-26-intel) produced an artifact. Releasing the other 3 platforms; Intel-mac users will get a loud 'no binary for darwin-x64' error at install until a follow-up Intel build is published under this version."
+            {
+              echo "### ⚠️ Intel macOS (darwin-x64) NOT published"
+              echo ""
+              echo "Neither Intel build leg (\`macos-15-intel\`, \`macos-26-intel\`) produced an artifact, so this release ships **3 of 4** platforms."
+              echo "Intel-mac (\`darwin-x64\`) users will hit a loud install error until an Intel binary is published for this version."
+              echo ""
+              echo "**Follow-up:** re-run the \`build (darwin-x64)\` leg when Intel runner capacity frees up; the POST /publish endpoint is immutable-per-filename, so adding the Intel binary to the *same* version is safe and idempotent."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Publish binaries to the Agent Hub (POST /publish)
         shell: bash
@@ -286,6 +348,24 @@ jobs:
             --version "${{ steps.ver.outputs.version }}" \
             --lock "${PKG_DIR}/binaries.lock.json" \
             --meta published.json
+
+          # gen_binaries_lock.py keeps the PRIOR entry for any platform absent from
+          # the metas. If Intel was skipped, that prior entry is the unpublished
+          # PENDING-1648 placeholder — drop it entirely so the shipped lock carries
+          # NO darwin-x64 entry. fetch.ts then emits a clear "no binary for
+          # platform 'darwin-x64' (available: …)" error instead of a placeholder
+          # one. Explicit absence beats a stale/placeholder hash.
+          if [ "${DARWIN_X64_PUBLISHED}" = "false" ]; then
+            python - "${PKG_DIR}/binaries.lock.json" <<'PY'
+          import json, sys
+          p = sys.argv[1]
+          lock = json.load(open(p))
+          removed = lock.get("binaries", {}).pop("darwin-x64", None)
+          if removed is not None:
+              print("[lock] dropped unpublished darwin-x64 entry (Intel best-effort skip)")
+          open(p, "w").write(json.dumps(lock, indent=2) + "\n")
+          PY
+          fi
           echo "=== regenerated lock ==="
           cat "${PKG_DIR}/binaries.lock.json"
 
@@ -301,12 +381,17 @@ jobs:
         run: |
           set -euo pipefail
           # Atomicity gate: the public object's bytes must hash to the lock value
-          # for EVERY platform before we publish the package that points at them.
+          # for EVERY published platform before we publish the package that points
+          # at them. The platform set is the lock's own keys — exactly what was
+          # published this run (so a best-effort Intel skip isn't verified as if it
+          # were present, which would wrongly fail the release).
           # Bounded retry: a just-uploaded object can briefly 404 / serve a stale
           # negative cache at the Cloudflare edge (hub.amd-gaia.ai) before it
           # propagates — that edge is separate from R2's read-after-write store.
           # Explicit, caller-requested retry that still fails loudly once exhausted.
-          for plat in win32-x64 darwin-arm64 darwin-x64 linux-x64; do
+          platforms="$(node -e "const l=require('./binaries.lock.json');process.stdout.write(Object.keys(l.binaries).join(' '))")"
+          echo "verifying published platforms: ${platforms}"
+          for plat in ${platforms}; do
             echo "--- verifying $plat ---"
             attempt=1; max=5
             until node dist/cli.js fetch --out "/tmp/verify-$plat" --platform "$plat"; do
