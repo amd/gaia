@@ -1220,8 +1220,17 @@ async function installBackend(opts = {}) {
   // failures (Windows os-error-32) are NOT retried — they need user action.
   let installResult;
   let useNativeTls = false;
-  for (let attempt = 1; attempt <= INSTALL_MAX_ATTEMPTS; attempt++) {
+  let nativeTlsAttempted = false;
+  // The TLS branch flips useNativeTls and `continue`s, consuming an iteration.
+  // If the signature only surfaces on the final attempt, extend the loop once
+  // so the promised --native-tls retry actually runs (issue #1693 review).
+  for (
+    let attempt = 1;
+    attempt <= INSTALL_MAX_ATTEMPTS || (useNativeTls && !nativeTlsAttempted);
+    attempt++
+  ) {
     const attemptArgs = useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs;
+    if (useNativeTls) nativeTlsAttempted = true;
     installResult = await runCommand("uv", attemptArgs, { stageLabel: "pip" });
     if (installResult.code === 0) break;
     const attemptOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
@@ -1272,8 +1281,11 @@ async function installBackend(opts = {}) {
     } else if (isTlsCertError(output)) {
       suggestion =
         "PyPI's certificate isn't trusted on this network — usually a corporate proxy presenting its own root CA. " +
-        "GAIA retried with the OS certificate store and it still failed. Ask IT to install the proxy's root CA in " +
-        "your system's trusted certificate store, then relaunch GAIA. See https://amd-gaia.ai/quickstart#cli-install";
+        (nativeTlsAttempted
+          ? "GAIA retried with the OS certificate store and it still failed. "
+          : "") +
+        "Ask IT to install the proxy's root CA in your system's trusted certificate store, then relaunch GAIA. " +
+        "See https://amd-gaia.ai/quickstart#cli-install";
     } else {
       suggestion = `Try installing manually:\n  uv pip install ${pipPackage} --python ${
         IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
