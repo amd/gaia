@@ -215,6 +215,12 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Install deps (requests + PyYAML — needed from version-resolve on)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade requests pyyaml
+
       - name: Resolve + validate release version
         id: ver
         shell: bash
@@ -263,12 +269,6 @@ jobs:
         with:
           pattern: email-agent-*
           path: artifacts
-
-      - name: Install deps (requests + PyYAML for publish + lock generator)
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade requests pyyaml
 
       - name: Collect binaries + assert required platforms present
         shell: bash
