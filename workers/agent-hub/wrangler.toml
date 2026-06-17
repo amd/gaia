@@ -13,8 +13,9 @@ name = "agent-hub"
 main = "src/index.ts"
 compatibility_date = "2025-01-29"
 
-# The route the publish/catalog API is served under in production.
-# routes = [{ pattern = "hub.amd-gaia.ai/*", zone_name = "amd-gaia.ai" }]
+# The Agent Hub is served at hub.amd-gaia.ai. A custom domain (not a bare route)
+# so Cloudflare manages the DNS record + TLS cert automatically.
+routes = [{ pattern = "hub.amd-gaia.ai", custom_domain = true }]
 
 # Production R2 binding. `binding` is the name the Worker code reads
 # (env.BUCKET); `bucket_name` is the real bucket the maintainer creates.
