@@ -892,17 +892,25 @@ async def forward_connection(
     auto-tighten as agents add new ``ConnectorRequirement`` entries — no
     duplication in the router.
     """
-    # Resolve required scopes from the granted agents' REQUIRED_CONNECTORS so
-    # the import-time check is driven by what agents actually need, not a
-    # hardcoded list in the connectors layer.
-    registry = getattr(request.app.state, "agent_registry", None)
     required: set[str] = set()
-    if registry is not None and body.grant_agents:
+    if body.grant_agents:
+        registry = getattr(request.app.state, "agent_registry", None)
+        if registry is None:
+            raise HTTPException(
+                status_code=503, detail="Agent registry not initialized"
+            )
         by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
+        unknown_agents = [nsid for nsid in body.grant_agents if nsid not in by_nsid]
+        if unknown_agents:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "unknown_agent",
+                    "agent_ids": unknown_agents,
+                },
+            )
         for nsid in body.grant_agents:
-            reg = by_nsid.get(nsid)
-            if reg is None:
-                continue
+            reg = by_nsid[nsid]
             for cr in reg.required_connections:
                 if cr.connector_id == provider:
                     required.update(cr.scopes)

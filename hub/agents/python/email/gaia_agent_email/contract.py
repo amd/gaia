@@ -26,7 +26,7 @@ Design notes
 - **Single email vs full thread** is a discriminated union on ``kind`` so a
   consumer branches deterministically and an empty/`messages`-less thread is
   rejected at validation time.
-- **Categories** mirror the agent's frozen four-bucket taxonomy. The strings are
+- **Categories** mirror the agent's five-bucket taxonomy. The strings are
   duplicated here (not imported) to keep this module backend-free; the contract
   tests assert byte-for-byte equality against
   ``triage_heuristics.ALL_CATEGORIES`` so drift is caught at test time, not by
@@ -44,10 +44,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # ``test_contract_schema.test_categories_match_agent_taxonomy``. Duplicated
 # (not imported) so this module stays free of the email package's heavy
 # ``__init__`` import chain.
-CATEGORY_URGENT = "urgent"
-CATEGORY_ACTIONABLE = "actionable"
-CATEGORY_INFORMATIONAL = "informational"
-CATEGORY_LOW_PRIORITY = "low priority"
+CATEGORY_URGENT = "URGENT"
+CATEGORY_NEEDS_RESPONSE = "NEEDS_RESPONSE"
+CATEGORY_FYI = "FYI"
+CATEGORY_PROMOTIONAL = "PROMOTIONAL"
+CATEGORY_PERSONAL = "PERSONAL"
 
 # ---------------------------------------------------------------------------
 # Versioning
@@ -56,7 +57,7 @@ CATEGORY_LOW_PRIORITY = "low priority"
 # Bump on ANY breaking change to the shapes below. Echoed in both request and
 # response so a consumer can detect a mismatch loudly instead of silently
 # mis-parsing. The first frozen revision is "1.0".
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "2.0"
 
 
 class _Strict(BaseModel):
@@ -71,14 +72,15 @@ class _Strict(BaseModel):
 
 
 class EmailCategory(str, Enum):
-    """The frozen four-bucket triage taxonomy. Values MUST match
+    """The five-bucket triage taxonomy (schema 2.0, #1615). Values MUST match
     ``triage_heuristics.ALL_CATEGORIES`` — the contract tests assert this.
     """
 
     URGENT = CATEGORY_URGENT
-    ACTIONABLE = CATEGORY_ACTIONABLE
-    INFORMATIONAL = CATEGORY_INFORMATIONAL
-    LOW_PRIORITY = CATEGORY_LOW_PRIORITY
+    NEEDS_RESPONSE = CATEGORY_NEEDS_RESPONSE
+    FYI = CATEGORY_FYI
+    PROMOTIONAL = CATEGORY_PROMOTIONAL
+    PERSONAL = CATEGORY_PERSONAL
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +237,9 @@ class DraftReply(_Strict):
 class EmailTriageResult(_Strict):
     """The structured analysis of a single email or thread."""
 
-    category: EmailCategory = Field(..., description="One of the four buckets.")
+    category: EmailCategory = Field(
+        ..., description="One of the five taxonomy buckets (schema 2.0)."
+    )
     is_spam: bool = Field(default=False, description="Spam signal (independent).")
     is_phishing: bool = Field(
         default=False, description="Phishing signal (independent of spam)."
@@ -246,6 +250,22 @@ class EmailTriageResult(_Strict):
     )
     draft: Optional[DraftReply] = Field(
         default=None, description="Proposed reply, or null when none is suggested."
+    )
+    suggested_action: Literal["reply", "none", "archive"] = Field(
+        default="none",
+        description=(
+            "Suggested next action: reply (URGENT/NEEDS_RESPONSE), "
+            "archive (PROMOTIONAL), or none (FYI/PERSONAL). Derived by "
+            "precedence rule -- never required so existing consumers are unaffected."
+        ),
+    )
+    message_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Echoes the provider message-id from the request (SingleEmailInput.message "
+            "or ThreadInput.thread_id). Null when the result was produced from a "
+            "raw Gmail-API message (no contract message_id available)."
+        ),
     )
 
 

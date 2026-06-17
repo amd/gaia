@@ -144,6 +144,12 @@ class InitCommand:
     4. Verify setup
     """
 
+    # Per-model context verification state, set dynamically during model
+    # verification. Declared here (without assignment) so its *absence* on the
+    # instance keeps meaning "verification not attempted" while satisfying the
+    # pylint attribute-defined-outside-init check.
+    _ctx_verified: "Optional[int]"
+
     def __init__(
         self,
         profile: str = "chat",
@@ -215,8 +221,9 @@ class InitCommand:
             console=self.console,
         )
 
-        # Context verification state (set during model loading)
-        self._ctx_verified = None
+        # Context verification state. _ctx_verified is set per-model during
+        # verification (only for LLM models with a min context size); its
+        # absence means verification was not attempted for that model.
         self._ctx_warning = None
 
     def _print(self, message: str, end: str = "\n"):
@@ -1480,9 +1487,11 @@ class InitCommand:
                             self._print_error(f"Failed to delete {model_id}: {e}")
 
             # Download each model via LemonadeClient API.
-            # For profiles with a recipe (e.g. NPU/FLM), use pull_model()
-            # with the recipe so Lemonade registers the model with the
-            # correct inference engine.
+            # NPU/FLM models (e.g. ``gemma4-it-e2b-FLM``) are built-in Lemonade
+            # models — pull them by name only. Passing ``recipe`` makes Lemonade
+            # treat the call as a *new* model registration, which requires the
+            # ``user.`` prefix and 400s on built-in names (#1655). The recipe is
+            # baked into the built-in model and applied at load time.
             recipe = profile_config.get("recipe")
             success = True
             for model_id in model_ids:
@@ -1491,14 +1500,7 @@ class InitCommand:
                 self.agent_console.print(
                     f"   [bold cyan]Downloading:[/bold cyan] {label}"
                 )
-                if recipe:
-                    try:
-                        client.pull_model(model_id, recipe=recipe)
-                        self._print_success(f"Downloaded {model_id}")
-                    except Exception as e:
-                        self._print_error(f"Failed to download {model_id}: {e}")
-                        success = False
-                elif client.ensure_model_downloaded(model_id):
+                if client.ensure_model_downloaded(model_id):
                     self._print_success(f"Downloaded {model_id}")
                 else:
                     self._print_error(f"Failed to download {model_id}")
@@ -1740,10 +1742,20 @@ class InitCommand:
                         )
                         continue
 
+                    # Reset per-model context state. _test_model_inference
+                    # sets _ctx_verified only for LLM models that declare a min
+                    # context size; SD/embedding models leave verification N/A
+                    # and must not inherit a stale "unverified" flag from
+                    # __init__ or a prior model.
+                    if hasattr(self, "_ctx_verified"):
+                        delattr(self, "_ctx_verified")
+                    self._ctx_warning = None
+
                     # Test the model
                     success, error = self._test_model_inference(client, model_id)
                     if success:
-                        # Check if context was verified
+                        # Show context only when verification was attempted
+                        # (LLM models with a min_ctx requirement).
                         ctx_msg = ""
                         if hasattr(self, "_ctx_verified"):
                             if self._ctx_verified:
@@ -1757,8 +1769,6 @@ class InitCommand:
                             elif self._ctx_verified is None:
                                 # Context could not be verified
                                 ctx_msg = " [yellow]⚠️ Context unverified![/yellow]"
-
-                            delattr(self, "_ctx_verified")  # Reset for next model
 
                         self.console.print(
                             f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]{ctx_msg}"
@@ -1816,8 +1826,10 @@ class InitCommand:
                             f"     [cyan]{model_id}[/cyan]: [dim]{model_path}[/dim]"
                         )
                         if sys.platform == "win32":
+                            # PowerShell is GAIA's assumed Windows shell; cmd's
+                            # `rmdir /s /q` is not valid PowerShell syntax.
                             self.console.print(
-                                f'       [yellow]rmdir /s /q[/yellow] [cyan]"{model_path}"[/cyan]'
+                                f'       [yellow]Remove-Item -Recurse -Force[/yellow] [cyan]"{model_path}"[/cyan]'
                             )
                         else:
                             self.console.print(

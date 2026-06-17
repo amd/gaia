@@ -16,9 +16,20 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Literal, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+)
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
@@ -72,6 +83,57 @@ def default_max_steps() -> int:
     return value
 
 
+# Default per-tool execution limit (seconds). Bounds a single ``tool(**args)``
+# call so a hung tool (e.g. a stuck connector/network call) surfaces an
+# actionable error in a sensible window instead of blocking the agent loop —
+# and the producer thread — indefinitely. Well under the UI's 600s consumer cap.
+# Tools that legitimately run longer (e.g. ``generate_image``, which may
+# download a model) opt out via ``@tool(timeout=...)``.
+DEFAULT_TOOL_TIMEOUT = 180.0
+
+
+def tool_execution_timeout() -> float:
+    """Resolve the global default per-tool execution timeout in seconds.
+
+    Reads ``GAIA_AGENT_TOOL_TIMEOUT`` at call time (not import) so the env var
+    can be set after this module is imported and still take effect. Returns
+    ``DEFAULT_TOOL_TIMEOUT`` when the var is unset; raises on a present-but-
+    invalid value so a typo surfaces immediately instead of silently removing
+    the guard.
+    """
+    raw = os.environ.get("GAIA_AGENT_TOOL_TIMEOUT")
+    if raw is None or raw == "":
+        return DEFAULT_TOOL_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"GAIA_AGENT_TOOL_TIMEOUT must be a positive number of seconds, "
+            f"got {raw!r}. Unset it to use the default ({DEFAULT_TOOL_TIMEOUT})."
+        ) from e
+    if value <= 0:
+        raise ValueError(
+            f"GAIA_AGENT_TOOL_TIMEOUT must be a positive number of seconds, "
+            f"got {value}. Unset it to use the default ({DEFAULT_TOOL_TIMEOUT})."
+        )
+    return value
+
+
+class ToolExecutionTimeout(Exception):
+    """Raised when a tool body exceeds its bounded execution window.
+
+    Caught inside ``Agent._execute_tool`` and converted into a fail-loud,
+    actionable error result; it is not meant to propagate to callers.
+    """
+
+    def __init__(self, tool_name: str, timeout: float):
+        self.tool_name = tool_name
+        self.timeout = timeout
+        super().__init__(
+            f"Tool '{tool_name}' exceeded its {timeout:g}s execution limit"
+        )
+
+
 # Tools that require explicit user confirmation before execution.
 # Adding a tool name here causes _execute_tool() to call
 # console.confirm_tool_execution() and block until the user responds.
@@ -119,6 +181,26 @@ class HardwareRequirement:
 # Prefixes for tools that represent SD (Stable Diffusion) capability.
 # Used to detect whether the agent has attempted image-generation tools.
 _SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
+
+
+# Tools that mutate external state (mark read, archive, star, …). A small
+# model that loses track of sequential state may re-issue an identical
+# mutation (same tool + same id). Unlike query dedup we key on the *args*,
+# not the result — re-issuing mark_read on the same id returns a *different*
+# result ("already read"), so a result hash would miss the repeat (#1317).
+_MUTATION_TOOLS: Tuple[str, ...] = (
+    "mark_read",
+    "mark_read_batch",
+    "mark_unread",
+    "mark_unread_batch",
+    "archive_message",
+    "archive_message_batch",
+    "add_star",
+    "add_star_batch",
+    "remove_star",
+    "remove_star_batch",
+    "trash_message",
+)
 
 
 def _repair_invalid_json_escapes(s: str) -> str:
@@ -185,6 +267,12 @@ class Agent(abc.ABC):
     # Per-instance tool snapshot.  ``None`` → fall back to global
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
+
+    # Dynamic tool loader (#1449): the sorted subset of tool names to surface
+    # this turn, or ``None`` to render the full registry (legacy, byte-identical).
+    # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
+    # both render paths and the ``_openai_tools`` property.
+    _active_tool_filter: Optional[List[str]] = None
 
     # Define state constants
     STATE_PLANNING = "PLANNING"
@@ -342,6 +430,10 @@ Do NOT wrap conversational replies in JSON.
         self._current_query: Optional[str] = (
             None  # Store current query for error context
         )
+        # Optional cooperative cancel signal. When set (e.g. by the Agent UI's
+        # stream-timeout/disconnect cleanup), the process_query loop bails at the
+        # next step boundary so the producer thread is torn down, not leaked.
+        self._cancel_event: Optional[threading.Event] = None
 
         # Read base_url from environment if not provided
         if base_url is None:
@@ -525,11 +617,21 @@ Do NOT wrap conversational replies in JSON.
         if custom:
             parts.append(custom)
 
-        # Add tool descriptions (if tools registered)
+        # When a dynamic tool filter is active, the tool block is volatile (it
+        # grows as new tools are selected), so it must come LAST — after the
+        # stable response-format template — to keep the KV-cache prefix warm on
+        # non-expansion turns. With no filter (``None``) we keep the legacy
+        # order (tools before the format template) so the composed prompt stays
+        # byte-identical for every existing agent.
+        tool_filter = self._active_tool_filter
+        tools_block = None
         if hasattr(self, "_format_tools_for_prompt"):
-            tools_description = self._format_tools_for_prompt()
+            tools_description = self._format_tools_for_prompt(filter_to=tool_filter)
             if tools_description:
-                parts.append(f"==== AVAILABLE TOOLS ====\n{tools_description}")
+                tools_block = f"==== AVAILABLE TOOLS ====\n{tools_description}"
+
+        if tool_filter is None and tools_block is not None:
+            parts.append(tools_block)
 
         # Add embedded-JSON response format only for models that don't support
         # native tool_calls. For tool_calling models we pass tools=[] instead,
@@ -539,6 +641,9 @@ Do NOT wrap conversational replies in JSON.
 
             if not is_tool_calling_model(getattr(self, "model_id", None)):
                 parts.append(self._response_format_template)
+
+        if tool_filter is not None and tools_block is not None:
+            parts.append(tools_block)
 
         return "\n\n".join(p for p in parts if p)
 
@@ -629,11 +734,24 @@ Do NOT wrap conversational replies in JSON.
         """
         self._instance_tools = dict(_TOOL_REGISTRY)
 
-    def _format_tools_for_prompt(self) -> str:
-        """Format the registered tools into a string for the prompt."""
+    def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
+        """Format the registered tools into a string for the prompt.
+
+        Args:
+            filter_to: When ``None`` (default), render every registered tool in
+                registry order — byte-identical to the legacy path. When a list,
+                render only those names, in the given (pre-sorted) order,
+                skipping any not present in the registry.
+        """
         tool_descriptions = []
 
-        for name, tool_info in self._tools_registry.items():
+        if filter_to is None:
+            items = list(self._tools_registry.items())
+        else:
+            registry = self._tools_registry
+            items = [(n, registry[n]) for n in filter_to if n in registry]
+
+        for name, tool_info in items:
             params_str = ", ".join(
                 [
                     f"{param_name}{'' if param_info['required'] else '?'}: {param_info['type']}"
@@ -659,8 +777,48 @@ Do NOT wrap conversational replies in JSON.
         from gaia.llm.lemonade_client import is_tool_calling_model
 
         if is_tool_calling_model(getattr(self, "model_id", None)):
-            return self._build_openai_tool_schemas() or None
+            return (
+                self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
+                or None
+            )
         return None
+
+    def _select_tools_for_turn(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> Optional[List[str]]:
+        """Return the sorted tool-name subset to surface this turn, or ``None``.
+
+        Default: ``None`` — render the full registry (legacy behavior). Agents
+        with a dynamic tool loader override this to return a selection.
+        """
+        return None
+
+    def _on_tool_invoked(self, tool_name: str) -> None:
+        """Hook called when a tool is about to execute (after registry lookup).
+
+        Default: no-op. Agents with a dynamic tool loader override this to
+        record tool-use recency. Execution itself always uses the full registry,
+        so this never gates execution.
+        """
+
+    def _refresh_active_tool_filter(self, user_input: str) -> None:
+        """Update the active tool filter for this turn, recomputing on change.
+
+        Calls ``_select_tools_for_turn`` and, **only when the selection
+        changes**, swaps ``_active_tool_filter`` and recomputes the cached
+        system prompt. Both filters are sorted lists (or ``None``), so ``!=`` is
+        a correct change test; a stable selection leaves the cached prompt — and
+        thus the backend's KV-cache prefix — untouched. ``None`` is the legacy
+        full-registry path. ``_openai_tools`` is a property, so all native
+        ``tools=`` call sites pick up the new filter automatically.
+        """
+        # The base hook returns None, but ChatAgent overrides it to return
+        # Optional[List[str]] — pylint's None-inference is wrong here.
+        # pylint: disable-next=assignment-from-none
+        new_filter = self._select_tools_for_turn(user_input)
+        if new_filter != self._active_tool_filter:
+            self._active_tool_filter = new_filter
+            self._system_prompt_cache = self._compose_system_prompt()
 
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.
@@ -1124,8 +1282,15 @@ Do NOT wrap conversational replies in JSON.
 
         return json_response
 
-    def _build_openai_tool_schemas(self) -> list:
-        """Build OpenAI-format function-calling schemas from the tool registry."""
+    def _build_openai_tool_schemas(self, filter_to: Optional[List[str]] = None) -> list:
+        """Build OpenAI-format function-calling schemas from the tool registry.
+
+        Args:
+            filter_to: When ``None`` (default), build a schema for every
+                registered tool in registry order — byte-identical to the legacy
+                path. When a list, build only those names, in the given
+                (pre-sorted) order, skipping any not present in the registry.
+        """
 
         def _python_to_json_type(py_type: str) -> str:
             return {
@@ -1137,8 +1302,14 @@ Do NOT wrap conversational replies in JSON.
                 "dict": "object",
             }.get(py_type.lower().strip(), "string")
 
+        if filter_to is None:
+            items = list(self._tools_registry.items())
+        else:
+            registry = self._tools_registry
+            items = [(n, registry[n]) for n in filter_to if n in registry]
+
         schemas = []
-        for name, tool_info in self._tools_registry.items():
+        for name, tool_info in items:
             properties = {}
             required = []
             for param_name, param_info in tool_info["parameters"].items():
@@ -1668,6 +1839,49 @@ Do NOT wrap conversational replies in JSON.
             return matches[0]
         return None
 
+    def _resolve_tool_timeout(self, tool_name: str) -> float:
+        """Resolve the execution timeout (seconds) for a tool.
+
+        A per-tool ``@tool(timeout=...)`` override wins; otherwise the global
+        ``GAIA_AGENT_TOOL_TIMEOUT`` default applies.
+        """
+        entry = self._tools_registry.get(tool_name) or {}
+        override = entry.get("timeout")
+        if override is not None:
+            return float(override)
+        return tool_execution_timeout()
+
+    def _call_tool_bounded(
+        self, tool: Callable, tool_args: Dict[str, Any], tool_name: str
+    ) -> Any:
+        """Run a tool body under a bounded execution window.
+
+        The tool runs in a daemon worker thread joined with the resolved
+        timeout. On success the worker's return value is returned and any
+        exception it raised is re-raised in the caller (so the existing
+        ``_execute_tool`` error handling applies unchanged). On timeout a
+        ``ToolExecutionTimeout`` is raised — the worker keeps running (Python
+        cannot kill a thread) but it is a daemon, so it cannot block process
+        exit and the agent loop is freed immediately.
+        """
+        timeout = self._resolve_tool_timeout(tool_name)
+        holder: Dict[str, Any] = {}
+
+        def _target():
+            try:
+                holder["result"] = tool(**tool_args)
+            except BaseException as exc:  # noqa: BLE001 — re-raised in caller
+                holder["exc"] = exc
+
+        worker = threading.Thread(target=_target, name=f"tool:{tool_name}", daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            raise ToolExecutionTimeout(tool_name, timeout)
+        if "exc" in holder:
+            raise holder["exc"]
+        return holder.get("result")
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
@@ -1747,6 +1961,13 @@ Do NOT wrap conversational replies in JSON.
                     "error": f"Tool '{tool_name}' was denied by the user.",
                 }
 
+        # Dynamic tool loader (#1449): record use for LRU recency. The name is
+        # fully resolved and confirmed in the registry here. Execution stays on
+        # the full registry — recording never gates it — so a model that names
+        # an unlisted tool still runs it (free non-tool-calling recovery), and
+        # the loader logs that as an escape-hatch signal.
+        self._on_tool_invoked(tool_name)
+
         tool = self._tools_registry[tool_name]["function"]
         sig = inspect.signature(tool)
 
@@ -1771,9 +1992,29 @@ Do NOT wrap conversational replies in JSON.
             return {"status": "error", "error": error_msg}
 
         try:
-            result = tool(**tool_args)
+            result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
             return result
+        except ToolExecutionTimeout as e:
+            # Bounded-execution guard fired: the tool body blocked past its
+            # limit. Fail loud with an actionable message — name the tool, the
+            # window, and the override knob — instead of hanging the agent loop.
+            error_msg = (
+                f"Tool '{tool_name}' did not return within {e.timeout:g}s and "
+                f"was abandoned. The call may be hung (e.g. an unreachable "
+                f"service or stuck network request). Check the tool/connector, "
+                f"or raise GAIA_AGENT_TOOL_TIMEOUT if it legitimately needs "
+                f"longer."
+            )
+            logger.error(error_msg)
+            self.error_history.append(error_msg)
+            self.console.print_error(error_msg)
+            return {
+                "status": "error",
+                "error": error_msg,
+                "timeout": True,
+                "tool_name": tool_name,
+            }
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout specifically
             error_msg = f"Tool {tool_name} timed out: {str(e)}"
@@ -2379,6 +2620,10 @@ Do NOT wrap conversational replies in JSON.
         self._current_query = user_input
         self._single_tool_done = False
 
+        # Dynamic tool selection (#1449): pick this turn's tool subset and
+        # recompute the cached system prompt only when it changes.
+        self._refresh_active_tool_filter(user_input)
+
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
@@ -2407,6 +2652,9 @@ Do NOT wrap conversational replies in JSON.
         query_result_cache: dict[str, int] = (
             {}
         )  # result_hash → call count (result-based dedup)
+        mutation_call_cache: dict[str, int] = (
+            {}
+        )  # (tool, normalized args) → call count (input-based dedup, #1317)
         last_error = None  # Track the last error to handle it properly
         previous_outputs = []  # Track previous tool outputs (truncated for context)
         step_results = []  # Track full tool results for parameter substitution
@@ -2446,6 +2694,25 @@ Do NOT wrap conversational replies in JSON.
 
         # Process the query in steps, allowing for multiple tool usages
         while steps_taken < steps_limit and final_answer is None:
+            # Cooperative cancellation: if a consumer (e.g. the Agent UI's
+            # stream-timeout/disconnect cleanup) signalled cancel, stop here so
+            # the producer thread is torn down rather than left running. Checked
+            # at the step boundary; per-tool timeouts keep each step bounded so
+            # this point is always reached in finite time.
+            cancel_event = getattr(self, "_cancel_event", None)
+            if cancel_event is not None and cancel_event.is_set():
+                logger.warning(
+                    "Agent run cancelled at step %d/%d via cancel_event",
+                    steps_taken,
+                    steps_limit,
+                )
+                final_answer = (
+                    "The request was stopped because it exceeded the allowed "
+                    "time before completing. Try a simpler request or break it "
+                    "into smaller steps."
+                )
+                break
+
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
             steps_taken += 1
@@ -3529,6 +3796,12 @@ Do NOT wrap conversational replies in JSON.
                             )
                             messages.append({"role": "user", "content": dedup_msg})
 
+                    # Input-based dedup for mutation tools (#1317): catch an
+                    # identical mutation re-issue at the first repeat.
+                    self._dedup_mutation_call(
+                        tool_name, tool_args, mutation_call_cache, messages
+                    )
+
                     # Domain hooks. A returned plan switches the agent into
                     # STATE_EXECUTING_PLAN for prereq-style recovery. The
                     # base impl returns None but the hook's annotation is
@@ -3748,6 +4021,12 @@ Do NOT wrap conversational replies in JSON.
                             "OR state that the information was not found in the document."
                         )
                         messages.append({"role": "user", "content": dedup_msg})
+
+                # Input-based dedup for mutation tools (#1317): catch an
+                # identical mutation re-issue at the first repeat.
+                self._dedup_mutation_call(
+                    tool_name, tool_args, mutation_call_cache, messages
+                )
 
                 # Handle domain-specific post-processing.
                 # A returned plan switches into STATE_EXECUTING_PLAN. The
@@ -4360,6 +4639,51 @@ Do NOT wrap conversational replies in JSON.
                 "or check that the underlying service is running."
             )
         return f"Task completed with {tool_name}. No further action needed."
+
+    def _dedup_mutation_call(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        mutation_call_cache: Dict[str, int],
+        messages: List[Dict[str, Any]],
+    ) -> None:
+        """Catch a repeated identical mutation at the FIRST repeat (#1317).
+
+        Query dedup hashes the *result*; mutations must key on the *args*
+        instead — re-issuing the same mutation (e.g. ``mark_read`` on an
+        already-read id) returns a *different* result the second time, so a
+        result hash would miss the repeat. Keying on ``(tool, normalized
+        args)`` also leaves mutations on *different* ids untouched. Mirrors
+        the query-dedup corrective signal: inject a re-plan prompt rather
+        than silently dropping the call, so the model gets a chance to move
+        on instead of waiting for the slow reactive loop-detector.
+        """
+        if tool_name not in _MUTATION_TOOLS:
+            return
+        # Normalize so {"a":1,"b":2} and {"b":2,"a":1} hash identically.
+        try:
+            normalized = json.dumps(tool_args, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            normalized = str(tool_args)
+        call_key = f"{tool_name}:{normalized}"
+        mutation_call_cache[call_key] = mutation_call_cache.get(call_key, 0) + 1
+        if mutation_call_cache[call_key] >= 2:
+            logger.debug(
+                "[DEDUP] Identical mutation %s issued %d times — injecting re-plan signal",
+                tool_name,
+                mutation_call_cache[call_key],
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"[SYSTEM] You already called {tool_name} with these exact "
+                        f"arguments {mutation_call_cache[call_key]} times. The change "
+                        "is already applied — repeating it has no effect. Move on to "
+                        "the next item in your plan, or finish if nothing is left."
+                    ),
+                }
+            )
 
     def _post_process_tool_result(
         self, _tool_name: str, _tool_args: Dict[str, Any], _tool_result: Dict[str, Any]

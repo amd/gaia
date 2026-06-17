@@ -13,12 +13,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from gaia.agents.base.tools import tool
 from gaia_agent_email import action_store
+from gaia_agent_email.tools.read_tools import extract_sender_email
 from gaia_agent_email.verbose import log_tool_call
+
+from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -30,6 +35,66 @@ def _envelope_ok(data: Any) -> str:
 
 def _envelope_err(message: str) -> str:
     return json.dumps({"ok": False, "error": message})
+
+
+def _compute_reply_latency_seconds(original_msg: Dict[str, Any]) -> Optional[float]:
+    """Seconds between the original message's receipt and now (the reply time).
+
+    Accepts two receipt-anchor formats that the email backends use:
+
+    - **Gmail** ``internalDate``: numeric millis since Unix epoch (int or str),
+      e.g. ``"1717502400000"``.
+    - **Outlook** ``receivedDateTime`` (mapped to ``internalDate`` by the Outlook
+      backend): ISO-8601 string, e.g. ``"2026-06-04T12:00:00Z"``.
+
+    Returns ``None`` when no usable anchor is present or parsing fails — the
+    caller skips recording rather than fabricating a latency.
+    """
+    raw = original_msg.get("internalDate")
+    if raw in (None, ""):
+        return None
+    # Try numeric (Gmail millis) first.
+    try:
+        received_s = int(raw) / 1000.0
+        return time.time() - received_s
+    except (TypeError, ValueError):
+        pass
+    # Try ISO-8601 string (Outlook receivedDateTime). Handle trailing 'Z'
+    # which datetime.fromisoformat does not accept before Python 3.11.
+    try:
+        iso = str(raw).strip()
+        if iso.endswith("Z"):
+            iso = iso[:-1] + "+00:00"
+        received_s = datetime.fromisoformat(iso).astimezone(timezone.utc).timestamp()
+        return time.time() - received_s
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _record_reply_observation(agent, original_msg: Dict[str, Any]) -> None:
+    """Record a reply-latency observation for the sender being replied to.
+
+    Memory-guarded inside ``_record_reply_interaction`` (skips when memory is
+    disabled). Skips silently when the original message has no receipt anchor
+    (``internalDate``) or no resolvable sender — we never fabricate a latency.
+    """
+    if agent is None:
+        return
+    record = getattr(agent, "_record_reply_interaction", None)
+    if record is None:
+        return
+    latency = _compute_reply_latency_seconds(original_msg)
+    if latency is None:
+        return
+    headers_dict = {
+        (h.get("name") or "").lower(): h.get("value", "")
+        for h in (original_msg.get("payload") or {}).get("headers", [])
+    }
+    sender = extract_sender_email(headers_dict.get("from", ""))
+    if not sender:
+        return
+    record(sender, latency_seconds=latency)
 
 
 def _build_threading_headers(original_msg: Dict[str, Any]) -> Dict[str, str]:
@@ -95,6 +160,10 @@ def draft_reply_impl(
             "to": to,
             "subject": subject,
             "body_preview": body[:200],
+            # The original message is returned so the caller can record a
+            # reply-latency observation (behavioral learning, #1290). Kept out
+            # of the user-facing envelope by the closure.
+            "_original_msg": original,
         }
 
 
@@ -224,65 +293,110 @@ def forward_message_impl(
 
 class ReplyToolsMixin:
     def _register_reply_tools(self) -> None:
-        gmail = self._gmail
         db = self
+        agent = self  # per-message backend routing (#1603 Phase 2)
         debug_flag = bool(getattr(self.config, "debug", False))
 
         @tool
-        def draft_reply(message_id: str, body: str) -> str:
-            """Create a reply draft for a message (does NOT send)."""
+        def draft_reply(message_id: str, body: str, mailbox: str = "") -> str:
+            """Create a reply draft for a message (does NOT send).
+
+            ``mailbox`` (optional) names the source mailbox so the draft is
+            created in the right account when multiple mailboxes are connected.
+            """
             try:
-                return _envelope_ok(
-                    draft_reply_impl(
-                        gmail, db, message_id=message_id, body=body, debug=debug_flag
-                    )
+                provider = agent._provider_for_message(message_id, mailbox or None)
+                backend = agent._backends[provider]
+                result = draft_reply_impl(
+                    backend, db, message_id=message_id, body=body, debug=debug_flag
                 )
+                # Remember which mailbox holds this draft so send_draft routes
+                # back to the same backend.
+                agent._remember_draft_mailbox(result.get("draft_id"), provider)
+                # Behavioral learning (#1290): observe how fast the user replied
+                # to this sender, using the original message as the receipt
+                # anchor. Pop the internal field so it never reaches the user.
+                # The draft already succeeded — a bookkeeping failure here must
+                # not turn that success into an error the user might retry, so
+                # this specific post-commit write is logged, not raised.
+                original_msg = result.pop("_original_msg", None)
+                if original_msg is not None:
+                    try:
+                        _record_reply_observation(agent, original_msg)
+                    except (
+                        sqlite3.Error,
+                        json.JSONDecodeError,
+                        AttributeError,
+                    ) as obs_exc:
+                        log.warning(
+                            "draft_reply: reply observation failed (%s) — draft "
+                            "DID succeed; behavioral signal skipped",
+                            obs_exc,
+                        )
+                return _envelope_ok(result)
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def draft_forward(message_id: str, to: str, body: str = "") -> str:
-            """Create a forward draft for a message (does NOT send)."""
+        def draft_forward(
+            message_id: str, to: str, body: str = "", mailbox: str = ""
+        ) -> str:
+            """Create a forward draft for a message (does NOT send).
+
+            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            """
             try:
-                return _envelope_ok(
-                    draft_forward_impl(
-                        gmail,
-                        db,
-                        message_id=message_id,
-                        to=to,
-                        body=body,
-                        debug=debug_flag,
-                    )
+                provider = agent._provider_for_message(message_id, mailbox or None)
+                backend = agent._backends[provider]
+                result = draft_forward_impl(
+                    backend,
+                    db,
+                    message_id=message_id,
+                    to=to,
+                    body=body,
+                    debug=debug_flag,
                 )
+                agent._remember_draft_mailbox(result.get("draft_id"), provider)
+                return _envelope_ok(result)
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def send_draft(draft_id: str) -> str:
-            """Send a previously-created draft. Requires user confirmation."""
+        def send_draft(draft_id: str, mailbox: str = "") -> str:
+            """Send a previously-created draft. Requires user confirmation.
+
+            Routes to the mailbox the draft was created in (remembered from
+            ``draft_reply`` / ``draft_forward``). ``mailbox`` overrides that.
+            """
             try:
+                backend = agent._backend_for_draft(draft_id, mailbox or None)
                 return _envelope_ok(
-                    send_draft_impl(gmail, db, draft_id=draft_id, debug=debug_flag)
+                    send_draft_impl(backend, db, draft_id=draft_id, debug=debug_flag)
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def send_now(to: str, subject: str, body: str) -> str:
-            """Send an email immediately, no draft step. Requires user confirmation."""
+        def send_now(to: str, subject: str, body: str, mailbox: str = "") -> str:
+            """Send an email immediately, no draft step. Requires user confirmation.
+
+            ``mailbox`` (optional) chooses which account sends when multiple are
+            connected; defaults to the primary mailbox.
+            """
             try:
+                backend = agent._send_backend(mailbox or None)
                 return _envelope_ok(
                     send_now_impl(
-                        gmail,
+                        backend,
                         db,
                         to=to,
                         subject=subject,
@@ -291,18 +405,24 @@ class ReplyToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def forward_message(message_id: str, to: str, note: str = "") -> str:
-            """Forward an email to a new recipient. Requires user confirmation."""
+        def forward_message(
+            message_id: str, to: str, note: str = "", mailbox: str = ""
+        ) -> str:
+            """Forward an email to a new recipient. Requires user confirmation.
+
+            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            """
             try:
+                provider = agent._provider_for_message(message_id, mailbox or None)
                 return _envelope_ok(
                     forward_message_impl(
-                        gmail,
+                        agent._backends[provider],
                         db,
                         message_id=message_id,
                         to=to,
@@ -311,7 +431,7 @@ class ReplyToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")

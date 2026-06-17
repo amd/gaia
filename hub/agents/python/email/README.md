@@ -28,6 +28,27 @@ gaia email --spec                 # write + open the REST endpoint spec
 Requires the Google (or Microsoft) connector — connect it once with
 `gaia connectors` so the agent is grant-checked for mailbox access.
 
+## REST contract
+
+The `/v1/email/*` routes are a published, cross-implementation contract — the
+`@amd-gaia/agent-email` npm client and the future native build both conform to
+it. The version numbers and the OpenAPI spec are the source of truth:
+
+- **Versions** live in `gaia_agent_email/version.py`: `API_VERSION` (the REST
+  contract version, equal to `contract.SCHEMA_VERSION` — bumping the contract
+  bumps the API) and `AGENT_VERSION` (the package build). Both the product
+  server and the frozen sidecar read these constants, so they cannot disagree.
+- **Runtime probes** (dependency-light — no mailbox, no LLM):
+  `GET /v1/email/health` → `{"status":"ok","service":"gaia-agent-email"}`,
+  `GET /v1/email/version` → `{"apiVersion","agentVersion"}`.
+- **Spec artifact** `openapi.email.json` is committed. Regenerate it after any
+  route or contract change, and let CI diff it:
+
+  ```bash
+  python -m gaia_agent_email.export_openapi          # regenerate
+  python -m gaia_agent_email.export_openapi --check  # CI drift check (non-zero if stale)
+  ```
+
 ## Develop / test
 
 ```bash

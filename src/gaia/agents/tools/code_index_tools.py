@@ -95,7 +95,10 @@ class CodeIndexToolsMixin:
     def register_code_index_tools(self) -> None:
         """Register code-index tools with the agent's tool registry."""
 
-        @tool
+        # Embedding a whole repo into the shared FAISS index can run minutes on a
+        # large codebase; opt out of the default per-tool cap so a legitimate
+        # index isn't abandoned mid-write.
+        @tool(timeout=900)
         def index_codebase(repo_path: str = "") -> str:
             """Index a code repository for semantic search.
 

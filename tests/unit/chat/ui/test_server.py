@@ -829,9 +829,11 @@ class TestSessionEndpoints:
         resp = client.get("/api/sessions/nonexistent-uuid")
         assert resp.status_code == 404
 
-    def test_create_session_default_mail_provider(self, client):
+    def test_create_session_default_mail_provider_is_null(self, client):
+        # #1596: no pick → null in the API response, so the UI selector shows
+        # "no pick" (scan all) instead of a phantom google selection.
         data = client.post("/api/sessions", json={}).json()
-        assert data["mail_provider"] == "google"
+        assert data["mail_provider"] is None
 
     def test_create_session_microsoft_mail_provider(self, client):
         resp = client.post(

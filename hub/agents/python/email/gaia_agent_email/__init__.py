@@ -18,7 +18,9 @@ if TYPE_CHECKING:  # pragma: no cover - import only for type checkers
 
 __all__ = ["build_registration", "EmailTriageAgent", "EmailAgentConfig"]
 
-__version__ = "0.1.0"
+# Single source of truth for the package version lives in ``version.py`` (the
+# same module the REST and freeze servers read), so ``__version__`` has one home.
+from gaia_agent_email.version import AGENT_VERSION as __version__
 
 _LAZY = {
     "EmailTriageAgent": "agent",
@@ -47,17 +49,17 @@ def build_registration():
     """
     import dataclasses
 
-    from gaia.agents.registry import (
-        AgentRegistration,
-        _wrap_factory_with_namespaced_id,
-    )
-    from gaia.connectors.providers.base import ConnectorRequirement
-
     from gaia_agent_email.outlook_scopes import (
         OUTLOOK_CALENDAR_SCOPES,
         OUTLOOK_MAIL_SCOPES,
     )
     from gaia_agent_email.scopes import ALL_SCOPES
+
+    from gaia.agents.registry import (
+        AgentRegistration,
+        _wrap_factory_with_namespaced_id,
+    )
+    from gaia.connectors.providers.base import ConnectorRequirement
 
     def email_factory(**kwargs):
         from gaia_agent_email.agent import EmailTriageAgent

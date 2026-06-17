@@ -35,6 +35,7 @@ from gaia_agent_email.verbose import log_tool_call
 
 from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -234,7 +235,7 @@ class PhishingToolsMixin:
             except ValueError as exc:
                 return _envelope_err(str(exc))
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
@@ -255,7 +256,7 @@ class PhishingToolsMixin:
                     )
                 )
             except ConnectorsError as exc:
-                return _envelope_err(str(exc))
+                return _envelope_err(format_connector_error(exc))
             except RuntimeError as exc:
                 # Expired-undo-window / unknown-action_id is actionable —
                 # surface the message instead of a generic tool error.

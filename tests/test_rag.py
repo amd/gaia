@@ -241,6 +241,46 @@ class TestRAGSDK:
                 assert rag.indexed_files == set()
                 assert os.path.exists(temp_dir)
 
+    def test_load_embedder_scoped_unload_keeps_chat_model_resident(
+        self, mock_dependencies
+    ):
+        """RAG cold start must not evict the chat model (issue #1544).
+
+        _load_embedder() unloads ONLY the embedder slot — never a global
+        /unload — so Lemonade keeps the chat model resident and the next
+        generation turn stays warm instead of cold-reloading for ~100s.
+        """
+        if not RAG_AVAILABLE:
+            pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = RAGConfig(cache_dir=temp_dir)
+
+            with patch("gaia.rag.sdk.RAGSDK._check_dependencies"):
+                rag = RAGSDK(config)
+                assert rag.embedder is None  # cold start — nothing loaded yet
+
+                rag._load_embedder()
+
+            lemonade = mock_dependencies["lemonade"]
+
+            # Unload is scoped to the embedder ONLY — exactly one call, carrying
+            # the embedder name. assert_called_once_with also pins that the bare
+            # global form unload_model() was never used. ignore_if_not_loaded
+            # tolerates Lemonade's 404 on a cold (empty) embedder slot (#1544).
+            lemonade.unload_model.assert_called_once_with(
+                config.embedding_model, ignore_if_not_loaded=True
+            )
+            # The chat model id is never handed to unload_model.
+            for call in lemonade.unload_model.call_args_list:
+                assert config.model not in call.args
+
+            lemonade.load_model.assert_called_once_with(
+                config.embedding_model,
+                llamacpp_args="--ubatch-size 2048",
+            )
+            assert rag.embedder is lemonade
+
     def test_dependency_checking(self):
         """Test dependency checking."""
         if not RAG_AVAILABLE:

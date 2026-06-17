@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import ClassVar, List, Optional
+from typing import Any, ClassVar, List, Optional
 
 from gaia_agent_email import action_store
 from gaia_agent_email.config import EmailAgentConfig
@@ -51,14 +51,19 @@ from gaia_agent_email.tools.organize_tools import OrganizeToolsMixin
 from gaia_agent_email.tools.phishing_tools import PhishingToolsMixin
 from gaia_agent_email.tools.preference_tools import (
     PreferenceToolsMixin,
+    _normalize_email,
+    _persist_preferences,
+    _validate_session_preferences,
     init_session_preferences,
 )
+from gaia_agent_email.tools.profile_tools import ProfileToolsMixin
 from gaia_agent_email.tools.read_tools import ReadToolsMixin
 from gaia_agent_email.tools.reply_tools import ReplyToolsMixin
 from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
@@ -112,9 +117,9 @@ ACTIONS:
   shows the user the literal recipient/subject/body; trust ONLY what
   appears there.
 - Preference tools (set_priority_sender, set_low_priority_sender,
-  set_category_default, clear_session_preferences) — mutate session-scoped
-  classification preferences. Confirm the change in plain English; the
-  preferences are wiped on agent restart by design.
+  set_category_default, clear_session_preferences) — mutate persistent
+  classification preferences that survive across restarts. Confirm the
+  change in plain English.
 
 PRE-SCAN BEHAVIOR:
 When the user asks for a pre-scan, morning brief, triage view, or "what's
@@ -140,6 +145,7 @@ the user — do not recite raw JSON.
 
 class EmailTriageAgent(
     Agent,
+    MemoryMixin,
     DatabaseMixin,
     ReadToolsMixin,
     OrganizeToolsMixin,
@@ -149,6 +155,7 @@ class EmailTriageAgent(
     CalendarToolsMixin,
     PreferenceToolsMixin,
     PhishingToolsMixin,
+    ProfileToolsMixin,
 ):
     """Email Triage Agent — Gmail + Calendar through the connectors
     framework, all body inference local on Lemonade.
@@ -159,6 +166,10 @@ class EmailTriageAgent(
     and ``self._calendar`` BEFORE invoking the parent ``Agent.__init__``,
     so when ``_register_tools`` is later called by the base class, every
     closure has the backends ready.
+
+    Exception: ``MemoryMixin`` is NOT state-free — it requires an explicit
+    ``self.init_memory(...)`` call BEFORE ``super().__init__()``, which is
+    exactly where it is placed in this ``__init__``.
     """
 
     AGENT_ID = "email"
@@ -215,11 +226,22 @@ class EmailTriageAgent(
         self.config = config
 
         # Backend resolution. Production binds to live; eval injects fakes.
-        # ``resolve_mail_backend`` picks Gmail vs Outlook from
-        # ``config.mail_provider`` (#1275) — the tools treat either as a
-        # ``GmailBackend``. The attribute stays ``self._gmail`` for tool-mixin
-        # compatibility regardless of the underlying provider.
-        self._gmail = config.resolve_mail_backend()
+        # ``resolve_mail_backends`` returns provider→backend for every mailbox
+        # the ``mail_provider`` filter admits (#1603 Phase 2): None scans every
+        # connected mailbox, an explicit value restricts to one. Each backend
+        # satisfies the ``GmailBackend`` Protocol so the tools treat Gmail and
+        # Outlook interchangeably.
+        self._backends: dict[str, Any] = dict(config.resolve_mail_backends())
+        # ``self._gmail`` stays the PRIMARY backend (first in registry order) so
+        # existing single-backend tool closures keep working unchanged.
+        self._gmail = next(iter(self._backends.values()))
+        # message_id → provider, populated by triage / scan / read so action
+        # tools route each message to the mailbox it came from (no cross-mailbox
+        # 404s when multiple are connected). See ``_backend_for_message``.
+        self._message_mailbox: dict[str, str] = {}
+        # draft_id → provider, so send_draft routes back to the mailbox the
+        # draft was created in.
+        self._draft_mailbox: dict[str, str] = {}
         # ``resolve_calendar_backend`` picks Google vs Outlook from
         # ``config.calendar_provider`` (#1276) — the tools treat either as a
         # ``CalendarBackend``. An injected backend (eval/test seam) wins inside
@@ -244,6 +266,19 @@ class EmailTriageAgent(
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.init_db(db_path)
         action_store.init_schema(self)
+
+        # Memory subsystem. Must be called BEFORE super().__init__() because
+        # Agent.__init__() calls _register_tools(), and register_memory_tools()
+        # needs _memory_store to be set. Default path: ~/.gaia/email/memory.db
+        # (namespaced so it coexists with state.db without conflict).
+        memory_db = Path(config.resolved_memory_db_path())
+        memory_db.parent.mkdir(parents=True, exist_ok=True)
+        self.init_memory(db_path=memory_db, context="email")
+
+        # Restore preferences from the previous session. Must come after
+        # init_memory() (so _memory_store is set) and after
+        # _session_preferences is set (done above).
+        self._load_persisted_preferences()
 
         # LLM connection. Default to Lemonade — the config's base_url
         # allowlist guarantees the host is local.
@@ -296,6 +331,315 @@ class EmailTriageAgent(
         self._register_calendar_tools()
         self._register_preference_tools()
         self._register_phishing_tools()
+        self._register_profile_tools()
+        self.register_memory_tools()
+
+    # -- Phase 2 multi-inbox routing (#1603) -------------------------------
+
+    def _remember_message_mailbox(
+        self, message_id: Optional[str], provider: str
+    ) -> None:
+        """Record which mailbox a message_id came from, for action routing."""
+        if message_id:
+            self._message_mailbox[message_id] = provider
+
+    def _backend_for_message(
+        self, message_id: str, explicit_mailbox: Optional[str] = None
+    ):
+        """Return the backend the given message belongs to.
+
+        Resolution order:
+          1. ``explicit_mailbox`` when supplied (the LLM passed the tagged value
+             it saw in triage output).
+          2. The provider remembered from triage / scan / read.
+          3. The sole backend when exactly one is connected.
+          4. Otherwise FAIL LOUD — with multiple mailboxes connected and no
+             provenance, guessing would risk a cross-mailbox 404 / wrong-account
+             mutation.
+        """
+        provider = explicit_mailbox or self._message_mailbox.get(message_id)
+        if provider is None:
+            if len(self._backends) == 1:
+                return next(iter(self._backends.values()))
+            raise ValueError(
+                f"Cannot determine which mailbox message {message_id!r} belongs "
+                f"to; multiple mailboxes are connected ({', '.join(self._backends)}). "
+                "Re-run triage so the message is tagged, or pass mailbox= "
+                "explicitly."
+            )
+        backend = self._backends.get(provider)
+        if backend is None:
+            raise ValueError(
+                f"Message {message_id!r} is tagged mailbox {provider!r}, which is "
+                f"not connected. Connected: {', '.join(self._backends) or 'none'}."
+            )
+        return backend
+
+    def _provider_for_message(
+        self, message_id: str, explicit_mailbox: Optional[str] = None
+    ) -> str:
+        """Return the provider name a message routes to (the key in _backends).
+
+        Same resolution as ``_backend_for_message`` but yields the provider
+        STRING so action rows can record which mailbox they hit (undo routing).
+        """
+        backend = self._backend_for_message(message_id, explicit_mailbox)
+        for provider, candidate in self._backends.items():
+            if candidate is backend:
+                return provider
+        # _backend_for_message only ever returns a value from _backends.
+        raise ValueError(
+            f"resolved backend for message {message_id!r} is not in _backends"
+        )
+
+    def _send_backend(self, explicit_mailbox: Optional[str] = None):
+        """Resolve a backend for a send-from-scratch (``send_now``).
+
+        ``send_now`` has no source message, so it defaults to the primary
+        mailbox unless an explicit ``mailbox`` names another connected one.
+        """
+        if explicit_mailbox is None:
+            return self._gmail
+        backend = self._backends.get(explicit_mailbox)
+        if backend is None:
+            raise ValueError(
+                f"Mailbox {explicit_mailbox!r} is not connected. Connected: "
+                f"{', '.join(self._backends) or 'none'}."
+            )
+        return backend
+
+    def _remember_draft_mailbox(self, draft_id: Optional[str], provider: str) -> None:
+        """Record which mailbox a draft was created in (for send_draft routing)."""
+        if draft_id:
+            self._draft_mailbox[draft_id] = provider
+
+    def _backend_for_draft(self, draft_id: str, explicit_mailbox: Optional[str] = None):
+        """Resolve the backend a draft lives in, for ``send_draft``.
+
+        Prefers an explicit mailbox, then the provider remembered when the draft
+        was created, then the sole backend. Fails loud when ambiguous.
+        """
+        provider = explicit_mailbox or self._draft_mailbox.get(draft_id)
+        if provider is None:
+            if len(self._backends) == 1:
+                return next(iter(self._backends.values()))
+            raise ValueError(
+                f"Cannot determine which mailbox draft {draft_id!r} belongs to; "
+                f"multiple mailboxes are connected ({', '.join(self._backends)}). "
+                "Re-create the draft or pass mailbox= explicitly."
+            )
+        backend = self._backends.get(provider)
+        if backend is None:
+            raise ValueError(
+                f"Draft {draft_id!r} is tagged mailbox {provider!r}, which is not "
+                f"connected. Connected: {', '.join(self._backends) or 'none'}."
+            )
+        return backend
+
+    def _backend_for_action(self, action: dict):
+        """Resolve the backend for a recorded action row (undo routing).
+
+        Prefers the mailbox stored on the row (#1603 D5); falls back to the
+        message's remembered provider, then to the sole backend. Legacy rows
+        with no mailbox default to 'google' when present, else fail loud if the
+        choice is ambiguous.
+        """
+        provider = action.get("mailbox")
+        message_id = action.get("message_id", "")
+        if provider is None:
+            return self._backend_for_message(message_id)
+        backend = self._backends.get(provider)
+        if backend is None:
+            raise ValueError(
+                f"Action for message {message_id!r} is tagged mailbox "
+                f"{provider!r}, which is not connected. Connected: "
+                f"{', '.join(self._backends) or 'none'}."
+            )
+        return backend
+
+    def _triage_all_backends(self, *, max_messages: int) -> dict:
+        """Triage every connected mailbox, tag each item, merge under budget.
+
+        ``max_messages`` is a TOTAL budget split across mailboxes (NEVER
+        per-mailbox) — "triage 20" with two connected stays ~20 total, not 40 —
+        because local inference is slow (~9-31 s/email) and a doubled budget
+        would blow the user's expected wait. Every returned item gains a
+        ``mailbox`` tag and its id is remembered for downstream action routing.
+        """
+        from gaia_agent_email.tools import read_tools
+        from gaia_agent_email.tools.read_tools import (
+            extract_sender_email,
+            triage_inbox_impl,
+        )
+        from gaia_agent_email.tools.triage_heuristics import group_by_category
+
+        # Reference the factory via the read_tools module so the existing
+        # ``read_tools.make_llm_classifier`` test seam (the pre-scan canary)
+        # keeps intercepting the expensive triage path.
+        chat = getattr(self, "chat", None)
+        classifier = read_tools.make_llm_classifier(chat) if chat is not None else None
+        prefs = getattr(self, "_session_preferences", None)
+        force_llm = bool(getattr(self.config, "force_llm", False))
+        debug_flag = bool(getattr(self.config, "debug", False))
+
+        backends = self._backends
+        per_backend = max(1, max_messages // len(backends))
+        merged: list[dict] = []
+        for provider, backend in backends.items():
+            if len(merged) >= max_messages:
+                break
+            out = triage_inbox_impl(
+                backend,
+                max_messages=per_backend,
+                session_preferences=prefs,
+                force_llm=force_llm,
+                classifier=classifier,
+                debug=debug_flag,
+            )
+            for item in out["results"]:
+                item["mailbox"] = provider
+                self._remember_message_mailbox(item.get("id"), provider)
+                # Thread ids share the provenance map so get_thread /
+                # summarize_thread route to the right mailbox too.
+                self._remember_message_mailbox(item.get("thread_id"), provider)
+                # Record interaction for inbox profiling (#1289). Memory-guarded
+                # inside _record_interaction — silently skips when disabled.
+                # Recorded BEFORE the max_messages cap below on purpose: triage
+                # already classified this item, so its sender history is real
+                # even if the cap drops it from the returned view.
+                sender_addr = extract_sender_email(item.get("from", ""))
+                if sender_addr:
+                    self._record_interaction(sender_addr, item.get("category", ""))
+                merged.append(item)
+        merged = merged[:max_messages]
+        # Behavioral learning: evaluate reply behavior and promote qualifying
+        # senders to priority. On-demand — no background thread.
+        self._apply_behavioral_promotions()
+        # Re-group the merged, capped list so the bucketed view matches what the
+        # caller actually sees.
+        return {"results": merged, "grouped": group_by_category(merged)}
+
+    def _apply_behavioral_promotions(self) -> None:
+        """Promote qualifying senders to priority based on observed reply behavior.
+
+        Reads reply interactions via ``_evaluate_promotions()`` and, for each
+        qualifying sender not already in priority_senders, writes them through
+        the #1288 persistence path (``_session_preferences`` + MemoryStore) so
+        the promotion applies this turn AND survives restart.
+
+        Called synchronously from ``_triage_all_backends`` — never on a
+        background thread or scheduler. Memory-guarded: skips silently when
+        ``_memory_store is None``.
+        """
+        if getattr(self, "_memory_store", None) is None:
+            return
+
+        promoted_senders = self._evaluate_promotions()
+        if not promoted_senders:
+            return
+
+        prefs = getattr(self, "_session_preferences", None)
+        if prefs is None:
+            return
+
+        _validate_session_preferences(prefs)
+        new_promotions: list[str] = []
+        for sender in promoted_senders:
+            normalized = _normalize_email(sender)
+            if not normalized or "@" not in normalized:
+                continue
+            if normalized not in prefs["priority_senders"]:
+                prefs["priority_senders"].add(normalized)
+                prefs["low_priority_senders"].discard(normalized)
+                new_promotions.append(normalized)
+
+        if new_promotions:
+            _persist_preferences(self)
+            logger.info(
+                "email behavioral learning: promoted %d sender(s) to priority "
+                "via observed reply behavior: %s",
+                len(new_promotions),
+                new_promotions,
+            )
+
+    def _pre_scan_all_backends(self, *, max_messages: int) -> dict:
+        """Pre-scan every connected mailbox, tag each item, merge under budget.
+
+        Same TOTAL-budget split as ``_triage_all_backends``. Each section item
+        (urgent / actionable / suggested_archives) gains a ``mailbox`` tag and
+        its message_id is remembered for action routing. Per-section caps and
+        the envelope shape are preserved by merging the per-backend envelopes.
+        """
+        from gaia_agent_email.tools.read_tools import (
+            PRE_SCAN_ACTIONABLE_CAP,
+            PRE_SCAN_ARCHIVE_CAP,
+            PRE_SCAN_URGENT_CAP,
+            pre_scan_inbox_impl,
+        )
+
+        prefs = getattr(self, "_session_preferences", None)
+        force_llm = bool(getattr(self.config, "force_llm", False))
+        debug_flag = bool(getattr(self.config, "debug", False))
+
+        backends = self._backends
+        per_backend = max(1, max_messages // len(backends))
+        urgent: list[dict] = []
+        actionable: list[dict] = []
+        suggested_archives: list[dict] = []
+        informational_count = 0
+        scanned = 0
+        merged_prefs_applied: dict = {}
+        for provider, backend in backends.items():
+            if scanned >= max_messages:
+                break
+            out = pre_scan_inbox_impl(
+                backend,
+                max_messages=per_backend,
+                session_preferences=prefs,
+                force_llm=force_llm,
+                debug=debug_flag,
+            )
+            # Count messages actually returned, not the cap — an under-filled
+            # backend would otherwise trip the budget guard and skip a later one.
+            backend_totals = out.get("totals", {})
+            scanned += (
+                int(backend_totals.get("urgent", 0))
+                + int(backend_totals.get("actionable", 0))
+                + int(backend_totals.get("suggested_archives", 0))
+                + int(out.get("informational_count", 0))
+            )
+            merged_prefs_applied = out.get("preferences_applied", merged_prefs_applied)
+            for item in out.get("urgent", []):
+                item["mailbox"] = provider
+                self._remember_message_mailbox(item.get("message_id"), provider)
+                self._remember_message_mailbox(item.get("thread_id"), provider)
+                urgent.append(item)
+            for item in out.get("actionable", []):
+                item["mailbox"] = provider
+                self._remember_message_mailbox(item.get("message_id"), provider)
+                self._remember_message_mailbox(item.get("thread_id"), provider)
+                actionable.append(item)
+            for item in out.get("suggested_archives", []):
+                item["mailbox"] = provider
+                self._remember_message_mailbox(item.get("message_id"), provider)
+                self._remember_message_mailbox(item.get("thread_id"), provider)
+                suggested_archives.append(item)
+            informational_count += int(out.get("informational_count", 0))
+        return {
+            "kind": "email_pre_scan",
+            "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
+            "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
+            "informational_count": informational_count,
+            "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
+            "suggested_drafts": [],
+            "preferences_applied": merged_prefs_applied,
+            "totals": {
+                "urgent": len(urgent),
+                "actionable": len(actionable),
+                "informational": informational_count,
+                "suggested_archives": len(suggested_archives),
+            },
+        }
 
     # -- Phase I3 batch-organize counter -----------------------------------
 

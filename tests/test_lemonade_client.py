@@ -5,6 +5,7 @@
 Unit tests for the Lemonade client API.
 """
 
+import json
 import logging
 import os
 import sys
@@ -688,6 +689,70 @@ class TestLemonadeClientMock(unittest.TestCase):
         finally:
             # Restore original log level
             logger.setLevel(original_level)
+
+    @responses.activate
+    def test_unload_model_scoped_vs_global(self):
+        """unload_model(name) targets only that model; unload_model() stays global.
+
+        Regression guard for #1544: the RAG embedder refresh must scope its
+        /unload to the embedder so the co-resident chat model is not evicted.
+        The no-arg form keeps the historical global behavior other callers rely
+        on (chat preflight, init, UI eviction).
+        """
+        unload_response = {"status": "success", "message": "unloaded"}
+
+        # Scoped: model_name is sent in the request body.
+        responses.add(
+            responses.POST, f"{API_BASE}/unload", json=unload_response, status=200
+        )
+        embed_model = "nomic-embed-text-v2-moe-GGUF"
+        result = self.client.unload_model(embed_model)
+        self.assertEqual(result, unload_response)
+        self.assertEqual(
+            json.loads(responses.calls[-1].request.body),
+            {"model_name": embed_model},
+        )
+
+        # Global (no arg): no model_name → no JSON body, unloads everything.
+        responses.reset()
+        responses.add(
+            responses.POST, f"{API_BASE}/unload", json=unload_response, status=200
+        )
+        result = self.client.unload_model()
+        self.assertEqual(result, unload_response)
+        self.assertIsNone(responses.calls[-1].request.body)
+
+    @responses.activate
+    def test_unload_model_ignore_if_not_loaded(self):
+        """Cold-start guard (#1544): Lemonade 404s "Model not loaded" when the
+        embedder slot is empty. ignore_if_not_loaded turns that one benign case
+        into a no-op; every other failure — and the default strict mode — still
+        raises, so a global unload or a real outage is never swallowed.
+        """
+        embed_model = "nomic-embed-text-v2-moe-GGUF"
+        not_loaded = {"error": f"Model not loaded: {embed_model}"}
+
+        # 404 "not loaded" + flag ON → no-op, no raise.
+        responses.add(responses.POST, f"{API_BASE}/unload", json=not_loaded, status=404)
+        result = self.client.unload_model(embed_model, ignore_if_not_loaded=True)
+        self.assertEqual(result.get("status"), "not_loaded")
+
+        # 404 "not loaded" + flag OFF (default) → raises.
+        responses.reset()
+        responses.add(responses.POST, f"{API_BASE}/unload", json=not_loaded, status=404)
+        with self.assertRaises(LemonadeClientError):
+            self.client.unload_model(embed_model)
+
+        # A different failure (500) is NOT swallowed even with the flag ON.
+        responses.reset()
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/unload",
+            json={"error": "Internal server error"},
+            status=500,
+        )
+        with self.assertRaises(LemonadeClientError):
+            self.client.unload_model(embed_model, ignore_if_not_loaded=True)
 
     @responses.activate
     def test_set_params(self):

@@ -9,6 +9,7 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { DocumentLibrary } from './components/DocumentLibrary';
 import { FileBrowser } from './components/FileBrowser';
 import { MemoryDashboard } from './components/MemoryDashboard';
+import { ScheduleManager } from './components/ScheduleManager';
 import { SettingsPage } from './components/SettingsPage';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
@@ -63,12 +64,15 @@ function App() {
         removeSession,
         updateSessionInList,
         setMessages,
+        resetStreaming,
         showDocLibrary,
         showFileBrowser,
         showSettings,
         setShowSettings,
         showMemoryDashboard,
         setShowMemoryDashboard,
+        showSchedules,
+        setShowSchedules,
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
@@ -76,6 +80,7 @@ function App() {
         setSystemStatus,
         setBackendConnected,
         setAgents,
+        setRunningSessions,
     } = useChatStore();
     const showNotificationPanel = useNotificationStore((s) => s.showPanel);
     const setShowNotificationPanel = useNotificationStore((s) => s.setShowPanel);
@@ -265,6 +270,25 @@ function App() {
             if (sessionPollRef.current) clearInterval(sessionPollRef.current);
         };
     }, [setSessions, addSession, removeSession, updateSessionInList, setBackendConnected]);
+
+    // Poll which sessions have a running turn so the sidebar can show a
+    // "still running" spinner on backgrounded runs. Backend-truth
+    // (/api/chat/active), independent of any open SSE stream (#1580).
+    const activeRunsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    useEffect(() => {
+        const poll = () => {
+            api.getActiveRuns()
+                .then((data) => setRunningSessions(data.session_ids || []))
+                .catch(() => { /* non-critical — sidebar just won't show spinners */ });
+        };
+        poll();
+        // 2.6s (off the :00/:30 marks) — responsive enough to feel live without
+        // hammering the backend.
+        activeRunsPollRef.current = setInterval(poll, 2_600);
+        return () => {
+            if (activeRunsPollRef.current) clearInterval(activeRunsPollRef.current);
+        };
+    }, [setRunningSessions]);
 
     // Support URL-based session navigation (?session=<id> or #<hash>)
     useEffect(() => {
@@ -499,6 +523,9 @@ function App() {
             setIsViewTransitioning(true);
             // Allow fade-out to complete, then swap content
             const timer = setTimeout(() => {
+                // Drop the previous session's in-flight stream state so the
+                // incoming view starts clean instead of mirroring it (#1580).
+                resetStreaming();
                 setDisplayedSessionId(currentSessionId);
                 // Brief delay before removing transition class (allows new content to mount)
                 requestAnimationFrame(() => {
@@ -509,7 +536,7 @@ function App() {
             }, 220); // matches CSS transition duration
             return () => clearTimeout(timer);
         }
-    }, [currentSessionId, displayedSessionId]);
+    }, [currentSessionId, displayedSessionId, resetStreaming]);
 
     return (
         <div className="app">
@@ -531,7 +558,7 @@ function App() {
 
             <Sidebar
                 onNewTask={handleNewTask}
-                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); window.history.replaceState(null, '', window.location.pathname); }}
+                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); setShowSchedules(false); window.history.replaceState(null, '', window.location.pathname); }}
                 tunnelActive={tunnelActive}
                 tunnelLoading={tunnelLoading}
                 onMobileToggle={handleMobileToggle}
@@ -542,6 +569,8 @@ function App() {
                     <SettingsPage />
                 ) : showMemoryDashboard ? (
                     <MemoryDashboard />
+                ) : showSchedules ? (
+                    <ScheduleManager />
                 ) : (
                     <>
                         {/* Connection / LLM status banner */}

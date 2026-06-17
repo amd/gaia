@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "description": "Ground truth and acceptance criteria for bash agent eval scenarios",
+  "ground_truth": {
+    "bash-write-dedup": {
+      "must_contain": ["set -e", "md5sum", "find"],
+      "must_not_contain": ["eval"],
+      "expected_tools": ["file_write", "bash_execute"],
+      "shellcheck_max_warnings": 2
+    },
+    "bash-write-backup": {
+      "must_contain": ["rsync", "--link-dest"],
+      "must_not_contain": ["eval", "rm -rf /"],
+      "expected_tools": ["file_write"],
+      "shellcheck_max_warnings": 2
+    },
+    "bash-write-csv": {
+      "must_contain": ["awk", "cut"],
+      "must_contain_any": true,
+      "expected_tools": ["file_write"],
+      "shellcheck_max_warnings": 2
+    },
+    "bash-write-cron": {
+      "must_contain": ["crontab"],
+      "expected_tools": ["file_write"],
+      "shellcheck_max_warnings": 2
+    },
+    "bash-write-logrotate": {
+      "must_contain": ["find", "-mtime", "gzip"],
+      "expected_tools": ["file_write"],
+      "shellcheck_max_warnings": 2
+    },
+    "bash-write-parallel-dl": {
+      "must_contain": ["xargs", "curl"],
+      "expected_tools": ["file_write"],
+      "shellcheck_max_warnings": 2
+    },
+    "bash-write-systemd": {
+      "must_contain": ["[Unit]", "[Service]", "[Install]"],
+      "expected_tools": ["file_write"],
+      "shellcheck_max_warnings": 0
+    },
+    "bash-write-sshkey": {
+      "must_contain": ["ssh"],
+      "expected_tools": ["file_write"],
+      "shellcheck_max_warnings": 2
+    },
+    "bash-review-injection": {
+      "must_contain": ["eval", "injection", "quote"],
+      "must_contain_any": false,
+      "expected_tools": [],
+      "response_must_mention": ["command injection", "unquoted"]
+    },
+    "bash-review-portability": {
+      "response_must_mention": ["bashism", "POSIX", "declare", "[["],
+      "expected_tools": []
+    },
+    "bash-review-performance": {
+      "response_must_mention": ["cat", "awk"],
+      "expected_tools": []
+    },
+    "bash-review-errors": {
+      "response_must_mention": ["set -e", "error", "cd"],
+      "expected_tools": []
+    },
+    "bash-review-race": {
+      "response_must_mention": ["race", "mktemp", "TOCTOU"],
+      "expected_tools": []
+    },
+    "bash-tool-filesearch": {
+      "expected_tools": ["file_search"],
+      "tool_args_must_contain": {"pattern": "*.py"}
+    },
+    "bash-tool-gitlog": {
+      "expected_tools": ["git_log"],
+      "tool_args_must_contain": {"count": 5}
+    },
+    "bash-tool-fileread": {
+      "expected_tools": ["file_read"],
+      "tool_args_must_contain": {"path": "cpp/CMakeLists.txt"}
+    },
+    "bash-tool-execute": {
+      "expected_tools": ["bash_execute"],
+      "response_must_contain": "hello world"
+    },
+    "bash-tool-envcheck": {
+      "expected_tools": ["env_inspect"]
+    },
+    "bash-tool-search-todo": {
+      "expected_tools": ["file_search"],
+      "tool_args_must_contain": {"content_pattern": "TODO"}
+    },
+    "bash-tool-gitdiff": {
+      "expected_tools": ["git_diff"],
+      "tool_args_must_contain": {"staged": true}
+    },
+    "bash-error-nonexistent": {
+      "expected_tools": ["bash_execute"],
+      "expect_error": true,
+      "expect_nonzero_exit": true
+    },
+    "bash-error-timeout": {
+      "expected_tools": ["bash_execute"],
+      "expect_timeout": true
+    },
+    "bash-error-readonly": {
+      "expected_tools": ["file_write"],
+      "expect_error": true
+    },
+    "bash-posix-convert": {
+      "must_not_contain": ["declare", "[[", "$(<"],
+      "must_contain": ["#!/bin/sh"],
+      "expected_tools": ["file_write"]
+    },
+    "bash-posix-explain": {
+      "response_must_mention": ["POSIX", "test", "keyword"],
+      "expected_tools": []
+    }
+  }
+}

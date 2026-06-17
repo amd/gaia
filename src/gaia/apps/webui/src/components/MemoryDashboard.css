@@ -94,9 +94,9 @@
     transition: all var(--duration) var(--ease);
 }
 .mem-section-add-btn:hover {
-    border-color: var(--amd-red);
-    color: var(--amd-red);
-    background: var(--amd-red-dim, rgba(237,28,36,0.08));
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim);
 }
 
 /* Activity range tab selector */
@@ -122,7 +122,7 @@
     border-left: 1px solid var(--border);
 }
 .mem-range-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
-.mem-range-tab.active { background: var(--amd-red); color: #fff; }
+.mem-range-tab.active { background: var(--accent); color: #1a1a1a; }
 
 /* Global memory-disabled banner */
 .mem-disabled-banner {
@@ -131,11 +131,11 @@
     gap: 10px;
     padding: 10px 16px;
     margin-bottom: 20px;
-    background: rgba(237, 28, 36, 0.08);
-    border: 1px solid rgba(237, 28, 36, 0.25);
+    background: rgba(226, 163, 62, 0.08);
+    border: 1px solid rgba(226, 163, 62, 0.25);
     border-radius: var(--radius-md);
     font-size: 12px;
-    color: var(--amd-red-soft, #f87171);
+    color: var(--accent-soft);
     font-family: var(--font-sans);
 }
 .mem-disabled-banner svg { flex-shrink: 0; }
@@ -149,15 +149,15 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
     border-radius: var(--radius-md);
-    border: 1px solid rgba(237,28,36,0.4);
+    border: 1px solid rgba(226, 163, 62, 0.4);
     background: transparent;
-    color: var(--amd-red-soft, #f87171);
+    color: var(--accent-soft);
     cursor: pointer;
     transition: all var(--duration) var(--ease);
 }
 .mem-disabled-banner-action:hover {
-    background: rgba(237,28,36,0.15);
-    border-color: var(--amd-red);
+    background: rgba(226, 163, 62, 0.15);
+    border-color: var(--accent);
 }
 
 /* ── 1. Header Stat Cards ────────────────────────────────────── */
@@ -205,7 +205,7 @@
 .mem-stat-card[data-accent="purple"] .mem-stat-value { color: #a78bfa; }
 .mem-stat-card[data-accent="blue"] .mem-stat-value { color: var(--accent-blue); }
 .mem-stat-card[data-accent="green"] .mem-stat-value { color: var(--accent-green); }
-.mem-stat-card[data-accent="red"] .mem-stat-value { color: var(--amd-red-soft); }
+.mem-stat-card[data-accent="red"] .mem-stat-value { color: var(--accent-soft); }
 .mem-stat-card[data-accent="gold"] .mem-stat-value { color: var(--accent-gold); }
 
 /* ── 2. Activity Timeline (CSS bar chart) ────────────────────── */
@@ -321,7 +321,7 @@
     background-repeat: no-repeat;
     background-position: right 8px center;
 }
-.mem-filter-select:focus { border-color: var(--amd-red); }
+.mem-filter-select:focus { border-color: var(--accent); }
 
 /* ── Category multi-select pills ─────────────────────────────── */
 .mem-category-pills {
@@ -353,7 +353,7 @@
     background: var(--bg-hover);
 }
 .mem-category-pill:focus-visible {
-    outline: 2px solid var(--amd-red);
+    outline: 2px solid var(--accent);
     outline-offset: 1px;
 }
 
@@ -363,7 +363,7 @@
 .mem-category-pill.error.active       { background: var(--accent-danger-dim); border-color: var(--accent-danger); color: var(--accent-danger); }
 .mem-category-pill.skill.active       { background: var(--accent-green-dim); border-color: var(--accent-green); color: var(--accent-green); }
 .mem-category-pill.note.active        { background: rgba(255, 165, 0, 0.12); border-color: var(--accent-gold); color: var(--accent-gold); }
-.mem-category-pill.reminder.active    { background: rgba(237, 28, 36, 0.10); border-color: var(--amd-red-soft); color: var(--amd-red-soft); }
+.mem-category-pill.reminder.active    { background: rgba(226, 163, 62, 0.10); border-color: var(--accent-soft); color: var(--accent-soft); }
 
 /* Clear button */
 .mem-category-pill.clear {
@@ -389,7 +389,7 @@
     outline: none;
     transition: border-color var(--duration) var(--ease);
 }
-.mem-filter-search:focus { border-color: var(--amd-red); }
+.mem-filter-search:focus { border-color: var(--accent); }
 .mem-filter-search::placeholder { color: var(--text-muted); }
 
 .mem-filter-search-wrap {
@@ -430,7 +430,7 @@
     transition: color var(--duration) var(--ease);
 }
 .mem-knowledge-table th:hover { color: var(--text-primary); }
-.mem-knowledge-table th.sorted { color: var(--amd-red); }
+.mem-knowledge-table th.sorted { color: var(--accent); }
 .mem-sort-arrow { margin-left: 4px; font-size: 10px; }
 
 .mem-knowledge-table td {
@@ -579,8 +579,8 @@
     transition: all var(--duration) var(--ease);
 }
 .mem-page-btn:hover:not(:disabled) {
-    border-color: var(--amd-red);
-    color: var(--amd-red);
+    border-color: var(--accent);
+    color: var(--accent);
 }
 .mem-page-btn:disabled {
     opacity: 0.3;
@@ -601,8 +601,8 @@
     margin-top: 8px;
 }
 .mem-add-btn:hover {
-    border-color: var(--amd-red);
-    color: var(--amd-red);
+    border-color: var(--accent);
+    color: var(--accent);
     border-style: solid;
 }
 
@@ -688,7 +688,7 @@
     outline: none;
     transition: border-color var(--duration) var(--ease);
 }
-.mem-conv-search input:focus { border-color: var(--amd-red); }
+.mem-conv-search input:focus { border-color: var(--accent); }
 .mem-conv-search input { padding-right: 32px; }
 
 .mem-search-clear {
@@ -915,7 +915,7 @@
 .mem-spinner {
     width: 18px; height: 18px;
     border: 2px solid var(--border);
-    border-top-color: var(--amd-red);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
@@ -963,7 +963,7 @@
 .mem-inline-form-row input:focus,
 .mem-inline-form-row select:focus,
 .mem-inline-form-row textarea:focus {
-    border-color: var(--amd-red);
+    border-color: var(--accent);
 }
 .mem-inline-form-row textarea {
     min-height: 60px;
@@ -1116,7 +1116,7 @@
 .mem-spinner-sm {
     width: 14px; height: 14px;
     border: 2px solid var(--border);
-    border-top-color: var(--amd-red);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
@@ -1347,7 +1347,7 @@
 }
 .mem-tab-active {
     color: var(--text-primary);
-    border-bottom-color: var(--amd-red);
+    border-bottom-color: var(--accent);
 }
 
 /* ── Profile Setup Tab ───────────────────────────────────────── */

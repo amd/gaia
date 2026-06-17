@@ -1,0 +1,45 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Packaging manifest for the native (C++) bash coding agent. Built from
+# cpp/agents/bash/ by .github/workflows/build_agents.yml and packaged into
+# dist/bash/ by cpp/packaging/package_agents.py. Cross-platform.
+id: bash
+name: Bash Coding Agent
+version: 0.1.0
+description: "Write, review, test, and debug shell scripts locally with a Claude Code-style TUI, REST API, and MCP server."
+author: AMD
+license: MIT
+
+category: coding
+tags: [bash, shell, scripting, coding, tui, mcp, cross-platform]
+icon: terminal
+
+language: cpp
+min_gaia_version: "0.18.0"
+models: [Gemma-4-E4B-it-GGUF]
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+cpp:
+  static_linked: true
+  binaries:
+    win-x64: bash-win-x64.exe
+    linux-x64: bash-linux-x64
+    darwin-arm64: bash-darwin-arm64
+
+permissions:
+  - filesystem:read
+  - filesystem:write
+  - process:execute
+  - system:read
+  - network:read
+
+interfaces:
+  tui: true
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: true

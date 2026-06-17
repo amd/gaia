@@ -1,0 +1,117 @@
+---
+title: "v0.21.0"
+description: "Email triage now works across Outlook and multiple inboxes at once, and the Agent UI can run prompts on a schedule — plus a batch of email, connector, packaging, and UI fixes that clear hangs, crashes, and wrong-mailbox routing."
+---
+
+# GAIA v0.21.0 Release Notes
+
+GAIA v0.21.0 rounds out the email triage agent and adds scheduled tasks to the Agent UI. Email triage is no longer Gmail-only: it now reads whatever mailboxes you've connected — Gmail, Outlook, or both — tags each message with its source, and routes replies and archives back to the right account. The Agent UI gains a Schedule Manager so a prompt like "every morning, summarize my inbox" runs on its own. The rest of the release clears a stack of email, connector, packaging, and UI bugs — a Windows triage hang, crashes on bare and partner installs, hung tools that left the UI thinking forever, and wrong-mailbox routing.
+
+**Why upgrade:**
+- **Triage Gmail and Outlook in one pass** — the email agent now consolidates every connected mailbox automatically: "triage my inbox" fans out across Gmail and Outlook together, tags each message with its source, and sends from the right account — no per-mailbox picking.
+- **Run prompts on a schedule** — describe a schedule in plain language in the Agent UI and the local agent runs your prompt on time, with each schedule's run history kept in its own chat.
+- **No more silent triage hang** — a connector token call could leave the Agent UI stuck "thinking" with no error; tool calls are now bounded and cancel cleanly, and the underlying event-loop bug behind the Windows hang is fixed.
+- **`gaia connectors` and `gaia api` start on bare and partner installs** — both crashed on a missing `keyring`; the dependency is now declared where it's used and missing it fails with an actionable message.
+
+---
+
+## What's New
+
+### Triage Gmail and Outlook in one pass — `gaia email`
+
+The email agent used to assume Gmail everywhere — an Outlook-only user couldn't send at all, and someone with both accounts connected could only ever scan one, with no way to tell which mailbox a message came from. Now it consolidates every connected mailbox automatically: "triage my inbox" fans out across Gmail and Outlook together, tags each message with its source, splits your message budget across them, and routes every reply, archive, and undo back to the correct account — no per-mailbox picking, and no selector to manage (PRs [#1614](https://github.com/amd/gaia/pull/1614), [#1616](https://github.com/amd/gaia/pull/1616), [#1635](https://github.com/amd/gaia/pull/1635)). Sending resolves to the connected mailbox and fails loudly if it's ambiguous instead of guessing. The REST triage API also gains an `engine=llm` path that escalates low-confidence messages to the local model with the full email body — no more 4,000-character truncation (PR [#1590](https://github.com/amd/gaia/pull/1590)). Try it: `gaia email`.
+
+---
+
+### Schedule recurring prompts — Agent UI Schedule Manager
+
+Running anything on a schedule used to mean reaching for tools outside GAIA. The Agent UI now has a Schedule Manager: describe the cadence in plain language ("every 30m", "daily at 9pm", "every Monday at 8am"), attach a prompt, and the local agent runs it on time — each schedule keeps its full run history in its own chat session. Malformed schedules fail loudly rather than silently never firing, and the scheduler won't boot with lost tasks (PR [#1566](https://github.com/amd/gaia/pull/1566)).
+
+---
+
+### LiteLLM provider — initial integration (alpha)
+
+Groundwork for an additional LLM provider option behind GAIA's existing client abstraction. The initial LiteLLM integration has landed and registers alongside Lemonade, OpenAI, and Claude, but it is **alpha and not yet validated end-to-end** — treat it as experimental. Local inference on Lemonade remains the default and the supported path. Contributed by [@RheagalFire](https://github.com/RheagalFire) (PRs [#1593](https://github.com/amd/gaia/pull/1593), [#1626](https://github.com/amd/gaia/pull/1626)).
+
+---
+
+## Bug Fixes
+
+- **Email Triage hung the Agent UI with no error** (PRs [#1589](https://github.com/amd/gaia/pull/1589), [#1591](https://github.com/amd/gaia/pull/1591)) — a connector token call made from a worker thread could leave the UI stuck "thinking" indefinitely; a persistent event-loop bridge fixes the underlying hang and every tool call is now bounded (default 180s) so a stuck tool surfaces an actionable error instead of leaking.
+- **`gaia connectors` and `gaia api` crashed on missing `keyring`** (PRs [#1620](https://github.com/amd/gaia/pull/1620), [#1624](https://github.com/amd/gaia/pull/1624), [#1622](https://github.com/amd/gaia/pull/1622)) — `keyring` was declared only in the `[ui]`/`[dev]` extras, so a bare `pip install amd-gaia` crashed `gaia connectors`, and the documented `[api]` partner recipe crashed `gaia api` at startup. `keyring` is now a base dependency, also added to `[api]`, and a guarded import fails with an actionable message on stripped installs.
+- **Email Triage Google connection wouldn't grant** (PR [#1599](https://github.com/amd/gaia/pull/1599)) — the Email Triage connector grant for Google was broken; it's repaired and token failures now return actionable errors.
+- **Microsoft connections were invisible to generic consumers** (PR [#1616](https://github.com/amd/gaia/pull/1616)) — connection listing was hardcoded to Google, so the `/v1/connections` endpoint, the UI connectors list, and the send-budget calc all stayed Outlook-blind even when Microsoft was connected.
+- **Chat model got evicted by the embedder** (PR [#1586](https://github.com/amd/gaia/pull/1586), by [@alexey-tyurin](https://github.com/alexey-tyurin)) — a RAG embedder warm-up could unload the resident chat model; the unload is now scoped so chat stays loaded.
+- **File search scope wasn't shown** (PR [#1587](https://github.com/amd/gaia/pull/1587), by [@77652189](https://github.com/77652189)) — the Agent UI now displays which scope a file search ran against.
+- **macOS auto-updater kept failing** (PR [#1553](https://github.com/amd/gaia/pull/1553)) — the build didn't publish a macOS `.zip`, so the Electron auto-updater had nothing to fetch; it's published now.
+- **New Task mirrored the previous session's live stream** (PR [#1584](https://github.com/amd/gaia/pull/1584)) — starting a new task could echo the prior session's in-flight output; fixed.
+- **Repeated mutation tool calls ran twice** (PR [#1557](https://github.com/amd/gaia/pull/1557)) — identical mutating tool calls are now deduped early so an action doesn't fire twice.
+- **Agent UI swallowed non-JSON error bodies** (PR [#1554](https://github.com/amd/gaia/pull/1554)) — `apiFetch` now fails loudly on a non-JSON response instead of hiding the real error.
+- **Init flagged SD and embedding models as "Context unverified"** (PR [#1558](https://github.com/amd/gaia/pull/1558)) — `gaia init` no longer mislabels non-chat models during setup.
+- **Model-cleanup command broke on Windows** (PR [#1559](https://github.com/amd/gaia/pull/1559)) — the CLI now emits a PowerShell-compatible cleanup command on Windows.
+- **Backend install gave up on transient PyPI failures** (PR [#1561](https://github.com/amd/gaia/pull/1561)) — the installer retries transient PyPI errors instead of failing the whole install.
+- **Tray icon and policy-block fixes** (PRs [#1555](https://github.com/amd/gaia/pull/1555), [#1556](https://github.com/amd/gaia/pull/1556)) — correctly sized per-platform tray icons that fail loud on a missing asset, and atomic chat policy-block message replacement.
+
+---
+
+## Contributors
+
+Thanks to the community members who contributed to this release:
+
+- [@RheagalFire](https://github.com/RheagalFire) — initial LiteLLM provider integration (alpha) (PR [#1593](https://github.com/amd/gaia/pull/1593))
+- [@alexey-tyurin](https://github.com/alexey-tyurin) — RAG embedder unload scoping so chat stays resident (PR [#1586](https://github.com/amd/gaia/pull/1586)) and the tool-prompt cost & TTFT baseline harness (PR [#1546](https://github.com/amd/gaia/pull/1546))
+- [@GaetanVDB07](https://github.com/GaetanVDB07) — improved Agent UI active-agent context (PR [#1578](https://github.com/amd/gaia/pull/1578))
+- [@77652189](https://github.com/77652189) — show file search scope in the Agent UI (PR [#1587](https://github.com/amd/gaia/pull/1587))
+
+---
+
+## Full Changelog
+
+**44 commits** since v0.20.1:
+
+- `dd35c385` — refactor(agent-ui): remove email mailbox selector — consolidate all connected mailboxes (#1635)
+- `93755ba4` — fix(llm): correct LiteLLM embed() model override + finish #1593 review items (#1626)
+- `fb76ccd8` — fix(packaging): add keyring to base install_requires so gaia connectors works on bare install (#1621) (#1624)
+- `08ca5aa8` — fix(connectors): actionable error when keyring missing on base install (#1622)
+- `881ebcfb` — feat(llm): add LiteLLM as AI gateway provider (#1593)
+- `9ab7da1c` — docs(email): partner-facing Capability & API Spec (v2.0) (#1619)
+- `49c26661` — docs: fix stale Agent UI version and broken quickstart anchors (#1623)
+- `84214104` — fix(packaging): add keyring to [api] extra so gaia api + email wheel starts (#1620)
+- `b14e09d6` — fix(email): wire EmailSendRequest.provider fallback + exact pre-scan budget (#1603 review) (#1616)
+- `f6d81e38` — chore(ci): route build_agent_package version/dist/path through env: for hardening uniformity (#1613)
+- `007a486c` — feat(email): connector-derived mailbox selection — multi-inbox triage + send (#1603, #1594) (#1614)
+- `01cd345c` — ci(agents): build & share the email agent package via a GitHub Release (#1601)
+- `b6726b7a` — feat(agent-ui): mailbox-provider selector so Outlook users can triage from the UI (#1596) (#1600)
+- `e1880154` — fix(connectors): repair Email Triage Google grant + actionable token errors (#1592) (#1599)
+- `0fe21871` — Improve Agent UI active agent context (#1578)
+- `a55e23bd` — feat(email): engine=llm triage API + remove body clipping (#1452, #1539) (#1590)
+- `8cd5c5cf` — fix(agents): bound and cancel tool execution so hung tools fail loudly (#1591)
+- `798846d7` — fix(connectors): persistent event-loop bridge to stop Email Triage UI hang (#1579) (#1589)
+- `d22a8fb2` — fix(electron): publish macOS .zip so the auto-updater stops failing (#1553)
+- `110d2d15` — feat(ui): scheduled recurring tasks in Agent UI (#1566)
+- `731d8d9d` — docs: fix wrong on-disk paths in FAQ and install guide (#1588)
+- `f06763c3` — fix(rag): scope embedder unload to keep chat model resident (#1544) (#1586)
+- `b0c03c51` — fix(agents): early dedup for repeated mutation tool calls (#1557)
+- `973effe1` — fix(ui): stop New Task from mirroring the previous session's live stream (#1584)
+- `eced0dac` — fix(webui): show file search scope (#1587)
+- `bab58846` — fix(agent-ui): fail loudly when apiFetch gets a non-JSON body (#1554)
+- `377e1a3c` — fix(tray): small per-platform tray icons + fail loud on missing asset (#1555)
+- `e9c56704` — fix(ui): make chat policy-block message replacement atomic (#1556)
+- `6d03b4b8` — fix(installer): don't flag SD/embedding models as 'Context unverified' during init (#1558)
+- `083e79b6` — fix(cli): emit PowerShell-compatible model-cleanup command on Windows (#1559)
+- `b4d87a87` — fix(installer): retry backend install on transient PyPI failures (#1561)
+- `21227511` — ci(deps): label Lemonade bump PRs and request maintainer reviews (#1573)
+- `39548ebe` — fix(ci): let auto-fix run on community bug reports (#1582)
+- `7e94b98a` — docs(emr): correct VLM execution claim — Qwen3-VL runs on iGPU/Vulkan, not NPU (#1583)
+- `92478194` — chore(deps-dev): bump electron from 42.3.0 to 42.3.3 in the root-npm-dependencies group across 1 directory (#1425)
+- `e10e9ebd` — fix(ci): clear stale llama.cpp backend on Lemonade version reconcile (#1581)
+- `d71565f0` — refactor(agents): migrate email to hub (#1102) (#1520)
+- `2a0685e9` — feat(eval): tool-prompt cost & TTFT baseline harness (#1448 Part 0) (#1546)
+- `65a10357` — fix(ci): pause agent PyPI publishing until Agent Hub is ready (+ OIDC test fix) (#1576)
+- `ab96d9fd` — fix(ci): drop stale gaia-emr smoke check + make PyPI publish idempotent (#1563)
+- `6c025fa0` — fix(ci): pin self-hosted runners to exact LEMONADE_VERSION via WinGet (#1569)
+- `7333ba73` — ci(deps): add automated Lemonade version-bump workflow (#1552)
+- `958506db` — fix(ci): publish agent wheels via OIDC trusted publishing (#1568) (#1570)
+- `d12ef7d2` — docs(npu): add Linux setup section to NPU guide (#1565)
+
+Full Changelog: [v0.20.1...v0.21.0](https://github.com/amd/gaia/compare/v0.20.1...v0.21.0)

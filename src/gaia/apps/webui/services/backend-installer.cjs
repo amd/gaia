@@ -64,6 +64,11 @@ const NETWORK_CHECK_HOSTS = Object.freeze([
 ]);
 const NETWORK_CHECK_TIMEOUT_MS = 5000;
 
+// Pip-install resilience: the install stage fetches heavy transitive deps from
+// PyPI, so retry a transient network failure a few times before giving up.
+const INSTALL_MAX_ATTEMPTS = 3;
+const INSTALL_RETRY_BACKOFF_MS = 3000;
+
 // ── Bundled `uv` binary ──────────────────────────────────────────────────────
 //
 // Issue #782 / T3: the AppImage now ships a pinned `uv` under
@@ -478,6 +483,37 @@ function runCommand(cmd, args, { env, stageLabel } = {}) {
 function isFileLockedError(output) {
   if (!output) return false;
   return /os error 32/i.test(output) || /being used by another process/i.test(output);
+}
+
+/**
+ * Detect a transient network failure in `uv pip install` output so the
+ * install stage can retry instead of failing the whole bootstrap. The
+ * install stage downloads heavy transitive deps (scipy, numpy, torch) from
+ * PyPI; a single mid-stream hiccup ("stream closed because of a broken pipe")
+ * otherwise fails the entire backend install — and, in the release pipeline,
+ * the whole AppImage smoke test that gates publishing.
+ *
+ * Matches only network-shaped failures — NOT dependency-resolution errors
+ * ("No solution found") or disk-full, which retrying cannot fix.
+ */
+function isTransientNetworkError(output) {
+  if (!output) return false;
+  return (
+    /broken pipe/i.test(output) ||
+    /stream closed/i.test(output) ||
+    /failed to fetch/i.test(output) ||
+    /error sending request/i.test(output) ||
+    /connection (?:error|reset|closed|refused|aborted)/i.test(output) ||
+    /could not connect/i.test(output) ||
+    /(?:request|operation|connection)?\s*tim(?:ed\s*out|eout)/i.test(output) ||
+    /temporary failure in name resolution/i.test(output) ||
+    /(?:could not resolve|failed to lookup|dns error)/i.test(output) ||
+    /network is unreachable/i.test(output)
+  );
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ── Pre-checks ───────────────────────────────────────────────────────────────
@@ -1323,7 +1359,33 @@ async function installBackend(opts = {}) {
     pipArgs.push("--extra-index-url", "https://download.pytorch.org/whl/cpu");
   }
 
-  const installResult = await runCommand("uv", pipArgs, { stageLabel: "pip" });
+  // Retry the install on transient PyPI/network failures. The heavy
+  // transitive deps (scipy, numpy, torch) are fetched live from PyPI even
+  // when the gaia wheel itself is local, so a single broken-pipe mid-download
+  // would otherwise fail the whole bootstrap (and block a release). File-lock
+  // failures (Windows os-error-32) are NOT retried — they need user action.
+  let installResult;
+  for (let attempt = 1; attempt <= INSTALL_MAX_ATTEMPTS; attempt++) {
+    installResult = await runCommand("uv", pipArgs, { stageLabel: "pip" });
+    if (installResult.code === 0) break;
+    const attemptOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
+    const canRetry =
+      attempt < INSTALL_MAX_ATTEMPTS &&
+      isTransientNetworkError(attemptOutput) &&
+      !isFileLockedError(attemptOutput);
+    if (!canRetry) break;
+    const backoffMs = INSTALL_RETRY_BACKOFF_MS * attempt;
+    log(
+      `Transient network error during install (attempt ${attempt}/${INSTALL_MAX_ATTEMPTS}). ` +
+        `Retrying in ${Math.round(backoffMs / 1000)}s…`
+    );
+    report(
+      STAGES.INSTALL_PACKAGE,
+      0,
+      `Network hiccup — retrying install (attempt ${attempt + 1}/${INSTALL_MAX_ATTEMPTS})`
+    );
+    await sleep(backoffMs);
+  }
   if (installResult.code !== 0) {
     // Windows: an upgrade can't replace gaia.exe while a previous GAIA
     // process still holds it open (issue #1388). The orphan cleanup in
@@ -1632,6 +1694,7 @@ module.exports = {
   checkDiskSpace,
   checkNetwork,
   isFileLockedError,
+  isTransientNetworkError,
   buildCaBundle,
   proxyForHttps,
   classifyNetworkError,
