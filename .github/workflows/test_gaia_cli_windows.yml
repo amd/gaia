@@ -139,8 +139,8 @@ jobs:
           # (the old form prints "This command is deprecated. Use
           # 'lemonade pull --help' instead." and exits non-zero, killing
           # this step under PowerShell).
-          Write-Host "Pulling Llama-3.2-3B-Instruct-Hybrid model..."
-          lemonade pull Llama-3.2-3B-Instruct-Hybrid
+          Write-Host "Pulling Gemma-4-E4B-it-GGUF model..."
+          lemonade pull Gemma-4-E4B-it-GGUF
 
       - name: Run Unit Tests (Direct CMD - Full Error Visibility)
         shell: cmd
@@ -272,7 +272,7 @@ jobs:
         shell: cmd
         env:
           PYTHONUTF8: 1
-          GAIA_TEST_MODEL: Llama-3.2-3B-Instruct-Hybrid
+          GAIA_TEST_MODEL: Gemma-4-E4B-it-GGUF
         run: |
           REM Activate virtual environment
           call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
