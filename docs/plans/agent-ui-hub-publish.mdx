@@ -1,16 +1,17 @@
 ---
-title: "Agent UI — Agent Hub Publishing + In-App Marketplace"
-description: "Scope for (1) publishing the Agent UI installers to R2 via the Agent Hub Worker as a thin R2-fetching npm wrapper mirroring the email agent, and (2) an in-app Hub marketplace that dynamically installs published npm agents."
+title: "Agent UI on the Hub — Publishing, In-App Marketplace & Multi-Component Model"
+description: "Scope for publishing the Agent UI to the Agent Hub (R2 + npm) as a first-class app, an in-app marketplace that installs Hub units on demand, and generalizing the Hub from agents-only to a multi-component registry (app · component · agent)."
 ---
 
 # Scope
 
-Two related bodies of work:
+Three related bodies of work over one substrate (Agent Hub Worker + R2 + catalog):
 
-- **Part 1 — Publish Agent UI to the Agent Hub (R2 + npm)** — make the Agent UI itself a Hub package the way `email` is.
-- **Part 2 — In-app Agent Hub + dynamic npm-agent install** — let the running Agent UI browse the Hub and install other published agents on demand.
+- **Part 1 — Publish Agent UI to the Agent Hub (R2 + npm)** — make the Agent UI itself a Hub package the way `email` is (it's an `app`-type unit).
+- **Part 2 — In-app Agent Hub + dynamic install** — let the running Agent UI browse the Hub and install other published units on demand.
+- **Multi-component model** — generalize the Hub from agents-only to `app · component · agent` (see the section below); this reshapes the manifest, catalog, and install paths used by Parts 1–2.
 
-They share one substrate (the Agent Hub Worker + R2 + the `@amd-gaia/agent-*` wrapper contract), so they're scoped together.
+They share one substrate (the Agent Hub Worker + R2 + the wrapper/catalog contract), so they're scoped together.
 
 **Why this matters — independent versioning.** Moving the Agent UI onto the
 Hub package model decouples it from the core `amd-gaia` wheel's release train:
@@ -21,6 +22,49 @@ stable, pinnable URL, and `min_gaia_version` in each manifest lets the catalog
 gate compatibility instead of forcing lockstep upgrades. Same machinery that
 publishes the email agent independently today — extended to the UI and to
 in-app installs.
+
+# The Hub is multi-component (app · component · agent)
+
+The Agent Hub is **not** an agents-only registry. It hosts multiple kinds of
+publishable units, and the Agent UI is one of them:
+
+| Type | Examples | What it is | How it's consumed |
+|------|----------|------------|-------------------|
+| `app` | **Agent UI** | A standalone desktop/host application | Installed by the user (platform installer); *hosts* agents & components |
+| `component` | **RAG**, **memory** | A reusable capability/library | Consumed by apps & agents (a dependency), not "run" on its own |
+| `agent` | **email**, browser, code | A discrete AI tool | Installed into a host, then run |
+
+**This resolves the earlier "is the UI an agent?" tension.** The Agent UI is an
+`app`, not an agent — so it does **not** get co-listed in the same installable-
+agent list it renders in-app (which would be circular). It lives in its own Hub
+lane. Concretely, the multi-component model adds these requirements on top of
+Parts 1–2:
+
+- **Manifest needs a `type` discriminator.** `gaia-agent.yaml` is agent-shaped
+  today (id/name/version/language/category/interfaces). Generalize to a top-level
+  `type: app | component | agent` (the manifest/file naming likely generalizes
+  beyond `gaia-agent.yaml`). Per-type required fields differ — an `app` carries
+  installers + an update channel; a `component` carries a library artifact + a
+  consumption contract (API/version range); an `agent` carries the binary/wheel +
+  interfaces it already has.
+- **Catalog (`index.json`) needs the type field + lanes.** `IndexEntry` gains
+  `type`; the website and in-app Hub filter/segment by it (Apps · Components ·
+  Agents) instead of one flat list.
+- **Worker validation forks by type.** `manifest.ts` validates each type's
+  schema; `/publish` accepts app/component artifacts, not just agent binaries.
+- **Install/run semantics differ by type.** `app` → run the platform installer;
+  `agent` → land + register + run in the host; `component` → resolve as a
+  dependency (version range), not a launchable. The in-app "Install" action must
+  branch on `type` (you don't "launch" RAG; you enable/attach it).
+- **Dependency edges between types.** Agents/apps can *require* components (an
+  agent may need the `rag` or `memory` component at a version range). This is a
+  new dependency-resolution surface the catalog + installer must model — beyond
+  the per-agent `requirements`/`REQUIRED_CONNECTORS` that exist today.
+
+Parts 1–2 below are the **`app`** (Agent UI) and **`agent`** install paths; the
+`component` lane (RAG/memory as independently versioned Hub units) is a third
+track that shares the same Worker/R2/catalog substrate and is scoped at the same
+altitude here, with its own decisions called out in the inventory (section E).
 
 # Part 1: Publish Agent UI to the Agent Hub (R2 + npm)
 
@@ -365,7 +409,7 @@ Every gap surfaced during this investigation, in one checklist. Severity:
 | A9 | `publish_to_r2.py` / `gen_binaries_lock.py` assume one binary/platform | single-file | extend for multi-file-per-platform | Medium |
 | A10 | Signing/notarization may point at unsigned intermediates | CI signs before GitHub Release | ensure **signed** artifacts are what's POSTed to R2 | High |
 | A11 | agent-ui has no wheel but the publish-validation expects `setup.py[agents]` members to have one | n/a | keep agent-ui **out** of `setup.py[agents]`; document the divergence | Low |
-| A12 | Worker `manifest.ts` may reject a desktop-app manifest type | validates python/cpp shapes | accept `desktop-app` type | Low |
+| A12 | Manifest/catalog are agent-shaped; no component `type` | `gaia-agent.yaml` + `IndexEntry` model only agents | add `type: app\|component\|agent` discriminator end-to-end (see §E) | High |
 | A13 | R2 egress / storage cost | ~90 MB email binary | installers are ~100–300 MB each — budget egress | Low |
 
 ## B. In-app marketplace + dynamic install (Part 2)
@@ -411,6 +455,18 @@ Every gap surfaced during this investigation, in one checklist. Severity:
 | D5 | OS-gate friction for R2-fetched installers | n/a | verify Gatekeeper/SmartScreen pass on signed artifacts (overlaps A10) | High |
 | D6 | Deep-link when app isn't installed | `gaia://hub/install/<id>` has no fallback | website detects "no app" → route to download | Low |
 | D7 | No install/usage telemetry | `agent-hub.mdx` envisions download stats | optional, privacy-respecting install counters / observability | Low |
+
+## E. Multi-component Hub model (app · component · agent)
+
+| # | Gap | Today | Needed | Sev |
+|---|-----|-------|--------|-----|
+| E1 | No component `type` discriminator | manifest + catalog model only agents | top-level `type: app\|component\|agent`; per-type required fields | High |
+| E2 | Catalog is a flat agent list | `index.json` / website / in-app hub list agents | `type` field + segmented lanes (Apps · Components · Agents) | High |
+| E3 | Worker validates only agent manifests | `manifest.ts` agent-shaped; `/publish` expects agent artifacts | per-type schema validation + accept app/component artifacts | High |
+| E4 | Install action assumes "run an agent" | install = land + register + run | branch on `type`: app→installer, agent→register+run, component→resolve as dependency (not launchable) | High |
+| E5 | No inter-component dependency model | per-agent `requirements`/`REQUIRED_CONNECTORS` only | agents/apps can require a `component` (e.g. `rag`/`memory`) at a version range — catalog + installer must resolve it | Medium |
+| E6 | RAG/memory aren't independently versioned Hub units | shipped inside the `amd-gaia` wheel | extract as publishable `component` packages on their own SemVer line | Medium |
+| E7 | Agent UI risks self-listing in its own hub | agent-ui would land in the same list it renders | keep `app` in a separate lane / download surface, not the in-app installable-agent list | Medium |
 
 ## Reference files
 - In-app agent runtime: `src/gaia/apps/webui/services/{agent-process-manager,agent-seeder}.cjs`, `preload.cjs`
