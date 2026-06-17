@@ -1255,7 +1255,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have red left border for errors', () => {
-      expect(msgCss).toContain('border-left: 2px solid var(--amd-red)');
+      expect(msgCss).toContain('border-left: 2px solid var(--danger)');
     });
 
     it('should have error background tint', () => {
