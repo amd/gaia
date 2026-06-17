@@ -107,7 +107,9 @@ def _infer_platform_key(filename: str) -> str:
 
 def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) -> str:
     url = f"{base_url.rstrip('/')}/agents/{agent_id}/{version}/{filename}"
-    resp = requests.get(url, headers={"accept": "application/octet-stream"}, timeout=120)
+    resp = requests.get(
+        url, headers={"accept": "application/octet-stream"}, timeout=120
+    )
     if resp.status_code != 200:
         raise SystemExit(
             f"error: 409 said '{filename}' exists but GET {url} returned "
@@ -123,6 +125,7 @@ def publish_one(
     artifact_path: Path,
     platform_key: str,
     token: str,
+    readme_bytes: bytes | None = None,
 ) -> dict:
     if not artifact_path.exists():
         raise SystemExit(f"error: artifact not found: {artifact_path}")
@@ -139,17 +142,26 @@ def publish_one(
     )
 
     with artifact_path.open("rb") as fh:
+        files = {
+            "manifest": (
+                "gaia-agent.yaml",
+                manifest_path.read_bytes(),
+                "application/x-yaml",
+            ),
+            "artifact": (filename, fh, "application/octet-stream"),
+        }
+        # Same multipart field name + shape the Worker expects from
+        # `gaia agent publish` (src/gaia/hub/publisher.py): the README becomes
+        # the catalog entry's `readme` (rendered as sanitized markdown on the
+        # website). The README rides along on every POST so the index always
+        # reflects the latest published README; Workers predating the field
+        # ignore the unknown part.
+        if readme_bytes is not None:
+            files["readme"] = ("README.md", readme_bytes, "text/markdown")
         resp = requests.post(
             publish_url,
             headers={"authorization": f"Bearer {token}"},
-            files={
-                "manifest": (
-                    "gaia-agent.yaml",
-                    manifest_path.read_bytes(),
-                    "application/x-yaml",
-                ),
-                "artifact": (filename, fh, "application/octet-stream"),
-            },
+            files=files,
             timeout=300,
         )
 
@@ -200,14 +212,24 @@ def publish_one(
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Publish email-agent binaries to R2.")
-    parser.add_argument("--base-url", required=True, help="Worker origin, e.g. https://hub.example.")
-    parser.add_argument("--manifest", required=True, type=Path, help="gaia-agent.yaml path.")
+    parser.add_argument(
+        "--base-url", required=True, help="Worker origin, e.g. https://hub.example."
+    )
+    parser.add_argument(
+        "--manifest", required=True, type=Path, help="gaia-agent.yaml path."
+    )
     parser.add_argument(
         "--artifact",
         action="append",
         required=True,
         metavar="PATH[=PLATFORM]",
         help="Artifact file, optionally with =<platform-key>. Repeatable.",
+    )
+    parser.add_argument(
+        "--readme",
+        type=Path,
+        help="Path to README.md to publish as the agent's catalog readme "
+        "(POSTed as the multipart 'readme' part the Worker accepts).",
     )
     parser.add_argument(
         "--summary-out",
@@ -219,19 +241,42 @@ def main(argv=None) -> int:
     token = _read_token()
     manifest = _load_manifest(args.manifest)
 
+    readme_bytes = None
+    if args.readme is not None:
+        if not args.readme.exists():
+            raise SystemExit(
+                f"error: --readme path not found: {args.readme}. Pass the agent's "
+                "README.md, or omit --readme to publish without one."
+            )
+        readme_bytes = args.readme.read_bytes()
+        print(
+            f"[publish] attaching readme: {args.readme} ({len(readme_bytes)} bytes)",
+            flush=True,
+        )
+
     results = []
     for raw in args.artifact:
         path, key = _parse_artifact_arg(raw)
         platform_key = key or _infer_platform_key(path.name)
         results.append(
-            publish_one(args.base_url, args.manifest, manifest, path, platform_key, token)
+            publish_one(
+                args.base_url,
+                args.manifest,
+                manifest,
+                path,
+                platform_key,
+                token,
+                readme_bytes=readme_bytes,
+            )
         )
 
     if args.summary_out:
         args.summary_out.write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(f"[publish] wrote summary -> {args.summary_out}", flush=True)
 
-    print(f"[publish] DONE — {len(results)} artifact(s) published/verified.", flush=True)
+    print(
+        f"[publish] DONE — {len(results)} artifact(s) published/verified.", flush=True
+    )
     return 0
 
 
