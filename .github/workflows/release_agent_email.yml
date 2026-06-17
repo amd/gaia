@@ -92,17 +92,17 @@ jobs:
   build:
     name: Freeze (${{ matrix.key }})
     runs-on: ${{ matrix.os }}
-    # darwin-x64 (Intel) is BEST-EFFORT, built on macos-15-intel. macos-13 was
-    # retired (Dec 2025); macos-15-intel is GitHub's recommended Intel image
-    # (supported through Aug 2027) and is a current GA standard runner, so it
-    # doesn't have macos-13's scarcity. We build on the OLDER supported macOS on
-    # purpose: a binary built there links a lower minimum-OS target and runs on a
-    # broader range of Macs. PyInstaller can't cross-compile, so an Intel binary
-    # needs an Intel host. The leg may fail/time out without failing the job
-    # (continue-on-error + required:false); `publish` gates only on the 3 REQUIRED
-    # platforms. A miss is announced LOUDLY (::warning:: + job summary) and Intel
-    # users still fail loudly at install (fetch.ts rejects a missing / placeholder
-    # lock entry) — explicit degradation, never a silent one.
+    # darwin-x64 (Intel) is BEST-EFFORT, built on macos-26-intel (the latest Intel
+    # image; macos-13 retired Dec 2025, Intel images supported through Aug 2027).
+    # TRADE-OFF: building on the newest macOS can raise the frozen binary's
+    # minimum-OS, so Intel-Mac users on older macOS may not be able to run it. If
+    # broad backward-compat matters more than a current toolchain, switch this to
+    # macos-15-intel (older OS → lower min-OS → runs on more Macs). PyInstaller
+    # can't cross-compile, so an Intel binary needs an Intel host. The leg may
+    # fail/time out without failing the job (continue-on-error + required:false);
+    # `publish` gates only on the 3 REQUIRED platforms. A miss is announced LOUDLY
+    # (::warning:: + job summary) and Intel users still fail loudly at install
+    # (fetch.ts rejects a missing / placeholder lock entry) — never silent.
     continue-on-error: ${{ !matrix.required }}
     timeout-minutes: ${{ matrix.required && 30 || 60 }}
     strategy:
@@ -130,7 +130,7 @@ jobs:
             frozen: email-agent
             required: true
           # darwin-x64 (Intel) BEST-EFFORT — see the job-level comment above.
-          - os: macos-15-intel
+          - os: macos-26-intel
             platform: darwin-x64
             key: darwin-x64
             artifact: email-agent-darwin-x64
@@ -199,11 +199,63 @@ jobs:
             staging/${{ matrix.platform }}.meta.json
           if-no-files-found: error
 
+  # ── Stage 1.5: prove the (macos-26-built) Intel binary runs on OLDER macOS ──
+  # We build darwin-x64 on the newest Intel image (macos-26) but must confirm the
+  # frozen binary still runs on an older macOS — backward-compat is the real risk
+  # (forward-compat is reliable). Best-effort, like the build leg: if darwin-x64
+  # wasn't built, this is a no-op; if it was built but FAILS here, `publish` drops
+  # it (ships 3 platforms) rather than shipping a binary broken on older Macs.
+  # continue-on-error so an Intel-runner hiccup can't block the whole release —
+  # `publish` only ships darwin-x64 when this explicitly reports ok=true.
+  verify-darwin-x64-compat:
+    name: Verify darwin-x64 on older macOS (macos-15-intel)
+    runs-on: macos-15-intel
+    needs: [build]
+    continue-on-error: true
+    timeout-minutes: 20
+    outputs:
+      ok: ${{ steps.smoke.outputs.ok }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Download the darwin-x64 binary (absent if its best-effort build skipped)
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: email-agent-darwin-x64
+          path: dl
+
+      - name: Smoke-test the macos-26-built binary on macOS 15
+        id: smoke
+        shell: bash
+        run: |
+          # NOT `-e`: a failed smoke test is captured into an output, not a job failure.
+          set -uo pipefail
+          BIN="dl/email-agent-darwin-x64"
+          if [ ! -f "$BIN" ]; then
+            echo "::notice::darwin-x64 binary absent — nothing to verify."
+            echo "ok=absent" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          chmod +x "$BIN"
+          if python hub/agents/python/email/packaging/smoke_test.py "$BIN"; then
+            echo "darwin-x64 binary (built on macos-26-intel) runs on macOS 15 ✓"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::darwin-x64 binary (built on macos-26-intel) FAILED its smoke test on macOS 15 — it will be DROPPED from this release so older Intel Macs aren't shipped a broken binary. Build darwin-x64 on macos-15-intel for broader compatibility."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # ── Stage 2: publish to the hub + npm (single atomic step) ─────────
   publish:
     name: Publish to Hub + npm
     runs-on: ubuntu-latest
-    needs: [build]
+    needs: [build, verify-darwin-x64-compat]
     # Manual approval gate: the `agent-publish` environment is configured (repo
     # Settings → Environments) with required reviewers, so this job pauses until a
     # maintainer approves — the human backstop for an accidental/tampered release
@@ -302,6 +354,10 @@ jobs:
 
       - name: Collect binaries + assert required platforms present
         shell: bash
+        env:
+          # ok=true (built + verified on macOS 15) | false (built, failed on 15) |
+          # absent (not built) | "" (verify job errored — treat as not shippable).
+          DARWIN_X64_COMPAT: ${{ needs.verify-darwin-x64-compat.outputs.ok }}
         run: |
           set -euo pipefail
           # Only the platform binaries are needed — the manifest is read from its
@@ -323,21 +379,28 @@ jobs:
             exit 1
           fi
 
-          # darwin-x64 (Intel) is BEST-EFFORT. Announce its absence LOUDLY so the
-          # gap is visible in the run, not discovered later from a user bug report.
-          if [ -f "bins/email-agent-darwin-x64" ]; then
+          # darwin-x64 (Intel) is BEST-EFFORT. Ship it ONLY if it built AND passed
+          # the older-macOS (macos-15) compat check; otherwise drop it loudly and
+          # release the other 3 platforms.
+          if [ -f "bins/email-agent-darwin-x64" ] && [ "${DARWIN_X64_COMPAT:-}" = "true" ]; then
             echo "DARWIN_X64_PUBLISHED=true" >> "$GITHUB_ENV"
-            echo "darwin-x64 (Intel) binary present — full 4-platform release."
+            echo "darwin-x64 (Intel) binary present + verified on macOS 15 — full 4-platform release."
           else
             echo "DARWIN_X64_PUBLISHED=false" >> "$GITHUB_ENV"
-            echo "::warning::darwin-x64 (Intel macOS) binary is ABSENT — the Intel build leg (macos-15-intel) produced no artifact. Releasing the other 3 platforms; Intel-mac users will get a loud 'no binary for darwin-x64' error at install until a follow-up Intel build is published under this version."
+            rm -f bins/email-agent-darwin-x64   # never publish an absent/incompatible Intel binary
+            if [ "${DARWIN_X64_COMPAT:-}" = "false" ]; then
+              reason="built on macos-26-intel but FAILED its macOS 15 compat check"
+            else
+              reason="was not produced by its best-effort build (or its compat check could not run)"
+            fi
+            echo "::warning::darwin-x64 (Intel macOS) NOT published — it ${reason}. Releasing the other 3 platforms; Intel-mac users get a loud 'no binary for darwin-x64' error at install until an Intel binary is published for this version."
             {
               echo "### ⚠️ Intel macOS (darwin-x64) NOT published"
               echo ""
-              echo "The Intel build leg (\`macos-15-intel\`) produced no artifact, so this release ships **3 of 4** platforms."
+              echo "The darwin-x64 binary ${reason}, so this release ships **3 of 4** platforms."
               echo "Intel-mac (\`darwin-x64\`) users will hit a loud install error until an Intel binary is published for this version."
               echo ""
-              echo "**Follow-up:** re-run the \`build (darwin-x64)\` leg when Intel runner capacity frees up; the POST /publish endpoint is immutable-per-filename, so adding the Intel binary to the *same* version is safe and idempotent."
+              echo "**Follow-up:** re-run once the Intel binary builds + passes the macOS 15 check; \`POST /publish\` is immutable-per-filename, so adding the Intel binary to the *same* version is safe and idempotent."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
