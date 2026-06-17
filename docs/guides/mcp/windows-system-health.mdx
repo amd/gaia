@@ -66,7 +66,7 @@ The agent gathers metrics via PowerShell, formats a report, and pastes it into N
 ## How It Works
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'18px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'18px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 graph TB
     User("User: 'Check system health'")
     Agent("WindowsSystemHealthAgent<br/>(Agent + MCPClientMixin)")
@@ -87,18 +87,18 @@ graph TB
     Clipboard --> Notepad("mcp_windows_Shell<br/>Start-Process notepad")
     Notepad --> Paste("mcp_windows_Shortcut<br/>ctrl+v")
 
-    style User fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Agent fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
-    style Plan fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell1 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell2 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell3 fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Format fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Clipboard fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Notepad fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Paste fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style User fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Agent fill:#E2A33E,stroke:#EFC480,stroke-width:3px,color:#1a1a1a
+    style Plan fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Shell1 fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Shell2 fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Shell3 fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Format fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style Clipboard fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Notepad fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Paste fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
 
-    linkStyle default stroke:#ED1C24,stroke-width:2px
+    linkStyle default stroke:#E2A33E,stroke-width:2px
 ```
 
 **Execution Flow:**

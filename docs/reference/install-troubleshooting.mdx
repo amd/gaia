@@ -54,7 +54,10 @@ The Electron app launches but the backend install fails with an error dialog. Co
 
 ### No internet connection
 
-**Symptom**: Error dialog says "You appear to be offline".
+**Symptom**: Install fails during the download step with a `uv`/`pip` network
+error (connection refused, name resolution failure, timeouts). The first-launch
+network check is advisory and no longer blocks on its own — a genuine outage
+surfaces here, at the actual download, with a precise error.
 
 **Fix**: Connect to the internet and click **Retry**. The first launch needs to download:
 - `uv` (~30 MB)
@@ -82,6 +85,40 @@ $env:HTTPS_PROXY = "http://proxy.example.com:8080"
 HTTPS_PROXY=http://proxy.example.com:8080 open -a "GAIA"
 # or just (Linux .deb / AppImage):
 HTTPS_PROXY=http://proxy.example.com:8080 gaia-desktop
+```
+
+### Corporate proxy with TLS inspection — "unable to get issuer certificate"
+
+**Symptom**: Install fails (or the network pre-check warns) with `unable to get
+issuer certificate; if the root CA is installed locally, try running Node.js
+with --use-system-ca`. You are **not** offline — your proxy re-signs HTTPS
+traffic with a corporate root CA that GAIA's bundled trust store doesn't know.
+
+GAIA now trusts the OS certificate store automatically, so on most machines this
+resolves itself. If the install still can't reach a host, point GAIA at your
+corporate root CA explicitly:
+
+**Windows (PowerShell)** — export the root CA from `certmgr.msc` as Base-64 `.cer`/`.pem`, then:
+```powershell
+$env:NODE_EXTRA_CA_CERTS = "C:\path\to\corp-root-ca.pem"
+& "$env:LOCALAPPDATA\Programs\gaia-desktop\gaia-desktop.exe"
+```
+
+**macOS/Linux**:
+```bash
+NODE_EXTRA_CA_CERTS=/path/to/corp-root-ca.pem gaia-desktop
+```
+
+`NODE_EXTRA_CA_CERTS` covers GAIA's own network checks. The download step runs
+`uv` and `pip`, which use their own trust stores — point them at the same root
+CA with `SSL_CERT_FILE` (honored by both) and set `HTTPS_PROXY`. The most
+reliable combination behind a TLS-inspecting proxy:
+
+```bash
+export HTTPS_PROXY=http://proxy.example.com:8080
+export NODE_EXTRA_CA_CERTS=/path/to/corp-root-ca.pem
+export SSL_CERT_FILE=/path/to/corp-root-ca.pem
+gaia-desktop
 ```
 
 ### Antivirus interference

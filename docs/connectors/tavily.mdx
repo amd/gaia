@@ -1,0 +1,107 @@
+---
+title: "Tavily"
+icon: "globe"
+description: "Give GAIA agents web search and content extraction via Tavily."
+---
+
+<Info>
+  **Connector ID:** `mcp-tavily` · **Type:** `mcp_server` · **Catalog entry:** [`src/gaia/connectors/catalog/mcp_servers.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/mcp_servers.py)
+</Info>
+
+## What you'll need
+
+[Tavily](https://tavily.com) is a web-search API built for AI agents. The
+connector is an **MCP server** — GAIA spawns the
+[`tavily-mcp`](https://github.com/tavily-ai/tavily-mcp) process on demand via
+`npx` and routes tool calls (`tavily-search`, `tavily-extract`) through it, so
+the tools become available to **all** GAIA agents.
+
+It needs a single secret: a **Tavily API key**. You'll create one, paste it
+into GAIA once, and you're done. The key lives encrypted in your OS keyring;
+the MCP server reads it via a `$keyring` reference at launch.
+
+## Step 1 — Get an API key
+
+1. Sign in at <a href="https://app.tavily.com/" target="_blank">app.tavily.com</a>.
+2. Copy your API key from the dashboard. It starts with `tvly-` followed by a
+   string of characters (e.g. `tvly-AbCd…`). If your key doesn't start with
+   `tvly-`, you're looking at the wrong value.
+
+The free tier includes a monthly credit allowance; a basic search costs 1
+credit and an advanced search costs 2.
+
+## Step 2 — Configure GAIA
+
+**From the CLI:**
+
+```bash
+gaia connectors configure mcp-tavily --set TAVILY_API_KEY=tvly-...
+```
+
+**From the Agent UI:**
+
+1. Launch the Agent UI: `gaia chat --ui`.
+2. **Settings** (gear) → **Connections** → click the **Tavily** tile.
+3. Paste the key into the **Tavily API Key** field and click **Save**.
+
+Either path stores the key in your OS keyring (a single slot, distinct from
+other connectors) and writes a `$keyring` reference into
+`~/.gaia/mcp_servers.json` — the key never lives in plaintext on disk.
+
+## Step 3 — Use it
+
+Once configured, the `tavily-search` / `tavily-extract` MCP tools are available
+to any agent you grant them to:
+
+```bash
+gaia connectors grants grant mcp-tavily builtin:chat --scopes "*"
+```
+
+GAIA also ships a Python wrapper (`gaia.web.tavily`) used by web-research
+workflows, with response caching, a credit budget, and a CLI:
+
+```bash
+gaia knowledge search "AMD ROCm latest release" --max-results 5
+gaia knowledge usage          # show credits spent
+```
+
+<Note>
+  If the connector isn't configured, `gaia knowledge search` and the wrapper
+  fall back to a keyless DuckDuckGo search — so search works out of the box,
+  and Tavily simply upgrades its quality and adds `extract`/`crawl`.
+</Note>
+
+## Common issues
+
+### `Unauthorized` / `401` from the MCP server
+
+The key in your keyring is wrong or revoked. Click **Disconnect** on the tile
+(or `gaia connectors disconnect mcp-tavily`) and re-add a fresh key.
+
+### `npx: command not found`
+
+`tavily-mcp` is launched via `npx`. Install Node 18+ and ensure `npx` is on
+your `PATH`:
+
+```bash
+node --version   # must be >= 18
+which npx        # must resolve to a real path
+```
+
+### Budget exceeded
+
+`gaia knowledge` warns (if nearing the budget) then blocks once a session passes its `--budget` credit cap. Raise the cap, or pass `--no-block` to warn and proceed instead of blocking.
+
+## Revoking access
+
+- **From GAIA:** Settings → Connections → Tavily → **Disconnect** (or
+  `gaia connectors disconnect mcp-tavily`). The key is removed from the keyring
+  and the entry is dropped from `mcp_servers.json`.
+- **From Tavily:** rotate or delete the key in your
+  [Tavily dashboard](https://app.tavily.com/).
+
+## See also
+
+- [Connectors overview](/connectors)
+- [Tavily documentation](https://docs.tavily.com/)
+- [Connectors security model](/security/connections)

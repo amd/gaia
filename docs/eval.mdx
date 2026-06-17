@@ -39,7 +39,7 @@ The benchmark runs as **two distinct processes** connected over MCP: a Python or
 ### System Overview
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     YAML(["eval/scenarios/*.yaml"]) --> RUNNER(["AgentEvalRunner\n(Python orchestrator)"])
     MANIFEST(["eval/corpus/manifest.json"]) --> RUNNER
@@ -62,20 +62,20 @@ flowchart TD
     style YAML fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
     style MANIFEST fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
     style PROMPTS fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
-    style RUNNER fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style EVAL fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style RUNNER fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
+    style EVAL fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
     style MCPS fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
     style API fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
     style DB fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
     style RAG fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
     style LEM fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
-    style SCORE fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style SCORE fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
     style SC fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
     style SM fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
     style TR fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
 
-    linkStyle 0,1,2 stroke:#F4484D,stroke-width:2px
-    linkStyle 3,4,5,6,7,8,9,10,11,12 stroke:#ED1C24,stroke-width:2px
+    linkStyle 0,1,2 stroke:#EFC480,stroke-width:2px
+    linkStyle 3,4,5,6,7,8,9,10,11,12 stroke:#E2A33E,stroke-width:2px
 ```
 
 **Key design decisions:**
@@ -95,7 +95,7 @@ flowchart TD
 Each `claude -p` subprocess runs a 6-phase protocol. The eval agent has access to the Agent UI MCP server tools and uses them to drive a real session:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     P1(["Phase 1 · Setup\nsystem_status()\ncreate_session()\nindex_document() ×N"]) --> P2(["Phase 2 · Simulate + Judge\n(turn loop)"])
 
@@ -114,19 +114,19 @@ flowchart TD
     P1 -->|"system_status fails"| ERR1
     P1 -->|"non-adversarial scenario\nchunk_count = 0"| ERR2
 
-    style P1 fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style P2 fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style SM fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
-    style JT fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style P1 fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
+    style P2 fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style SM fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
+    style JT fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
     style MORE fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
-    style P3 fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style P4 fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style P3 fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style P4 fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
     style P5 fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
     style P6 fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
     style ERR1 fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
     style ERR2 fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
 
-    linkStyle 0,1,2,3,5,6,7,8 stroke:#ED1C24,stroke-width:2px
+    linkStyle 0,1,2,3,5,6,7,8 stroke:#E2A33E,stroke-width:2px
     linkStyle 4 stroke:#28a745,stroke-width:2px
     linkStyle 9,10 stroke:#6c757d,stroke-width:2px
 ```
@@ -160,7 +160,7 @@ effective_timeout = max(base_timeout,
 After each subprocess returns its JSON result, the runner validates and deterministically overwrites the eval agent's arithmetic before writing the trace file:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     DIM(["7 Dimension Scores per Turn\ncorrectness · tool_selection · context_retention\ncompleteness · efficiency · personality · error_recovery"]) -->|"weighted sum\n(_SCORE_WEIGHTS)"| PT(["Per-Turn Score\n(0–10)"])
 
@@ -174,15 +174,15 @@ flowchart TD
     FAIL -->|"capped at 5.99\nbefore averaging"| AVG
 
     style DIM fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
-    style PT fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style SS fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style PT fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
+    style SS fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
     style RULES fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
     style PASS fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
     style FAIL fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
     style AVG fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
 
-    linkStyle 0,1 stroke:#ED1C24,stroke-width:2px
-    linkStyle 2,3,4 stroke:#F4484D,stroke-width:2px
+    linkStyle 0,1 stroke:#E2A33E,stroke-width:2px
+    linkStyle 2,3,4 stroke:#EFC480,stroke-width:2px
     linkStyle 5 stroke:#28a745,stroke-width:2px
     linkStyle 6 stroke:#6c757d,stroke-width:2px
 ```
@@ -204,7 +204,7 @@ The recomputation applies in three passes:
 When `--fix` is passed, the runner repeats a diagnose-repair-retest cycle:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A(["Phase A · Initial Eval\nall scenarios"]) --> CHK{"judged_pass_rate\n≥ target?\nno failures?"}
     CHK -->|"yes"| DONE(["Done"])
@@ -213,14 +213,14 @@ flowchart TD
     C --> D(["Phase D · Compare\nbaseline vs current\nper-scenario delta"])
     D --> CHK
 
-    style A fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style A fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
     style CHK fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
     style DONE fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
-    style B fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style C fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
-    style D fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style B fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style C fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
+    style D fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
 
-    linkStyle 0,2,3,4,5 stroke:#ED1C24,stroke-width:2px
+    linkStyle 0,2,3,4,5 stroke:#E2A33E,stroke-width:2px
     linkStyle 1 stroke:#28a745,stroke-width:2px
 ```
 

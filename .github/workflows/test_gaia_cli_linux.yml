@@ -135,9 +135,30 @@ jobs:
             exit 1
           fi
 
-          # Pull the model now that server is running
+          # Pull the model now that server is running. Retry with EXPONENTIAL
+          # backoff: HF can transiently 429-throttle CI runners even with auth.
+          # Decent delays (60s → 120s → 240s) give the rate-limit window time to
+          # clear. Explicit retry that still fails LOUDLY once spent.
           echo "=== Pulling Qwen3-0.6B-GGUF model ==="
-          lemonade-server-dev pull Qwen3-0.6B-GGUF
+          pull_ok=false
+          max_attempts=4   # 1 initial + 3 retries
+          delay=60
+          for attempt in $(seq 1 $max_attempts); do
+            if lemonade-server-dev pull Qwen3-0.6B-GGUF; then
+              pull_ok=true
+              break
+            fi
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              echo "::warning::model pull attempt ${attempt}/${max_attempts} failed (likely a transient HF 429) — retrying in ${delay}s"
+              sleep "$delay"
+              delay=$((delay * 2))
+            fi
+          done
+          if [ "$pull_ok" != "true" ]; then
+            echo "::error::model pull failed after ${max_attempts} attempts (Qwen3-0.6B-GGUF)"
+            cat lemonade.log 2>/dev/null || true
+            exit 1
+          fi
 
           # List available models for debugging
           echo "=== Listing Available Models ==="

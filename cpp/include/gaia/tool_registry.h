@@ -72,6 +72,13 @@ public:
     /// @return Tool execution result as JSON.
     json executeTool(const std::string& name, const json& args);
 
+    /// Validate tool arguments against declared ToolParameter schemas.
+    /// Called automatically by executeTool() when no custom validateArgs is set.
+    /// Checks: required params present, types match ToolParamType, no unknown params.
+    /// @return empty string on success, error description on failure.
+    static std::string validateArgsAgainstSchema(const std::vector<ToolParameter>& params,
+                                                 const json& args);
+
     // ---- Enable / disable ----
 
     /// Enable or disable a tool by name.

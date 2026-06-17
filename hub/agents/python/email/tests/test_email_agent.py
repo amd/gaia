@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Smoke tests for the standalone gaia-agent-email package."""
 
+import pytest
+
 
 def test_build_registration_shape():
     import gaia_agent_email as m
@@ -33,7 +35,9 @@ def test_required_connectors_match_agent():
     from gaia_agent_email.agent import EmailTriageAgent
 
     reg = m.build_registration()
-    built = [(c.connector_id, tuple(c.scopes), c.reason) for c in reg.required_connections]
+    built = [
+        (c.connector_id, tuple(c.scopes), c.reason) for c in reg.required_connections
+    ]
     expected = [
         (c.connector_id, tuple(c.scopes), c.reason)
         for c in EmailTriageAgent.REQUIRED_CONNECTORS
@@ -93,7 +97,7 @@ def _make_single_request():
     return EmailTriageRequest(payload=payload)
 
 
-def _fake_chat(category="actionable", summary="Alice invites Bob to lunch."):
+def _fake_chat(category="NEEDS_RESPONSE", summary="Alice invites Bob to lunch."):
     """Minimal stub that makes classify_email_llm and summarize_email_llm succeed."""
     import json
     import types
@@ -119,11 +123,11 @@ def test_triage_service_uses_llm():
 
     service = EmailTriageService()
     request = _make_single_request()
-    chat = _fake_chat(category="actionable", summary="Alice invites Bob to lunch.")
+    chat = _fake_chat(category="NEEDS_RESPONSE", summary="Alice invites Bob to lunch.")
 
     response = service.triage_request(request, chat=chat)
 
-    assert response.result.category == "actionable"
+    assert response.result.category == "NEEDS_RESPONSE"
     assert "Alice" in response.result.summary or "lunch" in response.result.summary
     assert response.result.message_id == "msg-001"
 
@@ -184,7 +188,7 @@ def test_thread_newest_first():
             captured["body"] = body
             return super()._build_result_llm(body=body, **kwargs)
 
-    chat = _fake_chat(category="actionable", summary="Project update thread.")
+    chat = _fake_chat(category="NEEDS_RESPONSE", summary="Project update thread.")
     service = _CapturingService()
     response = service.triage_request(request, chat=chat)
 
@@ -194,3 +198,34 @@ def test_thread_newest_first():
     new_pos = captured["body"].index("NEW MESSAGE")
     old_pos = captured["body"].index("OLD MESSAGE")
     assert new_pos < old_pos, "thread body must be newest-first"
+
+
+def test_triage_fails_fast_when_lemonade_unreachable(monkeypatch):
+    """Unreachable Lemonade → prompt LLMTriageError, not a ~30s hang (#1677)."""
+    import requests
+
+    from gaia_agent_email.api_routes import EmailTriageService
+    from gaia_agent_email.tools.llm_triage import LLMTriageError
+
+    captured = {}
+
+    def _fake_get(url, *args, **kwargs):
+        captured["url"] = url
+        captured["timeout"] = kwargs.get("timeout")
+        raise requests.exceptions.ConnectionError("Connection refused")
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    service = EmailTriageService()
+    request = _make_single_request()
+
+    # No chat passed → _build_llm_chat runs the reachability probe.
+    with pytest.raises(LLMTriageError) as exc:
+        service.triage_request(request)
+
+    assert "not reachable" in str(exc.value)
+    assert captured["url"].endswith("/health")
+    # The probe must use a short *connect* timeout (a tuple), not the 900s
+    # scalar the real chat path uses.
+    assert isinstance(captured["timeout"], tuple)
+    assert captured["timeout"][0] <= 5

@@ -49,6 +49,30 @@ _GITHUB = ConnectorSpec(
     ),
 )
 
+_TAVILY = ConnectorSpec(
+    id="mcp-tavily",
+    display_name="Tavily",
+    icon="🛜",
+    category="dev-tools",
+    tier=1,
+    type="mcp_server",
+    description="Web search and content extraction for agents through the Tavily API.",
+    docs_url="https://amd-gaia.ai/docs/connectors/tavily",
+    mcp_command="npx",
+    mcp_args=("-y", "tavily-mcp@latest"),
+    mcp_env_keys=("TAVILY_API_KEY",),
+    config_schema=(
+        ConfigField(
+            key="TAVILY_API_KEY",
+            label="Tavily API Key",
+            kind="secret",
+            placeholder="tvly-…",
+            help_md="Get an API key from your [Tavily dashboard](https://app.tavily.com/).",
+            secret=True,
+        ),
+    ),
+)
+
 _MEMORY = ConnectorSpec(
     id="mcp-memory",
     display_name="Memory",
@@ -79,6 +103,7 @@ _GIT = ConnectorSpec(
 
 _ALL_SPECS = (
     _GITHUB,
+    _TAVILY,
     _MEMORY,
     _GIT,
 )

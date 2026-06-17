@@ -6,9 +6,9 @@ These tests assert the *generator contract* independently of any live
 service:
 
 - The corpus is exactly the reconciled size (220 messages).
-- Every ground-truth label is one of the four v0.20 taxonomy categories
-  (urgent / actionable / informational / "low priority") — exact strings,
-  matching ``gaia_agent_email.tools.triage_heuristics.ALL_CATEGORIES``.
+- Every ground-truth label is one of the five schema-2.0 taxonomy categories
+  (URGENT / NEEDS_RESPONSE / FYI / PROMOTIONAL / PERSONAL, #1615) — exact
+  strings, matching ``gaia_agent_email.tools.triage_heuristics.ALL_CATEGORIES``.
 - The realized per-category counts sum to the total (no message is
   unlabelled or double-counted).
 - Every ground-truth entry is schema-well-formed (required fields present
@@ -73,12 +73,12 @@ def test_corpus_has_reconciled_total(generated_corpus):
 
 
 def test_every_label_is_valid_taxonomy(generated_corpus):
-    """AC3/test-AC: every category is one of the 4 v0.20 buckets, exact
-    string — matching the production ``ALL_CATEGORIES``.
+    """AC3/test-AC: every category is one of the 5 schema-2.0 buckets (#1615),
+    exact string — matching the production ``ALL_CATEGORIES``.
     """
     _, ground_truth = generated_corpus
     valid = set(ALL_CATEGORIES)
-    assert valid == {"urgent", "actionable", "informational", "low priority"}
+    assert valid == {"URGENT", "NEEDS_RESPONSE", "FYI", "PROMOTIONAL", "PERSONAL"}
     for msg_id, meta in _labels(ground_truth).items():
         assert (
             meta["category"] in valid
@@ -86,7 +86,7 @@ def test_every_label_is_valid_taxonomy(generated_corpus):
 
 
 def test_category_counts_sum_to_total(generated_corpus):
-    """The four taxonomy buckets account for every message (no orphan,
+    """The taxonomy buckets account for every message (no orphan,
     no double-count).
     """
     _, ground_truth = generated_corpus
@@ -95,10 +95,18 @@ def test_category_counts_sum_to_total(generated_corpus):
     for meta in labels.values():
         counts[meta["category"]] += 1
     assert sum(counts.values()) == len(labels) == 220
-    # Every bucket is non-empty — a degenerate split (all one category)
-    # would make per-category accuracy meaningless.
-    for cat, n in counts.items():
-        assert n > 0, f"category {cat!r} has no messages"
+    # Non-degenerate split: the synthetic corpus must spread across the
+    # priority/content buckets so per-category accuracy stays meaningful.
+    # PERSONAL is not yet represented in the synthetic corpus — populating it
+    # and re-recording the categorization baseline is eval-owned (#1438); until
+    # then we require the four generated buckets to be non-empty.
+    populated = {c for c, n in counts.items() if n > 0}
+    assert populated >= {
+        "URGENT",
+        "NEEDS_RESPONSE",
+        "FYI",
+        "PROMOTIONAL",
+    }, f"degenerate corpus split: {counts}"
 
 
 def test_ground_truth_schema_well_formed(generated_corpus):

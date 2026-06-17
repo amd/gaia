@@ -136,17 +136,13 @@ class TestReadTools:
             assert "is_phishing" in r
             assert "confident" in r
 
-    def test_triage_emits_848_taxonomy_only(self, fake_gmail):
+    def test_triage_emits_schema2_taxonomy_only(self, fake_gmail):
         out = triage_inbox_impl(fake_gmail, max_messages=50)
-        legacy = {"URGENT", "NEEDS_RESPONSE", "FYI", "PROMOTIONAL", "PERSONAL"}
+        old_taxonomy = {"urgent", "actionable", "informational", "low priority"}
+        new_taxonomy = {"URGENT", "NEEDS_RESPONSE", "FYI", "PROMOTIONAL", "PERSONAL"}
         for r in out["results"]:
-            assert r["category"] not in legacy
-            assert r["category"] in (
-                "urgent",
-                "actionable",
-                "informational",
-                "low priority",
-            )
+            assert r["category"] not in old_taxonomy
+            assert r["category"] in new_taxonomy
 
     def test_triage_flags_phishing_payload(self, fake_gmail):
         out = triage_inbox_impl(fake_gmail, max_messages=50)
@@ -328,7 +324,7 @@ class TestPreScanInbox:
         prefs = {
             "priority_senders": set(),
             "low_priority_senders": set(),
-            "category_defaults": {"informational": "archive"},
+            "category_defaults": {"FYI": "archive"},
         }
         out = pre_scan_inbox_impl(
             fake_gmail, max_messages=50, session_preferences=prefs
@@ -347,7 +343,7 @@ class TestPreScanInbox:
         prefs = {
             "priority_senders": {"alice@example.com", "bob@example.com"},
             "low_priority_senders": {"news@example.com"},
-            "category_defaults": {"low priority": "archive"},
+            "category_defaults": {"PROMOTIONAL": "archive"},
         }
         out = pre_scan_inbox_impl(
             fake_gmail, max_messages=50, session_preferences=prefs
@@ -359,7 +355,7 @@ class TestPreScanInbox:
             prefs["low_priority_senders"]
         )
         assert out["preferences_applied"]["category_defaults"] == {
-            "low priority": "archive"
+            "PROMOTIONAL": "archive"
         }
 
 
@@ -468,22 +464,13 @@ class TestPreferenceTools:
     def test_set_category_default_round_trip(self, fake_gmail, fake_calendar, tmp_path):
         agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
         try:
-            ok = json.loads(
-                self._tool("set_category_default")("informational", "archive")
-            )
+            ok = json.loads(self._tool("set_category_default")("FYI", "archive"))
             assert ok["ok"] is True
-            assert (
-                agent._session_preferences["category_defaults"]["informational"]
-                == "archive"
-            )
+            assert agent._session_preferences["category_defaults"]["FYI"] == "archive"
             # Setting it back to "keep" clears the override.
-            keep = json.loads(
-                self._tool("set_category_default")("informational", "keep")
-            )
+            keep = json.loads(self._tool("set_category_default")("FYI", "keep"))
             assert keep["ok"] is True
-            assert (
-                "informational" not in agent._session_preferences["category_defaults"]
-            )
+            assert "FYI" not in agent._session_preferences["category_defaults"]
         finally:
             agent.close_db()
 
@@ -506,9 +493,7 @@ class TestPreferenceTools:
     ):
         agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
         try:
-            result = json.loads(
-                self._tool("set_category_default")("informational", "delete")
-            )
+            result = json.loads(self._tool("set_category_default")("FYI", "delete"))
             assert result["ok"] is False
             assert "action" in result["error"].lower()
             assert not agent._session_preferences["category_defaults"]
@@ -522,7 +507,7 @@ class TestPreferenceTools:
         try:
             self._tool("set_priority_sender")("alice@example.com")
             self._tool("set_low_priority_sender")("news@example.com")
-            self._tool("set_category_default")("informational", "archive")
+            self._tool("set_category_default")("FYI", "archive")
             result = json.loads(self._tool("clear_session_preferences")())
             assert result["ok"] is True
             assert agent._session_preferences["priority_senders"] == set()

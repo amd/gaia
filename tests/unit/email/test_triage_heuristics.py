@@ -10,9 +10,9 @@ critical behaviour that this test pins down:
    (``CATEGORY_PROMOTIONS``, ``SPAM``, ...), NOT on the human label
    names that PR #916 originally used (``"Promotions"``, ``"Spam"``,
    ...).
-2. The heuristic emits #848's four-bucket taxonomy
-   (``urgent / actionable / informational / low priority``), NOT
-   PR #916's five-bucket scheme (``URGENT/NEEDS_RESPONSE/FYI/...``).
+2. The heuristic emits the schema-2.0 five-bucket taxonomy (#1615)
+   (``URGENT / NEEDS_RESPONSE / FYI / PROMOTIONAL / PERSONAL``), NOT
+   the retired #848 four-bucket scheme (``urgent/actionable/...``).
 3. Spam/phishing are SEPARATE booleans, not categories.
 4. ``confident=False`` results MUST escalate to the LLM — the heuristic
    must never silently absorb an ambiguous case.
@@ -31,10 +31,12 @@ import pytest  # noqa: E402
 pytest.importorskip("gaia_agent_email")  # noqa: E402
 from gaia_agent_email.tools.triage_heuristics import (
     ALL_CATEGORIES,
-    CATEGORY_ACTIONABLE,
-    CATEGORY_INFORMATIONAL,
-    CATEGORY_LOW_PRIORITY,
+    CATEGORY_FYI,
+    CATEGORY_NEEDS_RESPONSE,
+    CATEGORY_PERSONAL,
+    CATEGORY_PROMOTIONAL,
     CATEGORY_URGENT,
+    LABEL_CATEGORY_PERSONAL,
     LABEL_CATEGORY_PROMOTIONS,
     LABEL_CATEGORY_SOCIAL,
     LABEL_CATEGORY_UPDATES,
@@ -43,6 +45,7 @@ from gaia_agent_email.tools.triage_heuristics import (
     LABEL_SPAM,
     LABEL_STARRED,
     classify_category_heuristic,
+    default_action_for,
     detect_phishing,
     group_by_category,
 )
@@ -61,7 +64,7 @@ class TestSystemLabelIDs:
             sender="winner@scam.example",
             label_ids=[LABEL_SPAM],
         )
-        assert result.category == CATEGORY_LOW_PRIORITY
+        assert result.category == CATEGORY_PROMOTIONAL
         assert result.is_spam is True
         assert result.confident is True
         assert "SPAM" in result.reason
@@ -72,7 +75,7 @@ class TestSystemLabelIDs:
             sender="store@example.com",
             label_ids=[LABEL_INBOX, LABEL_CATEGORY_PROMOTIONS],
         )
-        assert result.category == CATEGORY_LOW_PRIORITY
+        assert result.category == CATEGORY_PROMOTIONAL
         assert result.is_spam is False
         assert result.confident is True
         assert "CATEGORY_PROMOTIONS" in result.reason
@@ -83,7 +86,7 @@ class TestSystemLabelIDs:
             sender="notify@social-network.example",
             label_ids=[LABEL_INBOX, LABEL_CATEGORY_SOCIAL],
         )
-        assert result.category == CATEGORY_LOW_PRIORITY
+        assert result.category == CATEGORY_PROMOTIONAL
         assert result.confident is True
 
     def test_updates_label_marks_informational(self):
@@ -92,7 +95,7 @@ class TestSystemLabelIDs:
             sender="orders@store.example",
             label_ids=[LABEL_INBOX, LABEL_CATEGORY_UPDATES],
         )
-        assert result.category == CATEGORY_INFORMATIONAL
+        assert result.category == CATEGORY_FYI
         assert result.confident is True
         assert "CATEGORY_UPDATES" in result.reason
 
@@ -135,35 +138,37 @@ class TestSystemLabelIDs:
 
 
 class TestTaxonomy:
-    """Categories MUST be #848's four-bucket scheme."""
+    """Categories MUST be the schema-2.0 five-bucket scheme (#1615)."""
 
-    def test_categories_are_exactly_the_four_we_expect(self):
+    def test_categories_are_exactly_the_five_we_expect(self):
         assert set(ALL_CATEGORIES) == {
-            "urgent",
-            "actionable",
-            "informational",
-            "low priority",
+            "URGENT",
+            "NEEDS_RESPONSE",
+            "FYI",
+            "PROMOTIONAL",
+            "PERSONAL",
         }
 
     @pytest.mark.parametrize(
         "label_ids,expected",
         [
-            ([LABEL_SPAM], CATEGORY_LOW_PRIORITY),
-            ([LABEL_CATEGORY_PROMOTIONS], CATEGORY_LOW_PRIORITY),
-            ([LABEL_CATEGORY_SOCIAL], CATEGORY_LOW_PRIORITY),
-            ([LABEL_CATEGORY_UPDATES], CATEGORY_INFORMATIONAL),
+            ([LABEL_SPAM], CATEGORY_PROMOTIONAL),
+            ([LABEL_CATEGORY_PROMOTIONS], CATEGORY_PROMOTIONAL),
+            ([LABEL_CATEGORY_SOCIAL], CATEGORY_PROMOTIONAL),
+            ([LABEL_CATEGORY_UPDATES], CATEGORY_FYI),
+            ([LABEL_CATEGORY_PERSONAL], CATEGORY_PERSONAL),
         ],
     )
-    def test_emitted_category_is_one_of_the_four(self, label_ids, expected):
+    def test_emitted_category_is_one_of_the_five(self, label_ids, expected):
         result = classify_category_heuristic(
             subject="x", sender="x@example.com", label_ids=label_ids
         )
         assert result.category == expected
         assert result.category in ALL_CATEGORIES
 
-    def test_pr916_category_strings_are_NOT_emitted(self):
-        """``URGENT/NEEDS_RESPONSE/FYI/PROMOTIONAL/PERSONAL`` must never appear."""
-        legacy = {"URGENT", "NEEDS_RESPONSE", "FYI", "PROMOTIONAL", "PERSONAL"}
+    def test_schema_2_category_strings_are_emitted(self):
+        """Schema 2.0 taxonomy (URGENT/NEEDS_RESPONSE/FYI/PROMOTIONAL/PERSONAL) must be emitted."""
+        new_taxonomy = {"URGENT", "NEEDS_RESPONSE", "FYI", "PROMOTIONAL", "PERSONAL"}
         for label in [
             [LABEL_SPAM],
             [LABEL_CATEGORY_PROMOTIONS],
@@ -173,7 +178,7 @@ class TestTaxonomy:
             result = classify_category_heuristic(
                 subject="x", sender="x@example.com", label_ids=label
             )
-            assert result.category not in legacy
+            assert result.category in new_taxonomy
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +243,7 @@ class TestEscalation:
             label_ids=[LABEL_INBOX, LABEL_IMPORTANT],
         )
         assert result.confident is False  # LLM still has the final say
-        assert result.category == CATEGORY_ACTIONABLE
+        assert result.category == CATEGORY_NEEDS_RESPONSE
         assert LABEL_IMPORTANT in result.matched_label_ids
 
     def test_starred_only_also_escalates(self):
@@ -258,31 +263,31 @@ class TestGroupByCategory:
     def test_basic_bucketing(self):
         items = [
             {"id": "m1", "category": CATEGORY_URGENT},
-            {"id": "m2", "category": CATEGORY_ACTIONABLE},
-            {"id": "m3", "category": CATEGORY_INFORMATIONAL},
-            {"id": "m4", "category": CATEGORY_LOW_PRIORITY},
-            {"id": "m5", "category": CATEGORY_LOW_PRIORITY},
+            {"id": "m2", "category": CATEGORY_NEEDS_RESPONSE},
+            {"id": "m3", "category": CATEGORY_FYI},
+            {"id": "m4", "category": CATEGORY_PROMOTIONAL},
+            {"id": "m5", "category": CATEGORY_PROMOTIONAL},
         ]
         out = group_by_category(items)
         assert out["groups"][CATEGORY_URGENT] == ["m1"]
-        assert out["groups"][CATEGORY_ACTIONABLE] == ["m2"]
-        assert out["groups"][CATEGORY_INFORMATIONAL] == ["m3"]
-        assert out["groups"][CATEGORY_LOW_PRIORITY] == ["m4", "m5"]
+        assert out["groups"][CATEGORY_NEEDS_RESPONSE] == ["m2"]
+        assert out["groups"][CATEGORY_FYI] == ["m3"]
+        assert out["groups"][CATEGORY_PROMOTIONAL] == ["m4", "m5"]
         assert out["total"] == 5
 
     def test_spam_and_phishing_are_separate_lists(self):
         items = [
-            {"id": "m1", "category": CATEGORY_LOW_PRIORITY, "is_spam": True},
-            {"id": "m2", "category": CATEGORY_INFORMATIONAL, "is_phishing": True},
-            {"id": "m3", "category": CATEGORY_LOW_PRIORITY},
+            {"id": "m1", "category": CATEGORY_PROMOTIONAL, "is_spam": True},
+            {"id": "m2", "category": CATEGORY_FYI, "is_phishing": True},
+            {"id": "m3", "category": CATEGORY_PROMOTIONAL},
         ]
         out = group_by_category(items)
         assert "m1" in out["spam"]
         assert "m2" in out["phishing"]
         # Spam/phishing items still appear in their categories — the
         # buckets are AND-views, not exclusive.
-        assert "m1" in out["groups"][CATEGORY_LOW_PRIORITY]
-        assert "m2" in out["groups"][CATEGORY_INFORMATIONAL]
+        assert "m1" in out["groups"][CATEGORY_PROMOTIONAL]
+        assert "m2" in out["groups"][CATEGORY_FYI]
 
     def test_missing_id_skipped(self):
         items = [{"category": CATEGORY_URGENT}]  # no id
@@ -350,7 +355,7 @@ class TestAutomatedSenderUrgentSubjectEscalation:
         )
         # A plain passing-build message has no urgency keywords; the heuristic
         # CAN commit confidently to informational here.
-        assert result.category == CATEGORY_INFORMATIONAL
+        assert result.category == CATEGORY_FYI
         assert result.confident is True
 
     def test_incident_prod_down_from_alerts_escalates(self):
@@ -394,7 +399,7 @@ class TestNewsletterKeywordFalsePositive:
         # requirement is: a human-sender company update with 'newsletter' in
         # its subject MUST NOT be confidently killed as low-priority by the
         # newsletter keyword alone.
-        if result.confident and result.category == CATEGORY_LOW_PRIORITY:
+        if result.confident and result.category == CATEGORY_PROMOTIONAL:
             assert "newsletter" not in result.reason.lower(), (
                 "'newsletter' keyword should not confidently kill a company-sent "
                 f"digest: {result!r}"
@@ -408,7 +413,7 @@ class TestNewsletterKeywordFalsePositive:
             label_ids=["INBOX", LABEL_CATEGORY_PROMOTIONS],
         )
         # CATEGORY_PROMOTIONS label guarantees low priority regardless of subject.
-        assert result.category == CATEGORY_LOW_PRIORITY
+        assert result.category == CATEGORY_PROMOTIONAL
         assert result.confident is True
 
 
@@ -524,3 +529,31 @@ class TestDetectPhishingBodyChannel:
             body="Hackers have your credentials. Transfer to a protected "
             "account immediately.",
         )
+
+
+# ---------------------------------------------------------------------------
+# default_action_for helper (schema 2.0, #1615)
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultActionFor:
+    """``default_action_for`` derives suggested_action from the category."""
+
+    def test_urgent_suggests_reply(self):
+        assert default_action_for("URGENT") == "reply"
+
+    def test_needs_response_suggests_reply(self):
+        assert default_action_for("NEEDS_RESPONSE") == "reply"
+
+    def test_promotional_suggests_archive(self):
+        assert default_action_for("PROMOTIONAL") == "archive"
+
+    def test_fyi_suggests_none(self):
+        assert default_action_for("FYI") == "none"
+
+    def test_personal_suggests_none(self):
+        assert default_action_for("PERSONAL") == "none"
+
+    def test_unknown_category_suggests_none(self):
+        # Graceful fallback — unknown input yields "none", not an exception.
+        assert default_action_for("BOGUS_CATEGORY") == "none"

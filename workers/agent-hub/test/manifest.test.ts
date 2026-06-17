@@ -46,6 +46,74 @@ describe("parseManifest", () => {
     const yaml = sampleManifest().replace("win-x64, linux-x64, darwin-arm64", "win-x64, sparc");
     expect(() => parseManifest(yaml)).toThrow(/unknown platform/);
   });
+
+  it("carries tools_count and defaults it to 0 when absent", () => {
+    expect(parseManifest(sampleManifest({ tools_count: "9" })).tools_count).toBe(9);
+
+    const noToolsCount = sampleManifest()
+      .split("\n")
+      .filter((l) => !l.startsWith("tools_count:"))
+      .join("\n");
+    expect(parseManifest(noToolsCount).tools_count).toBe(0);
+  });
+
+  it.each([
+    ["negative tools_count", "tools_count: -1"],
+    ["non-integer tools_count", "tools_count: 1.5"],
+    ["non-numeric tools_count", "tools_count: lots"],
+  ])("rejects %s", (_label, line) => {
+    const yaml = sampleManifest().replace(/^tools_count:.*$/m, line);
+    expect(() => parseManifest(yaml)).toThrow(/tools_count must be an integer/);
+  });
+
+  it("carries permissions and defaults to [] when absent", () => {
+    const yaml = sampleManifest() + "permissions: [filesystem:read, network:none]\n";
+    expect(parseManifest(yaml).permissions).toEqual(["filesystem:read", "network:none"]);
+    expect(parseManifest(sampleManifest()).permissions).toEqual([]);
+  });
+
+  it("rejects non-list permissions", () => {
+    const yaml = sampleManifest() + "permissions: everything\n";
+    expect(() => parseManifest(yaml)).toThrow(/permissions must be a list of strings/);
+  });
+
+  it("carries deprecation_message and leaves it undefined when absent", () => {
+    const yaml = sampleManifest() + 'deprecation_message: "Use chat-v2 instead."\n';
+    expect(parseManifest(yaml).deprecation_message).toBe("Use chat-v2 instead.");
+    expect(parseManifest(sampleManifest()).deprecation_message).toBeUndefined();
+  });
+
+  it("fully populates requirements with defaults for omitted fields", () => {
+    const m = parseManifest(sampleManifest());
+    expect(m.requirements).toEqual({
+      platforms: ["win-x64", "linux-x64", "darwin-arm64"],
+      min_memory_gb: 8,
+      min_disk_gb: 0,
+      min_context_size: 0,
+      npu: false,
+      gpu_vram_gb: 0,
+    });
+  });
+
+  it("fully populates requirements when the block is absent entirely", () => {
+    const yaml = [
+      "id: mini",
+      "name: Mini",
+      "version: 1.0.0",
+      "description: x",
+      "author: AMD",
+      "license: MIT",
+      "language: python",
+    ].join("\n");
+    expect(parseManifest(yaml).requirements).toEqual({
+      platforms: [],
+      min_memory_gb: 0,
+      min_disk_gb: 0,
+      min_context_size: 0,
+      npu: false,
+      gpu_vram_gb: 0,
+    });
+  });
 });
 
 describe("compareSemver", () => {

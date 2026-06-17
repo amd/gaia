@@ -48,12 +48,10 @@ import hmac
 import re
 import secrets
 import threading
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, ConfigDict, Field
-
 from gaia_agent_email.contract import (
     ActionItem,
     DraftReply,
@@ -68,7 +66,13 @@ from gaia_agent_email.contract import (
 )
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
-from gaia_agent_email.tools.triage_heuristics import classify_category_heuristic
+from gaia_agent_email.tools.triage_heuristics import (
+    classify_category_heuristic,
+    default_action_for,
+)
+from gaia_agent_email.version import AGENT_VERSION, API_VERSION
+from pydantic import BaseModel, ConfigDict, Field
+
 from gaia.connectors.api import connected_mailbox_providers
 from gaia.logger import get_logger
 
@@ -114,6 +118,14 @@ _DUE_HINT_RE = re.compile(
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _MAX_SUMMARY_CHARS = 300
+
+# Fast pre-flight timeouts for the "is Lemonade even up?" probe (#1677). The
+# real chat path uses a 900s scalar timeout — correct for long generation, but
+# it also governs the TCP connect, so an unreachable server blocks on the OS
+# SYN timeout (~30s) before erroring. A short connect timeout turns "server
+# down" into a prompt 502 instead of a 30s hang.
+_LEMONADE_PROBE_CONNECT_TIMEOUT = 2.0
+_LEMONADE_PROBE_READ_TIMEOUT = 3.0
 
 
 def _split_sentences(text: str) -> List[str]:
@@ -170,10 +182,15 @@ class EmailTriageService:
         cloud LLM — no silent fallback to heuristic.
         """
         from gaia_agent_email.config import EmailAgentConfig
+
         from gaia.chat.sdk import AgentConfig, AgentSDK
 
         cfg = EmailAgentConfig(base_url=base_url)
         cfg.validate()
+
+        # Fail fast + loud if Lemonade isn't reachable, before the chat path's
+        # long-timeout connect can stall ~30s (#1677).
+        self._assert_lemonade_reachable(base_url)
 
         sdk_cfg = AgentConfig(
             base_url=base_url,
@@ -185,6 +202,42 @@ class EmailTriageService:
             max_tokens=4096,
         )
         return AgentSDK(sdk_cfg)
+
+    def _assert_lemonade_reachable(self, base_url: Optional[str]) -> None:
+        """Probe Lemonade's /health with a short connect timeout (#1677).
+
+        Raises ``LLMTriageError`` (→ HTTP 502 at the route) when the local
+        server can't be reached, so "Lemonade is down" surfaces as a prompt,
+        actionable failure instead of a ~30s hang. Any HTTP response — even
+        an error status — means the server is up; only a connection/timeout
+        failure counts as unreachable (auth/model errors surface later on the
+        real chat call, where their messages are specific).
+        """
+        import requests
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        if base_url:
+            probe_base = base_url.rstrip("/")
+            if not probe_base.endswith("/api/v1"):
+                probe_base = f"{probe_base}/api/v1"
+        else:
+            _, _, probe_base = _get_lemonade_config()
+        health_url = f"{probe_base}/health"
+
+        try:
+            requests.get(
+                health_url,
+                timeout=(
+                    _LEMONADE_PROBE_CONNECT_TIMEOUT,
+                    _LEMONADE_PROBE_READ_TIMEOUT,
+                ),
+            )
+        except requests.exceptions.RequestException as exc:
+            raise LLMTriageError(
+                f"Local Lemonade Server is not reachable at {probe_base} "
+                f"({type(exc).__name__}: {exc}). Start it with "
+                "`lemonade-server serve` (or run `gaia init`), then retry."
+            ) from exc
 
     def triage_gmail_message(
         self, msg: dict, *, principal_email: str
@@ -297,6 +350,11 @@ class EmailTriageService:
             is_spam=heuristic.is_spam,
             is_phishing=heuristic.is_phishing,
         )
+        suggested_action = (
+            llm_result.get("suggested_action")
+            if not heuristic.confident
+            else default_action_for(category.value)
+        ) or default_action_for(category.value)
         return EmailTriageResult(
             category=category,
             is_spam=heuristic.is_spam,
@@ -305,6 +363,7 @@ class EmailTriageService:
             action_items=action_items,
             draft=draft,
             message_id=message_id,
+            suggested_action=suggested_action,
         )
 
     def _build_result(
@@ -332,6 +391,7 @@ class EmailTriageService:
             is_spam=heuristic.is_spam,
             is_phishing=heuristic.is_phishing,
         )
+        suggested_action = default_action_for(category.value)
         return EmailTriageResult(
             category=category,
             is_spam=heuristic.is_spam,
@@ -340,6 +400,7 @@ class EmailTriageService:
             action_items=action_items,
             draft=draft,
             message_id=message_id,
+            suggested_action=suggested_action,
         )
 
     def _summarize(self, subject: str, body: str) -> str:
@@ -629,6 +690,37 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class HealthResponse(_Strict):
+    """Liveness/readiness probe for the email surface.
+
+    Dependency-light by design: it never touches a live mailbox or the LLM, so a
+    host can confirm the router is mounted and serving before any connector or
+    model is configured.
+    """
+
+    status: Literal["ok"] = Field(
+        default="ok", description="Always 'ok' when the surface is serving."
+    )
+    service: Literal["gaia-agent-email"] = Field(
+        default="gaia-agent-email", description="Stable service identifier."
+    )
+
+
+class VersionResponse(_Strict):
+    """The two version numbers a host negotiates against.
+
+    ``apiVersion`` is the frozen REST/contract version (a contract bump bumps it);
+    ``agentVersion`` is the package build. Both come from
+    ``gaia_agent_email.version`` so this endpoint and the freeze server's
+    ``/version`` report identical values.
+    """
+
+    apiVersion: str = Field(
+        ..., description="REST/contract version (contract.SCHEMA_VERSION)."
+    )
+    agentVersion: str = Field(..., description="Package build version.")
+
+
 class EmailDraftRequest(_Strict):
     """Propose a reply and obtain a confirmation token for it."""
 
@@ -790,6 +882,27 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     return EmailSendResponse(sent_id=sent_id, to=request.to, subject=request.subject)
 
 
+@router.get("/health", response_model=HealthResponse)
+async def email_health() -> HealthResponse:
+    """Report that the email REST surface is mounted and serving.
+
+    Dependency-light: no live mailbox, no LLM. A host uses this for the sidecar
+    readiness handshake and for liveness checks once mounted on the product app.
+    """
+    return HealthResponse()
+
+
+@router.get("/version", response_model=VersionResponse)
+async def email_version() -> VersionResponse:
+    """Report the REST/contract version and the package build version.
+
+    Both values come from ``gaia_agent_email.version`` — the same constants the
+    freeze server's root ``/version`` reads — so the product surface and the
+    frozen binary can never disagree on what contract they speak.
+    """
+    return VersionResponse(apiVersion=API_VERSION, agentVersion=AGENT_VERSION)
+
+
 @router.get("/spec", response_class=HTMLResponse, include_in_schema=False)
 async def email_spec() -> HTMLResponse:
     """Serve the self-contained HTML endpoint spec page.
@@ -812,6 +925,8 @@ __all__ = [
     "EmailDraftResponse",
     "EmailSendRequest",
     "EmailSendResponse",
+    "HealthResponse",
+    "VersionResponse",
     # Shared formatting helpers reused by the MCP surface.
     "_format_address",
     "_payload_fingerprint",

@@ -6,8 +6,9 @@
  *
  * Flow: authenticate -> parse multipart -> validate manifest -> enforce
  * publisher scope -> enforce version immutability -> generate server-side
- * SHA-256 -> store artifact + raw manifest + per-agent manifest -> rebuild
- * index.json. Every guard fails loudly with a structured error.
+ * SHA-256 -> store artifact + raw manifest + optional README + per-agent
+ * manifest -> rebuild index.json. Every guard fails loudly with a structured
+ * error.
  */
 
 import { assertAuthorAllowed, authenticate } from "./auth";
@@ -18,6 +19,7 @@ import {
   artifactKey,
   rawManifestKey,
   readAgentManifest,
+  readmeKey,
   writeAgentManifest,
 } from "./storage";
 import type { ArtifactInfo, Env } from "./types";
@@ -59,7 +61,8 @@ export async function handlePublish(
       415,
       "unsupported_media_type",
       "POST /publish expects multipart/form-data with 'manifest' (gaia-agent.yaml " +
-        "text) and 'artifact' (the wheel or binary file) parts."
+        "text), 'artifact' (the wheel or binary file), and optionally 'readme' " +
+        "(README.md markdown text) parts."
     );
   }
 
@@ -87,6 +90,24 @@ export async function handlePublish(
   }
   const artifactFile = artifactPart as File;
 
+  // Optional README markdown for this version (rendered on the Hub pages).
+  const readmePart = form.get("readme");
+  let readmeText: string | null = null;
+  if (readmePart != null) {
+    readmeText = typeof readmePart === "string" ? readmePart : await (readmePart as Blob).text();
+    // Multipart string fields are CRLF-normalized by the form encoding —
+    // canonicalize to LF so stored READMEs are byte-stable either way.
+    readmeText = readmeText.replace(/\r\n/g, "\n");
+    if (readmeText.trim() === "") {
+      throw new HttpError(
+        400,
+        "invalid_request",
+        "The 'readme' part is empty. Send the README.md markdown text, or omit the " +
+          "part entirely if the agent has no README."
+      );
+    }
+  }
+
   const manifest = parseManifest(manifestText);
   assertAuthorAllowed(publisher, manifest.author);
 
@@ -100,26 +121,20 @@ export async function handlePublish(
     );
   }
 
-  // Publisher scope + version immutability against the existing agent manifest.
+  // Publisher scope (ownership) against the existing agent manifest. Version
+  // immutability is enforced per-artifact below: a version's artifact set is
+  // append-only per distinct filename, so a second platform binary can join an
+  // existing version, but no published filename can ever be overwritten.
   const existing = await readAgentManifest(env.BUCKET, manifest.id);
-  if (existing) {
-    if (existing.author !== manifest.author) {
-      throw new HttpError(
-        403,
-        "forbidden_scope",
-        `Agent '${manifest.id}' is owned by author '${existing.author}'. A publish ` +
-          `with author '${manifest.author}' cannot update it.`
-      );
-    }
-    if (existing.versions[manifest.version]) {
-      throw new HttpError(
-        409,
-        "version_exists",
-        `Version ${manifest.version} of agent '${manifest.id}' is already published. ` +
-          `Published versions are immutable — bump the version in gaia-agent.yaml.`
-      );
-    }
+  if (existing && existing.author !== manifest.author) {
+    throw new HttpError(
+      403,
+      "forbidden_scope",
+      `Agent '${manifest.id}' is owned by author '${existing.author}'. A publish ` +
+        `with author '${manifest.author}' cannot update it.`
+    );
   }
+  const versionExists = Boolean(existing?.versions[manifest.version]);
 
   const bytes = new Uint8Array(await artifactFile.arrayBuffer());
   const limit = maxBytes(env);
@@ -135,13 +150,16 @@ export async function handlePublish(
   }
 
   const key = artifactKey(manifest.id, manifest.version, filename);
-  // Defense in depth: object-level immutability even if the manifest is missing
-  // the version (e.g. a partial prior publish).
+  // Per-filename immutability: a published artifact is never overwritten. A new
+  // platform binary under an existing version uses a distinct filename and is
+  // allowed; re-uploading the same filename is rejected. (Idempotent re-runs of
+  // a release job should treat this 409 as "already published" — success.)
   if (await env.BUCKET.head(key)) {
     throw new HttpError(
       409,
       "version_exists",
-      `Artifact already exists at ${key}. Published versions are immutable.`
+      `Artifact already exists at ${key} and is immutable. To add another ` +
+        `platform binary use a distinct filename; to change this one, bump the version.`
     );
   }
 
@@ -154,14 +172,26 @@ export async function handlePublish(
     content_type: artifactFile.type || "application/octet-stream",
   };
 
-  // Store artifact + the exact raw manifest for this version.
+  // Store the artifact. The raw gaia-agent.yaml is written only on the first
+  // publish of a version so it stays the immutable record of that release; a
+  // later platform binary joining the same version must not rewrite it.
   await env.BUCKET.put(key, bytes, {
     httpMetadata: { contentType: artifact.content_type },
     sha256,
   });
-  await env.BUCKET.put(rawManifestKey(manifest.id, manifest.version), manifestText, {
-    httpMetadata: { contentType: "application/x-yaml; charset=utf-8" },
-  });
+  // The raw gaia-agent.yaml and README are per-version records: write them only
+  // on the first publish of a version so a later platform binary joining the
+  // same version cannot rewrite them.
+  if (!versionExists) {
+    await env.BUCKET.put(rawManifestKey(manifest.id, manifest.version), manifestText, {
+      httpMetadata: { contentType: "application/x-yaml; charset=utf-8" },
+    });
+    if (readmeText != null) {
+      await env.BUCKET.put(readmeKey(manifest.id, manifest.version), readmeText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+  }
 
   const versionEntry = makeVersionEntry(manifest, artifact, publisher.publisher, now.toISOString());
   const updated = upsertVersion(existing, manifest, versionEntry);
@@ -175,6 +205,8 @@ export async function handlePublish(
         id: manifest.id,
         version: manifest.version,
         artifact,
+        // How many artifacts (platforms) now exist under this version.
+        version_artifacts: updated.versions[manifest.version].artifacts.length,
         latest_version: updated.latest_version,
       },
       catalog_agents: index.agents.length,

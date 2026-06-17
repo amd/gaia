@@ -2,25 +2,19 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus, Mail } from 'lucide-react';
+import { Bell, Edit3, Paperclip, Download, Send, Upload, MessageSquare, Square, ArrowDown, Lock, FileText, FolderSearch, CheckCircle2, X, Brain, EyeOff, Bot, ChevronDown, Plus } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { useChatStore } from '../stores/chatStore';
 import { useNotificationStore, ALWAYS_ALLOW_TOOLS_KEY, selectUnreadCount } from '../stores/notificationStore';
-import { useConnectionsStore } from '../stores/connectorsStore';
 import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import { getAgentIcon } from './agentIcons';
 import type { Message, StreamEvent, AgentStep, Attachment, Session, AgentInfo } from '../types';
-import { MAIL_PROVIDERS, type MailProvider } from '../utils/mailProviderDefault';
 
 import './ChatView.css';
 import DashboardProgress from './DashboardProgress';
-
-
-/** Human-readable labels for mail providers. */
-const PROVIDER_LABELS: Record<string, string> = { google: 'Gmail', microsoft: 'Outlook' };
 
 const EMPTY_SUGGESTIONS = [
     'Summarize a document',
@@ -222,58 +216,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     );
     const DisplayedAgentIcon = getAgentIcon(displayedAgent?.icon);
 
-    // Mail-provider picker — only rendered for email sessions.
-    const [mailProviderPickerOpen, setMailProviderPickerOpen] = useState(false);
-    const mailProviderPickerRef = useRef<HTMLDivElement>(null);
-    // Select the stable `connections` reference, then derive — mapping inside the
-    // selector returns a fresh array each render and loops useSyncExternalStore.
-    const connections = useConnectionsStore((s) => s.connections);
-    const connectedMailProviders = useMemo(
-        () =>
-            connections
-                .map((c) => c.provider)
-                .filter((p): p is MailProvider => (MAIL_PROVIDERS as readonly string[]).includes(p)),
-        [connections],
-    );
-    // AC3: the session header shows which mailbox is active.
-    const displayedMailProvider = session?.mail_provider;
-    // The single-provider pill reflects what THIS session triages (the stored
-    // session value), falling back to the sole connected provider when unset.
-    const activeMailbox = displayedMailProvider ?? connectedMailProviders[0];
-
-    // Close mail-provider picker on outside click
-    useEffect(() => {
-        if (!mailProviderPickerOpen) return;
-        const handler = (e: MouseEvent) => {
-            if (mailProviderPickerRef.current && !mailProviderPickerRef.current.contains(e.target as Node)) {
-                setMailProviderPickerOpen(false);
-            }
-        };
-        document.addEventListener('mousedown', handler);
-        return () => document.removeEventListener('mousedown', handler);
-    }, [mailProviderPickerOpen]);
-
-    const handleMailProviderChange = useCallback(async (newProvider: MailProvider) => {
-        setMailProviderPickerOpen(false);
-        if (newProvider === displayedMailProvider) return;
-        const previousProvider = displayedMailProvider;
-        // Store the choice for the next session create (App.tsx handleNewTask reads it).
-        useConnectionsStore.getState().setPendingMailProvider(newProvider);
-        if (messages.length === 0) {
-            // Empty session — update in place (mirrors handleAgentChange pattern).
-            updateSessionInList(sessionId, { mail_provider: newProvider } as Partial<Session>);
-            try {
-                await api.updateSession(sessionId, { mail_provider: newProvider });
-            } catch (err) {
-                log.chat.error('Failed to update mail provider', err);
-                // Roll back optimistic update on failure.
-                updateSessionInList(sessionId, { mail_provider: previousProvider } as Partial<Session>);
-            }
-        }
-        // If messages exist we don't start a new session — the header pill stays
-        // non-interactive once the session has content (same guard as agent change).
-    }, [displayedMailProvider, messages.length, sessionId, updateSessionInList]);
-
     // Close agent picker on outside click
     useEffect(() => {
         if (!agentPickerOpen) return;
@@ -338,7 +280,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
     const toolOccurredRef = useRef(false);
-    const sendMessageRef = useRef<(text?: string) => void>(() => {});
+    const sendMessageRef = useRef<(text?: string, options?: { attach?: boolean }) => void>(() => {});
 
     // ── Streaming chunk buffer ──────────────────────────────────────
     // Buffer SSE chunks in a ref and flush to the store via rAF.
@@ -529,6 +471,12 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // Stop streaming — reads fresh state from store to avoid stale closures
     const handleStop = useCallback(() => {
         log.stream.warn('User stopped generation');
+        // Tell the backend to cancel the run. Since runs now outlive the SSE
+        // connection (#1580), aborting the client alone only detaches us — the
+        // agent would keep generating in the background. The cancel endpoint
+        // sets the handler's cancelled flag so the producer bails at its next
+        // step boundary.
+        api.cancelStream(sessionId).catch(() => { /* best-effort */ });
         if (abortRef.current) {
             abortRef.current.abort();
             abortRef.current = null;
@@ -690,7 +638,13 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     }, []);
 
     // Send message
-    const sendMessage = useCallback(async (overrideText?: string) => {
+    const sendMessage = useCallback(async (overrideText?: string, options?: { attach?: boolean }) => {
+        // attach=true re-subscribes to a run already in flight server-side
+        // (revisiting a backgrounded session, #1580). It reuses the entire
+        // stream-event handling below but skips composing/sending a new turn:
+        // no optimistic user message, no input/attachment handling, and the
+        // controller comes from api.attachToRun instead of api.sendMessageStream.
+        const attach = options?.attach === true;
         const text = (overrideText || input).trim();
         const hasAttachments = attachments.length > 0 && attachments.some(a => a.uploaded);
 
@@ -699,7 +653,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         isNearBottomRef.current = true;
 
         const isInitializing = systemStatus?.init_state === 'initializing';
-        if ((!text && !hasAttachments) || isStreaming || isInitializing) {
+        if (attach) {
+            // Don't double-attach if a stream is already live in this view.
+            if (isStreaming) return;
+        } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
             if (isInitializing) log.chat.debug('Send blocked: system initializing');
@@ -708,43 +665,47 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
         // Build message text with attachment references
         let messageText = text;
-        const uploadedAttachments = attachments.filter(a => a.uploaded && a.serverUrl);
-        if (uploadedAttachments.length > 0) {
-            const attachmentLines = uploadedAttachments.map(a => {
-                if (a.isImage) {
-                    return `![${a.name}](${a.serverUrl})`;
-                }
-                return `[${a.name}](${a.serverUrl})`;
-            }).join('\n');
-            messageText = messageText
-                ? `${messageText}\n\n${attachmentLines}`
-                : attachmentLines;
+        if (!attach) {
+            const uploadedAttachments = attachments.filter(a => a.uploaded && a.serverUrl);
+            if (uploadedAttachments.length > 0) {
+                const attachmentLines = uploadedAttachments.map(a => {
+                    if (a.isImage) {
+                        return `![${a.name}](${a.serverUrl})`;
+                    }
+                    return `[${a.name}](${a.serverUrl})`;
+                }).join('\n');
+                messageText = messageText
+                    ? `${messageText}\n\n${attachmentLines}`
+                    : attachmentLines;
+            }
+
+            log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
+
+            setInput('');
+            if (inputRef.current) {
+                inputRef.current.style.height = 'auto';
+                inputRef.current.focus();
+            }
+
+            // Clear attachments
+            setAttachments(prev => {
+                prev.forEach(a => { if (a.url) URL.revokeObjectURL(a.url); });
+                return [];
+            });
+
+            // Optimistic user message
+            const userMsg: Message = {
+                id: Date.now(),
+                session_id: sessionId,
+                role: 'user',
+                content: messageText,
+                created_at: new Date().toISOString(),
+                rag_sources: null,
+            };
+            addMessage(userMsg);
+        } else {
+            log.chat.info(`Re-attaching to background run for session=${sessionId}`);
         }
-
-        log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
-
-        setInput('');
-        if (inputRef.current) {
-            inputRef.current.style.height = 'auto';
-            inputRef.current.focus();
-        }
-
-        // Clear attachments
-        setAttachments(prev => {
-            prev.forEach(a => { if (a.url) URL.revokeObjectURL(a.url); });
-            return [];
-        });
-
-        // Optimistic user message
-        const userMsg: Message = {
-            id: Date.now(),
-            session_id: sessionId,
-            role: 'user',
-            content: messageText,
-            created_at: new Date().toISOString(),
-            rag_sources: null,
-        };
-        addMessage(userMsg);
 
         // Start streaming
         setStreaming(true);
@@ -761,7 +722,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         let doneHandled = false;
         streamBufferRef.current = '';
 
-        const controller = api.sendMessageStream(sessionId, messageText, {
+        const streamCallbacks: api.StreamCallbacks = {
             onChunk: (event) => {
                 if (isStale()) return; // stop writing after a session switch (#1580)
                 const content = event.content || '';
@@ -1104,7 +1065,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 }, 300);
 
                 // Auto-title on first message
-                if (session && session.title === 'New Task') {
+                // Skip client-side auto-title when re-attaching (no user text in
+                // hand and the run's lifecycle already titles server-side, #1580).
+                if (!attach && session && session.title === 'New Task') {
                     const autoTitle = text.slice(0, 50) + (text.length > 50 ? '...' : '');
                     api.updateSession(sessionId, { title: autoTitle })
                         .then(() => updateSessionInList(sessionId, { title: autoTitle }))
@@ -1171,13 +1134,50 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     .then((data) => useChatStore.getState().setAgents(data.agents || []))
                     .catch(() => { /* non-critical */ });
             },
-        }, undefined, undefined, activeAgentId);
+        };
+
+        const controller = attach
+            ? api.attachToRun(sessionId, streamCallbacks)
+            : api.sendMessageStream(sessionId, messageText, streamCallbacks, undefined, undefined, activeAgentId);
 
         abortRef.current = controller;
     }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId, addNotification, isStale]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
+
+    // Re-attach to an in-flight background run on mount (#1580). When the
+    // user revisits a session whose turn is still running server-side, hook
+    // back into its live stream so progress resumes in the view instead of
+    // sitting static until the run finishes. Once per session mount; the
+    // attach path no-ops if a stream is already live here.
+    const reattachedRef = useRef(false);
+    useEffect(() => {
+        reattachedRef.current = false;
+    }, [sessionId]);
+    useEffect(() => {
+        const attemptAttach = () => {
+            if (reattachedRef.current) return;
+            if (useChatStore.getState().isStreaming) return;
+            reattachedRef.current = true;
+            log.chat.info(`Resuming live view of background run for session=${sessionId}`);
+            sendMessageRef.current(undefined, { attach: true });
+        };
+        // Fast path: the global poll already knows this session is running.
+        if (useChatStore.getState().runningSessionIds.includes(sessionId)) {
+            attemptAttach();
+            return;
+        }
+        // Otherwise confirm once with the backend on mount.
+        let cancelled = false;
+        api.getActiveRuns()
+            .then(({ session_ids }) => {
+                if (cancelled) return;
+                if (session_ids.includes(sessionId)) attemptAttach();
+            })
+            .catch(() => { /* non-critical — sidebar spinner still signals running */ });
+        return () => { cancelled = true; };
+    }, [sessionId]);
 
     // Listen for programmatic message dispatches from rich-content
     // components (currently the EmailPreScanCard's Approve / Reply
@@ -1428,52 +1428,6 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     )}
                 </div>
                 <div className="task-header-right">
-                    {/* Mail-provider selector — only for email sessions. */}
-                    {session?.agent_type === 'email' && connectedMailProviders.length > 0 && (
-                        connectedMailProviders.length === 1 ? (
-                            /* AC3: single connected provider → non-interactive pill */
-                            <span
-                                className="mail-provider-pill"
-                                title={`Mailbox: ${PROVIDER_LABELS[activeMailbox] ?? activeMailbox}`}
-                            >
-                                <Mail size={10} />
-                                {PROVIDER_LABELS[activeMailbox] ?? activeMailbox}
-                            </span>
-                        ) : (
-                            /* AC2: multiple providers → interactive dropdown */
-                            <div className="agent-picker mail-provider-picker" ref={mailProviderPickerRef}>
-                                <button
-                                    className="agent-picker-btn"
-                                    onClick={() => !messages.length && setMailProviderPickerOpen((o) => !o)}
-                                    aria-haspopup="listbox"
-                                    aria-expanded={mailProviderPickerOpen}
-                                    disabled={messages.length > 0}
-                                    title={messages.length > 0 ? 'Mailbox is locked once a session has messages — start a new task to change it' : 'Switch mailbox provider'}
-                                >
-                                    <Mail size={10} />
-                                    {displayedMailProvider
-                                        ? (PROVIDER_LABELS[displayedMailProvider] ?? displayedMailProvider)
-                                        : 'Mailbox'}
-                                    <ChevronDown size={10} />
-                                </button>
-                                {mailProviderPickerOpen && (
-                                    <div className="agent-picker-dropdown" role="listbox">
-                                        {connectedMailProviders.map((p) => (
-                                            <button
-                                                key={p}
-                                                className={`agent-picker-option${displayedMailProvider === p ? ' active' : ''}`}
-                                                role="option"
-                                                aria-selected={displayedMailProvider === p}
-                                                onClick={() => handleMailProviderChange(p)}
-                                            >
-                                                {PROVIDER_LABELS[p] ?? p}
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )
-                    )}
                     {displayedAgent && (
                         <div
                             className="active-agent-indicator"
