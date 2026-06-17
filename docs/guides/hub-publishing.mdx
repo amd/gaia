@@ -1,155 +1,196 @@
 ---
 title: "Publishing Agents to the Hub"
-description: "Step-by-step: build, version, publish, and update a hub-installable GAIA agent."
+description: "A beginner-friendly, step-by-step guide to building, versioning, publishing, and updating a GAIA agent on the Agent Hub."
 icon: "upload"
 ---
 
-Publishing an agent to the **Agent Hub** makes it installable with one command
-(`gaia agent install <id>`) and auto-generates its page on
-[amd-gaia.ai/hub](https://amd-gaia.ai/hub) — the website builds entirely from the
-hub catalog, so a successful publish *is* the website update. This guide walks
-through creating a new publishable agent and updating an existing one.
+## What the Agent Hub is
+
+The **Agent Hub** is GAIA's catalog of installable agents — think of it as an app
+store for agents that run **on your own machine**. Behind the scenes it's a
+storage bucket of published files plus a small web service (the "Worker") that
+serves a catalog file, `index.json`.
+
+Publishing your agent to the Hub does two things:
+
+1. Anyone can install it with one command — `gaia agent install <id>`.
+2. It **auto-creates the agent's page** on
+   [amd-gaia.ai/hub](https://amd-gaia.ai/hub). The website is generated entirely
+   from the Hub's catalog, so **publishing _is_ the website update** — there's no
+   separate web page to write.
+
+This guide takes you from an empty folder to a published agent, and then shows how
+to ship updates. No prior packaging experience assumed.
 
 ## Two ways to publish
 
-There are two paths to get an agent into the Hub. You build the **same package**
-either way (Steps 1–7); only the final publish differs (Step 8).
+To publish to the Hub you normally need a **publish token** — a secret credential
+that proves you're allowed to publish. There are two routes, and they decide
+whether *you* need a token:
 
-1. **Contribute via PR — no publish token needed.** Add your agent package under
-   `hub/agents/python/<id>/` and open a PR to
-   [`amd/gaia`](https://github.com/amd/gaia). CI validates the package
-   (`build_agents.yml` + your `tests/`) and a maintainer reviews the code; once
-   merged, GAIA's release pipeline publishes it using **AMD's** credentials behind
-   an approval gate — **you never handle a publish token.** Best for community
-   authors; the review is what assigns your security tier.
-2. **Direct publish — your own token** _(self-publishing opens later)_. Run
-   `gaia agent publish` from your machine with a Hub token scoped to your `author`,
-   for publishing independently outside the repo. **By design, agents are curated
-   via PR (Path 1) while the hub builds momentum** — open self-publishing unlocks
-   as the ecosystem matures, so early agents are all reviewed and the bar stays
-   high. Tokens are provisioned manually by the maintainers today (primarily
-   AMD/internal).
+1. **Contribute via a Pull Request — no token needed (recommended).** You add your
+   agent's folder under `hub/agents/python/<id>/` and open a PR to
+   [`amd/gaia`](https://github.com/amd/gaia). Automated checks run, a maintainer
+   reviews your code, and after it's merged a maintainer publishes it for you using
+   AMD's credentials. **You never touch a token.** This is the path for community
+   authors, and the review is what earns your agent its trust level (its
+   "security tier").
+2. **Direct publish with your own token.** You run `gaia agent publish` from your
+   own machine. This needs a Hub token scoped to your name. **Self-serve tokens
+   aren't open yet** — by design, agents are curated through the PR route while the
+   Hub builds momentum, so every early agent is reviewed and quality stays high.
+   Self-publishing opens up as the ecosystem matures. Today tokens are handed out
+   manually by the maintainers (mostly AMD-internal).
+
+You build the **exact same package** either way — Steps 1–7 below are identical;
+only the final publish step (Step 8) differs.
 
 <Note>
-The Hub is the **curated** channel — the Worker authorizes each publish against a
-token scoped to the manifest `author` (`workers/agent-hub/src/auth.ts`), and the
-PR path adds human review. **Anyone** can additionally distribute openly via
-**PyPI** / **npm**.
+The Hub is a **curated** channel: the Worker only accepts a publish if the token is
+scoped to the agent's `author`, and the PR route adds human review on top. Separately,
+**anyone** can always distribute their agent openly on **PyPI** or **npm** — the Hub
+is the reviewed channel, not the only one.
 </Note>
+
+## The four parts of an agent package
+
+Every agent you publish is a normal Python package with four pieces. Keep these in
+mind — the steps below fill each one in:
+
+| File | Plain-English purpose |
+|---|---|
+| `gaia-agent.yaml` | The **manifest**: a short description card the Hub reads (id, what it needs, which model). |
+| `pyproject.toml` | **Packaging metadata** — and the one line that lets GAIA *find* your agent after install (the "entry point", explained in Step 3). |
+| `<package>/agent.py` | Your **agent code** — a Python class with a system prompt and tools. |
+| `README.md` | Becomes your agent's **page** on the website. |
 
 ## Prerequisites
 
-- GAIA installed (`gaia -v`). See [Install](/guides/install).
-- A **Hub publish token** (for the R2 Hub) and, optionally, a **PyPI API token**
-  (to also publish to PyPI). See [Authenticate](#step-6-authenticate) below.
-- `build` + `twine` for packaging: `uv pip install "amd-gaia[publish]"`.
+- GAIA installed — check with `gaia -v`. See [Install](/guides/install).
+- Packaging tools (only needed for the direct-publish route): `uv pip install "amd-gaia[publish]"`
+  — this adds `build` (makes the package file) and `twine` (uploads to PyPI).
+- A **Hub token** only if you're using the direct-publish route (Step 8, Path 2).
 
 ---
 
 ## Part A — Create a new publishable agent
 
-### Step 1 — Scaffold the package
+### Step 1 — Generate a starter package
+
+"Scaffolding" means generating a ready-to-edit starter package so you don't write
+the boilerplate by hand:
 
 ```bash
-gaia agent init --language python my-agent
+gaia agent init my-agent --language python
 cd my-agent
 ```
 
-`gaia agent init` generates a package skeleton: a `gaia-agent.yaml` manifest, the
-agent module, a `README.md`, and packaging metadata. Use `--force` to overwrite an
-existing directory, and `--dir <parent>` to scaffold elsewhere.
+This creates a folder with the four parts above already wired together. Flags:
+`--language python|cpp` (default `python`), `--output <dir>` / `-o` to choose where
+it's created (default: current folder), and `--force` to overwrite an existing
+folder.
 
 <Note>
-**Prefer to start from a working example?** The repo ships minimal, heavily
-commented, **copy-pasteable** reference agents — read them in order; each adds one
-concept:
+**Prefer to learn from a working example?** The repo ships tiny, heavily
+commented agents made to be **copy-pasted** — read them in order; each adds exactly
+one new idea:
 
-- [`hub/agents/python/hello-world/`](https://github.com/amd/gaia/tree/main/hub/agents/python/hello-world) — the smallest possible agent (subclass `Agent` + a system prompt; 0 tools).
-- [`word-count/`](https://github.com/amd/gaia/tree/main/hub/agents/python/word-count) — registering one tool with `@tool`.
-- [`doc-search/`](https://github.com/amd/gaia/tree/main/hub/agents/python/doc-search) — composing a framework mixin (`RAGToolsMixin`).
+- [`hello-world/`](https://github.com/amd/gaia/tree/main/hub/agents/python/hello-world) — the smallest agent possible (a system prompt, no tools).
+- [`word-count/`](https://github.com/amd/gaia/tree/main/hub/agents/python/word-count) — adds one tool with the `@tool` decorator.
+- [`doc-search/`](https://github.com/amd/gaia/tree/main/hub/agents/python/doc-search) — reuses a built-in toolset (`RAGToolsMixin`) for document Q&A.
 
-Each has the full publishable layout (manifest + package + README + `tests/` that
-mock the LLM, so they run with no Lemonade server) — see the
+Each is a complete, publishable package (manifest + code + README + tests that fake
+the model, so they run without a model server). See the
 [examples index](https://github.com/amd/gaia/tree/main/hub/agents/python#readme).
-The [email agent](https://github.com/amd/gaia/tree/main/hub/agents/python/email)
-is a full-featured, real-world reference.
+The [email agent](https://github.com/amd/gaia/tree/main/hub/agents/python/email) is
+a full-featured, real-world reference.
 </Note>
 
-### Step 2 — Understand the layout
+### Step 2 — Tour the files
 
 ```
 my-agent/
-├── gaia-agent.yaml        # manifest — the hub reads this (see Step 3)
-├── README.md              # becomes the agent's catalog page body (see Step 5)
-├── pyproject.toml         # Python package metadata (build → wheel)
-└── <package>/             # your agent code
-    ├── __init__.py
-    └── agent.py           # entry_class lives here
+├── gaia-agent.yaml        # the manifest the Hub reads (Step 3)
+├── README.md              # becomes your agent's web page (Step 5)
+├── pyproject.toml         # Python packaging + the GAIA "entry point" (Step 3)
+└── <package>/             # your agent's code, e.g. gaia_agent_my_agent/
+    ├── __init__.py        # exposes build_registration (how GAIA finds the agent)
+    └── agent.py           # your agent class
 ```
 
-### Step 3 — Fill in `gaia-agent.yaml`
+### Step 3 — Fill in the manifest (and understand the entry point)
 
-This is the contract the hub validates and indexes. Authoritative schema:
-[`workers/agent-hub/schemas/manifest.schema.json`](https://github.com/amd/gaia/blob/main/workers/agent-hub/schemas/manifest.schema.json).
-A real, working example is the email agent's
-[`gaia-agent.yaml`](https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia-agent.yaml):
+The **manifest** (`gaia-agent.yaml`) is the description card the Hub stores and
+indexes. Each field below feeds the catalog and your auto-generated page. The
+authoritative list of fields lives in
+[`manifest.schema.json`](https://github.com/amd/gaia/blob/main/workers/agent-hub/schemas/manifest.schema.json);
+a real example is the
+[email agent's manifest](https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia-agent.yaml).
 
 ```yaml
-id: my-agent                 # slug used in hub URLs (/hub/my-agent); [a-z0-9-]
-name: My Agent               # display name
-version: 0.1.0               # SemVer — bump on every publish (immutable, see Step 8)
-description: "One-line summary shown on hub cards"
-author: your-name-or-org     # YOUR developer/org identity — shown on the hub; must match your publish token's scope (Step 6)
+id: my-agent                 # the short name used in URLs (/hub/my-agent); lowercase + hyphens
+name: My Agent               # the display name shown to people
+version: 0.1.0               # the release number (see "Versioning" — once published it can't change)
+description: "One-line summary shown on the hub card"
+author: your-name-or-org     # YOUR identity — shown on the hub; must match your token's scope (Step 6)
 license: MIT
 
-category: productivity       # conversation | development | productivity | integrations | creative | vision
-tags: [example, demo]
-icon: sparkles               # a lucide icon name
-tools_count: 3               # number of @tool functions the agent registers
+category: productivity       # one of: conversation | development | productivity | integrations | creative | vision
+tags: [example, demo]        # free-text keywords for search
+icon: sparkles               # an icon name from lucide.dev
+tools_count: 3               # how many @tool functions your agent registers
 
 language: python             # python | cpp
-min_gaia_version: "0.20.0"   # minimum GAIA the agent needs
-models: [Gemma-4-E4B-it-GGUF]
+min_gaia_version: "0.20.0"   # the oldest GAIA version your agent works on
+models: [Gemma-4-E4B-it-GGUF]  # the model(s) your agent expects
 
 python:
-  entry_module: my_agent     # import path
-  entry_class: MyAgent       # the Agent subclass
-  dependencies:
-    - "amd-gaia>=0.20.0"
+  entry_module: my_agent     # the Python package to import
+  entry_class: MyAgent       # your agent class inside it
 
-requirements:
+requirements:                # what a machine needs to run it (shown as cards on your page)
   min_memory_gb: 8
   platforms: [win-x64, linux-x64, darwin-arm64]
 
-interfaces:                  # which surfaces the agent exposes
-  cli: true
-  pipe: true
-  api_server: false
-  mcp_server: false
+interfaces:                  # the ways your agent can be used (see "Standalone sidecars")
+  cli: true                  # `gaia <id> ...` on the command line
+  pipe: true                 # piping text in/out
+  api_server: false          # served over a local REST API
+  mcp_server: false          # served over MCP (for tools like Claude/IDEs)
 ```
 
 <Note>
-`download_size_bytes` is **computed server-side** — never author it.
-`security_tier` is optional and defaults to **`experimental`**; the `verified` /
-`community` tier is governed by your publisher token + maintainer review, so
-setting it yourself won't grant a higher tier (the reference example agents do set
-it explicitly to `experimental`). `permissions` is optional. The website derives
-the install switcher, platform badges, and requirement / permission / tier cards
-from these manifest fields automatically.
+A few fields are **not** yours to set: `download_size_bytes` is measured by the
+server when you publish. `security_tier` defaults to `experimental` and only
+becomes `community` / `verified` through review — setting it yourself does nothing
+(the example agents set `experimental` just to be explicit). `permissions` is
+optional. The website turns all of these into the install switcher, platform
+badges, and requirement/permission/tier cards automatically — you don't build any
+of that.
 </Note>
 
-**Authors.** `author` is your public identity on the hub — it's shown on your
-agent's card and page. Any developer or org can publish under their own `author`;
-the value must match the scope of your publish token (Step 6), so an author can't
-be spoofed. AMD-reviewed agents carry the `verified` tier; third-party agents
-publish at `community` / `experimental`. (Self-serve token issuance for
-independent publishing is **coming soon**; today, community authors publish via
-Path 1 — the PR route.)
+**How GAIA actually finds your agent.** After someone installs your package, GAIA
+has to discover it. That happens through a Python **entry point** — a standard way
+for a package to advertise something to a host program. `gaia agent init` already
+wrote it into `pyproject.toml`:
 
-### Step 4 — Implement the agent
+```toml
+[project.entry-points."gaia.agent"]
+my-agent = "gaia_agent_my_agent:build_registration"
+```
 
-Extend the base `Agent` and register tools with `@tool` (see
-[Agent System](/sdk/core/agent-system) and [Tools](/sdk/core/tools)):
+This says: "under the group `gaia.agent`, my agent is registered by calling
+`build_registration()` in this package." That function (in `__init__.py`) returns a
+small `AgentRegistration` object describing your agent. You rarely edit it by
+hand — the scaffold and the examples set it up for you — but that's the wiring that
+makes `gaia <id>` work after install.
+
+### Step 4 — Write the agent
+
+An agent is a Python class that extends GAIA's base `Agent`. At minimum you give it
+a **system prompt** (its instructions) and optionally **tools** (functions it can
+call). See [Agent System](/sdk/core/agent-system) and [Tools](/sdk/core/tools) for
+the full picture:
 
 ```python
 from gaia.agents.base.agent import Agent
@@ -157,171 +198,210 @@ from gaia.agents.base.tools import tool
 
 class MyAgent(Agent):
     def _get_system_prompt(self) -> str:
+        # The agent's personality and rules, in plain language.
         return "You are My Agent. Be concise and use tools when helpful."
 
     def _register_tools(self):
+        # Each @tool is a function the model can choose to call.
+        # The docstring is how the model knows what the tool does — be descriptive.
         @tool
         def greet(name: str) -> str:
             """Return a friendly greeting for the given name."""
             return f"Hello, {name}!"
 ```
 
-### Step 5 — Write `README.md`
+### Step 5 — Write the README
 
-The README **is** your agent's page body on the website. Keep it to **plain
-Markdown** — headings, lists, fenced code, bold, inline code, links, blockquotes.
-The site renders it as **sanitized** Markdown (raw HTML/scripts are stripped), so
-don't rely on HTML or images. Lead with what the agent does and how to use it; the
-website wraps it in manifest-driven chrome (install commands, requirement cards),
-so you don't need to hand-write install steps.
+Your `README.md` becomes your agent's page on the website, so write it for users.
+Keep it to **plain Markdown** (headings, lists, fenced code, bold, inline code,
+links, blockquotes). For safety the site strips raw HTML and scripts and ignores
+images, so don't rely on them. Lead with *what the agent does* and *how to use
+it* — you don't need to write install instructions, because the website adds the
+install commands and requirement cards around your text automatically.
 
-### Step 6 — Authenticate
+### Step 6 — Get a token (direct-publish route only)
 
-Store your tokens once in the OS keyring:
+Skip this entirely if you're using the PR route (Path 1) — the maintainers publish
+for you. For direct publishing, store your token once in your operating system's
+secure keychain:
 
 ```bash
-gaia agent login --hub      # prompts securely for the Hub token
-gaia agent login --pypi     # optional: prompts for a PyPI API token
+gaia agent login --hub      # prompts you to paste the Hub token (hidden input)
+gaia agent login --pypi     # optional: a PyPI token, if you also publish to PyPI
 ```
 
-On headless/CI machines, pass tokens via environment variables instead:
+On a server or CI machine with no keychain, pass tokens as environment variables
+instead:
 
 ```bash
-export GAIA_HUB_TOKEN=***    # R2 Hub publish token
+export GAIA_HUB_TOKEN=***    # the Hub publish token
 export PYPI_TOKEN=***        # optional, for PyPI
 ```
 
 <Warning>
-Your Hub token is **scoped to an author**. The `author` in `gaia-agent.yaml` must
-fall within that scope or the Hub returns **403**. Never commit tokens or pass them
-on the command line.
+A Hub token is **scoped to an author**. The `author` in your manifest must match
+that scope, or the Hub refuses the publish with a **403** error — this is what stops
+anyone from publishing under someone else's name. Never commit a token or type it
+directly on the command line.
 </Warning>
 
-### Step 7 — Test locally
+### Step 7 — Test it locally
 
 ```bash
-gaia agent test            # runs the package's tests
-gaia agent status my-agent # installed version + health
-gaia agent health my-agent # does it load + entry point resolve?
+gaia agent test            # run the package's tests
+gaia agent status my-agent # show the installed version + basic health
+gaia agent health my-agent # confirm it loads and its entry point resolves
 ```
 
 ### Step 8 — Publish
 
-**Path 1 — Contribute via PR (no token):** open a PR to `amd/gaia` with your
-package under `hub/agents/python/<id>/`. When CI passes and a maintainer approves,
-the release pipeline publishes it for you — skip to [Verify](#step-9-verify).
+**Path 1 — via PR (no token):** commit your package under
+`hub/agents/python/<id>/` and open a PR to `amd/gaia`. Once the automated checks
+pass and a maintainer approves and merges it, a maintainer publishes it for you.
+You're done — jump to [Verify](#step-9-verify).
 
-**Path 2 — Direct publish (your token)** _(coming soon for self-serve; needs a Hub
-token, issued manually today)_ — publish from your machine:
+**Path 2 — direct (your own token):** from inside your package folder, run:
 
 ```bash
-gaia agent publish         # builds the wheel, then dual-publishes to R2 (Hub) + PyPI
+gaia agent publish         # builds the package file (a "wheel") and uploads it to the Hub + PyPI
 ```
 
-Useful flags:
+A **wheel** is just the standard Python package file (`.whl`); `publish` builds it
+for you. Handy flags:
 
 - `--skip-pypi` — publish to the Hub only.
-- `--skip-r2` — publish to PyPI only.
-- `--hub-url <url>` — override the Worker origin (default `GAIA_HUB_URL` or
+- `--skip-r2` — publish to PyPI only (skip the Hub).
+- `--hub-url <url>` — point at a different Hub (defaults to `GAIA_HUB_URL` or
   `https://hub.amd-gaia.ai`).
 
-What happens server-side: the Worker validates your manifest, enforces your
-publisher scope, computes a server-side SHA-256, stores the artifact **immutably**
-at `agents/<id>/<version>/…`, attaches your `README.md`, and **rebuilds
-`index.json`** — which is what the website builds from.
+When you publish, the server checks your manifest, confirms your token is allowed to
+publish under that `author`, fingerprints the file (a SHA-256 checksum) so it can't
+be tampered with, stores it so it can **never be overwritten**, attaches your
+`README.md`, and rebuilds the catalog `index.json`.
 
 ### Step 9 — Verify
 
 ```bash
-# The catalog now includes your agent:
+# Confirm your agent is in the catalog:
 curl -s https://hub.amd-gaia.ai/index.json | grep my-agent
 
-# Install it like any user:
+# Install it the way a user would:
 gaia agent install my-agent
 ```
 
-Your page appears at `https://amd-gaia.ai/hub/my-agent` after the website
-redeploys (the agent-release pipeline triggers that automatically).
+Your page appears at `https://amd-gaia.ai/hub/my-agent` the next time the website
+**rebuilds** (it regenerates from the catalog on each deploy). For the email agent
+that redeploy is triggered automatically by its release workflow; a generic
+auto-redeploy for every agent is still being wired, so for now a maintainer may
+trigger the website deploy after your publish.
 
 ---
 
 ## Part B — Update an existing agent
 
-Published versions are **immutable** — you can't overwrite `0.1.0`. To ship a
-change, bump the version and republish:
+You can't change a version once it's published (more on why under
+[Versioning](#versioning-rules)). To ship a change you publish a **new** version:
 
 <Steps>
 <Step title="Make your changes">
-Edit code, `gaia-agent.yaml`, and/or `README.md`. README + manifest edits flow to
-the website on the next publish.
+Edit your code, `gaia-agent.yaml`, and/or `README.md`. Manifest and README changes
+flow to your website page on the next publish.
 </Step>
-<Step title="Bump the version">
+<Step title="Bump the version number">
 ```bash
-gaia agent version patch   # 0.1.0 → 0.1.1  (patch | minor | major)
+gaia agent version patch   # 0.1.0 → 0.1.1   (patch | minor | major)
 ```
-This updates `version` in `gaia-agent.yaml`. Keep any sibling package files
-(e.g. an npm `package.json`) in sync — the release tooling checks they match.
+This rewrites `version` in `gaia-agent.yaml`. If your package has sibling files
+that also carry a version (for example an npm `package.json`), update them to match —
+the release tooling checks they agree.
 </Step>
-<Step title="Test, then publish">
+<Step title="Test, then publish again">
 ```bash
 gaia agent test
-gaia agent publish
+gaia agent publish         # or open an updated PR (Path 1)
 ```
-The Worker rebuilds `index.json`, so the catalog (and your website page) reflect
-the new version, README, and manifest.
+The server rebuilds the catalog, so the Hub and your website page reflect the new
+version, README, and manifest.
 </Step>
 </Steps>
 
-<Note>
-**Republishing the *same* version fails loudly** (HTTP **409**) — published
-artifacts are immutable. This is intentional: bump the version instead.
-</Note>
-
 ### Keep a changelog
 
-As the hub grows, track what changed per version. Add a **`CHANGELOG.md`** to each
-agent package (one entry per published version — Keep a Changelog format), and
-write the version's headline into the commit/PR. For agents that also ship an npm
-package, [`@changesets/cli`](https://github.com/changesets/changesets) automates
-version bumps + changelog generation across packages. A changelog isn't currently
-required by the publish pipeline, but it's the cheapest way to keep `gaia agent
-version` bumps reviewable.
+As your agent evolves, record what changed in each version in a `CHANGELOG.md`
+(the [Keep a Changelog](https://keepachangelog.com/) format is a good default). It
+isn't required by the publish process, but it's the cheapest way to make your
+version bumps reviewable. If your agent also ships an npm package,
+[`@changesets/cli`](https://github.com/changesets/changesets) can automate version
+bumps and changelog entries.
 
 ---
 
-## How it shows up on the website
+## Standalone sidecars
 
-The site has **no hand-maintained agent list** — it builds from the hub's
-`index.json`. From your manifest + README the website generates:
+The `api_server` and `mcp_server` interfaces in your manifest let your agent run as
+a **sidecar** — a small local web server that *another* application talks to over a
+REST API or [MCP](/sdk/infrastructure/mcp), instead of a person using it directly.
+This is how an app embeds a GAIA agent.
 
-- the **listing card** and the per-agent page at `/hub/<id>`;
-- an **install-method switcher** (GAIA / pip / source) with copyable commands;
-- **platform badges** (`requirements.platforms`) and **requirement / permission /
-  security-tier cards**;
-- your **README** rendered as sanitized Markdown inside that chrome.
+For a sidecar to actually serve those interfaces, its package must depend on the
+REST server pieces. Declare that in `pyproject.toml` by asking for the `[api]`
+extra (the example agents do this):
 
-So you only maintain the manifest and README; the page stays in sync on each
+```toml
+dependencies = ["amd-gaia[api]>=0.20.0"]   # add ,rag / ,etc. for extra capabilities
+```
+
+The [email agent](https://github.com/amd/gaia/tree/main/hub/agents/python/email)
+goes one step further and ships a **frozen native binary** plus an npm package
+(`@amd-gaia/agent-email`) so JavaScript apps can run it with no Python installed.
+That packaging is currently hand-built per agent; reusable tooling to make any agent
+an npm sidecar is on the roadmap.
+
+## How your agent shows up on the website
+
+There is **no hand-maintained list of agents** — the site is built from the Hub's
+`index.json`. From your manifest and README, the website generates:
+
+- your **listing card** and the page at `/hub/<id>`;
+- an **install-method switcher** (GAIA / pip / source) with copy buttons;
+- **platform badges** (from `requirements.platforms`) and requirement / permission /
+  security-tier cards;
+- your **README**, rendered as sanitized Markdown inside that frame.
+
+So you maintain only the manifest and README; the page updates itself on each
 publish.
 
 ## Versioning rules
 
-- **SemVer**, bumped via `gaia agent version patch|minor|major`.
-- Published `id@version` artifacts are **immutable** (409 on a duplicate).
-- `latest_version` in the catalog tracks the highest published SemVer
-  automatically.
+Versions follow **SemVer** — `MAJOR.MINOR.PATCH` (e.g. `2.4.1`). Which number you
+bump signals what changed:
+
+- **PATCH** (`0.1.0 → 0.1.1`) — bug fixes and tweaks; no new features, nothing breaks.
+- **MINOR** (`0.1.1 → 0.2.0`) — new features that are backward-compatible (existing
+  usage still works).
+- **MAJOR** (`0.2.0 → 1.0.0`) — breaking changes (you removed/renamed something users
+  relied on).
+
+Use `gaia agent version patch|minor|major` to bump it. Two rules the Hub enforces:
+
+- **Published versions are immutable.** Re-publishing the same `id@version` is
+  rejected with a **409** error — this guarantees that what someone installed can
+  never silently change underneath them. Always bump the version to ship a change.
+- **`latest_version`** in the catalog tracks the highest published version
+  automatically; you don't set it.
 
 ## Troubleshooting
 
-| Symptom | Cause & fix |
+| Symptom | What it means & how to fix it |
 |---|---|
-| `401` on publish | Missing/invalid Hub token. Re-run `gaia agent login --hub` or set `GAIA_HUB_TOKEN`. |
-| `403` on publish | Your token's author scope doesn't include the manifest `author`. Align `author`, or request scope. |
-| `409` on publish | That `id@version` already exists (immutable). `gaia agent version patch` and retry. |
-| Manifest rejected | A required field is missing/invalid. Validate against `workers/agent-hub/schemas/manifest.schema.json`. |
-| Agent not on the website | The site rebuilds from `index.json` on deploy; confirm the publish rebuilt the index and the website redeployed. |
+| `401` when publishing | Your Hub token is missing or invalid. Re-run `gaia agent login --hub`, or set `GAIA_HUB_TOKEN`. |
+| `403` when publishing | Your token isn't allowed to publish under the manifest's `author`. Make `author` match your token's scope (or request the right scope). |
+| `409` when publishing | That `id@version` already exists and is immutable. Run `gaia agent version patch` and publish again. |
+| "Manifest rejected" | A required field is missing or malformed. Check it against [`manifest.schema.json`](https://github.com/amd/gaia/blob/main/workers/agent-hub/schemas/manifest.schema.json). |
+| Agent isn't on the website | The site only rebuilds from the catalog on deploy. Confirm your publish succeeded (Step 9), then that the website redeployed. |
 
 ## See also
 
-- [Build a custom agent](/guides/custom-agent) — the agent class itself.
-- [Agent System](/sdk/core/agent-system) · [Tools](/sdk/core/tools).
-- [Agent Hub plan](/plans/agent-hub) and [spec](/spec/agent-hub-restructure).
+- [Build a custom agent](/guides/custom-agent) — focuses on the agent class itself.
+- [Agent System](/sdk/core/agent-system) and [Tools](/sdk/core/tools) — the building blocks.
+- [Agent Hub plan](/plans/agent-hub) and [spec](/spec/agent-hub-restructure) — how the Hub works under the hood.
