@@ -92,6 +92,7 @@
                   "connectors/google",
                   "connectors/microsoft",
                   "connectors/github",
+                  "connectors/tavily",
                   "security/connections",
                   "security/connectors"
                 ]
