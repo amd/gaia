@@ -1,0 +1,61 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Auto-deploy the GAIA website (Astro) to Railway whenever website/ changes on
+# main. Path-filtered so unrelated commits don't redeploy the site.
+#
+# Maintainer setup (one-time):
+#   Secret RAILWAY_TOKEN — a Railway *project* token for the gaia-agent-hub
+#   project (Railway → project → Settings → Tokens → Project Token, production
+#   environment). Scopes the deploy to that project; no account login needed.
+#
+# The service is built by Railway from website/railway.json (NIXPACKS:
+# `npm install && npm run build`, served by `serve dist`).
+
+name: Deploy Website (Railway)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/deploy_website.yml'
+  workflow_dispatch:
+
+concurrency:
+  # One website deploy at a time; a newer push supersedes an in-flight one.
+  group: deploy-website
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy website to Railway
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Assert RAILWAY_TOKEN present
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RAILWAY_TOKEN:-}" ]; then
+            echo "::error::missing repo secret RAILWAY_TOKEN — a Railway project token for gaia-agent-hub. See .github/workflows/deploy_website.yml header."
+            exit 1
+          fi
+
+      - name: Deploy
+        working-directory: website
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service website --ci

@@ -11,8 +11,12 @@ import AgentRow from '../../components/AgentRow.astro';
 import { getCatalog, categoryLabel, distinct } from '../../data/catalog';
 
 const agents = await getCatalog();
-// Editorial pick: first non-deprecated verified agent, else first agent.
-const spotlight = agents.find((a) => !a.deprecated && a.security_tier === 'verified') ?? agents[0];
+// Editorial pick: feature the email agent; fall back to the first non-deprecated
+// verified agent, else the first agent.
+const spotlight =
+  agents.find((a) => a.id === 'email' && !a.deprecated) ??
+  agents.find((a) => !a.deprecated && a.security_tier === 'verified') ??
+  agents[0];
 const categories = distinct(agents, 'category');
 ---
 
