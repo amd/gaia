@@ -7,7 +7,7 @@ import Header from '../../components/Header.astro';
 import Footer from '../../components/Footer.astro';
 import Eyebrow from '../../components/Eyebrow.astro';
 import AgentIcon from '../../components/AgentIcon.astro';
-import InstallCommand from '../../components/InstallCommand.astro';
+import InstallMethods from '../../components/InstallMethods.astro';
 import TerminalBlock from '../../components/TerminalBlock.astro';
 import {
   getCatalog,
@@ -15,8 +15,10 @@ import {
   categoryLabel,
   languageLabel,
   securityTierLabel,
+  securityTierDescription,
   formatBytes,
   platformLabel,
+  npuLabel,
 } from '../../data/catalog';
 import { renderMarkdown } from '../../data/markdown';
 
@@ -30,6 +32,7 @@ const agent = (await getAgent(id!))!;
 const installCmd = `gaia agent install ${agent.id}`;
 const deepLink = `gaia://hub/install/${agent.id}`;
 const readmeHtml = renderMarkdown(agent.readme);
+const req = agent.requirements;
 const terminalLines = [
   { prompt: true, text: installCmd },
   { muted: true, text: `✓ ${agent.name} ${agent.latest_version} installed` },
@@ -65,7 +68,6 @@ const terminalLines = [
           <a href={deepLink} class="rounded-md bg-g-gold px-6 py-3 text-sm font-semibold text-black hover:brightness-110 transition">
             Open in GAIA
           </a>
-          <InstallCommand command={installCmd} />
         </div>
         <p class="mt-2 text-xs text-g-muted">
           Don't have GAIA yet? <a href="https://amd-gaia.ai/docs" class="text-g-gold-text hover:underline">Get started →</a>
@@ -73,8 +75,22 @@ const terminalLines = [
       </div>
     </header>
 
-    <!-- Body: README + sidebar -->
-    <div class="mt-14 grid lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
+    <!-- Install chrome: switcher + platform badges, both manifest-driven -->
+    <section class="mt-12" aria-label="Install">
+      <Eyebrow class="mb-3">Install</Eyebrow>
+      <div class="max-w-xl">
+        <InstallMethods agent={agent} />
+      </div>
+      <div class="mt-4 flex flex-wrap items-center gap-1.5">
+        <span class="text-[11px] text-g-muted mr-1">Runs on:</span>
+        {req.platforms.map((p) => (
+          <span class="text-[11px] text-g-muted border border-g-border rounded px-2 py-0.5">{platformLabel(p)}</span>
+        ))}
+      </div>
+    </section>
+
+    <!-- Body: README + manifest-driven cards -->
+    <div class="mt-12 grid lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
       <article class="readme min-w-0 max-w-[70ch]">
         <h2 class="sr-only">About {agent.name}</h2>
         <div set:html={readmeHtml} />
@@ -83,9 +99,21 @@ const terminalLines = [
         </div>
       </article>
 
-      <aside class="space-y-8">
-        <section>
-          <Eyebrow class="mb-3">Details</Eyebrow>
+      <aside class="space-y-5">
+        <!-- Security tier card -->
+        <section class="rounded-xl border border-g-border bg-g-surface p-5">
+          <div class="flex items-center justify-between gap-2">
+            <Eyebrow>Security tier</Eyebrow>
+            <span class="text-[10px] font-bold tracking-wide uppercase text-g-gold-text border border-g-gold/40 rounded px-2 py-0.5">
+              {securityTierLabel(agent.security_tier)}
+            </span>
+          </div>
+          <p class="mt-2 text-[12.5px] leading-relaxed text-g-muted">{securityTierDescription(agent.security_tier)}</p>
+        </section>
+
+        <!-- Details card -->
+        <section class="rounded-xl border border-g-border bg-g-surface p-5">
+          <Eyebrow class="mb-2">Details</Eyebrow>
           <dl class="text-[13px]">
             <div class="flex justify-between py-2 border-b border-g-border">
               <dt class="text-g-muted">Version</dt><dd class="font-mono">{agent.latest_version}</dd>
@@ -102,32 +130,39 @@ const terminalLines = [
             <div class="flex justify-between py-2 border-b border-g-border">
               <dt class="text-g-muted">Category</dt><dd>{categoryLabel(agent.category)}</dd>
             </div>
-            <div class="flex justify-between py-2 border-b border-g-border">
+            <div class="flex justify-between py-2 last:border-0 border-b border-g-border">
               <dt class="text-g-muted">Min GAIA</dt><dd class="font-mono">{agent.min_gaia_version || '—'}</dd>
             </div>
           </dl>
         </section>
 
-        <section>
-          <Eyebrow class="mb-3">Requirements</Eyebrow>
+        <!-- Requirements card -->
+        <section class="rounded-xl border border-g-border bg-g-surface p-5">
+          <Eyebrow class="mb-2">Requirements</Eyebrow>
           <dl class="text-[13px]">
             <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">Memory</dt><dd class="font-mono">{agent.requirements.min_memory_gb} GB</dd>
+              <dt class="text-g-muted">Memory</dt><dd class="font-mono">{req.min_memory_gb} GB</dd>
             </div>
             <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">NPU</dt><dd>{agent.requirements.npu}</dd>
+              <dt class="text-g-muted">Disk</dt><dd class="font-mono">{req.min_disk_gb} GB</dd>
             </div>
+            <div class="flex justify-between py-2 border-b border-g-border">
+              <dt class="text-g-muted">Context</dt><dd class="font-mono">{req.min_context_size.toLocaleString()}</dd>
+            </div>
+            <div class="flex justify-between py-2 border-b border-g-border">
+              <dt class="text-g-muted">NPU</dt><dd>{npuLabel(req.npu)}</dd>
+            </div>
+            {req.gpu_vram_gb > 0 && (
+              <div class="flex justify-between py-2 border-b border-g-border">
+                <dt class="text-g-muted">GPU VRAM</dt><dd class="font-mono">{req.gpu_vram_gb} GB</dd>
+              </div>
+            )}
           </dl>
-          <div class="mt-3 flex flex-wrap gap-1.5">
-            {agent.requirements.platforms.map((p) => (
-              <span class="text-[11px] text-g-muted border border-g-border rounded px-2 py-0.5">{platformLabel(p)}</span>
-            ))}
-          </div>
         </section>
 
         {agent.models.length > 0 && (
-          <section>
-            <Eyebrow class="mb-3">Models</Eyebrow>
+          <section class="rounded-xl border border-g-border bg-g-surface p-5">
+            <Eyebrow class="mb-2">Models</Eyebrow>
             <ul class="text-[12px] font-mono text-g-muted space-y-1.5">
               {agent.models.map((m) => <li>{m}</li>)}
             </ul>
@@ -135,10 +170,12 @@ const terminalLines = [
         )}
 
         {agent.permissions.length > 0 && (
-          <section>
-            <Eyebrow class="mb-3">Permissions</Eyebrow>
-            <ul class="text-[12px] font-mono text-g-muted space-y-1.5">
-              {agent.permissions.map((p) => <li>{p}</li>)}
+          <section class="rounded-xl border border-g-border bg-g-surface p-5">
+            <Eyebrow class="mb-2">Permissions</Eyebrow>
+            <ul class="flex flex-wrap gap-1.5">
+              {agent.permissions.map((p) => (
+                <li class="text-[11px] font-mono text-g-muted border border-g-border rounded px-2 py-0.5">{p}</li>
+              ))}
             </ul>
           </section>
         )}

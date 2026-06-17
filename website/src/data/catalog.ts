@@ -3,18 +3,18 @@
 
 // Agent Hub catalog access layer.
 //
-// Two explicit build-time modes, switched by the HUB_CATALOG_URL env var:
+// The hub pages are built ENTIRELY from the live hub catalog — there is no
+// bundled fixture, so the site can never drift from what is actually published.
+// The catalog is fetched at build time from `${HUB_CATALOG_URL}/index.json`
+// (the agent-hub Worker, workers/agent-hub). HUB_CATALOG_URL is REQUIRED: if it
+// is unset, or the fetch fails, or the shape is wrong, the build FAILS LOUDLY —
+// there is no silent fallback to stale data.
 //
-//   HUB_CATALOG_URL unset  -> bundled fixture (`./index.json`); offline builds.
-//   HUB_CATALOG_URL set    -> fetch `${HUB_CATALOG_URL}/index.json` from the
-//                             agent-hub worker (workers/agent-hub). A fetch
-//                             failure FAILS the build — no silent fixture
-//                             fallback.
+//   Production (Railway): set HUB_CATALOG_URL=https://hub.amd-gaia.ai
+//   Local dev:            HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run dev
+//                         (or point it at a local Worker — workers/agent-hub/README.md)
 //
-// e.g.  HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build
 // Nothing else in the app changes: pages consume getCatalog()/getAgent() only.
-
-import fixture from './index.json';
 
 export type SecurityTier = 'verified' | 'community' | 'experimental';
 export type AgentLanguage = 'python' | 'cpp';
@@ -90,17 +90,18 @@ async function fetchLiveCatalog(baseUrl: string): Promise<CatalogFile> {
 
 // One fetch per build, shared across pages.
 let liveCatalog: Promise<CatalogFile> | null = null;
-let loggedFixtureMode = false;
 
 // Load the raw catalog. The ONLY function that knows where the data comes from.
 async function loadCatalog(): Promise<CatalogFile> {
   const hubUrl = process.env.HUB_CATALOG_URL;
   if (!hubUrl) {
-    if (!loggedFixtureMode) {
-      console.log('[catalog] HUB_CATALOG_URL not set — using the bundled fixture catalog');
-      loggedFixtureMode = true;
-    }
-    return fixture as unknown as CatalogFile;
+    throw new Error(
+      '[catalog] HUB_CATALOG_URL is not set. The website builds its Agent Hub ' +
+        'pages from the live hub catalog and has no bundled fixture fallback. ' +
+        'Set HUB_CATALOG_URL=https://hub.amd-gaia.ai for production/Railway, or ' +
+        'point it at a local agent-hub Worker (workers/agent-hub/README.md), e.g. ' +
+        '`HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build`.'
+    );
   }
   liveCatalog ??= fetchLiveCatalog(hubUrl);
   return liveCatalog;
@@ -187,4 +188,58 @@ export function distinct<K extends keyof Agent>(agents: Agent[], key: K): string
   const set = new Set<string>();
   for (const a of agents) set.add(String(a[key]));
   return [...set].sort();
+}
+
+export interface InstallMethod {
+  key: string;
+  label: string;
+  command: string;
+  note: string;
+}
+
+/**
+ * Install methods for an agent, derived from the MANIFEST (its `language`) —
+ * never from README markup. Every agent installs through the GAIA app; Python
+ * agents also ship a pip package; source install is always available. The hub
+ * index has no per-channel field today, so language is the source of truth.
+ */
+export function installMethods(agent: Agent): InstallMethod[] {
+  const methods: InstallMethod[] = [
+    {
+      key: 'gaia',
+      label: 'GAIA',
+      command: `gaia agent install ${agent.id}`,
+      note: 'Recommended — installs into your GAIA app and registers the agent automatically.',
+    },
+  ];
+  if (agent.language === 'python') {
+    methods.push({
+      key: 'pip',
+      label: 'pip',
+      command: `pip install gaia-agent-${agent.id}`,
+      note: 'Python package from PyPI. Discovered via the gaia.agent entry-point group.',
+    });
+  }
+  methods.push({
+    key: 'source',
+    label: 'Source',
+    command: 'git clone https://github.com/amd/gaia.git',
+    note: 'Build from the GAIA repository — clone, then follow the agent README to install it.',
+  });
+  return methods;
+}
+
+const SECURITY_TIER_DESCRIPTIONS: Record<SecurityTier, string> = {
+  verified: 'Built and reviewed by AMD.',
+  community: 'Publisher-signed but not reviewed by AMD — install with the usual third-party caution.',
+  experimental: 'Opt-in only; may run outside the Python sandbox. Review the source before installing.',
+};
+
+export function securityTierDescription(tier: SecurityTier): string {
+  return SECURITY_TIER_DESCRIPTIONS[tier] ?? '';
+}
+
+/** Human label for the catalog's normalized npu value ("required" | "optional"). */
+export function npuLabel(npu: string): string {
+  return npu === 'required' ? 'Required' : 'Optional';
 }
