@@ -207,8 +207,8 @@
     letter-spacing: 0;
 }
 .msg-avatar-user {
-    background: var(--amd-red);
-    color: white;
+    background: var(--accent);
+    color: #1a1a1a;
 }
 .msg-avatar-assistant {
     background: var(--bg-tertiary);
@@ -238,7 +238,7 @@
     letter-spacing: 1.5px;
     color: var(--text-muted);
 }
-.role-assistant { color: var(--amd-red); }
+.role-assistant { color: var(--accent); }
 
 /* Agent name in message header: "GAIA Chat Agent | 3m ago" */
 .msg-role-brand {
@@ -247,7 +247,7 @@
     font-family: var(--font-mono);
     text-transform: uppercase;
     letter-spacing: 1.5px;
-    color: var(--amd-red);
+    color: var(--accent);
     margin: 0 4px;
 }
 .msg-role-agent {
@@ -301,10 +301,10 @@
 .msg-copy.copied { color: var(--accent-green); background: var(--accent-green-dim); }
 
 /* Delete button */
-.msg-delete:hover { color: var(--amd-red); }
+.msg-delete:hover { color: var(--danger); }
 .msg-delete.confirm {
-    color: var(--amd-red);
-    background: var(--amd-red-dim);
+    color: var(--danger);
+    background: var(--danger-dim);
     opacity: 1;
 }
 
@@ -338,7 +338,7 @@
 /* ── Error message styling ────────────────────────────────────── */
 .msg-error {
     background: rgba(239, 68, 68, 0.04);
-    border-left: 2px solid var(--amd-red);
+    border-left: 2px solid var(--danger);
 }
 
 [data-theme="dark"] .msg-error {
@@ -353,7 +353,7 @@
     margin-bottom: 8px;
     border-radius: var(--radius-sm);
     background: rgba(239, 68, 68, 0.08);
-    color: var(--amd-red);
+    color: var(--danger);
     font-size: 11px;
     font-weight: 600;
     font-family: var(--font-mono);
@@ -462,13 +462,13 @@
 
 /* ── Links ────────────────────────────────────────────────────── */
 .md-link {
-    color: var(--amd-red);
+    color: var(--accent);
     text-decoration: none;
     border-bottom: 1px solid transparent;
     transition: border-color 200ms var(--ease);
 }
 .md-link:hover {
-    border-bottom-color: var(--amd-red);
+    border-bottom-color: var(--accent);
 }
 
 /* ── File Path Links ─────────────────────────────────────────── */
@@ -522,7 +522,7 @@
 .md-blockquote {
     margin: 12px 0;
     padding: 10px 18px;
-    border-left: 2px solid var(--amd-red);
+    border-left: 2px solid var(--accent);
     background: var(--tint-subtle);
     border-radius: 0 var(--radius-md) var(--radius-md) 0;
     color: var(--text-secondary);
@@ -598,7 +598,7 @@
     font-size: 13px;
     font-weight: 600;
     font-family: var(--font-mono);
-    color: var(--amd-red);
+    color: var(--accent);
     cursor: pointer;
     background: var(--tint-subtle);
     transition: background var(--duration) var(--ease);
@@ -625,7 +625,7 @@
     padding: 4px 14px;
 }
 .md-content details[open] {
-    border-color: rgba(237, 28, 36, 0.2);
+    border-color: rgba(226, 163, 62, 0.2);
 }
 
 /* ── Strikethrough (GFM) ─────────────────────────────────────── */
@@ -729,13 +729,13 @@
     display: inline-block;
     width: 8px;
     height: 16px;
-    background: var(--amd-red);
+    background: var(--accent);
     margin-left: 2px;
     vertical-align: text-bottom;
     /* Pixelated terminal aesthetic - sharp edges */
     border-radius: 0;
     image-rendering: pixelated;
-    box-shadow: 0 0 8px rgba(237, 28, 36, 0.5), 0 0 2px rgba(237, 28, 36, 0.8);
+    box-shadow: 0 0 8px rgba(226, 163, 62, 0.5), 0 0 2px rgba(226, 163, 62, 0.8);
     animation: cursorBlink 600ms steps(2, start) infinite;
 }
 

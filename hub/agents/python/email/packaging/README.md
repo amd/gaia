@@ -16,8 +16,10 @@ The binary serves the full email REST surface — `/v1/email/triage`, `/draft`,
 | `server.py` | Minimal FastAPI app mounting only the email router + `/health` + `/version`. The freeze entrypoint (not the whole `gaia api` app, which drags in every agent + the ML stack). |
 | `freeze.py` | PyInstaller build. Bakes in the gotcha fixes below. |
 | `smoke_test.py` | Launches the built binary as a subprocess and checks `/health`, OpenAPI, `/version`, and a triage round-trip. Used by `release_agent_email.yml`. |
-| `gen_binaries_lock.py` | Regenerates `hub/agents/npm/agent-email/binaries.lock.json` from built binaries (R2 keys + SHA-256). |
-| `publish_to_r2.py` | Uploads a built binary to R2 via the Agent Hub Worker `POST /publish`. |
+| `gen_binaries_lock.py` | Regenerates `hub/agents/npm/agent-email/binaries.lock.json` from the publish summary (hub URLs + SHA-256). |
+| `publish_to_r2.py` | **The release upload path.** POSTs each binary + `gaia-agent.yaml` to the Agent Hub Worker's `POST /publish` (`release_agent_email.yml`), which checksums server-side, stores immutably under `agents/email/<ver>/`, and rebuilds `index.json`. |
+| `upload_to_r2.sh` | **Legacy / discouraged.** Hand-upload via rclone straight to the bucket — this **bypasses the Worker**, so `index.json` is NOT rebuilt. Use `publish_to_r2.py` instead. See [`HUB-UPLOAD.md`](HUB-UPLOAD.md). |
+| `HUB-UPLOAD.md` | Manual rclone upload guide (the legacy bypass path). |
 
 Build artifacts (`build/`, `dist/`, `*.spec`) are git-ignored; binaries are never committed.
 

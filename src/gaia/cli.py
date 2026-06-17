@@ -1912,6 +1912,60 @@ def build_parser():
 
     telegram_parser.set_defaults(action="telegram")
 
+    # Knowledge command — web research via the Tavily wrapper
+    knowledge_parser = subparsers.add_parser(
+        "knowledge",
+        help="Web research via Tavily (search|extract|usage), with caching and a credit budget",
+    )
+    knowledge_subparsers = knowledge_parser.add_subparsers(
+        dest="knowledge_action", help="knowledge action to perform"
+    )
+
+    k_search = knowledge_subparsers.add_parser("search", help="Run a web search")
+    k_search.add_argument("query", help="Search query")
+    k_search.add_argument(
+        "--max-results", type=int, default=5, help="Max results (default: 5)"
+    )
+    k_search.add_argument(
+        "--depth",
+        choices=("basic", "advanced"),
+        default="basic",
+        help="Search depth — advanced costs more credits (default: basic)",
+    )
+    k_search.add_argument(
+        "--budget",
+        type=int,
+        default=None,
+        help="Credit cap for this session; omit for unlimited",
+    )
+    k_search.add_argument(
+        "--no-block",
+        action="store_true",
+        help="Warn instead of blocking when the budget cap is exceeded",
+    )
+
+    k_extract = knowledge_subparsers.add_parser(
+        "extract", help="Extract clean content from one or more URLs (requires Tavily)"
+    )
+    k_extract.add_argument("urls", nargs="+", help="One or more URLs to extract")
+    k_extract.add_argument(
+        "--depth",
+        choices=("basic", "advanced"),
+        default="basic",
+        help="Extract depth (default: basic)",
+    )
+    k_extract.add_argument(
+        "--budget", type=int, default=None, help="Credit cap for this session"
+    )
+    k_extract.add_argument(
+        "--no-block",
+        action="store_true",
+        help="Warn instead of blocking when the budget cap is exceeded",
+    )
+
+    knowledge_subparsers.add_parser("usage", help="Show cached credit-usage totals")
+    knowledge_parser.set_defaults(action="knowledge")
+
     # Add model download command
     download_parser = subparsers.add_parser(
         "download",
@@ -4167,6 +4221,11 @@ Let me know your answer!
         handle_cache_command(args)
         return
 
+    # Handle Knowledge command (Tavily web research)
+    if args.action == "knowledge":
+        handle_knowledge_command(args)
+        return
+
     # Handle Memory command
     if args.action == "memory":
         handle_memory_command(args)
@@ -5092,6 +5151,69 @@ def handle_blender_command(args):
         blender_log.error(f"Error running Blender agent: {e}")
         print(f"❌ Error: {e}")
         sys.exit(1)
+
+
+def _print_knowledge_usage(client):
+    """Print a one-line credit-usage summary for a Tavily client."""
+    usage = client.usage()
+    cap = usage["cap"]
+    cap_str = "unlimited" if cap is None else str(cap)
+    print(f"\n💳 Credits used: {usage['total_credits']} (cap: {cap_str})")
+
+
+def handle_knowledge_command(args):
+    """Handle `gaia knowledge` — Tavily web research with caching + budget.
+
+    Args:
+        args: Parsed command-line arguments
+    """
+    action = getattr(args, "knowledge_action", None)
+    if action is None:
+        print("❌ Error: No knowledge action specified")
+        print("Available actions: search, extract, usage")
+        print("Run 'gaia knowledge --help' for more information")
+        return
+
+    from gaia.web.tavily import (
+        BudgetConfig,
+        TavilyBudgetExceeded,
+        TavilyClient,
+        TavilyConfigError,
+    )
+
+    budget = BudgetConfig(
+        cap=getattr(args, "budget", None),
+        block=not getattr(args, "no_block", False),
+    )
+    client = TavilyClient(budget=budget)
+    try:
+        if action == "search":
+            result = client.search(
+                args.query, search_depth=args.depth, max_results=args.max_results
+            )
+            source = result.get("source", "tavily")
+            print(f"\n=== Results for {args.query!r} (source: {source}) ===")
+            for i, r in enumerate(result.get("results", []), 1):
+                print(f"{i}. {r.get('title', '')}")
+                print(f"   {r.get('url', '')}")
+                content = r.get("content") or r.get("snippet") or ""
+                if content:
+                    print(f"   {content[:200]}")
+            _print_knowledge_usage(client)
+        elif action == "extract":
+            result = client.extract(args.urls, extract_depth=args.depth)
+            print(json.dumps(result, indent=2))
+            _print_knowledge_usage(client)
+        elif action == "usage":
+            _print_knowledge_usage(client)
+    except TavilyBudgetExceeded as e:
+        print(f"🛑 {e}")
+        sys.exit(1)
+    except TavilyConfigError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    finally:
+        client.close()
 
 
 def handle_cache_command(args):

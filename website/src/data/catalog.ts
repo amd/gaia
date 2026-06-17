@@ -3,18 +3,18 @@
 
 // Agent Hub catalog access layer.
 //
-// Today the catalog is read from a bundled fixture (`./index.json`) so the
-// Hub pages build and render without a network round-trip. When the R2 bucket
-// + Cloudflare Worker land (#1095), swap to the live catalog by flipping the
-// single boundary below — change `CATALOG_SOURCE` to the R2 URL and the
-// `loadCatalog()` import to a `fetch()`. Nothing else in the app changes:
-// pages consume `getCatalog()` / `getAgent()` only.
+// Two explicit build-time modes, switched by the HUB_CATALOG_URL env var:
+//
+//   HUB_CATALOG_URL unset  -> bundled fixture (`./index.json`); offline builds.
+//   HUB_CATALOG_URL set    -> fetch `${HUB_CATALOG_URL}/index.json` from the
+//                             agent-hub worker (workers/agent-hub). A fetch
+//                             failure FAILS the build — no silent fixture
+//                             fallback.
+//
+// e.g.  HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build
+// Nothing else in the app changes: pages consume getCatalog()/getAgent() only.
 
 import fixture from './index.json';
-
-// One-line swap target. Point this at the R2 index when #1095 wires it up.
-export const CATALOG_SOURCE = 'fixture';
-// export const CATALOG_SOURCE = 'https://hub.amd-gaia.ai/index.json';
 
 export type SecurityTier = 'verified' | 'community' | 'experimental';
 export type AgentLanguage = 'python' | 'cpp';
@@ -56,11 +56,54 @@ interface CatalogFile {
   agents: Agent[];
 }
 
+async function fetchLiveCatalog(baseUrl: string): Promise<CatalogFile> {
+  const url = `${baseUrl.replace(/\/+$/, '')}/index.json`;
+  console.log(`[catalog] HUB_CATALOG_URL is set — fetching live catalog from ${url}`);
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch (e) {
+    throw new Error(
+      `[catalog] Failed to fetch the live catalog from ${url}: ${(e as Error).message}. ` +
+        `HUB_CATALOG_URL is set, so the build must use the live hub — it will not ` +
+        `fall back to the bundled fixture. Start the agent-hub worker (see ` +
+        `workers/agent-hub/README.md) or unset HUB_CATALOG_URL to build from the fixture.`
+    );
+  }
+  if (!res.ok) {
+    throw new Error(
+      `[catalog] Live catalog request to ${url} returned HTTP ${res.status}. ` +
+        `Check that the agent-hub worker is healthy (GET /health) and has at least ` +
+        `one published agent, or unset HUB_CATALOG_URL to build from the fixture.`
+    );
+  }
+  const catalog = (await res.json()) as CatalogFile;
+  if (!Array.isArray(catalog.agents)) {
+    throw new Error(
+      `[catalog] Live catalog at ${url} has no 'agents' array — the hub worker ` +
+        `returned an unexpected shape. See workers/agent-hub/schemas/index.schema.json.`
+    );
+  }
+  console.log(`[catalog] Loaded ${catalog.agents.length} agents from the live catalog`);
+  return catalog;
+}
+
+// One fetch per build, shared across pages.
+let liveCatalog: Promise<CatalogFile> | null = null;
+let loggedFixtureMode = false;
+
 // Load the raw catalog. The ONLY function that knows where the data comes from.
-// R2 swap: replace the fixture return with
-//   `return (await fetch(CATALOG_SOURCE).then((r) => r.json())) as CatalogFile;`
 async function loadCatalog(): Promise<CatalogFile> {
-  return fixture as unknown as CatalogFile;
+  const hubUrl = process.env.HUB_CATALOG_URL;
+  if (!hubUrl) {
+    if (!loggedFixtureMode) {
+      console.log('[catalog] HUB_CATALOG_URL not set — using the bundled fixture catalog');
+      loggedFixtureMode = true;
+    }
+    return fixture as unknown as CatalogFile;
+  }
+  liveCatalog ??= fetchLiveCatalog(hubUrl);
+  return liveCatalog;
 }
 
 /** All agents in the catalog, sorted: verified first, then alphabetical. */
@@ -117,20 +160,6 @@ const SECURITY_TIER_LABELS: Record<SecurityTier, string> = {
 
 export function securityTierLabel(tier: SecurityTier): string {
   return SECURITY_TIER_LABELS[tier] ?? tier;
-}
-
-/** Tailwind classes for a security-tier badge. */
-export function securityTierClasses(tier: SecurityTier): string {
-  switch (tier) {
-    case 'verified':
-      return 'bg-green-500/10 text-green-400 border-green-500/30';
-    case 'community':
-      return 'bg-blue-500/10 text-blue-400 border-blue-500/30';
-    case 'experimental':
-      return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30';
-    default:
-      return 'bg-gaia-card text-gaia-muted border-gaia-border';
-  }
 }
 
 /** Human-readable download size, e.g. "2.3 MB". */

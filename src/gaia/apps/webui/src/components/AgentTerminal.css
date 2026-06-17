@@ -75,7 +75,7 @@
   gap: 4px;
   font-size: 11px;
   font-family: var(--font-mono);
-  color: var(--amd-red);
+  color: var(--danger);
   font-weight: 600;
 }
 
@@ -106,8 +106,8 @@
 }
 
 .terminal-tab.active {
-  color: var(--amd-red);
-  border-bottom-color: var(--amd-red);
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
 /* ── Toolbar ──────────────────────────────────────────────────────────── */
@@ -149,7 +149,7 @@
 }
 
 .terminal-search input:focus {
-  border-color: var(--amd-red);
+  border-color: var(--accent);
 }
 
 .terminal-search input::placeholder {
@@ -330,7 +330,7 @@
 
 /* Line type color-coding */
 .terminal-line-error .terminal-line-content {
-  color: var(--amd-red);
+  color: var(--danger);
 }
 
 .terminal-line-warn .terminal-line-content {
@@ -428,7 +428,7 @@
 .terminal-scroll-btn:hover {
   background: var(--bg-active);
   color: var(--text-primary);
-  border-color: var(--amd-red-light);
+  border-color: var(--accent-light);
 }
 
 @keyframes fadeInUp {
