@@ -169,7 +169,7 @@ class AgentRegistry:
                     "'pip install amd-gaia[agents]'). See "
                     "docs/spec/agent-hub-restructure.mdx."
                 )
-            raise ValueError(f"Agent {model_id} not available: {e}.{hint}")
+            raise ValueError(f"Agent {model_id} not available: {e}.{hint}") from e
 
     def list_models(self) -> List[Dict[str, Any]]:
         """
