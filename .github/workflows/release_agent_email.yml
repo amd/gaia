@@ -39,8 +39,13 @@
 #                              in the Worker's PUBLISH_TOKENS secret, scoped to the
 #                              `AMD` author (workers/agent-hub/README.md).
 #   Variables:
-#     GAIA_HUB_BASE_URL           — Worker origin, default https://hub.amd-gaia.ai
-#                              (set only to override).
+#     GAIA_HUB_BASE_URL      — public Worker origin for downloads + the lock
+#                              baseUrl, default https://hub.amd-gaia.ai.
+#     GAIA_HUB_PUBLISH_URL   — origin CI POSTs uploads to. MUST be the Worker's
+#                              workers.dev URL: the free-plan managed WAF on the
+#                              proxied hub.amd-gaia.ai custom domain blocks large
+#                              binary uploads, but not GET downloads. Unset →
+#                              falls back to GAIA_HUB_BASE_URL (uploads will 403).
 #   npm trusted publisher for @amd-gaia/agent-email registered against THIS
 #   workflow file name: release_agent_email.yml (repo amd/gaia). The OIDC subject
 #   is tied to the exact filename — renaming this file breaks publish.
@@ -336,6 +341,14 @@ jobs:
           # stores each object immutably under agents/email/<ver>/, and rebuilds
           # index.json. publish_to_r2.py writes a summary the lock generator reads.
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          # Upload through GAIA_HUB_PUBLISH_URL (the Worker's workers.dev URL): the
+          # free-plan managed WAF on the proxied hub.amd-gaia.ai custom domain
+          # blocks large binary multipart uploads (the POST /publish path).
+          # workers.dev is a separate zone with no such ruleset and hits the same
+          # Worker + bucket. Downloads and the lock baseUrl stay on
+          # hub.amd-gaia.ai (GETs aren't blocked). Falls back to the public origin
+          # if the var is unset.
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
           GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
         run: |
           set -euo pipefail
@@ -347,7 +360,7 @@ jobs:
             args+=(--artifact "$f")
           done
           python hub/agents/python/email/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}" \
+            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
             --manifest "${MANIFEST}" \
             "${args[@]}" \
             --summary-out published.json
