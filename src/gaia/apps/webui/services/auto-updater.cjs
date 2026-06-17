@@ -324,6 +324,15 @@ async function installVersion(tag) {
       url: `https://github.com/amd/gaia/releases/download/${tag}/`,
     });
 
+    // Known limitation: the generic/tagged feed + allowDowngrade stay set
+    // until clearPin(). While pinned, autoDownload=false (set at init) keeps
+    // the scheduled check from installing anything, but that check queries the
+    // pinned release's own feed rather than GitHub-latest — so the "newer
+    // version available, you're pinned" chip won't fire until the user resumes.
+    // Restoring the github feed in the scheduled path risks racing the still-
+    // in-flight rollback download (which outlives this checkInProgress window),
+    // so it's intentionally deferred.
+
     // Kick off the targeted check — will fire update-available → downloads →
     // update-downloaded → our existing dialog prompts restart.
     await autoUpdaterRef.checkForUpdates();
