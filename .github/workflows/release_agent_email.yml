@@ -39,7 +39,7 @@
 #                              in the Worker's PUBLISH_TOKENS secret, scoped to the
 #                              `AMD` author (workers/agent-hub/README.md).
 #   Variables:
-#     HUB_BASE_URL           — Worker origin, default https://hub.amd-gaia.ai
+#     GAIA_HUB_BASE_URL           — Worker origin, default https://hub.amd-gaia.ai
 #                              (set only to override).
 #   npm trusted publisher for @amd-gaia/agent-email registered against THIS
 #   workflow file name: release_agent_email.yml (repo amd/gaia). The OIDC subject
@@ -193,7 +193,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
-          HUB_BASE_URL: ${{ vars.HUB_BASE_URL }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
@@ -211,7 +211,7 @@ jobs:
             exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "base_url=${HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base_url=${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Assert hub publish token present
         shell: bash
@@ -257,7 +257,7 @@ jobs:
           # stores each object immutably under agents/email/<ver>/, and rebuilds
           # index.json. publish_to_r2.py writes a summary the lock generator reads.
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
-          HUB_BASE_URL: ${{ vars.HUB_BASE_URL }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
         run: |
           set -euo pipefail
           args=()
@@ -268,7 +268,7 @@ jobs:
             args+=(--artifact "$f")
           done
           python hub/agents/python/email/packaging/publish_to_r2.py \
-            --base-url "${HUB_BASE_URL:-https://hub.amd-gaia.ai}" \
+            --base-url "${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}" \
             --manifest "${MANIFEST}" \
             "${args[@]}" \
             --summary-out published.json

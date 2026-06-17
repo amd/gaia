@@ -28,7 +28,7 @@
 #                  lock entry (so a Windows-only hand-upload won't wipe mac/linux).
 #
 # Env overrides: R2_REMOTE (default gaia), R2_BUCKET (default gaia-hub),
-#                HUB_BASE_URL (default https://hub.amd-gaia.ai).
+#                GAIA_HUB_BASE_URL (default https://hub.amd-gaia.ai).
 #
 # No silent fallback: a missing rclone/remote, a version mismatch, or no
 # binaries found is a hard error.
@@ -40,7 +40,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 REMOTE="${R2_REMOTE:-gaia}"
 BUCKET="${R2_BUCKET:-gaia-hub}"
 HUB_PREFIX="agents/email"
-HUB_BASE_URL="${HUB_BASE_URL:-https://hub.amd-gaia.ai}"
+GAIA_HUB_BASE_URL="${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}"
 
 PKG_JSON="${REPO_ROOT}/hub/agents/npm/agent-email/package.json"
 LOCK="${REPO_ROOT}/hub/agents/npm/agent-email/binaries.lock.json"
@@ -118,7 +118,7 @@ rclone lsl "${DEST}/" --s3-no-check-bucket
 
 echo "==> regenerating ${LOCK}"
 "${PY}" "${SCRIPT_DIR}/gen_binaries_lock.py" \
-  --base-url "${HUB_BASE_URL}/${HUB_PREFIX}/${VERSION}" \
+  --base-url "${GAIA_HUB_BASE_URL}/${HUB_PREFIX}/${VERSION}" \
   --version "${VERSION}" \
   --lock "${LOCK}" \
   $(for m in "${META_DIR}"/*.meta.json; do echo --meta "${m}"; done)
@@ -126,7 +126,7 @@ echo "==> regenerating ${LOCK}"
 cat <<EOF
 
 Done. ${#BINS[@]} binary(ies) live at:
-  ${HUB_BASE_URL}/${HUB_PREFIX}/${VERSION}/
+  ${GAIA_HUB_BASE_URL}/${HUB_PREFIX}/${VERSION}/
 
 Next — verify the published bytes match the lock, then publish npm:
   cd hub/agents/npm/agent-email
