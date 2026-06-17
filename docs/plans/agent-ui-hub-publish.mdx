@@ -270,11 +270,21 @@ its **Python backend** finishes a cold bootstrap: `backend-installer.cjs` runs
 "fast install" still lands the user on a multi-minute wait.
 
 - **Highest-leverage fix:** ship a **frozen/prebuilt backend** instead of a
-  runtime pip install — reuse the exact PyInstaller freeze tooling Part 1 builds
-  for the agents (`hub/agents/python/email/packaging/freeze.py`, which already
-  excludes torch/transformers/faiss to get <90 MB). A frozen UI backend turns
-  first-run from minutes into seconds and removes the PyPI/network failure mode.
-  This is the single biggest thing missing and it *reuses Part 1's investment*.
+  runtime pip install, so first-run is seconds and the PyPI/network failure mode
+  is gone. **Caveat (verify first):** the email freeze
+  (`hub/agents/python/email/packaging/freeze.py`) gets to <90 MB by *excluding*
+  torch/transformers/faiss — but the UI backend can't, because `[ui]` directly
+  declares `faiss-cpu` + `sentence-transformers` + `torch` and
+  `gaia.ui.server` **boots faiss + sentence_transformers eagerly** (`setup.py:143`,
+  #845). So this is **not** a drop-in reuse of the email recipe. Real options,
+  in order of leverage: (a) **move embeddings to remote Lemonade** so the backend
+  can be slimmed and *then* frozen small; (b) ship a **prebuilt venv / wheelhouse**
+  (no PyInstaller) — bigger artifact but avoids freezing torch/faiss native libs,
+  which is notoriously fragile; (c) accept a large (~GB) frozen artifact. Pick
+  before committing — the "<90 MB like email" expectation is wrong as written.
+- **Measure the baseline:** the "7–20 min" figure is an estimate, not a measured
+  cold run. Time a real first-run on a clean machine before anchoring the roadmap
+  to it.
 - **Model setup is silent + non-fatal:** `gaia init` runs in the background with
   no in-app visual, and a failure is swallowed (user lands on a terminal hint).
   Need an **in-app model downloader** with visible progress + a smaller default
@@ -382,7 +392,7 @@ Every gap surfaced during this investigation, in one checklist. Severity:
 
 | # | Gap | Today | Needed | Sev |
 |---|-----|-------|--------|-----|
-| C1 | First *use* is 7–20 min cold | `uv pip install amd-gaia[ui]` pulls torch/scipy (~5–10 min) | ship a **frozen backend** (reuse agent freeze tooling) → seconds | Critical |
+| C1 | First *use* is minutes cold (est. 7–20, unmeasured) | `[ui]` directly pulls faiss + sentence-transformers + torch (`setup.py:143`); not a transitive accident | frozen/prebuilt backend — but **cannot** reuse email's slim freeze (UI boots faiss+embeddings eagerly); needs remote-embeddings or a wheelhouse first | Critical |
 | C2 | Model setup is silent + non-fatal | `gaia init` runs in background; failure swallowed → terminal hint | in-app model downloader with visible progress + retry | High |
 | C3 | No lightweight first-run model option | default pulls ~4 GB Gemma-4-E4B | offer a smaller default for the first run | Medium |
 | C4 | No hardware pre-flight gating | scanner (`/api/system/status`) + catalog `requirements` both exist, never cross-checked | block/warn "NPU required, not detected" / "needs 8 GB" on card + install confirm | High |
