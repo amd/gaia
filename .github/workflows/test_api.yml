@@ -14,6 +14,8 @@ on:
       - 'src/gaia/api/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/llm/**'
+      - 'hub/agents/python/routing/**'
+      - 'hub/agents/python/code/**'
       - 'tests/test_api.py'
       - 'setup.py'
       - '.github/workflows/test_api.yml'
@@ -24,6 +26,8 @@ on:
       - 'src/gaia/api/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/llm/**'
+      - 'hub/agents/python/routing/**'
+      - 'hub/agents/python/code/**'
       - 'tests/test_api.py'
       - 'setup.py'
       - '.github/workflows/test_api.yml'
@@ -58,6 +62,13 @@ jobs:
         shell: powershell
         run: |
           uv pip install pytest pytest-timeout requests --python .venv\Scripts\python.exe
+          # The 'gaia-code' API model routes through RoutingAgent, which now
+          # ships as the standalone gaia-agent-routing wheel (#1102). Install
+          # both local hub packages (routing first, since gaia-agent-code
+          # depends on it and it isn't on PyPI) so the gaia-code streaming
+          # tests exercise the real agent instead of the missing-wheel error.
+          uv pip install -e hub/agents/python/routing --python .venv\Scripts\python.exe
+          uv pip install -e hub/agents/python/code --python .venv\Scripts\python.exe
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
