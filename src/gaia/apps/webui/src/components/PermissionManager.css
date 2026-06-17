@@ -25,7 +25,7 @@
 }
 
 .perm-header-icon {
-    color: var(--amd-red);
+    color: var(--accent);
     margin-top: 2px;
     flex-shrink: 0;
 }
@@ -127,7 +127,7 @@
 }
 
 .perm-search-input:focus {
-    border-color: var(--amd-red);
+    border-color: var(--accent);
     outline: none;
     box-shadow: 0 0 0 2px rgba(226, 60, 64, 0.1);
 }
@@ -268,7 +268,7 @@
 
 .perm-reset-btn:hover {
     background: var(--bg-hover);
-    color: var(--amd-red);
+    color: var(--accent);
 }
 
 /* ── Empty State ────────────────────────────────────────────── */

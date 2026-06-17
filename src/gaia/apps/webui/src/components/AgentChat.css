@@ -50,7 +50,7 @@
 }
 
 .agent-chat-header-icon {
-  color: var(--amd-red);
+  color: var(--accent);
 }
 
 .agent-chat-agent-name {
@@ -111,14 +111,14 @@
 .agent-chat-quick-btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: var(--amd-red);
+  border-color: var(--accent);
 }
 .agent-chat-quick-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 .agent-chat-quick-btn svg {
-  color: var(--amd-red);
+  color: var(--accent);
 }
 
 /* ── Messages Area ───────────────────────────────────────────────────── */
@@ -199,8 +199,8 @@
 }
 
 .agent-msg-user .agent-msg-avatar {
-  background: var(--amd-red);
-  color: white;
+  background: var(--accent);
+  color: #1a1a1a;
 }
 
 .agent-msg-agent .agent-msg-avatar {
@@ -230,7 +230,7 @@
 }
 
 .agent-msg-user .agent-msg-role {
-  color: var(--amd-red);
+  color: var(--accent);
 }
 
 .agent-msg-time {
@@ -259,7 +259,7 @@
   display: inline-block;
   width: 6px;
   height: 14px;
-  background: var(--amd-red);
+  background: var(--accent);
   margin-left: 1px;
   vertical-align: text-bottom;
   animation: blink 1s infinite;
@@ -376,7 +376,7 @@
   transition: border-color 150ms var(--ease);
 }
 .agent-chat-input:focus {
-  border-color: var(--amd-red);
+  border-color: var(--accent);
 }
 .agent-chat-input::placeholder {
   color: var(--text-muted);
@@ -393,8 +393,8 @@
   width: 36px;
   height: 36px;
   border-radius: var(--radius-md);
-  background: var(--amd-red);
-  color: white;
+  background: var(--accent);
+  color: #1a1a1a;
   flex-shrink: 0;
   transition: all 150ms var(--ease);
 }

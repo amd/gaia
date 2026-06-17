@@ -29,7 +29,7 @@ We adopt **option (b)** from the design discussion:
 > desktop installers). The paused `publish_agents.yml` (PyPI wheels, #1179) is
 > **left untouched** — the PyPI channel stays paused; the new publisher does
 > **npm + binary** first. Agent UI is **promoted to a registry package** so it
-> releases on its own cadence. R2 backend is **rclone → `assets.amd-gaia.ai`**.
+> releases on its own cadence. R2 backend is **rclone → `hub.amd-gaia.ai`**.
 
 ## Core principle: version-as-signal + idempotent publish
 
@@ -185,10 +185,10 @@ interact with:
 
 ## Open items to resolve during implementation
 
-- **R2 backend** — confirm rclone → `assets.amd-gaia.ai` (bucket `amd-gaia`) as
-  the binary origin; the `binary` channel's upload + the lock `baseUrl` depend on
-  it. (Repo secrets `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` /
-  `R2_ACCOUNT_ID`; var `ASSETS_BASE_URL`.)
+- **Hub backend** — the `binary` channel POSTs to the Agent Hub Worker's
+  `/publish` at `hub.amd-gaia.ai` (bucket `gaia-hub`), which checksums + rebuilds
+  `index.json`; the lock `baseUrl` points at the same origin. (Repo secret
+  `GAIA_HUB_TOKEN`; var `GAIA_HUB_BASE_URL`, default `https://hub.amd-gaia.ai`.)
 - **Approval gate** — `publish.yml` uses a manual `publish` environment gate. Do
   package releases need the same gate, or is the namespaced tag + idempotency
   enough? (Recommendation: gate the `npm`/`pypi` publish step only, not the

@@ -4,15 +4,17 @@
 Catalog ledger test (#976, updated #1021).
 
 Replaces the previous "legacy ⊆ new" parity check. The MCP catalog has been
-intentionally reduced from 22 deployed entries down to 3 entries (#1021
-removed mcp-filesystem and mcp-fetch because no built-in agent consumes them
-through the connectors framework; custom agents supply their own
-mcp_servers.json instead). This test asserts both ends of that ledger:
+intentionally reduced from 22 deployed entries down to 3 carried-over entries
+(#1021 removed mcp-filesystem and mcp-fetch because no built-in agent consumes
+them through the connectors framework; custom agents supply their own
+mcp_servers.json instead), plus mcp-tavily added net-new afterwards. This test
+asserts both ends of that ledger:
 
-  * KEPT_IDS — exactly these 3 ids must remain in
-    ``connectors.catalog.mcp_servers``. For each, field-by-field equivalence
-    against the legacy ``mcp.py:_CATALOG`` row of the same name is asserted as
-    a guard against silent drift during the migration.
+  * KEPT_IDS — exactly these ids must remain in
+    ``connectors.catalog.mcp_servers`` (the 3 carried over from the legacy
+    catalog, plus mcp-tavily). For each carried-over id, field-by-field
+    equivalence against the legacy ``mcp.py:_CATALOG`` row of the same name is
+    asserted as a guard against silent drift during the migration.
   * DELETED_IDS — these 19 ids must NOT be present. Regression guard against
     accidentally re-introducing untested catalog tiles.
 
@@ -33,6 +35,10 @@ KEPT_IDS = frozenset(
         "mcp-github",
         "mcp-memory",
         "mcp-git",
+        # Net-new (not part of the original 22): a real tavily-mcp@latest
+        # server. The same keyring TAVILY_API_KEY is also read by the
+        # gaia.web.tavily Python wrapper.
+        "mcp-tavily",
     }
 )
 

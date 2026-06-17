@@ -33,14 +33,18 @@ export interface Publisher {
   authors: string[];
 }
 
-/** The subset of the `requirements:` block surfaced in the catalog. */
+/**
+ * The `requirements:` block as stored in per-agent manifests. Numbers default
+ * to 0 and `npu` to false when the uploaded gaia-agent.yaml omits them, so the
+ * stored shape is always fully populated.
+ */
 export interface Requirements {
   platforms: string[];
-  min_memory_gb?: number;
-  min_disk_gb?: number;
-  min_context_size?: number;
-  npu?: boolean;
-  gpu_vram_gb?: number;
+  min_memory_gb: number;
+  min_disk_gb: number;
+  min_context_size: number;
+  npu: boolean;
+  gpu_vram_gb: number;
 }
 
 export interface Interfaces {
@@ -70,9 +74,12 @@ export interface ParsedManifest {
   security_tier: string;
   min_gaia_version?: string;
   models: string[];
+  tools_count: number;
+  permissions: string[];
   requirements: Requirements;
   interfaces: Interfaces;
   deprecated: boolean;
+  deprecation_message?: string;
 }
 
 /** Metadata for one stored artifact (computed server-side). */
@@ -127,14 +134,35 @@ export interface AgentManifest {
   security_tier: string;
   min_gaia_version?: string;
   models: string[];
+  tools_count: number;
+  permissions: string[];
   requirements: Requirements;
   interfaces: Interfaces;
   latest_version: string;
   deprecated: boolean;
+  deprecation_message?: string;
   versions: Record<string, VersionEntry>;
 }
 
-/** One lightweight entry in the top-level catalog index.json. */
+/**
+ * The `requirements` block in an index entry. Same numbers as
+ * {@link Requirements} but `npu` is rendered as "required"/"optional" — the
+ * shape the website Hub pages consume.
+ */
+export interface IndexRequirements {
+  min_memory_gb: number;
+  min_disk_gb: number;
+  min_context_size: number;
+  platforms: string[];
+  npu: "required" | "optional";
+  gpu_vram_gb: number;
+}
+
+/**
+ * One entry in the top-level catalog index.json. This is the contract the
+ * website Hub pages build from (`website/src/data/catalog.ts` `Agent`) — keep
+ * the two in sync.
+ */
 export interface IndexEntry {
   id: string;
   name: string;
@@ -146,8 +174,17 @@ export interface IndexEntry {
   author: string;
   security_tier: string;
   download_size_bytes: number;
-  requirements: { platforms: string[] };
+  tags: string[];
+  tools_count: number;
+  models: string[];
+  /** Empty string when the manifest does not declare one. */
+  min_gaia_version: string;
+  permissions: string[];
   deprecated: boolean;
+  deprecation_message?: string;
+  requirements: IndexRequirements;
+  /** README.md markdown of the latest version; empty string if none was published. */
+  readme: string;
 }
 
 /** The top-level catalog served at GET /index.json. */

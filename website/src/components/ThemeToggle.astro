@@ -1,0 +1,33 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+---
+<button
+  id="theme-toggle"
+  type="button"
+  aria-label="Toggle color theme"
+  class="p-2 rounded-md text-g-muted hover:text-g-text border border-transparent hover:border-g-border transition-colors"
+>
+  <!-- sun (shown in dark mode) -->
+  <svg data-icon="sun" class="w-4 h-4 hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+  <!-- moon (shown in light mode) -->
+  <svg data-icon="moon" class="w-4 h-4 hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+</button>
+
+<script>
+  const btn = document.getElementById('theme-toggle')!;
+  const sun = btn.querySelector('[data-icon="sun"]')!;
+  const moon = btn.querySelector('[data-icon="moon"]')!;
+  const render = () => {
+    const dark = document.documentElement.dataset.theme === 'dark';
+    sun.classList.toggle('hidden', !dark);
+    moon.classList.toggle('hidden', dark);
+  };
+  btn.addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem('gaia-theme', next);
+    render();
+  });
+  render();
+</script>

@@ -93,7 +93,7 @@
 
 .btn-agent-action:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--amd-red-light);
+  border-color: var(--accent-light);
   color: var(--text-primary);
 }
 
@@ -129,7 +129,7 @@
   background: rgba(226, 60, 64, 0.08);
   border: 1px solid rgba(226, 60, 64, 0.2);
   border-radius: var(--radius-sm);
-  color: var(--amd-red);
+  color: var(--danger);
   font-size: 13px;
   animation: agentFadeIn 150ms var(--ease);
 }
@@ -227,7 +227,7 @@
 }
 
 .agent-card.agent-card-selected {
-  border-color: var(--amd-red-light);
+  border-color: var(--accent-light);
   box-shadow: 0 0 0 1px rgba(226, 60, 64, 0.1);
 }
 
@@ -237,7 +237,7 @@
 }
 
 .agent-card.agent-card-error {
-  border-left: 3px solid var(--amd-red);
+  border-left: 3px solid var(--danger);
   padding-left: 13px;
 }
 
@@ -267,7 +267,7 @@
 }
 
 .agent-status-dot.dot-error {
-  background: var(--amd-red);
+  background: var(--danger);
   box-shadow: 0 0 6px rgba(226, 60, 64, 0.4);
 }
 
@@ -385,8 +385,8 @@
 
 .btn-card-action:hover {
   background: var(--bg-active);
-  border-color: var(--amd-red-light);
-  color: var(--amd-red);
+  border-color: var(--accent-light);
+  color: var(--accent);
 }
 
 .btn-card-action.btn-card-start:hover {
@@ -395,8 +395,8 @@
 }
 
 .btn-card-action.btn-card-stop:hover {
-  border-color: var(--amd-red);
-  color: var(--amd-red);
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .btn-card-action.btn-card-install {
@@ -408,9 +408,9 @@
 }
 
 .btn-card-action.btn-card-install:hover {
-  background: var(--amd-red);
-  border-color: var(--amd-red);
-  color: white;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1a1a;
 }
 
 /* Install progress bar */
@@ -427,7 +427,7 @@
 
 .install-progress-fill {
   height: 100%;
-  background: var(--amd-red);
+  background: var(--accent);
   border-radius: 2px;
   transition: width 300ms var(--ease);
 }
@@ -445,13 +445,13 @@
   width: 12px;
   height: 12px;
   border: 2px solid var(--border);
-  border-top-color: var(--amd-red);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: spinAnim 0.8s linear infinite;
 }
 
 .install-progress-error {
-  color: var(--amd-red);
+  color: var(--danger);
   font-size: 11px;
   margin-top: 4px;
 }
@@ -591,7 +591,7 @@
 }
 
 .config-select:focus {
-  border-color: var(--amd-red);
+  border-color: var(--accent);
 }
 
 /* Config footer */

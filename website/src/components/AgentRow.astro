@@ -1,0 +1,42 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+import AgentIcon from './AgentIcon.astro';
+import { securityTierLabel, type Agent } from '../data/catalog';
+
+interface Props {
+  agent: Agent;
+}
+
+const { agent } = Astro.props;
+---
+
+<a
+  href={`/hub/${agent.id}`}
+  class={`agent-row group flex items-center gap-4 px-4 py-4 border-b border-g-border last:border-b-0 hover:bg-g-surface transition-colors ${agent.deprecated ? 'opacity-50' : ''}`}
+  data-id={agent.id}
+  data-name={agent.name.toLowerCase()}
+  data-description={agent.description.toLowerCase()}
+  data-tags={agent.tags.join(' ').toLowerCase()}
+  data-category={agent.category}
+  data-language={agent.language}
+  data-tier={agent.security_tier}
+  data-deprecated={agent.deprecated ? 'true' : 'false'}
+>
+  <span class="flex-none w-10 h-10 rounded-lg border border-g-border bg-g-surface flex items-center justify-center text-g-muted group-hover:text-g-gold-text group-hover:border-g-gold/40 transition-colors">
+    <AgentIcon name={agent.icon} class="w-5 h-5" />
+  </span>
+  <span class="min-w-0 flex-1">
+    <span class="flex items-baseline gap-2.5">
+      <span class="text-[15px] font-semibold text-g-text">{agent.name}</span>
+      {agent.security_tier === 'verified' && (
+        <span class="text-[10px] font-bold tracking-wide uppercase text-g-gold-text">{securityTierLabel(agent.security_tier)}</span>
+      )}
+    </span>
+    <span class="block text-[13px] text-g-muted truncate">{agent.description}</span>
+  </span>
+  <span class="flex-none text-[12px] font-medium text-g-gold-text opacity-0 group-hover:opacity-100 transition-opacity hidden sm:block">
+    Open in GAIA ›
+  </span>
+</a>
