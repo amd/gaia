@@ -3,11 +3,11 @@ title: "Multi-Agent Orchestration"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/routing/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/routing/)
+  **Source Code:** [`hub/agents/python/routing/`](https://github.com/amd/gaia/blob/main/hub/agents/python/routing/)
 </Info>
 
 <Note>
-**Import:** `from gaia.agents.routing.agent import RoutingAgent`
+**Import:** `from gaia_agent_routing.agent import RoutingAgent`
 </Note>
 ---
 
@@ -28,7 +28,7 @@ title: "Multi-Agent Orchestration"
 ## 11.1 Basic Routing
 
 ```python
-from gaia.agents.routing.agent import RoutingAgent
+from gaia_agent_routing.agent import RoutingAgent
 
 # Create router (no interactive mode - uses defaults)
 router = RoutingAgent(api_mode=True)
@@ -53,7 +53,7 @@ print(result)
 ## 11.2 Interactive Routing (CLI Mode)
 
 ```python
-from gaia.agents.routing.agent import RoutingAgent
+from gaia_agent_routing.agent import RoutingAgent
 
 # Create router with user interaction
 router = RoutingAgent(api_mode=False)
@@ -77,7 +77,7 @@ result = agent.process_query("Build the app")
 ## 11.3 Routing with Conversation History
 
 ```python
-from gaia.agents.routing.agent import RoutingAgent
+from gaia_agent_routing.agent import RoutingAgent
 
 router = RoutingAgent(api_mode=False)
 
@@ -110,7 +110,7 @@ agent = router.process_query(
 ## 11.4 Intent Detection Patterns
 
 ```python
-from gaia.agents.routing.agent import RoutingAgent
+from gaia_agent_routing.agent import RoutingAgent
 
 router = RoutingAgent(api_mode=True)
 
