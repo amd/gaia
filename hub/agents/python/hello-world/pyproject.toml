@@ -10,7 +10,10 @@ authors = [{ name = "AMD" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["amd-gaia>=0.20.0"]
+# [api] makes this runnable as a standalone REST/MCP sidecar (pulls fastapi/uvicorn;
+# mcp + keyring are already core). Mirrors the email agent's packaging so the
+# api_server/mcp_server interfaces declared in gaia-agent.yaml work on a bare install.
+dependencies = ["amd-gaia[api]>=0.20.0"]
 
 [project.entry-points."gaia.agent"]
 hello-world = "gaia_agent_hello_world:build_registration"
