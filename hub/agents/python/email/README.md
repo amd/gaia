@@ -14,7 +14,7 @@ a cloud LLM; local-only inference is enforced at startup.
   and it remembers them for the session.
 - **Read & search** — list, open, and search threads; summarize a single
   message or an entire thread down to the essentials.
-- **Organize at scale** — archive, label, move, star, and mark read/unread —
+- **Organize at scale** — archive, label, move, and mark read/unread —
   one message or in batches, with one-step **undo** for batch actions.
 - **Reply, forward & send** — draft context-aware replies and forwards, then
   send. Anything that leaves your mailbox — **send, forward, permanent delete,
