@@ -493,7 +493,15 @@ class EmailTriageService:
             if url_match:
                 # Trim trailing sentence punctuation the greedy match grabs
                 # ("...report." → "...report") so the link is well-formed.
-                url = url_match.group(0).rstrip(".,;:!?)]}\"'")
+                # Strip char-by-char, but keep a ")" that closes a "(" inside
+                # the URL itself (e.g. .../Python_(programming_language)) so we
+                # don't silently truncate Wikipedia/Confluence-style links.
+                url = url_match.group(0)
+                _trailing = ".,;:!?)]}\"'"
+                while url and url[-1] in _trailing:
+                    if url[-1] == ")" and "(" in url:
+                        break
+                    url = url[:-1]
                 items.append(
                     ActionItem(
                         description=normalized,

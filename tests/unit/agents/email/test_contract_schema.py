@@ -469,6 +469,39 @@ def test_extract_action_items_detects_link():
     assert link_items[0].url == "https://example.com/report"
 
 
+def test_extract_action_items_preserves_matched_parens_in_url():
+    """A URL whose own path contains a matched () keeps its closing paren —
+    only true trailing punctuation is trimmed (#1696 review: Wikipedia-style)."""
+    pytest.importorskip("gaia_agent_email.api_routes")
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    svc = EmailTriageService()
+    body = (
+        "Please read https://en.wikipedia.org/wiki/Python_(programming_language) "
+        "before the review."
+    )
+    items = svc._extract_action_items(body)
+    link_items = [i for i in items if i.type == "link"]
+    assert link_items, "expected a link action item"
+    assert (
+        link_items[0].url
+        == "https://en.wikipedia.org/wiki/Python_(programming_language)"
+    )
+
+
+def test_extract_action_items_trims_unmatched_trailing_paren():
+    """A trailing ')' that does NOT close a '(' inside the URL is still trimmed."""
+    pytest.importorskip("gaia_agent_email.api_routes")
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    svc = EmailTriageService()
+    body = "Review the doc (see https://example.com/report) before Friday."
+    items = svc._extract_action_items(body)
+    link_items = [i for i in items if i.type == "link"]
+    assert link_items
+    assert link_items[0].url == "https://example.com/report"
+
+
 def test_extract_action_items_plain_imperative_is_text():
     """A plain imperative sentence without a URL yields a text item."""
     pytest.importorskip("gaia_agent_email.api_routes")
