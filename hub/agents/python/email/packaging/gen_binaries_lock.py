@@ -81,7 +81,7 @@ def _load_metas(paths: list[Path]) -> dict[str, dict]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Regenerate binaries.lock.json from R2 uploads."
+        description="Regenerate binaries.lock.json from the hub publish summary."
     )
     parser.add_argument(
         "--base-url",
