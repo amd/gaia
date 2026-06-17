@@ -36,6 +36,8 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const https = require("https");
+const http = require("http");
+const tls = require("tls");
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -611,69 +613,234 @@ function checkDiskSpace() {
 }
 
 /**
- * Best-effort network reachability check. Performs a HEAD request to
- * https://astral.sh (where the uv installer lives). Resolves { ok, message? }.
+ * Read the OS trust store. Node 22+ exposes `tls.getCACertificates("system")`;
+ * older Node lacks it, so this returns `[]` there (callers fall back to
+ * NODE_EXTRA_CA_CERTS / the bundled Mozilla set).
+ *
+ * Why this exists: behind a corporate TLS-inspection proxy, the proxy's root
+ * CA is installed in the OS trust store but NOT in Node's bundled Mozilla set,
+ * so every HTTPS handshake fails with UNABLE_TO_GET_ISSUER_CERT_LOCALLY and the
+ * machine looks "offline" when it is online (issue #1572).
+ */
+function _systemCaCertificates() {
+  try {
+    if (typeof tls.getCACertificates === "function") {
+      return tls.getCACertificates("system") || [];
+    }
+  } catch (err) {
+    log(`Could not read system CA store: ${err.message}`);
+  }
+  return [];
+}
+
+/** Read a pinned corporate root CA from NODE_EXTRA_CA_CERTS (any Node version). */
+function _extraCaCertificates() {
+  const file = process.env.NODE_EXTRA_CA_CERTS;
+  if (!file) return [];
+  try {
+    return [fs.readFileSync(file, "utf8")];
+  } catch (err) {
+    log(`Could not read NODE_EXTRA_CA_CERTS (${file}): ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Build the CA trust bundle for the network probe. Passing `ca` to
+ * `https.request` REPLACES Node's default trust store, so when we add system /
+ * extra certs we must re-include the bundled Mozilla set. Returns `undefined`
+ * when there is nothing extra to add (probe uses Node's default trust store —
+ * behaviour unchanged).
+ */
+function buildCaBundle() {
+  const extra = [..._systemCaCertificates(), ..._extraCaCertificates()];
+  if (extra.length === 0) return undefined;
+  return [...new Set([...tls.rootCertificates, ...extra])];
+}
+
+/** First non-empty proxy URL from the standard env vars, or null. */
+function proxyForHttps() {
+  return (
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    null
+  );
+}
+
+/**
+ * Classify a network error so the caller can tell a trust-store gap (NOT
+ * offline) apart from genuine connectivity loss.
+ *   - "tls"          → certificate/handshake failure (machine is online)
+ *   - "timeout"      → request timed out
+ *   - "connectivity" → DNS/connect failure (likely offline)
+ */
+function classifyNetworkError(err) {
+  const code = (err && err.code) || "";
+  const message = (err && err.message) || "";
+  if (/CERT|SELF_SIGNED|UNABLE_TO_|_SIGNATURE|ALTNAME/.test(code)) {
+    return "tls";
+  }
+  if (code === "ETIMEDOUT" || /timed out/i.test(message)) {
+    return "timeout";
+  }
+  return "connectivity";
+}
+
+/** HEAD-probe `target` (a URL) directly, trusting `ca`. */
+function _probeDirect(target, ca, finish, setSock) {
+  const opts = {
+    host: target.hostname,
+    port: target.port || 443,
+    path: target.pathname || "/",
+    method: "HEAD",
+    servername: target.hostname,
+    headers: { "User-Agent": "gaia-backend-installer/1.0" },
+  };
+  if (ca) opts.ca = ca;
+  try {
+    const req = https.request(opts, (res) => {
+      res.resume();
+      finish({ ok: true, status: res.statusCode });
+    });
+    setSock(req);
+    req.on("error", (err) =>
+      finish({ ok: false, kind: classifyNetworkError(err), message: `${target.href}: ${err.message}` })
+    );
+    req.end();
+  } catch (err) {
+    finish({ ok: false, kind: classifyNetworkError(err), message: `${target.href}: ${err.message}` });
+  }
+}
+
+/** HEAD-probe `target` through an HTTP CONNECT proxy, trusting `ca`. */
+function _probeViaProxy(target, proxy, ca, finish, setSock) {
+  let proxyUrl;
+  try {
+    proxyUrl = new URL(proxy);
+  } catch {
+    finish({ ok: false, kind: "connectivity", message: `${target.href}: invalid proxy URL "${proxy}"` });
+    return;
+  }
+  const headers = {};
+  if (proxyUrl.username) {
+    const cred = `${decodeURIComponent(proxyUrl.username)}:${decodeURIComponent(proxyUrl.password)}`;
+    headers["Proxy-Authorization"] = "Basic " + Buffer.from(cred).toString("base64");
+  }
+  const connectReq = http.request({
+    host: proxyUrl.hostname,
+    port: proxyUrl.port || 80,
+    method: "CONNECT",
+    path: `${target.hostname}:${target.port || 443}`,
+    headers,
+  });
+  setSock(connectReq);
+  connectReq.on("connect", (res, socket) => {
+    if (res.statusCode !== 200) {
+      try { socket.destroy(); } catch { /* ignore */ }
+      finish({ ok: false, kind: "connectivity", message: `${target.href}: proxy CONNECT returned ${res.statusCode}` });
+      return;
+    }
+    setSock(socket);
+    const opts = {
+      host: target.hostname,
+      port: target.port || 443,
+      path: target.pathname || "/",
+      method: "HEAD",
+      socket,
+      agent: false,
+      servername: target.hostname,
+      headers: { "User-Agent": "gaia-backend-installer/1.0" },
+    };
+    if (ca) opts.ca = ca;
+    try {
+      const req = https.request(opts, (r) => {
+        r.resume();
+        finish({ ok: true, status: r.statusCode });
+      });
+      req.on("error", (err) =>
+        finish({ ok: false, kind: classifyNetworkError(err), message: `${target.href}: ${err.message}` })
+      );
+      req.end();
+    } catch (err) {
+      finish({ ok: false, kind: classifyNetworkError(err), message: `${target.href}: ${err.message}` });
+    }
+  });
+  connectReq.on("error", (err) =>
+    finish({ ok: false, kind: classifyNetworkError(err), message: `${target.href}: ${err.message}` })
+  );
+  connectReq.end();
+}
+
+/**
+ * Best-effort reachability probe for a single host. A HEAD that gets any
+ * response (even 3xx/4xx) proves connectivity. Trusts the system / pinned CA
+ * store (issue #1572) and honors HTTPS_PROXY/HTTP_PROXY. Resolves
+ * { ok, status? } or { ok:false, kind, message }.
  */
 function _checkOneHost(url) {
   return new Promise((resolve) => {
     let settled = false;
+    let sock = null;
+    let timer = null;
     const finish = (result) => {
       if (settled) return;
       settled = true;
+      if (timer) clearTimeout(timer);
+      if (sock) {
+        try { sock.destroy(); } catch { /* ignore */ }
+      }
       resolve(result);
     };
-
-    try {
-      const req = https.request(
-        url,
-        {
-          method: "HEAD",
-          timeout: NETWORK_CHECK_TIMEOUT_MS,
-          headers: { "User-Agent": "gaia-backend-installer/1.0" },
-        },
-        (res) => {
-          // Any response (even 3xx/4xx) means we have basic connectivity.
-          res.resume();
-          finish({ ok: true, status: res.statusCode });
-        }
-      );
-      req.on("timeout", () => {
-        req.destroy();
-        finish({
-          ok: false,
-          message: `${url}: timed out after ${NETWORK_CHECK_TIMEOUT_MS / 1000}s`,
-        });
-      });
-      req.on("error", (err) => {
-        finish({
-          ok: false,
-          message: `${url}: ${err.message}`,
-        });
-      });
-      req.end();
-    } catch (err) {
+    const setSock = (s) => {
+      sock = s;
+    };
+    timer = setTimeout(() => {
       finish({
         ok: false,
-        message: `${url}: ${err.message}`,
+        kind: "timeout",
+        message: `${url}: timed out after ${NETWORK_CHECK_TIMEOUT_MS / 1000}s`,
       });
+    }, NETWORK_CHECK_TIMEOUT_MS);
+
+    let target;
+    try {
+      target = new URL(url);
+    } catch (err) {
+      finish({ ok: false, kind: "connectivity", message: `${url}: ${err.message}` });
+      return;
+    }
+    const ca = buildCaBundle();
+    const proxy = proxyForHttps();
+    if (proxy) {
+      _probeViaProxy(target, proxy, ca, finish, setSock);
+    } else {
+      _probeDirect(target, ca, finish, setSock);
     }
   });
 }
 
 /**
- * Probe each host in ``NETWORK_CHECK_HOSTS`` sequentially. Succeed as
- * soon as ANY host responds (even 3xx/4xx counts — it proves
- * connectivity). Only fail if ALL hosts are unreachable.
+ * Probe each host in ``NETWORK_CHECK_HOSTS`` sequentially. Succeed as soon as
+ * ANY host responds (even 3xx/4xx counts — it proves connectivity). On total
+ * failure, report the dominant failure `kind` so the caller can distinguish a
+ * trust-store gap ("tls" — online but Node doesn't trust the proxy CA) from a
+ * genuine outage ("connectivity").
  */
 async function checkNetwork() {
   const errors = [];
+  const kinds = new Set();
   for (const url of NETWORK_CHECK_HOSTS) {
     const result = await _checkOneHost(url);
-    if (result.ok) return result;
+    if (result.ok) return { ok: true, status: result.status };
     errors.push(result.message);
+    kinds.add(result.kind || "connectivity");
   }
+  const allTls = kinds.size > 0 && [...kinds].every((k) => k === "tls");
   return {
     ok: false,
+    kind: allTls ? "tls" : kinds.has("connectivity") ? "connectivity" : [...kinds][0] || "connectivity",
     message: `Network check failed for all hosts: ${errors.join("; ")}`,
   };
 }
@@ -1487,18 +1654,25 @@ async function ensureBackend(opts = {}) {
       throw err;
     }
 
-    // Network check failure: fatal, surface as InstallError.
+    // Network check is ADVISORY, never fatal. A failed HEAD probe is most often
+    // a corporate TLS-inspection proxy whose root CA isn't in Node's bundled
+    // trust store (#1572) — the machine is online and `uv`/`pip`, which honor
+    // HTTPS_PROXY and the system trust store, install fine. If the host really
+    // is unreachable, the install step below fails loudly with an accurate
+    // uv/pip error, which is more actionable than a generic "offline".
     if (!preChecks.network.ok) {
-      const err = new InstallError(
-        `You appear to be offline. ${preChecks.network.message || "Could not reach any network host."}`,
-        {
-          stage: STAGES.PRE_CHECKS,
-          suggestion:
-            "Connect to the internet and try again. If you are behind a corporate proxy, configure HTTPS_PROXY and re-launch GAIA.",
-        }
-      );
-      setState(STATES.FAILED, { stage: STAGES.PRE_CHECKS, message: err.message });
-      throw err;
+      if (preChecks.network.kind === "tls") {
+        log(
+          `Network pre-check hit a TLS/certificate error (not offline): ${preChecks.network.message}. ` +
+            "Typically a corporate proxy root CA missing from Node's trust store — " +
+            "set NODE_EXTRA_CA_CERTS to it (or relaunch with --use-system-ca) if the install fails. Proceeding."
+        );
+      } else {
+        log(
+          `Network pre-check could not reach any host: ${preChecks.network.message}. ` +
+            "Proceeding anyway; the install step will surface an accurate error if the network is truly unreachable."
+        );
+      }
     }
 
     // Fast-path: already installed at the expected version.
@@ -1583,6 +1757,10 @@ module.exports = {
   isFileLockedError,
   isTransientNetworkError,
   isTlsCertError,
+  buildCaBundle,
+  proxyForHttps,
+  classifyNetworkError,
+  _checkOneHost,
 
   // State machine
   getState,
