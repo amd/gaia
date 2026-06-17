@@ -34,10 +34,19 @@
 # trigger). Example: `git tag agent-pkg-email-v0.1.0 && git push origin --tags`.
 #
 # Maintainer setup (one-time):
+#   Environment:
+#     agent-publish         — create this GitHub environment (Settings →
+#                              Environments) with REQUIRED REVIEWERS and its
+#                              deployment branch restricted to `main`. The publish
+#                              job is bound to it, so a release pauses for human
+#                              approval before any hub/npm publish.
 #   Secrets:
 #     GAIA_HUB_TOKEN         — Agent Hub Bearer publish token; must match an entry
 #                              in the Worker's PUBLISH_TOKENS secret, scoped to the
-#                              `AMD` author (workers/agent-hub/README.md).
+#                              `AMD` author (workers/agent-hub/README.md). Define it
+#                              as an ENVIRONMENT secret on `agent-publish` (NOT a
+#                              repo secret) so it's unreadable until the gate is
+#                              approved.
 #   Variables:
 #     GAIA_HUB_BASE_URL      — public Worker origin for downloads + the lock
 #                              baseUrl, default https://hub.amd-gaia.ai.
@@ -83,16 +92,17 @@ jobs:
   build:
     name: Freeze (${{ matrix.key }})
     runs-on: ${{ matrix.os }}
-    # darwin-x64 (Intel) is BEST-EFFORT, built on BOTH supported Intel images
-    # (macos-15-intel + macos-26-intel) for redundancy. macos-13 was retired
-    # (Dec 2025); these are GitHub's recommended Intel replacements (supported
-    # through Aug 2027). PyInstaller can't cross-compile, so an Intel binary
-    # needs an Intel host — we won't fake one. Either Intel leg may fail/time out
-    # without failing the job (continue-on-error + required:false); `publish`
-    # gates only on the 3 REQUIRED platforms and keeps whichever Intel binary
-    # arrived. A total Intel miss is announced LOUDLY (::warning:: + job summary)
-    # and Intel users still fail loudly at install (fetch.ts rejects a missing /
-    # placeholder lock entry) — explicit degradation, never a silent one.
+    # darwin-x64 (Intel) is BEST-EFFORT, built on macos-15-intel. macos-13 was
+    # retired (Dec 2025); macos-15-intel is GitHub's recommended Intel image
+    # (supported through Aug 2027) and is a current GA standard runner, so it
+    # doesn't have macos-13's scarcity. We build on the OLDER supported macOS on
+    # purpose: a binary built there links a lower minimum-OS target and runs on a
+    # broader range of Macs. PyInstaller can't cross-compile, so an Intel binary
+    # needs an Intel host. The leg may fail/time out without failing the job
+    # (continue-on-error + required:false); `publish` gates only on the 3 REQUIRED
+    # platforms. A miss is announced LOUDLY (::warning:: + job summary) and Intel
+    # users still fail loudly at install (fetch.ts rejects a missing / placeholder
+    # lock entry) — explicit degradation, never a silent one.
     continue-on-error: ${{ !matrix.required }}
     timeout-minutes: ${{ matrix.required && 30 || 60 }}
     strategy:
@@ -119,19 +129,10 @@ jobs:
             artifact: email-agent-linux-x64
             frozen: email-agent
             required: true
-          # darwin-x64 (Intel) BEST-EFFORT on BOTH supported Intel images for
-          # redundancy — whichever lands provides the binary; neither blocks the
-          # release. They write the same filename, so a later publish step keeps
-          # one. (macos-13 retired Dec 2025; these are GitHub's Intel images.)
+          # darwin-x64 (Intel) BEST-EFFORT — see the job-level comment above.
           - os: macos-15-intel
             platform: darwin-x64
-            key: darwin-x64-macos15
-            artifact: email-agent-darwin-x64
-            frozen: email-agent
-            required: false
-          - os: macos-26-intel
-            platform: darwin-x64
-            key: darwin-x64-macos26
+            key: darwin-x64
             artifact: email-agent-darwin-x64
             frozen: email-agent
             required: false
@@ -203,6 +204,13 @@ jobs:
     name: Publish to Hub + npm
     runs-on: ubuntu-latest
     needs: [build]
+    # Manual approval gate: the `agent-publish` environment is configured (repo
+    # Settings → Environments) with required reviewers, so this job pauses until a
+    # maintainer approves — the human backstop for an accidental/tampered release
+    # tag. GAIA_HUB_TOKEN lives as an ENVIRONMENT secret here, so the publish
+    # credential isn't even readable until approval. (Set the env + reviewers +
+    # move the secret in repo settings; restrict the env's deployment branch to main.)
+    environment: agent-publish
     permissions:
       contents: read
       id-token: write   # npm trusted publishing (OIDC) — no npm token
@@ -322,11 +330,11 @@ jobs:
             echo "darwin-x64 (Intel) binary present — full 4-platform release."
           else
             echo "DARWIN_X64_PUBLISHED=false" >> "$GITHUB_ENV"
-            echo "::warning::darwin-x64 (Intel macOS) binary is ABSENT — neither Intel build leg (macos-15-intel, macos-26-intel) produced an artifact. Releasing the other 3 platforms; Intel-mac users will get a loud 'no binary for darwin-x64' error at install until a follow-up Intel build is published under this version."
+            echo "::warning::darwin-x64 (Intel macOS) binary is ABSENT — the Intel build leg (macos-15-intel) produced no artifact. Releasing the other 3 platforms; Intel-mac users will get a loud 'no binary for darwin-x64' error at install until a follow-up Intel build is published under this version."
             {
               echo "### ⚠️ Intel macOS (darwin-x64) NOT published"
               echo ""
-              echo "Neither Intel build leg (\`macos-15-intel\`, \`macos-26-intel\`) produced an artifact, so this release ships **3 of 4** platforms."
+              echo "The Intel build leg (\`macos-15-intel\`) produced no artifact, so this release ships **3 of 4** platforms."
               echo "Intel-mac (\`darwin-x64\`) users will hit a loud install error until an Intel binary is published for this version."
               echo ""
               echo "**Follow-up:** re-run the \`build (darwin-x64)\` leg when Intel runner capacity frees up; the POST /publish endpoint is immutable-per-filename, so adding the Intel binary to the *same* version is safe and idempotent."
@@ -447,4 +455,8 @@ jobs:
             echo "@amd-gaia/agent-email@${VERSION} already on npm — skipping (idempotent)."
             exit 0
           fi
-          npm publish --access public --provenance
+          # --ignore-scripts: dist/ was already built by the "Build npm package"
+          # step, so no lifecycle script (prepublishOnly/prepare/prepack) needs to
+          # run here — and we don't want any package/dependency script executing in
+          # this OIDC-privileged job. Matches publish.yml.
+          npm publish --access public --provenance --ignore-scripts
