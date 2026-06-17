@@ -13,9 +13,20 @@
     "twitter:image": "https://amd-gaia.ai/assets/logo/dark.png"
   },
   "colors": {
-    "primary": "#ED1C24",
-    "light": "#F4484D",
-    "dark": "#C8171E"
+    "primary": "#A87B2D",
+    "light": "#E2A33E",
+    "dark": "#E2A33E"
+  },
+  "appearance": {
+    "default": "system"
+  },
+  "fonts": {
+    "heading": {
+      "family": "Inter"
+    },
+    "body": {
+      "family": "Inter"
+    }
   },
   "favicon": "/assets/favicon.ico",
   "navigation": {
@@ -505,7 +516,7 @@
       },
       {
         "label": "Main Site",
-        "href": "https://gaia.amd.com"
+        "href": "https://amd-gaia.ai"
       }
     ],
     "primary": {
@@ -513,10 +524,6 @@
       "label": "Download",
       "href": "https://github.com/amd/gaia/releases"
     }
-  },
-  "modeToggle": {
-    "default": "dark",
-    "isHidden": true
   },
   "contextual": {
     "options": [

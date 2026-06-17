@@ -8,6 +8,7 @@
  *   index.json                              top-level lightweight catalog
  *   agents/<id>/manifest.json               per-agent aggregate manifest
  *   agents/<id>/<version>/gaia-agent.yaml   raw uploaded manifest, per version
+ *   agents/<id>/<version>/README.md         README markdown, per version (optional)
  *   agents/<id>/<version>/<filename>        the artifact (wheel or binary)
  */
 
@@ -30,6 +31,25 @@ export function artifactKey(id: string, version: string, filename: string): stri
 
 export function rawManifestKey(id: string, version: string): string {
   return `${versionDir(id, version)}gaia-agent.yaml`;
+}
+
+export function readmeKey(id: string, version: string): string {
+  return `${versionDir(id, version)}README.md`;
+}
+
+/**
+ * Read the README markdown for one published version. Returns "" when no
+ * README was published for that version — the catalog's documented default,
+ * not an error (the `readme` form part is optional on POST /publish).
+ */
+export async function readReadme(
+  bucket: R2Bucket,
+  id: string,
+  version: string
+): Promise<string> {
+  const obj = await bucket.get(readmeKey(id, version));
+  if (!obj) return "";
+  return obj.text();
 }
 
 /** Read and parse the per-agent manifest, or null if the agent doesn't exist. */

@@ -2,6 +2,8 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import '../design/tokens.css';
+
 interface Props {
   title: string;
   description?: string;
@@ -18,7 +20,16 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
-    <meta name="theme-color" content="#0d0d0d" />
+    <meta name="theme-color" content="#0a0a0b" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#fcfcfa" media="(prefers-color-scheme: light)" />
+    <!-- Pre-paint theme: avoids flash of wrong theme. localStorage empty -> OS preference. -->
+    <script is:inline>
+      (() => {
+        const stored = localStorage.getItem('gaia-theme');
+        const dark = stored ? stored === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      })();
+    </script>
 
     <!-- Canonical URL -->
     <link rel="canonical" href={canonicalURL} />
@@ -51,9 +62,9 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
 
     <title>{title}</title>
   </head>
-  <body class="bg-gaia-bg text-gaia-text font-sans antialiased min-h-screen">
+  <body class="bg-g-bg text-g-text font-sans antialiased min-h-screen transition-colors duration-200">
     <!-- Skip to main content link for accessibility -->
-    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-gaia-accent focus:text-white focus:rounded-lg focus:outline-none">
+    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-g-gold focus:text-black focus:rounded-md focus:outline-none">
       Skip to main content
     </a>
     <slot />
@@ -74,26 +85,26 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
     border-width: 0;
   }
 
-  /* Custom scrollbar for dark theme */
+  /* Custom scrollbar, theme-aware via tokens */
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
   ::-webkit-scrollbar-track {
-    background: #0d0d0d;
+    background: rgb(var(--g-bg));
   }
   ::-webkit-scrollbar-thumb {
-    background: #27272a;
+    background: rgb(var(--g-border));
     border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #3f3f46;
+    background: rgb(var(--g-muted) / 0.5);
   }
 
   /* Firefox scrollbar */
   * {
     scrollbar-width: thin;
-    scrollbar-color: #27272a #0d0d0d;
+    scrollbar-color: rgb(var(--g-border)) rgb(var(--g-bg));
   }
 
   /* Code block styling */
@@ -103,12 +114,12 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
 
   /* Selection color */
   ::selection {
-    background: rgba(237, 28, 36, 0.3);
+    background: rgb(var(--g-gold) / 0.3);
   }
 
   /* Smooth focus outline */
   :focus-visible {
-    outline: 2px solid #ED1C24;
+    outline: 2px solid rgb(var(--g-gold));
     outline-offset: 2px;
   }
 </style>

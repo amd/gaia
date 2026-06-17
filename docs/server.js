@@ -162,7 +162,7 @@ function getLoginPage(nonce) {
       transition: border-color 0.2s;
     }
     input[type="password"]:focus {
-      border-color: #ED1C24;
+      border-color: #E2A33E;
     }
     input[type="password"]::placeholder {
       color: rgba(255, 255, 255, 0.4);
@@ -174,13 +174,13 @@ function getLoginPage(nonce) {
       font-weight: 600;
       border: none;
       border-radius: 8px;
-      background: #ED1C24;
-      color: #fff;
+      background: #E2A33E;
+      color: #1a1a1a;
       cursor: pointer;
       transition: background 0.2s, transform 0.1s;
     }
     button:hover {
-      background: #c8171e;
+      background: #A87B2D;
     }
     button:active {
       transform: scale(0.98);
@@ -204,15 +204,15 @@ function getLoginPage(nonce) {
       text-decoration: none;
     }
     .footer a:hover {
-      color: #ED1C24;
+      color: #E2A33E;
     }
   </style>
 </head>
 <body>
   <div class="container">
     <svg class="logo" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="50" cy="50" r="45" stroke="#ED1C24" stroke-width="4" fill="none"/>
-      <text x="50" y="58" text-anchor="middle" fill="#ED1C24" font-size="24" font-weight="bold" font-family="sans-serif">GAIA</text>
+      <circle cx="50" cy="50" r="45" stroke="#E2A33E" stroke-width="4" fill="none"/>
+      <text x="50" y="58" text-anchor="middle" fill="#E2A33E" font-size="24" font-weight="bold" font-family="sans-serif">GAIA</text>
     </svg>
     <h1>GAIA SDK Documentation</h1>
     <p class="subtitle">This documentation is access-restricted. Please enter the access code to continue.</p>

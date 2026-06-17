@@ -117,6 +117,23 @@ def test_pack_honours_output_dir(tmp_path):
     assert result.wheel_path.parent == out
 
 
+def test_pack_rebuild_same_version_succeeds(tmp_path):
+    """Re-packing the same version (e.g. pack then publish) overwrites in place."""
+    import os
+
+    pkg = _make_package(tmp_path)
+    dist = pkg / "dist"
+    dist.mkdir()
+    existing = dist / _EXPECTED_WHEEL
+    existing.write_bytes(b"previous build")
+    # Backdate so the rebuild's overwrite is detectable even on coarse clocks.
+    os.utime(existing, ns=(0, 0))
+
+    result = packager.pack(pkg, runner=_wheel_writing_runner())
+    assert result.wheel_path.name == _EXPECTED_WHEEL
+    assert result.sha256 == hashlib.sha256(_WHEEL_BYTES).hexdigest()
+
+
 def test_pack_ignores_preexisting_stale_wheel(tmp_path):
     pkg = _make_package(tmp_path)
     dist = pkg / "dist"

@@ -30,18 +30,18 @@ The console output system provides a unified interface for handling agent output
 ## Architecture
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A(["OUTPUT HANDLER"]) --> B(["AGENT CONSOLE"])
     A --> C(["SILENT CONSOLE"])
     A --> D(["SSE HANDLER"])
 
-    style A fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style B fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style D fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style A fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
+    style B fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style C fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style D fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
 
-    linkStyle 0,1,2 stroke:#ED1C24,stroke-width:2px
+    linkStyle 0,1,2 stroke:#E2A33E,stroke-width:2px
 ```
 
 | Component | Type | Purpose |
