@@ -1,0 +1,14 @@
+---
+// Gold aurora glow. Drift animation is disabled automatically by the
+// prefers-reduced-motion rule in tokens.css.
+interface Props { class?: string }
+const { class: className = '' } = Astro.props;
+---
+<div class={`pointer-events-none absolute inset-0 ${className}`} aria-hidden="true">
+  <div
+    class="absolute inset-0 animate-g-drift"
+    style="background:
+      radial-gradient(ellipse 55% 45% at 28% 85%, rgb(var(--g-gold) / calc(var(--g-glow) * 1.4)), transparent 70%),
+      radial-gradient(ellipse 45% 38% at 76% 18%, rgb(var(--g-gold) / calc(var(--g-glow) * 0.7)), transparent 70%);"
+  ></div>
+</div>

@@ -18,6 +18,7 @@
     "typescript": "^5.7.2"
   },
   "devDependencies": {
+    "@types/node": "^20.19.42",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49"
   }

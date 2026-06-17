@@ -82,7 +82,7 @@
 }
 
 .agent-icon-done { color: var(--text-muted); }
-.agent-icon-error { color: var(--amd-red); }
+.agent-icon-error { color: var(--danger); }
 .agent-activity.has-policy-alerts .agent-icon-done { color: var(--accent-yellow); }
 
 /* Spinner */
@@ -94,7 +94,7 @@
 
 .agent-spinner {
     animation: spin 1s linear infinite;
-    color: var(--amd-red);
+    color: var(--accent);
 }
 /* @keyframes spin defined in global index.css */
 
@@ -198,7 +198,7 @@
     background: transparent;
 }
 .flow-thought-hacker::-webkit-scrollbar-thumb {
-    background: rgba(237, 28, 36, 0.2);
+    background: rgba(226, 163, 62, 0.2);
     border-radius: 0;
 }
 
@@ -206,7 +206,7 @@
     display: inline-block;
     width: 0.55em;
     height: 1.1em;
-    background: var(--amd-red);
+    background: var(--accent);
     vertical-align: text-bottom;
     margin-left: 1px;
     animation: cursorBlink 600ms steps(2, start) infinite;
@@ -480,7 +480,7 @@
     border: 1px solid rgba(239, 68, 68, 0.15);
     font-size: 11px;
     font-family: var(--font-mono);
-    color: var(--amd-red);
+    color: var(--danger);
     animation: errorSlideIn 300ms var(--ease);
 }
 
@@ -894,7 +894,7 @@
 .cmd-exit-code {
     font-size: 9px;
     font-weight: 600;
-    color: var(--amd-red);
+    color: var(--accent);
     padding: 0 4px;
     border-radius: 2px;
     background: rgba(239, 68, 68, 0.1);
@@ -964,7 +964,7 @@
 .cmd-stderr {
     padding: 4px 10px 8px 22px;
     margin: 0;
-    color: var(--amd-red);
+    color: var(--accent);
     white-space: pre-wrap;
     word-break: break-word;
     max-height: 200px;

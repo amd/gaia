@@ -15,7 +15,7 @@
 
 /* Drag active indicator */
 .task-view.drag-active {
-    outline: 2px dashed var(--amd-red);
+    outline: 2px dashed var(--accent);
     outline-offset: -4px;
 }
 
@@ -101,7 +101,7 @@
     font-weight: 600;
     font-family: var(--font-sans);
     padding: 4px 10px;
-    border: 1px solid var(--amd-red);
+    border: 1px solid var(--accent);
     border-radius: var(--radius-md);
     outline: none;
     width: 280px;
@@ -110,7 +110,7 @@
 }
 
 .title-edit:focus {
-    box-shadow: 0 0 0 3px rgba(237, 28, 36, 0.12);
+    box-shadow: 0 0 0 3px rgba(226, 163, 62, 0.12);
 }
 
 
@@ -213,7 +213,7 @@
     transition: border-color var(--duration) var(--ease), color var(--duration) var(--ease);
 }
 .doc-pill:hover {
-    border-color: var(--amd-red);
+    border-color: var(--accent);
     color: var(--text-primary);
 }
 .doc-pill-name {
@@ -246,7 +246,7 @@
     display: inline-flex;
 }
 .doc-pill-remove:hover {
-    background: var(--amd-red);
+    background: var(--danger);
     color: var(--bg-primary);
 }
 .doc-pill-more,
@@ -373,11 +373,11 @@
 }
 
 .empty-task-chip:hover {
-    border-color: var(--amd-red);
-    color: var(--amd-red);
-    background: var(--amd-red-dim2);
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim2);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(237, 28, 36, 0.1);
+    box-shadow: 0 4px 12px rgba(226, 163, 62, 0.1);
 }
 
 /* ── Skeleton loading state ──────────────────────────────────────── */
@@ -458,11 +458,11 @@
     align-items: center;
     justify-content: center;
     gap: 12px;
-    background: var(--amd-red-dim2);
-    border: 2px dashed var(--amd-red);
+    background: var(--accent-dim2);
+    border: 2px dashed var(--accent);
     border-radius: var(--radius-lg);
     margin: 8px;
-    color: var(--amd-red);
+    color: var(--accent);
     font-weight: 600;
     font-size: 15px;
     font-family: var(--font-sans);
@@ -543,8 +543,8 @@
     width: 6px;
     height: 14px;
     border-radius: 0;
-    background: var(--amd-red);
-    box-shadow: 0 0 8px rgba(237, 28, 36, 0.45);
+    background: var(--accent);
+    box-shadow: 0 0 8px rgba(226, 163, 62, 0.45);
     image-rendering: pixelated;
     animation: typingBounce 1.4s infinite;
 }
@@ -590,15 +590,15 @@
 }
 
 .input-box:focus-within {
-    border-color: rgba(237, 28, 36, 0.4);
-    box-shadow: 0 0 20px rgba(237, 28, 36, 0.1);
+    border-color: rgba(226, 163, 62, 0.4);
+    box-shadow: 0 0 20px rgba(226, 163, 62, 0.1);
     animation: inputFocusPulse 400ms var(--ease);
 }
 
 @keyframes inputFocusPulse {
-    0% { box-shadow: 0 0 0 rgba(237, 28, 36, 0); }
-    50% { box-shadow: 0 0 24px rgba(237, 28, 36, 0.14); }
-    100% { box-shadow: 0 0 20px rgba(237, 28, 36, 0.1); }
+    0% { box-shadow: 0 0 0 rgba(226, 163, 62, 0); }
+    50% { box-shadow: 0 0 24px rgba(226, 163, 62, 0.14); }
+    100% { box-shadow: 0 0 20px rgba(226, 163, 62, 0.1); }
 }
 
 .msg-input {
@@ -646,13 +646,13 @@
     width: 34px;
     height: 34px;
     border-radius: var(--radius-md);
-    background: var(--amd-red);
-    color: white;
+    background: var(--accent);
+    color: #1a1a1a;
     transition: all var(--duration) var(--ease);
 }
 .send-btn:hover {
-    background: var(--amd-red-dark);
-    box-shadow: 0 0 16px rgba(237, 28, 36, 0.35);
+    background: var(--accent-dark);
+    box-shadow: 0 0 16px rgba(226, 163, 62, 0.35);
     transform: translateY(-1px);
 }
 .send-btn:active {
@@ -677,17 +677,17 @@
     width: 34px;
     height: 34px;
     border-radius: var(--radius-md);
-    border: 1.5px solid rgba(237, 28, 36, 0.5);
-    color: var(--amd-red);
-    background: var(--amd-red-dim2);
+    border: 1.5px solid rgba(229, 72, 77, 0.5);
+    color: var(--danger);
+    background: var(--danger-dim2);
     transition: all var(--duration) var(--ease);
     animation: pulse 2s ease-in-out infinite;
 }
 .stop-btn:hover {
-    border-color: var(--amd-red);
-    color: var(--amd-red-light);
-    background: var(--amd-red-dim);
-    box-shadow: 0 0 12px rgba(237, 28, 36, 0.2);
+    border-color: var(--danger);
+    color: var(--danger-light);
+    background: var(--danger-dim);
+    box-shadow: 0 0 12px rgba(229, 72, 77, 0.2);
     animation: none;
 }
 
@@ -722,9 +722,9 @@
 .scroll-bottom-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
-    border-color: var(--amd-red);
+    border-color: var(--accent);
     transform: translateX(-50%) translateY(-3px);
-    box-shadow: 0 4px 16px rgba(237, 28, 36, 0.15);
+    box-shadow: 0 4px 16px rgba(226, 163, 62, 0.15);
 }
 
 .input-footer {
@@ -850,7 +850,7 @@
 }
 
 .agent-picker-option.active {
-    color: #ed1c24;
+    color: #E2A33E;
     font-weight: 600;
 }
 
@@ -936,13 +936,13 @@
 }
 
 .attachment-preview:hover {
-    border-color: var(--amd-red);
+    border-color: var(--accent);
     background: var(--tint-subtle);
 }
 
 .attachment-preview.attachment-error {
-    border-color: var(--amd-red);
-    background: var(--amd-red-dim2);
+    border-color: var(--danger);
+    background: var(--danger-dim2);
 }
 
 .attachment-thumb {
@@ -976,7 +976,7 @@
     width: 12px;
     height: 12px;
     border: 1.5px solid var(--border);
-    border-top-color: var(--amd-red);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     flex-shrink: 0;
@@ -985,7 +985,7 @@
 /* @keyframes spin defined in global index.css */
 
 .attachment-error-text {
-    color: var(--amd-red);
+    color: var(--danger);
     font-size: 10px;
     white-space: nowrap;
 }
@@ -1013,7 +1013,7 @@
 }
 
 .attachment-remove:hover {
-    background: var(--amd-red);
+    background: var(--danger);
     color: white;
 }
 
