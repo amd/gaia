@@ -29,19 +29,32 @@ export function latestVersion(versions: string[]): string {
 /**
  * Produce an updated per-agent manifest with `newVersion` added.
  *
- * Caller must have already enforced immutability (the version must not exist).
- * The aggregate metadata (name/description/...) is refreshed from the manifest
- * of whatever version becomes `latest_version`, so the catalog reflects the
- * newest release's display fields.
+ * A version's artifact set is append-only per distinct filename: if the version
+ * already exists, the new artifact(s) are appended (the caller has already
+ * rejected duplicate filenames). The aggregate metadata (name/description/...)
+ * is refreshed from the manifest of whatever version becomes `latest_version`,
+ * so the catalog reflects the newest release's display fields.
  */
 export function upsertVersion(
   existing: AgentManifest | null,
   manifest: ParsedManifest,
   version: VersionEntry
 ): AgentManifest {
+  // If the version already exists, this publish adds another platform binary to
+  // it: append the new artifact(s), keep the original published_at/publisher and
+  // the primary artifact. The caller has already rejected duplicate filenames.
+  const prior = existing?.versions?.[version.version];
+  // Back-compat: a manifest written before `artifacts[]` existed has only the
+  // singular `artifact`. Treat that as the starting set so appending never
+  // dereferences an undefined array.
+  const priorArtifacts = prior ? (prior.artifacts ?? [prior.artifact]) : [];
+  const merged: VersionEntry = prior
+    ? { ...prior, artifacts: [...priorArtifacts, ...version.artifacts] }
+    : version;
+
   const versions: Record<string, VersionEntry> = {
     ...(existing?.versions ?? {}),
-    [version.version]: version,
+    [version.version]: merged,
   };
   const latest = latestVersion(Object.keys(versions));
 
@@ -155,5 +168,6 @@ export function makeVersionEntry(
     publisher,
     deprecated: manifest.deprecated,
     artifact,
+    artifacts: [artifact],
   };
 }

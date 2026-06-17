@@ -3,13 +3,13 @@ title: "Dynamic Tool Loader"
 ---
 
 <Info>
-  **Source Code (planned):** [`src/gaia/agents/base/tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)
+  **Source Code:** [`src/gaia/agents/base/tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) · bundles [`src/gaia/agents/chat/tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py)
 </Info>
 
 <Note>
 **Component:** Per-turn tool visibility for agents (issue [#688](https://github.com/amd/gaia/issues/688))
 **Module:** `gaia.agents.base.tool_loader`
-**Status:** Proposed — pending maintainer sign-off. Supersedes the issue-body spec once approved; read this first.
+**Status:** **Part 0 (#1448) + Part 1 (#1449) landed.** Part 1 ships the selection mechanism behind a default-off toggle on the ChatAgent `doc` profile. Parts 2–3 (explicit escape hatch, skill signal) are still proposed.
 **Target agent (v1):** `ChatAgent` (`doc` profile), behind a default-off toggle.
 </Note>
 
@@ -225,7 +225,7 @@ and sets the concrete TTFT target — before more is built.
 - A go/no-go note states whether the measured cost justifies the loader, and sets
   the concrete TTFT-reduction target Part 1 must hit.
 
-### Part 1 — Selection + dual-path filtering
+### Part 1 — Selection + dual-path filtering ✅ landed (#1449)
 
 - Wire selection into `_compose_system_prompt`; filter **both**
   `_format_tools_for_prompt` and `_build_openai_tool_schemas`.
@@ -250,6 +250,78 @@ and sets the concrete TTFT target — before more is built.
   measurably shrink, not just one.
 - **All three off-states revert to all tools** — memory disabled, loader toggle
   off, and embedder unavailable each expose the full registry (the last logs).
+
+#### How Part 1 shipped (implementation reference)
+
+**Toggle & tunables.** Default-off `ChatAgentConfig` fields, each overridable by
+an env var (env wins) so the eval harness can flip them without code changes:
+
+| Knob | Config field | Env override | Default |
+|------|--------------|--------------|---------|
+| Enable | `dynamic_tools` | `GAIA_DYNAMIC_TOOLS` (`1`/`true`/`yes`/`on`) | `False` |
+| Match threshold τ | `dynamic_tools_threshold` | `GAIA_DYNAMIC_TOOLS_TAU` | `0.20` (inclusive) |
+| Loaded-set cap | `dynamic_tools_max` | `GAIA_DYNAMIC_TOOLS_MAX` | `14` |
+
+A malformed `*_TAU` / `*_MAX` value raises at construction (no silent default).
+The loader is built **only** for `prompt_profile == "doc"` with the toggle on;
+otherwise `self.tool_loader is None` and the agent stays on the legacy path.
+
+**CORE (10, always-on, cap- & eviction-exempt)** — defined in
+[`tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py):
+`remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`,
+`read_file`, `query_documents`, `query_specific_file`, `set_loop_state`,
+`request_user_input`.
+
+**Bundles (cohesion groups, pulled in whole on a member match):** `rag_query`,
+`rag_index`, `file_search`, `file_browse`, `file_edit`, `data`, `shell`,
+`clipboard`, `desktop`, `vision`, `memory`, `loop_control`. CORE ∪ all bundle
+members must equal the 37-tool `doc` registry exactly. The drift guard is the CI
+test `test_chat_tool_bundles.py` (it compares both sets, so a new doc tool forces
+a conscious bundling decision); `ToolLoader.validate_registry`, called once on
+first `select`, additionally fails loudly at runtime if a CORE/bundle name is
+missing from the registry.
+
+**Selection each turn** = CORE ∪ semantically-matched tools (+ their bundles),
+accumulated into a session-scoped *loaded set* that only grows, then sorted. The
+query embedded is the **previous user message + current**, trailing 4,000 chars
+(Open Q4). Below the cap the set is monotonic; at the cap a non-CORE tool is
+**LRU-evicted** (oldest `last_call_ts`, falling back to load time for
+never-called tools); CORE and tools admitted this turn are exempt; if nothing is
+evictable the candidate is skipped and logged. Each turn emits one structured
+`TOOL_LOADER {json}` INFO line (scores, matched, bundle_pulled, admitted,
+evicted, skipped, loaded) for Part-2 tuning and the recall gate.
+
+**Caching seam.** The system prompt is recomputed **only** when the sorted
+selection changes, so steady-state turns serialize byte-identically and the
+backend KV prefix stays warm. When a filter is active the tools block moves
+**after** the response-format template (volatile content last); with no filter
+the legacy order and bytes are preserved exactly.
+
+**Native known gap (Amendment 2).** `_execute_tool` is never tightened, so a
+non-tool-calling model that names an unlisted tool still runs it (free recovery)
+and the loader logs `TOOL_LOADER_ESCAPE_HATCH`. Native tool-calling models have
+no such hatch until Part 2's `load_tools`; on first activation the agent logs the
+miss as a *known gap* rather than padding the loaded set.
+
+**Approved deviations from this sketch** (flagged in the #1449 PR):
+
+1. **No `finish` in CORE** — turn completion is protocol-level in GAIA; there is
+   no `finish` registry tool. CORE = 10 real names.
+2. **`max_tools=14`, not 8–12** — CORE alone is 10 and eviction-exempt, so the
+   cap is 10 CORE + 4 dynamic slots.
+3. **Config via `ChatAgentConfig` + env, not `config.toml`** — the repo has no
+   `[agent.tool_loader]` TOML section; tunables live on the dataclass with
+   `GAIA_DYNAMIC_TOOLS*` env overrides, leaving `GaiaConfig` untouched.
+
+<Warning>
+**Measured reduction is smaller than the original estimate.** The 5 memory CORE
+tools carry verbose docstrings, so CORE alone renders ~40% of the 37-tool native
+baseline — meaning **CORE-only is the ~60%-reduction best case** and a full
+14-tool loaded set lands around ~50% of baseline (~50% token reduction), not the
+~68% first guessed. Token count is only a proxy; the authoritative ≥60%
+*first-turn TTFT* gate is the live `gaia.eval.tool_cost --live-ttft --filter` run.
+`test_tool_loader_token_budget.py` pins these filtered costs as a static guard.
+</Warning>
 
 ### Part 2 — Explicit escape hatch + tuning
 
@@ -302,34 +374,40 @@ its own successful multi-step runs; each `SKILL.md` declares the exact
   Parts 0–2 behavior is byte-for-byte unchanged (regression test).
 - **No regression** when no skill matches the goal (falls through to semantic).
 
-## Open questions for the implementer
+## Open questions — resolved in Part 1
 
-These are intentionally **not** decided — propose them in your design sketch:
+These were open in the design sketch; Part 1 (#1449) decided them as follows:
 
-1. **Bundle definitions and CORE membership** — which tools group together for
-   ChatAgent, which tools are always-on CORE (the diagram list is illustrative,
-   not decided), and where the bundle→tools map lives (no such grouping exists
-   today; `KNOWN_TOOLS` is mixins, not bundles).
-2. **Similarity threshold τ** and how many tools/bundles to load before a cap.
-3. **Selection stability policy** — select once per session, or re-select on a
-   detected topic shift? What triggers a re-selection without thrashing the cache?
-4. **Query construction** — what text gets embedded as the match query: the
-   current user turn only, the last N chars of the conversation, or a blend? This
-   directly drives recall.
-5. **Config / toggle location** — where the default-off switch and any tunables
-   live (e.g. `~/.gaia/config.toml [agent.tool_loader]`, env var, or constructor
-   arg).
-6. **Part-0 methodology** — exact harness for measuring TTFT and slope (extend
-   `gaia eval agent`, or a standalone bench?).
+1. **Bundle definitions and CORE membership** — *decided.* CORE = 10 names and 12
+   bundles, in [`tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py)
+   (see [How Part 1 shipped](#part-1-selection-dual-path-filtering-landed-1449)),
+   pinned to cover the 37-tool `doc` registry exactly.
+2. **Similarity threshold τ / cap** — *decided.* τ = `0.20` inclusive, cap = `14`
+   (both tunable via config/env). τ was calibrated against live nomic
+   embeddings: question↔tool-description similarity is weak (real scores
+   ~0.05–0.25), so the original `0.55` guess made the semantic tier inert
+   (CORE-only). `0.20` surfaces document-action tools while excluding noise.
+3. **Selection stability policy** — *decided.* Re-select every turn, but the
+   loaded set only grows ("expand-on-new-match") and the prompt is recomputed
+   only when it changes, so non-expansion turns stay KV-warm. At the cap a
+   non-CORE tool is LRU-evicted.
+4. **Query construction** — *decided.* Previous user message + current, trailing
+   4,000 chars (assistant/RAG text excluded by construction).
+5. **Config / toggle location** — *decided.* `ChatAgentConfig` fields +
+   `GAIA_DYNAMIC_TOOLS*` env overrides (no `config.toml` section; `GaiaConfig`
+   untouched).
+6. **Part-0 methodology** — *decided in #1448.* `gaia.eval.tool_cost` measures
+   deterministic cost/slope and live prompt-prefill TTFT.
 
 ## Current state of the code
 
-`tool_loader.py` already exists on `main` (~257 lines, bundle/keyword skeleton)
-but is **inert**: `ChatAgent` constructs it and wires `reset_session()` in several
-call sites, yet `resolve()` is never called and no bundles are ever registered, so
-it filters nothing today. Treat it as a starting scaffold to be reshaped toward
-this spec (keyword policies removed, semantic added, both render paths wired) —
-not a finished base.
+`tool_loader.py` is the **live semantic loader** (Part 1, #1449): `ChatAgent`
+builds it for the `doc` profile when the toggle is on, calls `select()` each turn
+via the base `_select_tools_for_turn` hook, and both render paths filter from the
+same selection. The old keyword/bundle-policy skeleton was removed; the class name
+`ToolLoader` and `reset_session()` were kept so the existing (guarded) call sites
+in `cli.py` / `chat/app.py` needed no change. Recall recovery for native
+tool-calling models (the `load_tools` meta-tool) is still **Part 2**.
 
 ## Dependencies
 

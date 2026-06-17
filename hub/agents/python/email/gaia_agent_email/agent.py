@@ -51,14 +51,19 @@ from gaia_agent_email.tools.organize_tools import OrganizeToolsMixin
 from gaia_agent_email.tools.phishing_tools import PhishingToolsMixin
 from gaia_agent_email.tools.preference_tools import (
     PreferenceToolsMixin,
+    _normalize_email,
+    _persist_preferences,
+    _validate_session_preferences,
     init_session_preferences,
 )
+from gaia_agent_email.tools.profile_tools import ProfileToolsMixin
 from gaia_agent_email.tools.read_tools import ReadToolsMixin
 from gaia_agent_email.tools.reply_tools import ReplyToolsMixin
 from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
@@ -112,9 +117,9 @@ ACTIONS:
   shows the user the literal recipient/subject/body; trust ONLY what
   appears there.
 - Preference tools (set_priority_sender, set_low_priority_sender,
-  set_category_default, clear_session_preferences) — mutate session-scoped
-  classification preferences. Confirm the change in plain English; the
-  preferences are wiped on agent restart by design.
+  set_category_default, clear_session_preferences) — mutate persistent
+  classification preferences that survive across restarts. Confirm the
+  change in plain English.
 
 PRE-SCAN BEHAVIOR:
 When the user asks for a pre-scan, morning brief, triage view, or "what's
@@ -140,6 +145,7 @@ the user — do not recite raw JSON.
 
 class EmailTriageAgent(
     Agent,
+    MemoryMixin,
     DatabaseMixin,
     ReadToolsMixin,
     OrganizeToolsMixin,
@@ -149,6 +155,7 @@ class EmailTriageAgent(
     CalendarToolsMixin,
     PreferenceToolsMixin,
     PhishingToolsMixin,
+    ProfileToolsMixin,
 ):
     """Email Triage Agent — Gmail + Calendar through the connectors
     framework, all body inference local on Lemonade.
@@ -159,6 +166,10 @@ class EmailTriageAgent(
     and ``self._calendar`` BEFORE invoking the parent ``Agent.__init__``,
     so when ``_register_tools`` is later called by the base class, every
     closure has the backends ready.
+
+    Exception: ``MemoryMixin`` is NOT state-free — it requires an explicit
+    ``self.init_memory(...)`` call BEFORE ``super().__init__()``, which is
+    exactly where it is placed in this ``__init__``.
     """
 
     AGENT_ID = "email"
@@ -256,6 +267,19 @@ class EmailTriageAgent(
         self.init_db(db_path)
         action_store.init_schema(self)
 
+        # Memory subsystem. Must be called BEFORE super().__init__() because
+        # Agent.__init__() calls _register_tools(), and register_memory_tools()
+        # needs _memory_store to be set. Default path: ~/.gaia/email/memory.db
+        # (namespaced so it coexists with state.db without conflict).
+        memory_db = Path(config.resolved_memory_db_path())
+        memory_db.parent.mkdir(parents=True, exist_ok=True)
+        self.init_memory(db_path=memory_db, context="email")
+
+        # Restore preferences from the previous session. Must come after
+        # init_memory() (so _memory_store is set) and after
+        # _session_preferences is set (done above).
+        self._load_persisted_preferences()
+
         # LLM connection. Default to Lemonade — the config's base_url
         # allowlist guarantees the host is local.
         effective_model_id = config.model_id or DEFAULT_MODEL_NAME
@@ -307,10 +331,14 @@ class EmailTriageAgent(
         self._register_calendar_tools()
         self._register_preference_tools()
         self._register_phishing_tools()
+        self._register_profile_tools()
+        self.register_memory_tools()
 
     # -- Phase 2 multi-inbox routing (#1603) -------------------------------
 
-    def _remember_message_mailbox(self, message_id: Optional[str], provider: str) -> None:
+    def _remember_message_mailbox(
+        self, message_id: Optional[str], provider: str
+    ) -> None:
         """Record which mailbox a message_id came from, for action routing."""
         if message_id:
             self._message_mailbox[message_id] = provider
@@ -380,9 +408,7 @@ class EmailTriageAgent(
             )
         return backend
 
-    def _remember_draft_mailbox(
-        self, draft_id: Optional[str], provider: str
-    ) -> None:
+    def _remember_draft_mailbox(self, draft_id: Optional[str], provider: str) -> None:
         """Record which mailbox a draft was created in (for send_draft routing)."""
         if draft_id:
             self._draft_mailbox[draft_id] = provider
@@ -441,16 +467,17 @@ class EmailTriageAgent(
         ``mailbox`` tag and its id is remembered for downstream action routing.
         """
         from gaia_agent_email.tools import read_tools
-        from gaia_agent_email.tools.read_tools import triage_inbox_impl
+        from gaia_agent_email.tools.read_tools import (
+            extract_sender_email,
+            triage_inbox_impl,
+        )
         from gaia_agent_email.tools.triage_heuristics import group_by_category
 
         # Reference the factory via the read_tools module so the existing
         # ``read_tools.make_llm_classifier`` test seam (the pre-scan canary)
         # keeps intercepting the expensive triage path.
         chat = getattr(self, "chat", None)
-        classifier = (
-            read_tools.make_llm_classifier(chat) if chat is not None else None
-        )
+        classifier = read_tools.make_llm_classifier(chat) if chat is not None else None
         prefs = getattr(self, "_session_preferences", None)
         force_llm = bool(getattr(self.config, "force_llm", False))
         debug_flag = bool(getattr(self.config, "debug", False))
@@ -475,11 +502,65 @@ class EmailTriageAgent(
                 # Thread ids share the provenance map so get_thread /
                 # summarize_thread route to the right mailbox too.
                 self._remember_message_mailbox(item.get("thread_id"), provider)
+                # Record interaction for inbox profiling (#1289). Memory-guarded
+                # inside _record_interaction — silently skips when disabled.
+                # Recorded BEFORE the max_messages cap below on purpose: triage
+                # already classified this item, so its sender history is real
+                # even if the cap drops it from the returned view.
+                sender_addr = extract_sender_email(item.get("from", ""))
+                if sender_addr:
+                    self._record_interaction(sender_addr, item.get("category", ""))
                 merged.append(item)
         merged = merged[:max_messages]
+        # Behavioral learning: evaluate reply behavior and promote qualifying
+        # senders to priority. On-demand — no background thread.
+        self._apply_behavioral_promotions()
         # Re-group the merged, capped list so the bucketed view matches what the
         # caller actually sees.
         return {"results": merged, "grouped": group_by_category(merged)}
+
+    def _apply_behavioral_promotions(self) -> None:
+        """Promote qualifying senders to priority based on observed reply behavior.
+
+        Reads reply interactions via ``_evaluate_promotions()`` and, for each
+        qualifying sender not already in priority_senders, writes them through
+        the #1288 persistence path (``_session_preferences`` + MemoryStore) so
+        the promotion applies this turn AND survives restart.
+
+        Called synchronously from ``_triage_all_backends`` — never on a
+        background thread or scheduler. Memory-guarded: skips silently when
+        ``_memory_store is None``.
+        """
+        if getattr(self, "_memory_store", None) is None:
+            return
+
+        promoted_senders = self._evaluate_promotions()
+        if not promoted_senders:
+            return
+
+        prefs = getattr(self, "_session_preferences", None)
+        if prefs is None:
+            return
+
+        _validate_session_preferences(prefs)
+        new_promotions: list[str] = []
+        for sender in promoted_senders:
+            normalized = _normalize_email(sender)
+            if not normalized or "@" not in normalized:
+                continue
+            if normalized not in prefs["priority_senders"]:
+                prefs["priority_senders"].add(normalized)
+                prefs["low_priority_senders"].discard(normalized)
+                new_promotions.append(normalized)
+
+        if new_promotions:
+            _persist_preferences(self)
+            logger.info(
+                "email behavioral learning: promoted %d sender(s) to priority "
+                "via observed reply behavior: %s",
+                len(new_promotions),
+                new_promotions,
+            )
 
     def _pre_scan_all_backends(self, *, max_messages: int) -> dict:
         """Pre-scan every connected mailbox, tag each item, merge under budget.

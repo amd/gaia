@@ -1,0 +1,132 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Unit tests for the tool-recall gate (#1449).
+
+Covers the pure join logic and the log/scorecard parsers — no live eval.
+"""
+
+from __future__ import annotations
+
+from gaia.eval.tool_recall import (
+    compute_recall,
+    parse_called_sets_from_scorecard,
+    parse_loaded_sets_from_log,
+)
+
+
+def test_full_recall_when_called_subset_of_loaded():
+    loaded = [[["read_file", "query_documents"], ["query_documents"]]]
+    called = [[["read_file"], ["query_documents"]]]
+    report = compute_recall(loaded, called)
+    assert report.recall == 1.0
+    assert report.all_missing == []
+
+
+def test_miss_reported_when_called_tool_not_loaded():
+    loaded = [[["read_file"]]]
+    called = [[["read_file", "query_documents"]]]
+    report = compute_recall(loaded, called)
+    assert report.recall == 0.0
+    assert report.all_missing == ["query_documents"]
+    assert report.turns[0].missing == ["query_documents"]
+
+
+def test_partial_recall_across_turns():
+    loaded = [[["read_file"], ["query_documents"]]]
+    called = [[["read_file"], ["query_documents", "search_file"]]]
+    report = compute_recall(loaded, called)
+    assert report.recall == 0.5  # turn 0 ok, turn 1 missing search_file
+
+
+def test_empty_called_set_is_trivially_satisfied():
+    loaded = [[["read_file"], []]]
+    called = [[[], []]]
+    report = compute_recall(loaded, called)
+    assert report.recall == 1.0
+
+
+def test_scenario_count_mismatch_warns():
+    loaded = [[["a"]], [["b"]]]
+    called = [[["a"]]]
+    report = compute_recall(loaded, called)
+    assert any("scenario count mismatch" in w for w in report.alignment_warnings)
+
+
+def test_turn_count_mismatch_warns_and_scores_overlap():
+    loaded = [[["a"], ["b"]]]
+    called = [[["a"]]]  # one fewer turn
+    report = compute_recall(loaded, called)
+    assert any("turn count mismatch" in w for w in report.alignment_warnings)
+    assert len(report.turns) == 1  # scored the overlapping turn only
+
+
+# ── log parsing ───────────────────────────────────────────────────────────
+
+
+def test_parse_loaded_sets_splits_scenarios_on_turn_1():
+    log = "\n".join(
+        [
+            "some noise",
+            'TOOL_LOADER {"turn": 1, "loaded": ["read_file"]}',
+            'TOOL_LOADER {"turn": 2, "loaded": ["read_file", "query_documents"]}',
+            "[INFO] unrelated line",
+            'TOOL_LOADER {"turn": 1, "loaded": ["remember"]}',
+        ]
+    )
+    scenarios = parse_loaded_sets_from_log(log)
+    assert scenarios == [
+        [["read_file"], ["read_file", "query_documents"]],
+        [["remember"]],
+    ]
+
+
+def test_parse_loaded_sets_ignores_escape_hatch_lines():
+    log = "\n".join(
+        [
+            'TOOL_LOADER {"turn": 1, "loaded": ["read_file"]}',
+            '{"event": "TOOL_LOADER_ESCAPE_HATCH", "tool": "write_file", "turn": 1}',
+        ]
+    )
+    scenarios = parse_loaded_sets_from_log(log)
+    assert scenarios == [[["read_file"]]]
+
+
+def test_parse_called_sets_from_scorecard():
+    scorecard = {
+        "scenarios": [
+            {
+                "turns": [
+                    {"agent_tools": ["read_file"]},
+                    {"agent_tools": None},
+                ]
+            },
+            {"turns": [{"agent_tools": ["remember"]}]},
+        ]
+    }
+    called = parse_called_sets_from_scorecard(scorecard)
+    assert called == [[["read_file"], []], [["remember"]]]
+
+
+def test_end_to_end_log_and_scorecard_join():
+    log = "\n".join(
+        [
+            'TOOL_LOADER {"turn": 1, "loaded": ["read_file", "query_documents"]}',
+            'TOOL_LOADER {"turn": 2, "loaded": ["read_file", "query_documents"]}',
+        ]
+    )
+    scorecard = {
+        "scenarios": [
+            {
+                "turns": [
+                    {"agent_tools": ["read_file"]},
+                    {"agent_tools": ["query_documents"]},
+                ]
+            }
+        ]
+    }
+    report = compute_recall(
+        parse_loaded_sets_from_log(log),
+        parse_called_sets_from_scorecard(scorecard),
+    )
+    assert report.recall == 1.0
+    assert not report.alignment_warnings

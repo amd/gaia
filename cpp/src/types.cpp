@@ -155,6 +155,7 @@ AgentConfig AgentConfig::fromJson(const json& j) {
     c.showPrompts           = j.value("showPrompts",           c.showPrompts);
     c.streaming             = j.value("streaming",             c.streaming);
     c.silentMode            = j.value("silentMode",            c.silentMode);
+    c.structuredEvents      = j.value("structuredEvents",      c.structuredEvents);
     c.temperature           = j.value("temperature",           c.temperature);
     c.validate();
     return c;
@@ -189,6 +190,7 @@ json AgentConfig::toJson() const {
         {"showPrompts",           showPrompts},
         {"streaming",             streaming},
         {"silentMode",            silentMode},
+        {"structuredEvents",      structuredEvents},
         {"temperature",           temperature}
     };
 }

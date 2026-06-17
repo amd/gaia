@@ -113,6 +113,65 @@ describe("POST /publish — version immutability", () => {
     expect(await obj!.text()).toBe("original");
   });
 
+  it("appends a second platform binary to an existing version (multi-platform release)", async () => {
+    const env = makeEnv();
+    // First platform binary for email@0.1.0.
+    const first = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", name: "Email", version: "0.1.0" }),
+      artifact: "win32-binary",
+      filename: "email-agent-win32-x64.exe",
+    });
+    expect(first.status).toBe(201);
+    expect(((await first.json()) as any).published.version_artifacts).toBe(1);
+
+    // Second platform binary under the SAME version — must be accepted, not 409.
+    const second = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", name: "Email", version: "0.1.0" }),
+      artifact: "darwin-arm64-binary",
+      filename: "email-agent-darwin-arm64",
+    });
+    expect(second.status).toBe(201);
+    expect(((await second.json()) as any).published.version_artifacts).toBe(2);
+
+    // Both artifacts exist in R2 and in the per-agent manifest.
+    const keys = env.bucket.keys();
+    expect(keys).toContain("agents/email/0.1.0/email-agent-win32-x64.exe");
+    expect(keys).toContain("agents/email/0.1.0/email-agent-darwin-arm64");
+
+    const manifest = (await (await env.bucket.get("agents/email/manifest.json"))!.json()) as AgentManifest;
+    const v = manifest.versions["0.1.0"];
+    expect(v.artifacts.map((a) => a.filename).sort()).toEqual([
+      "email-agent-darwin-arm64",
+      "email-agent-win32-x64.exe",
+    ]);
+    // Primary artifact stays the first-published one.
+    expect(v.artifact.filename).toBe("email-agent-win32-x64.exe");
+    expect(Object.keys(manifest.versions)).toEqual(["0.1.0"]);
+  });
+
+  it("still rejects re-uploading the SAME filename under a version (409)", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      artifact: "original",
+      filename: "email-agent-win32-x64.exe",
+    });
+    const dup = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      artifact: "tampered",
+      filename: "email-agent-win32-x64.exe",
+    });
+    expect(dup.status).toBe(409);
+    expect(((await dup.json()) as any).error.code).toBe("version_exists");
+    // Original bytes untouched.
+    const obj = await env.bucket.get("agents/email/0.1.0/email-agent-win32-x64.exe");
+    expect(await obj!.text()).toBe("original");
+  });
+
   it("allows publishing a new version of an existing agent (201)", async () => {
     const env = makeEnv();
     await publish(env, {

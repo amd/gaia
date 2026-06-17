@@ -93,13 +93,28 @@ export interface ArtifactInfo {
   content_type: string;
 }
 
-/** One published version inside a per-agent manifest. */
+/**
+ * One published version inside a per-agent manifest.
+ *
+ * A version may carry MORE THAN ONE artifact — one per platform for a native
+ * binary release (e.g. the frozen email agent ships win32-x64, darwin-arm64,
+ * darwin-x64, linux-x64 under a single `0.1.0`). `artifacts` is the complete
+ * set; `artifact` is the primary (first-published) entry kept for catalog
+ * display and backward compatibility with single-artifact (wheel) agents.
+ *
+ * Within a version the artifact set is APPEND-ONLY per distinct filename:
+ * adding a new platform binary is allowed, but re-uploading an existing
+ * filename is rejected (immutability / tamper guard).
+ */
 export interface VersionEntry {
   version: string;
   published_at: string;
   publisher: string;
   deprecated: boolean;
+  /** Primary artifact (first published for this version). */
   artifact: ArtifactInfo;
+  /** All artifacts published under this version (one per platform). */
+  artifacts: ArtifactInfo[];
 }
 
 /**

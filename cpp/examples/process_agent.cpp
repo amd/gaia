@@ -701,7 +701,8 @@ static void cleanupBalloonNotify() {
 // ---------------------------------------------------------------------------
 class ProcessConsole : public gaia::CleanConsole {
 public:
-    void printFinalAnswer(const std::string& answer) override {
+    void printFinalAnswer(const std::string& answer,
+                          const gaia::UsageStats& /*usage*/ = {}) override {
         if (answer.empty()) return;
 
         std::string cleanAnswer = answer;

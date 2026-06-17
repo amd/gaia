@@ -62,7 +62,7 @@ def _forward_body(**overrides):
         "refresh_token": FWD_REFRESH,
         "scopes": FULL_SCOPES,
         "account_email": "alice@example.com",
-        "grant_agents": ["installed:email"],
+        "grant_agents": [],
     }
     body.update(overrides)
     return body
@@ -100,7 +100,10 @@ class TestForwardPost:
         )
         resp = ui_api_client.post(
             "/v1/connections/google",
-            json=_forward_body(scopes=["https://www.googleapis.com/auth/gmail.modify"]),
+            json=_forward_body(
+                scopes=["https://www.googleapis.com/auth/gmail.modify"],
+                grant_agents=["installed:email"],
+            ),
             headers=UI_HEADER,
         )
         assert resp.status_code == 403, resp.text
@@ -179,10 +182,13 @@ class TestAgentActsAfterForward:
             )
 
         respx.post("https://oauth2.googleapis.com/token").mock(side_effect=_cap)
+        ui_api_client.app.state.agent_registry = _make_fake_registry(
+            provider="google", scopes=FULL_SCOPES, nsid="installed:email"
+        )
 
         resp = ui_api_client.post(
             "/v1/connections/google",
-            json=_forward_body(account_email=""),
+            json=_forward_body(account_email="", grant_agents=["installed:email"]),
             headers=UI_HEADER,
         )
         assert resp.status_code == 201, resp.text
@@ -381,3 +387,78 @@ class TestRouterDrivenScopeResolution:
         )
         # required_scopes=[] → api.py honours empty list → 201.
         assert resp.status_code == 201, resp.text
+
+    def test_unknown_grant_agent_is_rejected(self, ui_api_client):
+        """A requested grant must resolve to a registered agent before import.
+
+        Unknown grant ids used to be skipped while still being persisted as
+        grants, which also collapsed required_scopes to [] when no valid grant
+        ids were present.
+        """
+        ui_api_client.app.state.agent_registry = _make_fake_registry(
+            provider="google",
+            scopes=["https://www.googleapis.com/auth/gmail.modify"],
+            nsid="builtin:test",
+        )
+
+        resp = ui_api_client.post(
+            "/v1/connections/google",
+            json=_forward_body(
+                scopes=["openid"],
+                grant_agents=["installed:missing"],
+            ),
+            headers=UI_HEADER,
+        )
+
+        assert resp.status_code == 404, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error"] == "unknown_agent"
+        assert detail["agent_ids"] == ["installed:missing"]
+        assert ui_api_client.get("/v1/connections/google").status_code == 404
+
+        from gaia.connectors.grants import list_agent_grants
+
+        assert list_agent_grants("google") == {}
+
+    def test_mixed_known_and_unknown_grant_agents_are_rejected(self, ui_api_client):
+        """Every requested grant id must be valid before import."""
+        ui_api_client.app.state.agent_registry = _make_fake_registry(
+            provider="google",
+            scopes=["https://www.googleapis.com/auth/gmail.modify"],
+            nsid="builtin:test",
+        )
+
+        resp = ui_api_client.post(
+            "/v1/connections/google",
+            json=_forward_body(
+                scopes=[
+                    "https://www.googleapis.com/auth/gmail.modify",
+                    "openid",
+                ],
+                grant_agents=["builtin:test", "installed:missing"],
+            ),
+            headers=UI_HEADER,
+        )
+
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"]["agent_ids"] == ["installed:missing"]
+        assert ui_api_client.get("/v1/connections/google").status_code == 404
+
+        from gaia.connectors.grants import list_agent_grants
+
+        assert list_agent_grants("google") == {}
+
+    def test_no_registry_with_grant_agents_fails(self, ui_api_client):
+        """A non-empty grant list cannot skip registry validation."""
+        if hasattr(ui_api_client.app.state, "agent_registry"):
+            del ui_api_client.app.state.agent_registry
+
+        resp = ui_api_client.post(
+            "/v1/connections/google",
+            json=_forward_body(scopes=["openid"], grant_agents=["installed:email"]),
+            headers=UI_HEADER,
+        )
+
+        assert resp.status_code == 503, resp.text
+        assert "Agent registry not initialized" in resp.text
+        assert ui_api_client.get("/v1/connections/google").status_code == 404

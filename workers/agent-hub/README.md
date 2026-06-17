@@ -29,9 +29,20 @@ depend on any `src/gaia` code.
   granted (`"*"` grants any). Once an agent id exists, only a publish whose
   `author` matches the recorded owner can add versions — you cannot hijack
   someone else's agent id.
-- **Version immutability.** Republishing an existing `<id>@<version>` is rejected
-  with `409`. The version list in `agents/<id>/manifest.json` is the source of
-  truth, with an object-level `head()` check as defense in depth.
+- **Version immutability (per filename).** A published artifact is never
+  overwritten: re-uploading the same `agents/<id>/<version>/<filename>` is
+  rejected with `409`, enforced by an object-level `head()` check. A version's
+  artifact set is **append-only per distinct filename** — see *Multi-platform
+  releases* below. A `409` on an artifact that already matches is the idempotent
+  re-run signal a release job treats as "already published".
+- **Multi-platform releases.** A single `<id>@<version>` may hold more than one
+  artifact — one per platform for a native binary (e.g. the frozen email agent
+  ships four binaries under `email@0.1.0`). The first publish of a version
+  creates it (and stores the immutable `gaia-agent.yaml`); each later publish
+  under the same version with a *new* filename appends another artifact. The
+  per-agent manifest's `versions[v]` records every artifact in `artifacts[]`,
+  with `artifact` kept as the primary (first-published) entry for single-artifact
+  (wheel) agents and catalog display.
 - **Server-side SHA-256.** The checksum is computed by the Worker from the bytes
   it received — never trusted from the request. It is also handed to R2's `put`
   integrity check.
@@ -57,6 +68,12 @@ agents/chat/0.1.0/gaia-agent.yaml
 agents/chat/0.1.0/gaia_agent_chat-0.1.0-py3-none-any.whl
 agents/chat/0.2.0/gaia-agent.yaml
 agents/chat/0.2.0/gaia_agent_chat-0.2.0-py3-none-any.whl
+agents/email/manifest.json
+agents/email/0.1.0/gaia-agent.yaml
+agents/email/0.1.0/email-agent-win32-x64.exe        # multi-platform: 4 binaries,
+agents/email/0.1.0/email-agent-darwin-arm64         # one version
+agents/email/0.1.0/email-agent-darwin-x64
+agents/email/0.1.0/email-agent-linux-x64
 ```
 
 ## JSON shapes
@@ -76,8 +93,10 @@ schemas live in [`schemas/`](./schemas):
   contract for the website Hub pages (`website/src/data/catalog.ts`).
 - [`schemas/manifest.schema.json`](./schemas/manifest.schema.json) —
   `GET /agents/<id>/manifest.json`. Full display metadata plus a `versions` map;
-  each version carries `published_at`, `publisher`, `deprecated`, and an
-  `artifact` block (`filename`, `path`, `size_bytes`, `sha256`, `content_type`).
+  each version carries `published_at`, `publisher`, `deprecated`, an `artifact`
+  block (the primary — `filename`, `path`, `size_bytes`, `sha256`,
+  `content_type`), and an `artifacts[]` array of every per-platform artifact in
+  that version.
 
 ## Local development & testing
 

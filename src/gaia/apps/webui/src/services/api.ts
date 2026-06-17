@@ -196,7 +196,7 @@ export async function rollbackAgent(agentId: string): Promise<InstallStatus> {
 
 // -- Connections (issue #915) ---------------------------------------------------
 
-import type { AgentMcpServer, ConnectorInfo, ConnectorRow } from '../types';
+import type { AgentMcpServer, ConnectorRow } from '../types';
 
 // New framework endpoints (T-8b) — /api/connectors
 const UI_HEADER = { 'x-gaia-ui': '1' };
@@ -364,53 +364,6 @@ export async function deactivateConnectorAgent(
     );
 }
 
-export async function listConnections(): Promise<{ connections: ConnectorInfo[] }> {
-    return apiFetch('GET', '/connections');
-}
-
-export async function getConnection(provider: string): Promise<ConnectorInfo> {
-    return apiFetch('GET', `/connections/${provider}`);
-}
-
-export async function authorizeConnection(
-    provider: string,
-    scopes: string[],
-): Promise<{ flow_id: string; authorization_url: string }> {
-    return apiFetch('POST', `/connections/${provider}/authorize`, { scopes });
-}
-
-export async function revokeConnection(provider: string): Promise<void> {
-    await apiFetch<unknown>('DELETE', `/connections/${provider}`);
-}
-
-export async function listAgentGrants(provider: string): Promise<{
-    grants: Record<string, string[]>;
-}> {
-    return apiFetch('GET', `/connections/${provider}/grants`);
-}
-
-export async function grantAgent(
-    provider: string,
-    agentId: string,
-    scopes: string[],
-): Promise<{ provider: string; agent_id: string; scopes: string[] }> {
-    return apiFetch(
-        'PUT',
-        `/connections/${provider}/grants/${encodeURIComponent(agentId)}`,
-        { scopes },
-    );
-}
-
-export async function revokeAgentGrant(
-    provider: string,
-    agentId: string,
-): Promise<void> {
-    await apiFetch<unknown>(
-        'DELETE',
-        `/connections/${provider}/grants/${encodeURIComponent(agentId)}`,
-    );
-}
-
 // -- Sessions ------------------------------------------------------------------
 
 export async function listSessions(): Promise<{ sessions: Session[]; total: number }> {
@@ -425,7 +378,7 @@ export async function getSession(id: string): Promise<Session> {
     return apiFetch('GET', `/sessions/${id}`);
 }
 
-export async function updateSession(id: string, data: { title?: string; system_prompt?: string; private?: boolean; agent_type?: string; mail_provider?: string }): Promise<Session> {
+export async function updateSession(id: string, data: { title?: string; system_prompt?: string; private?: boolean; agent_type?: string }): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}`, data);
 }
 
@@ -505,9 +458,6 @@ export function sendMessageStream(
 
     const controller = new AbortController();
     const t = log.stream.time();
-    let chunkCount = 0;
-    let totalChars = 0;
-    let agentEventCount = 0;
 
     log.stream.info(`Starting SSE stream for session=${sessionId}`, { messageLength: message.length });
 
@@ -523,100 +473,154 @@ export function sendMessageStream(
         }),
         signal: controller.signal,
     })
-        .then(async (res) => {
-            log.stream.info(`SSE connection opened -> HTTP ${res.status}`);
-
-            if (!res.ok) {
-                const errText = await res.text().catch(() => '');
-                log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
-                callbacks.onError(new Error(`HTTP ${res.status}: ${errText}`));
-                return;
-            }
-
-            const reader = res.body?.getReader();
-            if (!reader) {
-                log.stream.error('No response body reader available');
-                callbacks.onError(new Error('No response body'));
-                return;
-            }
-
-            const decoder = new TextDecoder();
-            let buffer = '';
-            let doneReceived = false;
-
-            try {
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) {
-                        log.stream.debug('SSE reader done (stream ended)');
-                        break;
-                    }
-
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop() || '';
-
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            const raw = line.slice(6).trim();
-                            if (!raw) continue;
-                            try {
-                                const event: StreamEvent = JSON.parse(raw);
-
-                                if (event.type === 'chunk') {
-                                    chunkCount++;
-                                    totalChars += (event.content || '').length;
-                                    if (chunkCount <= 3 || chunkCount % 50 === 0) {
-                                        log.stream.debug(`Chunk #${chunkCount} (+${(event.content || '').length} chars)`);
-                                    }
-                                    callbacks.onChunk(event);
-                                } else if (event.type === 'answer') {
-                                    // Agent final answer - treat as content
-                                    callbacks.onChunk(event);
-                                } else if (event.type === 'done') {
-                                    doneReceived = true;
-                                    log.stream.timed(`Stream complete: ${chunkCount} chunks, ${totalChars} chars, ${agentEventCount} agent events`, t);
-                                    callbacks.onDone(event);
-                                } else if (event.type === 'error') {
-                                    log.stream.error(`Stream error event:`, event.content);
-                                    callbacks.onError(new Error(event.content || 'Unknown error'));
-                                } else if (event.type === 'agent_created') {
-                                    log.stream.info(`Agent created: ${event.agent_id}`);
-                                    callbacks.onAgentCreated?.(event);
-                                } else if (AGENT_EVENT_TYPES.has(event.type)) {
-                                    agentEventCount++;
-                                    log.stream.debug(`Agent event: ${event.type}`, event);
-                                    callbacks.onAgentEvent(event);
-                                } else {
-                                    log.stream.warn(`Unknown SSE event type: ${event.type}`, event);
-                                }
-                            } catch (parseErr) {
-                                log.stream.warn(`Malformed SSE data, skipping`, { raw: raw.slice(0, 100) });
-                            }
-                        }
-                    }
-                }
-            } finally {
-                // Release the reader to free the underlying connection
-                reader.releaseLock();
-            }
-
-            // Only signal completion if no explicit done event was received during the stream
-            if (!doneReceived) {
-                log.stream.timed(`SSE connection closed without done event: ${chunkCount} chunks, ${agentEventCount} agent events`, t);
-                callbacks.onDone({ type: 'done' });
-            }
-        })
+        .then((res) => consumeSSEResponse(res, callbacks, t))
         .catch((err) => {
             if (err.name === 'AbortError') {
-                log.stream.warn(`Stream aborted by user after ${chunkCount} chunks`);
+                log.stream.warn('Stream aborted by user');
             } else {
-                log.stream.error(`Stream fetch error`, err);
+                log.stream.error('Stream fetch error', err);
                 callbacks.onError(err);
             }
         });
 
     return controller;
+}
+
+/**
+ * Read and dispatch an SSE response body against a set of StreamCallbacks.
+ * Shared by ``sendMessageStream`` (POST /chat/send) and ``attachToRun``
+ * (GET /chat/attach) so both parse events identically.
+ */
+async function consumeSSEResponse(
+    res: Response,
+    callbacks: StreamCallbacks,
+    t: ReturnType<typeof log.stream.time>,
+): Promise<void> {
+    log.stream.info(`SSE connection opened -> HTTP ${res.status}`);
+
+    if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
+        callbacks.onError(new Error(`HTTP ${res.status}: ${errText}`));
+        return;
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) {
+        log.stream.error('No response body reader available');
+        callbacks.onError(new Error('No response body'));
+        return;
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let doneReceived = false;
+    let chunkCount = 0;
+    let totalChars = 0;
+    let agentEventCount = 0;
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+                log.stream.debug('SSE reader done (stream ended)');
+                break;
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const raw = line.slice(6).trim();
+                    if (!raw) continue;
+                    try {
+                        const event: StreamEvent = JSON.parse(raw);
+
+                        if (event.type === 'chunk') {
+                            chunkCount++;
+                            totalChars += (event.content || '').length;
+                            if (chunkCount <= 3 || chunkCount % 50 === 0) {
+                                log.stream.debug(`Chunk #${chunkCount} (+${(event.content || '').length} chars)`);
+                            }
+                            callbacks.onChunk(event);
+                        } else if (event.type === 'answer') {
+                            // Agent final answer - treat as content
+                            callbacks.onChunk(event);
+                        } else if (event.type === 'done') {
+                            doneReceived = true;
+                            log.stream.timed(`Stream complete: ${chunkCount} chunks, ${totalChars} chars, ${agentEventCount} agent events`, t);
+                            callbacks.onDone(event);
+                        } else if (event.type === 'error') {
+                            log.stream.error(`Stream error event:`, event.content);
+                            callbacks.onError(new Error(event.content || 'Unknown error'));
+                        } else if (event.type === 'agent_created') {
+                            log.stream.info(`Agent created: ${event.agent_id}`);
+                            callbacks.onAgentCreated?.(event);
+                        } else if (AGENT_EVENT_TYPES.has(event.type)) {
+                            agentEventCount++;
+                            log.stream.debug(`Agent event: ${event.type}`, event);
+                            callbacks.onAgentEvent(event);
+                        } else {
+                            log.stream.warn(`Unknown SSE event type: ${event.type}`, event);
+                        }
+                    } catch (parseErr) {
+                        log.stream.warn(`Malformed SSE data, skipping`, { raw: raw.slice(0, 100) });
+                    }
+                }
+            }
+        }
+    } finally {
+        // Release the reader to free the underlying connection
+        reader.releaseLock();
+    }
+
+    // Only signal completion if no explicit done event was received during the stream
+    if (!doneReceived) {
+        log.stream.timed(`SSE connection closed without done event: ${chunkCount} chunks, ${agentEventCount} agent events`, t);
+        callbacks.onDone({ type: 'done' });
+    }
+}
+
+/**
+ * Re-attach to an in-flight background run and stream its events (#1580).
+ *
+ * Used when the user revisits a session whose turn is still running. The
+ * backend replays everything emitted so far, then streams live events.
+ * Returns an AbortController so the caller can detach on unmount — that
+ * does NOT cancel the run (it keeps going server-side), it only closes
+ * this client's view of it.
+ */
+export function attachToRun(
+    sessionId: string,
+    callbacks: StreamCallbacks,
+): AbortController {
+    const controller = new AbortController();
+    const t = log.stream.time();
+
+    log.stream.info(`Attaching to background run for session=${sessionId}`);
+
+    fetch(`${API_BASE}/chat/attach?session_id=${encodeURIComponent(sessionId)}`, {
+        method: 'GET',
+        signal: controller.signal,
+    })
+        .then((res) => consumeSSEResponse(res, callbacks, t))
+        .catch((err) => {
+            if (err.name === 'AbortError') {
+                log.stream.warn('Run attach detached by client');
+            } else {
+                log.stream.error('Run attach fetch error', err);
+                callbacks.onError(err);
+            }
+        });
+
+    return controller;
+}
+
+/** List session ids that currently have a running chat turn (#1580). */
+export async function getActiveRuns(): Promise<{ session_ids: string[] }> {
+    return apiFetch('GET', '/chat/active');
 }
 
 // -- Tool Confirmation ---------------------------------------------------------
@@ -813,7 +817,7 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
 // -- MCP Server Management -------------------------------------------------------
 
 // MCP server configuration moved to the connectors framework (#927):
-//   - Catalog tiles  → POST /api/connectors/{id}/configure (see connectorsStore)
+//   - Catalog tiles  → POST /api/connectors/{id}/configure
 //   - Custom servers → CLI `gaia connectors mcp add` today; UI in #977
 //   - Catalog list   → GET /api/connectors/catalog (filter by type='mcp_server')
 // Only read-only runtime endpoints remain:
