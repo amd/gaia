@@ -201,7 +201,7 @@ class TriageContext(_Strict):
         description="Active projects the principal cares about.",
     )
     tone: Optional[str] = Field(
-        default=None, description="Preferred summary/draft tone, e.g. 'concise'."
+        default=None, description="Preferred summary tone, e.g. 'concise'."
     )
     self_email: Optional[str] = Field(
         default=None,
@@ -296,6 +296,9 @@ class TriageUsage(_Strict):
 
     prompt_tokens: int = Field(
         default=0, description="Sum of input tokens across the LLM calls."
+    )
+    completion_tokens: int = Field(
+        default=0, description="Sum of output (completion) tokens across the LLM calls."
     )
     total_tokens: int = Field(
         default=0, description="Sum of input + output tokens across the LLM calls."

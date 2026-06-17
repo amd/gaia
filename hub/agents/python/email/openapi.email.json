@@ -664,7 +664,7 @@
                 "type": "null"
               }
             ],
-            "description": "Preferred summary/draft tone, e.g. 'concise'.",
+            "description": "Preferred summary tone, e.g. 'concise'.",
             "title": "Tone"
           }
         },
@@ -675,6 +675,12 @@
         "additionalProperties": false,
         "description": "LLM usage metrics for a triage, aggregated across the classify +\nsummarize calls. Reuses the existing ``AgentResponse.stats`` measurement\n(#1277/#1278) — no new measurement path. ``None`` on the heuristic-only\npath where no LLM call is made.",
         "properties": {
+          "completion_tokens": {
+            "default": 0,
+            "description": "Sum of output (completion) tokens across the LLM calls.",
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
           "prompt_tokens": {
             "default": 0,
             "description": "Sum of input tokens across the LLM calls.",

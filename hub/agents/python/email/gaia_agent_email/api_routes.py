@@ -151,6 +151,7 @@ def _aggregate_usage(call_stats: List[dict]) -> Optional[TriageUsage]:
         return None
     total_input = 0
     total_output = 0
+    decode_output = 0  # output only from calls with a usable TPS (>0)
     total_decode_time = 0.0
     for s in call_stats:
         inp = int(s.get("input_tokens") or 0)
@@ -159,10 +160,14 @@ def _aggregate_usage(call_stats: List[dict]) -> Optional[TriageUsage]:
         total_input += inp
         total_output += out
         if out and tps > 0:
+            decode_output += out
             total_decode_time += out / tps
-    agg_tps = total_output / total_decode_time if total_decode_time > 0 else 0.0
+    # Numerator excludes output from tps==0 calls so they can't inflate the
+    # aggregate (they add nothing to the decode-time denominator).
+    agg_tps = decode_output / total_decode_time if total_decode_time > 0 else 0.0
     return TriageUsage(
         prompt_tokens=total_input,
+        completion_tokens=total_output,
         total_tokens=total_input + total_output,
         tokens_per_second=agg_tps,
     )
