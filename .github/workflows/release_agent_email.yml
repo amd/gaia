@@ -203,6 +203,23 @@ jobs:
       id-token: write   # npm trusted publishing (OIDC) — no npm token
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history so the main-ancestry guard can resolve
+
+      # Publishing (hub + npm) is allowed ONLY from main. A tag must point at a
+      # commit on main; a workflow_dispatch must run on main. This blocks an
+      # accidental release from a feature branch (and keeps npm OIDC on main).
+      - name: Assert release is cut from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/main; then
+            echo "✓ release commit is on main"
+          else
+            echo "::error::Publishing is only allowed from main. The current ref '${GITHUB_REF_NAME}' ($(git rev-parse --short HEAD)) is not on main — merge to main, then tag or dispatch the release from main."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v6
