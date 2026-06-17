@@ -28,10 +28,12 @@ const categories = distinct(agents, 'category');
     <h1 class="text-3xl sm:text-4xl font-bold tracking-tight">Agents for your machine.</h1>
     <p class="mt-3 text-g-muted">Install with one command — or open directly in GAIA.</p>
 
-    <!-- Featured spotlight -->
-    <div class="mt-10">
-      <FeaturedCard agent={spotlight} eyebrow="Featured" />
-    </div>
+    <!-- Featured spotlight (omitted when the catalog is empty, e.g. a sparse live hub) -->
+    {spotlight && (
+      <div class="mt-10">
+        <FeaturedCard agent={spotlight} eyebrow="Featured" />
+      </div>
+    )}
 
     <!-- Filters -->
     <div class="mt-12 flex flex-wrap items-center gap-2">
