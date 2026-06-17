@@ -66,19 +66,31 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
         return () => document.removeEventListener('keydown', onKeyDown);
     }, [onClose]);
 
-    // Focus trap — keep focus inside the dialog.
+    // Move focus into the dialog ONCE on mount. Doing this per view change
+    // would yank focus mid-flow (list → confirm → installing).
     useEffect(() => {
         const el = dialogRef.current;
         if (!el) return;
-        const focusable = el.querySelectorAll<HTMLElement>(
+        const focusable = el.querySelector<HTMLElement>(
             'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
         );
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        first?.focus();
+        focusable?.focus();
+    }, []);
+
+    // Focus trap — recompute focusable elements live so it keeps working
+    // across view changes without stealing focus.
+    useEffect(() => {
+        const el = dialogRef.current;
+        if (!el) return;
 
         function trap(e: KeyboardEvent) {
-            if (e.key !== 'Tab') return;
+            if (e.key !== 'Tab' || !el) return;
+            const focusable = el.querySelectorAll<HTMLElement>(
+                'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+            );
+            if (focusable.length === 0) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
             if (e.shiftKey) {
                 if (document.activeElement === first) {
                     e.preventDefault();
@@ -93,7 +105,7 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
         }
         el.addEventListener('keydown', trap);
         return () => el.removeEventListener('keydown', trap);
-    }, [view]);
+    }, []);
 
     function selectRelease(release: ReleaseInfo, releases: ReleaseInfo[]) {
         if (release.isCurrent) return;

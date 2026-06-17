@@ -116,6 +116,27 @@ describe('VersionPicker', () => {
         expect(screen.getAllByText(/downgrade/i).length).toBeGreaterThan(0);
     });
 
+    it('does not steal focus from the focused control when the view changes', async () => {
+        const user = userEvent.setup();
+        render(<VersionPicker onClose={() => {}} />);
+
+        await waitFor(() => screen.getByText('0.20.0'));
+
+        // Move to the confirm view, then focus the "Back" button explicitly.
+        await user.click(screen.getByRole('button', { name: /0\.20\.0/i }));
+        const backBtn = screen.getByRole('button', { name: /back/i });
+        backBtn.focus();
+        expect(document.activeElement).toBe(backBtn);
+
+        // Transition back to the list view. The focus-trap effect must NOT
+        // yank focus to the first focusable element on this transition.
+        await user.click(backBtn);
+        await waitFor(() => screen.getByText('0.20.0'));
+
+        const closeBtn = screen.getByRole('button', { name: /close/i });
+        expect(document.activeElement).not.toBe(closeBtn);
+    });
+
     it('confirming the downgrade calls installVersion with the tag', async () => {
         const installMock = vi.fn(async () => {});
         vi.stubGlobal('gaiaUpdater', makeUpdaterBridge({ installVersion: installMock }));
