@@ -111,9 +111,9 @@ describe('VersionPicker', () => {
         await user.click(row);
 
         // Confirm step should mention version and restart
-        expect(screen.getByText(/0\.20\.0/i)).toBeInTheDocument();
-        expect(screen.getByText(/restart/i)).toBeInTheDocument();
-        expect(screen.getByText(/downgrade/i)).toBeInTheDocument();
+        expect(screen.getAllByText(/0\.20\.0/i).length).toBeGreaterThan(0);
+        expect(screen.getAllByText(/restart/i).length).toBeGreaterThan(0);
+        expect(screen.getAllByText(/downgrade/i).length).toBeGreaterThan(0);
     });
 
     it('confirming the downgrade calls installVersion with the tag', async () => {

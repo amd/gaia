@@ -202,10 +202,24 @@ function _releaseHasPlatformAsset(release) {
 async function listReleases() {
   const allowPrerelease = process.env.GAIA_UPDATE_PRERELEASE === "1";
   const pinnedVersion = _loadPin();
-  const currentVersion =
-    electronApi && electronApi.app
-      ? electronApi.app.getVersion()
-      : null;
+
+  // Get the running version — use the cached electronApi if available, else
+  // attempt a direct require (works when called after init(), and from tests
+  // where electron is mocked via moduleNameMapper).
+  let currentVersion = null;
+  if (electronApi && electronApi.app) {
+    currentVersion = electronApi.app.getVersion() || null;
+  } else {
+    try {
+      // eslint-disable-next-line global-require
+      const electron = require("electron");
+      if (electron && electron.app && electron.app.getVersion) {
+        currentVersion = electron.app.getVersion() || null;
+      }
+    } catch {
+      // ignore — currentVersion stays null
+    }
+  }
 
   let releases;
   try {
