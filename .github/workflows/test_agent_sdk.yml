@@ -124,8 +124,8 @@ jobs:
           # prints "This command is deprecated. Use 'lemonade pull --help'
           # instead." and exits non-zero, which under PowerShell + the
           # default error-on-stderr behaviour kills this step.
-          Write-Host "Pulling Llama-3.2-3B-Instruct-Hybrid model..."
-          lemonade pull Llama-3.2-3B-Instruct-Hybrid
+          Write-Host "Pulling Gemma-4-E4B-it-GGUF model..."
+          lemonade pull Gemma-4-E4B-it-GGUF
 
 
 
@@ -149,8 +149,8 @@ jobs:
 
           REM Run the comprehensive integration test suite
           set PYTHONIOENCODING=utf-8
-          REM Use the model that was pulled above (overrides DEFAULT_MODEL_NAME=Gemma-4-E4B)
-          set GAIA_TEST_MODEL=Llama-3.2-3B-Instruct-Hybrid
+          REM Use the model that was pulled above (matches DEFAULT_MODEL_NAME)
+          set GAIA_TEST_MODEL=Gemma-4-E4B-it-GGUF
           python tests\test_agent_sdk.py
           set integration_exit=%ERRORLEVEL%
 
