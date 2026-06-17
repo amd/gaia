@@ -2,11 +2,16 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
+# LEGACY / DISCOURAGED. This rclone hand-upload writes straight to the bucket and
+# therefore BYPASSES the Agent Hub Worker — so index.json is NOT rebuilt and the
+# upload is not server-side checksummed. The supported path (CI and by hand) is
+# publish_to_r2.py -> the Worker's POST /publish. Use this only for an emergency
+# direct-to-bucket upload, and run a Worker index rebuild afterwards.
+#
 # Manually upload frozen email-agent binaries to the GAIA hub R2 bucket and
 # regenerate binaries.lock.json with their real hashes — the "I run rclone
-# myself" path. Uses the SAME bucket, prefix, and public origin as the CI
-# release (release_agent_email.yml), so the published objects and the lock
-# baseUrl line up byte-for-byte whether a release goes through CI or by hand.
+# myself" path. Same bucket/prefix/origin as the CI release, so the lock baseUrl
+# lines up byte-for-byte.
 #
 # One-time rclone setup (remote name, creds, endpoint): see
 #   scripts/video-demo/R2-SETUP.md
