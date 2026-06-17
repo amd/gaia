@@ -252,6 +252,67 @@ describe("installVersion()", () => {
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
     expect(config.pinnedVersion).toBe("v0.20.0");
   });
+
+  test("aborts (throws) and does NOT touch the feed/check when the pin write fails", async () => {
+    const mod = loadModule();
+    const win = makeMockWindow();
+    mod.init(win);
+
+    // Reset feed state captured during init() so we can assert it stays put.
+    mockAutoUpdaterInstance._feedURL = null;
+    mockAutoUpdaterInstance.allowDowngrade = false;
+
+    const checkSpy = jest
+      .spyOn(mockAutoUpdaterInstance, "checkForUpdates")
+      .mockResolvedValue(null);
+    const setFeedSpy = jest.spyOn(mockAutoUpdaterInstance, "setFeedURL");
+
+    // Force the pin write to fail.
+    const writeSpy = jest
+      .spyOn(fs, "writeFileSync")
+      .mockImplementation(() => {
+        throw new Error("EACCES: permission denied");
+      });
+
+    await expect(mod.installVersion("v0.20.0")).rejects.toThrow(
+      /Failed to persist version pin — rollback aborted/
+    );
+
+    // The download/feed must NOT have been touched — AC2 stays intact.
+    expect(setFeedSpy).not.toHaveBeenCalled();
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(mockAutoUpdaterInstance.allowDowngrade).toBe(false);
+    expect(mockAutoUpdaterInstance._feedURL).toBeNull();
+
+    writeSpy.mockRestore();
+  });
+
+  test("throws a busy error when a check is already in progress", async () => {
+    const mod = loadModule();
+    const win = makeMockWindow();
+    mod.init(win);
+
+    // Hold checkForUpdates open so the module-level guard stays set while we
+    // fire a second (rollback) check.
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    jest
+      .spyOn(mockAutoUpdaterInstance, "checkForUpdates")
+      .mockImplementation(() => gate);
+
+    // Start a normal check (does not await) so checkInProgress flips true.
+    const firstCheck = mod.checkForUpdates();
+
+    await expect(mod.installVersion("v0.20.0")).rejects.toThrow(
+      /already in progress/i
+    );
+
+    // Let the first check finish to avoid a dangling promise.
+    release(null);
+    await firstCheck;
+  });
 });
 
 // ── Tests: pin gating at init ─────────────────────────────────────────────────

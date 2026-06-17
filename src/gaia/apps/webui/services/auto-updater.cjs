@@ -129,17 +129,18 @@ function _loadPin() {
   }
 }
 
+/**
+ * Persist the version pin. Propagates write errors to the caller so that a
+ * failed pin write can abort a rollback (AC2 must not be silently broken).
+ * Callers that can tolerate a failed write (e.g. clearPin) should catch.
+ */
 function _savePin(pinnedVersion) {
-  try {
-    fs.mkdirSync(path.dirname(UPDATE_CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(
-      UPDATE_CONFIG_PATH,
-      JSON.stringify({ pinnedVersion }, null, 2),
-      "utf8"
-    );
-  } catch (err) {
-    log("warn", "Failed to save pin:", err && err.message);
-  }
+  fs.mkdirSync(path.dirname(UPDATE_CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(
+    UPDATE_CONFIG_PATH,
+    JSON.stringify({ pinnedVersion }, null, 2),
+    "utf8"
+  );
 }
 
 // ── State management ─────────────────────────────────────────────────────────
@@ -293,23 +294,42 @@ async function installVersion(tag) {
       `Invalid release tag "${tag}" — expected the form "vMAJOR.MINOR.PATCH" (e.g. "v0.20.0")`
     );
   }
+  if (checkInProgress) {
+    throw new Error(
+      "An update check is already in progress — try again in a moment."
+    );
+  }
 
   log("info", `Installing version ${tag} via targeted rollback`);
 
-  // Persist pin before starting so AC2 holds even if download completes but
-  // user dismisses the restart prompt.
-  _savePin(tag);
+  // Persist pin before touching the feed/allowDowngrade so AC2 holds even if
+  // the download completes but the user dismisses the restart prompt. If the
+  // pin can't be persisted we ABORT — proceeding would let the next launch
+  // silently auto-upgrade past the rollback (no silent fallbacks).
+  try {
+    _savePin(tag);
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    throw new Error(
+      `Failed to persist version pin — rollback aborted: ${msg}`
+    );
+  }
   setState({ pinnedVersion: tag });
 
-  autoUpdaterRef.allowDowngrade = true;
-  autoUpdaterRef.setFeedURL({
-    provider: "generic",
-    url: `https://github.com/amd/gaia/releases/download/${tag}/`,
-  });
+  checkInProgress = true;
+  try {
+    autoUpdaterRef.allowDowngrade = true;
+    autoUpdaterRef.setFeedURL({
+      provider: "generic",
+      url: `https://github.com/amd/gaia/releases/download/${tag}/`,
+    });
 
-  // Kick off the targeted check — will fire update-available → downloads →
-  // update-downloaded → our existing dialog prompts restart.
-  await autoUpdaterRef.checkForUpdates();
+    // Kick off the targeted check — will fire update-available → downloads →
+    // update-downloaded → our existing dialog prompts restart.
+    await autoUpdaterRef.checkForUpdates();
+  } finally {
+    checkInProgress = false;
+  }
 }
 
 // ── clearPin / resumeUpdates ──────────────────────────────────────────────────
@@ -321,7 +341,13 @@ async function installVersion(tag) {
  * allowDowngrade so the next check is the normal forward-only flow.
  */
 function clearPin() {
-  _savePin(null);
+  // A failed clear is non-fatal — worst case the stale pin re-pauses updates
+  // on next launch and the user can retry Resume. Don't block resume on it.
+  try {
+    _savePin(null);
+  } catch (err) {
+    log("warn", "Failed to clear pin file:", err && err.message);
+  }
   setState({ pinnedVersion: null });
 
   if (autoUpdaterRef) {
