@@ -37,9 +37,11 @@
 #   Environment:
 #     agent-publish         — create this GitHub environment (Settings →
 #                              Environments) with REQUIRED REVIEWERS and its
-#                              deployment branch restricted to `main`. The publish
-#                              job is bound to it, so a release pauses for human
-#                              approval before any hub/npm publish.
+#                              deployment branches/tags restricted to `main` AND
+#                              the `agent-pkg-*` tag pattern (the release trigger
+#                              is a tag push, so a main-only rule blocks the gate).
+#                              The publish job is bound to it, so a release pauses
+#                              for human approval before any hub/npm publish.
 #   Secrets:
 #     GAIA_HUB_TOKEN         — Agent Hub Bearer publish token; must match an entry
 #                              in the Worker's PUBLISH_TOKENS secret, scoped to the
@@ -261,7 +263,9 @@ jobs:
     # maintainer approves — the human backstop for an accidental/tampered release
     # tag. GAIA_HUB_TOKEN lives as an ENVIRONMENT secret here, so the publish
     # credential isn't even readable until approval. (Set the env + reviewers +
-    # move the secret in repo settings; restrict the env's deployment branch to main.)
+    # move the secret in repo settings; restrict the env's deployment branches/tags
+    # to `main` + the `agent-pkg-*` tag pattern — the release is a tag push, so a
+    # main-only rule would block this gate.)
     environment: agent-publish
     permissions:
       contents: read
@@ -342,7 +346,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GAIA_HUB_TOKEN:-}" ]; then
-            echo "::error::missing repo secret GAIA_HUB_TOKEN — the Agent Hub Bearer publish token (must match the Worker's PUBLISH_TOKENS). See workers/agent-hub/README.md."
+            echo "::error::missing environment secret GAIA_HUB_TOKEN on the agent-publish environment — the Agent Hub Bearer publish token (must match the Worker's PUBLISH_TOKENS). See workers/agent-hub/README.md."
             exit 1
           fi
 
