@@ -106,6 +106,18 @@ class TestConstruction:
     def test_response_mode_is_conversational(self, agent):
         assert agent.response_mode == "conversational"
 
+    def test_injected_single_fake_builds_backends_map(self, agent, fake_gmail):
+        # Phase 2 (#1603 D2): the agent binds a provider→backend map. An
+        # injected single fake (no provider) tags as "google" to preserve the
+        # shipped Gmail fixtures, and ``self._gmail`` stays the primary backend.
+        assert agent._backends == {"google": fake_gmail}
+        assert agent._gmail is fake_gmail
+
+    def test_primary_backend_is_first_in_map(self, agent):
+        # self._gmail must be the first value in self._backends so existing
+        # single-backend tool closures keep working unchanged.
+        assert agent._gmail is next(iter(agent._backends.values()))
+
     def test_system_prompt_pre_scan_canary(self, agent):
         """Canary against silent prompt drift.
 
@@ -128,7 +140,7 @@ class TestConstruction:
 
 
 class TestToolRegistry:
-    """The agent must register all tools from the six mixins."""
+    """The agent must register all tools from its tool mixins."""
 
     EXPECTED_TOOLS = {
         # Read
@@ -139,6 +151,7 @@ class TestToolRegistry:
         "list_labels",
         "triage_inbox",
         "pre_scan_inbox",
+        "profile_inbox",
         # Organize
         "archive_message",
         "mark_read",
@@ -184,6 +197,8 @@ class TestToolRegistry:
         "set_low_priority_sender",
         "set_category_default",
         "clear_session_preferences",
+        # Inbox profiling from memory (#1289)
+        "profile_inbox",
     }
 
     def test_every_expected_tool_is_registered(self, agent):

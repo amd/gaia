@@ -45,9 +45,9 @@
 }
 
 .install-step.current .install-step-dot {
-    border-color: var(--amd-red);
+    border-color: var(--accent);
     background: rgba(226, 60, 64, 0.08);
-    color: var(--amd-red);
+    color: var(--accent);
     box-shadow: 0 0 0 3px rgba(226, 60, 64, 0.1);
 }
 
@@ -100,7 +100,7 @@
 .install-progress-fill {
     height: 100%;
     border-radius: 3px;
-    background: var(--amd-red);
+    background: var(--accent);
     transition: width 500ms var(--ease);
     position: relative;
 }
@@ -186,7 +186,7 @@
 }
 
 .install-step-icon.installing {
-    color: var(--amd-red);
+    color: var(--accent);
     animation: spin 2s linear infinite;
 }
 

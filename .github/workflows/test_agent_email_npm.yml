@@ -1,0 +1,89 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Builds + tests the @amd-gaia/agent-email npm package (thin JS/TS client +
+# build-time binary fetcher). The package ships NO binaries — they are fetched
+# from R2 at build time — so the final step asserts the npm tarball stays thin.
+
+name: Agent Email npm Package Tests
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+    paths:
+      - 'hub/agents/npm/agent-email/**'
+      - '.github/workflows/test_agent_email_npm.yml'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'hub/agents/npm/agent-email/**'
+      - '.github/workflows/test_agent_email_npm.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-agent-email-npm:
+    name: Build & Test agent-email npm package
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    defaults:
+      run:
+        working-directory: hub/agents/npm/agent-email
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: hub/agents/npm/agent-email/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (tsc)
+        run: npm run build
+
+      - name: Test (vitest)
+        run: npm test
+
+      # Thin-package invariant: the published tarball must NEVER contain a
+      # platform binary — those are fetched from R2 at build time (binaries.lock.json).
+      # Fail loudly if any packed file is an .exe/.bin or the email-agent binary.
+      - name: Assert tarball ships no binaries
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e '
+            const fs = require("fs");
+            const pack = JSON.parse(fs.readFileSync("pack.json", "utf8"));
+            const files = (pack[0]?.files ?? []).map((f) => f.path);
+            const offenders = files.filter((p) => {
+              const base = p.split("/").pop();
+              return (
+                /\.(exe|bin)$/i.test(base) ||
+                base === "email-agent" ||
+                /^email-agent(-|\.)/i.test(base)
+              );
+            });
+            if (offenders.length > 0) {
+              console.error("❌ Tarball contains forbidden binary file(s):");
+              offenders.forEach((p) => console.error("   " + p));
+              console.error(
+                "The @amd-gaia/agent-email package must stay thin — binaries are " +
+                "fetched from R2 at build time, never committed to the tarball."
+              );
+              process.exit(1);
+            }
+            console.log("✅ Thin-package invariant holds — " + files.length + " files, no binaries.");
+          '

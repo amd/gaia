@@ -46,9 +46,9 @@ pytest.importorskip("gaia_agent_email")  # noqa: E402
 from gaia_agent_email.tools import read_tools  # noqa: E402
 from gaia_agent_email.tools.read_tools import pre_scan_inbox_impl  # noqa: E402
 from gaia_agent_email.tools.triage_heuristics import (  # noqa: E402
-    CATEGORY_ACTIONABLE,
-    CATEGORY_INFORMATIONAL,
-    CATEGORY_LOW_PRIORITY,
+    CATEGORY_FYI,
+    CATEGORY_NEEDS_RESPONSE,
+    CATEGORY_PROMOTIONAL,
     CATEGORY_URGENT,
 )
 
@@ -99,9 +99,9 @@ def _msg(
 #   urgent         : (none — heuristic never emits urgent)          -> 0
 _EXPECTED = {
     CATEGORY_URGENT: 0,
-    CATEGORY_ACTIONABLE: 1,
-    CATEGORY_INFORMATIONAL: 3,
-    CATEGORY_LOW_PRIORITY: 3,
+    CATEGORY_NEEDS_RESPONSE: 1,
+    CATEGORY_FYI: 3,
+    CATEGORY_PROMOTIONAL: 3,
 }
 
 
@@ -173,19 +173,19 @@ class TestPreScanCounts:
 
         totals = out["totals"]
         assert totals["urgent"] == _EXPECTED[CATEGORY_URGENT]
-        assert totals["actionable"] == _EXPECTED[CATEGORY_ACTIONABLE]
-        assert totals["informational"] == _EXPECTED[CATEGORY_INFORMATIONAL]
+        assert totals["actionable"] == _EXPECTED[CATEGORY_NEEDS_RESPONSE]
+        assert totals["informational"] == _EXPECTED[CATEGORY_FYI]
         # Low-priority messages are surfaced as suggested archives.
-        assert totals["suggested_archives"] == _EXPECTED[CATEGORY_LOW_PRIORITY]
+        assert totals["suggested_archives"] == _EXPECTED[CATEGORY_PROMOTIONAL]
 
         # The scalar mirror of the informational bucket must agree.
-        assert out["informational_count"] == _EXPECTED[CATEGORY_INFORMATIONAL]
+        assert out["informational_count"] == _EXPECTED[CATEGORY_FYI]
 
         # Section list lengths agree with the totals (nothing dropped by caps
         # at this size — all caps are >= the per-section counts here).
         assert len(out["urgent"]) == _EXPECTED[CATEGORY_URGENT]
-        assert len(out["actionable"]) == _EXPECTED[CATEGORY_ACTIONABLE]
-        assert len(out["suggested_archives"]) == _EXPECTED[CATEGORY_LOW_PRIORITY]
+        assert len(out["actionable"]) == _EXPECTED[CATEGORY_NEEDS_RESPONSE]
+        assert len(out["suggested_archives"]) == _EXPECTED[CATEGORY_PROMOTIONAL]
 
         # Sanity: every fixture message is accounted for in exactly one bucket.
         accounted = (
@@ -237,7 +237,7 @@ class TestPreScanIsCheap:
 
         # Pre-scan still produced counts.
         assert out["kind"] == "email_pre_scan"
-        assert out["totals"]["suggested_archives"] == _EXPECTED[CATEGORY_LOW_PRIORITY]
+        assert out["totals"]["suggested_archives"] == _EXPECTED[CATEGORY_PROMOTIONAL]
 
         # triage_inbox_impl was called exactly once, and WITHOUT a classifier.
         assert seen_classifiers == [None], (
@@ -332,9 +332,9 @@ class TestPreScanToolWiringIsCheap:
             data = envelope["data"]
             assert data["kind"] == "email_pre_scan"
             assert (
-                data["totals"]["suggested_archives"] == _EXPECTED[CATEGORY_LOW_PRIORITY]
+                data["totals"]["suggested_archives"] == _EXPECTED[CATEGORY_PROMOTIONAL]
             )
-            assert data["informational_count"] == _EXPECTED[CATEGORY_INFORMATIONAL]
+            assert data["informational_count"] == _EXPECTED[CATEGORY_FYI]
 
             # The classifier factory was never invoked during pre-scan.
             assert (

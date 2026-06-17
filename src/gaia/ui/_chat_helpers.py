@@ -928,6 +928,19 @@ def _session_agent_kwargs(
     }
 
 
+def _session_mail_provider(session: dict) -> str | None:
+    """Session mailbox FILTER for the email agent (#1596 / #1603 Phase 2).
+
+    ``None`` (unset, null, or empty string from the frontend) means "every
+    connected mailbox" — the email agent scans all of them and fails loudly
+    when none is connected. An explicit ``"google"`` / ``"microsoft"``
+    restricts to that provider. Never coerce a missing pick to "google":
+    that silently triaged Gmail for sessions that never chose a provider
+    and ignored a connected Outlook.
+    """
+    return session.get("mail_provider") or None
+
+
 def _find_last_tool_step(steps: list) -> dict | None:
     """Find the last tool step in captured_steps, searching backwards."""
     for i in range(len(steps) - 1, -1, -1):
@@ -1282,8 +1295,9 @@ async def _get_chat_response(
                     ),
                     # Forwarded only here (not via _session_agent_kwargs, which
                     # also feeds the strict ChatAgentConfig). Non-email factories
-                    # drop it via dataclasses.fields filtering.
-                    mail_provider=session.get("mail_provider") or "google",
+                    # drop it via dataclasses.fields filtering. None = scan every
+                    # connected mailbox (#1596).
+                    mail_provider=_session_mail_provider(session),
                 )
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
@@ -1399,12 +1413,20 @@ async def _get_chat_response(
 # ── Streaming Chat ───────────────────────────────────────────────────────────
 
 
-async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):
-    """Stream chat response as Server-Sent Events.
+async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatRequest):
+    """Produce chat-response SSE events for a single run.
 
     Uses ChatAgent with SSEOutputHandler to emit agent activity events
     (steps, tool calls, thinking) alongside text chunks, giving the
     frontend visibility into what the agent is doing.
+
+    This is the run *producer*: it is driven by ``_run_chat_lifecycle``
+    inside a detached task that owns the run for its full duration,
+    independent of any HTTP/SSE client connection. Yielded ``data: ...``
+    strings are buffered and fanned out to attached subscribers by the
+    lifecycle; DB persistence happens here regardless of whether a client
+    is still listening, so navigating away never loses the run (issue
+    #1580 follow-up).
     """
     import queue
 
@@ -1436,6 +1458,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
     try:
         # Create SSE handler for streaming events
         sse_handler = SSEOutputHandler()
+        # Expose the handler on the run so an external Stop can signal the
+        # producer to bail even after every client has detached (#1580).
+        run.handler = sse_handler
         # Register so /api/chat/confirm-tool can find this handler.
         _active_sse_handlers[session_id] = sse_handler
 
@@ -1746,8 +1771,9 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
                                 session_id=session_id,
                             ),
                             # See the non-streaming path: email-only kwarg,
-                            # filtered out by non-email factories.
-                            mail_provider=session.get("mail_provider") or "google",
+                            # filtered out by non-email factories. None = scan
+                            # every connected mailbox (#1596).
+                            mail_provider=_session_mail_provider(session),
                         )
                         agent.console = sse_handler
                         logger.info(
@@ -2373,6 +2399,84 @@ async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRe
         yield f"data: {error_data}\n\n"
     finally:
         _cleanup_stream()
+
+
+async def _run_chat_lifecycle(
+    run, db: ChatDatabase, session: dict, request: ChatRequest
+):
+    """Drive a single chat run to completion, independent of any client.
+
+    Runs inside a detached task owned by ``RunManager``. Pumps every SSE
+    event from ``_stream_chat_impl`` into the run's replay buffer / live
+    subscribers via ``run.emit``. Because this task is not the HTTP
+    response, a client disconnect cannot cancel it — the producer finishes
+    and persists server-side (#1580 follow-up).
+    """
+    async for data in _stream_chat_impl(run, db, session, request):
+        run.emit(data)
+    # Notify the AgentLoop that a user turn completed (best-effort; no-op if
+    # the autonomy loop isn't running). Fires on real run completion rather
+    # than on subscriber detach.
+    try:
+        from gaia.ui.agent_loop import agent_loop
+
+        agent_loop.notify_user_message(request.session_id)
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+
+async def _stream_chat_response(db: ChatDatabase, session: dict, request: ChatRequest):
+    """Stream a chat turn as SSE for the ``/api/chat/send`` client.
+
+    Starts the run's detached lifecycle (the chat router guarantees no run
+    is already active for this session — it returns 409 otherwise) and
+    subscribes this HTTP connection to it. Yields the replay buffer (empty
+    for a fresh run) followed by live events until the run completes or the
+    client disconnects. Disconnecting only detaches this subscriber; the
+    run keeps going in the background.
+    """
+    from gaia.ui.run_manager import DONE, run_manager
+
+    session_id = request.session_id
+    run = run_manager.get(session_id)
+    if run is None:
+        run = run_manager.start(
+            session_id,
+            lambda r: _run_chat_lifecycle(r, db, session, request),
+        )
+    q = run.subscribe()
+    try:
+        while True:
+            item = await q.get()
+            if item is DONE:
+                break
+            yield item
+    finally:
+        run.unsubscribe(q)
+
+
+async def _attach_chat_stream(session_id: str):
+    """Re-attach an SSE client to an already-running background run (#1580).
+
+    Used by ``GET /api/chat/attach`` when the user revisits a session whose
+    turn is still in flight. Replays everything emitted so far, then streams
+    live events to completion. The caller is responsible for returning 404
+    when no run is active.
+    """
+    from gaia.ui.run_manager import DONE, run_manager
+
+    run = run_manager.get(session_id)
+    if run is None:
+        return
+    q = run.subscribe()
+    try:
+        while True:
+            item = await q.get()
+            if item is DONE:
+                break
+            yield item
+    finally:
+        run.unsubscribe(q)
 
 
 # ── Document Indexing ────────────────────────────────────────────────────────

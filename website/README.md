@@ -24,6 +24,24 @@ npm run build
 npm run preview
 ```
 
+## Hub catalog data (`HUB_CATALOG_URL`)
+
+The Agent Hub pages (`/hub`) are built from a catalog resolved at **build time**:
+
+- **`HUB_CATALOG_URL` unset (default):** the bundled fixture
+  `src/data/index.json` is used — builds work offline.
+- **`HUB_CATALOG_URL` set:** the build fetches `${HUB_CATALOG_URL}/index.json`
+  from the agent-hub worker (`workers/agent-hub/`):
+
+  ```bash
+  HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build
+  ```
+
+  If the fetch fails, the **build fails** with an actionable error — it never
+  silently falls back to the fixture. The entry shape is defined by
+  `workers/agent-hub/schemas/index.schema.json` and mirrored by the `Agent`
+  interface in `src/data/catalog.ts`.
+
 ## Project Structure
 
 ```

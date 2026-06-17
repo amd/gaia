@@ -18,10 +18,11 @@ except ImportError:
 
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.memory import EMBEDDING_MODEL, MemoryMixin
 from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.chat.session import SessionManager
+from gaia.agents.chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
 from gaia.agents.chat.tools import FileToolsMixin
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
@@ -33,7 +34,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ScreenshotToolsMixin,
     ShellToolsMixin,
 )
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, is_tool_calling_model
 from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
@@ -128,6 +129,14 @@ class ChatAgentConfig:
     #   "web"   — web research, page fetching
     #   "full"  — all tools and prompt sections (backward-compatible default)
     prompt_profile: str = "full"
+
+    # Dynamic tool loading (#1449) — experimental, default-off, doc profile only.
+    # When on, each turn surfaces CORE + semantically-matched tools instead of
+    # the full registry, shrinking first-turn prefill. Env overrides resolved in
+    # __init__: GAIA_DYNAMIC_TOOLS / GAIA_DYNAMIC_TOOLS_TAU / GAIA_DYNAMIC_TOOLS_MAX.
+    dynamic_tools: bool = False
+    dynamic_tools_threshold: float = 0.20  # inclusive cosine; calibrated #1449
+    dynamic_tools_max: int = 14  # cap (10 CORE + 4 dynamic slots)
 
     # Per-agent identity for the connectors activation filter (#1005).
     # Must be set BEFORE ``Agent.__init__`` runs ``_register_tools``, because
@@ -328,10 +337,14 @@ class ChatAgent(
         self.conversation_history: List[Dict[str, str]] = (
             []
         )  # Track conversation for persistence
-        # Tool loader controls which tool bundles are active per-session.
-        # Instantiate here so the agent can reset bundle activation when a
-        # new conversation/session is created.
-        self.tool_loader = ToolLoader()
+        # Dynamic tool loader (#1449): semantic per-turn tool selection. Built
+        # only for the doc profile with the toggle on (config or env); otherwise
+        # None → full registry / legacy prompt. Embedding fns are injected so the
+        # loader never imports MemoryMixin; they resolve lazily on first select(),
+        # by which point init_memory() has probed the embedder.
+        self._dynamic_tools_native_warned = False
+        self._dynamic_tools_validated = False
+        self.tool_loader = self._maybe_build_tool_loader()
 
         # Initialize memory subsystem (before super().__init__ which calls _register_tools)
         self.init_memory()
@@ -414,18 +427,147 @@ class ChatAgent(
                 self.current_session = self.session_manager.create_session(
                     config.ui_session_id
                 )
-                # New conversation started for this UI session; clear any
-                # session-scoped tool activations so bundles don't persist
-                # across distinct conversations.
-                try:
+                # New conversation started for this UI session; clear the
+                # per-session loaded set so selection doesn't persist across
+                # distinct conversations.
+                if self.tool_loader:
                     self.tool_loader.reset_session()
-                except Exception:
-                    # Never fail agent init due to tool loader reset.
-                    pass
 
         # Start watching directories
         if self.watch_directories:
             self._start_watching()
+
+    # ── dynamic tool loader (#1449) ───────────────────────────────────────
+
+    def _maybe_build_tool_loader(self) -> Optional[ToolLoader]:
+        """Construct the semantic tool loader, or ``None`` when inactive.
+
+        Active only for the ``doc`` profile with the toggle resolved on (config
+        field, overridable by ``GAIA_DYNAMIC_TOOLS``). Returning ``None`` leaves
+        the agent on the full-registry / byte-identical legacy path.
+        """
+        if not self._resolve_dynamic_tools_enabled():
+            return None
+        if getattr(self.config, "prompt_profile", "full") != "doc":
+            return None
+        return ToolLoader(
+            core_tools=DOC_CORE_TOOLS,
+            bundles=DOC_BUNDLES,
+            embed_fn=self._embed_text,
+            embed_batch_fn=self._embed_texts_batch,
+            threshold=self._resolve_dynamic_tools_threshold(),
+            max_tools=self._resolve_dynamic_tools_max(),
+        )
+
+    def _resolve_dynamic_tools_enabled(self) -> bool:
+        """Toggle: ``GAIA_DYNAMIC_TOOLS`` (truthy) wins over the config field."""
+        raw = os.getenv("GAIA_DYNAMIC_TOOLS")
+        if raw is None:
+            return bool(self.config.dynamic_tools)
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+
+    def _resolve_dynamic_tools_threshold(self) -> float:
+        """Threshold: ``GAIA_DYNAMIC_TOOLS_TAU`` wins; malformed value fails loudly."""
+        raw = os.getenv("GAIA_DYNAMIC_TOOLS_TAU")
+        if raw is None:
+            return float(self.config.dynamic_tools_threshold)
+        try:
+            return float(raw)
+        except ValueError as e:
+            raise ValueError(
+                f"GAIA_DYNAMIC_TOOLS_TAU must be a float, got {raw!r}"
+            ) from e
+
+    def _resolve_dynamic_tools_max(self) -> int:
+        """Cap: ``GAIA_DYNAMIC_TOOLS_MAX`` wins; malformed value fails loudly."""
+        raw = os.getenv("GAIA_DYNAMIC_TOOLS_MAX")
+        if raw is None:
+            return int(self.config.dynamic_tools_max)
+        try:
+            return int(raw)
+        except ValueError as e:
+            raise ValueError(
+                f"GAIA_DYNAMIC_TOOLS_MAX must be an int, got {raw!r}"
+            ) from e
+
+    def _embed_texts_batch(self, texts) -> "Any":
+        """Batch-embed *texts* into L2-normalized float32 rows (one call).
+
+        Matches ``MemoryMixin._embed_text`` normalization so the loader's dot
+        products are cosine similarities.
+        """
+        import numpy as np
+
+        results = self._get_embedder().embed(list(texts), model=EMBEDDING_MODEL)
+        vecs = np.asarray(results, dtype=np.float32)
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return vecs / norms
+
+    def _dynamic_tools_active(self) -> bool:
+        """True when dynamic selection should run this turn.
+
+        Off-states (any → full registry): loader not built (toggle off / wrong
+        profile), embedder session-disabled, or memory disabled
+        (``GAIA_MEMORY_DISABLED`` tears down ``_memory_store``).
+        """
+        return (
+            self.tool_loader is not None
+            and not self.tool_loader.session_disabled
+            and getattr(self, "_memory_store", None) is not None
+        )
+
+    def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
+        """Return this turn's sorted tool subset, or ``None`` for the full registry."""
+        if not self._dynamic_tools_active():
+            return None
+        self._maybe_warn_native_tool_gap()
+        if not self._dynamic_tools_validated:
+            # Fail loudly on first activation if a CORE/bundle name doesn't exist
+            # in the live registry (drift). The reverse direction is the CI test.
+            self.tool_loader.validate_registry(self._tools_registry)
+            self._dynamic_tools_validated = True
+        query = self._build_tool_selection_query(user_input)
+        return self.tool_loader.select(query, self._tools_registry)
+
+    def _on_tool_invoked(self, tool_name: str) -> None:
+        """Record tool-use recency for the loader's LRU (no-op when inactive)."""
+        if self.tool_loader is not None:
+            self.tool_loader.record_tool_use(tool_name)
+
+    def _build_tool_selection_query(self, user_input: str) -> str:
+        """Build the selection query: previous user message + current, last 4K chars.
+
+        Open Q4 per the design sketch. The previous turn carries context the
+        bare current message may lack (e.g. "summarize it"). Assistant replies
+        and RAG chunks are excluded by construction — only user text. At hook
+        time ``conversation_history`` holds prior turns only, so the last
+        ``role=="user"`` entry is genuinely the previous message; turn 1 has
+        none, so the query is just ``user_input``.
+        """
+        prev = ""
+        for msg in reversed(getattr(self, "conversation_history", None) or []):
+            if msg.get("role") == "user":
+                prev = msg.get("content", "") or ""
+                break
+        combined = f"{prev}\n{user_input}" if prev else user_input
+        return combined[-4000:]
+
+    def _maybe_warn_native_tool_gap(self) -> None:
+        """Log the Amendment-2 known gap once, on first activation for a native model.
+
+        Native tool-calling models have no escape hatch until Part 2's
+        ``load_tools`` lands, so a semantic miss can't self-recover. We log it as
+        a known gap rather than padding the loaded set.
+        """
+        if self._dynamic_tools_native_warned:
+            return
+        self._dynamic_tools_native_warned = True
+        if is_tool_calling_model(getattr(self, "model_id", None)):
+            logger.warning(
+                "tool_loader: native tool-calling model — no escape hatch until "
+                "Part 2; semantic misses are a known gap"
+            )
 
     def _post_process_tool_result(
         self,

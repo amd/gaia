@@ -193,6 +193,25 @@ def test_merge_registered_catalog_agent_is_installed():
     assert merged[0]["status"] == "installed"
 
 
+def test_build_catalog_degrades_to_registry_when_offline_no_cache(tmp_path):
+    # Hub unreachable AND no on-disk cache: the unified catalog must still
+    # return the local registry (builtins stay usable) flagged offline, rather
+    # than propagating CatalogError up to the UI as a blocking error.
+    def failing_fetcher(url):
+        raise ConnectionError("no network")
+
+    unified = build_catalog(
+        _FakeReg([_Reg("chat")]),
+        base_url="https://hub.test",
+        fetcher=failing_fetcher,
+        cache_path=tmp_path / "missing.json",
+        force=True,
+    )
+    assert unified.offline is True
+    assert [a["id"] for a in unified.agents] == ["chat"]
+    assert unified.agents[0]["status"] == "installed"
+
+
 def test_build_catalog_merges(tmp_path):
     payload = json.dumps(_index(_entry("demo", version="3.0.0"))).encode()
 

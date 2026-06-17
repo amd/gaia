@@ -233,6 +233,24 @@ class TestEmailMcpStdioParity:
         parsed = parse_response(mcp_out)
         assert parsed.request_kind == "thread"
 
+    def test_suggested_action_present_on_both_surfaces(self):
+        """Schema 2.0: suggested_action must be present in both REST and MCP stdio (#1615)."""
+        rest = _rest_triage(SINGLE_REQUEST)
+        mcp_out = anyio.run(_call_tool, "triage_email", SINGLE_REQUEST)
+        # Both surfaces must carry suggested_action.
+        rest_parsed = parse_response(rest)
+        mcp_parsed = parse_response(mcp_out)
+        assert hasattr(
+            rest_parsed.result, "suggested_action"
+        ), "REST result missing suggested_action"
+        assert rest_parsed.result.suggested_action is not None
+        assert hasattr(
+            mcp_parsed.result, "suggested_action"
+        ), "MCP result missing suggested_action"
+        assert mcp_parsed.result.suggested_action is not None
+        # And they agree.
+        assert rest_parsed.result.suggested_action == mcp_parsed.result.suggested_action
+
 
 class TestEmailMcpSendGate:
     """The send-confirmation gate (#1264) is enforced over MCP stdio too."""

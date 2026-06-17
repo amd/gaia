@@ -9,5 +9,9 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
     environment: "node",
+    // The default forks pool crashes on some Node 20 builds (tinypool IPC
+    // ERR_INVALID_ARG_TYPE deserializing worker messages). The suite needs no
+    // process-level isolation, so run it in worker threads instead.
+    pool: "threads",
   },
 });

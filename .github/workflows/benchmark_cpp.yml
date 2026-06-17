@@ -17,7 +17,10 @@ jobs:
   benchmark:
     name: C++ Benchmarks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Windows MSVC does two cold builds (static + shared) of gaia_core from an
+    # unpopulated FetchContent cache (PR runs don't restore the main-only cache),
+    # which now exceeds 15 min after gaia_core grew. Linux finishes in ~4 min.
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -67,6 +70,8 @@ jobs:
           -DGAIA_BUILD_EXAMPLES=ON
           -DGAIA_BUILD_TESTS=OFF
           -DGAIA_BUILD_INTEGRATION_TESTS=OFF
+          -DGAIA_BUILD_TUI=OFF
+          -DGAIA_BUILD_BASH_AGENT=OFF
 
       - name: Build (static + benchmarks)
         run: cmake --build cpp/build-bench --config Release --parallel
@@ -80,6 +85,8 @@ jobs:
           -DGAIA_BUILD_TESTS=OFF
           -DGAIA_BUILD_EXAMPLES=OFF
           -DGAIA_BUILD_BENCHMARKS=OFF
+          -DGAIA_BUILD_TUI=OFF
+          -DGAIA_BUILD_BASH_AGENT=OFF
 
       - name: Build (shared library)
         run: cmake --build cpp/build-bench-shared --config Release --parallel

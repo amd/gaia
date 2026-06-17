@@ -1,0 +1,52 @@
+/* Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* GAIA shared design tokens — single source of truth for website + Agent UI.
+   Values are RGB triplets so Tailwind opacity modifiers work
+   (rgb(var(--g-bg) / <alpha-value>)). Light is :root; dark overrides via
+   [data-theme="dark"], set pre-paint by the inline script in Layout.astro. */
+
+:root {
+  --g-bg: 252 252 250;        /* warm white */
+  --g-surface: 255 255 255;
+  --g-border: 232 232 229;
+  --g-text: 26 26 26;
+  --g-muted: 122 122 117;
+  --g-gold: 226 163 62;       /* #E2A33E — graphic gold (stripes, glows, icons) */
+  --g-gold-text: 154 111 38;  /* #9A6F26 — AA-contrast gold for text on light */
+  --g-glow: 0.20;             /* aurora opacity scale */
+}
+
+[data-theme='dark'] {
+  --g-bg: 10 10 11;           /* #0a0a0b pure black */
+  --g-surface: 17 17 19;
+  --g-border: 31 31 34;
+  --g-text: 240 240 238;
+  --g-muted: 142 142 146;
+  --g-gold: 226 163 62;
+  --g-gold-text: 226 163 62;  /* gold passes AA on black */
+  --g-glow: 0.38;
+}
+
+/* Motion vocabulary */
+@keyframes g-drift {
+  from { transform: translate3d(-4%, 0, 0) scale(1); opacity: 0.85; }
+  to   { transform: translate3d(4%, -2%, 0) scale(1.1); opacity: 1; }
+}
+@keyframes g-blink { 50% { opacity: 0; } }
+@keyframes g-pulse {
+  0%   { box-shadow: 0 0 0 0 rgb(var(--g-gold) / 0.45); }
+  100% { box-shadow: 0 0 0 14px rgb(var(--g-gold) / 0); }
+}
+@keyframes g-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

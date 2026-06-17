@@ -9,13 +9,15 @@
 #
 # Flow:
 #   discover (read setup.py[agents] -> matrix)
-#     -> build  (every push/PR: build each wheel + twine check, upload artifact)
+#     -> build  (tag only: build each wheel + twine check, upload artifact)
 #       -> approve (tag only: single manual gate, "publish" environment)
 #         -> publish (tag only: gh-action-pypi-publish per agent, skip-existing)
 #
-# The build job runs on every push/PR touching an agent so a broken wheel is
-# caught in review. Publishing runs ONLY on a version tag (v*). Agent wheels
-# version independently (each gaia-agent.yaml/pyproject sets its own SemVer), so
+# The whole workflow is tag-driven (v*) — it does NOT run on PRs. Building all
+# agent wheels on every PR touching hub/agents/python/** was pure noise; broken
+# wheels surface at release time instead. Publishing runs ONLY on a version tag
+# (v*). Agent wheels version independently (each gaia-agent.yaml/pyproject sets
+# its own SemVer), so
 # `skip-existing: true` makes a release a no-op for any agent whose version did
 # not change — that is PyPI's native version immutability, not custom overwrite
 # logic (issue #1179).
@@ -32,22 +34,15 @@
 name: Publish Agent Wheels (PyPI)
 
 on:
-  # PUBLISHING PAUSED (#1179): agent PyPI publishing is disabled while the Agent
-  # Hub distribution design is being finalized. The release-tag trigger is
-  # intentionally removed so a `v*` tag no longer fires the publish path, and the
-  # approve/publish jobs are additionally hard-gated below. To re-enable, restore
-  # the `push: tags: ['v*']` trigger here and drop the `false &&` guards on the
-  # approve-publish and publish jobs.
-  #
-  # PRs still get the build/twine-check so broken agent wheels are caught in review.
-  pull_request:
-    branches: [ main ]
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - 'hub/agents/python/**'
-      - 'setup.py'
-      - 'util/list_agent_packages.py'
-      - '.github/workflows/publish_agents.yml'
+  # Tag-only: the build matrix fires on a `v*` tag, never on PRs (building every
+  # agent wheel on each PR was noise). PUBLISHING REMAINS PAUSED (#1179): the
+  # approve/publish jobs are hard-gated with `false &&` below, so a `v*` tag
+  # builds + twine-checks the wheels but uploads NOTHING to PyPI. To re-enable
+  # publishing, drop the `false &&` guards on the approve-publish and publish
+  # jobs (the tag trigger is already in place).
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 concurrency:
@@ -65,7 +60,6 @@ jobs:
   discover:
     name: Discover Agent Packages
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     outputs:
       matrix: ${{ steps.list.outputs.matrix }}
     steps:
@@ -105,8 +99,8 @@ jobs:
   approve-publish:
     name: Approve Publishing
     needs: build
-    # Publishing paused (#1179) — `false &&` hard-skips this job. Remove it (and
-    # restore the tag trigger above) to re-enable.
+    # Publishing paused (#1179) — `false &&` hard-skips this job. Drop the
+    # `false &&` to re-enable (the v* tag trigger is already in place).
     if: false && startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment: publish
@@ -117,8 +111,8 @@ jobs:
   publish:
     name: Publish ${{ matrix.dist }}
     needs: [discover, approve-publish]
-    # Publishing paused (#1179) — `false &&` hard-skips this job. Remove it (and
-    # restore the tag trigger above) to re-enable.
+    # Publishing paused (#1179) — `false &&` hard-skips this job. Drop the
+    # `false &&` to re-enable (the v* tag trigger is already in place).
     if: false && startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.approve-publish.result == 'success'
     runs-on: ubuntu-latest
     # OIDC trusted publishing: the action mints a short-lived id-token PyPI

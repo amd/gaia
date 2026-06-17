@@ -300,6 +300,13 @@ AGENT_PROFILES = {
         min_ctx_size=32768,
         description="Autonomous coding assistant",
     ),
+    "bash": AgentProfile(
+        name="bash",
+        display_name="Bash Agent",
+        models=["gemma-4-e4b"],
+        min_ctx_size=32768,
+        description="Native C++ bash scripting agent (gaia-bash binary)",
+    ),
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",

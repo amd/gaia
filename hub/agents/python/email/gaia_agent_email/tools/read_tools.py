@@ -20,13 +20,15 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from gaia.agents.base.tools import tool
 from gaia_agent_email.gmail_backend import decode_message_body
-from gaia_agent_email.tools.llm_triage import make_llm_classifier
+
+# Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
+# to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
+from gaia_agent_email.tools.llm_triage import make_llm_classifier  # noqa: F401
 from gaia_agent_email.tools.triage_heuristics import (
-    CATEGORY_ACTIONABLE,
-    CATEGORY_INFORMATIONAL,
-    CATEGORY_LOW_PRIORITY,
+    CATEGORY_FYI,
+    CATEGORY_NEEDS_RESPONSE,
+    CATEGORY_PROMOTIONAL,
     CATEGORY_URGENT,
     classify_category_heuristic,
     group_by_category,
@@ -36,6 +38,8 @@ from gaia_agent_email.verbose import (
     log_triage_decision,
     log_triage_dispatch,
 )
+
+from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
@@ -427,7 +431,7 @@ def _apply_session_preferences(
             f"[heuristic said: {decision.get('rationale', '')}]"
         )
     elif sender_addr and sender_addr in low_priority_senders:
-        out["category"] = CATEGORY_LOW_PRIORITY
+        out["category"] = CATEGORY_PROMOTIONAL
         out["confident"] = True
         out["preference_applied"] = "low_priority_sender"
         out["rationale"] = (
@@ -625,7 +629,7 @@ def pre_scan_inbox_impl(
                 "subject": r.get("subject", ""),
             }
             why = r.get("rationale", "")
-            category = r.get("category", CATEGORY_INFORMATIONAL)
+            category = r.get("category", CATEGORY_FYI)
 
             if r.get("is_spam") or r.get("is_phishing"):
                 # Phishing/spam should never be silently archived from a
@@ -651,17 +655,19 @@ def pre_scan_inbox_impl(
 
             if category == CATEGORY_URGENT:
                 urgent.append({**base, "why": why})
-            elif category == CATEGORY_ACTIONABLE:
+            elif category == CATEGORY_NEEDS_RESPONSE:
                 actionable.append({**base, "why": why})
-            elif category == CATEGORY_LOW_PRIORITY:
+            elif category == CATEGORY_PROMOTIONAL:
                 suggested_archives.append({**base, "reason": why})
             else:
+                # FYI and PERSONAL share the keep / no-action bucket.
                 informational.append({**base, "why": why})
 
-        # Apply the informational category default: when the user has
-        # previously asked us to archive informational mail, lift those
-        # items into suggested_archives.
-        if category_defaults.get(CATEGORY_INFORMATIONAL) == "archive":
+        # Apply the FYI category default: when the user has previously asked
+        # us to archive FYI mail, lift those items into suggested_archives.
+        # (The ``informational`` list holds both FYI and PERSONAL — the keep
+        # bucket — but only the FYI default promotes to archive.)
+        if category_defaults.get(CATEGORY_FYI) == "archive":
             for item in informational:
                 suggested_archives.append(
                     {
@@ -714,11 +720,11 @@ class ReadToolsMixin:
     """Mixin that registers the read-side tools.
 
     The mixin is state-free at construction time — it relies on the agent
-    class having set ``self._gmail`` (and optionally ``self.config.debug``)
-    before invoking ``self._register_read_tools()``. The ``agent``
-    closure capture is used so triage / pre-scan tools can read live
-    ``self._session_preferences`` (set on the agent instance) at call
-    time, not snapshot at registration time.
+    class having set ``self._gmail``, ``self._backends``, and the
+    ``_backend_for_message`` routing helper (#1603 Phase 2) before invoking
+    ``self._register_read_tools()``. The ``agent`` closure capture is used so
+    triage / pre-scan tools can read live ``self._session_preferences`` (set
+    on the agent instance) at call time, not snapshot at registration time.
     """
 
     def _register_read_tools(self) -> None:
@@ -751,11 +757,17 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def get_message(message_id: str) -> str:
-            """Fetch a single message by id, including full body."""
+        def get_message(message_id: str, mailbox: str = "") -> str:
+            """Fetch a single message by id, including full body.
+
+            ``mailbox`` (optional) names the source mailbox ('google' /
+            'microsoft') from triage output so the read routes correctly when
+            multiple mailboxes are connected.
+            """
             try:
+                backend = agent._backend_for_message(message_id, mailbox or None)
                 return _envelope_ok(
-                    get_message_impl(gmail, message_id=message_id, debug=debug_flag)
+                    get_message_impl(backend, message_id=message_id, debug=debug_flag)
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
@@ -764,11 +776,15 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def get_thread(thread_id: str) -> str:
-            """Fetch every message in a thread (conversation view)."""
+        def get_thread(thread_id: str, mailbox: str = "") -> str:
+            """Fetch every message in a thread (conversation view).
+
+            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            """
             try:
+                backend = agent._backend_for_message(thread_id, mailbox or None)
                 return _envelope_ok(
-                    get_thread_impl(gmail, thread_id=thread_id, debug=debug_flag)
+                    get_thread_impl(backend, thread_id=thread_id, debug=debug_flag)
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
@@ -777,7 +793,7 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def summarize_thread(thread_id: str) -> str:
+        def summarize_thread(thread_id: str, mailbox: str = "") -> str:
             """Summarize an entire email thread, not just its latest message.
 
             Reads every message in the thread and produces one concise,
@@ -803,9 +819,10 @@ class ReadToolsMixin:
                 )
 
                 chat = getattr(agent, "chat", None)
+                backend = agent._backend_for_message(thread_id, mailbox or None)
                 return _envelope_ok(
                     summarize_thread_impl(
-                        gmail,
+                        backend,
                         chat,
                         thread_id=thread_id,
                         debug=debug_flag,
@@ -857,8 +874,8 @@ class ReadToolsMixin:
         def triage_inbox(max_messages: int = 25) -> str:
             """Triage the inbox, returning per-message categories.
 
-            Categories: ``urgent``, ``actionable``, ``informational``,
-            ``low priority``. Each result also has ``is_spam`` and
+            Categories: ``URGENT``, ``NEEDS_RESPONSE``, ``FYI``,
+            ``PROMOTIONAL``, ``PERSONAL``. Each result also has ``is_spam`` and
             ``is_phishing`` booleans. The ``confident`` field is True
             when the heuristic alone was sufficient; False means the
             agent should re-classify the body via LLM follow-up.
@@ -870,21 +887,12 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(1, min(int(max_messages or 25), 100))
-                # Wire LLM follow-up (#1107) for heuristic-uncertain messages.
-                # Built at call time so agent.chat is initialized.
-                chat = getattr(agent, "chat", None)
-                classifier = make_llm_classifier(chat) if chat is not None else None
+                # Phase 2 (#1603): scan every connected mailbox, tag each item
+                # with its source mailbox, split the budget across mailboxes,
+                # and merge. LLM follow-up (#1107) is wired inside the agent
+                # orchestration so agent.chat is initialized at call time.
                 return _envelope_ok(
-                    triage_inbox_impl(
-                        gmail,
-                        max_messages=max_messages,
-                        session_preferences=getattr(
-                            agent, "_session_preferences", None
-                        ),
-                        force_llm=bool(getattr(agent.config, "force_llm", False)),
-                        classifier=classifier,
-                        debug=debug_flag,
-                    )
+                    agent._triage_all_backends(max_messages=max_messages)
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
@@ -903,20 +911,14 @@ class ReadToolsMixin:
             ``kind: "email_pre_scan"`` so the chat surface renders the
             structured card component instead of plain text.
 
-            CRITICAL OUTPUT FORMAT for the LLM:
-            After this tool returns, your response to the user MUST be a
-            single fenced code block tagged ``email_pre_scan`` with the
-            ``data`` field's JSON inside it, exactly like::
-
-                ```email_pre_scan
-                {"kind": "email_pre_scan", ...}
-                ```
-
-            Optionally include ONE short framing sentence before the
-            block (e.g. "Here's your morning pre-scan:"). The frontend
-            detects the language tag and renders a triage card; if you
-            paraphrase the JSON or omit the fence, the user sees raw
-            text instead of the card.
+            The chat surface injects the triage card automatically from
+            the tool result — do NOT copy, re-serialize, or paraphrase
+            the JSON envelope into your reply. Re-emitting the full
+            envelope wastes the output budget on long message/thread IDs
+            and truncates the prose summary before the user can read it.
+            After this tool returns, write ONE short framing sentence
+            (e.g. "Here's your inbox pre-scan — 3 actionable, 1 urgent.")
+            and stop. The card is already visible to the user.
 
             Args:
                 max_messages: How many INBOX messages to scan
@@ -924,16 +926,10 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(1, min(int(max_messages or 25), 100))
+                # Phase 2 (#1603): pre-scan every connected mailbox, tag each
+                # section item with its source mailbox, split the budget, merge.
                 return _envelope_ok(
-                    pre_scan_inbox_impl(
-                        gmail,
-                        max_messages=max_messages,
-                        session_preferences=getattr(
-                            agent, "_session_preferences", None
-                        ),
-                        force_llm=bool(getattr(agent.config, "force_llm", False)),
-                        debug=debug_flag,
-                    )
+                    agent._pre_scan_all_backends(max_messages=max_messages)
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))

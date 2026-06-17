@@ -4,6 +4,7 @@
 const {
   isFileLockedError,
   isTransientNetworkError,
+  isTlsCertError,
 } = require("../../src/gaia/apps/webui/services/backend-installer.cjs");
 
 describe("isFileLockedError", () => {
@@ -72,5 +73,39 @@ describe("isTransientNetworkError", () => {
     ).toBe(false);
     expect(isTransientNetworkError("")).toBe(false);
     expect(isTransientNetworkError(undefined)).toBe(false);
+  });
+});
+
+describe("isTlsCertError", () => {
+  test("detects the UnknownIssuer corporate-proxy signature from issue #1693", () => {
+    const out = [
+      "error: Failed to fetch: `https://pypi.org/simple/amd-gaia/`",
+      "  Caused by: Request failed after 3 retries",
+      "  Caused by: error sending request for url (https://pypi.org/simple/amd-gaia/)",
+      "  Caused by: client error (Connect)",
+      "  Caused by: invalid peer certificate: UnknownIssuer",
+    ].join("\n");
+    expect(isTlsCertError(out)).toBe(true);
+  });
+
+  test("detects common TLS trust-failure phrasings", () => {
+    [
+      "invalid peer certificate: UnknownIssuer",
+      "certificate verify failed",
+      "unable to get local issuer certificate",
+      "self-signed certificate in certificate chain",
+      "self signed certificate",
+    ].forEach((phrase) => {
+      expect(isTlsCertError(phrase)).toBe(true);
+    });
+  });
+
+  test("ignores plain network and dependency failures", () => {
+    expect(isTlsCertError("connection refused")).toBe(false);
+    expect(
+      isTlsCertError("error: No solution found when resolving dependencies")
+    ).toBe(false);
+    expect(isTlsCertError("")).toBe(false);
+    expect(isTlsCertError(undefined)).toBe(false);
   });
 });

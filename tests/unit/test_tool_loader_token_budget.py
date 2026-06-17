@@ -25,10 +25,12 @@ in the PR) — the same discipline as the #1030 system-prompt budget test.
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
 
+from gaia.agents.chat.tool_bundles import DOC_CORE_TOOLS
 from gaia.eval.tool_cost import (
     FIXED_SUBSET_DEFAULT,
     build_doc_agent_skeleton,
@@ -160,3 +162,79 @@ def test_parse_ttft_from_committed_scorecard():
     assert ttft["first_turn"]["max"] == pytest.approx(0.856)
     # Needed-set = the per-turn agent_tools; the recall floor Part 1 must hit.
     assert ttft["max_needed_set"] == 2
+
+
+# --- Part-1 reduction proxy (#1449) ----------------------------------------
+#
+# Static, model-free proxy for the live ≥60% first-turn TTFT-reduction gate.
+# These pin the *native-schema* token cost of a filtered loaded set against the
+# 37-tool baseline. They are a proxy only — the authoritative gate is the live
+# ``measure_prefill_ttft`` run in Step 6; token count tracks prefill cost but is
+# not identical to it.
+#
+# Measured reality (worth knowing — it tempers the original estimate): the 10
+# always-on CORE tools alone render ~40% of the native baseline, because the 5
+# memory tools carry verbose docstrings. So CORE-only is the best case (~60%
+# token reduction, right at the gate boundary), and a full ``max_tools=14``
+# loaded set lands around ~50% of baseline (~50% reduction). The first-turn win
+# is real and large; whether it clears ≥60% in *TTFT* terms is what the live run
+# decides.
+
+
+def _filtered_native_tokens(agent, names, tok) -> int:
+    return len(
+        tok.encode(json.dumps(agent._build_openai_tool_schemas(filter_to=names)))
+    )
+
+
+def _filtered_text_tokens(agent, names, tok) -> int:
+    return len(tok.encode(agent._format_tools_for_prompt(filter_to=names)))
+
+
+def test_core_only_is_the_reduction_best_case(doc_agent):
+    """CORE-only (the always-on floor) renders well under half the baseline cost."""
+    tok = get_tokenizer()
+    if tok is None:
+        pytest.skip("tiktoken not installed — token proxy unavailable")
+    core = sorted(DOC_CORE_TOOLS)
+    native = _filtered_native_tokens(doc_agent, core, tok)
+    text = _filtered_text_tokens(doc_agent, core, tok)
+    # Headroom over the measured ~40% native / ~37% text so an incidental
+    # docstring edit doesn't flip the gate, but real CORE bloat is caught.
+    assert native <= 0.45 * BASELINE_NATIVE_TOKENS, (
+        f"CORE native tokens {native} exceeded 45% of {BASELINE_NATIVE_TOKENS} "
+        "baseline — CORE is the always-on floor; keep its docstrings lean."
+    )
+    assert text <= 0.45 * BASELINE_TEXT_TOKENS
+
+
+def test_max_loaded_set_substantially_shrinks_native_cost(doc_agent):
+    """A full ``max_tools=14`` loaded set still costs far less than all 37 tools.
+
+    Uses the 14 *largest* doc tools as a conservative worst case: if even those
+    clear the ceiling, any real 14-tool selection does.
+    """
+    tok = get_tokenizer()
+    if tok is None:
+        pytest.skip("tiktoken not installed — token proxy unavailable")
+    cost = measure_tool_prompt_cost(doc_agent, tok=tok)
+    per = cost["per_tool"]
+    largest14 = sorted(per, key=lambda n: per[n]["native_tokens"], reverse=True)[:14]
+    native = _filtered_native_tokens(doc_agent, largest14, tok)
+    # Conservative worst case lands ~60%; a realistic CORE+4 set is ~49%. Pin a
+    # ceiling that proves the mechanism shrinks cost without over-claiming.
+    assert native <= 0.65 * BASELINE_NATIVE_TOKENS, (
+        f"worst-case 14-tool native tokens {native} exceeded 65% of "
+        f"{BASELINE_NATIVE_TOKENS} — the loaded set is not shrinking as expected."
+    )
+
+
+def test_filtered_baselines_do_not_touch_unfiltered_pins(doc_agent):
+    """Filtering must not change the unfiltered render (byte-identical guarantee)."""
+    legacy_native = json.dumps(doc_agent._build_openai_tool_schemas())
+    legacy_text = doc_agent._format_tools_for_prompt()
+    assert (
+        json.dumps(doc_agent._build_openai_tool_schemas(filter_to=None))
+        == legacy_native
+    )
+    assert doc_agent._format_tools_for_prompt(filter_to=None) == legacy_text

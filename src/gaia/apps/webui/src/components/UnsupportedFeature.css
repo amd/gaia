@@ -73,19 +73,19 @@
 }
 
 .unsupported-feature-request svg {
-    color: var(--amd-red);
+    color: var(--danger);
     flex-shrink: 0;
 }
 
 .unsupported-feature-request a {
-    color: var(--amd-red);
+    color: var(--danger);
     text-decoration: none;
     font-weight: 600;
 }
 
 .unsupported-feature-request a:hover {
     text-decoration: underline;
-    color: var(--amd-red-light);
+    color: var(--danger-light);
 }
 
 /* ── Inline error toast for DocumentLibrary and FileBrowser ───────────── */
@@ -96,8 +96,8 @@
     gap: 10px;
     padding: 12px 14px;
     border-radius: var(--radius-md);
-    background: var(--amd-red-dim2);
-    border: 1px solid rgba(237, 28, 36, 0.15);
+    background: var(--danger-dim2);
+    border: 1px solid rgba(229, 72, 77, 0.15);
     margin: 8px 0;
     font-size: 12.5px;
     line-height: 1.5;
@@ -106,7 +106,7 @@
 }
 
 .upload-error-toast svg {
-    color: var(--amd-red);
+    color: var(--danger);
     flex-shrink: 0;
     margin-top: 1px;
 }
@@ -127,7 +127,7 @@
 }
 
 .upload-error-detail a {
-    color: var(--amd-red);
+    color: var(--danger);
     text-decoration: none;
     font-weight: 500;
 }

@@ -27,23 +27,43 @@ jobs:
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv
         with:
-          install-package: ".[dev]"
+          # [ui] carries fastapi/uvicorn + the RAG deps gaia.ui.server imports at
+          # boot — the harness spawns that server, so [dev] alone fails at import.
+          install-package: ".[dev,ui]"
 
-      - name: Ensure Lemonade
-        shell: powershell
-        run: |
-          gaia init --skip-lemonade
-          if ($LASTEXITCODE -ne 0) { throw "gaia init failed" }
-
-      - name: Run behavior E2E harness
+      - name: Start Lemonade + run behavior E2E harness
         shell: powershell
         env:
-          LEMONADE_BASE_URL: http://localhost:13305/api/v1
+          LEMONADE_BASE_URL: http://127.0.0.1:13305/api/v1
+          # Loopback server — bypass any runner proxy so Python requests reaches it.
+          NO_PROXY: "localhost,127.0.0.1"
         run: |
-          python -m pytest tests/integration/eval/test_behavior_e2e.py `
-            -m real_model -v --tb=short `
-            --basetemp="${{ runner.temp }}\pytest-behavior"
-          if ($LASTEXITCODE -ne 0) { throw "behavior E2E harness failed" }
+          # Start Lemonade AND run the harness in a SINGLE PowerShell session.
+          # The Lemonade server (a detached Start-Process child) does not survive
+          # a GitHub Actions step boundary, so starting it in a separate step made
+          # the harness skip with "Lemonade server not reachable" even though the
+          # model loaded. start-lemonade.ps1 itself notes it must run in one
+          # session "to avoid process lifecycle issues"; test_examples.yml does
+          # the same. The previous `gaia init --skip-lemonade` step also blocked
+          # on an interactive prompt when the server was down (#1639).
+          try {
+              .\installer\scripts\start-lemonade.ps1 `
+                  -ModelName "Qwen3.5-35B-A3B-GGUF" `
+                  -Port 13305 `
+                  -CtxSize 32768 `
+                  -InitWaitTime 15
+
+              python -m pytest tests/integration/eval/test_behavior_e2e.py `
+                  -m real_model -v -rs --tb=short `
+                  --basetemp="${{ runner.temp }}\pytest-behavior"
+              if ($LASTEXITCODE -ne 0) { throw "behavior E2E harness failed" }
+          }
+          finally {
+              if ($env:LEMONADE_PROCESS_ID) {
+                  Write-Host "Stopping Lemonade server (pid $env:LEMONADE_PROCESS_ID)..."
+                  Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+              }
+          }
 
       - name: Upload artifacts on failure
         if: failure()

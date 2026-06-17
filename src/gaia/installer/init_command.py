@@ -1487,9 +1487,11 @@ class InitCommand:
                             self._print_error(f"Failed to delete {model_id}: {e}")
 
             # Download each model via LemonadeClient API.
-            # For profiles with a recipe (e.g. NPU/FLM), use pull_model()
-            # with the recipe so Lemonade registers the model with the
-            # correct inference engine.
+            # NPU/FLM models (e.g. ``gemma4-it-e2b-FLM``) are built-in Lemonade
+            # models — pull them by name only. Passing ``recipe`` makes Lemonade
+            # treat the call as a *new* model registration, which requires the
+            # ``user.`` prefix and 400s on built-in names (#1655). The recipe is
+            # baked into the built-in model and applied at load time.
             recipe = profile_config.get("recipe")
             success = True
             for model_id in model_ids:
@@ -1498,14 +1500,7 @@ class InitCommand:
                 self.agent_console.print(
                     f"   [bold cyan]Downloading:[/bold cyan] {label}"
                 )
-                if recipe:
-                    try:
-                        client.pull_model(model_id, recipe=recipe)
-                        self._print_success(f"Downloaded {model_id}")
-                    except Exception as e:
-                        self._print_error(f"Failed to download {model_id}: {e}")
-                        success = False
-                elif client.ensure_model_downloaded(model_id):
+                if client.ensure_model_downloaded(model_id):
                     self._print_success(f"Downloaded {model_id}")
                 else:
                     self._print_error(f"Failed to download {model_id}")
