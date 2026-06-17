@@ -119,13 +119,23 @@ jobs:
 
           Write-Host "Lemonade server started successfully"
 
-          # Pull the model now that server is running. v10.x replaced
-          # ``lemonade-server pull`` with ``lemonade pull`` -- the old form
-          # prints "This command is deprecated. Use 'lemonade pull --help'
-          # instead." and exits non-zero, which under PowerShell + the
-          # default error-on-stderr behaviour kills this step.
-          Write-Host "Pulling Gemma-4-E4B-it-GGUF model..."
-          lemonade pull Gemma-4-E4B-it-GGUF
+          # Pull the model via the running server's API. Gemma-4-E4B-it-GGUF
+          # is a built-in of the C++ Lemonade server's catalog (recipe
+          # llamacpp), but the standalone ``lemonade pull`` CLI uses a separate
+          # registry that 400s on this name ("When registering a new model, the
+          # model name must include the `user` namespace"). Routing the pull
+          # through /api/v1/pull on the already-healthy server hits the catalog
+          # that actually has the model.
+          Write-Host "Pulling Gemma-4-E4B-it-GGUF via server API..."
+          $pullBody = @{ model_name = "Gemma-4-E4B-it-GGUF" } | ConvertTo-Json
+          try {
+              Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" -Method POST -ContentType "application/json" -Body $pullBody -TimeoutSec 900 | Out-Null
+              Write-Host "Model pulled: Gemma-4-E4B-it-GGUF"
+          } catch {
+              Write-Host "Model pull failed: $($_.Exception.Message)"
+              if ($_.ErrorDetails) { Write-Host "Details: $($_.ErrorDetails.Message)" }
+              throw
+          }
 
 
 
