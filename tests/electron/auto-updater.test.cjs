@@ -113,25 +113,34 @@ describe("listReleases()", () => {
   test("returns releases newest-first with isCurrent marking", async () => {
     const mod = loadModule();
 
-    const releases = [
-      makeRelease({ tag: "v0.21.0", version: "0.21.0", platform: process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : "win32" }),
-      makeRelease({ tag: "v0.20.0", version: "0.20.0", platform: process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : "win32" }),
-    ];
+    const currentPlatform =
+      process.platform === "darwin"
+        ? "darwin"
+        : process.platform === "linux"
+        ? "linux"
+        : "win32";
+
+    // Feed the mock API a known-ordered list (newest first, as the GitHub API
+    // returns it). The mapped result must preserve that order index-for-index.
+    const orderedVersions = ["0.21.0", "0.20.0", "0.19.0", "0.18.0"];
+    const releases = orderedVersions.map((v) =>
+      makeRelease({ tag: `v${v}`, version: v, platform: currentPlatform })
+    );
 
     stubFetch(releases);
     electronMock.app.getVersion = jest.fn(() => "0.21.0");
 
     const result = await mod.listReleases();
     expect(Array.isArray(result)).toBe(true);
-    expect(result.length).toBeGreaterThanOrEqual(1);
-    // The releases are in api order (newest first per GH API)
-    const found021 = result.find((r) => r.tag === "v0.21.0");
-    expect(found021).toBeDefined();
-    expect(found021.isCurrent).toBe(true);
-    const found020 = result.find((r) => r.tag === "v0.20.0");
-    if (found020) {
-      expect(found020.isCurrent).toBe(false);
-    }
+    expect(result.length).toBe(orderedVersions.length);
+
+    // Newest-first order preserved index-for-index.
+    expect(result.map((r) => r.version)).toEqual(orderedVersions);
+
+    // isCurrent marks only the running version.
+    expect(result[0].tag).toBe("v0.21.0");
+    expect(result[0].isCurrent).toBe(true);
+    expect(result.slice(1).every((r) => r.isCurrent === false)).toBe(true);
   });
 
   test("filters out draft releases", async () => {
