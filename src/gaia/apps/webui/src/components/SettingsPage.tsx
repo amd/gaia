@@ -510,7 +510,9 @@ export function SettingsPage() {
                                     className="about-resume-btn"
                                     onClick={() => {
                                         const bridge = (window as unknown as { gaiaUpdater?: { resumeUpdates: () => Promise<unknown> } }).gaiaUpdater;
-                                        bridge?.resumeUpdates();
+                                        void bridge?.resumeUpdates().catch((e) => {
+                                            log.system.error('Resume updates failed', e);
+                                        });
                                     }}
                                 >
                                     Resume updates

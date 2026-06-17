@@ -282,9 +282,16 @@ async function listReleases() {
  *
  * @param {string} tag  The git tag, e.g. "v0.20.0"
  */
+const TAG_RE = /^v\d+\.\d+\.\d+(-[A-Za-z0-9.]+)?$/;
+
 async function installVersion(tag) {
   if (!autoUpdaterRef) {
     throw new Error("installVersion called before auto-updater was initialised");
+  }
+  if (typeof tag !== "string" || !TAG_RE.test(tag)) {
+    throw new Error(
+      `Invalid release tag "${tag}" — expected the form "vMAJOR.MINOR.PATCH" (e.g. "v0.20.0")`
+    );
   }
 
   log("info", `Installing version ${tag} via targeted rollback`);

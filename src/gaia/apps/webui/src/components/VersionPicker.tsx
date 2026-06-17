@@ -13,7 +13,7 @@ type PickerView =
     | { kind: 'loading' }
     | { kind: 'error'; message: string }
     | { kind: 'list'; releases: ReleaseInfo[] }
-    | { kind: 'confirm'; release: ReleaseInfo }
+    | { kind: 'confirm'; release: ReleaseInfo; releases: ReleaseInfo[] }
     | { kind: 'installing' };
 
 interface GaiaUpdaterBridge {
@@ -95,9 +95,9 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
         return () => el.removeEventListener('keydown', trap);
     }, [view]);
 
-    function selectRelease(release: ReleaseInfo) {
+    function selectRelease(release: ReleaseInfo, releases: ReleaseInfo[]) {
         if (release.isCurrent) return;
-        setView({ kind: 'confirm', release });
+        setView({ kind: 'confirm', release, releases });
     }
 
     async function confirmInstall(release: ReleaseInfo) {
@@ -190,7 +190,7 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                                         data-version={r.version}
                                         aria-label={`${r.version}${r.isCurrent ? ' — installed' : ''}${r.isPinned ? ' — pinned' : ''}`}
                                         aria-disabled={r.isCurrent ? 'true' : 'false'}
-                                        onClick={() => selectRelease(r)}
+                                        onClick={() => selectRelease(r, view.releases)}
                                         disabled={r.isCurrent}
                                     >
                                         <span className="vp-version">{r.version}</span>
@@ -224,7 +224,7 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                                 <button
                                     type="button"
                                     className="vp-btn-cancel"
-                                    onClick={() => setView({ kind: 'list', releases: [] })}
+                                    onClick={() => setView({ kind: 'list', releases: view.releases })}
                                 >
                                     Back
                                 </button>
