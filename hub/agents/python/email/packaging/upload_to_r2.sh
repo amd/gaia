@@ -2,11 +2,16 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
+# LEGACY / DISCOURAGED. This rclone hand-upload writes straight to the bucket and
+# therefore BYPASSES the Agent Hub Worker — so index.json is NOT rebuilt and the
+# upload is not server-side checksummed. The supported path (CI and by hand) is
+# publish_to_r2.py -> the Worker's POST /publish. Use this only for an emergency
+# direct-to-bucket upload, and run a Worker index rebuild afterwards.
+#
 # Manually upload frozen email-agent binaries to the GAIA hub R2 bucket and
 # regenerate binaries.lock.json with their real hashes — the "I run rclone
-# myself" path. Uses the SAME bucket, prefix, and public origin as the CI
-# release (release_agent_email.yml), so the published objects and the lock
-# baseUrl line up byte-for-byte whether a release goes through CI or by hand.
+# myself" path. Same bucket/prefix/origin as the CI release, so the lock baseUrl
+# lines up byte-for-byte.
 #
 # One-time rclone setup (remote name, creds, endpoint): see
 #   scripts/video-demo/R2-SETUP.md
@@ -23,7 +28,7 @@
 #                  lock entry (so a Windows-only hand-upload won't wipe mac/linux).
 #
 # Env overrides: R2_REMOTE (default gaia), R2_BUCKET (default gaia-hub),
-#                HUB_BASE_URL (default https://hub.amd-gaia.ai).
+#                GAIA_HUB_BASE_URL (default https://hub.amd-gaia.ai).
 #
 # No silent fallback: a missing rclone/remote, a version mismatch, or no
 # binaries found is a hard error.
@@ -35,7 +40,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 REMOTE="${R2_REMOTE:-gaia}"
 BUCKET="${R2_BUCKET:-gaia-hub}"
 HUB_PREFIX="agents/email"
-HUB_BASE_URL="${HUB_BASE_URL:-https://hub.amd-gaia.ai}"
+GAIA_HUB_BASE_URL="${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}"
 
 PKG_JSON="${REPO_ROOT}/hub/agents/npm/agent-email/package.json"
 LOCK="${REPO_ROOT}/hub/agents/npm/agent-email/binaries.lock.json"
@@ -113,7 +118,7 @@ rclone lsl "${DEST}/" --s3-no-check-bucket
 
 echo "==> regenerating ${LOCK}"
 "${PY}" "${SCRIPT_DIR}/gen_binaries_lock.py" \
-  --base-url "${HUB_BASE_URL}/${HUB_PREFIX}/${VERSION}" \
+  --base-url "${GAIA_HUB_BASE_URL}/${HUB_PREFIX}/${VERSION}" \
   --version "${VERSION}" \
   --lock "${LOCK}" \
   $(for m in "${META_DIR}"/*.meta.json; do echo --meta "${m}"; done)
@@ -121,7 +126,7 @@ echo "==> regenerating ${LOCK}"
 cat <<EOF
 
 Done. ${#BINS[@]} binary(ies) live at:
-  ${HUB_BASE_URL}/${HUB_PREFIX}/${VERSION}/
+  ${GAIA_HUB_BASE_URL}/${HUB_PREFIX}/${VERSION}/
 
 Next — verify the published bytes match the lock, then publish npm:
   cd hub/agents/npm/agent-email

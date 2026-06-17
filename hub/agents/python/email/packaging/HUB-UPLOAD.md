@@ -45,7 +45,7 @@ Absent platforms keep their existing lock entry, so a **Windows-only** hand-uplo
 won't wipe the mac/linux entries — upload the rest later and rerun.
 
 Env overrides: `R2_REMOTE` (default `gaia`), `R2_BUCKET` (default `gaia-hub`),
-`HUB_BASE_URL` (default `https://hub.amd-gaia.ai`).
+`GAIA_HUB_BASE_URL` (default `https://hub.amd-gaia.ai`).
 
 ## Where the binaries come from
 

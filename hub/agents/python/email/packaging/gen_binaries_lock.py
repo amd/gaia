@@ -4,11 +4,11 @@
 Regenerate ``hub/agents/npm/agent-email/binaries.lock.json`` from real artifacts
 published to the GAIA hub R2 bucket (milestone #49, issue #1648).
 
-Distribution is direct-to-R2: the frozen per-platform binaries are uploaded with
-``rclone`` to the ``gaia-hub`` bucket and served publicly
-at ``hub.amd-gaia.ai``. The npm ``fetch`` CLI downloads each binary by a plain
-public GET and verifies its SHA-256 against this lock — so the lock's hashes are
-the integrity gate (there is no server-side checksum on a static object store).
+Distribution goes through the Agent Hub Worker: the frozen per-platform binaries
+are POSTed to ``hub.amd-gaia.ai`` ``/publish`` (see ``publish_to_r2.py``), which
+stores them in the ``gaia-hub`` bucket and serves them by a plain public GET. The
+npm ``fetch`` CLI downloads each binary and verifies its SHA-256 against this
+lock — the lock's hashes are the integrity gate the CLI enforces on download.
 
 Consumes one or more artifact-meta JSON files (each a list of
 ``{platform, filename, executable, sha256, size}``, written by the build/staging
@@ -81,7 +81,7 @@ def _load_metas(paths: list[Path]) -> dict[str, dict]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Regenerate binaries.lock.json from R2 uploads."
+        description="Regenerate binaries.lock.json from the hub publish summary."
     )
     parser.add_argument(
         "--base-url",
