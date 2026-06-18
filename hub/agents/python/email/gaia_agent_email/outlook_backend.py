@@ -478,6 +478,11 @@ class LiveOutlookBackend:
     def untrash_message(self, message_id: str) -> Dict[str, Any]:
         return self._move(message_id, _FOLDER_INBOX)
 
+    def unarchive_message(self, message_id: str, prior_labels: List[str]) -> Dict[str, Any]:
+        # Move back to the inbox folder; prior_labels unused (categories survive
+        # a folder move — kept for Protocol parity with LiveGmailBackend).
+        return self._move(message_id, _FOLDER_INBOX)
+
     def permanent_delete(self, message_id: str) -> None:
         self._delete(f"/me/messages/{message_id}")
 

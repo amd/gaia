@@ -146,6 +146,15 @@ class GmailBackend(Protocol):
         """Restore from TRASH."""
         ...
 
+    def unarchive_message(self, message_id: str, prior_labels: List[str]) -> Dict[str, Any]:
+        """Reverse an archive: restore the message to the inbox.
+
+        ``message_id`` is the id valid NOW (post-archive for folder-based
+        backends like Outlook, where archive changed the id). Returns the
+        message resource; the id may change again for folder backends.
+        """
+        ...
+
     def permanent_delete(self, message_id: str) -> None:
         """Permanently delete (DELETE not recoverable). Use sparingly."""
         ...
@@ -526,6 +535,12 @@ class LiveGmailBackend:
         # view so undo returns the message to its original state.
         self._post(f"/messages/{message_id}/untrash")
         return self._modify_labels(message_id, add=[GMAIL_LABEL_INBOX])
+
+    def unarchive_message(self, message_id: str, prior_labels: List[str]) -> Dict[str, Any]:
+        # Re-add INBOX plus any prior labels. Gmail modify is idempotent when
+        # adding a label already present, so this is safe to call more than once.
+        to_add = list({GMAIL_LABEL_INBOX, *(prior_labels or [])})
+        return self._modify_labels(message_id, add=to_add)
 
     def permanent_delete(self, message_id: str) -> None:
         self._delete(f"/messages/{message_id}")

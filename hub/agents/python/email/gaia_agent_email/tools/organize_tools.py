@@ -60,13 +60,17 @@ def archive_message_impl(
             prior = gmail.get_message(message_id)
         prior_labels = list(prior.get("labelIds", []))
         # Gmail call — if this raises, NO db row is written.
-        gmail.archive_message(message_id)
+        result = gmail.archive_message(message_id)
+        # Capture the post-archive id: for folder-based backends (Outlook)
+        # the move returns a new id; for label-based backends (Gmail) it
+        # equals the pre-archive id.
+        post_archive_id = (result or {}).get("id") or message_id
         action_id = action_store.record_action(
             db,
             action_type="archive",
             message_id=message_id,
             thread_id=prior.get("threadId"),
-            payload={"prior_labels": prior_labels},
+            payload={"prior_labels": prior_labels, "post_archive_id": post_archive_id},
             mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
@@ -213,15 +217,20 @@ def undo_archive_batch_impl(
 ) -> Dict[str, Any]:
     """Reverse a batch archive within the undo window.
 
-    Re-adds the labels that ``archive`` removed (INBOX, plus any other
-    label the message carried before) for every still-undoable ``archive``
-    row sharing ``batch_id``, then marks each row undone.
+    Calls ``backend.unarchive_message`` for each still-undoable ``archive``
+    row, which restores it to the inbox in a provider-correct way: Gmail
+    re-adds the INBOX label (stable id); Outlook moves the message back from
+    the archive folder using the post-archive id recorded at archive time.
 
     ``resolve_backend(row) -> backend`` routes each row to the mailbox it was
     archived from (#1603 Phase 2), so a cross-mailbox batch undoes against the
     right accounts. Raises ``RuntimeError`` if the batch has no undoable rows —
     the window expired, every row was already undone, or the batch_id is
     unknown. We fail loudly rather than silently no-op so the caller surfaces it.
+
+    Per-row failures are collected and reported but do NOT abort the rest of the
+    batch: partial success is preferable to a mid-loop abort that leaves some
+    messages stranded.
     """
     with log_tool_call("undo_archive_batch", {"batch_id": batch_id}, debug=debug) as st:
         rows = action_store.fetch_batch_undoable(
@@ -230,10 +239,11 @@ def undo_archive_batch_impl(
         if not rows:
             raise RuntimeError(
                 f"undo window has expired ({window_seconds} s) or batch_id "
-                f"{batch_id!r} has no undoable archive actions. Use Gmail to "
-                "move the messages back to the inbox manually."
+                f"{batch_id!r} has no undoable archive actions. Use your mail "
+                "client to move the messages back to the inbox manually."
             )
         restored: List[Dict[str, Any]] = []
+        failed: List[Dict[str, Any]] = []
         for row in rows:
             if row["action_type"] != "archive":
                 # batch_id is archive-only today; skip anything else rather
@@ -242,16 +252,38 @@ def undo_archive_batch_impl(
                 continue
             backend = resolve_backend(row)
             mid = row["message_id"]
-            prior_labels = set(row["payload"].get("prior_labels") or [])
-            current = set(backend.get_message(mid).get("labelIds", []))
-            # Archive only ever removes labels (INBOX); re-add whatever the
-            # message carried before that it no longer has.
-            for lab in prior_labels - current:
-                backend.add_label(mid, lab)
+            prior_labels = list(row["payload"].get("prior_labels") or [])
+            # Use the post-archive id so Outlook can find the message after the
+            # folder move changed its id.
+            restore_id = row["payload"].get("post_archive_id") or mid
+            try:
+                backend.unarchive_message(restore_id, prior_labels)
+            except Exception as exc:
+                failed.append(
+                    {
+                        "message_id": mid,
+                        "error": format_connector_error(exc)
+                        if isinstance(exc, ConnectorsError)
+                        else f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                if debug:
+                    log.exception("undo failed for %s", mid)
+                continue
             action_store.mark_undone(db, action_id=row["action_id"])
             restored.append({"message_id": mid, "action_id": row["action_id"]})
-        st["result_summary"] = {"restored": len(restored)}
-        return {"batch_id": batch_id, "restored": len(restored), "messages": restored}
+        if rows and not restored and failed:
+            raise RuntimeError(
+                f"undo_archive_batch: all {len(failed)} row(s) failed to restore. "
+                f"First error: {failed[0]['error']}"
+            )
+        st["result_summary"] = {"restored": len(restored), "failed": len(failed)}
+        return {
+            "batch_id": batch_id,
+            "restored": len(restored),
+            "messages": restored,
+            "failed": failed,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -359,9 +391,9 @@ def _run_batch_with_prior(
     """Same as _run_batch but fetches per-message prior state first.
 
     ``resolve_backend(mid) -> backend`` routes per message. ``backend_op(backend,
-    mid)`` performs the mutation on the resolved backend. ``prior_fn(msg) ->
-    prior`` is called once per message; ``payload_fn(msg, prior) -> dict`` builds
-    the action payload.
+    mid) -> result`` performs the mutation on the resolved backend. ``prior_fn(msg)
+    -> prior`` is called once per message; ``payload_fn(msg, prior, op_result) ->
+    dict`` builds the action payload (op_result is the backend_op return value).
     """
     succeeded: list[dict] = []
     failed: list[dict] = []
@@ -370,13 +402,13 @@ def _run_batch_with_prior(
             backend = resolve_backend(mid)
             msg = backend.get_message(mid)
             prior = prior_fn(msg)
-            backend_op(backend, mid)
+            op_result = backend_op(backend, mid)
             aid = action_store.record_action(
                 db,
                 action_type=action_type,
                 message_id=mid,
                 thread_id=msg.get("threadId"),
-                payload=payload_fn(msg, prior),
+                payload=payload_fn(msg, prior, op_result),
                 batch_id=batch_id,
                 mailbox=action_mailbox(mid) if action_mailbox else None,
             )
@@ -762,9 +794,14 @@ class OrganizeToolsMixin:
                     return list(msg.get("labelIds", []))
 
                 def _archive_payload_fn(
-                    _msg: Dict[str, Any], prior_labels: List[str]
+                    _msg: Dict[str, Any],
+                    prior_labels: List[str],
+                    op_result: Optional[Dict[str, Any]],
                 ) -> Dict[str, Any]:
-                    return {"prior_labels": prior_labels}
+                    # Record the post-archive id so undo can find the message even
+                    # when the backend changed its id (Outlook folder-move semantics).
+                    post_id = (op_result or {}).get("id") or _msg["id"]
+                    return {"prior_labels": prior_labels, "post_archive_id": post_id}
 
                 result = _run_batch_with_prior(
                     _batch_backend,
@@ -874,7 +911,9 @@ class OrganizeToolsMixin:
                     return list(msg.get("labelIds", []))
 
                 def _move_payload_fn(
-                    _msg: Dict[str, Any], prior_labels: List[str]
+                    _msg: Dict[str, Any],
+                    prior_labels: List[str],
+                    _op_result: Optional[Dict[str, Any]] = None,
                 ) -> Dict[str, Any]:
                     return {
                         "label_id": label_id_local,
