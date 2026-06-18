@@ -19,10 +19,9 @@ import os
 import sys
 import tempfile
 import webbrowser
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import requests
-from mcp.server.fastmcp import FastMCP
 
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
@@ -32,12 +31,47 @@ from gaia.ui.sse_handler import (
     _TRAILING_CODE_FENCE_RE,
 )
 
+if TYPE_CHECKING:  # import only for type checking; runtime import is lazy (#1750)
+    from mcp.server.fastmcp import FastMCP
+
 logger = logging.getLogger(__name__)
 
 # Default GAIA Agent UI backend URL
 DEFAULT_BACKEND = "http://localhost:4200"
 MCP_DEFAULT_PORT = 8765
 MCP_DEFAULT_HOST = "localhost"
+
+
+def _normalize_error(
+    e: Exception, base_url: str, status_code: Optional[int] = None
+) -> Dict[str, Any]:
+    """Normalize an exception into a structured error dict without leaking URLs.
+
+    Returns {"status": "error", "detail": "<clean message>"}.
+    """
+    if isinstance(e, requests.exceptions.ConnectionError):
+        return {
+            "status": "error",
+            "detail": "Cannot connect to GAIA backend. Is it running?",
+        }
+
+    if isinstance(e, requests.exceptions.HTTPError):
+        resp = e.response
+        code = resp.status_code if resp is not None else (status_code or 0)
+        detail = ""
+        if resp is not None:
+            try:
+                body = resp.json()
+                detail = body.get("detail", "") if isinstance(body, dict) else ""
+            except (ValueError, KeyError):
+                detail = resp.text[:200] if resp.text else ""
+        if not detail:
+            detail = f"HTTP {code}"
+        detail = detail.replace(base_url, "")
+        return {"status": "error", "detail": detail}
+
+    msg = str(e)[:200].replace(base_url, "")
+    return {"status": "error", "detail": msg}
 
 
 def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
@@ -47,14 +81,12 @@ def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
         r = getattr(requests, method)(url, timeout=120, **kwargs)
         r.raise_for_status()
         return r.json()
-    except requests.exceptions.ConnectionError:
-        return {
-            "error": f"Cannot connect to GAIA backend at {base_url}. Is it running?"
-        }
+    except requests.exceptions.ConnectionError as e:
+        return _normalize_error(e, base_url)
     except requests.exceptions.HTTPError as e:
-        return {"error": f"HTTP {e.response.status_code}: {e.response.text[:500]}"}
+        return _normalize_error(e, base_url)
     except Exception as e:
-        return {"error": str(e)}
+        return _normalize_error(e, base_url)
 
 
 def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]:
@@ -81,10 +113,12 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     try:
         r = requests.post(url, json=payload, stream=True, timeout=180)
         r.raise_for_status()
-    except requests.exceptions.ConnectionError:
-        return {"error": f"Cannot connect to GAIA backend at {base_url}"}
+    except requests.exceptions.ConnectionError as e:
+        return _normalize_error(e, base_url)
+    except requests.exceptions.HTTPError as e:
+        return _normalize_error(e, base_url)
     except Exception as e:
-        return {"error": str(e)}
+        return _normalize_error(e, base_url)
 
     full_content = ""
     agent_steps = []
@@ -203,8 +237,12 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     return result
 
 
-def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
+def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
     """Create the MCP server with tools for interacting with GAIA Agent UI."""
+    # Imported lazily so the pure helpers above (_normalize_error, _api,
+    # _stream_chat) stay importable without the optional ``mcp`` dependency,
+    # which the unit-test job does not install (issue #1750).
+    from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP(name="GAIA Agent UI")
 
@@ -290,11 +328,12 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
 
     @mcp.tool()
     def send_message(session_id: str, message: str) -> Dict[str, Any]:
-        """Send a message to the GAIA agent in a session. The response streams
-        to the webapp in real time. Returns the agent's response, tool outputs,
-        and an event log of what happened during processing.
+        """Send a message to the GAIA agent in a session and wait for the response.
+        The conversation is stored and will be visible when the session is viewed.
+        Returns the agent's response, tool outputs, and an event log.
 
         Use list_sessions() first to get a session ID, or create_session() to make one.
+        To make the session visible in the browser, call open_session_in_browser() first.
         """
         return _stream_chat(backend_url, session_id, message)
 
@@ -702,29 +741,36 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
     @mcp.tool()
     def open_session_in_browser(session_id: str) -> Dict[str, Any]:
         """Open a chat session in the user's default browser.
-        This navigates the browser to the GAIA Agent UI with the session selected.
+        This navigates the browser to the GAIA Agent UI with the session selected
+        and signals the frontend to switch to that session via the activate endpoint.
         Won't open a duplicate tab if the same session is already open.
 
         Args:
             session_id: The session ID to open.
         """
-        # Use the Vite dev server port if running in dev, otherwise backend
-        # Try dev server first (5173/5174), fall back to backend URL
+        # Try dev server first (5174/5173), fall back to backend URL.
+        # Use hash-based navigation so the SPA router picks up the session.
         dev_ports = [5174, 5173]
-        target_url = None
+        base = None
         for port in dev_ports:
             try:
                 r = requests.get(f"http://localhost:{port}/", timeout=2)
                 if r.status_code == 200:
-                    target_url = f"http://localhost:{port}/?session={session_id}"
+                    base = f"http://localhost:{port}"
                     break
             except Exception:
                 continue
 
-        if not target_url:
-            target_url = f"{backend_url}/?session={session_id}"
+        if not base:
+            base = backend_url
 
-        # Skip if this exact URL was already opened (avoid duplicate tabs)
+        target_url = f"{base}/#{session_id}"
+
+        # Signal the frontend to switch to this session via the activate endpoint.
+        # This emits a set_active_session SSE event that App.tsx consumes.
+        _api(backend_url, "post", f"/sessions/{session_id}/activate")
+
+        # Skip opening a duplicate tab for the same URL.
         if _last_opened_url["url"] == target_url:
             return {
                 "opened": False,
@@ -737,7 +783,11 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
             _last_opened_url["url"] = target_url
             return {"opened": True, "url": target_url}
         except Exception as e:
-            return {"error": f"Failed to open browser: {e}", "url": target_url}
+            return {
+                "opened": False,
+                "url": target_url,
+                "note": f"Failed to open browser: {e}",
+            }
 
     return mcp
 

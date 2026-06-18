@@ -21,6 +21,7 @@ import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
 import { getSessionHash, findSessionByHash } from './utils/format';
+import { getApiBase } from './utils/apiBase';
 
 /** Wrapper that delays unmount to allow CSS exit animations to play. */
 function AnimatedPresence({ show, children, duration = 250 }: {
@@ -292,14 +293,13 @@ function App() {
 
     // Support URL-based session navigation (?session=<id> or #<hash>)
     useEffect(() => {
-        if (currentSessionId) return; // Already have a session selected
-
         const params = new URLSearchParams(window.location.search);
         const sessionParam = params.get('session');
         const hashParam = window.location.hash.replace(/^#/, '');
-
         const target = sessionParam || hashParam;
         if (!target) return;
+        // Already on this session — no switch needed
+        if (target === currentSessionId) return;
 
         log.nav.info(`URL session parameter: ${target}`);
         // Defer so session list has time to load
@@ -318,6 +318,45 @@ function App() {
         }, 500);
         return () => clearTimeout(timer);
     }, [currentSessionId, setCurrentSession, setMessages]);
+
+    // Subscribe to system session-activation events (MCP bridge P1)
+    useEffect(() => {
+        const url = `${getApiBase()}/sessions/events`;
+        let es: EventSource | null = null;
+        let backoff = 2_000;
+        let cancelled = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+
+        const connect = () => {
+            if (cancelled) return;
+            es = new EventSource(url);
+            es.onopen = () => { backoff = 2_000; };
+            es.onmessage = (ev) => {
+                try {
+                    const data = JSON.parse(ev.data) as { type: string; session_id?: string };
+                    if (data.type === 'set_active_session' && data.session_id) {
+                        log.nav.info(`MCP activate session: ${data.session_id}`);
+                        setCurrentSession(data.session_id);
+                        setMessages([]);
+                    }
+                } catch { /* malformed event — ignore */ }
+            };
+            es.onerror = () => {
+                es?.close();
+                es = null;
+                if (cancelled) return;
+                timer = setTimeout(connect, backoff);
+                backoff = Math.min(backoff * 2, 30_000);
+            };
+        };
+
+        connect();
+        return () => {
+            cancelled = true;
+            if (timer) clearTimeout(timer);
+            es?.close();
+        };
+    }, [setCurrentSession, setMessages]);
 
     // Update URL hash when the current session changes
     useEffect(() => {
