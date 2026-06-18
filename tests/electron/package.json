@@ -39,7 +39,8 @@
       "./setup.js"
     ],
     "moduleNameMapper": {
-      "^electron$": "<rootDir>/mocks/electron.js"
+      "^electron$": "<rootDir>/mocks/electron.js",
+      "^electron-updater$": "<rootDir>/mocks/electron-updater.js"
     }
   },
   "devDependencies": {

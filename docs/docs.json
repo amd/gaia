@@ -425,6 +425,7 @@
               "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
+              "plans/skill-synthesis",
               "plans/oem-bundling"
             ]
           },

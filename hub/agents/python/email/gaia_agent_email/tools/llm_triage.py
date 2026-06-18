@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, List, Mapping, Optional
 
 from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
 
@@ -118,13 +118,48 @@ class LLMTriageError(RuntimeError):
         self.message_id = message_id
 
 
-def _build_user_prompt(subject: str, sender: str, body: str) -> str:
+def _format_context_block(context: Any) -> str:
+    """Render an optional TriageContext into a short, clearly-delimited block.
+
+    Returns "" when context is absent or carries no populated fields, so the
+    no-context path is byte-identical to before (#1541 behavior-unchanged
+    guard). Duck-typed on the contract attributes so this module need not
+    hard-depend on the contract shape.
+    """
+    if context is None:
+        return ""
+    people = list(getattr(context, "people", None) or [])
+    projects = list(getattr(context, "projects", None) or [])
+    tone = getattr(context, "tone", None)
+    self_email = getattr(context, "self_email", None)
+    lines: List[str] = []
+    if self_email:
+        lines.append(f"- This is my own email address: {self_email}")
+    if people:
+        lines.append(f"- Important people: {', '.join(people)}")
+    if projects:
+        lines.append(f"- Active projects I care about: {', '.join(projects)}")
+    if tone:
+        lines.append(f"- Preferred tone: {tone}")
+    if not lines:
+        return ""
+    return (
+        "Context to factor into your decision (about ME, the reader):\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
+def _build_user_prompt(
+    subject: str, sender: str, body: str, context: Any = None
+) -> str:
     # Local import breaks a circular dependency (read_tools imports this module)
     # while reusing the agent's single source of truth for the untrusted-input
     # delimiters the system prompt is trained to treat as data.
     from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 
     return (
+        f"{_format_context_block(context)}"
         f"Classify this email.\n\n"
         f"Subject: {subject}\n"
         f"From: {sender}\n"
@@ -193,14 +228,29 @@ def classify_email_llm(
     sender: str,
     body: str,
     message_id: str = "",
+    collect_stats: Optional[List[dict]] = None,
+    context: Any = None,
 ) -> dict[str, Any]:
     """Classify one email via the LLM. Raises ``LLMTriageError`` on any failure.
 
     ``chat`` is the agent's ``AgentSDK`` (or anything exposing
     ``send_messages(messages, system_prompt=...) -> response`` with a ``.text``
     attribute).
+
+    When ``collect_stats`` is a list, the response's ``.stats`` dict (the reused
+    ``AgentResponse.stats`` measurement, #1277/#1278) is appended to it so a
+    caller can aggregate usage across calls — no new measurement path.
+
+    ``context`` is an optional ``TriageContext`` (#1541): when supplied, a short
+    context block is prepended to the user prompt so the model factors in the
+    caller's people/projects/tone/self-email. Absent → prompt unchanged.
     """
-    messages = [{"role": "user", "content": _build_user_prompt(subject, sender, body)}]
+    messages = [
+        {
+            "role": "user",
+            "content": _build_user_prompt(subject, sender, body, context=context),
+        }
+    ]
     try:
         response = chat.send_messages(
             messages, system_prompt=_SYSTEM_PROMPT, temperature=0.0
@@ -211,6 +261,11 @@ def classify_email_llm(
             f"{type(exc).__name__}: {exc}",
             message_id=message_id,
         ) from exc
+
+    if collect_stats is not None:
+        stats = getattr(response, "stats", None)
+        if stats:
+            collect_stats.append(stats)
 
     text = getattr(response, "text", None)
     if text is None:

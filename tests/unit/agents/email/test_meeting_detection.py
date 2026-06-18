@@ -51,6 +51,35 @@ TRUE_POSITIVES = [
     ("Coffee", "Let's grab lunch on Friday — does noon work for you?"),
 ]
 
+# Slot-proposal emails: the sender proposes candidate times to find a mutual
+# slot.  Decision (#1709): a slot-proposal IS a meeting request — it is the
+# start of scheduling and downstream calendar capabilities should engage.
+SLOT_PROPOSALS = [
+    (
+        "Alignment session",
+        "I'd like to schedule an alignment session — Tue 10am PT / Wed 2pm PT / Thu 9am PT.",
+    ),
+    (
+        "Finding a time",
+        "Here are some times that work for me: Monday 3pm or Wednesday 11am. "
+        "Does either work for you?",
+    ),
+    (
+        "Re: intro call",
+        "I'd like to propose several times for our intro call: "
+        "Thursday 10am or Friday 2pm.",
+    ),
+    (
+        "Catch up",
+        "Let me know what time works for you — I'm available Monday at 10am or "
+        "Tuesday at 3pm.",
+    ),
+    (
+        "Quick chat",
+        "Does Thursday 9am work for you? If not, I can also do Friday afternoon.",
+    ),
+]
+
 # Non-meeting emails — no scheduling intent at all.
 TRUE_NEGATIVES = [
     ("Your order shipped", "Your package is on its way and will arrive Tuesday."),
@@ -147,6 +176,48 @@ class TestHeuristicTruePositive:
             "Meeting request: budget review at 3pm", "See you there."
         )
         assert result.is_meeting_request is True
+
+
+# ---------------------------------------------------------------------------
+# Heuristic — slot proposals (#1709)
+# A slot-proposal ("find a time") email IS a meeting request: it is the start
+# of scheduling.  The heuristic must return is_meeting_request=True with
+# high confidence so that downstream calendar capabilities engage.
+# ---------------------------------------------------------------------------
+
+
+class TestHeuristicSlotProposal:
+    @pytest.mark.parametrize("subject,body", SLOT_PROPOSALS)
+    def test_slot_proposal_is_a_meeting_request(self, subject, body):
+        result = detect_meeting_request_heuristic(subject, body)
+        assert result.is_meeting_request is True, (
+            f"Expected slot-proposal to be detected as meeting request, "
+            f"got is_meeting_request={result.is_meeting_request} "
+            f"(confidence={result.confidence!r}, reason={result.reason!r})"
+        )
+
+    @pytest.mark.parametrize("subject,body", SLOT_PROPOSALS)
+    def test_slot_proposal_has_high_confidence(self, subject, body):
+        result = detect_meeting_request_heuristic(subject, body)
+        assert (
+            result.confidence == "high"
+        ), f"Expected high confidence for slot-proposal, got {result.confidence!r}"
+
+    def test_slot_proposal_signals_are_surfaced(self):
+        result = detect_meeting_request_heuristic(
+            "Alignment",
+            "Here are some times: Monday 10am or Wednesday 2pm.",
+        )
+        assert result.signals, "Signals should be non-empty for a slot-proposal match"
+
+    def test_generic_available_without_time_does_not_false_positive(self):
+        # "available" alone (no time signal, no scheduling context) must NOT
+        # trigger — avoids matching "I am available for questions".
+        result = detect_meeting_request_heuristic(
+            "Re: report",
+            "The report is available for download.",
+        )
+        assert result.is_meeting_request is False
 
 
 # ---------------------------------------------------------------------------

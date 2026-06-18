@@ -38,7 +38,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import List, Literal, Optional, Union, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Category strings — kept in sync with ``triage_heuristics.ALL_CATEGORIES`` by
 # ``test_contract_schema.test_categories_match_agent_taxonomy``. Duplicated
@@ -186,6 +186,29 @@ class ThreadInput(_BaseInput):
 EmailInput = Union[SingleEmailInput, ThreadInput]
 
 
+class TriageContext(_Strict):
+    """Optional caller-supplied context that biases categorization/summary
+    (#1541). Absent → behavior is identical to today. Coexists with gaia
+    memory (#1114) without requiring it.
+    """
+
+    people: List[str] = Field(
+        default_factory=list,
+        description="Important people whose mail should weigh higher.",
+    )
+    projects: List[str] = Field(
+        default_factory=list,
+        description="Active projects the principal cares about.",
+    )
+    tone: Optional[str] = Field(
+        default=None, description="Preferred summary tone, e.g. 'concise'."
+    )
+    self_email: Optional[str] = Field(
+        default=None,
+        description="The principal's own address, so the model knows who 'I' is.",
+    )
+
+
 class EmailTriageRequest(_Strict):
     """Top-level request envelope shared by REST (#1229) and MCP stdio (#1104)."""
 
@@ -197,6 +220,13 @@ class EmailTriageRequest(_Strict):
         ...,
         discriminator="kind",
         description="The single-email or full-thread input.",
+    )
+    context: Optional[TriageContext] = Field(
+        default=None,
+        description=(
+            "Optional context (people/projects/tone/self-email) that biases "
+            "categorization and summary. Absent → behavior unchanged."
+        ),
     )
 
 
@@ -213,6 +243,17 @@ class ActionItem(_Strict):
         default=None,
         description="Free-text due hint as written ('Friday', 'EOD'); not parsed.",
     )
+    type: Literal["text", "link"] = Field(
+        default="text",
+        description=(
+            "Discriminator: 'text' for a plain imperative action; 'link' when the "
+            "action involves following a URL (url is then required and non-empty)."
+        ),
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description="The URL to follow for a 'link' action item; None for 'text'.",
+    )
 
     @field_validator("description")
     @classmethod
@@ -220,6 +261,18 @@ class ActionItem(_Strict):
         if not (v or "").strip():
             raise ValueError("action item description must be non-empty")
         return v
+
+    @model_validator(mode="after")
+    def _url_consistent_with_type(self) -> "ActionItem":
+        if self.type == "link":
+            if not (self.url or "").strip():
+                raise ValueError(
+                    "url is required and must be non-empty when type='link'"
+                )
+        else:
+            if self.url is not None:
+                raise ValueError("url must be None when type='text'")
+        return self
 
 
 class DraftReply(_Strict):
@@ -232,6 +285,28 @@ class DraftReply(_Strict):
     )
     subject: str = Field(..., description="Proposed subject line.")
     body: str = Field(..., description="Proposed reply body.")
+
+
+class TriageUsage(_Strict):
+    """LLM usage metrics for a triage, aggregated across the classify +
+    summarize calls. Reuses the existing ``AgentResponse.stats`` measurement
+    (#1277/#1278) — no new measurement path. ``None`` on the heuristic-only
+    path where no LLM call is made.
+    """
+
+    prompt_tokens: int = Field(
+        default=0, description="Sum of input tokens across the LLM calls."
+    )
+    completion_tokens: int = Field(
+        default=0, description="Sum of output (completion) tokens across the LLM calls."
+    )
+    total_tokens: int = Field(
+        default=0, description="Sum of input + output tokens across the LLM calls."
+    )
+    tokens_per_second: float = Field(
+        default=0.0,
+        description="Aggregate decode throughput (total output tokens / total decode time).",
+    )
 
 
 class EmailTriageResult(_Strict):
@@ -265,6 +340,13 @@ class EmailTriageResult(_Strict):
             "Echoes the provider message-id from the request (SingleEmailInput.message "
             "or ThreadInput.thread_id). Null when the result was produced from a "
             "raw Gmail-API message (no contract message_id available)."
+        ),
+    )
+    usage: Optional[TriageUsage] = Field(
+        default=None,
+        description=(
+            "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on "
+            "the heuristic-only path where no LLM call was made."
         ),
     )
 
@@ -313,9 +395,11 @@ __all__ = [
     "SingleEmailInput",
     "ThreadInput",
     "EmailInput",
+    "TriageContext",
     "EmailTriageRequest",
     "ActionItem",
     "DraftReply",
+    "TriageUsage",
     "EmailTriageResult",
     "EmailTriageResponse",
     "parse_request",
