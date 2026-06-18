@@ -1,0 +1,40 @@
+# TEMPORARY runner-maintenance workflow.
+# Manually dispatched to bring the self-hosted Windows (stx) runner to a
+# known-clean state: wipe every Lemonade / llama.cpp install (including stale
+# copies in other user profiles), reinstall the GAIA-pinned version, and warm
+# the backend by pulling + loading the default model. Delete this workflow once
+# the runner is clean.
+name: Reset Lemonade on Runner (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      verify_model:
+        description: "Model to pull + load to warm the backend"
+        default: "Gemma-4-E4B-it-GGUF"
+      keep_model_cache:
+        description: "Keep downloaded GGUFs (skip HF cache wipe)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  reset-lemonade:
+    name: Reset Lemonade on stx runner
+    runs-on: stx
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run reset-lemonade.ps1
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          $keep = if ("${{ github.event.inputs.keep_model_cache }}" -eq "true") { "-KeepModelCache" } else { "" }
+          Write-Host "Running reset-lemonade.ps1 (VerifyModel=${{ github.event.inputs.verify_model }}, keep=$keep)"
+          powershell -ExecutionPolicy Bypass -File installer\scripts\reset-lemonade.ps1 `
+            -VerifyModel "${{ github.event.inputs.verify_model }}" $keep
+          if ($LASTEXITCODE -ne 0) { throw "reset-lemonade.ps1 exited $LASTEXITCODE" }
