@@ -21,7 +21,7 @@ from typing import Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from gaia.agents.base.agent import default_max_steps
-from gaia.connectors.api import connected_mailbox_providers
+from gaia.connectors.api import connected_mailbox_providers, get_connection
 
 
 class ConfigurationError(ValueError):
@@ -300,16 +300,22 @@ class EmailAgentConfig:
 
         Resolution order:
           1. An injected ``calendar_backend`` (eval/test seam) — always wins.
-          2. Explicit ``calendar_provider`` config, if set — used directly.
+          2. Explicit ``calendar_provider`` config, if set — used directly
+             (trusted; no scope check).
           3. Explicit ``mail_provider`` config, if set — calendar follows the
              mailbox (a Microsoft-only user need not set ``calendar_provider``
-             separately).
-          4. Connector discovery via ``connected_mailbox_providers()`` — picks
-             the provider that is actually connected. If exactly one is
-             connected, use it; if both are connected without an explicit
-             ``mail_provider`` hint, prefer google (registry order).
-          5. Nothing connected and no explicit provider → ``ConfigurationError``
-             with an actionable message (never silently defaults to Google).
+             separately; trusted; no scope check).
+          4. Connector discovery: query ``connected_mailbox_providers()`` and
+             pick the provider that is BOTH connected AND calendar-scoped.
+             "Calendar-scoped" means the stored connection includes at least one
+             of the provider's calendar scopes
+             (Google: calendar.events / calendar.readonly;
+             Microsoft: Calendars.ReadWrite).
+             If nothing is connected → actionable ``ConfigurationError``.
+             If connected but no provider is calendar-scoped → actionable
+             ``ConfigurationError`` naming the scopes to grant.
+             If exactly one calendar-scoped provider → use it.
+             If both are calendar-scoped → registry order (google first).
 
         Both live backends satisfy the ``CalendarBackend`` Protocol, so the
         agent's calendar tools operate on Google and Outlook calendars
@@ -322,12 +328,20 @@ class EmailAgentConfig:
         if self.calendar_backend is not None:
             return self.calendar_backend
 
-        # Steps 2–3: explicit config takes precedence over connector discovery.
+        # Steps 2–3: explicit config is trusted and bypasses scope discovery.
         explicit = (self.calendar_provider or self.mail_provider or "").strip().lower()
         if explicit:
             provider = explicit
         else:
-            # Step 4: discover from connected providers (mirrors resolve_mail_backends).
+            # Step 4: scope-aware discovery — pick the connected + calendar-scoped provider.
+            from gaia_agent_email.outlook_scopes import OUTLOOK_CALENDAR_SCOPES
+            from gaia_agent_email.scopes import CALENDAR_SCOPES
+
+            _PROVIDER_CALENDAR_SCOPES = {
+                "google": set(CALENDAR_SCOPES),
+                "microsoft": set(OUTLOOK_CALENDAR_SCOPES),
+            }
+
             connected = connected_mailbox_providers()
             if not connected:
                 raise ConfigurationError(
@@ -335,8 +349,26 @@ class EmailAgentConfig:
                     "calendar.events / calendar.readonly) or Microsoft (grant "
                     "Calendars.ReadWrite) in Settings → Connectors, then retry."
                 )
-            # Prefer the first in registry order (google before microsoft).
-            provider = connected[0]
+
+            scoped = [
+                p
+                for p in connected
+                if p in _PROVIDER_CALENDAR_SCOPES
+                and _PROVIDER_CALENDAR_SCOPES[p].intersection(
+                    (get_connection(p) or {}).get("scopes", [])
+                )
+            ]
+
+            if not scoped:
+                raise ConfigurationError(
+                    "Connected providers have no calendar scope. "
+                    "Grant calendar.events or calendar.readonly for Google, "
+                    "or Calendars.ReadWrite for Microsoft, "
+                    "in Settings → Connectors, then retry."
+                )
+
+            # First in registry order (google before microsoft) wins when both are scoped.
+            provider = scoped[0]
 
         if provider == "google":
             from gaia_agent_email.calendar_backend import (
