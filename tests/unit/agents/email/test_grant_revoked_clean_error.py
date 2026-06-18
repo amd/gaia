@@ -28,8 +28,7 @@ from unittest.mock import MagicMock, patch
 from gaia_agent_email.agent import EmailTriageAgent
 from gaia_agent_email.config import EmailAgentConfig
 
-from gaia.connectors.errors import AuthRequiredError, ConnectorsError
-
+from gaia.connectors.errors import AuthRequiredError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -64,7 +63,9 @@ class GrantedBackend:
         }
         self.calls: list[tuple[str, str]] = []
 
-    def list_messages(self, *, query=None, label_ids=None, max_results=25, page_token=None):
+    def list_messages(
+        self, *, query=None, label_ids=None, max_results=25, page_token=None
+    ):
         ids = list(self._messages)[:max_results]
         return {"messages": [{"id": m, "threadId": f"t-{m}"} for m in ids]}
 
@@ -83,7 +84,9 @@ class UngrantedBackend:
     def __init__(self, name: str):
         self.name = name
 
-    def list_messages(self, *, query=None, label_ids=None, max_results=25, page_token=None):
+    def list_messages(
+        self, *, query=None, label_ids=None, max_results=25, page_token=None
+    ):
         raise AuthRequiredError(
             AuthRequiredError.Reason.AGENT_NOT_GRANTED,
             provider=self.name,
@@ -147,29 +150,38 @@ class TestTriageContinuesOnUngrantedMailbox:
         """
         granted = GrantedBackend("google", ["g1", "g2"])
         ungranted = UngrantedBackend("microsoft")
-        agent = _build_agent(tmp_path, monkeypatch, granted_backend=granted, ungranted_backend=ungranted)
+        agent = _build_agent(
+            tmp_path, monkeypatch, granted_backend=granted, ungranted_backend=ungranted
+        )
         try:
             envelope = json.loads(_registered_tool("triage_inbox")(20))
-            assert envelope["ok"] is True, f"scan raised instead of continuing: {envelope}"
+            assert (
+                envelope["ok"] is True
+            ), f"scan raised instead of continuing: {envelope}"
 
             data = envelope["data"]
             results = data["results"]
             # Granted mailbox contributed its messages.
             ids = {r["id"] for r in results}
-            assert "g1" in ids or "g2" in ids, f"no google messages in results: {results}"
+            assert (
+                "g1" in ids or "g2" in ids
+            ), f"no google messages in results: {results}"
             # Ungranted provider reported as a per-mailbox error, not an unhandled crash.
             mailbox_errors = data.get("mailbox_errors", [])
             assert mailbox_errors, "expected mailbox_errors but got none"
             providers_in_errors = {e["mailbox"] for e in mailbox_errors}
-            assert "microsoft" in providers_in_errors, f"microsoft not in mailbox_errors: {mailbox_errors}"
+            assert (
+                "microsoft" in providers_in_errors
+            ), f"microsoft not in mailbox_errors: {mailbox_errors}"
             # Error message is actionable.
             ms_error = next(e for e in mailbox_errors if e["mailbox"] == "microsoft")
             error_msg = ms_error["error"]
             assert error_msg, "mailbox_errors entry has empty error message"
             # The message should be actionable: mentions grant or Settings.
-            assert any(kw in error_msg for kw in ("grant", "Grant", "Settings", "AGENT_NOT_GRANTED")), (
-                f"error message not actionable: {error_msg!r}"
-            )
+            assert any(
+                kw in error_msg
+                for kw in ("grant", "Grant", "Settings", "AGENT_NOT_GRANTED")
+            ), f"error message not actionable: {error_msg!r}"
         finally:
             agent.close_db()
 
@@ -180,10 +192,14 @@ class TestTriageContinuesOnUngrantedMailbox:
         """
         granted = GrantedBackend("google", ["g1", "g2"])
         ungranted = UngrantedBackend("microsoft")
-        agent = _build_agent(tmp_path, monkeypatch, granted_backend=granted, ungranted_backend=ungranted)
+        agent = _build_agent(
+            tmp_path, monkeypatch, granted_backend=granted, ungranted_backend=ungranted
+        )
         try:
             envelope = json.loads(_registered_tool("pre_scan_inbox")(20))
-            assert envelope["ok"] is True, f"scan raised instead of continuing: {envelope}"
+            assert (
+                envelope["ok"] is True
+            ), f"scan raised instead of continuing: {envelope}"
 
             data = envelope["data"]
             assert data.get("kind") == "email_pre_scan"
@@ -201,7 +217,9 @@ class TestTriageContinuesOnUngrantedMailbox:
             mailbox_errors = data.get("mailbox_errors", [])
             assert mailbox_errors, "expected mailbox_errors but got none"
             providers_in_errors = {e["mailbox"] for e in mailbox_errors}
-            assert "microsoft" in providers_in_errors, f"microsoft not in mailbox_errors: {mailbox_errors}"
+            assert (
+                "microsoft" in providers_in_errors
+            ), f"microsoft not in mailbox_errors: {mailbox_errors}"
         finally:
             agent.close_db()
 
@@ -326,14 +344,15 @@ class TestCalendarUngrantedCleanError:
             # The list_calendar_events tool should return a clean error envelope,
             # not propagate the raw exception.
             envelope = json.loads(_registered_tool("list_calendar_events")())
-            assert envelope["ok"] is False, (
-                f"expected error envelope but got ok=True: {envelope}"
-            )
+            assert (
+                envelope["ok"] is False
+            ), f"expected error envelope but got ok=True: {envelope}"
             error_msg = envelope.get("error", "")
             assert error_msg, "error envelope has empty error message"
             # The message should be actionable.
-            assert any(kw in error_msg for kw in ("grant", "Grant", "Settings", "AGENT_NOT_GRANTED")), (
-                f"calendar error not actionable: {error_msg!r}"
-            )
+            assert any(
+                kw in error_msg
+                for kw in ("grant", "Grant", "Settings", "AGENT_NOT_GRANTED")
+            ), f"calendar error not actionable: {error_msg!r}"
         finally:
             agent.close_db()
