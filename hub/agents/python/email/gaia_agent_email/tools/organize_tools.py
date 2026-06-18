@@ -275,11 +275,17 @@ def undo_archive_batch_impl(
                 continue
             action_store.mark_undone(db, action_id=row["action_id"])
             restored.append({"message_id": mid, "action_id": row["action_id"]})
-        if rows and not restored and failed:
-            raise RuntimeError(
-                f"undo_archive_batch: all {len(failed)} row(s) failed to restore. "
+        if not restored:
+            # rows is non-empty (guarded above), so restoring nothing is a loud
+            # failure — never return ok with restored=0. Either every row failed,
+            # or the batch held no archive rows to restore.
+            detail = (
+                f"all {len(failed)} row(s) failed to restore. "
                 f"First error: {failed[0]['error']}"
+                if failed
+                else f"no archive rows among the {len(rows)} batch row(s) to restore"
             )
+            raise RuntimeError(f"undo_archive_batch: {detail}")
         st["result_summary"] = {"restored": len(restored), "failed": len(failed)}
         return {
             "batch_id": batch_id,
