@@ -19,7 +19,7 @@ python:
   entry_module: gaia_agent_word_count
   entry_class: WordCountAgent
   dependencies:
-    - "amd-gaia>=0.20.0"
+    - "amd-gaia[api]>=0.20.0"
 
 requirements:
   min_memory_gb: 5
