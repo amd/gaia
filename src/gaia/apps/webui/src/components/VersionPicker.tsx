@@ -222,6 +222,19 @@ export function VersionPicker({ onClose }: VersionPickerProps) {
                         </ul>
                     )}
 
+                    {view.kind === 'list' && (
+                        <p className="version-picker-more">
+                            Showing the {view.releases.length} most recent.{' '}
+                            <a
+                                href="https://github.com/amd/gaia/releases"
+                                target="_blank"
+                                rel="noreferrer"
+                            >
+                                Browse all releases on GitHub
+                            </a>
+                        </p>
+                    )}
+
                     {view.kind === 'confirm' && (
                         <div className="version-picker-confirm">
                             <p>

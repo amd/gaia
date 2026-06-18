@@ -51,10 +51,18 @@ const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // Subsequent checks every 4h
 const LOG_PATH = path.join(os.homedir(), ".gaia", "electron-updater.log");
 const UPDATE_CONFIG_PATH = path.join(os.homedir(), ".gaia", "update-config.json");
 
-// per_page=100 is the GitHub API max for a single page; >100 releases would
-// need pagination (follow the Link rel="next" header). Not built yet.
+// per_page=100 is the GitHub API max for a single page; we fetch broadly so
+// draft/prerelease/platform filtering still yields a full page of installable
+// releases before the display cap below. >100 releases would need pagination
+// (follow the Link rel="next" header). Not built yet.
 const GITHUB_API_RELEASES =
   "https://api.github.com/repos/amd/gaia/releases?per_page=100";
+
+// The picker shows only the N most-recent installable releases (rolling back
+// more than a few versions is rare). Older versions stay reachable via the
+// "browse all on GitHub" link in the picker, so this display cap never makes a
+// release unreachable.
+const MAX_RELEASES_SHOWN = 10;
 
 const STATES = Object.freeze({
   IDLE: "idle",
@@ -268,7 +276,9 @@ async function listReleases() {
       };
     });
 
-  return result;
+  // Cap to the most-recent installable releases; older ones remain reachable
+  // via the "browse all on GitHub" link in the picker.
+  return result.slice(0, MAX_RELEASES_SHOWN);
 }
 
 // ── installVersion ────────────────────────────────────────────────────────────

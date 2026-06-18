@@ -224,6 +224,33 @@ describe("listReleases()", () => {
     expect(r.isCurrent).toBe(false);
     expect(typeof r.isPinned).toBe("boolean");
   });
+
+  test("caps the list to the 10 most-recent installable releases", async () => {
+    const mod = loadModule();
+
+    const currentPlatform =
+      process.platform === "darwin"
+        ? "darwin"
+        : process.platform === "linux"
+        ? "linux"
+        : "win32";
+
+    // 15 installable releases, newest-first (as the GitHub API returns them).
+    const versions = Array.from({ length: 15 }, (_, i) => `0.${30 - i}.0`);
+    const releases = versions.map((v) =>
+      makeRelease({ tag: `v${v}`, version: v, platform: currentPlatform })
+    );
+
+    stubFetch(releases);
+    electronMock.app.getVersion = jest.fn(() => "0.30.0");
+
+    const result = await mod.listReleases();
+    expect(Array.isArray(result)).toBe(true);
+    // Display cap: only the 10 newest are returned; older remain reachable
+    // via the "browse all on GitHub" link in the picker.
+    expect(result.length).toBe(10);
+    expect(result.map((r) => r.version)).toEqual(versions.slice(0, 10));
+  });
 });
 
 // ── Tests: installVersion ──────────────────────────────────────────────────────
