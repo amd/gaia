@@ -62,9 +62,9 @@ from typing import (
 )
 
 import httpx
-
 from gaia_agent_email.outlook_scopes import OUTLOOK_MAIL_SCOPES
 from gaia_agent_email.scopes import AGENT_NAMESPACED_ID
+
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import get_credential_sync
 from gaia.logger import get_logger
@@ -476,6 +476,13 @@ class LiveOutlookBackend:
         return self._move(message_id, _FOLDER_DELETED)
 
     def untrash_message(self, message_id: str) -> Dict[str, Any]:
+        return self._move(message_id, _FOLDER_INBOX)
+
+    def unarchive_message(
+        self, message_id: str, prior_labels: List[str]
+    ) -> Dict[str, Any]:
+        # Move back to the inbox folder; prior_labels unused (categories survive
+        # a folder move — kept for Protocol parity with LiveGmailBackend).
         return self._move(message_id, _FOLDER_INBOX)
 
     def permanent_delete(self, message_id: str) -> None:
