@@ -66,6 +66,7 @@ from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.formatting import format_connector_error
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
@@ -504,8 +505,6 @@ class EmailTriageAgent(
         )
         from gaia_agent_email.tools.triage_heuristics import group_by_category
 
-        from gaia.connectors.formatting import format_connector_error
-
         # Reference the factory via the read_tools module so the existing
         # ``read_tools.make_llm_classifier`` test seam (the pre-scan canary)
         # keeps intercepting the expensive triage path.
@@ -532,14 +531,9 @@ class EmailTriageAgent(
                     debug=debug_flag,
                 )
             except ConnectorsError as exc:
-                mailbox_errors.append(
-                    {"mailbox": provider, "error": format_connector_error(exc)}
-                )
-                logger.warning(
-                    "email triage: skipping %s mailbox — %s",
-                    provider,
-                    format_connector_error(exc),
-                )
+                msg = format_connector_error(exc)
+                mailbox_errors.append({"mailbox": provider, "error": msg})
+                logger.warning("email triage: skipping %s mailbox — %s", provider, msg)
                 continue
             for item in out["results"]:
                 item["mailbox"] = provider
@@ -629,8 +623,6 @@ class EmailTriageAgent(
             pre_scan_inbox_impl,
         )
 
-        from gaia.connectors.formatting import format_connector_error
-
         prefs = getattr(self, "_session_preferences", None)
         force_llm = bool(getattr(self.config, "force_llm", False))
         debug_flag = bool(getattr(self.config, "debug", False))
@@ -656,13 +648,10 @@ class EmailTriageAgent(
                     debug=debug_flag,
                 )
             except ConnectorsError as exc:
-                mailbox_errors.append(
-                    {"mailbox": provider, "error": format_connector_error(exc)}
-                )
+                msg = format_connector_error(exc)
+                mailbox_errors.append({"mailbox": provider, "error": msg})
                 logger.warning(
-                    "email pre-scan: skipping %s mailbox — %s",
-                    provider,
-                    format_connector_error(exc),
+                    "email pre-scan: skipping %s mailbox — %s", provider, msg
                 )
                 continue
             # Count messages actually returned, not the cap — an under-filled
