@@ -198,6 +198,7 @@ async def upload_by_path(
         try:
             if file_size <= LARGE_FILE_THRESHOLD:
                 # Small file: index synchronously
+                index_error = None
                 try:
                     chunk_count = await _index_document(temp_path)
                 except Exception as e:
@@ -208,6 +209,7 @@ async def upload_by_path(
                         exc_info=True,
                     )
                     chunk_count = 0
+                    index_error = str(e)
 
                 if chunk_count == 0:
                     doc = db.add_document(
@@ -218,8 +220,12 @@ async def upload_by_path(
                         chunk_count=0,
                         file_mtime=file_mtime,
                     )
-                    db.update_document_status(doc["id"], "failed")
+                    error_text = index_error or "indexing produced 0 chunks"
+                    db.update_document_status(
+                        doc["id"], "failed", last_error=error_text
+                    )
                     doc["indexing_status"] = "failed"
+                    doc["last_error"] = error_text
                     return doc_to_response(doc)
 
                 doc = db.add_document(
@@ -260,7 +266,12 @@ async def upload_by_path(
                     chunk_count = await _index_document(temp_file)
                     if doc_id in indexing_tasks:
                         if chunk_count == 0:
-                            db.update_document_status(doc_id, "failed", chunk_count=0)
+                            db.update_document_status(
+                                doc_id,
+                                "failed",
+                                chunk_count=0,
+                                last_error="indexing produced 0 chunks",
+                            )
                             logger.warning(
                                 "Background indexing returned 0 chunks for %s",
                                 original_name,
@@ -278,7 +289,7 @@ async def upload_by_path(
                     db.update_document_status(doc_id, "cancelled")
                     logger.info("Background indexing cancelled for %s", original_name)
                 except Exception as e:
-                    db.update_document_status(doc_id, "failed")
+                    db.update_document_status(doc_id, "failed", last_error=str(e))
                     logger.error(
                         "Background indexing failed for %s: %s",
                         original_name,
@@ -559,8 +570,14 @@ async def reindex_document(
     db.update_document_status(doc_id, "indexing", last_error=None)
 
     _index_document = _server_mod()._index_document
+    temp_path = None
     try:
-        chunk_count = await _index_document(Path(filepath))
+        # Index a process-controlled temp copy opened atomically with
+        # O_NOFOLLOW + fstat -- the same TOCTOU/symlink hardening the upload
+        # path uses, rather than re-reading the stored path directly.
+        with safe_open_document(filepath) as (fd, _file_stat, safe_filepath):
+            temp_path = _copy_fd_to_temp(fd, safe_filepath.suffix)
+        chunk_count = await _index_document(temp_path)
     except Exception as exc:
         error_msg = str(exc)
         db.update_document_status(doc_id, "failed", last_error=error_msg)
@@ -569,6 +586,9 @@ async def reindex_document(
             status_code=500,
             detail="Reindex failed; see server logs for details",
         ) from exc
+    finally:
+        if temp_path is not None:
+            _cleanup_temp(temp_path)
 
     db.update_document_status(doc_id, "complete", chunk_count=chunk_count)
     logger.info("Reindex complete for %s: %d chunks", doc_id, chunk_count)

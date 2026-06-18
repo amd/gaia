@@ -181,3 +181,9 @@
     background: var(--accent-danger-dim);
     color: var(--accent-danger, #e74c3c);
 }
+.btn-retry:disabled {
+    opacity: 0.6;
+    cursor: default;
+    background: transparent;
+    color: var(--text-muted);
+}

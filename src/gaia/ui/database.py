@@ -28,6 +28,10 @@ SESSION_DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
 # last_error" from "caller did not pass last_error at all" (leaving it unchanged).
 _UNSET = object()
 
+# Cap stored indexing error messages -- they are surfaced verbatim in a UI
+# tooltip and a raw traceback/exception string can be very large (#1749 review).
+_MAX_LAST_ERROR_LEN = 500
+
 SCHEMA_SQL = """
 -- Global document library
 CREATE TABLE IF NOT EXISTS documents (
@@ -902,6 +906,11 @@ class ChatDatabase:
                 params.append(None)
             elif last_error is not _UNSET:
                 parts.append("last_error = ?")
+                if (
+                    isinstance(last_error, str)
+                    and len(last_error) > _MAX_LAST_ERROR_LEN
+                ):
+                    last_error = last_error[: _MAX_LAST_ERROR_LEN - 1] + "…"
                 params.append(last_error)
             parts.append("last_accessed_at = ?")
             params.append(self._now())

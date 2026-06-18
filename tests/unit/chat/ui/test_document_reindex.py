@@ -156,6 +156,16 @@ class TestColdSchemaLastError:
         assert row is not None
         assert row["last_error"] == "RAG exploded"
 
+    def test_update_document_status_truncates_long_last_error(self, db):
+        """A very long last_error is capped so it can't bloat the UI tooltip."""
+        doc_id = _insert_doc(db, "indexing", "trunc")
+        db.update_document_status(doc_id, "failed", last_error="x" * 5000)
+        row = db._conn.execute(
+            "SELECT last_error FROM documents WHERE id = ?", (doc_id,)
+        ).fetchone()
+        assert len(row["last_error"]) <= 500
+        assert row["last_error"].endswith("…")
+
     def test_update_document_status_clears_last_error_on_success(self, db):
         """Transitioning to 'complete' must clear any prior last_error."""
         doc_id = _insert_doc(db, "indexing", "b")
