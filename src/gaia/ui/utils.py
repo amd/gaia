@@ -208,6 +208,7 @@ def doc_to_response(doc: dict) -> DocumentResponse:
         last_accessed_at=doc.get("last_accessed_at"),
         sessions_using=doc.get("sessions_using", 0),
         indexing_status=doc.get("indexing_status", "complete"),
+        last_error=doc.get("last_error"),
     )
 
 
