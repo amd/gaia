@@ -111,29 +111,23 @@ jobs:
                   Write-Host "not ready (${waitTime}s)..."
               }
           }
-          if (-not $serverReady) { Write-Host "FRESH_SERVER_HEADLESS=FAIL"; exit 1 }
+          if (-not $serverReady) {
+              Write-Host "FRESH server failed to start headless"
+              throw "Failed to start lemonade-server for tests"
+          }
+          Write-Host "Lemonade server started successfully"
 
-          Write-Host "=== catalog of FRESH server ==="
+          # Pull the default model from the freshly-launched server's catalog.
+          Write-Host "Pulling Gemma-4-E4B-it-GGUF via server API..."
+          $pullBody = @{ model_name = "Gemma-4-E4B-it-GGUF" } | ConvertTo-Json
           try {
-              $m = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/models" -TimeoutSec 20
-              Write-Host "MODEL_COUNT=$($m.data.Count)"
-              Write-Host "GEMMA_E4B_PRESENT=$((($m.data | Where-Object { $_.id -eq 'Gemma-4-E4B-it-GGUF' }).Count) -gt 0)"
-          } catch { Write-Host "models failed: $($_.Exception.Message)" }
-
-          Write-Host "=== pull Gemma-4-E4B-it-GGUF (built-in) ==="
-          try {
-              $b = @{ model_name = "Gemma-4-E4B-it-GGUF" } | ConvertTo-Json
-              Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" -Method POST -ContentType "application/json" -Body $b -TimeoutSec 1200 | Out-Null
-              Write-Host "GEMMA_PULL=OK"
-          } catch { Write-Host "GEMMA_PULL=FAIL $($_.Exception.Message)"; if ($_.ErrorDetails) { Write-Host "Details: $($_.ErrorDetails.Message)" } }
-
-          Write-Host "=== load Gemma-4-E4B-it-GGUF (llama.cpp compat) ==="
-          try {
-              $b = @{ model_name = "Gemma-4-E4B-it-GGUF" } | ConvertTo-Json
-              Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" -Method POST -ContentType "application/json" -Body $b -TimeoutSec 300 | Out-Null
-              Write-Host "GEMMA_LOAD=OK"
-          } catch { Write-Host "GEMMA_LOAD=FAIL $($_.Exception.Message)"; if ($_.ErrorDetails) { Write-Host "Details: $($_.ErrorDetails.Message)" } }
-          exit 1
+              Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" -Method POST -ContentType "application/json" -Body $pullBody -TimeoutSec 1200 | Out-Null
+              Write-Host "Model pulled: Gemma-4-E4B-it-GGUF"
+          } catch {
+              Write-Host "Model pull failed: $($_.Exception.Message)"
+              if ($_.ErrorDetails) { Write-Host "Details: $($_.ErrorDetails.Message)" }
+              throw
+          }
 
 
 
@@ -157,8 +151,8 @@ jobs:
 
           REM Run the comprehensive integration test suite
           set PYTHONIOENCODING=utf-8
-          REM Use the model that was pulled above (modern, loads on the runner)
-          set GAIA_TEST_MODEL=Qwen3-4B-Instruct-2507-GGUF
+          REM Use the model that was pulled above (matches DEFAULT_MODEL_NAME)
+          set GAIA_TEST_MODEL=Gemma-4-E4B-it-GGUF
           python tests\test_agent_sdk.py
           set integration_exit=%ERRORLEVEL%
 
