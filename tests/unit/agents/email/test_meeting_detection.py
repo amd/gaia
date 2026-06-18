@@ -199,9 +199,9 @@ class TestHeuristicSlotProposal:
     @pytest.mark.parametrize("subject,body", SLOT_PROPOSALS)
     def test_slot_proposal_has_high_confidence(self, subject, body):
         result = detect_meeting_request_heuristic(subject, body)
-        assert result.confidence == "high", (
-            f"Expected high confidence for slot-proposal, got {result.confidence!r}"
-        )
+        assert (
+            result.confidence == "high"
+        ), f"Expected high confidence for slot-proposal, got {result.confidence!r}"
 
     def test_slot_proposal_signals_are_surfaced(self):
         result = detect_meeting_request_heuristic(

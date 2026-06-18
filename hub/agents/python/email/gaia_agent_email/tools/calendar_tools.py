@@ -31,8 +31,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from gaia.agents.base.tools import tool
 from gaia_agent_email.verbose import log_tool_call
+
+from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
@@ -205,6 +206,7 @@ _SLOT_PROPOSAL_PHRASES = (
     "i'm available",
     "i am available",
 )
+
 
 def detect_meeting_request_heuristic(subject: str, body: str) -> MeetingDetection:
     """Detect a meeting request via deterministic keyword + time rules.
