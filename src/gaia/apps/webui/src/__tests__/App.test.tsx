@@ -2,35 +2,51 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * App.tsx integration tests — MCP/SSE session activation (issue #1086).
+ * App session-navigation tests (issues #1086 / #1750).
+ *
+ * Exercises resolveUrlNavTarget — the guard + match used by App.tsx's URL-nav
+ * effect — including the short-hash same-session case that caused the #1750
+ * session-activation oscillation (a `#<short>` URL for the current session must
+ * NOT trigger a switch).
  */
 
 import { describe, it, expect } from 'vitest';
+import { resolveUrlNavTarget } from '../utils/sessionNav';
+import { getSessionHash } from '../utils/format';
 
-describe('App session navigation guard', () => {
-    it('hash URL format includes # not ?session=', () => {
-        // Verify the contract: bridge uses /#<id>, not /?session=<id>
-        const sessionId = 'abc123';
-        const hashUrl = `http://localhost:4200/#${sessionId}`;
-        const queryUrl = `http://localhost:4200/?session=${sessionId}`;
-        expect(hashUrl).toContain('#');
-        expect(hashUrl).not.toContain('?session=');
-        expect(queryUrl).not.toContain('#');
+const A = '550e8400-e29b-41d4-a716-446655440000';
+const B = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+const sessions = [{ id: A }, { id: B }];
+
+describe('resolveUrlNavTarget (URL session navigation guard)', () => {
+    it('returns null when there is no target', () => {
+        expect(resolveUrlNavTarget('', A, sessions)).toBeNull();
+        expect(resolveUrlNavTarget(null, A, sessions)).toBeNull();
     });
 
-    it('set_active_session event shape matches contract', () => {
-        // Verify the SSE event shape the frontend expects
-        const event = { type: 'set_active_session', session_id: 'test-123' };
-        expect(event.type).toBe('set_active_session');
-        expect(event.session_id).toBeDefined();
-        expect(typeof event.session_id).toBe('string');
+    it('returns null when already on the target session (full id)', () => {
+        expect(resolveUrlNavTarget(A, A, sessions)).toBeNull();
     });
-});
 
-describe('index.html title', () => {
-    it('title is GAIA Agent UI', () => {
-        // This test documents the required title value
-        const expectedTitle = 'GAIA Agent UI';
-        expect(expectedTitle).toBe('GAIA Agent UI');
+    it('returns null when target is the SHORT HASH of the current session (#1750)', () => {
+        // The oscillation bug: the app writes a short hash to the URL, so the
+        // guard must recognise it as "already here" and not switch.
+        expect(resolveUrlNavTarget(getSessionHash(A), A, sessions)).toBeNull();
+    });
+
+    it('switches to a different session by full id', () => {
+        expect(resolveUrlNavTarget(B, A, sessions)).toBe(B);
+    });
+
+    it('switches to a different session by short hash', () => {
+        expect(resolveUrlNavTarget(getSessionHash(B), A, sessions)).toBe(B);
+    });
+
+    it('returns null for an unknown target', () => {
+        expect(resolveUrlNavTarget('notarealsession', A, sessions)).toBeNull();
+    });
+
+    it('navigates when no session is currently active', () => {
+        expect(resolveUrlNavTarget(getSessionHash(B), null, sessions)).toBe(B);
     });
 });

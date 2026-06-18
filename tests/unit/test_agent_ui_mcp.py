@@ -138,3 +138,48 @@ class TestSendMessageDocstring:
         ), "send_message docstring should not claim real-time streaming"
         # Should mention open_session_in_browser
         assert "open_session_in_browser" in doc
+
+
+class TestErrorEnvelopeCallers:
+    """#1750: internal callers must read the normalized {"status": "error"} shape,
+    not the old "error" key, or backend errors silently vanish."""
+
+    @staticmethod
+    def _build_server():
+        from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
+
+        with patch("requests.get") as mock_get:
+            mock_get.return_value = MagicMock(
+                status_code=200,
+                json=MagicMock(return_value={"mcp_memory_enabled": False}),
+            )
+            mock_get.return_value.raise_for_status.return_value = None
+            return create_agent_ui_mcp("http://localhost:4200")
+
+    def test_get_messages_surfaces_backend_error(self):
+        """A backend error must propagate, not fall through to an empty session."""
+        pytest.importorskip("mcp")
+        mcp = self._build_server()
+        get_messages = mcp._tool_manager._tools["get_messages"].fn
+        with patch(
+            "gaia.mcp.servers.agent_ui_mcp._api",
+            return_value={"status": "error", "detail": "Session not found"},
+        ):
+            result = get_messages(session_id="bogus")
+        assert result.get("status") == "error"
+        assert "messages" not in result  # no silent empty-session fallback
+
+    def test_index_document_does_not_falsely_report_link(self):
+        """A failed session-link must not be reported as a successful link."""
+        pytest.importorskip("mcp")
+        mcp = self._build_server()
+        index_document = mcp._tool_manager._tools["index_document"].fn
+        with patch(
+            "gaia.mcp.servers.agent_ui_mcp._api",
+            side_effect=[
+                {"id": "doc-1"},  # upload-path succeeds
+                {"status": "error", "detail": "attach failed"},  # link fails
+            ],
+        ):
+            result = index_document(filepath="/tmp/x.txt", session_id="sess-1")
+        assert "linked_to_session" not in result

@@ -291,7 +291,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
             r.raise_for_status()
             return {"deleted": True, "session_id": session_id}
         except Exception as e:
-            return {"error": str(e)}
+            return _normalize_error(e, backend_url)
 
     # ── Messages ───────────────────────────────────────────────────
 
@@ -299,7 +299,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
     def get_messages(session_id: str) -> Dict[str, Any]:
         """Get all messages in a session (with agent steps and tool outputs)."""
         data = _api(backend_url, "get", f"/sessions/{session_id}/messages")
-        if "error" in data:
+        if data.get("status") == "error":
             return data
         # Simplify for readability
         messages = []
@@ -369,14 +369,14 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
                     f"/sessions/{session_id}/documents",
                     json={"document_id": doc_id},
                 )
-                if "error" not in attach_result:
+                if attach_result.get("status") != "error":
                     result["linked_to_session"] = session_id
                 else:
                     logger.warning(
                         "Failed to link doc %s to session %s: %s",
                         doc_id,
                         session_id,
-                        attach_result.get("error"),
+                        attach_result.get("detail"),
                     )
         return result
 
@@ -463,7 +463,10 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
         try:
             from PIL import Image, ImageGrab
         except ImportError:
-            return {"error": "Pillow not installed. Run: pip install Pillow"}
+            return {
+                "status": "error",
+                "detail": "Pillow not installed. Run: pip install Pillow",
+            }
 
         try:
             bbox = None
@@ -524,7 +527,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
                 "file_size_kb": file_size_kb,
             }
         except Exception as e:
-            return {"error": f"Screenshot failed: {e}"}
+            return {"status": "error", "detail": f"Screenshot failed: {e}"}
 
     # ── Memory ────────────────────────────────────────────────────────
     #
@@ -766,16 +769,26 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
 
         target_url = f"{base}/#{session_id}"
 
-        # Signal the frontend to switch to this session via the activate endpoint.
-        # This emits a set_active_session SSE event that App.tsx consumes.
-        _api(backend_url, "post", f"/sessions/{session_id}/activate")
-
-        # Skip opening a duplicate tab for the same URL.
+        # Skip re-opening (and re-activating) when this exact session is already
+        # the one we last opened — avoids emitting a redundant switch event that
+        # would wipe the visible messages for a session the user is already on.
         if _last_opened_url["url"] == target_url:
             return {
                 "opened": False,
                 "url": target_url,
                 "note": "Already open in browser",
+            }
+
+        # Signal the frontend to switch to this session via the activate endpoint
+        # (emits a set_active_session SSE event App.tsx consumes). Surface an
+        # activate failure rather than swallowing it.
+        activate = _api(backend_url, "post", f"/sessions/{session_id}/activate")
+        if isinstance(activate, dict) and activate.get("status") == "error":
+            return {
+                "opened": False,
+                "url": target_url,
+                "status": "error",
+                "detail": activate.get("detail", "activate failed"),
             }
 
         try:
@@ -786,7 +799,8 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
             return {
                 "opened": False,
                 "url": target_url,
-                "note": f"Failed to open browser: {e}",
+                "status": "error",
+                "detail": f"Failed to open browser: {e}",
             }
 
     return mcp

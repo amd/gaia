@@ -184,17 +184,6 @@ class SSEOutputHandler(OutputHandler):
         """Push an event to the queue for SSE delivery."""
         self.event_queue.put(event)
 
-    def emit_set_active_session(self, session_id: str) -> None:
-        """Emit a set_active_session event into the per-session chat stream.
-
-        Note: the primary activation path (MCP bridge → App.tsx) routes
-        through _system_emitter in routers/sessions.py, not this method.
-        This is a convenience shim for agent-loop code that already holds
-        an SSEOutputHandler and wants to push the event without importing
-        the sessions router.
-        """
-        self._emit({"type": "set_active_session", "session_id": session_id})
-
     def _elapsed(self) -> float:
         if self._start_time is None:
             return 0.0
