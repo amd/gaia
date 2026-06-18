@@ -314,9 +314,10 @@ flow to your website page on the next publish.
 ```bash
 gaia agent version patch   # 0.1.0 → 0.1.1   (patch | minor | major)
 ```
-This rewrites `version` in `gaia-agent.yaml`. If your package has sibling files
-that also carry a version (for example an npm `package.json`), update them to match —
-the release tooling checks they agree.
+This rewrites `version` in `gaia-agent.yaml` and keeps `pyproject.toml` and the
+package's `__init__.py` in sync automatically. If your package also ships a
+*non-Python* version file (for example an npm `package.json`), update that one to
+match — the release tooling checks they agree.
 </Step>
 <Step title="Test, then publish again">
 ```bash
