@@ -33,6 +33,8 @@ from gaia_agent_email.contract import (
     EmailTriageRequest,
     EmailTriageResponse,
     EmailTriageResult,
+    TriageContext,
+    TriageUsage,
     parse_request,
 )
 from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
@@ -393,3 +395,268 @@ def test_triage_result_has_no_mailbox_field():
     """The 'mailbox' tag is internal to the agent tools; the frozen REST result
     must not grow one implicitly."""
     assert "mailbox" not in EmailTriageResult.model_fields
+
+
+# ---------------------------------------------------------------------------
+# ActionItem type discriminator (#1538)
+# ---------------------------------------------------------------------------
+
+
+def test_action_item_defaults_to_text():
+    """ActionItem without a type field defaults to 'text' and url is None."""
+    item = ActionItem.model_validate({"description": "Reply to Alice"})
+    assert item.type == "text"
+    assert item.url is None
+
+
+def test_action_item_due_hint_still_optional():
+    """Existing due_hint behaviour is unchanged."""
+    item = ActionItem.model_validate({"description": "do thing"})
+    assert item.due_hint is None
+
+
+def test_action_item_link_requires_url():
+    """type='link' without a url raises ValidationError."""
+    with pytest.raises(ValidationError):
+        ActionItem.model_validate({"description": "Visit site", "type": "link"})
+
+
+def test_action_item_link_with_empty_url_rejected():
+    """type='link' with an empty url string raises ValidationError."""
+    with pytest.raises(ValidationError):
+        ActionItem.model_validate(
+            {"description": "Visit site", "type": "link", "url": ""}
+        )
+
+
+def test_action_item_text_rejects_url():
+    """type='text' (or default) with a url raises ValidationError."""
+    with pytest.raises(ValidationError):
+        ActionItem.model_validate(
+            {"description": "Do thing", "type": "text", "url": "https://example.com"}
+        )
+
+
+def test_action_item_link_valid():
+    """A valid link action item with description and url validates."""
+    item = ActionItem.model_validate(
+        {
+            "description": "Check the report",
+            "type": "link",
+            "url": "https://example.com/report",
+        }
+    )
+    assert item.type == "link"
+    assert item.url == "https://example.com/report"
+    assert item.description == "Check the report"
+
+
+# ---------------------------------------------------------------------------
+# _extract_action_items URL detection (#1538)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_action_items_detects_link():
+    """A sentence with an https URL in an action-cue context yields a link item."""
+    pytest.importorskip("gaia_agent_email.api_routes")
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    svc = EmailTriageService()
+    body = "Please review the report at https://example.com/report by Friday."
+    items = svc._extract_action_items(body)
+    link_items = [i for i in items if i.type == "link"]
+    assert link_items, "expected at least one link action item"
+    assert link_items[0].url == "https://example.com/report"
+
+
+def test_extract_action_items_preserves_matched_parens_in_url():
+    """A URL whose own path contains a matched () keeps its closing paren —
+    only true trailing punctuation is trimmed (#1696 review: Wikipedia-style)."""
+    pytest.importorskip("gaia_agent_email.api_routes")
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    svc = EmailTriageService()
+    body = (
+        "Please read https://en.wikipedia.org/wiki/Python_(programming_language) "
+        "before the review."
+    )
+    items = svc._extract_action_items(body)
+    link_items = [i for i in items if i.type == "link"]
+    assert link_items, "expected a link action item"
+    assert (
+        link_items[0].url
+        == "https://en.wikipedia.org/wiki/Python_(programming_language)"
+    )
+
+
+def test_extract_action_items_trims_unmatched_trailing_paren():
+    """A trailing ')' that does NOT close a '(' inside the URL is still trimmed."""
+    pytest.importorskip("gaia_agent_email.api_routes")
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    svc = EmailTriageService()
+    body = "Review the doc (see https://example.com/report) before Friday."
+    items = svc._extract_action_items(body)
+    link_items = [i for i in items if i.type == "link"]
+    assert link_items
+    assert link_items[0].url == "https://example.com/report"
+
+
+def test_extract_action_items_plain_imperative_is_text():
+    """A plain imperative sentence without a URL yields a text item."""
+    pytest.importorskip("gaia_agent_email.api_routes")
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    svc = EmailTriageService()
+    body = "Please confirm the meeting time by Monday."
+    items = svc._extract_action_items(body)
+    assert items
+    assert all(i.type == "text" for i in items)
+    assert all(i.url is None for i in items)
+
+
+def test_extract_action_items_link_strips_trailing_punctuation():
+    """A URL ending a sentence keeps no trailing punctuation in the link."""
+    pytest.importorskip("gaia_agent_email.api_routes")
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    svc = EmailTriageService()
+    body = "Please review the doc at https://example.com/report."
+    link_items = [i for i in svc._extract_action_items(body) if i.type == "link"]
+    assert link_items
+    assert link_items[0].url == "https://example.com/report"
+
+
+# ---------------------------------------------------------------------------
+# TriageUsage / EmailTriageResult.usage (#1540)
+# ---------------------------------------------------------------------------
+
+
+def test_triage_usage_defaults_are_zero():
+    """TriageUsage validates with zero defaults."""
+    usage = TriageUsage()
+    assert usage.prompt_tokens == 0
+    assert usage.total_tokens == 0
+    assert usage.tokens_per_second == 0.0
+
+
+def test_triage_usage_populated_round_trips():
+    """A populated TriageUsage validates and round-trips."""
+    usage = TriageUsage.model_validate(
+        {"prompt_tokens": 120, "total_tokens": 200, "tokens_per_second": 42.5}
+    )
+    assert usage.prompt_tokens == 120
+    assert usage.total_tokens == 200
+    assert usage.tokens_per_second == 42.5
+    again = TriageUsage.model_validate(usage.model_dump())
+    assert again == usage
+
+
+def test_triage_usage_rejects_unknown_field():
+    """TriageUsage forbids extra fields (strict)."""
+    with pytest.raises(ValidationError):
+        TriageUsage.model_validate({"prompt_tokens": 1, "bogus": 2})
+
+
+def test_triage_result_usage_defaults_to_none():
+    """EmailTriageResult.usage defaults to None (heuristic-only path)."""
+    result = EmailTriageResult.model_validate(
+        {"category": "FYI", "summary": "Just an update."}
+    )
+    assert result.usage is None
+
+
+def test_triage_result_accepts_usage():
+    """EmailTriageResult accepts a populated usage object and round-trips."""
+    result = EmailTriageResult.model_validate(
+        {
+            "category": "URGENT",
+            "summary": "Critical issue.",
+            "usage": {
+                "prompt_tokens": 50,
+                "total_tokens": 90,
+                "tokens_per_second": 30.0,
+            },
+        }
+    )
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 50
+    assert result.usage.total_tokens == 90
+    assert result.usage.tokens_per_second == 30.0
+
+
+def test_usage_is_not_a_required_field():
+    """usage must not become a required field (required set guard)."""
+    required = {
+        name
+        for name, field in EmailTriageResult.model_fields.items()
+        if field.is_required()
+    }
+    assert "usage" not in required
+
+
+# ---------------------------------------------------------------------------
+# TriageContext / EmailTriageRequest.context (#1541)
+# ---------------------------------------------------------------------------
+
+
+def test_triage_context_defaults_are_empty():
+    """TriageContext validates with empty defaults."""
+    ctx = TriageContext()
+    assert ctx.people == []
+    assert ctx.projects == []
+    assert ctx.tone is None
+    assert ctx.self_email is None
+
+
+def test_triage_context_populated_validates():
+    """A populated TriageContext validates and round-trips."""
+    ctx = TriageContext.model_validate(
+        {
+            "people": ["Boss", "Alice"],
+            "projects": ["Apollo"],
+            "tone": "concise",
+            "self_email": "me@example.com",
+        }
+    )
+    assert ctx.people == ["Boss", "Alice"]
+    assert ctx.projects == ["Apollo"]
+    assert ctx.tone == "concise"
+    assert ctx.self_email == "me@example.com"
+    again = TriageContext.model_validate(ctx.model_dump())
+    assert again == ctx
+
+
+def test_triage_context_rejects_unknown_field():
+    """TriageContext forbids extra fields (strict)."""
+    with pytest.raises(ValidationError):
+        TriageContext.model_validate({"people": [], "unknown_field": "x"})
+
+
+def test_request_without_context_validates():
+    """A request with no context validates and context is None (unchanged)."""
+    req = EmailTriageRequest.model_validate(_single_email_request())
+    assert req.context is None
+
+
+def test_request_with_context_validates():
+    """A request carrying a populated context validates."""
+    payload = _single_email_request()
+    payload["context"] = {
+        "people": ["Boss"],
+        "projects": ["Apollo"],
+        "tone": "friendly",
+        "self_email": "alice@example.com",
+    }
+    req = EmailTriageRequest.model_validate(payload)
+    assert req.context is not None
+    assert req.context.people == ["Boss"]
+    assert req.context.tone == "friendly"
+
+
+def test_request_context_unknown_subfield_rejected():
+    """An unknown sub-field of context is rejected loudly (extra='forbid')."""
+    payload = _single_email_request()
+    payload["context"] = {"people": ["Boss"], "bogus": True}
+    with pytest.raises(ValidationError):
+        EmailTriageRequest.model_validate(payload)

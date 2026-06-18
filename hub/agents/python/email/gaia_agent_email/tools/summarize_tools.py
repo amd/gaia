@@ -23,12 +23,13 @@ summarizer (Phase I1, mirroring ``llm_triage.py``).
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
-from gaia.agents.base.tools import tool
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 from gaia_agent_email.verbose import log_tool_call
+
+from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
@@ -93,8 +94,15 @@ def _envelope_err(message: str) -> str:
     return json.dumps({"ok": False, "error": message})
 
 
-def _build_user_prompt(subject: str, sender: str, body: str) -> str:
+def _build_user_prompt(
+    subject: str, sender: str, body: str, context: Any = None
+) -> str:
+    # Reuse the triage context formatter so the summary factors in the same
+    # caller-supplied people/projects/tone (#1541). Absent → prompt unchanged.
+    from gaia_agent_email.tools.llm_triage import _format_context_block
+
     return (
+        f"{_format_context_block(context)}"
         "Summarize this email.\n\n"
         f"Subject: {subject}\n"
         f"From: {sender}\n"
@@ -129,6 +137,8 @@ def summarize_email_llm(
     body: str,
     message_id: str = "",
     max_chars: int = DEFAULT_SUMMARY_CHAR_LIMIT,
+    collect_stats: Optional[List[dict]] = None,
+    context: Any = None,
 ) -> str:
     """Summarize one email via the LLM. Raises ``EmailSummarizeError`` on failure.
 
@@ -136,8 +146,21 @@ def summarize_email_llm(
     ``send_messages(messages, system_prompt=...) -> response`` with a ``.text``
     attribute). The returned summary is guaranteed non-empty and at most
     ``max_chars`` characters long.
+
+    When ``collect_stats`` is a list, the response's ``.stats`` dict (the reused
+    ``AgentResponse.stats`` measurement) is appended to it so a caller can
+    aggregate usage across calls — no new measurement path.
+
+    ``context`` is an optional ``TriageContext`` (#1541): when supplied, a short
+    context block is prepended so the summary factors in the caller's
+    people/projects/tone. Absent → prompt unchanged.
     """
-    messages = [{"role": "user", "content": _build_user_prompt(subject, sender, body)}]
+    messages = [
+        {
+            "role": "user",
+            "content": _build_user_prompt(subject, sender, body, context=context),
+        }
+    ]
     try:
         response = chat.send_messages(
             messages, system_prompt=_SYSTEM_PROMPT, temperature=0.0
@@ -148,6 +171,11 @@ def summarize_email_llm(
             f"{type(exc).__name__}: {exc}",
             message_id=message_id,
         ) from exc
+
+    if collect_stats is not None:
+        stats = getattr(response, "stats", None)
+        if stats:
+            collect_stats.append(stats)
 
     text = getattr(response, "text", None)
     if text is None:
