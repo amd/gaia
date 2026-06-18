@@ -612,10 +612,23 @@ class MemoryMixin:
                 f"Failed to initialize Lemonade embedding provider: {e}"
             ) from e
 
+    def _get_embedding_cache(self):
+        """Lazy-init the content-keyed embedding cache (per-instance)."""
+        cache = getattr(self, "_embedding_cache", None)
+        if cache is None:
+            from gaia.llm.embedding_cache import EmbeddingCache
+
+            cache = EmbeddingCache()
+            self._embedding_cache = cache
+        return cache
+
     def _embed_text(self, text: str) -> np.ndarray:
         """Embed text via Lemonade (nomic-embed-text-v2-moe-GGUF, 768-dim).
 
         Required, not optional. Raises RuntimeError if embedding fails.
+
+        Identical text is served from a content-keyed cache, so repeated
+        query embeds (same recall query across turns) skip the Lemonade call.
 
         Args:
             text: Text to embed.
@@ -623,6 +636,11 @@ class MemoryMixin:
         Returns:
             L2-normalized float32 numpy array of shape (768,).
         """
+        cache = self._get_embedding_cache()
+        cached = cache.get(EMBEDDING_MODEL, EMBEDDING_DIM, text)
+        if cached is not None:
+            return cached
+
         embedder = self._get_embedder()
         try:
             # LemonadeProvider.embed() returns list[list[float]]
@@ -634,6 +652,7 @@ class MemoryMixin:
             if norm > 0:
                 vec = vec / norm
 
+            cache.put(EMBEDDING_MODEL, EMBEDDING_DIM, text, vec)
             return vec
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {e}") from e
