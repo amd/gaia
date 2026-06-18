@@ -166,18 +166,29 @@ class TestSummarizeEmailLLM:
 
 
 class _Recorder:
-    """Captures the @tool functions a mixin registers without a real Agent."""
+    """Captures the @tool functions a mixin registers without a real Agent.
+
+    Simulates the minimal interface ``SummarizeToolsMixin`` now requires:
+    ``_gmail``, ``_backends`` (single-backend map), and the routing helper
+    ``_backend_for_message`` (always returns the injected gmail backend since
+    there is only one).
+    """
 
     def __init__(self, gmail, chat, debug=False):
         self._gmail = gmail
         self.chat = chat
         self._tools = {}
+        self._backends = {"google": gmail}
 
         class _Cfg:
             pass
 
         self.config = _Cfg()
         self.config.debug = debug
+
+    def _backend_for_message(self, message_id, explicit_mailbox=None):
+        # Single-backend: always return the injected gmail.
+        return self._gmail
 
 
 def _register_via_mixin(gmail, chat):
