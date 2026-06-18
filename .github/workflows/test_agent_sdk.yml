@@ -80,62 +80,12 @@ jobs:
           }
           Write-Host "Found gaia at: $($gaiaPath.Source)"
 
-          # Start the server in the background as a process (not PowerShell job)
-          Write-Host "Starting lemonade-server in background..."
-          # Start the server as a background process
-          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray", "--port", "13305" -PassThru -WindowStyle Hidden
-          Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
-
-          # Wait for server to start up
-          Write-Host "Waiting for server to start up..."
-          $maxWaitTime = 30  # seconds
-          $waitTime = 0
-          $serverReady = $false
-
-          while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
-              Start-Sleep -Seconds 2
-              $waitTime += 2
-
-              try {
-                  $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 5
-                  Write-Host "Server is ready and responding to health checks"
-                  $serverReady = $true
-              } catch {
-                  Write-Host "Server not ready yet (waited $waitTime seconds)..."
-              }
-          }
-
-          if (-not $serverReady) {
-              Write-Host "Server failed to start within $maxWaitTime seconds"
-              try {
-                  if (-not $serverProcess.HasExited) {
-                      $serverProcess.Kill()
-                  }
-              } catch {
-                  Write-Host "Error stopping server process: $_"
-              }
-              throw "Failed to start lemonade-server for tests"
-          }
-
-          Write-Host "Lemonade server started successfully"
-
-          # Pull the model via the running server's API. Gemma-4-E4B-it-GGUF
-          # is a built-in of the C++ Lemonade server's catalog (recipe
-          # llamacpp), but the standalone ``lemonade pull`` CLI uses a separate
-          # registry that 400s on this name ("When registering a new model, the
-          # model name must include the `user` namespace"). Routing the pull
-          # through /api/v1/pull on the already-healthy server hits the catalog
-          # that actually has the model.
-          Write-Host "Pulling Gemma-4-E4B-it-GGUF via server API..."
-          $pullBody = @{ model_name = "Gemma-4-E4B-it-GGUF" } | ConvertTo-Json
-          try {
-              Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" -Method POST -ContentType "application/json" -Body $pullBody -TimeoutSec 900 | Out-Null
-              Write-Host "Model pulled: Gemma-4-E4B-it-GGUF"
-          } catch {
-              Write-Host "Model pull failed: $($_.Exception.Message)"
-              if ($_.ErrorDetails) { Write-Host "Details: $($_.ErrorDetails.Message)" }
-              throw
-          }
+          # Ensure a healthy, Gemma-warmed Lemonade server is up on 13305. The
+          # helper launches the version-matched server as a persistent Scheduled
+          # Task (survives across CI jobs since GitHub Actions kills job-spawned
+          # processes), reuses it if already healthy, and warms Gemma-4.
+          powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1 -WarmModel "Gemma-4-E4B-it-GGUF"
+          if ($LASTEXITCODE -ne 0) { throw "Lemonade server not ready" }
 
 
 
