@@ -356,3 +356,44 @@ class TestCalendarUngrantedCleanError:
             ), f"calendar error not actionable: {error_msg!r}"
         finally:
             agent.close_db()
+
+
+class TestAllMailboxesUngrantedFailsLoudly:
+    """When EVERY connected mailbox errors, the scan must fail loudly (ok:False)
+    rather than return ok:True with zero results — which would read to the user
+    as "your inbox is empty" instead of "every mailbox needs a grant".
+    """
+
+    def test_triage_all_ungranted_returns_error_envelope(self, tmp_path, monkeypatch):
+        agent = _build_agent(
+            tmp_path,
+            monkeypatch,
+            granted_backend=UngrantedBackend("google"),
+            ungranted_backend=UngrantedBackend("microsoft"),
+        )
+        try:
+            envelope = json.loads(_registered_tool("triage_inbox")(20))
+            assert (
+                envelope["ok"] is False
+            ), f"all-failed triage must fail loudly, got: {envelope}"
+            err = envelope.get("error", "")
+            assert "google" in err and "microsoft" in err, err
+        finally:
+            agent.close_db()
+
+    def test_pre_scan_all_ungranted_returns_error_envelope(self, tmp_path, monkeypatch):
+        agent = _build_agent(
+            tmp_path,
+            monkeypatch,
+            granted_backend=UngrantedBackend("google"),
+            ungranted_backend=UngrantedBackend("microsoft"),
+        )
+        try:
+            envelope = json.loads(_registered_tool("pre_scan_inbox")(20))
+            assert (
+                envelope["ok"] is False
+            ), f"all-failed pre-scan must fail loudly, got: {envelope}"
+            err = envelope.get("error", "")
+            assert "google" in err and "microsoft" in err, err
+        finally:
+            agent.close_db()

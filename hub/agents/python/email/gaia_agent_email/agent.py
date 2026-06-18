@@ -556,6 +556,13 @@ class EmailTriageAgent(
         self._apply_behavioral_promotions()
         # Re-group the merged, capped list so the bucketed view matches what the
         # caller actually sees.
+        if mailbox_errors and len(mailbox_errors) == len(self._backends):
+            # Every connected mailbox failed — surface it loudly rather than
+            # returning ok with zero results (which reads as "empty inbox").
+            raise ConnectorsError(
+                "All connected mailboxes failed during triage: "
+                + "; ".join(f"{e['mailbox']}: {e['error']}" for e in mailbox_errors)
+            )
         result: dict = {"results": merged, "grouped": group_by_category(merged)}
         if mailbox_errors:
             result["mailbox_errors"] = mailbox_errors
@@ -695,6 +702,13 @@ class EmailTriageAgent(
                 "suggested_archives": len(suggested_archives),
             },
         }
+        if mailbox_errors and len(mailbox_errors) == len(self._backends):
+            # Every connected mailbox failed — surface it loudly rather than
+            # returning ok with zero results (which reads as "empty inbox").
+            raise ConnectorsError(
+                "All connected mailboxes failed during pre-scan: "
+                + "; ".join(f"{e['mailbox']}: {e['error']}" for e in mailbox_errors)
+            )
         if mailbox_errors:
             result["mailbox_errors"] = mailbox_errors
         return result
