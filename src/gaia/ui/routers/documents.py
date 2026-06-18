@@ -553,7 +553,7 @@ async def reindex_document(
     if not filepath or not Path(filepath).exists():
         raise HTTPException(
             status_code=422,
-            detail=f"File not found on disk: {filepath!r}",
+            detail=f"File not found on disk for document {doc_id!r}",
         )
 
     db.update_document_status(doc_id, "indexing", last_error=None)
@@ -567,13 +567,17 @@ async def reindex_document(
         logger.error("Reindex failed for %s: %s", doc_id, exc, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Reindex failed: {error_msg}",
+            detail="Reindex failed; see server logs for details",
         ) from exc
 
     db.update_document_status(doc_id, "complete", chunk_count=chunk_count)
     logger.info("Reindex complete for %s: %d chunks", doc_id, chunk_count)
 
     updated = db.get_document(doc_id)
+    if updated is None:
+        raise HTTPException(
+            status_code=404, detail="Document was deleted during reindex"
+        )
     return doc_to_response(updated)
 
 

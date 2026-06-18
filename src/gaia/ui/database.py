@@ -881,9 +881,10 @@ class ChatDatabase:
             doc_id: Document ID.
             status: New status ('pending', 'indexing', 'complete', 'failed', 'cancelled').
             chunk_count: If provided, also update the chunk count.
-            last_error: If provided, persist the error message (set to None to clear).
-                        Pass last_error=None without providing it to leave the existing
-                        value unchanged; pass last_error="" to explicitly clear it.
+            last_error: Controls the stored error message.
+                        Omit (default) to leave the existing value unchanged.
+                        Pass None to clear the column (SQL NULL).
+                        Pass a string to store that error message.
 
         Returns:
             True if the document was found and updated.
