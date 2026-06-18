@@ -85,7 +85,7 @@ contextBridge.exposeInMainWorld("gaiaInstall", {
 // available" chip without pulling in the full gaiaAPI surface. Mirrors
 // the naming convention (gaiaInstall, gaiaUpdater, gaiaAPI).
 contextBridge.exposeInMainWorld("gaiaUpdater", {
-  /** Get the current update state (status, version, progress, error). */
+  /** Get the current update state (status, version, progress, error, currentVersion, pinnedVersion). */
   getStatus: () => ipcRenderer.invoke("gaia:update:get-status"),
 
   /** Manually trigger a check. Resolves with the post-check state. */
@@ -100,4 +100,25 @@ contextBridge.exposeInMainWorld("gaiaUpdater", {
     ipcRenderer.on("gaia:update:status", handler);
     return () => ipcRenderer.removeListener("gaia:update:status", handler);
   },
+
+  /**
+   * Fetch available GitHub releases for this platform. Resolves with an
+   * array of ReleaseInfo objects (newest first) or { error: string } when
+   * the network call fails.
+   */
+  listReleases: () => ipcRenderer.invoke("gaia:update:list-releases"),
+
+  /**
+   * Download and install a specific tagged release, then prompt restart.
+   * Persists a version pin so auto-update stays paused (AC2).
+   *
+   * @param {string} tag  e.g. "v0.20.0"
+   */
+  installVersion: (tag) => ipcRenderer.invoke("gaia:update:install-version", tag),
+
+  /**
+   * Resume normal auto-updates — clears the version pin set by installVersion.
+   * Resolves with the updated state.
+   */
+  resumeUpdates: () => ipcRenderer.invoke("gaia:update:resume"),
 });
