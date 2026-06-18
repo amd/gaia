@@ -80,58 +80,60 @@ jobs:
           }
           Write-Host "Found gaia at: $($gaiaPath.Source)"
 
-          # Start the server in the background as a process (not PowerShell job)
-          Write-Host "Starting lemonade-server in background..."
-          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray", "--port", "13305" -PassThru -WindowStyle Hidden
-          Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
+          # PROBE: start the FRESH 10.7.0 server (LEMONADE_SERVER_PATH) headless
+          # with a long wait, and see whether it serves Gemma. PATH-resolved
+          # ``lemonade-server`` is a stale install in another user's profile.
+          $ErrorActionPreference = "Continue"
+          $freshBin = Split-Path $env:LEMONADE_SERVER_PATH
+          Write-Host "=== fresh install bin: $freshBin ==="
+          Get-ChildItem $freshBin -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
 
-          # Wait for server to start up
-          Write-Host "Waiting for server to start up..."
-          $maxWaitTime = 30  # seconds
+          Write-Host "Killing any running lemonade/llama processes for a clean port..."
+          foreach ($n in @("LemonadeServer","lemonade-server","llama-server","lemonade")) { Get-Process -Name $n -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
+          Start-Sleep -Seconds 3
+
+          Write-Host "Starting FRESH server bare: $env:LEMONADE_SERVER_PATH"
+          $serverProcess = Start-Process -FilePath "$env:LEMONADE_SERVER_PATH" -PassThru -WindowStyle Hidden
+          Write-Host "PID=$($serverProcess.Id)"
+
+          $maxWaitTime = 120
           $waitTime = 0
           $serverReady = $false
-
           while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
-              Start-Sleep -Seconds 2
-              $waitTime += 2
-
+              Start-Sleep -Seconds 3
+              $waitTime += 3
               try {
-                  $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 5
-                  Write-Host "Server is ready and responding to health checks"
+                  $h = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 5
+                  Write-Host "FRESH_SERVER_HEADLESS=OK (healthy after ${waitTime}s, version=[$($h.version)])"
                   $serverReady = $true
               } catch {
-                  Write-Host "Server not ready yet (waited $waitTime seconds)..."
+                  if ($serverProcess.HasExited) { Write-Host "FRESH server process EXITED after ${waitTime}s (exit=$($serverProcess.ExitCode))"; break }
+                  Write-Host "not ready (${waitTime}s)..."
               }
           }
+          if (-not $serverReady) { Write-Host "FRESH_SERVER_HEADLESS=FAIL"; exit 1 }
 
-          if (-not $serverReady) {
-              Write-Host "Server failed to start within $maxWaitTime seconds"
-              try {
-                  if (-not $serverProcess.HasExited) {
-                      $serverProcess.Kill()
-                  }
-              } catch {
-                  Write-Host "Error stopping server process: $_"
-              }
-              throw "Failed to start lemonade-server for tests"
-          }
-
-          Write-Host "Lemonade server started successfully"
-
-          # Pull the test model via the running server's API (the mechanism the
-          # green test_api.yml job uses). Qwen3-4B-Instruct-2507-GGUF is a current
-          # model in the runner's catalog that the bundled llama.cpp can load --
-          # unlike Gemma-4, which the runner's older llama-server can't load.
-          Write-Host "Pulling Qwen3-4B-Instruct-2507-GGUF via server API..."
-          $pullBody = @{ model_name = "Qwen3-4B-Instruct-2507-GGUF" } | ConvertTo-Json
+          Write-Host "=== catalog of FRESH server ==="
           try {
-              Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" -Method POST -ContentType "application/json" -Body $pullBody -TimeoutSec 900 | Out-Null
-              Write-Host "Model pulled: Qwen3-4B-Instruct-2507-GGUF"
-          } catch {
-              Write-Host "Model pull failed: $($_.Exception.Message)"
-              if ($_.ErrorDetails) { Write-Host "Details: $($_.ErrorDetails.Message)" }
-              throw
-          }
+              $m = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/models" -TimeoutSec 20
+              Write-Host "MODEL_COUNT=$($m.data.Count)"
+              Write-Host "GEMMA_E4B_PRESENT=$((($m.data | Where-Object { $_.id -eq 'Gemma-4-E4B-it-GGUF' }).Count) -gt 0)"
+          } catch { Write-Host "models failed: $($_.Exception.Message)" }
+
+          Write-Host "=== pull Gemma-4-E4B-it-GGUF (built-in) ==="
+          try {
+              $b = @{ model_name = "Gemma-4-E4B-it-GGUF" } | ConvertTo-Json
+              Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" -Method POST -ContentType "application/json" -Body $b -TimeoutSec 1200 | Out-Null
+              Write-Host "GEMMA_PULL=OK"
+          } catch { Write-Host "GEMMA_PULL=FAIL $($_.Exception.Message)"; if ($_.ErrorDetails) { Write-Host "Details: $($_.ErrorDetails.Message)" } }
+
+          Write-Host "=== load Gemma-4-E4B-it-GGUF (llama.cpp compat) ==="
+          try {
+              $b = @{ model_name = "Gemma-4-E4B-it-GGUF" } | ConvertTo-Json
+              Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" -Method POST -ContentType "application/json" -Body $b -TimeoutSec 300 | Out-Null
+              Write-Host "GEMMA_LOAD=OK"
+          } catch { Write-Host "GEMMA_LOAD=FAIL $($_.Exception.Message)"; if ($_.ErrorDetails) { Write-Host "Details: $($_.ErrorDetails.Message)" } }
+          exit 1
 
 
 
