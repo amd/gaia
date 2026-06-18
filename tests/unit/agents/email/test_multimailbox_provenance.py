@@ -26,7 +26,6 @@ pytest.importorskip("gaia_agent_email")
 from gaia_agent_email.agent import EmailTriageAgent
 from gaia_agent_email.config import EmailAgentConfig
 
-
 # ---------------------------------------------------------------------------
 # Minimal spy backend (Gmail-API-shape)
 # ---------------------------------------------------------------------------
@@ -63,7 +62,9 @@ class SpyBackend:
         }
         self.calls = []
 
-    def list_messages(self, *, query=None, label_ids=None, max_results=25, page_token=None):
+    def list_messages(
+        self, *, query=None, label_ids=None, max_results=25, page_token=None
+    ):
         ids = list(self._messages)[:max_results]
         return {"messages": [{"id": m, "threadId": f"t-{m}"} for m in ids]}
 
@@ -135,9 +136,10 @@ class TestListInboxProvenance:
             messages = env["data"]["messages"]
             assert messages, "list_inbox returned no messages"
             for msg in messages:
-                assert msg.get("mailbox") in {"google", "microsoft"}, (
-                    f"message {msg.get('id')!r} missing mailbox field: {msg}"
-                )
+                assert msg.get("mailbox") in {
+                    "google",
+                    "microsoft",
+                }, f"message {msg.get('id')!r} missing mailbox field: {msg}"
         finally:
             agent.close_db()
 
@@ -183,9 +185,10 @@ class TestSearchMessagesProvenance:
             messages = env["data"]["messages"]
             assert messages, "search_messages returned no messages"
             for msg in messages:
-                assert msg.get("mailbox") in {"google", "microsoft"}, (
-                    f"message {msg.get('id')!r} missing mailbox field"
-                )
+                assert msg.get("mailbox") in {
+                    "google",
+                    "microsoft",
+                }, f"message {msg.get('id')!r} missing mailbox field"
         finally:
             agent.close_db()
 
@@ -257,9 +260,7 @@ class TestSummarizeMessageRouting:
         finally:
             agent.close_db()
 
-    def test_summarize_message_routes_to_google_after_list(
-        self, tmp_path, monkeypatch
-    ):
+    def test_summarize_message_routes_to_google_after_list(self, tmp_path, monkeypatch):
         """After list_inbox surfaces a Gmail id, summarize_message routes there."""
         agent, spy_g, spy_m = _agent_two_backends(
             tmp_path, monkeypatch, google_ids=["g1"], microsoft_ids=["m1"]
