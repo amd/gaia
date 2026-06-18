@@ -154,3 +154,22 @@
 }
 .empty-docs p { font-size: 14px; margin-top: 8px; }
 .empty-docs span { font-size: 12px; margin-top: 4px; }
+
+/* Retry button for failed documents */
+.btn-retry {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px solid var(--accent-danger, #e74c3c);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--accent-danger, #e74c3c);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.btn-retry:hover {
+    background: var(--accent-danger, #e74c3c);
+    color: #fff;
+}

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2 } from 'lucide-react';
+import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -327,6 +327,19 @@ export function DocumentLibrary() {
         }
     }, [documents, setDocuments]);
 
+    const handleReindex = useCallback(async (id: string) => {
+        const doc = documents.find((d) => d.id === id);
+        log.doc.info(`Reindexing document: ${doc?.filename || id}`);
+        try {
+            await api.reindexDocument(id);
+            const data = await api.listDocuments();
+            setDocuments(data.documents || []);
+            log.doc.info(`Reindex complete for: ${doc?.filename || id}`);
+        } catch (err) {
+            log.doc.error(`Reindex failed for: ${doc?.filename || id}`, err);
+        }
+    }, [documents, setDocuments]);
+
     const handleAttachDoc = useCallback(async (docId: string) => {
         if (!currentSessionId) return;
         const doc = documents.find((d) => d.id === docId);
@@ -387,9 +400,24 @@ export function DocumentLibrary() {
                 );
             case 'failed':
                 return (
-                    <span className="doc-status-badge doc-status-failed">
-                        <AlertCircle size={12} /> Failed
-                    </span>
+                    <div className="doc-indexing-status">
+                        <span
+                            className="doc-status-badge doc-status-failed"
+                            title={doc.last_error || undefined}
+                            aria-label={doc.last_error ? `Failed: ${doc.last_error}` : 'Indexing failed'}
+                        >
+                            <AlertCircle size={12} /> Failed
+                        </span>
+                        <button
+                            className="btn-retry"
+                            onClick={(e) => { e.stopPropagation(); handleReindex(doc.id); }}
+                            title="Retry indexing"
+                            aria-label={`Retry indexing ${doc.filename}`}
+                        >
+                            <RefreshCcw size={14} />
+                            Retry
+                        </button>
+                    </div>
                 );
             case 'cancelled':
                 return (

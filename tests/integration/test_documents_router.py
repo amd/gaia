@@ -318,8 +318,6 @@ def failed_doc(client, managed_docs_sandbox):
     doc_id = doc["id"]
 
     # Directly set status to failed with a last_error via the DB
-    from gaia.ui.dependencies import get_db as _get_db
-
     # Access the db from the app state
     app = client.app
     db = app.state.db
@@ -331,9 +329,7 @@ def test_reindex_endpoint_happy_path(client, failed_doc, managed_docs_sandbox):
     """POST /api/documents/{id}/reindex on a failed doc re-runs indexing and clears last_error."""
     doc_id = failed_doc["id"]
 
-    with patch(
-        "gaia.ui.server._index_document", new=AsyncMock(return_value=5)
-    ):
+    with patch("gaia.ui.server._index_document", new=AsyncMock(return_value=5)):
         r = client.post(f"/api/documents/{doc_id}/reindex")
 
     assert r.status_code == 200, r.text

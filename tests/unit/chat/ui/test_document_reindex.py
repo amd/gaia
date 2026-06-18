@@ -14,7 +14,6 @@ import pytest
 
 from gaia.ui.database import ChatDatabase
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
@@ -39,8 +38,7 @@ def legacy_db():
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
 
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE IF NOT EXISTS documents (
             id TEXT PRIMARY KEY,
             filename TEXT NOT NULL,
@@ -109,8 +107,7 @@ def legacy_db():
         CREATE INDEX IF NOT EXISTS idx_session_docs ON session_documents(session_id);
         CREATE INDEX IF NOT EXISTS idx_schedule_results_task
             ON schedule_results(task_id, executed_at DESC);
-        """
-    )
+        """)
     conn.commit()
 
     # Construct ChatDatabase without calling __init__ (which would create a new
