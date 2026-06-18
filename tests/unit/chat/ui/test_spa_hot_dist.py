@@ -123,6 +123,37 @@ class TestSpaHotDistResolution:
             assert resp.status_code == 200
             assert "REAL_SPA_CONTENT" in resp.text
 
+    def test_missing_asset_returns_404_not_index_html(self):
+        """A missing file under /assets/ must 404, not fall through to index.html.
+
+        Otherwise a stale hashed chunk request gets index.html (text/html) back,
+        which the browser tries to execute as JS (``Uncaught SyntaxError``).
+        SPA fallback is correct for route paths only (issue #1741 review).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dist_dir = Path(tmpdir)
+            assets_dir = dist_dir / "assets"
+            assets_dir.mkdir(parents=True)
+            (dist_dir / "index.html").write_text(
+                "<html><body>REAL_SPA_CONTENT</body></html>", encoding="utf-8"
+            )
+
+            app = create_app(webui_dist=str(dist_dir), db_path=":memory:")
+            client = TestClient(app, raise_server_exceptions=False)
+
+            # Missing hashed chunk under /assets/ -> real 404, not index.html
+            resp = client.get("/assets/old-chunk-abc123.js")
+            assert resp.status_code == 404, (
+                "Missing /assets/* file must 404, not serve index.html; got "
+                f"{resp.status_code}"
+            )
+            assert "REAL_SPA_CONTENT" not in resp.text
+
+            # A non-asset route path still falls back to the SPA (unchanged).
+            resp_route = client.get("/some/app/route")
+            assert resp_route.status_code == 200
+            assert "REAL_SPA_CONTENT" in resp_route.text
+
     def test_path_traversal_outside_dist_rejected(self):
         """Requests that escape the dist directory must not serve files from outside it."""
         with tempfile.TemporaryDirectory() as outer_dir_str:

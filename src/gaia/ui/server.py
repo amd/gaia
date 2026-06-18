@@ -67,7 +67,7 @@ from .tunnel import TunnelManager
 from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
 from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
 from .utils import sanitize_document_path as _sanitize_document_path  # noqa: F401
-from .utils import sanitize_static_path as _sanitize_static_path  # noqa: F401
+from .utils import sanitize_static_path as _sanitize_static_path
 from .utils import validate_file_path as _validate_file_path  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -769,7 +769,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         if not index_html.is_file():
             # Frontend build not present yet -- serve the actionable fallback.
-            # Log only on first miss to avoid flooding logs during a build.
             return HTMLResponse(content=_FALLBACK_HTML, status_code=200)
 
         # 1. Token bootstrap path: only fires for the index-html case
@@ -787,6 +786,13 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             # Static asset (JS, CSS, image) -- never bootstrap a cookie
             # off this path; only the SPA index does that.
             return FileResponse(str(sanitized))
+
+        # A missing file under /assets/ is a real 404 -- don't mask a broken
+        # hashed chunk with index.html, or the browser parses the HTML as JS
+        # (``Uncaught SyntaxError: Unexpected token '<'``). SPA fallback is for
+        # route paths only.
+        if full_path.startswith("assets/"):
+            return HTMLResponse(content="Not Found", status_code=404)
 
         # SPA fallback: serve index.html. Bootstrap the auth cookie
         # if a valid ?token= is present (returns a 303 redirect that
