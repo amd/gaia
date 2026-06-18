@@ -80,27 +80,34 @@ jobs:
           }
           Write-Host "Found gaia at: $($gaiaPath.Source)"
 
-          # Start the server in the background as a process (not PowerShell job)
-          Write-Host "Starting lemonade-server in background..."
-          # Start the server as a background process
-          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray", "--port", "13305" -PassThru -WindowStyle Hidden
-          Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
+          # Start the version-matched 10.7.0 server by absolute path. The runner
+          # has no ``lemonade-server`` shim on PATH (a stale copy used to shadow
+          # it); LEMONADE_SERVER_PATH is set by the install-lemonade action and
+          # points at the LemonadeServer.exe whose catalog includes Gemma-4.
+          # Kill any leftover server first so the new one binds 13305 cleanly.
+          Write-Host "Stopping any leftover lemonade/llama processes..."
+          foreach ($n in @("LemonadeServer","lemonade-server","llama-server","lemonade")) { Get-Process -Name $n -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
+          Start-Sleep -Seconds 3
 
-          # Wait for server to start up
+          Write-Host "Starting server: $env:LEMONADE_SERVER_PATH"
+          $serverProcess = Start-Process -FilePath "$env:LEMONADE_SERVER_PATH" -PassThru -WindowStyle Hidden
+          Write-Host "Started server process with ID: $($serverProcess.Id)"
+
           Write-Host "Waiting for server to start up..."
-          $maxWaitTime = 30  # seconds
+          $maxWaitTime = 90  # seconds
           $waitTime = 0
           $serverReady = $false
 
           while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
-              Start-Sleep -Seconds 2
-              $waitTime += 2
+              Start-Sleep -Seconds 3
+              $waitTime += 3
 
               try {
                   $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 5
-                  Write-Host "Server is ready and responding to health checks"
+                  Write-Host "Server is ready and responding to health checks (after ${waitTime}s)"
                   $serverReady = $true
               } catch {
+                  if ($serverProcess.HasExited) { Write-Host "Server process exited (code $($serverProcess.ExitCode))"; break }
                   Write-Host "Server not ready yet (waited $waitTime seconds)..."
               }
           }
@@ -114,7 +121,7 @@ jobs:
               } catch {
                   Write-Host "Error stopping server process: $_"
               }
-              throw "Failed to start lemonade-server for tests"
+              throw "Failed to start lemonade server for tests"
           }
 
           Write-Host "Lemonade server started successfully"
