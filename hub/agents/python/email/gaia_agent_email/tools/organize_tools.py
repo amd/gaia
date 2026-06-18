@@ -18,9 +18,10 @@ import json
 import uuid
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.base.tools import tool
 from gaia_agent_email import action_store
 from gaia_agent_email.verbose import log_tool_call
+
+from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
@@ -262,9 +263,11 @@ def undo_archive_batch_impl(
                 failed.append(
                     {
                         "message_id": mid,
-                        "error": format_connector_error(exc)
-                        if isinstance(exc, ConnectorsError)
-                        else f"{type(exc).__name__}: {exc}",
+                        "error": (
+                            format_connector_error(exc)
+                            if isinstance(exc, ConnectorsError)
+                            else f"{type(exc).__name__}: {exc}"
+                        ),
                     }
                 )
                 if debug:

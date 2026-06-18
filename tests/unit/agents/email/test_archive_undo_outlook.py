@@ -33,12 +33,10 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 pytest.importorskip("gaia_agent_email")
-from gaia_agent_email import action_store  # noqa: E402
 from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
 from gaia_agent_email.config import EmailAgentConfig  # noqa: E402
 
 from tests.fixtures.email.fake_gmail import FakeCalendarBackend  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Fake backends
@@ -92,7 +90,9 @@ class FakeGmailBackend:
     def get_user_email(self) -> str:
         return "user@gmail.com"
 
-    def list_messages(self, *, query=None, label_ids=None, max_results=25, page_token=None):
+    def list_messages(
+        self, *, query=None, label_ids=None, max_results=25, page_token=None
+    ):
         return {"messages": [{"id": k, "threadId": f"t-{k}"} for k in self._messages]}
 
     def get_message(self, message_id: str) -> Dict[str, Any]:
@@ -108,7 +108,9 @@ class FakeGmailBackend:
         msg["labelIds"] = labels
         return dict(msg)  # id is STABLE for Gmail
 
-    def unarchive_message(self, message_id: str, prior_labels: List[str]) -> Dict[str, Any]:
+    def unarchive_message(
+        self, message_id: str, prior_labels: List[str]
+    ) -> Dict[str, Any]:
         """Restore to inbox: re-add INBOX + any prior labels."""
         self.calls.append(("unarchive_message", message_id, prior_labels))
         msg = self._messages[message_id]
@@ -156,7 +158,9 @@ class FakeOutlookBackend:
     def get_user_email(self) -> str:
         return "user@outlook.com"
 
-    def list_messages(self, *, query=None, label_ids=None, max_results=25, page_token=None):
+    def list_messages(
+        self, *, query=None, label_ids=None, max_results=25, page_token=None
+    ):
         return {"messages": [{"id": k, "threadId": f"t-{k}"} for k in self._messages]}
 
     def get_message(self, message_id: str) -> Dict[str, Any]:
@@ -165,7 +169,9 @@ class FakeOutlookBackend:
             return self._messages[message_id]
         if message_id in self._archive_folder:
             return self._archive_folder[message_id]
-        raise KeyError(f"FakeOutlookBackend: no message {message_id!r} (moved by archive?)")
+        raise KeyError(
+            f"FakeOutlookBackend: no message {message_id!r} (moved by archive?)"
+        )
 
     def archive_message(self, message_id: str) -> Dict[str, Any]:
         """Move to archive and return a new id (Outlook semantics)."""
@@ -178,7 +184,9 @@ class FakeOutlookBackend:
         self._archive_folder[new_id] = msg
         return msg  # Returns resource with the NEW id
 
-    def unarchive_message(self, message_id: str, prior_labels: List[str]) -> Dict[str, Any]:
+    def unarchive_message(
+        self, message_id: str, prior_labels: List[str]
+    ) -> Dict[str, Any]:
         """Move back to inbox; prior_labels unused (categories survive folder move)."""
         self.calls.append(("unarchive_message", message_id, prior_labels))
         if message_id in self._archive_folder:
@@ -224,7 +232,9 @@ class FakeOutlookBackend:
 class BrokenBackend:
     """Backend whose unarchive_message always raises — for partial failure test."""
 
-    def unarchive_message(self, message_id: str, prior_labels: List[str]) -> Dict[str, Any]:
+    def unarchive_message(
+        self, message_id: str, prior_labels: List[str]
+    ) -> Dict[str, Any]:
         raise RuntimeError(f"BrokenBackend: cannot restore {message_id!r}")
 
     def get_message(self, message_id: str) -> Dict[str, Any]:
@@ -306,13 +316,13 @@ class TestArchiveRecordsPostArchiveId:
             )
             assert rows, "No action row recorded"
             payload = _json.loads(rows[0]["payload_json"])
-            assert "post_archive_id" in payload, (
-                f"post_archive_id not recorded in payload: {payload}"
-            )
+            assert (
+                "post_archive_id" in payload
+            ), f"post_archive_id not recorded in payload: {payload}"
             # Outlook archive changes the id
-            assert payload["post_archive_id"] == "m-outlook-archived", (
-                f"Expected 'm-outlook-archived' got {payload['post_archive_id']!r}"
-            )
+            assert (
+                payload["post_archive_id"] == "m-outlook-archived"
+            ), f"Expected 'm-outlook-archived' got {payload['post_archive_id']!r}"
         finally:
             agent.close_db()
 
@@ -365,12 +375,14 @@ class TestUndoArchiveOutlookRestoresToInbox:
             assert undo_env["ok"] is True, undo_env
             data = undo_env["data"]
             assert data["restored"] == 1
-            assert data.get("failed", []) == [], f"undo had failures: {data.get('failed')}"
+            assert (
+                data.get("failed", []) == []
+            ), f"undo had failures: {data.get('failed')}"
 
             # Message is back in the inbox folder
-            assert outlook.inbox_contains("m-outlook"), (
-                "Outlook message was not moved back to inbox"
-            )
+            assert outlook.inbox_contains(
+                "m-outlook"
+            ), "Outlook message was not moved back to inbox"
             assert outlook.archive_folder_contains("m-outlook-archived") is False
         finally:
             agent.close_db()
@@ -405,14 +417,16 @@ class TestUndoArchiveMixedBatchRestoresBoth:
             assert undo_env["ok"] is True, undo_env
             data = undo_env["data"]
             assert data["restored"] == 2
-            assert data.get("failed", []) == [], f"undo had failures: {data.get('failed')}"
+            assert (
+                data.get("failed", []) == []
+            ), f"undo had failures: {data.get('failed')}"
 
-            assert "INBOX" in gmail._messages["g-gmail"]["labelIds"], (
-                "Gmail message not restored to INBOX"
-            )
-            assert outlook.inbox_contains("m-outlook"), (
-                "Outlook message was not moved back to inbox"
-            )
+            assert (
+                "INBOX" in gmail._messages["g-gmail"]["labelIds"]
+            ), "Gmail message not restored to INBOX"
+            assert outlook.inbox_contains(
+                "m-outlook"
+            ), "Outlook message was not moved back to inbox"
         finally:
             agent.close_db()
 
@@ -455,7 +469,9 @@ class TestUndoArchiveBatchPartialFailure:
             assert failed[0]["message_id"] == "g1"
 
             # g2 is back in inbox
-            assert "INBOX" in gmail._messages["g2"]["labelIds"], "g2 not restored to INBOX"
+            assert (
+                "INBOX" in gmail._messages["g2"]["labelIds"]
+            ), "g2 not restored to INBOX"
         finally:
             agent.close_db()
 
@@ -487,7 +503,9 @@ class TestGmailOnlyUndoRegression:
             assert undo_env["data"].get("failed", []) == []
 
             for mid in ids:
-                assert "INBOX" in gmail._messages[mid]["labelIds"], f"{mid} not restored"
+                assert (
+                    "INBOX" in gmail._messages[mid]["labelIds"]
+                ), f"{mid} not restored"
         finally:
             agent.close_db()
 

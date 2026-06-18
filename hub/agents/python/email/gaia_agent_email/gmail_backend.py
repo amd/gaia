@@ -146,7 +146,9 @@ class GmailBackend(Protocol):
         """Restore from TRASH."""
         ...
 
-    def unarchive_message(self, message_id: str, prior_labels: List[str]) -> Dict[str, Any]:
+    def unarchive_message(
+        self, message_id: str, prior_labels: List[str]
+    ) -> Dict[str, Any]:
         """Reverse an archive: restore the message to the inbox.
 
         ``message_id`` is the id valid NOW (post-archive for folder-based
@@ -536,7 +538,9 @@ class LiveGmailBackend:
         self._post(f"/messages/{message_id}/untrash")
         return self._modify_labels(message_id, add=[GMAIL_LABEL_INBOX])
 
-    def unarchive_message(self, message_id: str, prior_labels: List[str]) -> Dict[str, Any]:
+    def unarchive_message(
+        self, message_id: str, prior_labels: List[str]
+    ) -> Dict[str, Any]:
         # Re-add INBOX plus any prior labels. Gmail modify is idempotent when
         # adding a label already present, so this is safe to call more than once.
         to_add = list({GMAIL_LABEL_INBOX, *(prior_labels or [])})
