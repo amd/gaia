@@ -177,6 +177,21 @@
     font-size: 14px;
 }
 
+/* ── Footer / browse-more link ──────────────────────────────────────────────── */
+
+.version-picker-more {
+    margin: 0;
+    padding: 10px 20px 14px;
+    font-size: 12px;
+    color: var(--text-secondary, #888);
+    border-top: 1px solid var(--border-color, #2a2a2a);
+}
+
+.version-picker-more a {
+    color: var(--accent, #e05a00);
+    text-decoration: underline;
+}
+
 /* ── Confirm step ───────────────────────────────────────────────────────────── */
 
 .version-picker-confirm {
