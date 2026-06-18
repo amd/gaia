@@ -249,11 +249,17 @@ class EmailAgentConfig:
           - ``"google"`` / ``"microsoft"`` → only that provider, and only when
             it is actually connected.
 
-        Connector-derived: the connected set comes from
-        ``connected_mailbox_providers()`` (the keyring), in registry order
-        (google before microsoft). Fails loudly — an explicit filter naming an
-        unconnected provider, or nothing connected at all, raises
-        ``ConfigurationError`` rather than silently triaging one mailbox.
+        Connector-derived (intentional): the available set is the set of
+        CONNECTED providers, not the set of providers the agent is granted for.
+        Grant enforcement is the connectors layer's job — ``get_access_token_sync``
+        raises ``AuthRequiredError(AGENT_NOT_GRANTED)`` eagerly when the token is
+        fetched. The agent catches ``ConnectorsError`` per mailbox in
+        ``_triage_all_backends`` / ``_pre_scan_all_backends`` and surfaces a clean,
+        actionable per-mailbox notice rather than aborting the whole scan.
+
+        Fails loudly — an explicit filter naming an unconnected provider, or
+        nothing connected at all, raises ``ConfigurationError`` rather than
+        silently triaging one mailbox.
 
         The per-provider eval seam (``gmail_backend`` / ``outlook_backend``) is
         honored via ``_build_mail_backend``. An injected backend also marks its
@@ -321,6 +327,12 @@ class EmailAgentConfig:
         agent's calendar tools operate on Google and Outlook calendars
         interchangeably. An unsupported explicit provider raises
         ``ConfigurationError`` (fail loudly).
+
+        Grant enforcement is the connectors layer's job — a calendar backend
+        whose agent grant has been revoked raises ``AuthRequiredError`` when the
+        first calendar tool call fetches the token. The existing per-tool
+        ``ConnectorsError`` handler in ``CalendarToolsMixin`` surfaces that as a
+        clean actionable envelope without requiring any grant reasoning here.
 
         Live backend imports are local to keep the module import graph free of
         the ``connectors`` dependency chain at ``config`` import time.
