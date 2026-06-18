@@ -13,7 +13,7 @@ serves a catalog file, `index.json`.
 
 Publishing your agent to the Hub does two things:
 
-1. Anyone can install it with one command — `gaia agent install <id>`.
+1. Anyone can install it with `pip install gaia-agent-<id>` (or from the Agent UI's Hub panel).
 2. It **auto-creates the agent's page** on the Hub website
    (`amd-gaia.ai/hub`). The website is generated entirely
    from the Hub's catalog, so **publishing _is_ the website update** — there's no
@@ -121,10 +121,12 @@ my-agent/
 ### Step 3 — Fill in the manifest (and understand the entry point)
 
 The **manifest** (`gaia-agent.yaml`) is the description card the Hub stores and
-indexes. Each field below feeds the catalog and your auto-generated page. The
-authoritative list of fields lives in
-[`manifest.schema.json`](https://github.com/amd/gaia/blob/main/workers/agent-hub/schemas/manifest.schema.json);
-a real example is the
+indexes. Each field below feeds the catalog and your auto-generated page. To
+validate your manifest locally, run `gaia agent test --lint` (the author-side
+parser; the
+[`manifest.schema.json`](https://github.com/amd/gaia/blob/main/workers/agent-hub/schemas/manifest.schema.json)
+in the repo is the Hub's *server-side* aggregate schema and includes fields you
+never write by hand, like `versions`). A real example is the
 [email agent's manifest](https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia-agent.yaml).
 
 ```yaml
@@ -248,7 +250,7 @@ directly on the command line.
 ### Step 7 — Test it locally
 
 ```bash
-gaia agent test            # run the package's tests
+gaia agent test            # static quality gates: manifest, structure, black+isort (add --live for an LLM smoke test)
 gaia agent status my-agent # show the installed version + basic health
 gaia agent health my-agent # confirm it loads and its entry point resolves
 ```
@@ -285,8 +287,9 @@ be tampered with, stores it so it can **never be overwritten**, attaches your
 # Confirm your agent is in the catalog:
 curl -s https://hub.amd-gaia.ai/index.json | grep my-agent
 
-# Install it the way a user would:
-gaia agent install my-agent
+# Install it the way a user would (PyPI path):
+pip install gaia-agent-my-agent
+# …or browse and install it from the Agent UI's Hub panel.
 ```
 
 Your page appears at `https://amd-gaia.ai/hub/my-agent` the next time the website
@@ -397,7 +400,7 @@ Use `gaia agent version patch|minor|major` to bump it. Two rules the Hub enforce
 | `401` when publishing | Your Hub token is missing or invalid. Re-run `gaia agent login --hub`, or set `GAIA_HUB_TOKEN`. |
 | `403` when publishing | Your token isn't allowed to publish under the manifest's `author`. Make `author` match your token's scope (or request the right scope). |
 | `409` when publishing | That `id@version` already exists and is immutable. Run `gaia agent version patch` and publish again. |
-| "Manifest rejected" | A required field is missing or malformed. Check it against [`manifest.schema.json`](https://github.com/amd/gaia/blob/main/workers/agent-hub/schemas/manifest.schema.json). |
+| "Manifest rejected" | A required field is missing or malformed. Run `gaia agent test --lint` to validate it locally before publishing. |
 | Agent isn't on the website | The site only rebuilds from the catalog on deploy. Confirm your publish succeeded (Step 9), then that the website redeployed. |
 
 ## See also
