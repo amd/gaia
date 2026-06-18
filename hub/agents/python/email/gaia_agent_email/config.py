@@ -350,6 +350,11 @@ class EmailAgentConfig:
                     "Calendars.ReadWrite) in Settings → Connectors, then retry."
                 )
 
+            # A provider is calendar-scoped iff its stored connection includes one
+            # of its calendar scopes. NOTE: get_connection() returns None while a
+            # provider's re-auth tripwire is active, so a genuinely scoped provider
+            # can be transiently treated as unscoped here — re-auth is required
+            # anyway, and the actionable error below still names the scope to grant.
             scoped = [
                 p
                 for p in connected

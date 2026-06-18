@@ -597,3 +597,20 @@ class TestAgentConstructsWhenCalendarUnavailable:
                 agent._calendar.create_event(summary="x", start="s", end="e")
         finally:
             agent.close_db()
+
+    def test_constructs_when_calendar_scope_declined(self, tmp_path, monkeypatch):
+        # Reviewer's exact case: Gmail connected, calendar scope declined. Discovery
+        # finds google connected but mail-only-scoped -> no calendar provider. The
+        # agent must still construct so read/organize/reply work; calendar use then
+        # raises the actionable error (deferred, not at startup).
+        monkeypatch.setattr(
+            "gaia_agent_email.config.get_connection",
+            lambda p: {"scopes": ["https://www.googleapis.com/auth/gmail.modify"]},
+        )
+        agent, unavailable = self._build(tmp_path, monkeypatch, lambda: ["google"])
+        try:
+            assert isinstance(agent._calendar, unavailable)
+            with pytest.raises(ConfigurationError):
+                agent._calendar.list_events(time_min="a", time_max="b")
+        finally:
+            agent.close_db()
