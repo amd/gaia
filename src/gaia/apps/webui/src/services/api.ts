@@ -713,6 +713,10 @@ export async function cancelIndexing(id: string): Promise<{ cancelled: boolean; 
     return apiFetch('POST', `/documents/${id}/cancel`);
 }
 
+export async function reindexDocument(id: string): Promise<Document> {
+    return apiFetch('POST', `/documents/${id}/reindex`);
+}
+
 export async function attachDocument(sessionId: string, documentId: string): Promise<void> {
     return apiFetch('POST', `/sessions/${sessionId}/documents`, { document_id: documentId });
 }

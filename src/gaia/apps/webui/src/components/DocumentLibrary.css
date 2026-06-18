@@ -154,3 +154,36 @@
 }
 .empty-docs p { font-size: 14px; margin-top: 8px; }
 .empty-docs span { font-size: 12px; margin-top: 4px; }
+
+/* Failed-doc status: badge + retry need breathing room between them */
+.doc-indexing-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Retry button for failed documents — subtle ghost, not a second heavy red pill
+   crowding the Failed badge */
+.btn-retry {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.btn-retry:hover {
+    background: var(--accent-danger-dim);
+    color: var(--accent-danger, #e74c3c);
+}
+.btn-retry:disabled {
+    opacity: 0.6;
+    cursor: default;
+    background: transparent;
+    color: var(--text-muted);
+}
