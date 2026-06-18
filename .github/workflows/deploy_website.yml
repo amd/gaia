@@ -9,8 +9,16 @@
 #   project (Railway → project → Settings → Tokens → Project Token, production
 #   environment). Scopes the deploy to that project; no account login needed.
 #
+#   Railway variable HUB_CATALOG_URL=https://hub.amd-gaia.ai — REQUIRED. The
+#   website builds its Agent Hub pages from the live hub catalog and has NO
+#   bundled fixture fallback (website/src/data/catalog.ts), so the build FAILS
+#   LOUDLY if this is unset. Set it on the website service in Railway → Variables.
+#
 # The service is built by Railway from website/railway.json (NIXPACKS:
 # `npm install && npm run build`, served by `serve dist`).
+#
+# This workflow is also dispatched by release_agent_email.yml after a successful
+# agent publish, so a newly published agent shows up without a website commit.
 
 name: Deploy Website (Railway)
 

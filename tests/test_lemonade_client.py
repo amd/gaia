@@ -37,7 +37,7 @@ except ImportError:
     resolve_lemonade_api_key = None  # type: ignore[assignment]
 
 # Test constants - override via GAIA_TEST_MODEL env var for different platforms
-TEST_MODEL = os.environ.get("GAIA_TEST_MODEL", "Llama-3.2-3B-Instruct-Hybrid")
+TEST_MODEL = os.environ.get("GAIA_TEST_MODEL", "Gemma-4-E4B-it-GGUF")
 
 HOST = "localhost"
 # Respect LEMONADE_PORT env var so Linux CI (lemonade-server-dev, port 8000)

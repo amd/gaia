@@ -63,6 +63,7 @@ from gaia_agent_email.contract import (
     EmailTriageResult,
     SingleEmailInput,
     ThreadInput,
+    TriageUsage,
 )
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
@@ -117,6 +118,7 @@ _DUE_HINT_RE = re.compile(
 )
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_URL_RE = re.compile(r"https?://[^\s>\"']+", re.IGNORECASE)
 _MAX_SUMMARY_CHARS = 300
 
 # Fast pre-flight timeouts for the "is Lemonade even up?" probe (#1677). The
@@ -133,6 +135,42 @@ def _split_sentences(text: str) -> List[str]:
     if not text:
         return []
     return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+
+
+def _aggregate_usage(call_stats: List[dict]) -> Optional[TriageUsage]:
+    """Sum the per-call ``AgentResponse.stats`` (#1277/#1278) across the
+    classify + summarize LLM calls into a single :class:`TriageUsage`.
+
+    prompt_tokens = Σ input_tokens; total_tokens = Σ(input + output);
+    tokens_per_second = Σ output / Σ decode_time, where each call's decode time
+    is output_tokens / tokens_per_second (so the aggregate is total output
+    tokens over total decode time, not a naive TPS average). Returns ``None``
+    when no LLM call produced stats (the heuristic-only path).
+    """
+    if not call_stats:
+        return None
+    total_input = 0
+    total_output = 0
+    decode_output = 0  # output only from calls with a usable TPS (>0)
+    total_decode_time = 0.0
+    for s in call_stats:
+        inp = int(s.get("input_tokens") or 0)
+        out = int(s.get("output_tokens") or 0)
+        tps = float(s.get("tokens_per_second") or 0.0)
+        total_input += inp
+        total_output += out
+        if out and tps > 0:
+            decode_output += out
+            total_decode_time += out / tps
+    # Numerator excludes output from tps==0 calls so they can't inflate the
+    # aggregate (they add nothing to the decode-time denominator).
+    agg_tps = decode_output / total_decode_time if total_decode_time > 0 else 0.0
+    return TriageUsage(
+        prompt_tokens=total_input,
+        completion_tokens=total_output,
+        total_tokens=total_input + total_output,
+        tokens_per_second=agg_tps,
+    )
 
 
 class EmailTriageService:
@@ -161,12 +199,13 @@ class EmailTriageService:
         """
         payload = request.payload
         resolved_chat = chat or self._build_llm_chat()
+        context = request.context
         if isinstance(payload, SingleEmailInput):
             kind = "single"
-            result = self._triage_single_llm(payload, resolved_chat)
+            result = self._triage_single_llm(payload, resolved_chat, context=context)
         elif isinstance(payload, ThreadInput):
             kind = "thread"
-            result = self._triage_thread_llm(payload, resolved_chat)
+            result = self._triage_thread_llm(payload, resolved_chat, context=context)
         else:  # pragma: no cover - discriminated union guarantees one of the two
             raise HTTPException(
                 status_code=422,
@@ -200,6 +239,10 @@ class EmailTriageService:
             # Output cap (not input); context window governs what fits.
             # 4096 gives Gemma-4-E4B room for its reasoning chain + JSON.
             max_tokens=4096,
+            # Surface per-call token/TPS stats on AgentResponse.stats so the
+            # triage result can report usage metrics (#1540) — reuses the
+            # existing measurement; no new path.
+            show_stats=True,
         )
         return AgentSDK(sdk_cfg)
 
@@ -269,7 +312,7 @@ class EmailTriageService:
         )
 
     def _triage_single_llm(
-        self, payload: SingleEmailInput, chat: Any
+        self, payload: SingleEmailInput, chat: Any, context: Any = None
     ) -> EmailTriageResult:
         msg = payload.message
         return self._build_result_llm(
@@ -281,9 +324,12 @@ class EmailTriageService:
             reply_to=msg.from_,
             chat=chat,
             message_id=msg.message_id,
+            context=context,
         )
 
-    def _triage_thread_llm(self, payload: ThreadInput, chat: Any) -> EmailTriageResult:
+    def _triage_thread_llm(
+        self, payload: ThreadInput, chat: Any, context: Any = None
+    ) -> EmailTriageResult:
         messages: List[EmailMessage] = payload.messages
         last = messages[-1]
         # Join newest-first so the model sees the most recent context first.
@@ -300,6 +346,7 @@ class EmailTriageService:
             summary_prefix=f"Thread of {len(messages)} messages. ",
             chat=chat,
             message_id=payload.thread_id,
+            context=context,
         )
 
     def _build_result_llm(
@@ -314,6 +361,7 @@ class EmailTriageService:
         summary_prefix: str = "",
         chat: Any,
         message_id: Optional[str] = None,
+        context: Any = None,
     ) -> EmailTriageResult:
         """Build a result using LLM escalation when heuristic confidence is low."""
         from gaia_agent_email.tools.llm_triage import classify_email_llm
@@ -323,6 +371,10 @@ class EmailTriageService:
             subject=subject, sender=sender_raw, label_ids=label_ids
         )
 
+        # Per-call LLM stats accumulate here so the result can report aggregate
+        # usage (#1540). Reuses AgentResponse.stats — no new measurement.
+        call_stats: List[dict] = []
+
         if heuristic.confident:
             category = EmailCategory(heuristic.category)
         else:
@@ -331,6 +383,8 @@ class EmailTriageService:
                 subject=subject,
                 sender=sender_raw,
                 body=body,
+                collect_stats=call_stats,
+                context=context,
             )
             category = EmailCategory(llm_result["category"])
 
@@ -339,6 +393,8 @@ class EmailTriageService:
             subject=subject,
             sender=sender_raw,
             body=body,
+            collect_stats=call_stats,
+            context=context,
         )
         summary = summary_prefix + llm_summary
 
@@ -364,6 +420,7 @@ class EmailTriageService:
             draft=draft,
             message_id=message_id,
             suggested_action=suggested_action,
+            usage=_aggregate_usage(call_stats),
         )
 
     def _build_result(
@@ -432,7 +489,29 @@ class EmailTriageService:
             seen.add(key)
             due_match = _DUE_HINT_RE.search(sentence)
             due_hint = due_match.group(1) if due_match else None
-            items.append(ActionItem(description=normalized, due_hint=due_hint))
+            url_match = _URL_RE.search(sentence)
+            if url_match:
+                # Trim trailing sentence punctuation the greedy match grabs
+                # ("...report." → "...report") so the link is well-formed.
+                # Strip char-by-char, but keep a ")" that closes a "(" inside
+                # the URL itself (e.g. .../Python_(programming_language)) so we
+                # don't silently truncate Wikipedia/Confluence-style links.
+                url = url_match.group(0)
+                _trailing = ".,;:!?)]}\"'"
+                while url and url[-1] in _trailing:
+                    if url[-1] == ")" and "(" in url:
+                        break
+                    url = url[:-1]
+                items.append(
+                    ActionItem(
+                        description=normalized,
+                        due_hint=due_hint,
+                        type="link",
+                        url=url,
+                    )
+                )
+            else:
+                items.append(ActionItem(description=normalized, due_hint=due_hint))
         return items
 
     def _build_draft(
