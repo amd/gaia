@@ -291,33 +291,39 @@ function App() {
         };
     }, [setRunningSessions]);
 
-    // Support URL-based session navigation (?session=<id> or #<hash>)
+    // Support URL-based session navigation (?session=<id> or #<hash>).
+    // Runs once on mount only. Depending on currentSessionId caused a
+    // ping-pong (#1755): the hash-sync effect writes a 7-char short hash that
+    // never equals the full UUID, so on every session switch this guard re-fired,
+    // read a stale hash, and scheduled a ~500ms bounce back to the URL's target.
+    // currentSessionId is read fresh inside the timer instead of via deps.
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const sessionParam = params.get('session');
         const hashParam = window.location.hash.replace(/^#/, '');
         const target = sessionParam || hashParam;
         if (!target) return;
-        // Already on this session — no switch needed
-        if (target === currentSessionId) return;
 
         log.nav.info(`URL session parameter: ${target}`);
         // Defer so session list has time to load
         const timer = setTimeout(() => {
-            const { sessions } = useChatStore.getState();
+            const { sessions, currentSessionId } = useChatStore.getState();
+            // Already on this session — no switch needed
+            if (target === currentSessionId) return;
             // Try exact match first (full UUID), then short hash match
-            let matchId: string | null = sessions.some((s: { id: string }) => s.id === target)
+            const matchId: string | null = sessions.some((s: { id: string }) => s.id === target)
                 ? target
                 : findSessionByHash(sessions, target);
-            if (matchId) {
+            if (matchId && matchId !== currentSessionId) {
                 setCurrentSession(matchId);
                 setMessages([]);
-            } else {
+            } else if (!matchId) {
                 log.nav.warn(`Session ${target} not found in loaded sessions`);
             }
         }, 500);
         return () => clearTimeout(timer);
-    }, [currentSessionId, setCurrentSession, setMessages]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [setCurrentSession, setMessages]);
 
     // Subscribe to system session-activation events (MCP bridge P1)
     useEffect(() => {

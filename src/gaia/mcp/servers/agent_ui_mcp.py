@@ -74,6 +74,17 @@ def _normalize_error(
     return {"status": "error", "detail": msg}
 
 
+def _is_error(result: Any) -> bool:
+    """True if a tool result is a structured error envelope.
+
+    All boundary errors flow through ``_normalize_error`` which returns
+    ``{"status": "error", ...}``. Callers must key on this shape, not the
+    legacy ``{"error": ...}`` one, or a backend failure silently passes as
+    success.
+    """
+    return isinstance(result, dict) and result.get("status") == "error"
+
+
 def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
     """Make an API request to the GAIA Agent UI backend."""
     url = f"{base_url}/api{path}"
@@ -291,7 +302,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
             r.raise_for_status()
             return {"deleted": True, "session_id": session_id}
         except Exception as e:
-            return {"error": str(e)}
+            return _normalize_error(e, backend_url)
 
     # ── Messages ───────────────────────────────────────────────────
 
@@ -299,7 +310,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
     def get_messages(session_id: str) -> Dict[str, Any]:
         """Get all messages in a session (with agent steps and tool outputs)."""
         data = _api(backend_url, "get", f"/sessions/{session_id}/messages")
-        if "error" in data:
+        if _is_error(data):
             return data
         # Simplify for readability
         messages = []
@@ -369,15 +380,16 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
                     f"/sessions/{session_id}/documents",
                     json={"document_id": doc_id},
                 )
-                if "error" not in attach_result:
-                    result["linked_to_session"] = session_id
-                else:
+                if _is_error(attach_result):
                     logger.warning(
                         "Failed to link doc %s to session %s: %s",
                         doc_id,
                         session_id,
-                        attach_result.get("error"),
+                        attach_result.get("detail"),
                     )
+                    result["link_error"] = attach_result.get("detail")
+                else:
+                    result["linked_to_session"] = session_id
         return result
 
     @mcp.tool()
@@ -463,7 +475,10 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
         try:
             from PIL import Image, ImageGrab
         except ImportError:
-            return {"error": "Pillow not installed. Run: pip install Pillow"}
+            return {
+                "status": "error",
+                "detail": "Pillow not installed. Run: pip install Pillow",
+            }
 
         try:
             bbox = None
@@ -524,7 +539,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
                 "file_size_kb": file_size_kb,
             }
         except Exception as e:
-            return {"error": f"Screenshot failed: {e}"}
+            return {"status": "error", "detail": f"Screenshot failed: {e}"}
 
     # ── Memory ────────────────────────────────────────────────────────
     #

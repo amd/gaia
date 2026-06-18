@@ -138,3 +138,107 @@ class TestSendMessageDocstring:
         ), "send_message docstring should not claim real-time streaming"
         # Should mention open_session_in_browser
         assert "open_session_in_browser" in doc
+
+
+class TestIsError:
+    """#1755: error detection must key on the structured envelope, not the
+    legacy ``{"error": ...}`` shape that ``_normalize_error`` replaced."""
+
+    def test_new_envelope_is_error(self):
+        from gaia.mcp.servers.agent_ui_mcp import _is_error
+
+        assert _is_error({"status": "error", "detail": "boom"}) is True
+
+    def test_success_payload_not_error(self):
+        from gaia.mcp.servers.agent_ui_mcp import _is_error
+
+        assert _is_error({"messages": [], "total": 0}) is False
+        assert _is_error({"status": "ok"}) is False
+        assert _is_error("not a dict") is False
+
+    def test_legacy_error_key_not_matched(self):
+        from gaia.mcp.servers.agent_ui_mcp import _is_error
+
+        # The legacy shape no longer appears; _is_error must not depend on it.
+        assert _is_error({"error": "boom"}) is False
+
+
+def _get_tool(name):
+    """Construct the MCP server and return a tool's raw function."""
+    pytest.importorskip("mcp")  # constructing the server needs optional mcp
+    from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value = MagicMock(
+            status_code=200, json=MagicMock(return_value={})
+        )
+        mock_get.return_value.raise_for_status.return_value = None
+        mcp = create_agent_ui_mcp("http://localhost:4200")
+
+    tool = mcp._tool_manager._tools.get(name)  # pylint: disable=protected-access
+    if tool is None:
+        pytest.skip(f"{name} tool not found in tool manager")
+    return tool.fn
+
+
+class TestGetMessagesSurfacesError:
+    """#1755: get_messages keyed on the old shape, so a backend error fell
+    through to an empty success payload (silent fallback)."""
+
+    def test_backend_error_not_silent_empty(self):
+        get_messages = _get_tool("get_messages")
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_resp.json.return_value = {"detail": "Session not found"}
+        mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            response=mock_resp
+        )
+        with patch("requests.get", return_value=mock_resp):
+            result = get_messages("nonexistent")
+
+        assert result["status"] == "error"
+        assert result.get("detail")
+        # Regression: must NOT degrade to {"messages": [], "total": 0}.
+        assert "messages" not in result
+
+
+class TestIndexDocumentLinkFailure:
+    """#1755: index_document reported a session link succeeded even when the
+    attach call failed (false success)."""
+
+    @staticmethod
+    def _upload_ok():
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"id": "doc-1"}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    def test_attach_failure_not_reported_as_linked(self):
+        index_document = _get_tool("index_document")
+
+        attach_resp = MagicMock()
+        attach_resp.status_code = 404
+        attach_resp.json.return_value = {"detail": "Session not found"}
+        attach_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            response=attach_resp
+        )
+        with patch("requests.post", side_effect=[self._upload_ok(), attach_resp]):
+            result = index_document("/tmp/file.pdf", session_id="sess-1")
+
+        assert "linked_to_session" not in result
+        assert result.get("link_error")
+
+    def test_attach_success_reports_linked(self):
+        index_document = _get_tool("index_document")
+
+        attach_resp = MagicMock()
+        attach_resp.status_code = 200
+        attach_resp.json.return_value = {"attached": True}
+        attach_resp.raise_for_status.return_value = None
+        with patch("requests.post", side_effect=[self._upload_ok(), attach_resp]):
+            result = index_document("/tmp/file.pdf", session_id="sess-1")
+
+        assert result.get("linked_to_session") == "sess-1"
+        assert "link_error" not in result
