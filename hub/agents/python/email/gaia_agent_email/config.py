@@ -298,27 +298,46 @@ class EmailAgentConfig:
     def resolve_calendar_backend(self) -> Any:
         """Return the calendar backend for the configured ``calendar_provider``.
 
-        Resolution order (mirrors ``resolve_mail_backend``):
+        Resolution order:
           1. An injected ``calendar_backend`` (eval/test seam) — always wins.
-          2. The live backend bound to the provider's grant-checked token
-             resolver.
+          2. Explicit ``calendar_provider`` config, if set — used directly.
+          3. Explicit ``mail_provider`` config, if set — calendar follows the
+             mailbox (a Microsoft-only user need not set ``calendar_provider``
+             separately).
+          4. Connector discovery via ``connected_mailbox_providers()`` — picks
+             the provider that is actually connected. If exactly one is
+             connected, use it; if both are connected without an explicit
+             ``mail_provider`` hint, prefer google (registry order).
+          5. Nothing connected and no explicit provider → ``ConfigurationError``
+             with an actionable message (never silently defaults to Google).
 
-        ``calendar_provider`` defaults to ``mail_provider`` when unset, so a
-        Microsoft-only user is not forced to set it twice. Both live backends
-        satisfy the ``CalendarBackend`` Protocol, so the agent's calendar tools
-        operate on Google and Outlook calendars interchangeably. An unknown
-        provider raises ``ConfigurationError`` (fail loudly — never silently
-        default to one calendar).
+        Both live backends satisfy the ``CalendarBackend`` Protocol, so the
+        agent's calendar tools operate on Google and Outlook calendars
+        interchangeably. An unsupported explicit provider raises
+        ``ConfigurationError`` (fail loudly).
 
         Live backend imports are local to keep the module import graph free of
         the ``connectors`` dependency chain at ``config`` import time.
         """
         if self.calendar_backend is not None:
             return self.calendar_backend
-        # Default to the mail provider when calendar_provider is unset.
-        provider = (
-            (self.calendar_provider or self.mail_provider or "google").strip().lower()
-        )
+
+        # Steps 2–3: explicit config takes precedence over connector discovery.
+        explicit = (self.calendar_provider or self.mail_provider or "").strip().lower()
+        if explicit:
+            provider = explicit
+        else:
+            # Step 4: discover from connected providers (mirrors resolve_mail_backends).
+            connected = connected_mailbox_providers()
+            if not connected:
+                raise ConfigurationError(
+                    "No calendar provider connected. Connect Google (grant "
+                    "calendar.events / calendar.readonly) or Microsoft (grant "
+                    "Calendars.ReadWrite) in Settings → Connectors, then retry."
+                )
+            # Prefer the first in registry order (google before microsoft).
+            provider = connected[0]
+
         if provider == "google":
             from gaia_agent_email.calendar_backend import (
                 LiveCalendarBackend,
