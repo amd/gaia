@@ -424,6 +424,15 @@ class FakeGmailBackend:
         self._transport.record("untrash_message", message_id=message_id)
         return self._modify(message_id, add=["INBOX"], remove=["TRASH"])
 
+    def unarchive_message(
+        self, message_id: str, prior_labels: List[str]
+    ) -> Dict[str, Any]:
+        self._transport.record(
+            "unarchive_message", message_id=message_id, prior_labels=prior_labels
+        )
+        to_add = list({"INBOX", *(prior_labels or [])})
+        return self._modify(message_id, add=to_add)
+
     def permanent_delete(self, message_id: str) -> None:
         self._transport.record("permanent_delete", message_id=message_id)
         self._messages.pop(message_id, None)
