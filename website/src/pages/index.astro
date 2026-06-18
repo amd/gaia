@@ -10,6 +10,7 @@ import AuroraBg from '../components/AuroraBg.astro';
 import AgentIcon from '../components/AgentIcon.astro';
 import FeaturedCard from '../components/FeaturedCard.astro';
 import DownloadButton from '../components/DownloadButton.astro';
+import CodeBlock from '../components/CodeBlock.astro';
 import { getCatalog } from '../data/catalog';
 
 const agents = await getCatalog();
@@ -29,8 +30,8 @@ const pipeline = [
   {
     step: 'Run',
     icon: 'cpu',
-    body: 'It runs 100% locally on AI PCs — AMD Ryzen AI first-class, via Lemonade. Private by default, no API keys required. Cloud models are opt-in.',
-    code: 'gaia my-agent "..."',
+    body: 'It runs locally on AI PCs — AMD Ryzen AI first-class, via Lemonade. Private by default, no API keys required; cloud models are opt-in.',
+    code: 'python my_agent.py',
   },
   {
     step: 'Distribute',
@@ -54,6 +55,12 @@ const devInstalls = [
   { label: 'pip', cmd: 'uv pip install amd-gaia', note: 'The Python SDK + CLI framework.' },
   { label: 'script', cmd: 'curl -fsSL https://amd-gaia.ai/install.sh | sh', note: 'One-line install (Windows: irm …install.ps1 | iex).' },
 ];
+
+const embedSnippet = `// embed the email agent as a local sidecar
+import { fetchBinary, startSidecar } from "@amd-gaia/agent-email";
+
+const { binaryPath } = await fetchBinary({ outDir: "resources" });
+const sidecar = await startSidecar({ binaryPath, port: 8131 });`;
 ---
 
 <Layout title="GAIA — The Agent Factory" description="Build, run, and distribute AI agents that run locally on AI PCs.">
@@ -69,17 +76,17 @@ const devInstalls = [
           GAIA — The Agent&nbsp;Factory.
         </h1>
         <p class="mt-5 text-lg text-g-muted max-w-2xl mx-auto">
-          Build, run, and distribute AI agents that run <strong class="text-g-text font-semibold">100% locally on AI PCs</strong> —
+          Build, run, and distribute AI agents that run <strong class="text-g-text font-semibold">locally on AI PCs</strong> —
           private by default, no API keys required. Write one in minutes; publish to the Agent Hub and anyone can install it in one click.
         </p>
         <div class="mt-9 flex flex-wrap items-center justify-center gap-3">
-          <a href={QUICKSTART} class="rounded-md bg-g-gold px-6 py-3 text-sm font-semibold text-black hover:brightness-110 transition">
+          <DownloadButton variant="primary" size="lg" />
+          <a href={QUICKSTART} class="rounded-md border border-g-border px-6 py-3 text-sm font-semibold text-g-text hover:border-g-gold/50 transition-colors">
             Start building
           </a>
-          <DownloadButton variant="secondary" size="lg" />
         </div>
         <p class="mt-3 text-xs text-g-muted">
-          Free · Windows, macOS, Linux · or <a href="#developers" class="text-g-gold-text hover:underline">install via CLI →</a>
+          Fastest start: download, browse the hub, run an agent — then build your own or embed one in your app. Free · Windows, macOS, Linux · or <a href="#developers" class="text-g-gold-text hover:underline">install via CLI →</a>
         </p>
         <!-- Trust strip -->
         <div class="mt-8 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-[12px] text-g-muted">
@@ -106,7 +113,7 @@ const devInstalls = [
             </span>
             <h3 class="mt-4 text-lg font-semibold text-g-text">{p.step}</h3>
             <p class="mt-2 text-[14px] text-g-muted leading-relaxed">{p.body}</p>
-            <code class="mt-4 block rounded-md border border-g-border bg-g-bg px-3 py-2 font-mono text-[12.5px] text-g-gold-text overflow-x-auto">$ {p.code}</code>
+            <CodeBlock code={p.code} lang="bash" class="mt-4" />
           </div>
         ))}
       </div>
@@ -147,12 +154,7 @@ const devInstalls = [
             <span>· Signed &amp; checksummed artifacts</span>
           </div>
         </div>
-        <div class="rounded-xl border border-g-border bg-g-bg p-5 font-mono text-[12.5px] text-g-text overflow-x-auto">
-          <span class="text-g-muted">// embed the email agent as a local sidecar</span><br />
-          <span class="text-g-gold-text">import</span> {'{ fetchBinary, startSidecar }'} <span class="text-g-gold-text">from</span> "@amd-gaia/agent-email";<br /><br />
-          <span class="text-g-gold-text">const</span> {'{ binaryPath }'} = <span class="text-g-gold-text">await</span> fetchBinary({'{ outDir: "resources" }'});<br />
-          <span class="text-g-gold-text">const</span> sidecar = <span class="text-g-gold-text">await</span> startSidecar({'{ binaryPath, port: 8131 }'});
-        </div>
+        <CodeBlock code={embedSnippet} lang="ts" />
       </div>
     </section>
 
@@ -162,8 +164,12 @@ const devInstalls = [
         <div>
           <Eyebrow class="mb-2">Agent Hub</Eyebrow>
           <h2 class="text-2xl font-bold tracking-tight">There's an agent for that.</h2>
+          <p class="mt-2 max-w-lg text-[14px] text-g-muted">
+            Each one is <strong class="font-semibold text-g-text">purpose-built</strong> for a single job and
+            <strong class="font-semibold text-g-text">bulletproof</strong> — tested, versioned, and immutable once published.
+          </p>
         </div>
-        <a href="/hub" class="text-sm text-g-gold-text hover:underline">All agents →</a>
+        <a href="/hub" class="whitespace-nowrap text-sm text-g-gold-text hover:underline">All agents →</a>
       </div>
       {featured.length > 0 && (
         <div class="grid sm:grid-cols-3 gap-5">
@@ -182,7 +188,7 @@ const devInstalls = [
           {devInstalls.map((d) => (
             <div class="rounded-xl border border-g-border bg-g-surface p-5">
               <div class="text-[11px] font-bold uppercase tracking-wide text-g-gold-text">{d.label}</div>
-              <code class="mt-2 block rounded-md border border-g-border bg-g-bg px-3 py-2 font-mono text-[12px] text-g-text overflow-x-auto">{d.cmd}</code>
+              <CodeBlock code={d.cmd} lang="bash" class="mt-2" />
               <p class="mt-2 text-[12.5px] text-g-muted">{d.note}</p>
             </div>
           ))}
