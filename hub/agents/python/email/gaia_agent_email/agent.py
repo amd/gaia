@@ -497,14 +497,14 @@ class EmailTriageAgent(
         a genuine bug must fail loudly. The available set stays connection-derived;
         grant enforcement happens at the token layer.
         """
-        from gaia.connectors.formatting import format_connector_error
-
         from gaia_agent_email.tools import read_tools
         from gaia_agent_email.tools.read_tools import (
             extract_sender_email,
             triage_inbox_impl,
         )
         from gaia_agent_email.tools.triage_heuristics import group_by_category
+
+        from gaia.connectors.formatting import format_connector_error
 
         # Reference the factory via the read_tools module so the existing
         # ``read_tools.make_llm_classifier`` test seam (the pre-scan canary)
@@ -622,14 +622,14 @@ class EmailTriageAgent(
         the error is recorded in ``mailbox_errors`` and the loop continues with
         the remaining backends. Non-``ConnectorsError`` exceptions still propagate.
         """
-        from gaia.connectors.formatting import format_connector_error
-
         from gaia_agent_email.tools.read_tools import (
             PRE_SCAN_ACTIONABLE_CAP,
             PRE_SCAN_ARCHIVE_CAP,
             PRE_SCAN_URGENT_CAP,
             pre_scan_inbox_impl,
         )
+
+        from gaia.connectors.formatting import format_connector_error
 
         prefs = getattr(self, "_session_preferences", None)
         force_llm = bool(getattr(self.config, "force_llm", False))
