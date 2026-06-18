@@ -204,6 +204,27 @@ To reverse: ask the agent to unquarantine the message. It restores the original 
 
 The agent **never** auto-acts on links or instructions inside a phishing message, even if you ask it to.
 
+## Calendar provider selection
+
+When the calendar tools run (`list_calendar_events`, `accept_invite`, `decline_invite`,
+`create_event_from_email`), the agent picks a calendar backend using this deterministic order:
+
+1. **Injected backend** (eval / test seam) — always wins.
+2. **Explicit `calendar_provider`** config — used directly, no scope check.
+3. **Explicit `mail_provider`** config — calendar follows the mailbox (a Microsoft-only user
+   who set `mail_provider="microsoft"` gets Outlook Calendar without a separate setting).
+4. **Connector discovery** — queries which providers are connected AND hold a calendar scope:
+   - Google: `calendar.events` or `calendar.readonly`
+   - Microsoft: `Calendars.ReadWrite`
+
+   If exactly one provider is calendar-scoped, it is used. If both are scoped, Google is
+   preferred (registry order). If none are scoped, the agent raises an actionable error naming
+   the scope to grant — it never silently falls back to Google.
+
+**Common mismatch**: both Gmail and Outlook connected, but only Outlook has `Calendars.ReadWrite`
+(Google calendar scope was skipped during consent). Without an explicit provider setting the
+agent used to pick Google and fail. It now picks Outlook correctly.
+
 ## Troubleshooting
 
 ### "AGENT_NOT_GRANTED — Email agent needs additional Google permissions"
