@@ -1,17 +1,17 @@
 ---
 title: "v0.21.2"
-description: "The Agent Hub goes live with a one-command publish pipeline, a new native gaia-bash coding agent ships, the email agent learns your inbox and speaks a richer 5-bucket triage schema, and the desktop app can roll itself back from a bad update."
+description: "A new native gaia-bash coding agent ships, the email agent learns your inbox and speaks a richer 5-bucket triage schema, the desktop app can roll itself back from a bad update, and the Agent Hub publish pipeline lands as groundwork toward a live hub."
 ---
 
 # GAIA v0.21.2 Release Notes
 
-GAIA v0.21.2 is a feature-packed patch on top of v0.21.1. The Agent Hub is now a real, deployed service with a redesigned website and a one-command publish pipeline, and a new native `gaia-bash` coding agent joins the lineup. The email agent gets smarter — it learns which senders matter to you and now returns a 5-bucket triage taxonomy with a concrete suggested action per message — and the desktop app can finally roll itself back to a previous release when an update goes wrong. The rest of the release clears a batch of email, connector, UI, and installer bugs.
+GAIA v0.21.2 is a feature-packed patch on top of v0.21.1. A new native `gaia-bash` coding agent joins the lineup, the email agent gets smarter — it learns which senders matter to you and now returns a 5-bucket triage taxonomy with a concrete suggested action per message — and the desktop app can finally roll itself back to a previous release when an update goes wrong. Behind the scenes, the Agent Hub publish pipeline and redesigned website land as the groundwork for a hub you'll browse and install from. The rest of the release clears a batch of email, connector, UI, and installer bugs.
 
 **Why upgrade:**
-- **Discover and install agents from a live Agent Hub** — the Hub is now a deployed service with a redesigned site and `gaia://` "Open in GAIA" deep links, so agents are something you browse and install, not hand-assemble.
 - **A new native coding agent** — `gaia-bash` is a fast, self-contained C++ bash agent with an interactive TUI, CLI, REST API, and MCP server, usable on its own or from Claude Code / OpenCode.
 - **Your inbox, learned and better sorted** — `gaia email` now remembers which senders matter to you and sorts mail into five intuitive buckets, each with a suggested next action.
 - **Recover from a bad desktop update** — Settings → About now lists published releases and rolls the app back to one you pick, pausing auto-update so it can't silently re-upgrade.
+- **Agent Hub groundwork** — the one-command publish pipeline, catalog, and redesigned site land, moving toward a hub where agents are something you browse and install rather than hand-assemble (not yet publicly live).
 
 ---
 
@@ -20,12 +20,6 @@ GAIA v0.21.2 is a feature-packed patch on top of v0.21.1. The Agent Hub is now a
 ### A native bash coding agent — `gaia-bash`
 
 GAIA's C++ framework had the building blocks but no real agent you could run. `gaia-bash` is now a fully native binary coding agent for the shell, with five ways to use it: an interactive TUI, a one-shot CLI query, pipe mode, an OpenAI-compatible REST API server, and an MCP stdio server — so external tools like Claude Code and OpenCode can drive GAIA agents directly. It ships with file I/O, git, and shell-execution tools on a reusable C++ framework any future native agent can build on (PR [#985](https://github.com/amd/gaia/pull/985)).
-
----
-
-### Browse and install agents from the Agent Hub
-
-The Agent Hub used to exist only as code — no deploy story, no real catalog, and publishing meant hand-crafted curl calls. It's now a deployed service with a redesigned website shared across all GAIA surfaces, immutable checksummed agent versions, and a one-command publish pipeline. The primary flow is **Open in GAIA** — a `gaia://` deep link that takes you from a hub listing straight into the app (PRs [#1564](https://github.com/amd/gaia/pull/1564), [#1705](https://github.com/amd/gaia/pull/1705)).
 
 ---
 
@@ -56,6 +50,12 @@ A bad update used to strand you on the latest version with no way out but huntin
 ### Recover failed document indexing — Agent UI
 
 Documents that failed to index used to leave you with no detail and no way to retry. Failed documents now persist their last error, and a reindex API lets you retry them without re-adding the file (PR [#1749](https://github.com/amd/gaia/pull/1749)).
+
+---
+
+### Groundwork for the Agent Hub
+
+The Agent Hub used to exist only as code — no real catalog, no deploy story, and publishing meant hand-crafted curl calls. This release lands the foundation: a one-command publish pipeline producing immutable, checksummed agent versions, a catalog, and a redesigned website shared across all GAIA surfaces, with `gaia://` "Open in GAIA" deep links as the intended primary flow. The public hub isn't live yet — this is the infrastructure it will run on (PRs [#1564](https://github.com/amd/gaia/pull/1564), [#1705](https://github.com/amd/gaia/pull/1705)).
 
 ---
 
