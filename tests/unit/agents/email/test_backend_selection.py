@@ -294,7 +294,9 @@ class TestAgentCalendarWiring:
         agent = EmailTriageAgent(config=cfg)
         assert isinstance(agent._calendar, LiveOutlookCalendarBackend)
 
-    def test_agent_explicit_google_calendar_provider_wires_google(self, tmp_path, monkeypatch):
+    def test_agent_explicit_google_calendar_provider_wires_google(
+        self, tmp_path, monkeypatch
+    ):
         # Explicit calendar_provider="google" (step 2) wires LiveCalendarBackend
         # without hitting connector discovery.
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
@@ -449,7 +451,9 @@ class TestResolveCalendarBackendConnectorAware:
         backend = cfg.resolve_calendar_backend()
         assert isinstance(backend, LiveCalendarBackend)
 
-    def test_both_connected_only_microsoft_calendar_scoped_yields_outlook(self, monkeypatch):
+    def test_both_connected_only_microsoft_calendar_scoped_yields_outlook(
+        self, monkeypatch
+    ):
         """Case 6 — the #1708 bug scenario: both connected but only Outlook is calendar-scoped."""
         monkeypatch.setattr(
             "gaia_agent_email.config.connected_mailbox_providers",
@@ -468,7 +472,9 @@ class TestResolveCalendarBackendConnectorAware:
         backend = cfg.resolve_calendar_backend()
         assert isinstance(backend, LiveOutlookCalendarBackend)
 
-    def test_both_connected_only_google_calendar_scoped_yields_google(self, monkeypatch):
+    def test_both_connected_only_google_calendar_scoped_yields_google(
+        self, monkeypatch
+    ):
         """Case 7: both connected but only Google is calendar-scoped → Google."""
         monkeypatch.setattr(
             "gaia_agent_email.config.connected_mailbox_providers",
@@ -487,7 +493,9 @@ class TestResolveCalendarBackendConnectorAware:
         backend = cfg.resolve_calendar_backend()
         assert isinstance(backend, LiveCalendarBackend)
 
-    def test_both_connected_both_calendar_scoped_prefers_registry_order(self, monkeypatch):
+    def test_both_connected_both_calendar_scoped_prefers_registry_order(
+        self, monkeypatch
+    ):
         """Case 8: both connected and both calendar-scoped → registry order (google first)."""
         monkeypatch.setattr(
             "gaia_agent_email.config.connected_mailbox_providers",
