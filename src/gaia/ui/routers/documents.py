@@ -533,6 +533,50 @@ async def cancel_indexing(
     return {"cancelled": True, "id": doc_id}
 
 
+@router.post("/api/documents/{doc_id}/reindex", response_model=DocumentResponse)
+async def reindex_document(
+    doc_id: str,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Re-run the RAG indexing pipeline for a document.
+
+    Clears any previous failure, sets status to 'indexing', runs the full
+    indexing pipeline, then marks the document 'complete' on success or
+    'failed' (with last_error set) on failure.  Always raises loudly on
+    error — never returns 200 while leaving the document in a bad state.
+    """
+    doc = db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    filepath = doc.get("filepath")
+    if not filepath or not Path(filepath).exists():
+        raise HTTPException(
+            status_code=422,
+            detail=f"File not found on disk: {filepath!r}",
+        )
+
+    db.update_document_status(doc_id, "indexing", last_error=None)
+
+    _index_document = _server_mod()._index_document
+    try:
+        chunk_count = await _index_document(Path(filepath))
+    except Exception as exc:
+        error_msg = str(exc)
+        db.update_document_status(doc_id, "failed", last_error=error_msg)
+        logger.error("Reindex failed for %s: %s", doc_id, exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Reindex failed: {error_msg}",
+        ) from exc
+
+    db.update_document_status(doc_id, "complete", chunk_count=chunk_count)
+    logger.info("Reindex complete for %s: %d chunks", doc_id, chunk_count)
+
+    updated = db.get_document(doc_id)
+    return doc_to_response(updated)
+
+
 @router.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
     """Remove a document from the library.
