@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, ClassVar, List, Optional
 
 from gaia_agent_email import action_store
-from gaia_agent_email.config import EmailAgentConfig
+from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
 from gaia_agent_email.outlook_scopes import (
     OUTLOOK_CALENDAR_SCOPES,
     OUTLOOK_MAIL_SCOPES,
@@ -65,12 +65,30 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class _UnavailableCalendarBackend:
+    """Placeholder calendar backend when no provider is connected/scoped — or no
+    keyring is available in this environment.
+
+    The agent must still construct so non-calendar work (triage, summaries) runs;
+    any actual calendar operation raises the deferred, actionable error rather
+    than silently doing the wrong thing. ``detect_meeting_request`` touches no
+    backend, so it keeps working.
+    """
+
+    def __init__(self, message: str) -> None:
+        self._message = message
+
+    def __getattr__(self, name: str):
+        raise ConfigurationError(self._message)
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +264,13 @@ class EmailTriageAgent(
         # ``config.calendar_provider`` (#1276) — the tools treat either as a
         # ``CalendarBackend``. An injected backend (eval/test seam) wins inside
         # the resolver.
-        self._calendar = config.resolve_calendar_backend()
+        # Resolve eagerly, but if no calendar provider is connected/scoped — or
+        # no keyring is available here — defer the actionable error to
+        # calendar-tool use so the agent still constructs for non-calendar work.
+        try:
+            self._calendar = config.resolve_calendar_backend()
+        except (ConfigurationError, ConnectorsError) as exc:
+            self._calendar = _UnavailableCalendarBackend(str(exc))
 
         # I3 — batch-organize counters. Reset per process_query() call by
         # ``_reset_organize_counter``. Per-turn isolation is sufficient

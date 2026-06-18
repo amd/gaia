@@ -542,3 +542,58 @@ class TestResolveCalendarBackendConnectorAware:
         assert "calendar" in msg.lower()
         # Must NOT default silently to Google or emit the old misleading message.
         assert "additional google permission" not in msg.lower()
+
+
+class TestAgentConstructsWhenCalendarUnavailable:
+    """#1708 regression: agent construction must NOT eagerly require keyring access.
+
+    Scope-aware discovery calls ``connected_mailbox_providers()`` (which reads the
+    keyring). If that is unavailable (CI / headless / no system credential store)
+    or no calendar provider is connected, the agent must still construct so
+    non-calendar work runs; the actionable error is deferred to calendar-tool use.
+    """
+
+    def _build(self, tmp_path, monkeypatch, providers_fn):
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers", providers_fn
+        )
+        from gaia_agent_email.agent import (
+            EmailTriageAgent,
+            _UnavailableCalendarBackend,
+        )
+
+        cfg = EmailAgentConfig(
+            gmail_backend=object(),
+            db_path=str(tmp_path / "s.db"),
+            silent_mode=True,
+            mail_provider=None,
+            calendar_provider=None,
+        )
+        return EmailTriageAgent(config=cfg), _UnavailableCalendarBackend
+
+    def test_constructs_when_keyring_unavailable(self, tmp_path, monkeypatch):
+        from gaia.connectors.errors import ConnectorsError
+
+        def _no_keyring():
+            raise ConnectorsError(
+                "Keyring get_password failed: No recommended backend was available"
+            )
+
+        agent, unavailable = self._build(tmp_path, monkeypatch, _no_keyring)
+        try:
+            assert isinstance(agent._calendar, unavailable)
+            # Calendar use still fails loudly (no silent fallback).
+            with pytest.raises(ConfigurationError):
+                agent._calendar.list_events(time_min="a", time_max="b")
+        finally:
+            agent.close_db()
+
+    def test_constructs_when_no_provider_connected(self, tmp_path, monkeypatch):
+        agent, unavailable = self._build(tmp_path, monkeypatch, lambda: [])
+        try:
+            assert isinstance(agent._calendar, unavailable)
+            with pytest.raises(ConfigurationError):
+                agent._calendar.create_event(summary="x", start="s", end="e")
+        finally:
+            agent.close_db()
