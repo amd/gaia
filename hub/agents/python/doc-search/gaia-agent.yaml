@@ -19,7 +19,7 @@ python:
   entry_module: gaia_agent_doc_search
   entry_class: DocSearchAgent
   dependencies:
-    - "amd-gaia>=0.20.0"
+    - "amd-gaia[api,rag]>=0.20.0"
 
 requirements:
   min_memory_gb: 8
