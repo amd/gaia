@@ -82,8 +82,8 @@ jobs:
 
           # Start the server in the background as a process (not PowerShell job)
           Write-Host "Starting lemonade-server in background..."
-          # Start the server as a background process
-          $serverProcess = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray", "--port", "13305" -PassThru -WindowStyle Hidden
+          Write-Host "DIAG launching via LEMONADE_SERVER_PATH=$env:LEMONADE_SERVER_PATH"
+          $serverProcess = Start-Process -FilePath "$env:LEMONADE_SERVER_PATH" -PassThru -WindowStyle Hidden
           Write-Host "Started lemonade-server process with ID: $($serverProcess.Id)"
 
           # Wait for server to start up
@@ -126,7 +126,7 @@ jobs:
           # model name must include the `user` namespace"). Routing the pull
           # through /api/v1/pull on the already-healthy server hits the catalog
           # that actually has the model.
-          Write-Host "=== DIAGNOSTIC: running server version + catalog ==="
+          Write-Host "=== DIAG: catalog of the freshly-launched server ==="
           try {
               $h = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -TimeoutSec 5
               Write-Host "SERVER_VERSION=$($h.version)"
@@ -134,14 +134,19 @@ jobs:
           try {
               $m = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/models" -TimeoutSec 15
               Write-Host "MODEL_COUNT=$($m.data.Count)"
-              $m.data | ForEach-Object { Write-Host "MODEL: $($_.id)" }
+              Write-Host "GEMMA_E4B_PRESENT=$((($m.data | Where-Object { $_.id -eq 'Gemma-4-E4B-it-GGUF' }).Count) -gt 0)"
           } catch { Write-Host "models failed: $($_.Exception.Message)" }
-          Write-Host "=== binaries ==="
-          Write-Host "lemonade-server -> $((Get-Command lemonade-server -ErrorAction SilentlyContinue).Source)"
-          Write-Host "lemonade -> $((Get-Command lemonade -ErrorAction SilentlyContinue).Source)"
-          Write-Host "LEMONADE_SERVER_PATH=$env:LEMONADE_SERVER_PATH"
-          Write-Host "=== END DIAGNOSTIC ==="
-          exit 1
+
+          Write-Host "Pulling Gemma-4-E4B-it-GGUF via server API..."
+          $pullBody = @{ model_name = "Gemma-4-E4B-it-GGUF" } | ConvertTo-Json
+          try {
+              Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" -Method POST -ContentType "application/json" -Body $pullBody -TimeoutSec 900 | Out-Null
+              Write-Host "Model pulled: Gemma-4-E4B-it-GGUF"
+          } catch {
+              Write-Host "Model pull failed: $($_.Exception.Message)"
+              if ($_.ErrorDetails) { Write-Host "Details: $($_.ErrorDetails.Message)" }
+              throw
+          }
 
 
 
