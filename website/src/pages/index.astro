@@ -36,6 +36,7 @@ const pipeline = [
   {
     step: 'Distribute',
     icon: 'package',
+    badge: 'Coming soon',
     body: 'Publish to the Agent Hub — versioned, checksummed, immutable. Users install in one click, or one command. Distribute openly on PyPI and npm too.',
     code: 'gaia agent publish',
   },
@@ -111,7 +112,12 @@ const sidecar = await startSidecar({ binaryPath, port: 8131 });`;
             <span class="flex w-10 h-10 rounded-lg border border-g-border items-center justify-center text-g-gold-text">
               <AgentIcon name={p.icon} class="w-5 h-5" />
             </span>
-            <h3 class="mt-4 text-lg font-semibold text-g-text">{p.step}</h3>
+            <div class="mt-4 flex items-center gap-2">
+              <h3 class="text-lg font-semibold text-g-text">{p.step}</h3>
+              {p.badge && (
+                <span class="rounded border border-g-border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-g-muted">{p.badge}</span>
+              )}
+            </div>
             <p class="mt-2 text-[14px] text-g-muted leading-relaxed">{p.body}</p>
             <CodeBlock code={p.code} lang="bash" class="mt-4" />
           </div>
@@ -142,16 +148,18 @@ const sidecar = await startSidecar({ binaryPath, port: 8131 });`;
     <section class="border-y border-g-border bg-g-surface/40">
       <div class="max-w-6xl mx-auto px-6 py-20 grid lg:grid-cols-2 gap-12 items-center">
         <div>
-          <Eyebrow class="mb-3">For app builders</Eyebrow>
-          <h2 class="text-2xl sm:text-3xl font-bold tracking-tight">Ship GAIA agents inside your app.</h2>
+          <Eyebrow class="mb-3">Integrate</Eyebrow>
+          <h2 class="text-2xl sm:text-3xl font-bold tracking-tight">Drop GAIA into your own app.</h2>
           <p class="mt-3 text-g-muted max-w-md">
-            Embed an agent as a local REST sidecar or over MCP — no Python required for your users.
-            GAIA supplies the agents; you ship the experience.
+            Integrate whole <strong class="font-semibold text-g-text">agents</strong> — or individual
+            <strong class="font-semibold text-g-text">components</strong> — into your third-party app. No Python
+            required for your users; GAIA supplies the building blocks, you ship the experience.
           </p>
-          <div class="mt-6 flex flex-wrap gap-x-4 gap-y-2 text-[13px] text-g-muted">
-            <span>· Local REST sidecar</span>
-            <span>· MCP server</span>
-            <span>· Signed &amp; checksummed artifacts</span>
+          <div class="mt-6 grid gap-x-5 gap-y-1.5 text-[13px] text-g-muted sm:grid-cols-2">
+            <span>· Agents as a local REST sidecar</span>
+            <span>· MCP server (tools for any client)</span>
+            <span>· OpenAI-compatible API</span>
+            <span>· SDK: RAG, VLM, tools, memory</span>
           </div>
         </div>
         <CodeBlock code={embedSnippet} lang="ts" />
@@ -162,7 +170,10 @@ const sidecar = await startSidecar({ binaryPath, port: 8131 });`;
     <section class="max-w-6xl mx-auto px-6 py-24">
       <div class="flex items-baseline justify-between mb-6">
         <div>
-          <Eyebrow class="mb-2">Agent Hub</Eyebrow>
+          <div class="mb-2 flex items-center gap-2">
+            <Eyebrow>Agent Hub</Eyebrow>
+            <span class="rounded border border-g-gold/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-g-gold-text">Beta</span>
+          </div>
           <h2 class="text-2xl font-bold tracking-tight">There's an agent for that.</h2>
           <p class="mt-2 max-w-lg text-[14px] text-g-muted">
             Each one is <strong class="font-semibold text-g-text">purpose-built</strong> for a single job and
@@ -196,7 +207,7 @@ const sidecar = await startSidecar({ binaryPath, port: 8131 });`;
         <div class="mt-6 flex flex-wrap gap-3 text-sm">
           <a href={QUICKSTART} class="text-g-gold-text hover:underline">Build your first agent →</a>
           <span class="text-g-muted opacity-40">·</span>
-          <a href="/hub/email" class="text-g-gold-text hover:underline">Publish to the hub →</a>
+          <a href="https://amd-gaia.ai/docs/guides/hub-publishing" class="text-g-gold-text hover:underline">Publish your agent →</a>
         </div>
       </div>
     </section>
