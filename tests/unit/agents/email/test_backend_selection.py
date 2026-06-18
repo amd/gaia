@@ -312,3 +312,84 @@ class TestAgentCalendarWiring:
         )
         agent = EmailTriageAgent(config=cfg)
         assert agent._calendar is cal_sentinel
+
+
+class TestResolveCalendarBackendConnectorAware:
+    """Connector-aware calendar-backend selection (#1708).
+
+    ``resolve_calendar_backend()`` must query the live connector state (via
+    ``connected_mailbox_providers``) when neither ``calendar_provider`` nor
+    ``mail_provider`` is explicitly set, so a microsoft-only user gets Outlook
+    — not Google — without having to set an extra config field.
+
+    Five cases from the AC:
+      1. microsoft-only connected → ``LiveOutlookCalendarBackend``
+      2. google-only connected → ``LiveCalendarBackend`` (regression guard)
+      3. both connected, ``mail_provider="microsoft"`` → Outlook (mail-box match)
+      4. neither connected, no explicit provider → actionable ConfigurationError
+      5. explicit ``calendar_provider="google"`` overrides discovery → Google
+
+    Monkeypatching target is ``gaia_agent_email.config.connected_mailbox_providers``
+    (the import bound at module load in config.py:24) — NOT the source module.
+    """
+
+    def test_microsoft_only_connected_yields_outlook_calendar(self, monkeypatch):
+        """Case 1: only microsoft connection present → Outlook calendar."""
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["microsoft"],
+        )
+        cfg = EmailAgentConfig()
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveOutlookCalendarBackend)
+
+    def test_google_only_connected_yields_google_calendar(self, monkeypatch):
+        """Case 2: only google connection present → Google calendar (regression guard)."""
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google"],
+        )
+        cfg = EmailAgentConfig()
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveCalendarBackend)
+
+    def test_both_connected_mail_provider_microsoft_yields_outlook(self, monkeypatch):
+        """Case 3: both connected, mail_provider set to microsoft → Outlook."""
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google", "microsoft"],
+        )
+        cfg = EmailAgentConfig(mail_provider="microsoft")
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveOutlookCalendarBackend)
+
+    def test_no_provider_connected_raises_actionable_error(self, monkeypatch):
+        """Case 4: nothing connected + no explicit provider → loud ConfigurationError.
+
+        Error must NOT say "additional Google permission" (the old confusing
+        message) and MUST name the connection/scope to add so the user can act.
+        """
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: [],
+        )
+        cfg = EmailAgentConfig()
+        with pytest.raises(ConfigurationError) as exc:
+            cfg.resolve_calendar_backend()
+        msg = str(exc.value).lower()
+        # Must be actionable — mention calendar and how to fix it.
+        assert "calendar" in msg
+        assert "connect" in msg
+        # Must NOT be the old confusing Google-only message.
+        assert "additional google permission" not in msg
+
+    def test_explicit_calendar_provider_overrides_discovery(self, monkeypatch):
+        """Case 5: explicit calendar_provider bypasses connector discovery."""
+        # Even with no connector present, an explicit override must win.
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: [],
+        )
+        cfg = EmailAgentConfig(calendar_provider="google")
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveCalendarBackend)
