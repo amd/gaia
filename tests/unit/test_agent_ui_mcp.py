@@ -77,6 +77,7 @@ class TestOpenSessionInBrowser:
         assert expected_no_query not in f"http://localhost:4200/#{session_id}"
 
     def test_returns_hash_url_on_open(self):
+        pytest.importorskip("mcp")  # constructing the server needs optional mcp
         from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
 
         session_id = "abc123"
@@ -114,6 +115,7 @@ class TestSendMessageDocstring:
     """P2: send_message docstring must not overpromise real-time render."""
 
     def test_docstring_honest(self):
+        pytest.importorskip("mcp")  # constructing the server needs optional mcp
         from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
 
         with patch("requests.get") as mock_get:

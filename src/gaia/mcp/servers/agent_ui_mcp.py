@@ -22,7 +22,6 @@ import webbrowser
 from typing import Any, Dict, Optional
 
 import requests
-from mcp.server.fastmcp import FastMCP
 
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
@@ -235,8 +234,12 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     return result
 
 
-def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> FastMCP:
+def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
     """Create the MCP server with tools for interacting with GAIA Agent UI."""
+    # Imported lazily so the pure helpers above (_normalize_error, _api,
+    # _stream_chat) stay importable without the optional ``mcp`` dependency,
+    # which the unit-test job does not install (issue #1750).
+    from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP(name="GAIA Agent UI")
 
