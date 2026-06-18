@@ -19,7 +19,7 @@ import os
 import sys
 import tempfile
 import webbrowser
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import requests
 
@@ -30,6 +30,9 @@ from gaia.ui.sse_handler import (
     _TOOL_CALL_JSON_SUB_RE,
     _TRAILING_CODE_FENCE_RE,
 )
+
+if TYPE_CHECKING:  # import only for type checking; runtime import is lazy (#1750)
+    from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
