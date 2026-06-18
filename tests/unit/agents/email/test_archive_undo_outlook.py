@@ -111,13 +111,15 @@ class FakeGmailBackend:
     def unarchive_message(
         self, message_id: str, prior_labels: List[str]
     ) -> Dict[str, Any]:
-        """Restore to inbox: re-add INBOX + any prior labels."""
+        """Restore to inbox: re-add only INBOX (archive removed only INBOX).
+
+        Mirrors LiveGmailBackend: re-applying immutable system labels like
+        SENT would be rejected by Gmail's modify API, so undo must not.
+        """
         self.calls.append(("unarchive_message", message_id, prior_labels))
         msg = self._messages[message_id]
-        to_add = list({"INBOX", *(prior_labels or [])})
-        for lab in to_add:
-            if lab not in msg["labelIds"]:
-                msg["labelIds"].append(lab)
+        if "INBOX" not in msg["labelIds"]:
+            msg["labelIds"].append("INBOX")
         return dict(msg)
 
     def add_label(self, message_id: str, label_id: str) -> Dict[str, Any]:
@@ -529,3 +531,32 @@ class TestGmailOnlyUndoRegression:
             assert "undo window" in undo_env["error"].lower()
         finally:
             agent.close_db()
+
+
+class TestGmailUnarchiveAddsOnlyInbox:
+    """Regression for the live-Gmail bug surfaced in #1738 real-world testing.
+
+    Archive removes only the INBOX label, so unarchive must re-add ONLY INBOX.
+    Re-applying the message's other prior labels is both unnecessary and, for
+    immutable system labels like SENT/DRAFT, rejected by Gmail's modify API
+    ("Invalid label: SENT") — which 400'd the whole undo for any sent/archived
+    message. This guards the real LiveGmailBackend logic (the fakes can't).
+    """
+
+    def test_unarchive_adds_only_inbox_ignoring_prior_labels(self):
+        from gaia_agent_email.gmail_backend import LiveGmailBackend
+
+        backend = LiveGmailBackend(lambda: "fake-token")
+        recorded: Dict[str, Any] = {}
+
+        def fake_modify(message_id, *, add=None, remove=None):
+            recorded["add"] = list(add or [])
+            recorded["remove"] = list(remove or [])
+            return {"id": message_id, "labelIds": ["INBOX"]}
+
+        backend._modify_labels = fake_modify
+        backend.unarchive_message("m1", prior_labels=["INBOX", "SENT", "UNREAD"])
+
+        # Only INBOX is re-added; SENT/UNREAD are never sent to modify.
+        assert recorded["add"] == ["INBOX"], recorded
+        assert not recorded["remove"], recorded

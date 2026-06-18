@@ -541,10 +541,12 @@ class LiveGmailBackend:
     def unarchive_message(
         self, message_id: str, prior_labels: List[str]
     ) -> Dict[str, Any]:
-        # Re-add INBOX plus any prior labels. Gmail modify is idempotent when
-        # adding a label already present, so this is safe to call more than once.
-        to_add = list({GMAIL_LABEL_INBOX, *(prior_labels or [])})
-        return self._modify_labels(message_id, add=to_add)
+        # Archive removes only the INBOX label, so its exact inverse re-adds
+        # only INBOX (idempotent if already present). ``prior_labels`` is unused
+        # — kept for Protocol parity: the message still carries every other
+        # label, and re-applying immutable system labels like SENT/DRAFT is
+        # rejected by Gmail's modify API ("Invalid label: SENT").
+        return self._modify_labels(message_id, add=[GMAIL_LABEL_INBOX])
 
     def permanent_delete(self, message_id: str) -> None:
         self._delete(f"/messages/{message_id}")
