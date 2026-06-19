@@ -255,6 +255,124 @@ def test_record_tool_use_logs_escape_hatch_for_unloaded():
     assert any("TOOL_LOADER_ESCAPE_HATCH" in r.getMessage() for r in records)
 
 
+# ── load_bundle / menu / counters (Part 2, #1450) ──────────────────────────
+
+
+def _loader_with_bundles(max_tools: int = 14):
+    """A loader over a tiny CORE + two bundles, with a never-matching embedder."""
+    tools = ["c1", "a1", "a2", "b1"]
+    embed = _make_embed_fn(tools, {"q": {"c1": 0.0, "a1": 0.0, "a2": 0.0, "b1": 0.0}})
+    bundles = [
+        ToolBundle(name="A", members=frozenset({"a1", "a2"}), description="A tools"),
+        ToolBundle(name="B", members=frozenset({"b1"}), description="B tools"),
+    ]
+    loader = ToolLoader(
+        frozenset({"c1"}), bundles, embed, threshold=0.55, max_tools=max_tools
+    )
+    return loader, _registry(tools)
+
+
+def test_bundle_names_are_sorted():
+    loader, _ = _loader_with_bundles()
+    assert loader.bundle_names() == ["A", "B"]
+
+
+def test_format_bundle_menu_lists_name_and_description():
+    loader, _ = _loader_with_bundles()
+    menu = loader.format_bundle_menu()
+    assert "- A: A tools" in menu
+    assert "- B: B tools" in menu
+
+
+def test_load_bundle_by_bundle_name_admits_members():
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)  # turn 1: CORE only (c1)
+    loaded = loader.load_bundle("A", reg)
+    assert {"c1", "a1", "a2"} <= set(loaded)
+    assert loader._load_tools_count == 1
+
+
+def test_load_bundle_by_tool_name_resolves_to_owning_bundle():
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+    loaded = loader.load_bundle("a1", reg)  # bare tool name → bundle A
+    assert {"a1", "a2"} <= set(loaded)
+
+
+def test_load_bundle_unknown_name_raises_keyerror():
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+    with pytest.raises(KeyError):
+        loader.load_bundle("does_not_exist", reg)
+
+
+def test_load_bundle_skips_members_absent_from_registry():
+    tools = ["c1", "a1"]
+    embed = _make_embed_fn(tools, {"q": {"c1": 0.0, "a1": 0.0}})
+    bundles = [ToolBundle(name="A", members=frozenset({"a1", "ghost"}))]
+    loader = ToolLoader(frozenset({"c1"}), bundles, embed, threshold=0.55, max_tools=14)
+    reg = _registry(tools)
+    loader.select("q", reg)
+    loaded = loader.load_bundle("A", reg)
+    assert "a1" in loaded and "ghost" not in loaded
+
+
+def test_load_bundle_is_cap_aware_and_protects_just_loaded():
+    """At cap, load_bundle evicts an LRU non-CORE tool, never CORE or just-loaded."""
+    tools = ["c1", "d1", "a1", "a2"]
+    embed = _make_embed_fn(tools, {"q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0}})
+    bundles = [ToolBundle(name="A", members=frozenset({"a1", "a2"}), description="A")]
+    loader = ToolLoader(frozenset({"c1"}), bundles, embed, threshold=0.55, max_tools=3)
+    reg = _registry(tools)
+    assert loader.select("q", reg) == ["c1", "d1"]  # CORE + matched d1 (2 of 3)
+    loaded = loader.load_bundle("A", reg)  # wants a1,a2 with 1 slot free → evict
+    assert set(loaded) == {"c1", "a1", "a2"}  # cap held; d1 evicted
+    assert "d1" not in loaded
+
+
+def test_load_bundle_emits_same_turn_loaded_superset_line():
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.load_bundle("A", reg)
+    events = [p for p in _loader_payloads(records) if p.get("event") == "load_tools"]
+    assert events, "no load_tools TOOL_LOADER line captured"
+    assert events[0]["turn"] == loader._turn
+    assert {"a1", "a2"} <= set(events[0]["loaded"])
+
+
+def test_escape_hatch_and_load_counters_increment():
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+    loader.record_tool_use("never_loaded")  # free recovery
+    loader.load_bundle("A", reg)  # explicit recovery
+    assert loader._escape_hatch_count == 1
+    assert loader._load_tools_count == 1
+
+
+def test_reset_session_emits_summary_then_zeroes_counters():
+    loader, reg = _loader_with_bundles()
+    loader.select("q", reg)
+    loader.record_tool_use("never_loaded")
+    loader.load_bundle("A", reg)
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.reset_session()
+    summary = _session_payload(records)
+    assert summary["turns"] == 1
+    assert summary["escape_hatch_count"] == 1
+    assert summary["load_tools_count"] == 1
+    assert summary["escape_hatch_rate"] == pytest.approx(2.0)  # (1+1)/1
+    assert loader._escape_hatch_count == 0
+    assert loader._load_tools_count == 0
+
+
+def test_reset_session_emits_no_summary_when_no_turns():
+    loader, _ = _loader_with_bundles()
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.reset_session()  # turn == 0 → nothing to summarize
+    assert not any("TOOL_LOADER_SESSION" in r.getMessage() for r in records)
+
+
 # ── embedder failure ─────────────────────────────────────────────────────
 
 
@@ -343,10 +461,28 @@ class _capture:
         self._logger.propagate = self._prev_propagate
 
 
-def _selection_payload(records: list[logging.LogRecord]) -> dict:
-    """Extract the JSON payload from the TOOL_LOADER selection log line."""
+def _loader_payloads(records: list[logging.LogRecord]) -> list[dict]:
+    """All JSON payloads from ``TOOL_LOADER {...}`` lines (selection + load_tools)."""
+    out: list[dict] = []
     for r in records:
         msg = r.getMessage()
         if msg.startswith("TOOL_LOADER {"):
-            return json.loads(msg[len("TOOL_LOADER ") :])
+            out.append(json.loads(msg[len("TOOL_LOADER ") :]))
+    return out
+
+
+def _selection_payload(records: list[logging.LogRecord]) -> dict:
+    """Extract the JSON payload from the TOOL_LOADER selection log line."""
+    for payload in _loader_payloads(records):
+        if "event" not in payload:  # the per-turn select line (not load_tools)
+            return payload
     raise AssertionError("no TOOL_LOADER selection line captured")
+
+
+def _session_payload(records: list[logging.LogRecord]) -> dict:
+    """Extract the JSON payload from the TOOL_LOADER_SESSION summary line."""
+    for r in records:
+        msg = r.getMessage()
+        if msg.startswith("TOOL_LOADER_SESSION {"):
+            return json.loads(msg[len("TOOL_LOADER_SESSION ") :])
+    raise AssertionError("no TOOL_LOADER_SESSION line captured")
