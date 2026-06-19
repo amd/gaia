@@ -27,10 +27,15 @@
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client-entry.d.ts",
+      "import": "./dist/client-entry.js"
     }
   },
   "bin": {
@@ -58,6 +63,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "esbuild": "^0.28.1",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }
