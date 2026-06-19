@@ -237,6 +237,15 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_sensitive ON knowledge(sensitive)
 -- Knowledge FTS5 (standalone, manually synced, porter stemmer for morphological matching)
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(content, domain, category, tokenize='porter unicode61');
 
+-- Key/value metadata (e.g. the embedder id that produced stored vectors).
+-- Lives in the DB (not a sidecar file) so it is atomic with the data it
+-- describes and visible to every connection — the agent and the UI memory
+-- router open the same DB from different code paths (#1744).
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- Tool history
 CREATE TABLE IF NOT EXISTS tool_history (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1410,31 +1419,35 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def _embedder_marker_path(self) -> Path:
-        """Sidecar path that records which embedder produced the stored vectors."""
-        return self._db_path.with_name(self._db_path.name + ".embedder")
+    #: ``meta`` key recording which embedder produced the stored vectors.
+    _EMBEDDER_META_KEY = "embedder_id"
 
     def get_embedder_id(self) -> Optional[str]:
         """Return the embedder model id that produced the stored embeddings.
 
-        ``None`` when no embeddings have been written yet (fresh DB) or the
-        marker is missing — callers treat that as "no change to detect".
+        ``None`` when nothing has been stamped yet (fresh DB) — callers treat
+        that as "no change to detect". Read from the ``meta`` table so every
+        connection (agent + UI router) sees the same value.
         """
-        marker = self._embedder_marker_path()
-        try:
-            if marker.exists():
-                return marker.read_text(encoding="utf-8").strip() or None
-        except OSError as e:
-            logger.warning("[MemoryStore] could not read embedder marker: %s", e)
-        return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (self._EMBEDDER_META_KEY,)
+            ).fetchone()
+        return row[0] if row else None
 
     def set_embedder_id(self, model_id: str) -> None:
         """Record the embedder model id that produced the stored embeddings."""
-        marker = self._embedder_marker_path()
-        try:
-            marker.write_text(model_id, encoding="utf-8")
-        except OSError as e:
-            logger.warning("[MemoryStore] could not write embedder marker: %s", e)
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (self._EMBEDDER_META_KEY, model_id),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def get_items_with_embeddings(
         self,

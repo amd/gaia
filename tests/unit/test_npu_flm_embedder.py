@@ -130,6 +130,25 @@ class TestDynamicDim:
         assert host._embedding_model == "nomic-embed-text-v2-moe-GGUF"
         assert host._embedding_dim == 768
 
+    def test_zero_length_vector_degrades_memory(self, tmp_path, monkeypatch):
+        """A 0-length embedding trips the guard and degrades memory loudly,
+        rather than building a malformed index."""
+        monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+        from gaia.agents.base.memory import MemoryMixin
+
+        host = _make_host()
+        empty = np.empty(0, dtype=np.float32)
+        with (
+            patch.object(MemoryMixin, "_get_embedder", return_value=MagicMock()),
+            patch.object(MemoryMixin, "_embed_text", return_value=empty),
+            patch.object(MemoryMixin, "init_system_context", return_value=None),
+        ):
+            host.init_memory(
+                db_path=tmp_path / "memory.db", embedding_model="broken-embedder"
+            )
+        # The RuntimeError is caught and memory is disabled for the session.
+        assert host._memory_store is None
+
 
 class TestEmbedderChangeInvalidation:
     def test_switching_embedder_clears_stored_vectors(self, tmp_path, monkeypatch):
@@ -152,6 +171,33 @@ class TestEmbedderChangeInvalidation:
         # Marker updated and the stale vector was cleared for re-embedding.
         assert host._memory_store.get_embedder_id() == "embed-gemma-300m-FLM"
         assert host._memory_store.get_embedding_coverage()["without_embedding"] == 1
+
+    def test_switch_then_backfill_repopulates(self, tmp_path, monkeypatch):
+        """After a switch the cleared vectors are re-embedded with the new model
+        (full round trip: clear -> backfill -> coverage restored)."""
+        monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+        from gaia.agents.base.memory import MemoryMixin
+
+        db_path = tmp_path / "memory.db"
+        store = MemoryStore(db_path=db_path)
+        kid = store.store(category="fact", content="the sky is blue")
+        store.store_embedding(kid, np.zeros(768, dtype=np.float32).tobytes())
+        store.set_embedder_id("nomic-embed-text-v2-moe-GGUF")
+        store.close()
+
+        # Real backfill this time (only _embed_text is mocked).
+        host = _make_host()
+        vec = np.random.rand(768).astype(np.float32)
+        with (
+            patch.object(MemoryMixin, "_get_embedder", return_value=MagicMock()),
+            patch.object(MemoryMixin, "_embed_text", return_value=vec),
+            patch.object(MemoryMixin, "init_system_context", return_value=None),
+        ):
+            host.init_memory(db_path=db_path, embedding_model="embed-gemma-300m-FLM")
+
+        cov = host._memory_store.get_embedding_coverage()
+        assert cov["without_embedding"] == 0  # re-embedded with the new model
+        assert host._memory_store.get_embedder_id() == "embed-gemma-300m-FLM"
 
     def test_same_embedder_keeps_vectors(self, tmp_path, monkeypatch):
         monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
