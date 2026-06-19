@@ -75,7 +75,7 @@ fails loudly on any mismatch**, writes it to `--out`, and `chmod +x`'s it on
 POSIX.
 
 ```bash
-npx @amd-gaia/agent-email fetch --out resources --base-url https://<r2-bucket>/email-agent/0.1.0
+npx @amd-gaia/agent-email fetch --out resources --base-url https://<r2-bucket>/email-agent/0.2.0
 npx @amd-gaia/agent-email version     # show manifest + current platform
 npx @amd-gaia/agent-email help
 ```
@@ -111,12 +111,40 @@ Typed wrapper over the five endpoints. Methods: `triage`, `draft`, `send`,
 - `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The frozen one-file binary orphans a child otherwise (packaging/README.md, gotcha 6).
 - `startSidecar(opts)` → `spawn` → `waitForHealth` → `checkVersion` in one call; shuts down on any failure so a failed start never leaks a process.
 
+## Module format
+
+This package is **ESM-only** (`"type": "module"`; no CommonJS build). Import it
+with `import …`. From a CommonJS module, use a dynamic import instead of `require`:
+
+```js
+const { startSidecar } = await import("@amd-gaia/agent-email");
+```
+
+## Browser / Electron renderer (`./client`)
+
+The default entry (`.`) pulls in Node built-ins (`node:fs`, `node:child_process`,
+`node:crypto`) to fetch and spawn the binary, so it can't be bundled for a browser
+or an Electron **renderer** process. For those, import the browser-safe, client-only
+subpath and talk to an already-running sidecar over HTTP:
+
+```ts
+import { EmailClient } from "@amd-gaia/agent-email/client";
+
+const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131" });
+const res = await client.triage({ payload: { /* … */ } });
+```
+
+`./client` re-exports only zero-Node-dependency symbols — `EmailClient`, every
+error class, `SCHEMA_VERSION`, and all request/response types. The pattern for a
+desktop app: spawn the sidecar once from your **main/Node** process (the `.` entry),
+then drive it from the renderer via `./client`.
+
 ## Types
 
 TypeScript types in `src/types.ts` are **hand-written** to mirror two Python
 sources of truth:
 - `hub/agents/python/email/gaia_agent_email/contract.py` — the frozen #1262
-  triage request/response contract (`SCHEMA_VERSION = "1.0"`).
+  triage request/response contract (`SCHEMA_VERSION = "2.0"`).
 - `hub/agents/python/email/gaia_agent_email/api_routes.py` — the local draft/send
   handshake models (the #1264 send-confirmation gate).
 
