@@ -1,16 +1,17 @@
 ---
 title: "v0.21.2"
-description: "A new native gaia-bash coding agent ships, the email agent learns your inbox and speaks a richer 5-bucket triage schema, the desktop app can roll itself back from a bad update, plus a batch of email, connector, UI, and installer fixes."
+description: "A new native gaia-bash coding agent ships, the email agent learns your inbox and speaks a richer 5-bucket triage schema, the desktop app can roll itself back from a bad update, plus early Agent Hub groundwork and a batch of email, connector, UI, and installer fixes."
 ---
 
 # GAIA v0.21.2 Release Notes
 
-GAIA v0.21.2 is a feature-packed patch on top of v0.21.1. A new native `gaia-bash` coding agent joins the lineup, the email agent gets smarter — it learns which senders matter to you and now returns a 5-bucket triage taxonomy with a concrete suggested action per message — and the desktop app can finally roll itself back to a previous release when an update goes wrong. The rest of the release clears a batch of email, connector, UI, and installer bugs.
+GAIA v0.21.2 is a feature-packed patch on top of v0.21.1. A new native `gaia-bash` coding agent joins the lineup, the email agent gets smarter — it learns which senders matter to you and now returns a 5-bucket triage taxonomy with a concrete suggested action per message — and the desktop app can finally roll itself back to a previous release when an update goes wrong. Early Agent Hub plumbing also lands as a work in progress. The rest of the release clears a batch of email, connector, UI, and installer bugs.
 
 **Why upgrade:**
 - **A new native coding agent** — `gaia-bash` is a fast, self-contained C++ bash agent with an interactive TUI, CLI, REST API, and MCP server, usable on its own or from Claude Code / OpenCode.
 - **Your inbox, learned and better sorted** — `gaia email` now remembers which senders matter to you and sorts mail into five intuitive buckets, each with a suggested next action.
 - **Recover from a bad desktop update** — Settings → About now lists published releases and rolls the app back to one you pick, pausing auto-update so it can't silently re-upgrade.
+- **Agent Hub — work in progress** — the publish pipeline, catalog, and redesigned site are taking shape as the foundation for a hub to browse and install agents. Still in active development and not yet live.
 
 ---
 
@@ -18,7 +19,7 @@ GAIA v0.21.2 is a feature-packed patch on top of v0.21.1. A new native `gaia-bas
 
 ### A native bash coding agent — `gaia-bash`
 
-GAIA's native C++ framework had the building blocks — agent loop, LLM client, tool registry — but no shippable CLI agent built on them. `gaia-bash` is the first: a fully native binary coding agent for the shell, with five ways to use it — an interactive TUI, a one-shot CLI query, pipe mode, an OpenAI-compatible REST API server, and an MCP stdio server, so external tools like Claude Code and OpenCode can drive it directly. It ships with file I/O, git, and shell-execution tools on a reusable C++ framework any future native agent can build on (PR [#985](https://github.com/amd/gaia/pull/985)).
+`gaia-bash` joins GAIA's native C++ agents (alongside the WiFi, health, and process agents) as a fully native binary coding agent for the shell. It offers five ways to use it — an interactive TUI, a one-shot CLI query, pipe mode, an OpenAI-compatible REST API server, and an MCP stdio server, so external tools like Claude Code and OpenCode can drive it directly. It ships with file I/O, git, and shell-execution tools on the reusable C++ framework any future native agent can build on (PR [#985](https://github.com/amd/gaia/pull/985)).
 
 ---
 
@@ -46,6 +47,18 @@ Documents that failed to index used to leave you with no detail and no way to re
 
 ---
 
+### Web research via Tavily — connector groundwork
+
+Agents could previously only reach the web through keyless DuckDuckGo scraping. This release adds a Tavily connector and a `gaia.web.tavily` wrapper — proper `search`/`extract` from a single keyring-stored API key, with result caching, a credit budget, and an automatic DuckDuckGo fallback. It's not yet wired into an agent (the Knowledge Agent that consumes it lands in a later phase), so treat this as the plumbing rather than a user-facing feature (PR [#1234](https://github.com/amd/gaia/pull/1234)).
+
+---
+
+### Agent Hub — work in progress
+
+The Agent Hub is moving from code toward a real service for browsing and installing agents. This release lands foundational pieces — a one-command publish pipeline producing immutable, checksummed agent versions, a catalog, and a redesigned website shared across GAIA surfaces, with `gaia://` "Open in GAIA" deep links as the intended primary flow. It's still in active development and not yet live; this is the infrastructure it will run on (PRs [#1564](https://github.com/amd/gaia/pull/1564), [#1705](https://github.com/amd/gaia/pull/1705)).
+
+---
+
 ## Bug Fixes
 
 - **Agent UI served a stale frontend after an upgrade** (PR [#1741](https://github.com/amd/gaia/pull/1741)) — the frontend dist path was cached at startup, so an in-place upgrade could keep serving the old UI; it's now resolved per request.
@@ -58,6 +71,7 @@ Documents that failed to index used to leave you with no detail and no way to re
 - **File Browser row-click only previewed** (PR [#1734](https://github.com/amd/gaia/pull/1734)) — clicking a row in the File Browser now selects the file, not just previews it.
 - **Triage hung when Lemonade was down** (PR [#1678](https://github.com/amd/gaia/pull/1678)) — email triage now fails fast with an actionable error when Lemonade is unreachable.
 - **Email summary truncated by a tool docstring** (PR [#1668](https://github.com/amd/gaia/pull/1668)) — an oversized `pre_scan_inbox` docstring no longer eats into the Gemma-4-E4B summary budget.
+- **Agent UI broke when the hub was unreachable** (PR [#1698](https://github.com/amd/gaia/pull/1698)) — the Agent UI stays usable when the hub can't be reached and nothing is cached.
 - **Backend install failed behind a TLS-inspecting proxy** (PRs [#1575](https://github.com/amd/gaia/pull/1575), [#1694](https://github.com/amd/gaia/pull/1694)) — the network pre-check now trusts system/proxy CAs and honors `HTTPS_PROXY`, and backend install retries with `--native-tls` on a TLS trust failure.
 - **Chat runs died on New Task** (PR [#1656](https://github.com/amd/gaia/pull/1656)) — starting a New Task keeps existing chat runs alive and shows a running indicator.
 - **Forwarded grant agents imported unchecked** (PR [#1674](https://github.com/amd/gaia/pull/1674)) — forwarded grant agents are now validated before import.
