@@ -15,6 +15,7 @@ on:
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
+      - 'tests/test_email_openapi_conformance.py'
       - '.github/workflows/test_email_agent.yml'
   pull_request:
     branches: [ main ]
@@ -24,6 +25,7 @@ on:
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
+      - 'tests/test_email_openapi_conformance.py'
       - '.github/workflows/test_email_agent.yml'
   merge_group:
   workflow_dispatch:
@@ -66,6 +68,7 @@ jobs:
           # importorskips without the wheel and runs here with it installed.
           python -m pytest \
             hub/agents/python/email/tests/ \
+            tests/test_email_openapi_conformance.py \
             tests/unit/agents/email/ \
             tests/unit/email/ \
             tests/unit/agents/test_email_agent.py \

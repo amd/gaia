@@ -249,30 +249,37 @@ class SummarizeToolsMixin:
     """
 
     def _register_summarize_tools(self) -> None:
-        gmail = self._gmail
         debug_flag = bool(getattr(self.config, "debug", False))
-        agent = self  # captured for live access to ``chat``
+        agent = self  # captured for live access to ``chat`` and routing helpers
 
         @tool
-        def summarize_message(message_id: str) -> str:
+        def summarize_message(message_id: str, mailbox: str = "") -> str:
             """Summarize a single email, capturing its key ask or decision.
 
             Reads the message body locally and returns a concise summary of at
             most a couple of sentences. Use this when the user asks what an
             email says, what it wants, or to summarize one specific message.
 
+            When multiple mailboxes are connected, ``mailbox`` (optional) lets
+            you name the source provider ('google' / 'microsoft') explicitly;
+            when omitted the agent uses the provenance recorded by
+            list_inbox / search_messages / triage_inbox.
+
             Args:
                 message_id: The id of the message to summarize.
+                mailbox: Optional source mailbox ('google' / 'microsoft').
+                    Auto-resolved from prior list/search/triage when absent.
 
             Returns:
                 JSON envelope ``{"ok": true, "data": {"message_id", "subject",
                 "summary"}}`` — ``summary`` is a short, length-bounded string.
             """
             try:
+                backend = agent._backend_for_message(message_id, mailbox or None)
                 chat = getattr(agent, "chat", None)
                 return _envelope_ok(
                     summarize_message_impl(
-                        gmail,
+                        backend,
                         chat,
                         message_id=message_id,
                         debug=debug_flag,

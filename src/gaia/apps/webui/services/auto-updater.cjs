@@ -6,6 +6,7 @@
  *
  * Wraps `electron-updater` for the GitHub Releases auto-update flow.
  * Implements §4 Layer 3 + §7 Phase F of docs/plans/desktop-installer.mdx.
+ * Issue #1336: adds in-app rollback to a specific previous release.
  *
  * Behavior:
  *   - First check 10 seconds after `init()` is called (typically from
@@ -16,12 +17,17 @@
  *   - On `update-downloaded`, show a native dialog: "Update ready — restart?"
  *   - Renderer integration via IPC channel `gaia:update:status`
  *   - Disabled entirely via GAIA_DISABLE_UPDATE=1 env var (CI / dev / corp)
+ *   - Rollback: listReleases() → installVersion(tag) → pin persisted to
+ *     ~/.gaia/update-config.json so auto-update stays paused until resumeUpdates()
  *
  * Exports:
  *   - init(mainWindow)        → set up handlers, schedule checks
  *   - destroy()               → tear down timers and IPC handlers
  *   - checkForUpdates()       → manually trigger a check
  *   - getState()              → returns a copy of the current state
+ *   - listReleases()          → fetch available releases from GitHub
+ *   - installVersion(tag)     → downgrade/install a specific tagged release
+ *   - clearPin()              → resume auto-updates (clear the version pin)
  *   - STATES                  → string constants for valid states
  *
  * Design note: `electron` and `electron-updater` are lazy-required inside
@@ -43,6 +49,20 @@ const os = require("os");
 const CHECK_DELAY_MS = 10 * 1000; // First check 10s after init
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // Subsequent checks every 4h
 const LOG_PATH = path.join(os.homedir(), ".gaia", "electron-updater.log");
+const UPDATE_CONFIG_PATH = path.join(os.homedir(), ".gaia", "update-config.json");
+
+// per_page=100 is the GitHub API max for a single page; we fetch broadly so
+// draft/prerelease/platform filtering still yields a full page of installable
+// releases before the display cap below. >100 releases would need pagination
+// (follow the Link rel="next" header). Not built yet.
+const GITHUB_API_RELEASES =
+  "https://api.github.com/repos/amd/gaia/releases?per_page=100";
+
+// The picker shows only the N most-recent installable releases (rolling back
+// more than a few versions is rare). Older versions stay reachable via the
+// "browse all on GitHub" link in the picker, so this display cap never makes a
+// release unreachable.
+const MAX_RELEASES_SHOWN = 10;
 
 const STATES = Object.freeze({
   IDLE: "idle",
@@ -63,6 +83,8 @@ const state = {
   progress: 0,
   releaseNotes: null,
   error: null,
+  currentVersion: null,
+  pinnedVersion: null,
 };
 
 let mainWindowRef = null;
@@ -73,7 +95,7 @@ let ipcHandlersRegistered = false;
 let initialized = false;
 
 // Lazy-loaded Electron references (populated inside init()).
-let electronApi = null; // { dialog, ipcMain }
+let electronApi = null; // { dialog, ipcMain, app }
 let autoUpdaterRef = null; // electron-updater's singleton
 
 // ── Logging ──────────────────────────────────────────────────────────────────
@@ -88,7 +110,6 @@ function log(level, message, ...args) {
   } catch {
     // Non-fatal — logging must never crash the app.
   }
-  // Also mirror to stdout so devs see it in `npm start` output.
   try {
     // eslint-disable-next-line no-console
     console.log(`[auto-updater] ${level} ${message}`, ...args);
@@ -103,6 +124,34 @@ function safeStringify(value) {
   } catch {
     return String(value);
   }
+}
+
+// ── Pin persistence ───────────────────────────────────────────────────────────
+
+function _loadPin() {
+  try {
+    if (!fs.existsSync(UPDATE_CONFIG_PATH)) return null;
+    const raw = fs.readFileSync(UPDATE_CONFIG_PATH, "utf8");
+    const cfg = JSON.parse(raw);
+    return cfg.pinnedVersion || null;
+  } catch (err) {
+    log("warn", "Failed to read version pin — treating as unpinned:", err && err.message);
+    return null;
+  }
+}
+
+/**
+ * Persist the version pin. Propagates write errors to the caller so that a
+ * failed pin write can abort a rollback (AC2 must not be silently broken).
+ * Callers that can tolerate a failed write (e.g. clearPin) should catch.
+ */
+function _savePin(pinnedVersion) {
+  fs.mkdirSync(path.dirname(UPDATE_CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(
+    UPDATE_CONFIG_PATH,
+    JSON.stringify({ pinnedVersion }, null, 2),
+    "utf8"
+  );
 }
 
 // ── State management ─────────────────────────────────────────────────────────
@@ -132,6 +181,214 @@ function getState() {
 
 function isDisabled() {
   return process.env.GAIA_DISABLE_UPDATE === "1";
+}
+
+// ── Platform asset detection ─────────────────────────────────────────────────
+
+function _platformAssetPattern() {
+  if (process.platform === "win32") return /setup\.exe$/i;
+  if (process.platform === "darwin") return /\.zip$/i;
+  // Linux: AppImage (deb is apt-managed, electron-updater can't downgrade it)
+  return /\.AppImage$/i;
+}
+
+function _releaseHasPlatformAsset(release) {
+  const pattern = _platformAssetPattern();
+  return (
+    Array.isArray(release.assets) &&
+    release.assets.some((a) => a && a.name && pattern.test(a.name))
+  );
+}
+
+// ── listReleases ──────────────────────────────────────────────────────────────
+
+/**
+ * Fetch published GitHub releases filtered for this platform.
+ *
+ * Returns an array of ReleaseInfo objects newest-first, or a plain object
+ * { error: string } if the network call fails — never an empty array that
+ * would silently mask failures.
+ *
+ * @returns {Promise<Array<ReleaseInfo> | { error: string }>}
+ */
+async function listReleases() {
+  const allowPrerelease = process.env.GAIA_UPDATE_PRERELEASE === "1";
+  const pinnedVersion = _loadPin();
+
+  // Get the running version — use the cached electronApi if available, else
+  // attempt a direct require (works when called after init(), and from tests
+  // where electron is mocked via moduleNameMapper).
+  let currentVersion = null;
+  if (electronApi && electronApi.app) {
+    currentVersion = electronApi.app.getVersion() || null;
+  } else {
+    try {
+      // eslint-disable-next-line global-require
+      const electron = require("electron");
+      if (electron && electron.app && electron.app.getVersion) {
+        currentVersion = electron.app.getVersion() || null;
+      }
+    } catch {
+      // ignore — currentVersion stays null
+    }
+  }
+
+  let releases;
+  try {
+    const resp = await fetch(GITHUB_API_RELEASES, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "GAIA-Agent-UI",
+      },
+    });
+    if (!resp.ok) {
+      return {
+        error: `Couldn't reach GitHub to list releases (HTTP ${resp.status}) — check your connection; you can still download installers from the Releases page.`,
+      };
+    }
+    releases = await resp.json();
+  } catch (err) {
+    return {
+      error: `Couldn't reach GitHub to list releases — check your connection; you can still download installers from the Releases page. (${
+        err && err.message
+      })`,
+    };
+  }
+
+  const result = releases
+    .filter(
+      (r) =>
+        !r.draft &&
+        (allowPrerelease || !r.prerelease) &&
+        _releaseHasPlatformAsset(r)
+    )
+    .map((r) => {
+      const tag = r.tag_name || "";
+      // Version is tag without leading 'v'
+      const version = tag.startsWith("v") ? tag.slice(1) : tag;
+      return {
+        version,
+        tag,
+        date: r.published_at || null,
+        notesUrl: r.html_url || null,
+        isCurrent: currentVersion ? version === currentVersion : false,
+        isPinned: pinnedVersion ? tag === pinnedVersion : false,
+      };
+    });
+
+  // Cap to the most-recent installable releases; older ones remain reachable
+  // via the "browse all on GitHub" link in the picker.
+  return result.slice(0, MAX_RELEASES_SHOWN);
+}
+
+// ── installVersion ────────────────────────────────────────────────────────────
+
+/**
+ * Download and install a specific tagged release, then prompt restart.
+ *
+ * Uses the "generic provider + per-release channel file" pattern:
+ * each GitHub release hosts its own latest*.yml which describes that exact
+ * version. Setting allowDowngrade=true + pointing setFeedURL at the release
+ * folder lets electron-updater treat it as an available update.
+ *
+ * Persists the version pin BEFORE starting the download so that even if the
+ * user dismisses the restart dialog, the pin is already in place for AC2.
+ *
+ * @param {string} tag  The git tag, e.g. "v0.20.0"
+ */
+const TAG_RE = /^v\d+\.\d+\.\d+(-[A-Za-z0-9.]+)?$/;
+
+async function installVersion(tag) {
+  if (!autoUpdaterRef) {
+    throw new Error("installVersion called before auto-updater was initialised");
+  }
+  if (typeof tag !== "string" || !TAG_RE.test(tag)) {
+    throw new Error(
+      `Invalid release tag "${tag}" — expected the form "vMAJOR.MINOR.PATCH" (e.g. "v0.20.0")`
+    );
+  }
+  if (checkInProgress) {
+    throw new Error(
+      "An update check is already in progress — try again in a moment."
+    );
+  }
+
+  log("info", `Installing version ${tag} via targeted rollback`);
+
+  // Persist pin before touching the feed/allowDowngrade so AC2 holds even if
+  // the download completes but the user dismisses the restart prompt. If the
+  // pin can't be persisted we ABORT — proceeding would let the next launch
+  // silently auto-upgrade past the rollback (no silent fallbacks).
+  try {
+    _savePin(tag);
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    throw new Error(
+      `Failed to persist version pin — rollback aborted: ${msg}`
+    );
+  }
+  setState({ pinnedVersion: tag });
+
+  checkInProgress = true;
+  try {
+    autoUpdaterRef.allowDowngrade = true;
+    autoUpdaterRef.setFeedURL({
+      provider: "generic",
+      url: `https://github.com/amd/gaia/releases/download/${tag}/`,
+    });
+
+    // Known limitation: the generic/tagged feed + allowDowngrade stay set
+    // until clearPin(). While pinned, autoDownload=false (set at init) keeps
+    // the scheduled check from installing anything, but that check queries the
+    // pinned release's own feed rather than GitHub-latest — so the "newer
+    // version available, you're pinned" chip won't fire until the user resumes.
+    // Restoring the github feed in the scheduled path risks racing the still-
+    // in-flight rollback download (which outlives this checkInProgress window),
+    // so it's intentionally deferred.
+
+    // Kick off the targeted check — will fire update-available → downloads →
+    // update-downloaded → our existing dialog prompts restart.
+    await autoUpdaterRef.checkForUpdates();
+  } finally {
+    checkInProgress = false;
+  }
+}
+
+// ── clearPin / resumeUpdates ──────────────────────────────────────────────────
+
+/**
+ * Clear the version pin and resume normal auto-updates.
+ *
+ * Restores the GitHub provider feed, sets autoDownload=true, and clears
+ * allowDowngrade so the next check is the normal forward-only flow.
+ */
+function clearPin() {
+  // A failed clear is non-fatal — worst case the stale pin re-pauses updates
+  // on next launch and the user can retry Resume. Don't block resume on it.
+  try {
+    _savePin(null);
+  } catch (err) {
+    log("warn", "Failed to clear pin file:", err && err.message);
+  }
+  setState({ pinnedVersion: null });
+
+  if (autoUpdaterRef) {
+    autoUpdaterRef.autoDownload = true;
+    autoUpdaterRef.allowDowngrade = false;
+    // Restore the GitHub provider (overrides any generic/tagged feed set by
+    // installVersion). Owner/repo must match electron-builder.yml publish block.
+    try {
+      autoUpdaterRef.setFeedURL({
+        provider: "github",
+        owner: "amd",
+        repo: "gaia",
+      });
+    } catch (err) {
+      log("warn", "Failed to restore GitHub feed on resume:", err && err.message);
+    }
+  }
+
+  log("info", "Version pin cleared — auto-updates resumed");
 }
 
 // ── Core check ───────────────────────────────────────────────────────────────
@@ -237,6 +494,18 @@ function wireAutoUpdaterEvents() {
       return;
     }
     try {
+      const isRollback =
+        state.pinnedVersion !== null &&
+        info &&
+        info.version;
+      const title = isRollback ? "Roll back ready" : "Update ready";
+      const message = isRollback
+        ? `GAIA ${info.version} is ready to install.`
+        : `GAIA ${info && info.version ? info.version : ""} has been downloaded.`;
+      const detail = isRollback
+        ? `The app will restart into v${info.version}. Your chat history will be preserved.`
+        : "Restart the app to apply the update. Your chat history will be preserved.";
+
       const choice = await electronApi.dialog.showMessageBox(
         mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null,
         {
@@ -244,16 +513,13 @@ function wireAutoUpdaterEvents() {
           buttons: ["Restart now", "Later"],
           defaultId: 0,
           cancelId: 1,
-          title: "Update ready",
-          message: `GAIA ${info && info.version ? info.version : ""} has been downloaded.`,
-          detail:
-            "Restart the app to apply the update. Your chat history will be preserved.",
+          title,
+          message,
+          detail,
         }
       );
       if (choice && choice.response === 0) {
         log("info", "User chose to restart — calling quitAndInstall");
-        // (isSilent=false, isForceRunAfter=true) — run the installer UI on
-        // Windows and relaunch after the update is applied.
         autoUpdaterRef.quitAndInstall(false, true);
       } else {
         log("info", "User deferred restart — will install on next quit");
@@ -281,21 +547,37 @@ function registerIpcHandlers() {
     await checkForUpdates();
     return getState();
   });
+  ipcMain.handle("gaia:update:list-releases", async () => {
+    return listReleases();
+  });
+  ipcMain.handle("gaia:update:install-version", async (_event, tag) => {
+    await installVersion(tag);
+    return getState();
+  });
+  ipcMain.handle("gaia:update:resume", async () => {
+    clearPin();
+    return getState();
+  });
+
   ipcHandlersRegistered = true;
 }
 
 function unregisterIpcHandlers() {
   if (!ipcHandlersRegistered || !electronApi || !electronApi.ipcMain) return;
   const { ipcMain } = electronApi;
-  try {
-    ipcMain.removeHandler("gaia:update:get-status");
-  } catch {
-    // ignore
-  }
-  try {
-    ipcMain.removeHandler("gaia:update:check");
-  } catch {
-    // ignore
+  const channels = [
+    "gaia:update:get-status",
+    "gaia:update:check",
+    "gaia:update:list-releases",
+    "gaia:update:install-version",
+    "gaia:update:resume",
+  ];
+  for (const ch of channels) {
+    try {
+      ipcMain.removeHandler(ch);
+    } catch {
+      // ignore
+    }
   }
   ipcHandlersRegistered = false;
 }
@@ -329,6 +611,14 @@ function init(mainWindow) {
     return;
   }
 
+  // Read the persisted pin before touching electron-updater so pin gating
+  // is applied to the very first autoDownload flag set below.
+  const savedPin = _loadPin();
+  if (savedPin) {
+    state.pinnedVersion = savedPin;
+    log("info", `Found persisted version pin: ${savedPin} — autoDownload will be paused`);
+  }
+
   // Lazy-load Electron and electron-updater. Any failure here is logged
   // and the updater stays in `idle` — we never crash the app.
   try {
@@ -348,8 +638,16 @@ function init(mainWindow) {
     electronApi = {
       dialog: electron.dialog,
       ipcMain: electron.ipcMain,
+      app: electron.app,
     };
     autoUpdaterRef = electronUpdater.autoUpdater;
+
+    // Record the running version for getState() / listReleases().
+    try {
+      state.currentVersion = electron.app.getVersion() || null;
+    } catch {
+      // ignore
+    }
   } catch (err) {
     log("error", "Failed to load electron-updater:", err && err.message);
     setState({
@@ -359,15 +657,14 @@ function init(mainWindow) {
     return;
   }
 
-  // Configure electron-updater. Provider config comes from
-  // electron-builder.yml (`publish:` block) at build time; we only set
-  // behavioral flags here.
+  // Configure electron-updater.
   try {
-    autoUpdaterRef.autoDownload = true;
+    // When pinned, suppress autoDownload so the scheduled forward-only check
+    // cannot silently download/install a newer version (AC2).
+    autoUpdaterRef.autoDownload = savedPin ? false : true;
     autoUpdaterRef.autoInstallOnAppQuit = true;
     autoUpdaterRef.disableWebInstaller = true;
     autoUpdaterRef.allowDowngrade = false;
-    // Allow pre-releases only if explicitly opted in (for beta channels later).
     autoUpdaterRef.allowPrerelease =
       process.env.GAIA_UPDATE_PRERELEASE === "1";
 
@@ -433,5 +730,8 @@ module.exports = {
   destroy,
   checkForUpdates,
   getState,
+  listReleases,
+  installVersion,
+  clearPin,
   STATES,
 };
