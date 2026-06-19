@@ -429,11 +429,11 @@ gaia/
 │   ├── agents/         # Agent framework + in-core agents
 │   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent mixins
 │   │   ├── tools/      # Cross-agent tool mixins (rag, file, shell, browser, scratchpad, screenshot…)
-│   │   ├── chat/, docqa/, builder/, routing/   # in-core agents
+│   │   ├── chat/, builder/   # in-core agents
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   │   #   Packaged agents (code, analyst, browser, fileio, email, summarize, jira,
-│   │   #   blender, docker, sd, emr, connectors-demo) live in hub/agents/python/<id>/.
+│   │   #   blender, docker, sd, emr, connectors-demo, docqa, routing) live in hub/agents/python/<id>/.
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
@@ -528,9 +528,9 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | Agent | Description |
 |-------|-------------|
 | **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG — in-core (`chat/`) |
-| **DocumentQAAgent** | Standalone document Q&A with RAG — in-core (`docqa/`) |
 | **BuilderAgent** | Scaffolds new agents from templates — in-core (`builder/`) |
-| **RoutingAgent** | Intelligent agent selection (`AGENT_ROUTING_MODEL`) — in-core (`routing/`) |
+| **DocumentQAAgent** | Standalone document Q&A with RAG — hub (`docqa/`) |
+| **RoutingAgent** | Intelligent agent selection (`AGENT_ROUTING_MODEL`) — hub (`routing/`) |
 | **CodeAgent** | Code generation with orchestration |
 | **AnalystAgent** | Structured data analysis (CSV/Excel, scratchpad SQL) |
 | **BrowserAgent** | Web research — search, fetch pages, download |
@@ -544,7 +544,7 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | **MedicalIntakeAgent** | Medical form processing (VLM) — `hub/agents/python/emr/` |
 | **ConnectorsDemoAgent** | Per-agent connector activation demo |
 
-`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent (see [`src/gaia/cli.py`](src/gaia/cli.py)); `gaia telegram` is a messaging adapter, not an agent. DocumentQAAgent, FileIOAgent, and ConnectorsDemoAgent are internal building-block agents (not standalone CLI commands).
+`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent (see [`src/gaia/cli.py`](src/gaia/cli.py)); `gaia telegram` is a messaging adapter, not an agent. DocumentQAAgent, FileIOAgent, and ConnectorsDemoAgent are internal building-block agents (not standalone CLI commands). DocumentQAAgent and RoutingAgent now ship as standalone `gaia-agent-docqa` / `gaia-agent-routing` hub wheels (`hub/agents/python/`).
 
 ### Agent Registry & Tool Mixins
 
@@ -683,7 +683,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 2. **Check for duplicates:** Search existing issues/PRs to avoid redundant responses
 
 3. **Reference specific files:** Use precise file references with line numbers when possible
-   - Agent implementations: `src/gaia/agents/` (in-core: base/, tools/, chat/, docqa/, builder/, routing/, code_index/, registry.py) and `hub/agents/python/<id>/` (packaged agents: code, analyst, browser, email, jira, docker, sd, emr, …)
+   - Agent implementations: `src/gaia/agents/` (in-core: base/, tools/, chat/, builder/, code_index/, registry.py) and `hub/agents/python/<id>/` (packaged agents: code, analyst, browser, email, jira, docker, sd, emr, docqa, routing, …)
    - CLI commands: `src/gaia/cli.py`
    - MCP integration: `src/gaia/mcp/`
    - LLM backend: `src/gaia/llm/` (+ `providers/` for Claude/OpenAI)
