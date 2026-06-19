@@ -143,13 +143,13 @@ then drive it from the renderer via `./client`.
 
 TypeScript types in `src/types.ts` are **hand-written** to mirror two Python
 sources of truth:
-- `hub/agents/python/email/gaia_agent_email/contract.py` — the frozen #1262
-  triage request/response contract (`SCHEMA_VERSION = "2.0"`).
+- `hub/agents/python/email/gaia_agent_email/contract.py` — the #1262
+  triage request/response contract, evolved to `SCHEMA_VERSION = "2.0"` (#1766).
 - `hub/agents/python/email/gaia_agent_email/api_routes.py` — the local draft/send
   handshake models (the #1264 send-confirmation gate).
 
 Hand-written (vs. generated from `/openapi.json`) because the contract is small
-and frozen, keeping the published package free of a typegen build step. The
+and version-gated, keeping the published package free of a typegen build step. The
 runtime `checkVersion` guard catches contract drift loudly. The server exposes
 `GET /openapi.json` if you prefer to regenerate.
 

@@ -422,6 +422,7 @@
             "pages": [
               "plans/agent-hub",
               "plans/agent-hub-ui",
+              "plans/agent-ui-hub-publish",
               "plans/email-agent-packaging",
               "spec/agent-hub-restructure",
               "spec/agent-skills",
