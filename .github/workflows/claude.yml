@@ -16,7 +16,7 @@
 # action via the reusable workflow .github/workflows/claude-run.yml — which also adds a
 # retry for the upstream install-phase ENOENT crash and verifies output was produced.
 # auto-fix and release-notes still call the action inline. All invocations pin the same
-# SHA (v1.0.133). v0 `@beta` was stuck on a 2025-08-22 SHA that predates
+# SHA (v1.0.140). v0 `@beta` was stuck on a 2025-08-22 SHA that predates
 # `pull_request_target` support (merged 2025-09-22) and Opus 4.7 support (v1.0.98). v1's
 # API replaces `direct_prompt` / `custom_instructions` / `model` / `max_turns` with
 # `prompt` + `claude_args`.
