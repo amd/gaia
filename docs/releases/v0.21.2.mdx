@@ -5,12 +5,12 @@ description: "A new native gaia-bash coding agent ships, the email agent learns 
 
 # GAIA v0.21.2 Release Notes
 
-GAIA v0.21.2 is a feature-packed patch on top of v0.21.1. A new native `gaia-bash` coding agent joins the lineup, the email agent gets smarter — it learns which senders matter to you and now returns a 5-bucket triage taxonomy with a concrete suggested action per message — and the desktop app can finally roll itself back to a previous release when an update goes wrong. Early Agent Hub plumbing also lands as a work in progress. The rest of the release clears a batch of email, connector, UI, and installer bugs.
+GAIA v0.21.2 is a feature-packed patch on top of v0.21.1. A new native `gaia-bash` coding agent joins the lineup, the email agent gets smarter — it learns which senders matter to you and now returns a 5-bucket triage taxonomy with a concrete suggested action per message — and the desktop app now lets you roll back to a previous release whenever you want. Early Agent Hub plumbing also lands as a work in progress. The rest of the release clears a batch of email, connector, UI, and installer bugs.
 
 **Why upgrade:**
 - **A new native coding agent** — `gaia-bash` is a fast, self-contained C++ bash agent with an interactive TUI, CLI, REST API, and MCP server, usable on its own or from Claude Code / OpenCode.
 - **Your inbox, learned and better sorted** — `gaia email` now remembers which senders matter to you and sorts mail into five intuitive buckets, each with a suggested next action.
-- **Recover from a bad desktop update** — Settings → About now lists published releases and rolls the app back to one you pick, pausing auto-update so it can't silently re-upgrade.
+- **Roll back to a previous version anytime** — Settings → About now lists published releases and rolls the app back to one you pick, pausing auto-update so it can't silently re-upgrade past your choice.
 - **Agent Hub — work in progress** — the publish pipeline, catalog, and redesigned site are taking shape as the foundation for a hub to browse and install agents. Still in active development and not yet live.
 
 ---
@@ -35,9 +35,9 @@ Triage used to return four flat buckets with no next-step. The email agent now s
 
 ---
 
-### Roll back a bad desktop update — Agent UI
+### Roll back to a previous version — Agent UI
 
-A bad update used to strand you on the latest version with no way out but hunting down an old installer. The Agent UI now has **Settings → About → "Roll back to a previous version"**: pick an older published release, confirm, and the app downloads it and restarts into it. After a manual rollback it pauses auto-update so the next scheduled check can't silently re-upgrade past your choice — resume forward updates from the same panel when you're ready (PR [#1711](https://github.com/amd/gaia/pull/1711)).
+Switching back to an earlier release used to mean hunting down an old installer yourself. The Agent UI now has **Settings → About → "Roll back to a previous version"**: pick an older published release, confirm, and the app downloads it and restarts into it. After a manual rollback it pauses auto-update so the next scheduled check can't silently re-upgrade past your choice — resume forward updates from the same panel when you're ready (PR [#1711](https://github.com/amd/gaia/pull/1711)).
 
 ---
 
