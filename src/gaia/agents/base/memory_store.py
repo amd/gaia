@@ -1391,6 +1391,51 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
+    def clear_all_embeddings(self) -> int:
+        """Null out every stored embedding so they get re-embedded on backfill.
+
+        Used when the active embedder changes: vectors from a different model
+        live in a different vector space (and possibly a different dimension),
+        so reusing them would silently corrupt similarity search. Returns the
+        number of rows cleared.
+        """
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE knowledge SET embedding = NULL WHERE embedding IS NOT NULL"
+                ).rowcount
+                self._conn.commit()
+                return rowcount
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def _embedder_marker_path(self) -> Path:
+        """Sidecar path that records which embedder produced the stored vectors."""
+        return self._db_path.with_name(self._db_path.name + ".embedder")
+
+    def get_embedder_id(self) -> Optional[str]:
+        """Return the embedder model id that produced the stored embeddings.
+
+        ``None`` when no embeddings have been written yet (fresh DB) or the
+        marker is missing — callers treat that as "no change to detect".
+        """
+        marker = self._embedder_marker_path()
+        try:
+            if marker.exists():
+                return marker.read_text(encoding="utf-8").strip() or None
+        except OSError as e:
+            logger.warning("[MemoryStore] could not read embedder marker: %s", e)
+        return None
+
+    def set_embedder_id(self, model_id: str) -> None:
+        """Record the embedder model id that produced the stored embeddings."""
+        marker = self._embedder_marker_path()
+        try:
+            marker.write_text(model_id, encoding="utf-8")
+        except OSError as e:
+            logger.warning("[MemoryStore] could not write embedder marker: %s", e)
+
     def get_items_with_embeddings(
         self,
         category: str | None = None,
