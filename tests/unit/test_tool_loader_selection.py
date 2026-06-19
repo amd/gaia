@@ -295,8 +295,12 @@ def test_load_bundle_by_bundle_name_admits_members():
 def test_load_bundle_by_tool_name_resolves_to_owning_bundle():
     loader, reg = _loader_with_bundles()
     loader.select("q", reg)
-    loaded = loader.load_bundle("a1", reg)  # bare tool name → bundle A
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loaded = loader.load_bundle("a1", reg)  # bare tool name → bundle A
     assert {"a1", "a2"} <= set(loaded)
+    # The log records the resolved bundle ("A"), not the bare tool name ("a1").
+    events = [p for p in _loader_payloads(records) if p.get("event") == "load_tools"]
+    assert events and events[0]["bundle"] == "A"
 
 
 def test_load_bundle_unknown_name_raises_keyerror():

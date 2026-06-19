@@ -371,8 +371,7 @@ class ToolLoader:
                 name — the caller turns this into an actionable error listing the
                 valid bundle names.
         """
-        members = self._resolve_bundle_members(bundle)
-        resolved_name = bundle
+        members, resolved_name = self._resolve_bundle_members(bundle)
 
         protected = set(self._core) | set(members)
         sel = _Selection()
@@ -409,18 +408,22 @@ class ToolLoader:
 
     # ── internals ────────────────────────────────────────────────────────
 
-    def _resolve_bundle_members(self, bundle: str) -> FrozenSet[str]:
-        """Resolve *bundle* to its member set, or raise ``KeyError``.
+    def _resolve_bundle_members(self, bundle: str) -> tuple["FrozenSet[str]", str]:
+        """Resolve *bundle* to ``(members, resolved_name)``, or raise ``KeyError``.
 
         Exact bundle-name match first; else a bare tool name resolved to the
         union of its owning bundles' members via the reverse index.
+        ``resolved_name`` is the matched bundle name (exact match) or the owning
+        bundle name(s) joined with ``+`` (tool-name match), so the ``load_tools``
+        log line records the bundle actually pulled, not the bare tool name.
         """
         for b in self._bundles:
             if b.name == bundle:
-                return b.members
+                return b.members, b.name
         owning = self._tool_to_bundles.get(bundle)
         if owning:
-            return frozenset().union(*(b.members for b in owning))
+            members = frozenset().union(*(b.members for b in owning))
+            return members, "+".join(b.name for b in owning)
         raise KeyError(bundle)
 
     def _admit(self, name: str, sel: _Selection) -> None:

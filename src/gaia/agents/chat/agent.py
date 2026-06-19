@@ -879,7 +879,8 @@ No documents are currently indexed.
             # TTFT-sensitive case, so we don't tax them with the menu. Lives in
             # this stable prefix (before the volatile tools tail) → no KV thrash.
             load_tools_menu = ""
-            if self.tool_loader is not None and is_tool_calling_model(
+            loader = getattr(self, "tool_loader", None)
+            if loader is not None and is_tool_calling_model(
                 getattr(self, "model_id", None)
             ):
                 load_tools_menu = (
@@ -887,7 +888,7 @@ No documents are currently indexed.
                     "Your visible tools are trimmed to what this turn needs. If a "
                     "capability you need is missing, call load_tools(bundle) with "
                     "one of these names; its tools become available on your next "
-                    "step:\n" + self.tool_loader.format_bundle_menu()
+                    "step:\n" + loader.format_bundle_menu()
                 )
             return (
                 base_prompt
@@ -1201,14 +1202,16 @@ No documents are currently indexed.
                 """Load a bundle of tools so you can call them on your next step.
 
                 Call this when the capability you need is not in your current
-                tool list — pick a bundle name from the "Loadable tool bundles"
-                menu in your instructions (a bare tool name also works; it loads
-                that tool's whole bundle). The bundle's tools become available on
-                your **next** step; then call the one you need.
+                tool list. If a "Loadable tool bundles" menu is shown in your
+                instructions, pick a bundle name from it; otherwise pass the name
+                of the specific tool you need and its bundle is loaded. The
+                bundle's tools become available on your **next** step; then call
+                the one you need.
 
                 Args:
-                    bundle: A bundle name from the menu (e.g. "file_search",
-                        "rag_index"), or a specific tool name to load its bundle.
+                    bundle: A bundle name (e.g. "file_search", "rag_index") — from
+                        the menu when one is shown — or a specific tool name to
+                        load its owning bundle.
 
                 Returns:
                     Dictionary with status, the resolved bundle, and the full

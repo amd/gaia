@@ -48,7 +48,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 _TOOL_LOADER_RE = re.compile(r"TOOL_LOADER (\{.*\})\s*$")
 _SESSION_RE = re.compile(r"TOOL_LOADER_SESSION (\{.*\})\s*$")
@@ -237,7 +237,7 @@ def aggregate_escape_hatch(summaries: List[Dict]) -> Dict:
     }
 
 
-def count_recovery_events_from_log(text: str) -> tuple:
+def count_recovery_events_from_log(text: str) -> Tuple[int, int]:
     """Count the two escape-hatch recovery paths from raw per-turn log lines.
 
     Returns ``(free_recovery_count, load_tools_count)`` — free non-tool-calling
