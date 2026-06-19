@@ -177,8 +177,9 @@ Two things follow that the email pipeline does **not** have to handle:
 ## Workstreams
 
 ### 1. Hub manifest + package layout
-- Author a `gaia-agent.yaml` for agent-ui (id, version `0.21.x`, platforms,
-  `type: desktop-app`, interfaces). Agent-UI is **not** a Python freeze, so it
+- Author the manifest for agent-ui (id, version `0.21.x`, platforms,
+  `type: app`, installers/update-channel block — see the multi-component model).
+  Agent-UI is **not** a Python freeze, so it
   does **not** belong in `hub/agents/python/`. Proposed home:
   `hub/agents/desktop/agent-ui/` (manifest + lock + packaging scripts) or colocated
   with `src/gaia/apps/webui/`.
@@ -196,7 +197,7 @@ Two things follow that the email pipeline does **not** have to handle:
 - Confirm/extend GET passthrough so `latest.yml`, `latest-mac.yml`,
   `latest-linux.yml`, and `.blockmap` files are served at the URLs
   electron-updater expects.
-- `manifest.ts` validation may need to accept the `desktop-app` manifest type.
+- `manifest.ts` validation must accept the `app` manifest type (see §E / E8).
 - New/extended Worker tests for desktop artifacts + channel rewrite.
 
 ### 3. electron-builder / auto-updater repoint
@@ -261,11 +262,16 @@ Two things follow that the email pipeline does **not** have to handle:
 - **Phase 3 — Clients:** npm wrapper replaces the app as the published package; electron-updater repointed to the R2 generic feed.
 - **Phase 4 — Surface:** catalog/website integration, docs, tests, baseline.
 
-# Part 2: In-app Agent Hub + dynamic npm-agent install
+# Part 2: In-app Agent Hub + dynamic install
 
 Three requirements, one dependency chain: a **hub page** (browse) → an **install
-action** (click) → a **dynamic-install runtime** (import the npm agent). The
+action** (click) → a **dynamic-install runtime** (import the unit). The
 front-half UI scaffolding already exists; the back-half install service does not.
+
+> The install *unit and path* are not fixed to npm. The Hub is multi-component, so
+> the runtime branches by `type` (app/agent/component); for an `agent` the choice
+> between a **uv-installed wheel** and a **native-binary sidecar** is open (B2/B4).
+> "npm wrapper" below is one candidate, not a settled decision.
 
 ## What already exists (don't rebuild)
 
@@ -284,12 +290,13 @@ front-half UI scaffolding already exists; the back-half install service does not
 Error("… not yet implemented")`. **The Agent UI does not import published npm
 agents today.**
 
-## Feature 1 — Thin app layer that installs npm agents on demand
+## Feature 1 — Thin app layer that installs agents on demand
 
 Implement the `agent:install` / `agent:uninstall` service in the Electron main
-process. Pipeline: resolve the `@amd-gaia/agent-<id>` wrapper → run its
-R2 fetch + `binaries.lock.json` integrity check → land the artifact in
-`~/.gaia/agents/<id>/` → register → emit progress to the renderer.
+process. Pipeline: resolve the unit from the catalog → fetch its artifact from R2
+→ integrity-check (`binaries.lock.json` for the wrapper path) → land in
+`~/.gaia/agents/<id>/` (or the host venv for a wheel) → register → emit progress
+to the renderer.
 
 Key design decisions to settle:
 - **How to install the npm wrapper without a bundled npm CLI.** The app bundles
@@ -324,8 +331,10 @@ A React page in the renderer that mirrors the public Astro Hub. Fetch
 - **Merge installed ↔ catalog:** `/api/agents` (installed) ∪ `/index.json`
   (catalog) via the existing `agentHub.ts` helpers → per-card state
   (installed / available / update_available), with an updates badge.
-- **No CORS blocker:** the Worker serves `index.json` to any origin; the Electron
-  renderer can fetch directly. Cache last-fetched catalog for offline browsing.
+- **CORS (resolve — see B8):** the Worker sets no explicit CORS headers today, so
+  a renderer `fetch` of `index.json` may be blocked by Chromium. Either add
+  `Access-Control-Allow-Origin` on the Worker GETs or proxy the fetch through the
+  Electron main process. Cache the last-fetched catalog for offline browsing.
 - **Config:** catalog base URL (`hub.amd-gaia.ai`) as a setting; honor the same
   channel/base as Part 1.
 
@@ -371,7 +380,7 @@ Audit of the current install/UX paths. Several things already exist (streamed
 bootstrap progress dialog, auto-update IPC, a full hardware scanner) — the gaps
 below are ranked by user impact, not effort.
 
-## The #1 gap (underneath both parts): first *use* is 7–20 min, not seconds
+## The #1 gap (underneath Parts 1–2): first *use* is minutes-long, not seconds
 
 Part 1 can make the Electron **installer** instant, but the app is unusable until
 its **Python backend** finishes a cold bootstrap: `backend-installer.cjs` runs
@@ -447,7 +456,8 @@ its **Python backend** finishes a cold bootstrap: `backend-installer.cjs` runs
   (install, model, connector) so bug reports are actionable.
 
 ## Priority order (recommendation)
-1. **Frozen backend** (kills the 7–20 min first-use wait) — reuses Part 1 tooling.
+1. **Frozen/prebuilt backend** (kills the minutes-long first-use wait) — note this
+   does **not** cleanly reuse the email freeze; pick the approach in C1 first.
 2. **Guided onboarding + in-app model download** (replaces the terminal hint).
 3. **Hardware pre-flight + connector-on-install** (correct, non-surprising installs).
 4. **Update banner + offline catalog cache + diagnostics button** (polish).
