@@ -1,0 +1,81 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// Syntax-highlighted (Shiki, at build time) code block with a hover copy button.
+import { Code } from 'astro:components';
+
+interface Props {
+  code: string;
+  lang?: string;
+  class?: string;
+}
+const { code, lang = 'bash', class: className = '' } = Astro.props;
+---
+
+<div class={`code-block group relative ${className}`}>
+  <Code code={code} lang={lang as any} theme="github-dark" />
+  <button type="button" class="code-copy" data-code-copy={code} aria-label="Copy to clipboard">
+    <svg class="ic ic-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+    <svg class="ic ic-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+  </button>
+</div>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>('.code-copy').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.codeCopy || '');
+      } catch {
+        return;
+      }
+      btn.classList.add('copied');
+      setTimeout(() => btn.classList.remove('copied'), 1500);
+    });
+  });
+</script>
+
+<style>
+  /* Shiki renders its own <pre>; frame it on tokens. */
+  .code-block :global(pre) {
+    margin: 0;
+    padding: 0.8rem 2.6rem 0.8rem 1rem; /* right pad leaves room for the copy button */
+    border-radius: 0.5rem;
+    border: 1px solid rgb(var(--g-border));
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+  .code-copy {
+    position: absolute;
+    top: 0.45rem;
+    right: 0.45rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.3rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgb(var(--g-border));
+    background: rgb(var(--g-surface));
+    color: rgb(var(--g-muted));
+    opacity: 0;
+    transition: opacity 0.15s ease, color 0.15s ease;
+  }
+  .code-block:hover .code-copy,
+  .code-copy:focus-visible {
+    opacity: 1;
+  }
+  .code-copy:hover {
+    color: rgb(var(--g-text));
+  }
+  .ic-check {
+    display: none;
+  }
+  .code-copy.copied .ic-copy {
+    display: none;
+  }
+  .code-copy.copied .ic-check {
+    display: inline;
+    color: rgb(var(--g-gold-text));
+  }
+</style>

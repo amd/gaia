@@ -330,6 +330,7 @@ export interface Document {
     last_accessed_at: string | null;
     sessions_using: number;
     indexing_status?: 'pending' | 'indexing' | 'complete' | 'failed' | 'cancelled' | 'missing';
+    last_error?: string | null;
 }
 
 /** A file attached to a message before sending. */

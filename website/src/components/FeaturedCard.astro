@@ -28,7 +28,7 @@ const { agent, eyebrow = 'Featured' } = Astro.props;
       <span class="text-xl font-bold tracking-tight text-g-text">{agent.name}</span>
     </div>
     <p class="text-[14px] text-g-muted max-w-md mb-6">{agent.description}</p>
-    <!-- Static chip, not InstallCommand — the whole card is a link; nested buttons are invalid HTML. -->
+    <!-- Static chip, not a copy button — the whole card is a link; nested buttons are invalid HTML. -->
     <span class="inline-flex items-center rounded-md border border-g-gold/40 px-4 py-2 font-mono text-[12px] text-g-gold-text">
       $ gaia agent install {agent.id}
     </span>

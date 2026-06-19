@@ -168,6 +168,45 @@ class TestUploadIndexingFailure:
         assert data["chunk_count"] == 0
         assert data["indexing_status"] == "failed"
 
+    def test_small_file_failure_records_last_error(self, home_tmp_dir, client):
+        """#1749: a first-upload index failure persists *why* it failed, not just
+        status='failed' with an empty tooltip."""
+        doc_file = home_tmp_dir / "report.txt"
+        doc_file.write_text("hello world")
+
+        async def mock_index_fail(path):
+            raise RuntimeError("embedder unavailable")
+
+        with patch("gaia.ui.server._index_document", mock_index_fail):
+            resp = client.post(
+                "/api/documents/upload-path",
+                json={"filepath": str(doc_file)},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["indexing_status"] == "failed"
+        assert data["last_error"] and "embedder unavailable" in data["last_error"]
+
+    def test_small_file_zero_chunks_records_last_error(self, home_tmp_dir, client):
+        """A 0-chunk failure (no exception) still records an actionable reason."""
+        doc_file = home_tmp_dir / "empty.txt"
+        doc_file.write_text("x")
+
+        async def mock_index_zero(path):
+            return 0
+
+        with patch("gaia.ui.server._index_document", mock_index_zero):
+            resp = client.post(
+                "/api/documents/upload-path",
+                json={"filepath": str(doc_file)},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["indexing_status"] == "failed"
+        assert data["last_error"] == "indexing produced 0 chunks"
+
     def test_small_file_success_has_chunks(self, home_tmp_dir, client):
         """Successful indexing returns chunk_count > 0."""
         doc_file = home_tmp_dir / "test.txt"

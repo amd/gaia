@@ -21,6 +21,28 @@
             ],
             "description": "Free-text due hint as written ('Friday', 'EOD'); not parsed.",
             "title": "Due Hint"
+          },
+          "type": {
+            "default": "text",
+            "description": "Discriminator: 'text' for a plain imperative action; 'link' when the action involves following a URL (url is then required and non-empty).",
+            "enum": [
+              "text",
+              "link"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The URL to follow for a 'link' action item; None for 'text'.",
+            "title": "Url"
           }
         },
         "required": [
@@ -343,6 +365,17 @@
         "additionalProperties": false,
         "description": "Top-level request envelope shared by REST (#1229) and MCP stdio (#1104).",
         "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriageContext"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional context (people/projects/tone/self-email) that biases categorization and summary. Absent → behavior unchanged."
+          },
           "payload": {
             "description": "The single-email or full-thread input.",
             "discriminator": {
@@ -472,6 +505,17 @@
             "description": "Plain-text summary of the email/thread.",
             "title": "Summary",
             "type": "string"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriageUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on the heuristic-only path where no LLM call was made."
           }
         },
         "required": [
@@ -577,6 +621,86 @@
           "messages"
         ],
         "title": "ThreadInput",
+        "type": "object"
+      },
+      "TriageContext": {
+        "additionalProperties": false,
+        "description": "Optional caller-supplied context that biases categorization/summary\n(#1541). Absent → behavior is identical to today. Coexists with gaia\nmemory (#1114) without requiring it.",
+        "properties": {
+          "people": {
+            "description": "Important people whose mail should weigh higher.",
+            "items": {
+              "type": "string"
+            },
+            "title": "People",
+            "type": "array"
+          },
+          "projects": {
+            "description": "Active projects the principal cares about.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Projects",
+            "type": "array"
+          },
+          "self_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The principal's own address, so the model knows who 'I' is.",
+            "title": "Self Email"
+          },
+          "tone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Preferred summary tone, e.g. 'concise'.",
+            "title": "Tone"
+          }
+        },
+        "title": "TriageContext",
+        "type": "object"
+      },
+      "TriageUsage": {
+        "additionalProperties": false,
+        "description": "LLM usage metrics for a triage, aggregated across the classify +\nsummarize calls. Reuses the existing ``AgentResponse.stats`` measurement\n(#1277/#1278) — no new measurement path. ``None`` on the heuristic-only\npath where no LLM call is made.",
+        "properties": {
+          "completion_tokens": {
+            "default": 0,
+            "description": "Sum of output (completion) tokens across the LLM calls.",
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "prompt_tokens": {
+            "default": 0,
+            "description": "Sum of input tokens across the LLM calls.",
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "tokens_per_second": {
+            "default": 0.0,
+            "description": "Aggregate decode throughput (total output tokens / total decode time).",
+            "title": "Tokens Per Second",
+            "type": "number"
+          },
+          "total_tokens": {
+            "default": 0,
+            "description": "Sum of input + output tokens across the LLM calls.",
+            "title": "Total Tokens",
+            "type": "integer"
+          }
+        },
+        "title": "TriageUsage",
         "type": "object"
       },
       "ValidationError": {

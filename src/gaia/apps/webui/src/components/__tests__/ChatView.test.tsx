@@ -42,6 +42,7 @@ const DOC_AGENT: AgentInfo = {
 beforeEach(() => {
     vi.clearAllMocks();
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
+    mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [] });
     mockedApi.listDocuments.mockResolvedValue({
         documents: [],
         total: 0,

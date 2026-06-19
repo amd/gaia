@@ -509,7 +509,7 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                     {message.role === 'assistant'
                         && !isStreaming
                         && isAuthRequiredMessage(cleanedContent) && (
-                        <EmailConnectCta />
+                        <EmailConnectCta content={cleanedContent} />
                     )}
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
                         <div className="msg-stats" aria-label="Message performance stats">
