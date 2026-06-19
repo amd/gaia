@@ -4,16 +4,21 @@
 /**
  * EmailConnectCta
  *
- * Inline "Connect Google" button rendered next to an assistant message
- * when the email agent surfaces a connectors auth-required error
- * (``NOT_CONNECTED:`` or ``AGENT_NOT_GRANTED:`` from
- * ``gaia.connectors.formatting.format_connector_error``). The CTA
- * triggers the same OAuth flow the user would otherwise reach via
- * Settings → Connectors → Google → Connect — without forcing them to
- * navigate away from the chat.
+ * Inline "Connect" button(s) rendered next to an assistant message when the
+ * email agent surfaces a connectors auth-required error (``NOT_CONNECTED:``,
+ * ``AGENT_NOT_GRANTED:``, or ``AUTH_REQUIRED:`` from
+ * ``gaia.connectors.formatting.format_connector_error``). The CTA triggers
+ * the same OAuth flow the user would otherwise reach via
+ * Settings → Connectors → (Google|Microsoft) → Connect — without forcing
+ * them to navigate away from the chat.
  *
  * Detection lives in ``isAuthRequiredMessage`` so MessageBubble can
  * mount this component conditionally on assistant content.
+ *
+ * Provider detection: when the error message mentions "microsoft" the CTA
+ * offers a Microsoft connect button; when it mentions "google" (or the
+ * ``installed:email`` upgrade message) it offers Google; when the provider
+ * is ambiguous both buttons are shown so the user can pick.
  */
 
 import { useCallback, useState } from 'react';
@@ -25,8 +30,7 @@ import './EmailConnectCta.css';
 
 /** Match the canonical prefixes the connectors framework emits. The
  *  prefixes are stable (see ``connectors/formatting.py``); fuzzy
- *  fallbacks like "Open Settings → Connectors → Google" handle the
- *  agent-specific override message for ``installed:email``.
+ *  fallbacks handle agent-specific override messages.
  */
 export function isAuthRequiredMessage(content: string): boolean {
     if (!content) return false;
@@ -44,7 +48,37 @@ export function isAuthRequiredMessage(content: string): boolean {
     ) {
         return true;
     }
+    // Microsoft-side error messages from format_connector_error
+    if (
+        lower.includes('connectors → microsoft') ||
+        lower.includes('connections → microsoft') ||
+        lower.includes('microsoft is not currently connected')
+    ) {
+        return true;
+    }
     return false;
+}
+
+/**
+ * Detect which provider(s) an error message references.
+ *
+ * Returns:
+ * - ``'google'``    — only Google connector mentioned
+ * - ``'microsoft'`` — only Microsoft connector mentioned
+ * - ``'both'``      — ambiguous / no specific provider found → show both
+ */
+export function detectProvider(content: string): 'google' | 'microsoft' | 'both' {
+    if (!content) return 'both';
+    const lower = content.toLowerCase();
+    const mentionsGoogle =
+        lower.includes('google') ||
+        lower.includes('gmail');
+    const mentionsMicrosoft =
+        lower.includes('microsoft') ||
+        lower.includes('outlook');
+    if (mentionsGoogle && !mentionsMicrosoft) return 'google';
+    if (mentionsMicrosoft && !mentionsGoogle) return 'microsoft';
+    return 'both';
 }
 
 // ── OAuth helpers (mirror ConnectorsSection.openAuthUrl) ─────────────────────
@@ -60,16 +94,21 @@ function openAuthUrl(url: string): void {
     }
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
+// ── Single-provider connect button ────────────────────────────────────────────
 
-export function EmailConnectCta({
-    connectorId = 'google',
+function ProviderButton({
+    connectorId,
+    label,
+    done,
+    onDone,
 }: {
-    connectorId?: string;
+    connectorId: string;
+    label: string;
+    done: boolean;
+    onDone: () => void;
 }) {
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<string | null>(null);
-    const [done, setDone] = useState(false);
 
     const handleConnect = useCallback(async () => {
         setBusy(true);
@@ -82,41 +121,98 @@ export function EmailConnectCta({
                     : connector.default_scopes;
             const r = await api.authorizeConnector(connectorId, scopes);
             openAuthUrl(r.authorization_url);
-            setDone(true);
+            onDone();
         } catch (e) {
             setErr(e instanceof Error ? e.message : String(e));
         } finally {
             setBusy(false);
         }
-    }, [connectorId]);
+    }, [connectorId, onDone]);
 
     return (
-        <div className="email-connect-cta" role="region" aria-label="Connect Google">
-            <div className="email-connect-cta__text">
-                <AlertCircle size={14} className="email-connect-cta__icon" />
-                <span>
-                    {done
-                        ? 'A browser tab opened for Google sign-in. Return here when finished.'
-                        : 'Connect your Google account to use Email Triage.'}
-                </span>
-            </div>
+        <div className="email-connect-cta__provider-slot">
             <button
                 className="email-connect-cta__button"
                 onClick={() => void handleConnect()}
-                disabled={busy}
+                disabled={busy || done}
+                aria-label={done ? `${label} sign-in opened` : `Connect ${label}`}
             >
                 {busy ? (
                     <Loader2 size={12} className="email-connect-cta__spinner" />
                 ) : (
                     <ExternalLink size={12} />
                 )}
-                <span>{done ? 'Reopen Google sign-in' : 'Connect Google'}</span>
+                <span>{done ? `${label} sign-in opened` : `Connect ${label}`}</span>
             </button>
             {err && (
                 <div className="email-connect-cta__error" role="alert">
                     {err}
                 </div>
             )}
+        </div>
+    );
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
+
+export function EmailConnectCta({
+    content = '',
+    connectorId,
+}: {
+    /** The assistant message content — used to detect which provider to surface. */
+    content?: string;
+    /**
+     * Optional explicit connector override. When provided, only this connector's
+     * button is shown regardless of content detection. Kept for back-compat with
+     * callers that hardcode ``connectorId="google"``.
+     */
+    connectorId?: string;
+}) {
+    const [googleDone, setGoogleDone] = useState(false);
+    const [microsoftDone, setMicrosoftDone] = useState(false);
+
+    // Resolve which provider(s) to surface.
+    const provider = connectorId
+        ? (connectorId as 'google' | 'microsoft' | 'both')
+        : detectProvider(content);
+
+    const showGoogle = provider === 'google' || provider === 'both';
+    const showMicrosoft = provider === 'microsoft' || provider === 'both';
+
+    const anyDone = googleDone || microsoftDone;
+
+    return (
+        <div
+            className="email-connect-cta"
+            role="region"
+            aria-label="Connect email account"
+        >
+            <div className="email-connect-cta__text">
+                <AlertCircle size={14} className="email-connect-cta__icon" />
+                <span>
+                    {anyDone
+                        ? 'A browser tab opened for sign-in. Return here when finished.'
+                        : 'Connect your email account to use Email Triage.'}
+                </span>
+            </div>
+            <div className="email-connect-cta__buttons">
+                {showGoogle && (
+                    <ProviderButton
+                        connectorId="google"
+                        label="Google"
+                        done={googleDone}
+                        onDone={() => setGoogleDone(true)}
+                    />
+                )}
+                {showMicrosoft && (
+                    <ProviderButton
+                        connectorId="microsoft"
+                        label="Microsoft"
+                        done={microsoftDone}
+                        onDone={() => setMicrosoftDone(true)}
+                    />
+                )}
+            </div>
         </div>
     );
 }

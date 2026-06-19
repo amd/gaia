@@ -17,7 +17,6 @@ Covers:
 
 from __future__ import annotations
 
-import dataclasses
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,6 +25,16 @@ pytest.importorskip("fastapi")
 pytest.importorskip("gaia_agent_email")
 
 from fastapi.testclient import TestClient  # noqa: E402
+from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
+from gaia_agent_email.outlook_scopes import (  # noqa: E402
+    OUTLOOK_CALENDAR_SCOPES,
+    OUTLOOK_MAIL_SCOPES,
+)
+from gaia_agent_email.scopes import (  # noqa: E402
+    ALL_SCOPES,
+    CALENDAR_SCOPES,
+    GMAIL_SCOPES,
+)
 
 from gaia.agents.registry import AgentRegistration, AgentRegistry  # noqa: E402
 from gaia.connectors.context import _agent_context  # noqa: E402
@@ -34,13 +43,6 @@ from gaia.connectors.grants import (  # noqa: E402
     _LEGACY_KEY_MIGRATIONS,
     migrate_legacy_agent_grants,
 )
-from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
-from gaia_agent_email.outlook_scopes import (  # noqa: E402
-    OUTLOOK_CALENDAR_SCOPES,
-    OUTLOOK_MAIL_SCOPES,
-)
-from gaia_agent_email.scopes import ALL_SCOPES, CALENDAR_SCOPES, GMAIL_SCOPES  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -66,13 +68,19 @@ class TestScopeResolution:
         """Resolved Google scopes include all Gmail + Calendar scopes."""
         reqs = _email_required_connections()
         google_req = next((r for r in reqs if r.connector_id == "google"), None)
-        assert google_req is not None, "No Google ConnectorRequirement in REQUIRED_CONNECTORS"
+        assert (
+            google_req is not None
+        ), "No Google ConnectorRequirement in REQUIRED_CONNECTORS"
 
         google_scopes = set(google_req.scopes)
         for scope in GMAIL_SCOPES:
-            assert scope in google_scopes, f"Missing Gmail scope {scope!r} in REQUIRED_CONNECTORS"
+            assert (
+                scope in google_scopes
+            ), f"Missing Gmail scope {scope!r} in REQUIRED_CONNECTORS"
         for scope in CALENDAR_SCOPES:
-            assert scope in google_scopes, f"Missing Calendar scope {scope!r} in REQUIRED_CONNECTORS"
+            assert (
+                scope in google_scopes
+            ), f"Missing Calendar scope {scope!r} in REQUIRED_CONNECTORS"
 
     def test_google_scopes_exact(self):
         """Google scopes are exactly ALL_SCOPES — no extras, no gaps."""
@@ -87,7 +95,9 @@ class TestScopeResolution:
         """Resolved Microsoft scopes include mail + calendar scopes."""
         reqs = _email_required_connections()
         ms_req = next((r for r in reqs if r.connector_id == "microsoft"), None)
-        assert ms_req is not None, "No Microsoft ConnectorRequirement in REQUIRED_CONNECTORS"
+        assert (
+            ms_req is not None
+        ), "No Microsoft ConnectorRequirement in REQUIRED_CONNECTORS"
 
         ms_scopes = set(ms_req.scopes)
         for scope in OUTLOOK_MAIL_SCOPES:
@@ -137,11 +147,17 @@ class TestScopeResolution:
         # Verify scope resolution goes through the registry registration —
         # independent of any chat session context variable
         all_regs = registry.list()
-        email_entry = next(r for r in all_regs if r.namespaced_agent_id == "installed:email")
+        email_entry = next(
+            r for r in all_regs if r.namespaced_agent_id == "installed:email"
+        )
         assert len(email_entry.required_connections) == 2  # Google + Microsoft
 
-        google_req = next(r for r in email_entry.required_connections if r.connector_id == "google")
-        ms_req = next(r for r in email_entry.required_connections if r.connector_id == "microsoft")
+        google_req = next(
+            r for r in email_entry.required_connections if r.connector_id == "google"
+        )
+        ms_req = next(
+            r for r in email_entry.required_connections if r.connector_id == "microsoft"
+        )
 
         assert set(google_req.scopes) == set(ALL_SCOPES)
         assert set(ms_req.scopes) == set(OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES)
@@ -150,8 +166,12 @@ class TestScopeResolution:
         """REQUIRED_CONNECTORS declares exactly two providers: google and microsoft."""
         reqs = _email_required_connections()
         connector_ids = {r.connector_id for r in reqs}
-        assert "google" in connector_ids, "Google provider missing from REQUIRED_CONNECTORS"
-        assert "microsoft" in connector_ids, "Microsoft provider missing from REQUIRED_CONNECTORS"
+        assert (
+            "google" in connector_ids
+        ), "Google provider missing from REQUIRED_CONNECTORS"
+        assert (
+            "microsoft" in connector_ids
+        ), "Microsoft provider missing from REQUIRED_CONNECTORS"
         assert len(reqs) == 2, (
             f"Expected exactly 2 REQUIRED_CONNECTORS entries (google + microsoft), "
             f"got {len(reqs)}: {[r.connector_id for r in reqs]}"
@@ -186,9 +206,9 @@ class TestAgentNotGranted:
                         scopes=list(GMAIL_SCOPES),
                     )
         err = exc_info.value
-        assert err.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED, (
-            f"Expected AGENT_NOT_GRANTED, got {err.reason}"
-        )
+        assert (
+            err.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED
+        ), f"Expected AGENT_NOT_GRANTED, got {err.reason}"
         assert err.agent_id == "installed:email"
         assert err.provider == "google"
 
@@ -219,9 +239,9 @@ class TestAgentNotGranted:
             missing_scopes=list(GMAIL_SCOPES),
         )
         http_exc = _raise_http_for(err)
-        assert http_exc.status_code == 403, (
-            f"AGENT_NOT_GRANTED must map to 403, got {http_exc.status_code}"
-        )
+        assert (
+            http_exc.status_code == 403
+        ), f"AGENT_NOT_GRANTED must map to 403, got {http_exc.status_code}"
         detail = http_exc.detail
         assert detail.get("error") == "agent_not_granted"
         assert "installed:email" in str(detail.get("agent_id", ""))
@@ -242,11 +262,15 @@ class TestAgentNotGranted:
         # Without a context, check_agent_grant is not called even if no grant exists.
         # The call will fail at load_connection (no stored connection) — but NOT
         # at the grant check stage.
-        with patch("gaia.connectors.api.check_agent_grant", return_value=False) as mock_grant:
+        with patch(
+            "gaia.connectors.api.check_agent_grant", return_value=False
+        ) as mock_grant:
             with patch("gaia.connectors.api.get_provider"):
                 with patch("gaia.connectors.api.load_connection", return_value=None):
                     with pytest.raises(AuthRequiredError) as exc_info:
-                        get_access_token_sync(provider="google", scopes=list(GMAIL_SCOPES))
+                        get_access_token_sync(
+                            provider="google", scopes=list(GMAIL_SCOPES)
+                        )
 
         # The error should be NOT_CONNECTED (from load_connection → None),
         # not AGENT_NOT_GRANTED.
@@ -306,9 +330,9 @@ class TestMissingCalendarScope:
                                 scopes=[calendar_scope],
                             )
         err = exc_info.value
-        assert err.reason is AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES, (
-            f"Expected CONNECTION_MISSING_SCOPES, got {err.reason}"
-        )
+        assert (
+            err.reason is AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES
+        ), f"Expected CONNECTION_MISSING_SCOPES, got {err.reason}"
         assert calendar_scope in err.missing_scopes
 
     def test_missing_calendar_scope_maps_to_403_with_missing_scopes(self):
@@ -344,17 +368,20 @@ class TestMissingCalendarScope:
         ):
             # gmail.modify alone — passes (triage read/organize)
             assert check_agent_grant(
-                "google", "installed:email",
+                "google",
+                "installed:email",
                 ["https://www.googleapis.com/auth/gmail.modify"],
             )
             # gmail.send alone — passes (send/reply)
             assert check_agent_grant(
-                "google", "installed:email",
+                "google",
+                "installed:email",
                 ["https://www.googleapis.com/auth/gmail.send"],
             )
             # calendar.events alone — fails (calendar tool guard fires)
             assert not check_agent_grant(
-                "google", "installed:email",
+                "google",
+                "installed:email",
                 [self.CALENDAR_SCOPE],
             )
 
@@ -397,7 +424,6 @@ class TestNoMailboxConnected:
     def test_resolve_send_backend_raises_http_503_no_mailbox(self):
         """resolve_send_backend raises HTTPException(503) when no mailbox connected."""
         from fastapi import HTTPException
-
         from gaia_agent_email.api_routes import get_send_backend
 
         with patch(
@@ -410,9 +436,9 @@ class TestNoMailboxConnected:
         exc = exc_info.value
         assert exc.status_code == 503
         detail = exc.detail or ""
-        assert "mailbox" in detail.lower() or "connect" in detail.lower(), (
-            f"503 detail should be actionable, got: {detail!r}"
-        )
+        assert (
+            "mailbox" in detail.lower() or "connect" in detail.lower()
+        ), f"503 detail should be actionable, got: {detail!r}"
 
     def test_email_health_always_200_via_ui_backend(self, ui_client):
         """GET /v1/email/health is always 200 — not gated by mailbox connection."""
@@ -462,9 +488,9 @@ class TestNoMailboxConnected:
             }
             resp = ui_client.post("/v1/email/triage", json=payload)
 
-        assert resp.status_code == 200, (
-            f"Triage should succeed without a mailbox connection, got {resp.status_code}: {resp.text}"
-        )
+        assert (
+            resp.status_code == 200
+        ), f"Triage should succeed without a mailbox connection, got {resp.status_code}: {resp.text}"
 
     def test_email_routes_mounted_at_ui_backend(self, ui_client):
         """The #1768 email router is mounted at /v1/email on the UI backend."""
@@ -515,12 +541,12 @@ class TestLegacyGrantMigration:
         # After migration, installed:email should have the scopes;
         # builtin:email should be gone.
         google_grants = captured_write.get("google", {})
-        assert "installed:email" in google_grants, (
-            "installed:email not present after migration"
-        )
-        assert "builtin:email" not in google_grants, (
-            "builtin:email still present after migration — should be removed"
-        )
+        assert (
+            "installed:email" in google_grants
+        ), "installed:email not present after migration"
+        assert (
+            "builtin:email" not in google_grants
+        ), "builtin:email still present after migration — should be removed"
         assert google_grants["installed:email"] == [
             "https://www.googleapis.com/auth/gmail.modify"
         ]
@@ -576,6 +602,6 @@ class TestLegacyGrantMigration:
             migrate_legacy_agent_grants()
 
         # No save when nothing changed
-        assert len(save_called) == 0, (
-            "_save_grants_locked called unexpectedly when no migration needed"
-        )
+        assert (
+            len(save_called) == 0
+        ), "_save_grants_locked called unexpectedly when no migration needed"
