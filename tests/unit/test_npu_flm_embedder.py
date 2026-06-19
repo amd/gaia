@@ -119,7 +119,9 @@ class TestDynamicDim:
         )
         assert host._embedding_dim == 512
         assert host._embedding_model == "embed-gemma-300m-FLM"
-        # Index was built at the derived dim, not the module default.
+        # When faiss is available, the index is built at the derived dim, not
+        # the module default. faiss is optional, so skip this leg without it.
+        pytest.importorskip("faiss")
         assert host._faiss_index is not None
         assert host._faiss_index.d == 512
 

@@ -223,6 +223,11 @@ def _compute_custom_origin_hash(py_file: Path) -> str:
     return hashlib.sha256(py_file.read_bytes()).hexdigest()[:16]
 
 
+# Default embedder (GPU/CPU). The NPU device overrides this with the FLM-native
+# embedder so chat + embeddings stay co-resident on the NPU backend (#1744).
+DEFAULT_EMBEDDING_MODEL = "nomic-embed-text-v2-moe-GGUF"
+
+
 @dataclass
 class DeviceConfig:
     """A verified (device, model, recipe, backend) configuration for an agent.
@@ -253,7 +258,7 @@ class DeviceConfig:
     backend: str
     verified: bool = False
     ctx_size: int = 32768
-    embedding_model: str = "nomic-embed-text-v2-moe-GGUF"
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
 
 
 # Default device configurations for built-in agents using Gemma 4 E4B.
@@ -301,7 +306,7 @@ def get_embedding_model_for_device(device: Optional[str]) -> str:
     for dc in DEFAULT_DEVICE_CONFIGS:
         if dc.device == device:
             return dc.embedding_model
-    return DeviceConfig.__dataclass_fields__["embedding_model"].default
+    return DEFAULT_EMBEDDING_MODEL
 
 
 @dataclass

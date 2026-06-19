@@ -876,6 +876,7 @@ class TestReconcileEndpoint:
         dim, not a hardcoded 768 — so a non-768 embedder (e.g. a truncated FLM
         embedder) is not silently skipped (#1744).
         """
+        pytest.importorskip("faiss")  # standalone reconcile path needs faiss
         import numpy as np
 
         # Two identical 512-dim vectors → cosine 1.0 → above the pair threshold.
