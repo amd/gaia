@@ -136,7 +136,7 @@ class ChatAgentConfig:
     # __init__: GAIA_DYNAMIC_TOOLS / GAIA_DYNAMIC_TOOLS_TAU / GAIA_DYNAMIC_TOOLS_MAX.
     dynamic_tools: bool = False
     dynamic_tools_threshold: float = 0.20  # inclusive cosine; calibrated #1449
-    dynamic_tools_max: int = 14  # cap (10 CORE + 4 dynamic slots)
+    dynamic_tools_max: int = 14  # cap (11 CORE + 3 dynamic slots)
 
     # Per-agent identity for the connectors activation filter (#1005).
     # Must be set BEFORE ``Agent.__init__`` runs ``_register_tools``, because
@@ -1214,13 +1214,10 @@ No documents are currently indexed.
                     Dictionary with status, the resolved bundle, and the full
                     loaded_tools list now available to call.
                 """
+                # load_tools is registered only inside ``if self.tool_loader is
+                # not None`` and the loader is never re-nulled after construction,
+                # so the loader is always live here.
                 loader = self.tool_loader
-                if loader is None:
-                    return {
-                        "status": "error",
-                        "error": "Dynamic tool loading is not active; all tools "
-                        "are already available.",
-                    }
                 try:
                     loaded = loader.load_bundle(bundle, self._tools_registry)
                 except KeyError:

@@ -57,8 +57,9 @@ logger = logging.getLogger(__name__)
 # tools (index/summarize/RAG) for doc-oriented turns while excluding lower-
 # scoring noise; plain content questions fall back to the CORE set. Overridable.
 DEFAULT_THRESHOLD = 0.20
-# Default cap: 10 CORE + 4 dynamic slots = 14 (≈62% shrink on the 37-tool doc
-# profile, clears the ≥60% Part-0 TTFT-reduction gate). See the plan deviations.
+# Default cap: 11 CORE (doc profile, incl. the load_tools escape hatch) + 3
+# dynamic slots = 14 (≈62% shrink on the 37-tool doc profile, clears the
+# ≥60% Part-0 TTFT-reduction gate). See the plan deviations.
 DEFAULT_MAX_TOOLS = 14
 
 
