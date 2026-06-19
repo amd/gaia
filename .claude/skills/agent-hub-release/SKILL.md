@@ -117,6 +117,8 @@ matching `CHANGELOG.md` entry in the same PR. `binaries.lock.json`'s `agentVersi
    core `publish.yml`.
 4. **Build stage** freezes on 4 platforms — `win32-x64`, `darwin-arm64`, `linux-x64`
    **required**; `darwin-x64` (Intel) **best-effort** — smoke-tests each, hashes it.
+   (The smoke test proves the binary boots and the REST route answers; with no
+   Lemonade in CI it does **not** exercise real LLM triage — a 502/timeout passes.)
 5. **Approve the gate.** The `publish` job pauses on the `agent-publish` environment
    until a maintainer approves; the publish token isn't readable until then.
 6. **Publish stage** (atomic): POST every binary to `/publish` → regenerate
@@ -131,9 +133,12 @@ exists; `/publish` is a verified 409 no-op for identical bytes.
 
 1. **Scaffold** the normal agent first (`gaia agent init`, per the guide), then add
    `packaging/` and the `hub/agents/npm/agent-<id>/` client. Mirror email.
-2. **Adapt the packaging scripts.** `freeze.py`, `publish_to_r2.py`, and
-   `gen_binaries_lock.py` currently **hardcode the `email-agent` artifact name +
-   paths** — copy + parameterize them for `<id>`.
+2. **Adapt the packaging scripts.** `freeze.py` (its `NAME = "email-agent"` constant)
+   and `publish_to_r2.py` (the executable name + the `email-agent-` filename prefix it
+   parses) **hardcode `email-agent`** — copy + parameterize them for `<id>`.
+   `gen_binaries_lock.py` is already generic (driven by `published.json` + manifest
+   `id`); the `agents/email` hub prefix lives in the workflow's `HUB_PREFIX` env, not a
+   script.
 3. **Copy the workflow** `release_agent_email.yml` → `release_agent_<id>.yml` and
    change: `PKG_DIR`, `MANIFEST`, `README`, `FREEZE_DIST`, `HUB_PREFIX`
    (`agents/<id>`), the tag trigger (`agent-pkg-<id>-*`), the artifact/frozen names,
@@ -156,7 +161,8 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
 - **Secret `GAIA_HUB_TOKEN`** — Agent Hub Bearer token matching an entry in the
   Worker's `PUBLISH_TOKENS`, scoped to the agent's `author`. Define it as an
   **environment** secret on `agent-publish` (not a repo secret) so it's unreadable
-  until the gate is approved.
+  until the gate is approved. (The workflow maps it into the publish script's
+  `AGENT_HUB_PUBLISH_TOKEN` env var — same token, different name inside the script.)
 - **Var `GAIA_HUB_BASE_URL`** — public Worker origin for downloads + the lock
   `baseUrl` (default `https://hub.amd-gaia.ai`).
 - **Var `GAIA_HUB_PUBLISH_URL`** — the Worker's **workers.dev** URL for uploads. The
@@ -167,10 +173,11 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
 
 ## Invariants & gotchas
 
-- **Immutable per filename.** Re-publishing identical bytes = idempotent 409 no-op;
-  different bytes under a published name **fail loudly**. Fix a bad release with a
-  new version — never an overwrite. (Same immutability the guide describes for
-  `id@version`.)
+- **Immutable per filename.** The Worker `409`s on any re-POST of an existing
+  filename (it keys on the filename via `head()`, not a byte-compare). The publish
+  script then re-fetches and hashes the stored object: **identical bytes → idempotent
+  no-op**, a **hash mismatch → fail loudly**. Fix a bad release with a new version —
+  never an overwrite. (Same immutability the guide describes for `id@version`.)
 - **Publish only from main.** The job asserts the release commit is on `main`.
 - **`SCHEMA_VERSION` MAJOR is the compat gate.** Client and binary must agree on the
   wire-contract MAJOR or `startSidecar` throws `VersionMismatchError`. Bump the npm
@@ -179,6 +186,11 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
   `macos-15-intel`. If it fails/absent it's **dropped** (3-platform release) with a
   loud `::warning::`; Intel users get a clear "no binary for darwin-x64" install
   error, never a placeholder one.
+- **SHA-256 provenance.** `publish_to_r2.py` hashes each binary locally and the Worker
+  hashes it server-side; the script **asserts they match** on the `201` before that
+  (local, server-verified) hash is written to `binaries.lock.json`. The lock hash is
+  then the gate the npm `fetch` CLI enforces on download (`PlatformError` on a
+  placeholder, `IntegrityError` on a mismatch).
 - **Fetch-verify is the real gate.** After `/publish`, CI re-fetches every object via
   the npm `fetch` CLI and checks bytes-hash-to-lock (bounded retry for Cloudflare
   edge propagation) before `npm publish`.
