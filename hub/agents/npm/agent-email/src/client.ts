@@ -3,12 +3,22 @@
 /**
  * Typed REST client for the GAIA email agent sidecar.
  *
- * Wraps the five HTTP endpoints the frozen sidecar serves:
- *   POST /v1/email/triage   (the frozen #1262 contract)
- *   POST /v1/email/draft     (mint a confirmation token)
- *   POST /v1/email/send      (send — gated on a valid token)
- *   GET  /health             (readiness probe)
- *   GET  /version            (apiVersion / agentVersion)
+ * Wraps every HTTP endpoint the frozen sidecar serves:
+ *   POST /v1/email/triage    (the frozen #1262 contract)
+ *   POST /v1/email/draft      (mint a confirmation token)
+ *   POST /v1/email/send       (send — gated on a valid token)
+ *   GET  /health              (root liveness — what the standalone sidecar serves)
+ *   GET  /version             (root apiVersion / agentVersion)
+ *   GET  /v1/email/health     (router-scoped liveness — for the mounted-on-app case)
+ *   GET  /v1/email/version    (router-scoped version)
+ *   GET  /v1/email/spec       (human-readable HTML endpoint spec)
+ *   GET  /openapi.json        (machine-readable OpenAPI document)
+ *
+ * NOTE: `/health` is liveness-only — it does NOT check Lemonade or the model, so a
+ * green health probe does not guarantee `triage` will succeed (a cold/unprovisioned
+ * host returns 502 on the first triage). A real readiness endpoint is tracked
+ * separately. The interactive `/docs` and `/redoc` UIs are intentionally not
+ * wrapped — they are browser pages, not a programmatic surface.
  *
  * Uses the global `fetch` (Node >= 18). Every non-2xx response raises an
  * `HttpError` carrying the status and body — no silent empty/null fallback.
@@ -25,6 +35,7 @@ import type {
   EmailTriageRequest,
   EmailTriageResponse,
   HealthResponse,
+  OpenApiDocument,
   VersionResponse,
 } from "./types.js";
 
@@ -78,14 +89,47 @@ export class EmailClient {
     return this.post<EmailSendResponse>("/v1/email/send", request);
   }
 
-  /** Readiness probe (GET /health). */
+  /**
+   * Root liveness probe (GET /health). LIVENESS ONLY — it does not check
+   * Lemonade or the model, so a green result does not guarantee `triage` works.
+   */
   async health(): Promise<HealthResponse> {
     return this.get<HealthResponse>("/health");
   }
 
-  /** Version probe (GET /version). */
+  /** Root version probe (GET /version). */
   async version(): Promise<VersionResponse> {
     return this.get<VersionResponse>("/version");
+  }
+
+  /**
+   * Router-scoped liveness probe (GET /v1/email/health). Use this when the
+   * email router is mounted on a product app, where root `/health` is the
+   * host's and this one reports the email surface specifically.
+   */
+  async emailHealth(): Promise<HealthResponse> {
+    return this.get<HealthResponse>("/v1/email/health");
+  }
+
+  /** Router-scoped version probe (GET /v1/email/version). */
+  async emailVersion(): Promise<VersionResponse> {
+    return this.get<VersionResponse>("/v1/email/version");
+  }
+
+  /**
+   * Human-readable HTML endpoint spec (GET /v1/email/spec). Returns the raw
+   * HTML page — a convenience for opening in a browser, not a JSON contract.
+   */
+  async spec(): Promise<string> {
+    const { text } = await this.requestRaw("GET", "/v1/email/spec", {
+      accept: "text/html",
+    });
+    return text;
+  }
+
+  /** The machine-readable OpenAPI document (GET /openapi.json). */
+  async openapi(): Promise<OpenApiDocument> {
+    return this.get<OpenApiDocument>("/openapi.json");
   }
 
   // -- internals ----------------------------------------------------------
@@ -98,12 +142,42 @@ export class EmailClient {
     return this.request<T>("POST", path, body);
   }
 
+  /** JSON request: fetch raw text, then parse + fail loud on empty/invalid JSON. */
   private async request<T>(
     method: "GET" | "POST",
     path: string,
     body?: unknown,
   ): Promise<T> {
+    const { status, text } = await this.requestRaw(method, path, { body });
     const url = `${this.baseUrl}${path}`;
+    if (!text) {
+      // A 2xx with no body is unexpected for these JSON endpoints — fail loud.
+      throw new HttpError(status, url, "expected a JSON body but got none");
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch (e) {
+      throw new HttpError(
+        status,
+        url,
+        `response was not valid JSON: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Transport core: send the request, surface network/timeout/non-2xx as
+   * `HttpError`, and return the raw `{ status, text }` for the caller to
+   * interpret (JSON for most endpoints, HTML for `/v1/email/spec`).
+   */
+  private async requestRaw(
+    method: "GET" | "POST",
+    path: string,
+    opts?: { body?: unknown; accept?: string },
+  ): Promise<{ status: number; text: string }> {
+    const url = `${this.baseUrl}${path}`;
+    const accept = opts?.accept ?? "application/json";
+    const hasBody = opts?.body !== undefined;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     log.debug(`${method} ${url}`);
@@ -112,11 +186,10 @@ export class EmailClient {
       res = await this.fetchImpl(url, {
         method,
         signal: ctrl.signal,
-        headers:
-          body === undefined
-            ? { accept: "application/json" }
-            : { accept: "application/json", "content-type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        headers: hasBody
+          ? { accept, "content-type": "application/json" }
+          : { accept },
+        body: hasBody ? JSON.stringify(opts!.body) : undefined,
       });
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") {
@@ -141,18 +214,6 @@ export class EmailClient {
       log.debug(`${method} ${url} -> ${res.status}`);
       throw new HttpError(res.status, url, text);
     }
-    if (!text) {
-      // A 2xx with no body is unexpected for these JSON endpoints — fail loud.
-      throw new HttpError(res.status, url, "expected a JSON body but got none");
-    }
-    try {
-      return JSON.parse(text) as T;
-    } catch (e) {
-      throw new HttpError(
-        res.status,
-        url,
-        `response was not valid JSON: ${(e as Error).message}`,
-      );
-    }
+    return { status: res.status, text };
   }
 }
