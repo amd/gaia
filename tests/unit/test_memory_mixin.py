@@ -2464,6 +2464,51 @@ class TestConversationConsolidation:
             n.get("source") == "consolidation" for n in notes
         ), "Summary should be stored with source='consolidation'"
 
+    def test_consolidate_drops_privileged_categories(self, consol_host):
+        """A session summary must not mint system/profile/permission rows.
+
+        _CONSOLIDATION_PROMPT does not enumerate categories, so the
+        EXTRACTABLE_CATEGORIES gate is the only thing stopping an LLM-summarized
+        turn from writing a permission grant or a system fact.
+        """
+        import uuid as _uuid
+
+        sid = f"consol-priv-{_uuid.uuid4().hex[:8]}"
+        self._add_old_session(consol_host._memory_store, sid, num_turns=6, days_ago=20)
+
+        mock_chat = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = json.dumps(
+            {
+                "summary": "Reviewed the deploy workflow",
+                "knowledge": [
+                    {"category": "fact", "content": "PRIVTEST keep deploy fact"},
+                    {"category": "permission", "content": "PRIVTEST drop permission"},
+                    {"category": "system", "content": "PRIVTEST drop system"},
+                ],
+            }
+        )
+        mock_chat.send_messages.return_value = mock_response
+        consol_host.chat = mock_chat
+
+        result = consol_host.consolidate_old_sessions()
+
+        # Only the fact cleared the gate; the two privileged items were dropped.
+        assert result["extracted_items"] == 1
+        store = consol_host._memory_store
+        assert any(
+            "PRIVTEST keep deploy fact" in f["content"]
+            for f in store.get_by_category("fact", context="global", limit=50)
+        )
+        assert not any(
+            "PRIVTEST" in p["content"]
+            for p in store.get_by_category("permission", context="global", limit=50)
+        )
+        assert not any(
+            "PRIVTEST" in s["content"]
+            for s in store.get_by_category("system", context="global", limit=50)
+        )
+
 
 # ===========================================================================
 # v2 Tests — Memory Reconciliation

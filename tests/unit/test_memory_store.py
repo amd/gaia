@@ -4945,17 +4945,25 @@ class TestProceduresCRUD:
         assert store.touch_skills([]) == 0
 
     def test_get_stats_reports_procedure_counts(self, store):
-        """get_stats()['procedures'] counts total/active and last recall time."""
+        """get_stats()['procedures'] counts total/active and last recall time.
+
+        "active" excludes both disabled rows AND superseded-but-enabled rows.
+        """
         active = self._sample(store, name="active-proc")
         store.put_skill(
             name="disabled-proc", when_to_use="t", markdown_body="b", enabled=False
         )
+        old = self._sample(store, name="old-proc")
+        new = self._sample(store, name="new-proc")
+        store.supersede_skill(old, superseded_by=new)  # old stays enabled=1
         store.touch_skills([active])
 
         proc = store.get_stats()["procedures"]
 
-        assert proc["total"] == 2
-        assert proc["active"] == 1  # the disabled row is excluded
+        assert proc["total"] == 4
+        # active-proc + new-proc count as active; disabled-proc (disabled) and
+        # old-proc (superseded though still enabled) are both excluded.
+        assert proc["active"] == 2
         assert proc["last_recalled"] is not None
 
     def test_search_skills_by_name(self, store):
