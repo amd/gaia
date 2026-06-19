@@ -8,8 +8,17 @@ from importlib.metadata import version as get_package_version_metadata
 
 __version__ = "0.21.2"
 
-# Lemonade version used across CI and installer
-LEMONADE_VERSION = "10.7.0"
+# Lemonade version used across CI and installer.
+#
+# DO NOT bump past 10.2.0 until the embedding regression below is fixed upstream.
+# v10.7.0 ships llama.cpp build b9585, which crashes loading the
+# nomic-embed-text-v2-moe-GGUF embedding model (llama-server "failed to start",
+# matching upstream llama.cpp GGML_ASSERT in llama-vocab.cpp, ggml-org/llama.cpp#13534).
+# Regular LLM GGUFs load fine, so only RAG / code-index / agent-memory embeddings
+# break -- which is why CI fails ONLY on the embedding jobs. Tracked by gaia#941.
+# The embeddings/RAG workflows now surface the llama-server stderr on load failure,
+# so a future bump can confirm the backend loads this model before landing.
+LEMONADE_VERSION = "10.2.0"
 
 
 def get_package_version() -> str:

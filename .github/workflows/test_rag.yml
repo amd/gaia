@@ -210,6 +210,17 @@ jobs:
                 if ($_.ErrorDetails) {
                     Write-Host "Error details: $($_.ErrorDetails.Message)"
                 }
+                # Lemonade returns a generic 500 "llama-server failed to start" and
+                # swallows the backend's own stderr -- the only place the real cause
+                # (e.g. a GGML_ASSERT vocab crash) is visible is the server job stream
+                # (lemonade-server is launched with 2>&1, so the llama-server child's
+                # stderr is merged in). Dump it before failing. See gaia#941 / #1571.
+                if ($env:LEMONADE_JOB_ID) {
+                    Write-Host "`n=== Lemonade / llama-server output (job $env:LEMONADE_JOB_ID) ==="
+                    $jobOutput = Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
+                    if ($jobOutput) { $jobOutput | ForEach-Object { Write-Host $_ } }
+                    else { Write-Host "(no server job output captured)" }
+                }
                 throw "Failed to load embedding model"
             }
 
