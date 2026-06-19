@@ -21,16 +21,13 @@ These tests cover:
 from __future__ import annotations
 
 import inspect
-import json
-from typing import Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 pytest.importorskip("gaia.ui._chat_helpers")
 pytest.importorskip("gaia_agent_email")
 
-from gaia.ui._chat_helpers import _email_rest_bridge, _parse_email_from_text
 from gaia_agent_email.api_routes import EmailTriageService
 from gaia_agent_email.contract import (
     EmailAddress,
@@ -38,9 +35,9 @@ from gaia_agent_email.contract import (
     EmailTriageRequest,
     EmailTriageResponse,
     EmailTriageResult,
-    SingleEmailInput,
 )
 
+from gaia.ui._chat_helpers import _email_rest_bridge, _parse_email_from_text
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -61,7 +58,9 @@ def _make_triage_response() -> EmailTriageResponse:
     return EmailTriageResponse(request_kind="single", result=result)
 
 
-def _make_message(subject: str = "Test subject", body: str = "Test body") -> EmailMessage:
+def _make_message(
+    subject: str = "Test subject", body: str = "Test body"
+) -> EmailMessage:
     return EmailMessage(
         message_id="msg1",
         **{"from": EmailAddress(email="alice@example.com")},
@@ -95,7 +94,9 @@ class TestParseEmailFromText:
         assert "Friday" in result.payload.message.body
 
     def test_parses_from_address(self):
-        text = "From: bob@company.com\nSubject: Urgent action needed\n\nPlease reply ASAP."
+        text = (
+            "From: bob@company.com\nSubject: Urgent action needed\n\nPlease reply ASAP."
+        )
         result = _parse_email_from_text(text)
         assert result is not None
         assert result.payload.message.from_.email == "bob@company.com"
@@ -139,13 +140,8 @@ class TestEmailRestBridge:
             )
         assert isinstance(result, str)
         assert len(result) > 0
-        # Category or summary from the mocked result should appear in the output.
-        assert (
-            "NEEDS_RESPONSE" in result
-            or "needs_response" in result.lower()
-            or "Reply" in result
-            or "Q3 report" in result
-        )
+        # Category value (lowercase str) should appear in the output.
+        assert "NEEDS_RESPONSE" in result or "Reply" in result or "Q3 report" in result
 
     def test_returns_guide_when_no_email_content(self):
         """When the user's message contains no email content, return a helpful guide."""
@@ -157,20 +153,18 @@ class TestEmailRestBridge:
             for kw in ["paste", "email", "subject", "from", "triage"]
         )
 
-    def test_surfaces_agent_not_granted_prefix(self):
-        """403 / AGENT_NOT_GRANTED from the service must surface the sentinel prefix
-        the frontend uses to show EmailConnectCta."""
-        from fastapi import HTTPException
-
+    def test_unexpected_service_error_propagates(self):
+        """Errors from the service that are NOT LLMTriageError/EmailSummarizeError
+        propagate as-is (fail loud; no silent swallowing)."""
         with patch.object(
             EmailTriageService,
             "triage_request",
-            side_effect=HTTPException(status_code=403, detail="AGENT_NOT_GRANTED: no connector"),
+            side_effect=RuntimeError("unexpected backend failure"),
         ):
-            result = _email_rest_bridge(
-                "From: alice@example.com\nSubject: test\n\nBody text."
-            )
-        assert "AGENT_NOT_GRANTED" in result or "connect" in result.lower()
+            with pytest.raises(RuntimeError, match="unexpected backend failure"):
+                _email_rest_bridge(
+                    "From: alice@example.com\nSubject: test\n\nBody text."
+                )
 
     def test_surfaces_lemonade_error(self):
         """LLMTriageError (LLM backend down) returns an actionable error string."""
@@ -186,11 +180,14 @@ class TestEmailRestBridge:
             )
         assert isinstance(result, str)
         assert len(result) > 0
-        assert "lemonade" in result.lower() or "llm" in result.lower() or "model" in result.lower()
+        assert (
+            "lemonade" in result.lower()
+            or "llm" in result.lower()
+            or "model" in result.lower()
+        )
 
-    def test_mail_provider_filter_passed_to_service(self):
-        """The mail_provider filter (google/microsoft/None) is forwarded to the
-        service so it scans the correct mailbox when looking up OAuth tokens."""
+    def test_bridge_calls_service_with_valid_triage_request(self):
+        """Bridge passes a well-formed EmailTriageRequest to EmailTriageService."""
         mock_resp = _make_triage_response()
         calls = []
 
@@ -201,13 +198,12 @@ class TestEmailRestBridge:
         with patch.object(EmailTriageService, "triage_request", side_effect=_capture):
             _email_rest_bridge(
                 "From: alice@example.com\nSubject: test\n\nBody text.",
-                mail_provider="google",
             )
         assert len(calls) == 1
-        # The provider hint must reach the service — the contract stores it via
-        # TriageContext or a direct field; verify it was supplied in some form.
         req = calls[0]
-        assert req is not None  # bridge called the service with a valid request
+        assert isinstance(req, EmailTriageRequest)
+        assert req.payload.kind == "single"
+        assert req.payload.message.from_.email == "alice@example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -222,9 +218,9 @@ class TestRipOutCanaries:
         """_session_mail_provider must NOT exist in _chat_helpers."""
         import gaia.ui._chat_helpers as ch
 
-        assert not hasattr(ch, "_session_mail_provider"), (
-            "_session_mail_provider still exists — in-process email wiring not ripped out"
-        )
+        assert not hasattr(
+            ch, "_session_mail_provider"
+        ), "_session_mail_provider still exists — in-process email wiring not ripped out"
 
     def test_mail_provider_kwarg_not_passed_to_create_agent(self):
         """registry.create_agent must never receive mail_provider= in _chat_helpers.
@@ -235,9 +231,9 @@ class TestRipOutCanaries:
         import gaia.ui._chat_helpers as ch
 
         src = inspect.getsource(ch)
-        assert "mail_provider=_session_mail_provider" not in src, (
-            "mail_provider= is still forwarded to create_agent — rip-out incomplete"
-        )
+        assert (
+            "mail_provider=_session_mail_provider" not in src
+        ), "mail_provider= is still forwarded to create_agent — rip-out incomplete"
 
     def test_pre_scan_inbox_not_in_render_tool_map(self):
         """pre_scan_inbox must NOT be a key in SSEOutputHandler._RENDER_TOOL_TO_LANG.
@@ -247,14 +243,14 @@ class TestRipOutCanaries:
         """
         from gaia.ui.sse_handler import SSEOutputHandler
 
-        assert "pre_scan_inbox" not in SSEOutputHandler._RENDER_TOOL_TO_LANG, (
-            "pre_scan_inbox still registered in _RENDER_TOOL_TO_LANG — SSE drop incomplete"
-        )
+        assert (
+            "pre_scan_inbox" not in SSEOutputHandler._RENDER_TOOL_TO_LANG
+        ), "pre_scan_inbox still registered in _RENDER_TOOL_TO_LANG — SSE drop incomplete"
 
     def test_email_rest_bridge_exists(self):
         """_email_rest_bridge must be importable from _chat_helpers."""
         import gaia.ui._chat_helpers as ch
 
-        assert hasattr(ch, "_email_rest_bridge"), (
-            "_email_rest_bridge not found in _chat_helpers — REST re-point not implemented"
-        )
+        assert hasattr(
+            ch, "_email_rest_bridge"
+        ), "_email_rest_bridge not found in _chat_helpers — REST re-point not implemented"

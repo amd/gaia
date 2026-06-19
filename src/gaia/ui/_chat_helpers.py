@@ -928,7 +928,6 @@ def _session_agent_kwargs(
     }
 
 
-
 def _find_last_tool_step(steps: list) -> dict | None:
     """Find the last tool step in captured_steps, searching backwards."""
     for i in range(len(steps) - 1, -1, -1):
@@ -1120,9 +1119,7 @@ _EMAIL_KEYWORDS = frozenset(
     ]
 )
 
-_FROM_HEADER_RE = _re.compile(
-    r"^from\s*:\s*(.+)$", _re.IGNORECASE | _re.MULTILINE
-)
+_FROM_HEADER_RE = _re.compile(r"^from\s*:\s*(.+)$", _re.IGNORECASE | _re.MULTILINE)
 _SUBJECT_HEADER_RE = _re.compile(
     r"^subject\s*:\s*(.+)$", _re.IGNORECASE | _re.MULTILINE
 )
@@ -1143,7 +1140,9 @@ def _parse_email_from_text(text: str):
         return None
 
     low = text.lower()
-    has_indicators = any(kw in low for kw in _EMAIL_KEYWORDS) or _EMAIL_ADDR_RE.search(text)
+    has_indicators = any(kw in low for kw in _EMAIL_KEYWORDS) or _EMAIL_ADDR_RE.search(
+        text
+    )
     if not has_indicators:
         return None
 
@@ -1202,16 +1201,11 @@ def _parse_email_from_text(text: str):
         return None
 
 
-def _email_rest_bridge(
-    user_message: str,
-    *,
-    mail_provider: str | None = None,  # reserved — forwarded to service context
-) -> str:
+def _email_rest_bridge(user_message: str) -> str:
     """Triage a single email pasted by the user, via EmailTriageService.
 
-    This is the REST re-point for agent_type=="email" (#1653).  Instead of
-    instantiating the in-process EmailTriageAgent, the chat path calls this
-    function which:
+    REST re-point for agent_type=="email" (#1653).  Instead of instantiating
+    the in-process EmailTriageAgent, the chat path calls this function which:
 
       1. Parses the user's message into an EmailTriageRequest.
       2. Calls the same EmailTriageService instance the /v1/email/triage route
@@ -1236,11 +1230,11 @@ def _email_rest_bridge(
             "suggest next steps."
         )
 
-    try:
-        from gaia_agent_email.api_routes import _service
-        from gaia_agent_email.tools.llm_triage import LLMTriageError
-        from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
+    from gaia_agent_email.api_routes import _service
+    from gaia_agent_email.tools.llm_triage import LLMTriageError
+    from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
 
+    try:
         resp = _service.triage_request(req)
         return _format_triage_response(resp)
     except LLMTriageError as exc:
@@ -1254,22 +1248,12 @@ def _email_rest_bridge(
             f"Email summarization failed: {exc}\n\n"
             "Make sure Lemonade Server is running and try again."
         )
-    except Exception as exc:
-        # Surface 403/AGENT_NOT_GRANTED from connector grant check.
-        detail = getattr(exc, "detail", None) or str(exc)
-        if "403" in str(exc) or "AGENT_NOT_GRANTED" in str(detail):
-            return (
-                f"AGENT_NOT_GRANTED: {detail}\n\n"
-                "Connect your email in Settings → Connectors to enable triage."
-            )
-        logger.error("_email_rest_bridge: unexpected error: %s", exc, exc_info=True)
-        raise
 
 
 def _format_triage_response(resp) -> str:
     """Format an EmailTriageResponse as a concise markdown reply."""
     result = resp.result
-    lines = [f"**Category:** {result.category}"]
+    lines = [f"**Category:** {result.category.value}"]
     if result.is_spam:
         lines.append("**Spam:** Yes")
     if result.is_phishing:
@@ -1387,10 +1371,7 @@ async def _get_chat_response(
                 "chat: email agent_type → REST bridge for session %s",
                 session_id[:8],
             )
-            return _email_rest_bridge(
-                request.message,
-                mail_provider=session.get("mail_provider") or None,
-            )
+            return _email_rest_bridge(request.message)
 
         # ── Agent cache ──────────────────────────────────────────────────────
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
@@ -1776,10 +1757,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         "chat: email agent_type → REST bridge (streaming) session %s",
                         session_id[:8],
                     )
-                    answer = _email_rest_bridge(
-                        request.message,
-                        mail_provider=session.get("mail_provider") or None,
-                    )
+                    answer = _email_rest_bridge(request.message)
                     sse_handler.print_final_answer(answer, streaming=False)
                     result_holder["answer"] = answer
                     return
