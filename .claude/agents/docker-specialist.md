@@ -63,7 +63,7 @@ services:
     group_add:
       - render
     environment:
-      LEMONADE_BASE_URL: http://lemonade:8000/api/v1
+      LEMONADE_BASE_URL: http://lemonade:13305/api/v1
 ```
 
 **Windows NPU note:** Ryzen AI NPU is only exposed inside Windows 11 hosts; containers on Linux don't currently see the NPU.
@@ -76,14 +76,14 @@ Compose pattern where Lemonade serves models to GAIA:
 services:
   lemonade:
     image: lemonade-sdk/server:latest
-    ports: ["8000:8000"]
+    ports: ["13305:13305"]
     volumes: ["model-cache:/root/.cache/lemonade"]
 
   gaia:
     image: amd/gaia:latest
     depends_on: [lemonade]
     environment:
-      LEMONADE_BASE_URL: http://lemonade:8000/api/v1
+      LEMONADE_BASE_URL: http://lemonade:13305/api/v1
 
 volumes:
   model-cache: {}

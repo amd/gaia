@@ -38,10 +38,10 @@ From `src/gaia/llm/lemonade_client.py`:
 |-----|-------|------|
 | General/default (`DEFAULT_MODEL_NAME`) | `Gemma-4-E4B-it-GGUF` | ~3 GB |
 | Code-heavy agents only (Code, Builder, Jira) | `Qwen3.5-35B-A3B-GGUF` | ~17 GB Q4_K_M |
-| Vision / VLM | `Qwen3-VL-4B-Instruct-GGUF` | ~3.2 GB |
+| Vision / VLM | `Gemma-4-E4B-it-GGUF` (default; `Qwen3-VL-4B-Instruct-GGUF` also supported) | ~3 GB |
 | Prompt enhancement | `Qwen3-8B-GGUF` | ~5 GB |
 
-Most agents default to `Gemma-4-E4B-it-GGUF` (the `DEFAULT_MODEL_NAME`); only code-heavy agents (Code, Builder, Jira) hardcode `Qwen3.5-35B-A3B-GGUF`. Don't hardcode model IDs in new agents — let users override via the CLI `--model` flag or the agent's dataclass config.
+Agents that don't set a model fall back to `Qwen3.5-35B-A3B-GGUF` (base `Agent` default, `agent.py:515`); Chat and Email explicitly use `Gemma-4-E4B-it-GGUF`. `gaia llm` uses `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`). Don't hardcode model IDs in new agents — let users override via the CLI `--model` flag or the agent's dataclass config.
 
 ## Inference engines (Lemonade terminology)
 

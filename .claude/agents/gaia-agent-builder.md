@@ -105,13 +105,13 @@ Missing any of these will fail `python util/lint.py --agents` or silently produc
 | Stable Diffusion | `SDToolsMixin` (`sd`) | `src/gaia/sd/mixin.py` |
 | Vision / structured extraction | `VLMToolsMixin` (`vlm`) | `src/gaia/vlm/mixin.py` |
 
-**MRO rule (GAIA convention, verified against the tree):** `Agent` is **first**, mixins after. Matches `ChatAgent`, `SDAgent`, `MedicalIntakeAgent`, and the registry's dynamic class in `registry.py:358`. Works because `Agent.__init__` does not call `super().__init__()` and the mixins that do have `__init__` (e.g. `ShellToolsMixin`) defensively initialize state lazily with `hasattr` guards. If you ever add a mixin whose `__init__` must run at construction, either (a) make it lazy-init like `ShellToolsMixin` or (b) override `__init__` on the concrete agent class and call the mixin's setup explicitly — do **not** silently flip the MRO, which would diverge from every other agent in the tree.
+**MRO rule (GAIA convention, verified against the tree):** TOOL mixins go **after** `Agent`; a STATE mixin like `MemoryMixin` may precede `Agent` (see `ChatAgent(MemoryMixin, Agent, RAGToolsMixin, …)`). `SDAgent` and `MedicalIntakeAgent` follow the simpler `class X(Agent, …Mixin)` shape. Works because `Agent.__init__` does not call `super().__init__()` and the mixins that do have `__init__` (e.g. `ShellToolsMixin`) defensively initialize state lazily with `hasattr` guards. If you ever add a tool mixin whose `__init__` must run at construction, either (a) make it lazy-init like `ShellToolsMixin` or (b) override `__init__` on the concrete agent class and call the mixin's setup explicitly — do **not** silently flip the MRO, which would diverge from every other agent in the tree.
 
 ## Default models (verified)
 
 - General: `Gemma-4-E4B-it-GGUF`
 - Code / agents: `Qwen3.5-35B-A3B-GGUF`
-- Vision: `Qwen3-VL-4B-Instruct-GGUF`
+- Vision: `Gemma-4-E4B-it-GGUF` (`Qwen3-VL-4B-Instruct-GGUF` also supported)
 
 Pin the model via the agent's `@dataclass` config default — never hardcode inside `__init__`. This lets CLI `--model` and eval harness override.
 
@@ -128,7 +128,7 @@ Surface failures with: what failed, which resource, what the user should do.
 
 - **Forgot `_TOOL_REGISTRY.clear()`** at the top of `_register_tools` — tools from a prior agent leak in
 - **`@tool` at module top-level** — decorator needs `self` in closure; silently drops `self` binding
-- **MRO departure from convention** — every in-tree agent uses `class X(Agent, MyMixin)`; don't flip to `class X(MyMixin, Agent)` "for textbook Python MRO reasons." Agent-first works because `Agent.__init__` doesn't `super().__init__()` and mixins handle it (see the MRO note above). If your mixin must run custom init, make it lazy or override `__init__` on the concrete class.
+- **MRO departure from convention** — put TOOL mixins after `Agent` (`class X(Agent, MyToolMixin)`); a STATE mixin like `MemoryMixin` may precede `Agent` (`class ChatAgent(MemoryMixin, Agent, …)`). Don't flip a tool mixin ahead of `Agent` "for textbook Python MRO reasons." This works because `Agent.__init__` doesn't `super().__init__()` and mixins lazy-init (see the MRO note above). If your mixin must run custom init, make it lazy or override `__init__` on the concrete class.
 - **New tool mixin not added to `KNOWN_TOOLS`** — other agents can't compose it by name
 - **Subprocess injection** — never pass user input directly to `subprocess.call`; use list args or `shlex.quote`
 - **`docs.json` not updated** — `.mdx` exists but Mintlify shows 404

@@ -38,7 +38,7 @@ You review GAIA code through an architectural lens. Focus on how the change sits
 1. **Map the change** — which layer(s) does it modify?
 2. **Check dep direction** — any upward imports? Any circulars?
 3. **Check reuse** — is similar logic already in `base/`, a mixin, or `KNOWN_TOOLS`?
-4. **Check mixin MRO** — when composing, `Agent` must be **first**, mixins after (mixins lazy-init since `Agent.__init__` doesn't call `super().__init__()`)
+4. **Check mixin MRO** — when composing, `Agent` precedes the tool mixins; a state mixin like `MemoryMixin` may precede `Agent` (see `ChatAgent`). Mixins lazy-init since `Agent.__init__` doesn't call `super().__init__()`
 5. **Check registry wiring** — new mixin? Add to `KNOWN_TOOLS` (`src/gaia/agents/registry.py:38`). New built-in agent? Add `_register_*_agent` block
 6. **Check blast radius** — who depends on what's changing? `grep` for imports
 7. **Check docs & tests** — any user-visible API change without a guide/spec update?
@@ -58,7 +58,7 @@ Structure reviews as:
 
 - **New tool class outside `tools/` or `<agent>/tools/`** — breaks mixin discoverability
 - **Mixin not added to `KNOWN_TOOLS`** — other agents can't compose it by name
-- **`Agent` subclass with wrong MRO** — `Agent` must be **first**, mixins after (mixins lazy-init since `Agent.__init__` doesn't call `super()`)
+- **`Agent` subclass with wrong MRO** — `Agent` precedes the tool mixins; a state mixin like `MemoryMixin` may precede `Agent` (see `ChatAgent`). Mixins lazy-init since `Agent.__init__` doesn't call `super()`
 - **Importing `gaia.cli` from a library module** — upward dependency
 - **Duplicated tool logic** — should be a mixin
 - **Hard-coded `http://localhost:13305`** — use `os.getenv("LEMONADE_BASE_URL", ...)` so Docker/CI can override

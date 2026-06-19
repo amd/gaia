@@ -76,7 +76,7 @@ python -m gaia.cli llm hi    # avoid — not what users run
 ## Key GAIA patterns
 
 ### Agent-style class
-See `src/gaia/agents/base/agent.py` for the base. Inherit from `Agent`, implement `_get_system_prompt()` and `_register_tools()`. Put `Agent` first, mixins after (GAIA convention — `Agent.__init__` doesn't call `super().__init__()`, so mixins lazy-init their state).
+See `src/gaia/agents/base/agent.py` for the base. Inherit from `Agent`, implement `_get_system_prompt()` and `_register_tools()`. Put `Agent` before the tool mixins; a state mixin like `MemoryMixin` may precede `Agent` (see `ChatAgent`). `Agent.__init__` doesn't call `super().__init__()`, so mixins lazy-init their state.
 
 ### `@tool` decorator
 ```python
