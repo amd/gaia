@@ -72,6 +72,31 @@ describe('renderMarkdown sanitization', () => {
     expect(html).toContain('&quot;');
   });
 
+  it('renders a GFM table with header and body cells', () => {
+    const md = '| Endpoint | Auth |\n|----------|------|\n| `/triage` | **Standalone** |\n| `/send` | Connector |';
+    const html = renderMarkdown(md);
+    expect(html).toContain('<table');
+    expect(html).toContain('<th');
+    expect(html).toContain('<td');
+    expect(html).toContain('<code'); // inline formatting inside a cell
+    expect(html).toContain('<strong'); // bold inside a cell
+    expect((html.match(/<tr>/g) || []).length).toBe(3); // 1 header + 2 body rows
+  });
+
+  it('does NOT treat a lone pipe line (no delimiter) as a table', () => {
+    const html = renderMarkdown('a | b | c is just prose');
+    expect(html).not.toContain('<table');
+    expect(html).toContain('<p');
+  });
+
+  it('escapes raw HTML smuggled inside a table cell', () => {
+    const md = '| x |\n|---|\n| <img src=x onerror=alert(1)> |';
+    const html = renderMarkdown(md);
+    expect(html).toContain('<table');
+    expect(html).not.toContain('<img'); // smuggled tag is escaped, not live
+    expect(html).toContain('&lt;img');
+  });
+
   it('still renders benign markdown (links, bold, code)', () => {
     const html = renderMarkdown('See **GAIA** at [the site](https://amd-gaia.ai) and run `gaia email`.');
     expect(html).toContain('<strong');
