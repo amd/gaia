@@ -469,6 +469,11 @@ def cluster_by_goal(
         Qualifying ``GoalCluster`` objects.
     """
     embedded: List[tuple] = []
+    # Memoize by goal text within the pass: identical goals embed to the identical
+    # vector, so the same recurring task (the procedural case — one goal succeeding
+    # many times) costs one embedder round-trip instead of one per session. Bounds
+    # the per-pass embed count by *distinct* goals, not session count.
+    embed_cache: Dict[str, np.ndarray] = {}
     for session in sequences:
         goal = session.get("goal")
         if not goal or not str(goal).strip():
@@ -477,8 +482,11 @@ def cluster_by_goal(
                 session.get("session_id"),
             )
             continue
-        vec = embed_fn(goal)  # embedder failure RE-RAISES (fail-loud)
-        embedded.append((session, np.asarray(vec, dtype=np.float32)))
+        vec = embed_cache.get(goal)
+        if vec is None:
+            vec = np.asarray(embed_fn(goal), dtype=np.float32)  # failure RE-RAISES
+            embed_cache[goal] = vec
+        embedded.append((session, vec))
 
     # Deterministic, content-derived seed order (goal text, then session id) so
     # cluster membership and the representative goal never hinge on the arbitrary

@@ -301,6 +301,14 @@ class ProceduralMemoryMixin:
         injection is an enhancement, so a recall hiccup must never crash the
         user's query — mirrors ``get_memory_dynamic_context``.
         """
+        # Zero-cost off-state: no procedures (new user) or memory disabled
+        # (GAIA_MEMORY_DISABLED -> no store -> index never built) means there is
+        # nothing to recall, so short-circuit before the per-turn settings-file
+        # read. Mirrors recall_skill's own empty-index guard.
+        index = getattr(self, "_proc_faiss_index", None)
+        if index is None or index.ntotal == 0:
+            return ""
+
         from gaia.agents.base.memory import (
             _load_memory_settings,  # deferred (cycle break)
         )

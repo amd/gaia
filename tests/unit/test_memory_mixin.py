@@ -3502,6 +3502,17 @@ class TestRecalledSkillPromptBuilder:
         pytest.importorskip("faiss")
         assert mixin_host._build_recalled_skills_prompt("goal") == ""
 
+    def test_off_state_skips_settings_file_read(self, mixin_host):
+        """Empty procedures index → no per-turn memory_settings.json read.
+
+        The zero-procedure / GAIA_MEMORY_DISABLED case must stay zero-cost: the
+        guard short-circuits before load_synthesis_config(_load_memory_settings()).
+        """
+        pytest.importorskip("faiss")
+        with patch("gaia.agents.base.memory._load_memory_settings") as mock_settings:
+            assert mixin_host._build_recalled_skills_prompt("goal") == ""
+        mock_settings.assert_not_called()
+
     def test_short_body_kept_intact(self, mixin_host):
         """A body under the cap is injected verbatim, no truncation marker."""
         pytest.importorskip("faiss")

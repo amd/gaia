@@ -365,6 +365,26 @@ class TestClusterByGoal:
         assert forward[0].goal == reverse[0].goal
         assert forward[0].from_sessions == reverse[0].from_sessions
 
+    def test_identical_goals_embed_once_per_distinct_goal(self):
+        """Per-pass memoization: the embedder is called once per *distinct* goal,
+        not once per session — so a recurring task does not re-embed N times."""
+        vecs = {"g": _unit([1.0, 0.0, 0.0]), "other": _unit([0.0, 1.0, 0.0])}
+        calls: list = []
+
+        def counting_embed(text):
+            calls.append(text)
+            return vecs[text]
+
+        # 5 sessions share goal "g", 1 has "other" → 2 distinct goals.
+        sessions = [_session(f"s{i}", "g", ["a", "b", "c"]) for i in range(5)]
+        sessions.append(_session("s5", "other", ["a", "b", "c"]))
+
+        cluster_by_goal(sessions, counting_embed, min_occurrences=3)
+
+        assert calls.count("g") == 1  # embedded once despite 5 sessions
+        assert calls.count("other") == 1
+        assert len(calls) == 2  # 2 distinct goals, not 6 sessions
+
 
 # ===========================================================================
 # distill_cluster — contract-shape + fail-loud split
