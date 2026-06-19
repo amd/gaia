@@ -171,10 +171,13 @@ export function EmailConnectCta({
     const [googleDone, setGoogleDone] = useState(false);
     const [microsoftDone, setMicrosoftDone] = useState(false);
 
-    // Resolve which provider(s) to surface.
-    const provider = connectorId
-        ? (connectorId as 'google' | 'microsoft' | 'both')
-        : detectProvider(content);
+    // Resolve which provider(s) to surface. Honor an explicit google/microsoft
+    // override; any other value (or none) falls back to content detection so we
+    // never render zero connect buttons (no silent dead-end).
+    const provider =
+        connectorId === 'google' || connectorId === 'microsoft'
+            ? connectorId
+            : detectProvider(content);
 
     const showGoogle = provider === 'google' || provider === 'both';
     const showMicrosoft = provider === 'microsoft' || provider === 'both';
