@@ -405,7 +405,6 @@ gaia/
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   ├── analyst/    # AnalystAgent — structured data analysis (CSV/Excel, scratchpad SQL)
 │   │   ├── browser/    # BrowserAgent — web research (search, fetch, download)
-│   │   ├── docqa/      # DocumentQAAgent — standalone document Q&A with RAG
 │   │   ├── fileio/     # FileIOAgent — file read/write/edit operations
 │   │   ├── email/      # EmailTriageAgent — email triage and summarization
 │   │   ├── builder/    # BuilderAgent — scaffolds new agents from templates
@@ -506,7 +505,7 @@ The `gaia-emr` console script now ships with the standalone `gaia-agent-emr` hub
 | Agent | Location | Description | Default Model |
 |-------|----------|-------------|---------------|
 | **ChatAgent** | `agents/chat/agent.py` | Multi-profile conversation (chat/doc/file) with RAG | Gemma-4-E4B |
-| **DocumentQAAgent** | `agents/docqa/agent.py` | Standalone document Q&A with RAG | Qwen3.5-35B-A3B |
+| **DocumentQAAgent** | `hub/agents/python/docqa/gaia_agent_docqa/agent.py` | Standalone document Q&A with RAG | Qwen3.5-35B-A3B |
 | **AnalystAgent** | `agents/analyst/agent.py` | Structured data analysis (CSV/Excel, scratchpad SQL) | Qwen3.5-35B-A3B |
 | **BrowserAgent** | `agents/browser/agent.py` | Web research — search, fetch pages, download | Qwen3.5-35B-A3B |
 | **FileIOAgent** | `agents/fileio/agent.py` | File read/write/edit operations | Qwen3.5-35B-A3B |
@@ -518,11 +517,11 @@ The `gaia-emr` console script now ships with the standalone `gaia-agent-emr` hub
 | **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B-A3B |
 | **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B-A3B |
 | **MedicalIntakeAgent** | `hub/agents/python/emr/gaia_agent_emr/agent.py` | Medical form processing (VLM) | Gemma-4-E4B |
-| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B-A3B (`AGENT_ROUTING_MODEL`) |
+| **RoutingAgent** | `hub/agents/python/routing/gaia_agent_routing/agent.py` | Intelligent agent selection | Qwen3.5-35B-A3B (`AGENT_ROUTING_MODEL`) |
 | **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
 | **ConnectorsDemoAgent** | `agents/connectors_demo/agent.py` | Per-agent connector activation demo | Qwen3.5-35B-A3B |
 
-`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent respectively (see [`src/gaia/cli.py`](src/gaia/cli.py)). `gaia telegram` is a messaging adapter, not an agent. Internal building-block agents (DocumentQAAgent, FileIOAgent, ConnectorsDemoAgent) live under `src/gaia/agents/` but aren't standalone CLI commands.
+`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent respectively (see [`src/gaia/cli.py`](src/gaia/cli.py)). `gaia telegram` is a messaging adapter, not an agent. Internal building-block agents (FileIOAgent, ConnectorsDemoAgent) live under `src/gaia/agents/` but aren't standalone CLI commands. DocumentQAAgent and RoutingAgent now ship as standalone `gaia-agent-docqa` / `gaia-agent-routing` hub wheels (`hub/agents/python/`).
 
 ### Agent Registry & Tool Mixins
 
