@@ -41,7 +41,6 @@ from gaia_agent_email.contract import (  # noqa: E402
 from gaia_agent_email.export_openapi import ARTIFACT_PATH, build_app  # noqa: E402
 from gaia_agent_email.version import AGENT_VERSION, API_VERSION  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -141,9 +140,7 @@ def test_version_conforms_to_spec(client, committed_spec):
     resp = client.get("/v1/email/version")
     assert resp.status_code == 200
 
-    schema_name = _schema_name_from_response(
-        committed_spec, "get", "/v1/email/version"
-    )
+    schema_name = _schema_name_from_response(committed_spec, "get", "/v1/email/version")
     required = _required_keys(committed_spec, schema_name)
     body = resp.json()
 
@@ -166,16 +163,14 @@ def test_version_has_no_undocumented_fields(client, committed_spec):
     assert resp.status_code == 200
     body = resp.json()
 
-    schema_name = _schema_name_from_response(
-        committed_spec, "get", "/v1/email/version"
-    )
+    schema_name = _schema_name_from_response(committed_spec, "get", "/v1/email/version")
     documented_keys = set(
         committed_spec["components"]["schemas"][schema_name].get("properties", {})
     )
     for key in body:
-        assert key in documented_keys, (
-            f"response field {key!r} is not documented in the spec schema"
-        )
+        assert (
+            key in documented_keys
+        ), f"response field {key!r} is not documented in the spec schema"
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +190,7 @@ def test_triage_conforms_to_spec(client, committed_spec):
 
     assert resp.status_code == 200
 
-    schema_name = _schema_name_from_response(
-        committed_spec, "post", "/v1/email/triage"
-    )
+    schema_name = _schema_name_from_response(committed_spec, "post", "/v1/email/triage")
     required = _required_keys(committed_spec, schema_name)
     body = resp.json()
 
@@ -235,9 +228,7 @@ def test_draft_conforms_to_spec(client, committed_spec):
     )
     assert resp.status_code == 200
 
-    schema_name = _schema_name_from_response(
-        committed_spec, "post", "/v1/email/draft"
-    )
+    schema_name = _schema_name_from_response(committed_spec, "post", "/v1/email/draft")
     required = _required_keys(committed_spec, schema_name)
     body = resp.json()
 
@@ -283,9 +274,9 @@ def test_send_without_token_returns_403(client):
     body = resp.json()
     assert "detail" in body
     detail_lower = body["detail"].lower()
-    assert "confirmation_token" in detail_lower or "draft" in detail_lower, (
-        "403 detail should guide the caller to POST /draft to obtain a token"
-    )
+    assert (
+        "confirmation_token" in detail_lower or "draft" in detail_lower
+    ), "403 detail should guide the caller to POST /draft to obtain a token"
 
 
 def test_send_invalid_payload_returns_422(client):
