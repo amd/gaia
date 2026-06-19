@@ -928,18 +928,6 @@ def _session_agent_kwargs(
     }
 
 
-def _session_mail_provider(session: dict) -> str | None:
-    """Session mailbox FILTER for the email agent (#1596 / #1603 Phase 2).
-
-    ``None`` (unset, null, or empty string from the frontend) means "every
-    connected mailbox" — the email agent scans all of them and fails loudly
-    when none is connected. An explicit ``"google"`` / ``"microsoft"``
-    restricts to that provider. Never coerce a missing pick to "google":
-    that silently triaged Gmail for sessions that never chose a provider
-    and ignored a connected Outlook.
-    """
-    return session.get("mail_provider") or None
-
 
 def _find_last_tool_step(steps: list) -> dict | None:
     """Find the last tool step in captured_steps, searching backwards."""
@@ -1105,6 +1093,203 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
             )
 
 
+# ── Email REST bridge (#1653) ────────────────────────────────────────────────
+# Replaces the in-process EmailTriageAgent dispatch.  When agent_type=="email"
+# the chat path calls _email_rest_bridge instead of registry.create_agent.
+# The bridge parses the user message into an EmailTriageRequest and calls the
+# same EmailTriageService the mounted /v1/email/triage route uses.
+
+_EMAIL_KEYWORDS = frozenset(
+    [
+        "dear ",
+        "hi ",
+        "hello ",
+        "from:",
+        "subject:",
+        "to:",
+        "cc:",
+        "date:",
+        "could you",
+        "can you",
+        "please ",
+        "action required",
+        "follow up",
+        "follow-up",
+        "reply by",
+        "respond by",
+    ]
+)
+
+_FROM_HEADER_RE = _re.compile(
+    r"^from\s*:\s*(.+)$", _re.IGNORECASE | _re.MULTILINE
+)
+_SUBJECT_HEADER_RE = _re.compile(
+    r"^subject\s*:\s*(.+)$", _re.IGNORECASE | _re.MULTILINE
+)
+_EMAIL_ADDR_RE = _re.compile(r"[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}")
+
+
+def _parse_email_from_text(text: str):
+    """Parse a free-text user message into an ``EmailTriageRequest``.
+
+    Returns ``None`` when the text contains no identifiable email content so
+    the bridge can return a guide message instead.  The parser is deliberately
+    permissive — it only looks for rough structural markers (headers or common
+    email-salutation keywords) before constructing a minimal request.
+
+    Import is deferred so non-email sessions never pay the wheel import cost.
+    """
+    if not text or not text.strip():
+        return None
+
+    low = text.lower()
+    has_indicators = any(kw in low for kw in _EMAIL_KEYWORDS) or _EMAIL_ADDR_RE.search(text)
+    if not has_indicators:
+        return None
+
+    # --- Extract From ---
+    from_match = _FROM_HEADER_RE.search(text)
+    addr_match = _EMAIL_ADDR_RE.search(text)
+    if from_match:
+        raw_from = from_match.group(1).strip()
+        em = _EMAIL_ADDR_RE.search(raw_from)
+        sender_email = em.group(0) if em else raw_from
+        # Try name before angle-bracket address
+        name_match = _re.match(r"^(.+?)\s*<", raw_from)
+        sender_name = name_match.group(1).strip().strip('"') if name_match else None
+    elif addr_match:
+        sender_email = addr_match.group(0)
+        sender_name = None
+    else:
+        sender_email = "unknown@unknown.invalid"
+        sender_name = None
+
+    # --- Extract Subject ---
+    subj_match = _SUBJECT_HEADER_RE.search(text)
+    subject = subj_match.group(1).strip() if subj_match else "(no subject)"
+
+    # --- Extract Body ---
+    # Strip recognized headers from the top; remainder is the body.
+    _HEADER_LINE_RE = _re.compile(
+        r"^(?:from|to|cc|bcc|subject|date|reply-to)\s*:.*$",
+        _re.IGNORECASE | _re.MULTILINE,
+    )
+    body = _HEADER_LINE_RE.sub("", text).strip()
+    if not body:
+        body = text.strip()
+
+    try:
+        from gaia_agent_email.contract import (
+            EmailAddress,
+            EmailMessage,
+            EmailTriageRequest,
+            SingleEmailInput,
+        )
+
+        message = EmailMessage(
+            message_id="chat-bridge-0",
+            **{"from": EmailAddress(name=sender_name, email=sender_email)},
+            subject=subject,
+            body=body,
+        )
+        payload = SingleEmailInput(
+            principal=EmailAddress(email="me@gaia.local"),
+            message=message,
+        )
+        return EmailTriageRequest(payload=payload)
+    except Exception as _e:
+        logger.debug("_parse_email_from_text: construction failed: %s", _e)
+        return None
+
+
+def _email_rest_bridge(
+    user_message: str,
+    *,
+    mail_provider: str | None = None,  # reserved — forwarded to service context
+) -> str:
+    """Triage a single email pasted by the user, via EmailTriageService.
+
+    This is the REST re-point for agent_type=="email" (#1653).  Instead of
+    instantiating the in-process EmailTriageAgent, the chat path calls this
+    function which:
+
+      1. Parses the user's message into an EmailTriageRequest.
+      2. Calls the same EmailTriageService instance the /v1/email/triage route
+         uses (no HTTP round-trip; in-process call).
+      3. Formats the EmailTriageResponse as a human-readable assistant reply.
+
+    Auth / grant errors propagate the AGENT_NOT_GRANTED prefix so the frontend
+    surfaces EmailConnectCta (the 403 response already carries that detail from
+    the connector grant check).
+    """
+    req = _parse_email_from_text(user_message)
+    if req is None:
+        return (
+            "To triage an email, paste its content here — include the **Subject**, "
+            "**From**, and **body** lines. For example:\n\n"
+            "```\n"
+            "From: alice@example.com\n"
+            "Subject: Q3 report review\n\n"
+            "Hi, could you review the attached report by Friday?\n"
+            "```\n\n"
+            "Once you paste the email I'll categorize it, summarize it, and "
+            "suggest next steps."
+        )
+
+    try:
+        from gaia_agent_email.api_routes import _service
+        from gaia_agent_email.tools.llm_triage import LLMTriageError
+        from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
+
+        resp = _service.triage_request(req)
+        return _format_triage_response(resp)
+    except LLMTriageError as exc:
+        return (
+            f"The local LLM could not complete the triage: {exc}\n\n"
+            "Make sure Lemonade Server is running (`gaia init` or "
+            "`lemonade-server serve`) and try again."
+        )
+    except EmailSummarizeError as exc:
+        return (
+            f"Email summarization failed: {exc}\n\n"
+            "Make sure Lemonade Server is running and try again."
+        )
+    except Exception as exc:
+        # Surface 403/AGENT_NOT_GRANTED from connector grant check.
+        detail = getattr(exc, "detail", None) or str(exc)
+        if "403" in str(exc) or "AGENT_NOT_GRANTED" in str(detail):
+            return (
+                f"AGENT_NOT_GRANTED: {detail}\n\n"
+                "Connect your email in Settings → Connectors to enable triage."
+            )
+        logger.error("_email_rest_bridge: unexpected error: %s", exc, exc_info=True)
+        raise
+
+
+def _format_triage_response(resp) -> str:
+    """Format an EmailTriageResponse as a concise markdown reply."""
+    result = resp.result
+    lines = [f"**Category:** {result.category}"]
+    if result.is_spam:
+        lines.append("**Spam:** Yes")
+    if result.is_phishing:
+        lines.append("**Phishing:** Yes")
+    if result.summary:
+        lines.append(f"\n**Summary:** {result.summary}")
+    if result.action_items:
+        lines.append("\n**Action items:**")
+        for item in result.action_items:
+            due = f" (due: {item.due_hint})" if item.due_hint else ""
+            lines.append(f"- {item.description}{due}")
+    if result.draft:
+        draft = result.draft
+        lines.append("\n**Suggested reply:**")
+        if draft.subject:
+            lines.append(f"> **Subject:** {draft.subject}")
+        lines.append(f"> {draft.body}")
+    return "\n".join(lines)
+
+
 # ── Non-streaming Chat ───────────────────────────────────────────────────────
 
 
@@ -1192,6 +1377,20 @@ async def _get_chat_response(
         model_id, device_ctx = _apply_device_model(
             session, agent_type, model_id, custom_model, registry
         )
+
+        # ── Email REST bridge — intercept before agent cache / construction ──
+        # agent_type=="email" no longer dispatches an in-process EmailTriageAgent.
+        # The bridge calls EmailTriageService directly (same object the mounted
+        # /v1/email/triage route uses) and returns the formatted result (#1653).
+        if agent_type == "email":
+            logger.info(
+                "chat: email agent_type → REST bridge for session %s",
+                session_id[:8],
+            )
+            return _email_rest_bridge(
+                request.message,
+                mail_provider=session.get("mail_provider") or None,
+            )
 
         # ── Agent cache ──────────────────────────────────────────────────────
         cached_agent = _get_cached_agent(session_id, model_id, agent_type)
@@ -1293,11 +1492,6 @@ async def _get_chat_response(
                         allowed=allowed,
                         session_id=session_id,
                     ),
-                    # Forwarded only here (not via _session_agent_kwargs, which
-                    # also feeds the strict ChatAgentConfig). Non-email factories
-                    # drop it via dataclasses.fields filtering. None = scan every
-                    # connected mailbox (#1596).
-                    mail_provider=_session_mail_provider(session),
                 )
                 logger.info(
                     "chat: Invoking agent %s for session %s, model=%s",
@@ -1574,6 +1768,22 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             try:
                 t0 = _time.monotonic()
 
+                # ── Email REST bridge — intercept before agent construction ───
+                # agent_type=="email" routes through the packaged REST service
+                # instead of the in-process EmailTriageAgent (#1653).
+                if agent_type == "email":
+                    logger.info(
+                        "chat: email agent_type → REST bridge (streaming) session %s",
+                        session_id[:8],
+                    )
+                    answer = _email_rest_bridge(
+                        request.message,
+                        mail_provider=session.get("mail_provider") or None,
+                    )
+                    sse_handler.print_final_answer(answer, streaming=False)
+                    result_holder["answer"] = answer
+                    return
+
                 # ── Agent cache check ─────────────────────────────────────────
                 cached_agent = _get_cached_agent(session_id, model_id, agent_type)
 
@@ -1770,10 +1980,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 allowed=allowed,
                                 session_id=session_id,
                             ),
-                            # See the non-streaming path: email-only kwarg,
-                            # filtered out by non-email factories. None = scan
-                            # every connected mailbox (#1596).
-                            mail_provider=_session_mail_provider(session),
                         )
                         agent.console = sse_handler
                         logger.info(

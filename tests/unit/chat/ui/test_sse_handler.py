@@ -1727,167 +1727,49 @@ class TestMCPToolVisualization:
 
 
 class TestStructuredRenderInjection:
-    """The SSE handler buffers ``pre_scan_inbox`` envelopes and prepends
-    them as fenced ``email_pre_scan`` blocks into the final answer.
+    """Structured-render injection mechanism (HACK — see issue #1000).
 
-    This is the workaround for chat-tuned models that paraphrase the JSON
-    envelope into prose instead of emitting a fenced block (Gemma-4-E4B
-    observed). Removing the hack requires multi-model support — see #1000.
+    The ``_RENDER_TOOL_TO_LANG`` map is currently empty (#1653 rip-out removed
+    the only entry, ``pre_scan_inbox``). These tests guard the injection
+    infrastructure so future render tools can be added without re-introducing
+    bugs.
     """
 
-    def _make_envelope(self):
-        return {
-            "ok": True,
-            "data": {
-                "kind": "email_pre_scan",
-                "urgent": [],
-                "actionable": [
-                    {
-                        "message_id": "abc123",
-                        "thread_id": "thr1",
-                        "sender": "alice@example.com",
-                        "subject": "Q3 review",
-                        "why": "important + starred",
-                    }
-                ],
-                "informational_count": 0,
-                "suggested_archives": [],
-                "suggested_drafts": [],
-                "preferences_applied": {
-                    "priority_senders": [],
-                    "low_priority_senders": [],
-                    "category_defaults": {},
-                },
-                "totals": {
-                    "urgent": 0,
-                    "actionable": 1,
-                    "informational": 0,
-                    "suggested_archives": 0,
-                },
-            },
-        }
+    def test_render_tool_map_is_empty_after_rip_out(self, handler):
+        """``_RENDER_TOOL_TO_LANG`` has no entries after the #1653 rip-out.
 
-    def test_pre_scan_envelope_captured(self, handler):
-        """``pretty_print_json`` should buffer a well-formed pre-scan envelope."""
-        handler.print_tool_usage("pre_scan_inbox")
-        _drain(handler)
-        handler.pretty_print_json(self._make_envelope(), title="Result")
-        _drain(handler)
-        # Buffer holds one ``(lang, payload)`` tuple.
-        assert len(handler._pending_render_payloads) == 1
-        lang, payload = handler._pending_render_payloads[0]
-        assert lang == "email_pre_scan"
-        assert payload["kind"] == "email_pre_scan"
-
-    def test_pre_scan_envelope_captured_when_passed_as_json_string(self, handler):
-        """Live regression: ``@tool``-decorated functions return JSON strings,
-        which the agent dispatch loop hands to ``pretty_print_json`` verbatim.
-        The capture must parse-on-demand or the fence never gets injected
-        (this exact bug took one live retest to surface — the unit-test path
-        was passing dicts only and missed the string case).
+        pre_scan_inbox was the only key; once the in-process email agent is
+        gone, the map is empty until a new render tool is registered.
         """
-        import json as _json
+        from gaia.ui.sse_handler import SSEOutputHandler
 
-        handler.print_tool_usage("pre_scan_inbox")
-        _drain(handler)
-        handler.pretty_print_json(_json.dumps(self._make_envelope()), title="Result")
-        _drain(handler)
-        assert len(handler._pending_render_payloads) == 1
-        assert handler._pending_render_payloads[0][0] == "email_pre_scan"
+        assert SSEOutputHandler._RENDER_TOOL_TO_LANG == {}
 
-    def test_pre_scan_capture_ignores_unparseable_strings(self, handler):
-        """Defensive: a tool returning a non-JSON string (e.g. a free-text
-        error) shouldn't crash the handler — just decline to capture."""
-        handler.print_tool_usage("pre_scan_inbox")
+    def test_empty_render_map_produces_no_fence(self, handler):
+        """With an empty _RENDER_TOOL_TO_LANG, no fence is ever prepended."""
+        handler.print_tool_usage("any_tool")
         _drain(handler)
-        handler.pretty_print_json("not json at all", title="Result")
+        handler.pretty_print_json({"ok": True, "data": {"kind": "whatever"}}, title="R")
         _drain(handler)
+        handler.print_final_answer("Plain answer.")
+        events = _drain(handler)
+        assert events[0]["content"] == "Plain answer."
         assert handler._pending_render_payloads == []
 
-    def test_pre_scan_fence_prepended_to_final_answer(self, handler):
-        """Final answer gets the fenced block prepended; LLM prose follows."""
-        handler.print_tool_usage("pre_scan_inbox")
-        _drain(handler)
-        handler.pretty_print_json(self._make_envelope(), title="Result")
-        _drain(handler)
-        handler.print_final_answer("Here's your inbox pre-scan.")
-        events = _drain(handler)
-        assert len(events) == 1
-        content = events[0]["content"]
-        # Fence comes first.
-        assert content.startswith("```email_pre_scan\n")
-        # Closing fence + LLM prose follow.
-        assert "```\n\nHere's your inbox pre-scan." in content
-        # Buffer drained.
+    def test_buffer_starts_empty(self, handler):
+        """New handler has no pending render payloads."""
         assert handler._pending_render_payloads == []
 
-    def test_pre_scan_fence_when_llm_emits_no_prose(self, handler):
-        """Even with empty LLM answer, the card still renders."""
-        handler.print_tool_usage("pre_scan_inbox")
+    def test_buffer_cleared_after_final_answer(self, handler):
+        """After print_final_answer drains the buffer, it is empty."""
+        # Manually plant a payload to simulate a future render tool.
+        handler._pending_render_payloads.append(("fake_lang", {"kind": "fake_lang"}))
+        handler.print_final_answer("First turn.")
         _drain(handler)
-        handler.pretty_print_json(self._make_envelope(), title="Result")
-        _drain(handler)
-        handler.print_final_answer("")
-        events = _drain(handler)
-        assert events[0]["content"].startswith("```email_pre_scan\n")
-        assert events[0]["content"].rstrip().endswith("```")
-
-    # --- De-dup: explicit-tool path where the LLM also echoes the card ----
-
-    def test_echoed_fence_rendered_once(self, handler):
-        """Explicit-tool path: the model echoes the same fenced card the
-        handler already buffered. The card must appear exactly once."""
-        import json as _json
-
-        inner = self._make_envelope()["data"]
-        echoed = f"```email_pre_scan\n{_json.dumps(inner)}\n```"
-        handler.print_tool_usage("pre_scan_inbox")
-        _drain(handler)
-        handler.pretty_print_json(self._make_envelope(), title="Result")
-        _drain(handler)
-        handler.print_final_answer(f"Here is your inbox.\n\n{echoed}")
-        events = _drain(handler)
-        content = events[0]["content"]
-        # Exactly one fenced card (the authoritative buffered one).
-        assert content.count("```email_pre_scan") == 1
-        assert content.startswith("```email_pre_scan\n")
-        # The LLM prose survives.
-        assert "Here is your inbox." in content
-
-    def test_echoed_bare_envelope_stripped(self, handler):
-        """The model echoes the raw envelope object as prose (no fence). The
-        balanced-brace strip removes it so only the buffered card renders."""
-        import json as _json
-
-        echoed = _json.dumps(self._make_envelope())  # full {"ok":..,"data":..}
-        handler.print_tool_usage("pre_scan_inbox")
-        _drain(handler)
-        handler.pretty_print_json(self._make_envelope(), title="Result")
-        _drain(handler)
-        handler.print_final_answer(f"Summary below.\n\n{echoed}")
-        events = _drain(handler)
-        content = events[0]["content"]
-        assert content.count("```email_pre_scan") == 1
-        # The bare echo (a field unique to the envelope) is gone.
-        assert "informational_count" not in content.split("```", 3)[-1]
-        assert "Summary below." in content
-
-    def test_inline_path_fence_not_stripped(self, handler):
-        """Regression: inline single-step path has an EMPTY buffer, so the
-        strip must not run — the model's own legitimate fence renders once."""
-        import json as _json
-
-        inner = self._make_envelope()["data"]
-        legit = f"```email_pre_scan\n{_json.dumps(inner)}\n```"
-        assert handler._pending_render_payloads == []  # nothing buffered
-        handler.print_final_answer(f"{legit}\n\nDone.")
-        events = _drain(handler)
-        content = events[0]["content"]
-        assert content.count("```email_pre_scan") == 1
-        assert "Done." in content
+        assert handler._pending_render_payloads == []
 
     def test_other_tool_results_do_not_inject_fence(self, handler):
-        """Only ``pre_scan_inbox`` triggers injection — other tools pass through."""
+        """Unknown tool names produce no fence injection."""
         handler.print_tool_usage("triage_inbox")
         _drain(handler)
         handler.pretty_print_json(
@@ -1898,46 +1780,6 @@ class TestStructuredRenderInjection:
         events = _drain(handler)
         assert events[0]["content"] == "Plain prose answer."
         assert handler._pending_render_payloads == []
-
-    def test_failed_pre_scan_envelope_does_not_inject(self, handler):
-        """``ok=False`` envelopes should not produce a fence block."""
-        handler.print_tool_usage("pre_scan_inbox")
-        _drain(handler)
-        handler.pretty_print_json({"ok": False, "error": "Gmail 401"}, title="Result")
-        _drain(handler)
-        handler.print_final_answer("Sorry, I couldn't reach Gmail.")
-        events = _drain(handler)
-        assert events[0]["content"] == "Sorry, I couldn't reach Gmail."
-        assert handler._pending_render_payloads == []
-
-    def test_pre_scan_envelope_with_wrong_kind_does_not_inject(self, handler):
-        """Defensive — only payloads whose ``kind`` matches the lang tag are
-        captured."""
-        handler.print_tool_usage("pre_scan_inbox")
-        _drain(handler)
-        handler.pretty_print_json(
-            {"ok": True, "data": {"kind": "something_else"}}, title="Result"
-        )
-        _drain(handler)
-        handler.print_final_answer("ok")
-        events = _drain(handler)
-        assert events[0]["content"] == "ok"
-
-    def test_buffer_cleared_between_turns(self, handler):
-        """After one final-answer drain, a second turn with no tool call
-        should not re-emit the previous fence."""
-        handler.print_tool_usage("pre_scan_inbox")
-        _drain(handler)
-        handler.pretty_print_json(self._make_envelope(), title="Result")
-        _drain(handler)
-        handler.print_final_answer("First turn.")
-        _drain(handler)
-
-        # Second turn — no tool call, plain answer.
-        handler.print_final_answer("Second turn — no card.")
-        events = _drain(handler)
-        assert events[0]["content"] == "Second turn — no card."
-        assert "email_pre_scan" not in events[0]["content"]
 
 
 class TestStripBalancedJsonBlobs:

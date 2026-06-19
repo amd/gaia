@@ -468,9 +468,9 @@ class SSEOutputHandler(OutputHandler):
     # Mapping from tool name to the language-tag the frontend's ``pre``
     # override matches (``MessageBubble.tsx`` ``KNOWN_CODE_LANGS`` set).
     # Keep this in sync with the frontend's structured-payload renderers.
-    _RENDER_TOOL_TO_LANG: ClassVar[Dict[str, str]] = {
-        "pre_scan_inbox": "email_pre_scan",
-    }
+    # pre_scan_inbox removed: in-process email agent ripped out (#1653).
+    # Add entries here when structured-render tools are re-introduced via REST.
+    _RENDER_TOOL_TO_LANG: ClassVar[Dict[str, str]] = {}
 
     def _capture_render_payload(self, data: Any) -> None:
         """Detect a structured tool-result envelope and buffer it for fence injection.

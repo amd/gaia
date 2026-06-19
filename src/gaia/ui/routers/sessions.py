@@ -162,11 +162,7 @@ async def update_session(
     db: ChatDatabase = Depends(get_db),
 ):
     """Update session title, system prompt, or linked documents."""
-    if (
-        request.agent_type is not None
-        or request.device is not None
-        or request.mail_provider is not None
-    ):
+    if request.agent_type is not None or request.device is not None:
         evict_session_agent(session_id)
 
     # On a device switch, rewrite the session's model to that device's
