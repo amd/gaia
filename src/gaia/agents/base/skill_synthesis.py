@@ -447,6 +447,11 @@ def cluster_by_goal(
     ``>= similarity_tau`` joins it.  Embeddings are assumed L2-normalized
     (``_embed_text`` guarantees this), so cosine == dot product.
 
+    Seeds are taken in a deterministic, content-derived order (goal text, then
+    session id), so the result is independent of the order ``sequences`` arrives
+    in — the same set of sessions always produces the same clusters, members,
+    and representative goal.
+
     Sessions without a goal are skipped (a goal is required to cluster).  Only
     clusters with ``>= min_occurrences`` sessions AND ``>= min_success_rate``
     aggregate success rate are returned.
@@ -475,6 +480,14 @@ def cluster_by_goal(
             continue
         vec = embed_fn(goal)  # embedder failure RE-RAISES (fail-loud)
         embedded.append((session, np.asarray(vec, dtype=np.float32)))
+
+    # Deterministic, content-derived seed order (goal text, then session id) so
+    # cluster membership and the representative goal never hinge on the arbitrary
+    # session-id order iter_sessions returns: the same set of sessions yields the
+    # same clusters across runs and across any future `since` window.
+    embedded.sort(
+        key=lambda pair: (str(pair[0]["goal"]).strip().lower(), pair[0]["session_id"])
+    )
 
     assigned = [False] * len(embedded)
     clusters: List[GoalCluster] = []

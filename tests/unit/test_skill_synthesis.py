@@ -332,6 +332,39 @@ class TestClusterByGoal:
         with pytest.raises(RuntimeError, match="Embedding failed"):
             cluster_by_goal(sessions, boom)
 
+    def test_clustering_is_order_independent(self):
+        """Any input order → identical clusters, seed goal, and provenance.
+
+        Seeds are taken in content-derived order (goal text, then session id),
+        so the arbitrary row order ``iter_sessions`` returns can never change
+        membership or which goal becomes the cluster representative.
+        """
+        # All three goals embed identically → one cluster; the seed is therefore
+        # decided purely by the deterministic ordering, not by input position.
+        shared = _unit([1.0, 0.0, 0.0])
+        vecs = {
+            "deploy app": shared,
+            "deploy service": shared,
+            "ship release": shared,
+        }
+        sessions = [
+            _session("s3", "ship release", ["a", "b", "c"]),
+            _session("s1", "deploy app", ["a", "b", "c"]),
+            _session("s2", "deploy service", ["a", "b", "c"]),
+        ]
+
+        forward = cluster_by_goal(sessions, lambda t: vecs[t], min_occurrences=3)
+        reverse = cluster_by_goal(
+            list(reversed(sessions)), lambda t: vecs[t], min_occurrences=3
+        )
+
+        assert len(forward) == 1
+        # Seed is the lexically-smallest goal, not the first row of the input.
+        assert forward[0].goal == "deploy app"
+        assert forward[0].from_sessions == ["s1", "s2", "s3"]
+        assert forward[0].goal == reverse[0].goal
+        assert forward[0].from_sessions == reverse[0].from_sessions
+
 
 # ===========================================================================
 # distill_cluster — contract-shape + fail-loud split

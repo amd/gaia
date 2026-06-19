@@ -1533,7 +1533,8 @@ class MemoryMixin:
 
         Called automatically on the first process_query() invocation, by which
         time Agent.__init__() has completed and self.chat is available.
-        Steps: reconcile_memory (max 20 pairs) + consolidate_old_sessions (max 5).
+        Steps: reconcile_memory (max 20 pairs), consolidate_old_sessions (max 5),
+        then _synthesize_skills (procedural memory, #887).
         """
         # Step 6: reconcile_memory() (max 20 pairs)
         try:
