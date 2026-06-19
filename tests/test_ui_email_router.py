@@ -38,8 +38,9 @@ from gaia.ui.server import create_app  # noqa: E402
 def ui_client():
     """TestClient for the UI backend with gaia_agent_email wheel present."""
     app = create_app(db_path=":memory:")
-    with TestClient(app, raise_server_exceptions=True) as client:
-        yield client
+    # The email routes are self-contained; skip the UI server's lifespan startup
+    # (connectors sync / MCP reload), which can hang in a bare test env (#1297).
+    yield TestClient(app, raise_server_exceptions=True)
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +53,7 @@ def test_email_health_mounted(ui_client):
     resp = ui_client.get("/v1/email/health")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body.get("ok") is True
+    assert body.get("status") == "ok"
 
 
 def test_email_version_mounted(ui_client):
@@ -125,25 +126,34 @@ def test_triage_returns_200_schema_2_shape(ui_client):
 
 
 def test_mount_block_absent_wheel_does_not_mount():
-    """When gaia_agent_email is absent, health/version return 404 (not mounted).
+    """When gaia_agent_email is absent, the email paths are not served by the router.
 
-    Simulates the absent-wheel path by patching find_spec to return None,
-    then rebuilding the app. Proves the mount block does a clean skip and does
+    Simulates the absent-wheel path by making only ``gaia_agent_email`` look
+    absent to ``find_spec``. Proves the mount block does a clean skip and does
     NOT raise an ImportError when the wheel is simply not installed.
     """
-    import importlib
+    import importlib.util as ilu
 
-    import gaia.ui.server as server_mod
+    real_find_spec = ilu.find_spec
 
-    with patch("importlib.util.find_spec", return_value=None):
-        importlib.reload(server_mod)
-        app = server_mod.create_app(db_path=":memory:")
+    def _absent_email(name, *args, **kwargs):
+        # Only the email wheel looks absent; every other optional dependency
+        # resolves normally so create_app builds the rest of the app unchanged.
+        if name == "gaia_agent_email":
+            return None
+        return real_find_spec(name, *args, **kwargs)
 
-    with TestClient(app) as client:
-        resp_health = client.get("/v1/email/health")
-        resp_version = client.get("/v1/email/version")
-        assert resp_health.status_code == 404
-        assert resp_version.status_code == 404
+    # find_spec is evaluated at create_app() runtime, so patching it (no module
+    # reload needed) makes the mount block take its clean-skip branch.
+    with patch("importlib.util.find_spec", side_effect=_absent_email):
+        app = create_app(db_path=":memory:")
 
-    # Restore the real module state for subsequent tests.
-    importlib.reload(server_mod)
+    client = TestClient(app)
+    # The mount is skipped, so these paths fall through to the UI's SPA catch-all
+    # (HTML 200) rather than 404 — assert they are NOT served by the email router,
+    # i.e. they do not return its JSON contract.
+    for path in ("/v1/email/version", "/v1/email/health"):
+        resp = client.get(path)
+        assert "application/json" not in resp.headers.get("content-type", ""), (
+            f"{path} unexpectedly served by the email router when the wheel is absent"
+        )
