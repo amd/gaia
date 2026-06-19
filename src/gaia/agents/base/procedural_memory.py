@@ -15,7 +15,6 @@ resolves on a ``MemoryMixin`` host via the MRO.
 Spec: docs/plans/skill-synthesis.mdx
 """
 
-import logging
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -28,8 +27,9 @@ from gaia.agents.base.skill_synthesis import (
     load_synthesis_config,
     reconcile_and_store,
 )
+from gaia.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ProceduralMemoryMixin:

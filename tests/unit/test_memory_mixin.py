@@ -3212,7 +3212,9 @@ class TestSynthesizeSkills:
         chat.send_messages.side_effect = ConnectionError("Lemonade down")
         mixin_host.chat = chat
 
-        with caplog.at_level(logging.WARNING, logger="gaia.agents.base.memory"):
+        with caplog.at_level(
+            logging.WARNING, logger="gaia.agents.base.procedural_memory"
+        ):
             result = mixin_host._synthesize_skills()
 
         assert result["stored"] == 0
@@ -3243,7 +3245,9 @@ class TestSynthesizeSkills:
             "gaia.agents.base.memory._load_memory_settings",
             return_value={"skill_synthesis": {"enabled": False}},
         ):
-            with caplog.at_level(logging.INFO, logger="gaia.agents.base.memory"):
+            with caplog.at_level(
+                logging.INFO, logger="gaia.agents.base.procedural_memory"
+            ):
                 result = mixin_host._synthesize_skills()
 
         assert result == {"clusters": 0, "stored": 0, "skipped": 0}
@@ -3457,7 +3461,9 @@ class TestRecallSkill:
             "_embed_text",
             side_effect=RuntimeError("Embedding failed: Lemonade unreachable"),
         ):
-            with caplog.at_level(logging.WARNING, logger="gaia.agents.base.memory"):
+            with caplog.at_level(
+                logging.WARNING, logger="gaia.agents.base.procedural_memory"
+            ):
                 result = mixin_host.recall_skill("goal")
 
         assert result == []
