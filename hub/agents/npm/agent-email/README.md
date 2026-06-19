@@ -261,24 +261,37 @@ runtime `checkVersion` guard catches contract drift loudly. The server exposes
 > Wire note: `EmailMessage.from` is the JSON key on the wire (Python aliases its
 > `from_` field to `from`), so the TS interface uses `from` directly.
 
-## End-to-end demo (the MVP proof)
+## Example — integration smoke test + health check
 
-`scripts/demo.mjs` drives the full lifecycle through the package's own helpers
-(spawn → health → version → triage → tree-kill shutdown) and prints the triage
-result. It runs against the dev `server.py` by default, or a frozen binary via
-`AGENT_EMAIL_BINARY`.
+[`examples/demo.mjs`](examples/demo.mjs) is the **one-command "did my integration
+work?" check**. It spawns the sidecar, runs a **health check** that says plainly
+what (if anything) is wrong — *sidecar down*, *Lemonade not found*, *model not
+downloaded* — then exercises **every standalone endpoint** (`health`, `version`,
+`emailHealth`, `emailVersion`, `openapi`, `spec`, `draft`, `triage`) and prints a
+PASS/SKIP tally. `send` is skipped (connector-gated — see
+[Auth & connectors](#auth--connectors)).
+
+It runs against the dev `server.py` by default, or a frozen binary via
+`AGENT_EMAIL_BINARY`. The example is **not** shipped in the npm tarball (kept
+lean) — it lives here in the repo and is linked from the agent hub.
 
 ```bash
-npm run build
+npm run build && npm run demo          # or: node examples/demo.mjs
 
-# Against the dev server (needs the Python env from the spike):
-#   uv venv && uv pip install --system-certs -e ".[api]" \
-#     && uv pip install --system-certs -e hub/agents/python/email
-node scripts/demo.mjs
-
-# Against the frozen binary:
+# Against the frozen binary instead of the dev server:
 AGENT_EMAIL_BINARY=../../python/email/packaging/dist/email-agent/email-agent.exe \
-  node scripts/demo.mjs
+  npm run demo
+```
+
+Example output on a host with no Lemonade running:
+
+```
+[demo] Health check:
+[demo]   ✓ sidecar          up — service=gaia-agent-email apiVersion=2.0 …
+[demo]   ✗ Lemonade not responding (timed out)
+[demo]        → Is `lemonade-server serve` running and reachable on the expected port?
+[demo] STACK HEALTH: ✗ NOT READY — Lemonade not responding …
+[demo] ENDPOINTS: 7 standalone endpoint(s) PASS; send() is connector-gated (skipped).
 ```
 
 Set `DEBUG=agent-email` (or `DEBUG=*`) for verbose spawn/fetch/health logs (all

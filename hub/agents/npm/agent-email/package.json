@@ -60,7 +60,7 @@
     "prepublishOnly": "npm run clean && npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "demo": "node scripts/demo.mjs"
+    "demo": "node examples/demo.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
