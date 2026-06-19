@@ -152,6 +152,10 @@ Typed wrapper over the five endpoints. Methods: `triage`, `draft`, `send`,
 
 ## Module format
 
+**Plain JavaScript works too** — the package ships compiled JS in `dist/`;
+TypeScript is the authoring language, not a consumer requirement. The bundled
+`.d.ts` files give editors autocomplete but your code never imports them.
+
 This package is **ESM-only** (`"type": "module"`; no CommonJS build). Import it
 with `import …`. From a CommonJS module, use a dynamic import instead of `require`:
 
