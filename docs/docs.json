@@ -91,6 +91,7 @@
                   "guides/docker",
                   "guides/routing",
                   "guides/custom-agent",
+                  "guides/hub-publishing",
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
@@ -455,6 +456,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.21.2",
               "releases/v0.21.1",
               "releases/v0.21.0",
               "releases/v0.20.1",
@@ -512,7 +514,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.21.1 \u00b7 Lemonade 10.2.0",
+        "label": "v0.21.2 \u00b7 Lemonade 10.7.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

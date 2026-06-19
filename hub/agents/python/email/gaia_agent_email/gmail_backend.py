@@ -146,6 +146,17 @@ class GmailBackend(Protocol):
         """Restore from TRASH."""
         ...
 
+    def unarchive_message(
+        self, message_id: str, prior_labels: List[str]
+    ) -> Dict[str, Any]:
+        """Reverse an archive: restore the message to the inbox.
+
+        ``message_id`` is the id valid NOW (post-archive for folder-based
+        backends like Outlook, where archive changed the id). Returns the
+        message resource; the id may change again for folder backends.
+        """
+        ...
+
     def permanent_delete(self, message_id: str) -> None:
         """Permanently delete (DELETE not recoverable). Use sparingly."""
         ...
@@ -525,6 +536,16 @@ class LiveGmailBackend:
         # quarantine/soft-delete undo would land in All Mail. Restore the inbox
         # view so undo returns the message to its original state.
         self._post(f"/messages/{message_id}/untrash")
+        return self._modify_labels(message_id, add=[GMAIL_LABEL_INBOX])
+
+    def unarchive_message(
+        self, message_id: str, prior_labels: List[str]
+    ) -> Dict[str, Any]:
+        # Archive removes only the INBOX label, so its exact inverse re-adds
+        # only INBOX (idempotent if already present). ``prior_labels`` is unused
+        # — kept for Protocol parity: the message still carries every other
+        # label, and re-applying immutable system labels like SENT/DRAFT is
+        # rejected by Gmail's modify API ("Invalid label: SENT").
         return self._modify_labels(message_id, add=[GMAIL_LABEL_INBOX])
 
     def permanent_delete(self, message_id: str) -> None:
