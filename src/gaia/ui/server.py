@@ -19,6 +19,7 @@ Endpoint implementations are split into router modules under
 """
 
 import asyncio
+import importlib.util
 import logging
 import os
 import shutil  # noqa: F401  # pylint: disable=unused-import
@@ -583,6 +584,21 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(connectors_router_mod.router)
     # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).
     app.include_router(connectors_router_mod.forwarded_router)
+    # Issue #1768 — Email REST surface (/v1/email/*).
+    # Ships with the standalone gaia-agent-email wheel; mount only when present.
+    # find_spec gates on wheel availability without importing it; the import and
+    # include_router are outside any except so a broken installed wheel fails
+    # loudly per the no-silent-fallback rule.
+    if importlib.util.find_spec("gaia_agent_email") is None:
+        logger.info(
+            "Email REST routes unavailable: install the email agent "
+            "(pip install gaia-agent-email) to enable POST /v1/email/*. "
+            "(#1768)"
+        )
+    else:
+        from gaia_agent_email.api_routes import router as email_router
+
+        app.include_router(email_router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.
