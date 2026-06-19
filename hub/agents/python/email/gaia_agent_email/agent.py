@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, ClassVar, List, Optional
 
 from gaia_agent_email import action_store
-from gaia_agent_email.config import EmailAgentConfig
+from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
 from gaia_agent_email.outlook_scopes import (
     OUTLOOK_CALENDAR_SCOPES,
     OUTLOOK_MAIL_SCOPES,
@@ -65,12 +65,31 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.formatting import format_connector_error
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class _UnavailableCalendarBackend:
+    """Placeholder calendar backend when no provider is connected/scoped — or no
+    keyring is available in this environment.
+
+    The agent must still construct so non-calendar work (triage, summaries) runs;
+    any actual calendar operation raises the deferred, actionable error rather
+    than silently doing the wrong thing. ``detect_meeting_request`` touches no
+    backend, so it keeps working.
+    """
+
+    def __init__(self, message: str) -> None:
+        self._message = message
+
+    def __getattr__(self, name: str):
+        raise ConfigurationError(self._message)
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +265,13 @@ class EmailTriageAgent(
         # ``config.calendar_provider`` (#1276) — the tools treat either as a
         # ``CalendarBackend``. An injected backend (eval/test seam) wins inside
         # the resolver.
-        self._calendar = config.resolve_calendar_backend()
+        # Resolve eagerly, but if no calendar provider is connected/scoped — or
+        # no keyring is available here — defer the actionable error to
+        # calendar-tool use so the agent still constructs for non-calendar work.
+        try:
+            self._calendar = config.resolve_calendar_backend()
+        except (ConfigurationError, ConnectorsError) as exc:
+            self._calendar = _UnavailableCalendarBackend(str(exc))
 
         # I3 — batch-organize counters. Reset per process_query() call by
         # ``_reset_organize_counter``. Per-turn isolation is sufficient
@@ -465,6 +490,13 @@ class EmailTriageAgent(
         because local inference is slow (~9-31 s/email) and a doubled budget
         would blow the user's expected wait. Every returned item gains a
         ``mailbox`` tag and its id is remembered for downstream action routing.
+
+        When one backend raises ``ConnectorsError`` (e.g. an agent grant was
+        revoked while the connection remains live), the error is recorded as a
+        per-mailbox notice in ``mailbox_errors`` and the loop continues with the
+        remaining backends. Non-``ConnectorsError`` exceptions still propagate —
+        a genuine bug must fail loudly. The available set stays connection-derived;
+        grant enforcement happens at the token layer.
         """
         from gaia_agent_email.tools import read_tools
         from gaia_agent_email.tools.read_tools import (
@@ -485,17 +517,24 @@ class EmailTriageAgent(
         backends = self._backends
         per_backend = max(1, max_messages // len(backends))
         merged: list[dict] = []
+        mailbox_errors: list[dict] = []
         for provider, backend in backends.items():
             if len(merged) >= max_messages:
                 break
-            out = triage_inbox_impl(
-                backend,
-                max_messages=per_backend,
-                session_preferences=prefs,
-                force_llm=force_llm,
-                classifier=classifier,
-                debug=debug_flag,
-            )
+            try:
+                out = triage_inbox_impl(
+                    backend,
+                    max_messages=per_backend,
+                    session_preferences=prefs,
+                    force_llm=force_llm,
+                    classifier=classifier,
+                    debug=debug_flag,
+                )
+            except ConnectorsError as exc:
+                msg = format_connector_error(exc)
+                mailbox_errors.append({"mailbox": provider, "error": msg})
+                logger.warning("email triage: skipping %s mailbox — %s", provider, msg)
+                continue
             for item in out["results"]:
                 item["mailbox"] = provider
                 self._remember_message_mailbox(item.get("id"), provider)
@@ -517,7 +556,17 @@ class EmailTriageAgent(
         self._apply_behavioral_promotions()
         # Re-group the merged, capped list so the bucketed view matches what the
         # caller actually sees.
-        return {"results": merged, "grouped": group_by_category(merged)}
+        if mailbox_errors and len(mailbox_errors) == len(self._backends):
+            # Every connected mailbox failed — surface it loudly rather than
+            # returning ok with zero results (which reads as "empty inbox").
+            raise ConnectorsError(
+                "All connected mailboxes failed during triage: "
+                + "; ".join(f"{e['mailbox']}: {e['error']}" for e in mailbox_errors)
+            )
+        result: dict = {"results": merged, "grouped": group_by_category(merged)}
+        if mailbox_errors:
+            result["mailbox_errors"] = mailbox_errors
+        return result
 
     def _apply_behavioral_promotions(self) -> None:
         """Promote qualifying senders to priority based on observed reply behavior.
@@ -569,6 +618,10 @@ class EmailTriageAgent(
         (urgent / actionable / suggested_archives) gains a ``mailbox`` tag and
         its message_id is remembered for action routing. Per-section caps and
         the envelope shape are preserved by merging the per-backend envelopes.
+
+        When one backend raises ``ConnectorsError`` (e.g. a revoked agent grant),
+        the error is recorded in ``mailbox_errors`` and the loop continues with
+        the remaining backends. Non-``ConnectorsError`` exceptions still propagate.
         """
         from gaia_agent_email.tools.read_tools import (
             PRE_SCAN_ACTIONABLE_CAP,
@@ -589,16 +642,25 @@ class EmailTriageAgent(
         informational_count = 0
         scanned = 0
         merged_prefs_applied: dict = {}
+        mailbox_errors: list[dict] = []
         for provider, backend in backends.items():
             if scanned >= max_messages:
                 break
-            out = pre_scan_inbox_impl(
-                backend,
-                max_messages=per_backend,
-                session_preferences=prefs,
-                force_llm=force_llm,
-                debug=debug_flag,
-            )
+            try:
+                out = pre_scan_inbox_impl(
+                    backend,
+                    max_messages=per_backend,
+                    session_preferences=prefs,
+                    force_llm=force_llm,
+                    debug=debug_flag,
+                )
+            except ConnectorsError as exc:
+                msg = format_connector_error(exc)
+                mailbox_errors.append({"mailbox": provider, "error": msg})
+                logger.warning(
+                    "email pre-scan: skipping %s mailbox — %s", provider, msg
+                )
+                continue
             # Count messages actually returned, not the cap — an under-filled
             # backend would otherwise trip the budget guard and skip a later one.
             backend_totals = out.get("totals", {})
@@ -625,7 +687,7 @@ class EmailTriageAgent(
                 self._remember_message_mailbox(item.get("thread_id"), provider)
                 suggested_archives.append(item)
             informational_count += int(out.get("informational_count", 0))
-        return {
+        result = {
             "kind": "email_pre_scan",
             "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
             "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
@@ -640,6 +702,16 @@ class EmailTriageAgent(
                 "suggested_archives": len(suggested_archives),
             },
         }
+        if mailbox_errors and len(mailbox_errors) == len(self._backends):
+            # Every connected mailbox failed — surface it loudly rather than
+            # returning ok with zero results (which reads as "empty inbox").
+            raise ConnectorsError(
+                "All connected mailboxes failed during pre-scan: "
+                + "; ".join(f"{e['mailbox']}: {e['error']}" for e in mailbox_errors)
+            )
+        if mailbox_errors:
+            result["mailbox_errors"] = mailbox_errors
+        return result
 
     # -- Phase I3 batch-organize counter -----------------------------------
 

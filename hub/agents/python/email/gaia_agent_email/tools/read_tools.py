@@ -736,19 +736,38 @@ class ReadToolsMixin:
         def list_inbox(max_results: int = 25) -> str:
             """List the most recent INBOX messages.
 
+            When multiple mailboxes are connected, lists from ALL of them with a
+            shared total budget (never per-mailbox-doubled). Each returned message
+            carries a ``mailbox`` field ('google' / 'microsoft') so downstream
+            tools can route actions without re-asking.
+
             Args:
-                max_results: How many messages to return (default 25, max 100).
+                max_results: How many messages to return in total (default 25, max 100).
 
             Returns:
                 JSON envelope with ``{"messages": [...]}`` per message:
                 id, thread_id, subject, from, to, date, label_ids,
                 snippet, body (wrapped in untrusted-input delimiters),
-                body_truncated, attachments.
+                body_truncated, attachments, mailbox.
             """
             try:
                 max_results = max(1, min(int(max_results or 25), 100))
+                backends = agent._backends
+                per_backend = max(1, max_results // len(backends))
+                merged: List[Dict[str, Any]] = []
+                for provider, backend in backends.items():
+                    if len(merged) >= max_results:
+                        break
+                    result = list_inbox_impl(
+                        backend, max_results=per_backend, debug=debug_flag
+                    )
+                    for msg in result.get("messages", []):
+                        msg["mailbox"] = provider
+                        agent._remember_message_mailbox(msg.get("id"), provider)
+                        agent._remember_message_mailbox(msg.get("thread_id"), provider)
+                        merged.append(msg)
                 return _envelope_ok(
-                    list_inbox_impl(gmail, max_results=max_results, debug=debug_flag)
+                    {"messages": merged[:max_results], "next_page_token": None}
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
@@ -838,21 +857,32 @@ class ReadToolsMixin:
 
         @tool
         def search_messages(query: str, max_results: int = 25) -> str:
-            """Search the user's mailbox.
+            """Search across ALL connected mailboxes.
+
+            When multiple mailboxes are connected, searches both with a shared
+            total budget. Each returned message carries a ``mailbox`` field so
+            downstream tools route actions without re-asking.
 
             ``query`` uses Gmail search syntax (e.g.
             ``"from:boss@example.com is:unread newer_than:7d"``).
             """
             try:
                 max_results = max(1, min(int(max_results or 25), 100))
-                return _envelope_ok(
-                    search_messages_impl(
-                        gmail,
-                        query=query,
-                        max_results=max_results,
-                        debug=debug_flag,
+                backends = agent._backends
+                per_backend = max(1, max_results // len(backends))
+                merged: List[Dict[str, Any]] = []
+                for provider, backend in backends.items():
+                    if len(merged) >= max_results:
+                        break
+                    result = search_messages_impl(
+                        backend, query=query, max_results=per_backend, debug=debug_flag
                     )
-                )
+                    for msg in result.get("messages", []):
+                        msg["mailbox"] = provider
+                        agent._remember_message_mailbox(msg.get("id"), provider)
+                        agent._remember_message_mailbox(msg.get("thread_id"), provider)
+                        merged.append(msg)
+                return _envelope_ok({"messages": merged[:max_results]})
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:

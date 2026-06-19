@@ -1,0 +1,79 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// OS-detecting "Download the app" CTA for the GAIA Agent UI.
+// Progressive enhancement: with no JS it links to the GitHub releases page
+// (always works). JS detects the OS to set the label, then best-effort fetches
+// the latest release to deep-link the right installer + show the version.
+// Falls back gracefully at every step.
+
+interface Props {
+  variant?: 'primary' | 'secondary';
+  size?: 'lg' | 'sm';
+  class?: string;
+}
+
+const { variant = 'primary', size = 'lg', class: className = '' } = Astro.props;
+
+const releasesUrl = 'https://github.com/amd/gaia/releases/latest';
+const variantCls =
+  variant === 'primary'
+    ? 'bg-g-gold text-black hover:brightness-110'
+    : 'border border-g-border text-g-text hover:border-g-gold/50';
+const sizeCls = size === 'lg' ? 'px-6 py-3 text-sm gap-2' : 'px-3.5 py-1.5 text-[13px] gap-1.5';
+---
+
+<a
+  href={releasesUrl}
+  data-download-cta
+  class={`inline-flex items-center rounded-md font-semibold transition-colors ${variantCls} ${sizeCls} ${className}`}
+>
+  <span data-dl-label>Download the app</span>
+  <span data-dl-version class="font-normal opacity-70"></span>
+</a>
+
+<script>
+  (() => {
+    const els = document.querySelectorAll<HTMLAnchorElement>('[data-download-cta]');
+    if (!els.length) return;
+
+    const detectOS = (): 'windows' | 'macos' | 'linux' | null => {
+      const ua = navigator.userAgent;
+      if (/Windows/i.test(ua)) return 'windows';
+      if (/Mac/i.test(ua) && !/iPhone|iPad|iPod/i.test(ua)) return 'macos';
+      if (/Linux/i.test(ua) && !/Android/i.test(ua)) return 'linux';
+      return null;
+    };
+
+    const os = detectOS();
+    const osLabel = { windows: 'Windows', macos: 'macOS', linux: 'Linux' } as const;
+    els.forEach((el) => {
+      const label = el.querySelector('[data-dl-label]');
+      if (os && label) label.textContent = `Download for ${osLabel[os]}`;
+    });
+
+    // Best-effort: latest version + the installer asset matching this OS.
+    fetch('https://api.github.com/repos/amd/gaia/releases/latest')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((rel) => {
+        if (!rel) return;
+        const ver: string = rel.tag_name;
+        const assets: { name: string; browser_download_url: string }[] = rel.assets || [];
+        const pick = (re: RegExp) => assets.find((a) => re.test(a.name))?.browser_download_url;
+        const url =
+          os === 'windows' ? pick(/x64-setup\.exe$/)
+          : os === 'macos' ? pick(/arm64\.dmg$/)
+          : os === 'linux' ? pick(/\.AppImage$/)
+          : undefined;
+        els.forEach((el) => {
+          if (url) el.href = url;
+          const v = el.querySelector('[data-dl-version]');
+          if (v && ver) v.textContent = ver;
+        });
+      })
+      .catch(() => {
+        /* keep the releases-page fallback */
+      });
+  })();
+</script>

@@ -91,6 +91,7 @@
                   "guides/docker",
                   "guides/routing",
                   "guides/custom-agent",
+                  "guides/hub-publishing",
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
@@ -425,6 +426,7 @@
               "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
+              "plans/skill-synthesis",
               "plans/oem-bundling"
             ]
           },

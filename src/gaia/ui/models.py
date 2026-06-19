@@ -419,6 +419,7 @@ class DocumentResponse(BaseModel):
     indexing_status: str = (
         "complete"  # pending | indexing | complete | failed | cancelled | missing
     )
+    last_error: Optional[str] = None
 
 
 class DocumentListResponse(BaseModel):

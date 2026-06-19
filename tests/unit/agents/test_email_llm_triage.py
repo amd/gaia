@@ -449,6 +449,90 @@ class TestBoundaryArchetypes:
         ), "System prompt must clarify FYI = no action required"
 
 
+# --------------------------------------------------------------------------
+# Usage metrics aggregation (#1540)
+# --------------------------------------------------------------------------
+
+
+class _RespWithStats:
+    def __init__(self, text: str, stats: dict) -> None:
+        self.text = text
+        self.stats = stats
+
+
+class _StatsChat:
+    """Returns a classification JSON for classify calls and a summary string
+    for summarize calls, each carrying a known per-call stats dict."""
+
+    def __init__(self, classify_stats: dict, summarize_stats: dict) -> None:
+        self._classify_stats = classify_stats
+        self._summarize_stats = summarize_stats
+
+    def send_messages(self, messages, system_prompt=None, **kwargs):
+        content = messages[0].get("content", "") if messages else ""
+        if "Classify" in content:
+            return _RespWithStats(
+                '{"category": "NEEDS_RESPONSE", "confidence": 0.9, "reasoning": "x"}',
+                self._classify_stats,
+            )
+        return _RespWithStats(
+            "Alice wants a budget review by Friday.", self._summarize_stats
+        )
+
+
+class TestUsageAggregation:
+    def test_build_result_llm_populates_usage(self):
+        from gaia_agent_email.api_routes import EmailTriageService
+        from gaia_agent_email.contract import EmailAddress
+
+        chat = _StatsChat(
+            classify_stats={
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "tokens_per_second": 40.0,
+            },
+            summarize_stats={
+                "input_tokens": 80,
+                "output_tokens": 30,
+                "tokens_per_second": 30.0,
+            },
+        )
+        svc = EmailTriageService()
+        result = svc._build_result_llm(
+            subject="Need your review",
+            sender_raw="bob@example.com",
+            body="Can you review the doc?",
+            label_ids=[],
+            principal=EmailAddress(email="me@example.com"),
+            reply_to=EmailAddress(email="bob@example.com"),
+            chat=chat,
+        )
+        assert result.usage is not None
+        # prompt_tokens = sum of input tokens across both calls
+        assert result.usage.prompt_tokens == 180
+        # total_tokens = sum of input + output across both calls
+        assert result.usage.total_tokens == 230
+        # aggregate TPS = total output / total decode time
+        # decode time = 20/40 + 30/30 = 0.5 + 1.0 = 1.5s; 50 / 1.5 ≈ 33.33
+        assert result.usage.tokens_per_second == pytest.approx(50 / 1.5, rel=1e-3)
+
+    def test_build_result_heuristic_only_usage_is_none(self):
+        from gaia_agent_email.api_routes import EmailTriageService
+        from gaia_agent_email.contract import EmailAddress
+
+        svc = EmailTriageService()
+        # The heuristic-only path (_build_result) never calls an LLM.
+        result = svc._build_result(
+            subject="50% off sale ends tonight",
+            sender_raw="deals@store.example.com",
+            body="Shop now.",
+            label_ids=[],
+            principal=EmailAddress(email="me@example.com"),
+            reply_to=EmailAddress(email="deals@store.example.com"),
+        )
+        assert result.usage is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
@@ -505,3 +589,58 @@ class TestSuggestedAction:
             chat, subject="s", sender="f", body="b", message_id="m"
         )
         assert out["suggested_action"] == "reply"
+
+
+# --------------------------------------------------------------------------
+# Request context threading into the classify prompt (#1541)
+# --------------------------------------------------------------------------
+
+
+class TestContextThreading:
+    """The optional triage context, when supplied, is woven into the classify
+    user prompt; when absent, the prompt is unchanged."""
+
+    def test_context_present_appears_in_prompt(self):
+        from gaia_agent_email.contract import TriageContext
+
+        chat = _CapturingChat("NEEDS_RESPONSE")
+        ctx = TriageContext(
+            people=["Boss", "Alice"],
+            projects=["Apollo"],
+            tone="concise",
+            self_email="me@example.com",
+        )
+        classify_email_llm(
+            chat,
+            subject="s",
+            sender="f",
+            body="b",
+            message_id="m",
+            context=ctx,
+        )
+        prompt = chat.last_user_content
+        assert "Boss" in prompt
+        assert "Alice" in prompt
+        assert "Apollo" in prompt
+        assert "concise" in prompt
+        assert "me@example.com" in prompt
+
+    def test_no_context_prompt_unchanged(self):
+        """Absent context → the prompt is byte-identical to the no-context call
+        (behavior-unchanged guard)."""
+        from gaia_agent_email.tools.llm_triage import _build_user_prompt
+
+        baseline = _build_user_prompt("subj", "alice@x.com", "the body")
+        with_none = _build_user_prompt("subj", "alice@x.com", "the body", context=None)
+        assert with_none == baseline
+
+    def test_empty_context_prompt_unchanged(self):
+        """A context with no populated fields adds nothing to the prompt."""
+        from gaia_agent_email.contract import TriageContext
+        from gaia_agent_email.tools.llm_triage import _build_user_prompt
+
+        baseline = _build_user_prompt("subj", "alice@x.com", "the body")
+        with_empty = _build_user_prompt(
+            "subj", "alice@x.com", "the body", context=TriageContext()
+        )
+        assert with_empty == baseline

@@ -84,6 +84,7 @@ permissions:
 env:
   PKG_DIR: hub/agents/npm/agent-email
   MANIFEST: hub/agents/python/email/gaia-agent.yaml
+  README: hub/agents/python/email/README.md
   FREEZE_DIST: hub/agents/python/email/packaging/dist
   # Hub key prefix (mirrors the Worker's agents/<id> layout). The Worker owns the
   # bucket binding; CI never talks to R2 directly — it POSTs to /publish.
@@ -270,6 +271,7 @@ jobs:
     permissions:
       contents: read
       id-token: write   # npm trusted publishing (OIDC) — no npm token
+      actions: write    # gh workflow run deploy_website.yml (redeploy on publish)
     steps:
       - uses: actions/checkout@v6
         with:
@@ -437,6 +439,7 @@ jobs:
           python hub/agents/python/email/packaging/publish_to_r2.py \
             --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
             --manifest "${MANIFEST}" \
+            --readme "${README}" \
             "${args[@]}" \
             --summary-out published.json
           echo "=== publish summary ==="
@@ -527,3 +530,21 @@ jobs:
           # run here — and we don't want any package/dependency script executing in
           # this OIDC-privileged job. Matches publish.yml.
           npm publish --access public --provenance --ignore-scripts
+
+      - name: Redeploy the website to publish the new catalog entry
+        shell: bash
+        # The website builds its Agent Hub pages at deploy time from the live hub
+        # index.json (website/src/data/catalog.ts, HUB_CATALOG_URL), so a freshly
+        # published agent only appears after the site rebuilds. deploy_website.yml
+        # auto-triggers only on website/** changes — a hub publish touches no such
+        # file — so trigger it explicitly via workflow_dispatch. Least-privilege:
+        # uses this job's GITHUB_TOKEN (actions: write), no extra secret. A
+        # workflow_dispatch from GITHUB_TOKEN is exempt from the no-recursion rule,
+        # so the deploy job does run. NOTE: the deploy only reflects the new entry
+        # if Railway has HUB_CATALOG_URL=https://hub.amd-gaia.ai set.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run deploy_website.yml --ref main
+          echo "✓ requested website redeploy (deploy_website.yml on main)"

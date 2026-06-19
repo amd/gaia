@@ -204,6 +204,35 @@ Pick the install path that fits you best:
 
 ---
 
+## Roll back to a previous version
+
+If an update introduces a regression, you can roll back to a specific earlier release directly from the app — no need to hunt down an old installer on GitHub.
+
+**How to roll back (desktop installer only):**
+
+1. Open **Settings → About**.
+2. Click **"Roll back to a previous version"**.
+3. The app fetches the list of published releases from GitHub and shows them newest-first, with your currently installed version marked.
+4. Click an older release to open a confirmation step.
+5. Confirm — the app downloads the selected version and shows a native "Restart now?" prompt when ready. Click Restart and the older version launches.
+
+**Version pinning (AC2):** After a manual rollback, auto-update is automatically paused. The About section shows "Auto-update paused (pinned to vX.Y.Z)" so you know it's held. Click **Resume updates** in the same section to re-enable normal auto-updates.
+
+### Platform support
+
+| Platform | Rollback support |
+|----------|-----------------|
+| Windows (NSIS installer) | Full — download + reinstall works end-to-end |
+| macOS (DMG/ZIP, signed builds) | Works on signed release builds; unsigned dev builds download but cannot apply the update |
+| Linux AppImage | Supported (self-replacing) |
+| Linux .deb | Not supported via in-app rollback — use `sudo apt install ./gaia-agent-ui-<version>-amd64.deb` from [Releases](https://github.com/amd/gaia/releases) |
+
+<Note>
+The rollback list only shows releases that have an installer for your current platform. Releases without a matching artifact are filtered out automatically.
+</Note>
+
+---
+
 ## Sessions and Shortcuts
 
 Sessions let you organize conversations by topic. They sync between the CLI (`gaia chat`) and the Agent UI — start in one, pick up in the other. Export any session as Markdown or JSON from the session menu.

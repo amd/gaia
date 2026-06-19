@@ -234,10 +234,15 @@ class TestResolveCalendarBackend:
 
     The shipped Google calendar path must stay the default; ``microsoft`` must
     route to the Outlook calendar backend; an injected backend always wins.
+
+    Tests here use an explicit ``calendar_provider`` so they exercise the
+    trusted-explicit path (step 2) and don't depend on connector state.
+    Connector-discovery behaviour lives in ``TestResolveCalendarBackendConnectorAware``.
     """
 
-    def test_default_provider_is_google_calendar(self):
-        cfg = EmailAgentConfig()
+    def test_explicit_google_provider_returns_google_calendar(self):
+        # Step 2 (explicit calendar_provider): google → LiveCalendarBackend.
+        cfg = EmailAgentConfig(calendar_provider="google")
         backend = cfg.resolve_calendar_backend()
         assert isinstance(backend, LiveCalendarBackend)
 
@@ -289,11 +294,16 @@ class TestAgentCalendarWiring:
         agent = EmailTriageAgent(config=cfg)
         assert isinstance(agent._calendar, LiveOutlookCalendarBackend)
 
-    def test_agent_keeps_google_calendar_as_default(self, tmp_path, monkeypatch):
+    def test_agent_explicit_google_calendar_provider_wires_google(
+        self, tmp_path, monkeypatch
+    ):
+        # Explicit calendar_provider="google" (step 2) wires LiveCalendarBackend
+        # without hitting connector discovery.
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
         from gaia_agent_email.agent import EmailTriageAgent
 
         cfg = EmailAgentConfig(
+            calendar_provider="google",
             gmail_backend=object(),
             db_path=str(tmp_path / "state.db"),
         )
@@ -312,3 +322,295 @@ class TestAgentCalendarWiring:
         )
         agent = EmailTriageAgent(config=cfg)
         assert agent._calendar is cal_sentinel
+
+
+def _make_get_connection(scopes_map):
+    """Build a ``get_connection`` stub that returns scope dicts from ``scopes_map``.
+
+    ``scopes_map`` is ``{provider: [scope, ...]}``.  A provider absent from the
+    map returns ``None`` (not connected).
+    """
+
+    def _stub(provider):
+        if provider in scopes_map:
+            return {"provider": provider, "scopes": scopes_map[provider]}
+        return None
+
+    return _stub
+
+
+class TestResolveCalendarBackendConnectorAware:
+    """Connector-aware calendar-backend selection (#1708).
+
+    ``resolve_calendar_backend()`` must query the live connector state when
+    neither ``calendar_provider`` nor ``mail_provider`` is explicitly set,
+    picking the provider that is BOTH connected AND calendar-scoped rather than
+    blindly defaulting to Google.
+
+    Cases:
+      1. microsoft-only connected + calendar-scoped → ``LiveOutlookCalendarBackend``
+      2. google-only connected + calendar-scoped → ``LiveCalendarBackend`` (regression guard)
+      3. both connected, ``mail_provider="microsoft"`` (explicit step-3) → Outlook
+      4. nothing connected → actionable ConfigurationError (no silent Google fallback)
+      5. explicit ``calendar_provider="google"`` overrides discovery → Google
+      6. both connected, only microsoft calendar-scoped → Outlook (#1708 bug scenario)
+      7. both connected, only google calendar-scoped → Google (#1708 symmetrical guard)
+      8. both connected and both calendar-scoped → registry order (google first)
+      9. connected but neither calendar-scoped → actionable ConfigurationError
+
+    Monkeypatching targets:
+      - ``gaia_agent_email.config.connected_mailbox_providers``
+      - ``gaia_agent_email.config.get_connection``
+    """
+
+    # --- scope constants used to build realistic stub connection dicts -------
+
+    _GOOGLE_CALENDAR_SCOPES = [
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.readonly",
+    ]
+    _GOOGLE_MAIL_ONLY_SCOPES = [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+    ]
+    _MS_CALENDAR_SCOPES = [
+        "https://graph.microsoft.com/Calendars.ReadWrite",
+    ]
+    _MS_MAIL_ONLY_SCOPES = [
+        "https://graph.microsoft.com/Mail.ReadWrite",
+        "https://graph.microsoft.com/Mail.Send",
+    ]
+
+    def test_microsoft_only_connected_calendar_scoped_yields_outlook(self, monkeypatch):
+        """Case 1: only microsoft connected + calendar-scoped → Outlook calendar."""
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["microsoft"],
+        )
+        monkeypatch.setattr(
+            "gaia_agent_email.config.get_connection",
+            _make_get_connection({"microsoft": self._MS_CALENDAR_SCOPES}),
+        )
+        cfg = EmailAgentConfig()
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveOutlookCalendarBackend)
+
+    def test_google_only_connected_calendar_scoped_yields_google(self, monkeypatch):
+        """Case 2: only google connected + calendar-scoped → Google calendar (regression guard)."""
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google"],
+        )
+        monkeypatch.setattr(
+            "gaia_agent_email.config.get_connection",
+            _make_get_connection({"google": self._GOOGLE_CALENDAR_SCOPES}),
+        )
+        cfg = EmailAgentConfig()
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveCalendarBackend)
+
+    def test_both_connected_mail_provider_microsoft_yields_outlook(self, monkeypatch):
+        """Case 3: both connected, explicit mail_provider="microsoft" → Outlook (step-3 trusted path)."""
+        # mail_provider is explicit → step 3 wins without calling get_connection.
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google", "microsoft"],
+        )
+        cfg = EmailAgentConfig(mail_provider="microsoft")
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveOutlookCalendarBackend)
+
+    def test_no_provider_connected_raises_actionable_error(self, monkeypatch):
+        """Case 4: nothing connected + no explicit provider → loud ConfigurationError.
+
+        Error must NOT say "additional Google permission" (the old confusing
+        message) and MUST name the connection/scope to add so the user can act.
+        """
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: [],
+        )
+        cfg = EmailAgentConfig()
+        with pytest.raises(ConfigurationError) as exc:
+            cfg.resolve_calendar_backend()
+        msg = str(exc.value).lower()
+        # Must be actionable — mention calendar and how to fix it.
+        assert "calendar" in msg
+        assert "connect" in msg
+        # Must NOT be the old confusing Google-only message.
+        assert "additional google permission" not in msg
+
+    def test_explicit_calendar_provider_overrides_discovery(self, monkeypatch):
+        """Case 5: explicit calendar_provider bypasses connector discovery."""
+        # Even with no connector present, an explicit override must win.
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: [],
+        )
+        cfg = EmailAgentConfig(calendar_provider="google")
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveCalendarBackend)
+
+    def test_both_connected_only_microsoft_calendar_scoped_yields_outlook(
+        self, monkeypatch
+    ):
+        """Case 6 — the #1708 bug scenario: both connected but only Outlook is calendar-scoped."""
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google", "microsoft"],
+        )
+        monkeypatch.setattr(
+            "gaia_agent_email.config.get_connection",
+            _make_get_connection(
+                {
+                    "google": self._GOOGLE_MAIL_ONLY_SCOPES,  # no calendar scope
+                    "microsoft": self._MS_CALENDAR_SCOPES,
+                }
+            ),
+        )
+        cfg = EmailAgentConfig()
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveOutlookCalendarBackend)
+
+    def test_both_connected_only_google_calendar_scoped_yields_google(
+        self, monkeypatch
+    ):
+        """Case 7: both connected but only Google is calendar-scoped → Google."""
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google", "microsoft"],
+        )
+        monkeypatch.setattr(
+            "gaia_agent_email.config.get_connection",
+            _make_get_connection(
+                {
+                    "google": self._GOOGLE_CALENDAR_SCOPES,
+                    "microsoft": self._MS_MAIL_ONLY_SCOPES,  # no calendar scope
+                }
+            ),
+        )
+        cfg = EmailAgentConfig()
+        backend = cfg.resolve_calendar_backend()
+        assert isinstance(backend, LiveCalendarBackend)
+
+    def test_both_connected_both_calendar_scoped_prefers_registry_order(
+        self, monkeypatch
+    ):
+        """Case 8: both connected and both calendar-scoped → registry order (google first)."""
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google", "microsoft"],
+        )
+        monkeypatch.setattr(
+            "gaia_agent_email.config.get_connection",
+            _make_get_connection(
+                {
+                    "google": self._GOOGLE_CALENDAR_SCOPES,
+                    "microsoft": self._MS_CALENDAR_SCOPES,
+                }
+            ),
+        )
+        cfg = EmailAgentConfig()
+        backend = cfg.resolve_calendar_backend()
+        # google comes first in registry order → LiveCalendarBackend
+        assert isinstance(backend, LiveCalendarBackend)
+
+    def test_connected_but_none_calendar_scoped_raises_actionable(self, monkeypatch):
+        """Case 9: connected providers exist but none has calendar scope → actionable error.
+
+        Distinct from the nothing-connected error.  Must name the scopes to
+        grant, not the confusing "additional Google permission" string.
+        """
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers",
+            lambda: ["google", "microsoft"],
+        )
+        monkeypatch.setattr(
+            "gaia_agent_email.config.get_connection",
+            _make_get_connection(
+                {
+                    "google": self._GOOGLE_MAIL_ONLY_SCOPES,
+                    "microsoft": self._MS_MAIL_ONLY_SCOPES,
+                }
+            ),
+        )
+        cfg = EmailAgentConfig()
+        with pytest.raises(ConfigurationError) as exc:
+            cfg.resolve_calendar_backend()
+        msg = str(exc.value)
+        # Must name the scope(s) the user needs to grant.
+        assert "calendar" in msg.lower()
+        # Must NOT default silently to Google or emit the old misleading message.
+        assert "additional google permission" not in msg.lower()
+
+
+class TestAgentConstructsWhenCalendarUnavailable:
+    """#1708 regression: agent construction must NOT eagerly require keyring access.
+
+    Scope-aware discovery calls ``connected_mailbox_providers()`` (which reads the
+    keyring). If that is unavailable (CI / headless / no system credential store)
+    or no calendar provider is connected, the agent must still construct so
+    non-calendar work runs; the actionable error is deferred to calendar-tool use.
+    """
+
+    def _build(self, tmp_path, monkeypatch, providers_fn):
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.setattr(
+            "gaia_agent_email.config.connected_mailbox_providers", providers_fn
+        )
+        from gaia_agent_email.agent import (
+            EmailTriageAgent,
+            _UnavailableCalendarBackend,
+        )
+
+        cfg = EmailAgentConfig(
+            gmail_backend=object(),
+            db_path=str(tmp_path / "s.db"),
+            silent_mode=True,
+            mail_provider=None,
+            calendar_provider=None,
+        )
+        return EmailTriageAgent(config=cfg), _UnavailableCalendarBackend
+
+    def test_constructs_when_keyring_unavailable(self, tmp_path, monkeypatch):
+        from gaia.connectors.errors import ConnectorsError
+
+        def _no_keyring():
+            raise ConnectorsError(
+                "Keyring get_password failed: No recommended backend was available"
+            )
+
+        agent, unavailable = self._build(tmp_path, monkeypatch, _no_keyring)
+        try:
+            assert isinstance(agent._calendar, unavailable)
+            # Calendar use still fails loudly (no silent fallback).
+            with pytest.raises(ConfigurationError):
+                agent._calendar.list_events(time_min="a", time_max="b")
+        finally:
+            agent.close_db()
+
+    def test_constructs_when_no_provider_connected(self, tmp_path, monkeypatch):
+        agent, unavailable = self._build(tmp_path, monkeypatch, lambda: [])
+        try:
+            assert isinstance(agent._calendar, unavailable)
+            with pytest.raises(ConfigurationError):
+                agent._calendar.create_event(summary="x", start="s", end="e")
+        finally:
+            agent.close_db()
+
+    def test_constructs_when_calendar_scope_declined(self, tmp_path, monkeypatch):
+        # Reviewer's exact case: Gmail connected, calendar scope declined. Discovery
+        # finds google connected but mail-only-scoped -> no calendar provider. The
+        # agent must still construct so read/organize/reply work; calendar use then
+        # raises the actionable error (deferred, not at startup).
+        monkeypatch.setattr(
+            "gaia_agent_email.config.get_connection",
+            lambda p: {"scopes": ["https://www.googleapis.com/auth/gmail.modify"]},
+        )
+        agent, unavailable = self._build(tmp_path, monkeypatch, lambda: ["google"])
+        try:
+            assert isinstance(agent._calendar, unavailable)
+            with pytest.raises(ConfigurationError):
+                agent._calendar.list_events(time_min="a", time_max="b")
+        finally:
+            agent.close_db()
