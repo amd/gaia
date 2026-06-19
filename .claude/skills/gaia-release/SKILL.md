@@ -304,7 +304,7 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    echo "Watching run $RUN_ID"
    gh run watch "$RUN_ID" --repo amd/gaia
    ```
-   **AppImage smoke jobs (`distro-matrix`, `userns-restricted`) are the most flaky** — `userns-restricted` has a 300s `state: ready` poll (raised from 90s to cover a first-run model download). On real failure, **stop** and fix root cause; on transient flake (timeout-only, no logic error), `gh run rerun $RUN_ID --failed` is acceptable.
+   **AppImage smoke jobs (`appimage-distro-matrix`, `appimage-userns-restricted`) are the most flaky** — `appimage-userns-restricted` has a 300s `state: ready` poll (raised from 90s to cover a first-run model download). On real failure, **stop** and fix root cause; on transient flake (timeout-only, no logic error), `gh run rerun $RUN_ID --failed` is acceptable.
 
 ### Gate 3 — green run on the merged commit
 
@@ -345,7 +345,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    gh run list --repo amd/gaia --workflow publish.yml --limit 3
    ```
 
-   The flow is: `validate → build (pypi + npm + electron) → approve (manual gate) → publish (PyPI + npm) → github-release`. Surface the run URL.
+   The flow is: `validate → build (build-pypi + build-npm + build-desktop-installers) → approve-publish (manual gate) → publish (publish-pypi + publish-npm) → post-publish-smoke → github-release → refresh-context7`. Surface the run URL.
 
 ---
 
@@ -364,7 +364,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 
 3. **On real failure** (logic error, missing artifact, validator failure that wasn't there before): **stop**. Do not push past a red build. Do not delete and re-tag — that path is messy. Surface the failing step + log to the user.
 
-4. **Manual approval gate** — when the run reaches the `approve` step in the `publish` GitHub environment, surface the URL to the user. Tell them: **"Manual approval required at <url>. Claude cannot click this — please approve in browser when ready."** Then wait.
+4. **Manual approval gate** — when the run reaches the `approve-publish` job (gated on the `publish` GitHub environment), surface the URL to the user. Tell them: **"Manual approval required at <url>. Claude cannot click this — please approve in browser when ready."** Then wait.
 
 5. **After approval**, PyPI + npm + GitHub Release jobs run in parallel. Watch to completion.
 
