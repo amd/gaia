@@ -404,7 +404,7 @@ gaia/
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   │   #   Packaged agents (code, analyst, browser, fileio, email, summarize, jira,
-│   │   #   blender, docker, sd, emr, connectors_demo) live in hub/agents/python/<id>/.
+│   │   #   blender, docker, sd, emr, connectors-demo) live in hub/agents/python/<id>/.
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
