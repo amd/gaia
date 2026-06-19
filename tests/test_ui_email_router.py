@@ -28,7 +28,6 @@ from gaia_agent_email.version import API_VERSION  # noqa: E402
 
 from gaia.ui.server import create_app  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Shared fixture: UI app with in-memory DB (no filesystem side effects)
 # ---------------------------------------------------------------------------
@@ -49,7 +48,7 @@ def ui_client():
 
 
 def test_email_health_mounted(ui_client):
-    """GET /v1/email/health -> 200 with ok=True when the wheel is installed."""
+    """GET /v1/email/health -> 200 with status='ok' when the wheel is installed."""
     resp = ui_client.get("/v1/email/health")
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -120,7 +119,7 @@ def test_triage_returns_200_schema_2_shape(ui_client):
 
 
 # ---------------------------------------------------------------------------
-# AC3 — fail-loud guard: absent wheel -> clean skip (404, no exception)
+# AC3 — fail-loud guard: absent wheel -> clean skip (no exception, routes unmounted)
 #        present-but-broken wheel -> error propagates (not swallowed)
 # ---------------------------------------------------------------------------
 
@@ -154,6 +153,6 @@ def test_mount_block_absent_wheel_does_not_mount():
     # i.e. they do not return its JSON contract.
     for path in ("/v1/email/version", "/v1/email/health"):
         resp = client.get(path)
-        assert "application/json" not in resp.headers.get("content-type", ""), (
-            f"{path} unexpectedly served by the email router when the wheel is absent"
-        )
+        assert "application/json" not in resp.headers.get(
+            "content-type", ""
+        ), f"{path} unexpectedly served by the email router when the wheel is absent"
