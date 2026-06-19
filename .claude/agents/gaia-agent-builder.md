@@ -63,7 +63,7 @@ Missing any of these will fail `python util/lint.py --agents` or silently produc
 - [ ] Every tool decorated with `@tool` inside `_register_tools` so `self` is in closure scope
 - [ ] Docstring describes args + return (the LLM reads this)
 - [ ] Reusable tools → pull into a mixin under `src/gaia/agents/tools/` or `src/gaia/agents/<agent>/tools/`
-- [ ] Add the mixin to `KNOWN_TOOLS` in `registry.py:26` so other agents can compose it by name
+- [ ] Add the mixin to `KNOWN_TOOLS` in `registry.py:38` so other agents can compose it by name
 
 ### 3. Registry wiring
 - [ ] Add a `_register_*_agent` block in `AgentRegistry._register_builtin_agents`
@@ -71,7 +71,7 @@ Missing any of these will fail `python util/lint.py --agents` or silently produc
 
 ### 4. CLI (optional)
 - [ ] Add a subparser in `src/gaia/cli.py` and document in `docs/reference/cli.mdx` — see `cli-developer` for the pattern
-- [ ] Standalone binary? Add a `console_scripts` entry in `setup.py` (e.g. `gaia-widget = gaia.agents.widget.cli:main`)
+- [ ] Standalone binary? Ship the agent as a hub wheel with its own `pyproject.toml` entry point — NOT a core `setup.py` `console_scripts` entry (e.g. `hub/agents/python/code/` declares `gaia-code = gaia_agent_code.cli:main`)
 
 ### 5. Tests (required)
 - [ ] `tests/test_<agent>.py` — instantiation + tool registration + mocked-LLM response
@@ -97,10 +97,10 @@ Missing any of these will fail `python util/lint.py --agents` or silently produc
 | Core agent (required) | `Agent` | `src/gaia/agents/base/agent.py` |
 | MCP protocol | `MCPAgent` | `src/gaia/agents/base/mcp_agent.py` |
 | OpenAI-compatible API | `ApiAgent` | `src/gaia/agents/base/api_agent.py` |
-| RAG over docs | `RAGToolsMixin` (`rag`) | `src/gaia/agents/chat/tools/rag_tools.py` |
+| RAG over docs | `RAGToolsMixin` (`rag`) | `src/gaia/agents/tools/rag_tools.py` |
 | Fuzzy/glob file search | `FileSearchToolsMixin` (`file_search`) | `src/gaia/agents/tools/file_tools.py` |
-| Read/write/edit files | `FileIOToolsMixin` (`file_io`) | `src/gaia/agents/code/tools/file_io.py` |
-| Sandboxed shell | `ShellToolsMixin` (`shell`) | `src/gaia/agents/chat/tools/shell_tools.py` |
+| Read/write/edit files | `FileIOToolsMixin` (`file_io`) | `src/gaia/agents/tools/file_io_tools.py` |
+| Sandboxed shell | `ShellToolsMixin` (`shell`) | `src/gaia/agents/tools/shell_tools.py` |
 | Screen capture | `ScreenshotToolsMixin` (`screenshot`) | `src/gaia/agents/tools/screenshot_tools.py` |
 | Stable Diffusion | `SDToolsMixin` (`sd`) | `src/gaia/sd/mixin.py` |
 | Vision / structured extraction | `VLMToolsMixin` (`vlm`) | `src/gaia/vlm/mixin.py` |
@@ -109,7 +109,7 @@ Missing any of these will fail `python util/lint.py --agents` or silently produc
 
 ## Default models (verified)
 
-- General: `Qwen3-0.6B-GGUF`
+- General: `Gemma-4-E4B-it-GGUF`
 - Code / agents: `Qwen3.5-35B-A3B-GGUF`
 - Vision: `Qwen3-VL-4B-Instruct-GGUF`
 

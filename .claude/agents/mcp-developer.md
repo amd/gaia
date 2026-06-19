@@ -42,12 +42,15 @@ gaia mcp start [--host H] [--port P] [--background]
 gaia mcp stop
 gaia mcp status
 gaia mcp list              # Configured servers
-gaia mcp add <name>        # Add a server to mcp.json
-gaia mcp remove <name>
 gaia mcp tools             # List tools from running servers
 gaia mcp test              # Smoke tests
 gaia mcp test-client       # Interactive MCP client for poking servers
+gaia mcp agent             # Expose GAIA agents over MCP
+gaia mcp docker            # MCP servers in Docker
+gaia mcp serve             # Serve an MCP server
 ```
+
+Note: `gaia mcp add`/`remove` were removed in #977 — server configuration now goes through the connectors framework (`gaia connectors mcp add/remove`).
 
 See the `mcp_parser` block in `src/gaia/cli.py` for the full subcommand tree.
 

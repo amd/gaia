@@ -10,7 +10,7 @@ You work on Docker-related code in GAIA: both the `DockerAgent` (an agent that *
 ## When to use
 
 - Writing/editing Dockerfiles or `docker-compose*.yml` for GAIA components
-- Editing `src/gaia/agents/docker/` (the `DockerAgent`)
+- Editing `hub/agents/python/docker/gaia_agent_docker/` (the `DockerAgent`)
 - Editing the Docker standalone app under `src/gaia/apps/docker/`
 - Writing K8s manifests or cloud-run configs for GAIA
 - AMD-hardware pass-through (NPU/GPU) in containers
@@ -18,14 +18,14 @@ You work on Docker-related code in GAIA: both the `DockerAgent` (an agent that *
 ## When NOT to use
 
 - CI workflow authoring → `github-actions-specialist`
-- Installer packaging (MSI/NSIS) → see `src/gaia/installer/` and `docs/plans/installer.mdx`
+- Installer packaging (MSI/NSIS) → see `src/gaia/installer/` and `docs/plans/desktop-installer.mdx`
 - General MCP integration → `mcp-developer`
 
 ## Key files
 
 | File | Purpose |
 |------|---------|
-| `src/gaia/agents/docker/agent.py` | `DockerAgent` — container management via natural language |
+| `hub/agents/python/docker/gaia_agent_docker/agent.py` | `DockerAgent` — container management via natural language |
 | `src/gaia/apps/docker/` | Docker standalone app (UI) |
 | `docs/guides/docker.mdx` | User guide |
 | `docs/plans/docker-containers.mdx` | Containerized deployment plan |
@@ -93,7 +93,7 @@ Persisting model cache is critical — without it, containers re-download GB of 
 
 ## Common pitfalls
 
-- **Hardcoded `http://localhost:8000`** inside container code — always read `LEMONADE_BASE_URL` env var
+- **Hardcoded `http://localhost:13305`** inside container code — always read `LEMONADE_BASE_URL` env var
 - **No volume for model cache** — slow cold starts
 - **Missing `group_add: render`** on Linux — GPU device exists but isn't accessible to non-root user
 - **Baking secrets into layers** — pass at runtime via `--env-file` or compose `secrets:`
