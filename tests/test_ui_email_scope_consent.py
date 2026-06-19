@@ -9,7 +9,7 @@ Covers:
   structured AGENT_NOT_GRANTED (not 500).
 - Negative (b): granted mail scopes but missing calendar.events → scope-guard
   path reports CONNECTION_MISSING_SCOPES; triage/draft/send mail-only still pass.
-- Negative (c): no mailbox connected → 503 from resolve_send_backend
+- Negative (c): no mailbox connected → 503 from get_send_backend
   (the fail-loud guard on the #1768-mounted /v1/email surface).
 - Legacy migration regression (#1592): builtin:email grant migrates to
   installed:email.
@@ -400,7 +400,7 @@ class TestMissingCalendarScope:
 
 
 # ---------------------------------------------------------------------------
-# Negative (c): no mailbox connected → 503 from resolve_send_backend
+# Negative (c): no mailbox connected → 503 from get_send_backend
 # ---------------------------------------------------------------------------
 
 
@@ -417,12 +417,12 @@ def ui_client():
 class TestNoMailboxConnected:
     """Absence of any connected mailbox → 503 (fail-loud, not 500/200/empty).
 
-    Tests the resolve_send_backend guard in the email REST surface mounted at
+    Tests the get_send_backend guard in the email REST surface mounted at
     /v1/email by the #1768 router.
     """
 
-    def test_resolve_send_backend_raises_http_503_no_mailbox(self):
-        """resolve_send_backend raises HTTPException(503) when no mailbox connected."""
+    def test_get_send_backend_raises_http_503_no_mailbox(self):
+        """get_send_backend raises HTTPException(503) when no mailbox connected."""
         from fastapi import HTTPException
         from gaia_agent_email.api_routes import get_send_backend
 

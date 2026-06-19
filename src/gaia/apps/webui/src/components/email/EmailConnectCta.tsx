@@ -134,15 +134,15 @@ function ProviderButton({
             <button
                 className="email-connect-cta__button"
                 onClick={() => void handleConnect()}
-                disabled={busy || done}
-                aria-label={done ? `${label} sign-in opened` : `Connect ${label}`}
+                disabled={busy}
+                aria-label={done ? `Reopen ${label} sign-in` : `Connect ${label}`}
             >
                 {busy ? (
                     <Loader2 size={12} className="email-connect-cta__spinner" />
                 ) : (
                     <ExternalLink size={12} />
                 )}
-                <span>{done ? `${label} sign-in opened` : `Connect ${label}`}</span>
+                <span>{done ? `Reopen ${label} sign-in` : `Connect ${label}`}</span>
             </button>
             {err && (
                 <div className="email-connect-cta__error" role="alert">
