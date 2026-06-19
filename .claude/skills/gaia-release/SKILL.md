@@ -195,7 +195,7 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
 
 7. **Validate.** Run from the repo's activated venv (`source .venv/bin/activate` on Linux/macOS, `.venv\Scripts\activate` on Windows; the bare-`python` Microsoft Store stub will fail). If you're working from a git worktree without its own venv, run from the parent checkout's venv.
    ```bash
-   python util/validate_release_notes.py
+   python util/validate_release_notes.py docs/releases/v<version>.mdx --tag v<version>
    ```
    Must exit 0 — this is the gate the publish workflow runs on tag push. Fix any errors before continuing. If it fails for reasons unrelated to your changes (missing dep, broken import), stop and surface that — do not silently bypass. Re-running the validator with `--verbose` (if supported) helps localise the failure.
 
@@ -293,7 +293,7 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
 
 3. **Re-run the release notes validator on the merged tree.**
    ```bash
-   python util/validate_release_notes.py
+   python util/validate_release_notes.py docs/releases/v<version>.mdx --tag v<version>
    ```
 
 4. **Trigger Build Installers via `workflow_dispatch` against the merged SHA.** This builds the same artifacts the tag push will build, on the same code, *before* the tag exists.
@@ -304,7 +304,7 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    echo "Watching run $RUN_ID"
    gh run watch "$RUN_ID" --repo amd/gaia
    ```
-   **AppImage smoke jobs (`distro-matrix`, `userns-restricted`) are the most flaky** — `userns-restricted` has a 90s `state: ready` poll that can race a model download. On real failure, **stop** and fix root cause; on transient flake (timeout-only, no logic error), `gh run rerun $RUN_ID --failed` is acceptable.
+   **AppImage smoke jobs (`distro-matrix`, `userns-restricted`) are the most flaky** — `userns-restricted` has a 300s `state: ready` poll (raised from 90s to cover a first-run model download). On real failure, **stop** and fix root cause; on transient flake (timeout-only, no logic error), `gh run rerun $RUN_ID --failed` is acceptable.
 
 ### Gate 3 — green run on the merged commit
 
@@ -368,7 +368,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 
 5. **After approval**, PyPI + npm + GitHub Release jobs run in parallel. Watch to completion.
 
-6. **`refresh-context7` is the terminal job and may legitimately fail — that is not a release failure.** This job runs *after* PyPI, npm, GitHub Release, and the desktop installers are already published. Context7's API rejects refresh requests inside a short cooldown window (observed: ~3–6 days between releases), and the response is HTTP 400. If the job is red, the release is still live. Open the job log, read the `Response body:` block between the `::stop-commands::` markers, and either accept the cooldown reason or file a follow-up about a new rejection cause. Do **not** delete or re-tag — see the recovery guidance in the Notes section below.
+6. **`refresh-context7` is the terminal job and may legitimately fail — that is not a release failure.** This job runs *after* PyPI, npm, GitHub Release, and the desktop installers are already published. Context7's API rejects refresh requests inside a short cooldown window (observed: ~3–6 days between releases) with HTTP 429 (rate-limited); the workflow tolerates 429 and treats any other status as a hard failure. If the job is red, the release is still live. Open the job log, read the `Response body:` block between the `::stop-commands::` markers, and either accept the cooldown reason or file a follow-up about a new rejection cause. Do **not** delete or re-tag — see the recovery guidance in the Notes section below.
 
 7. **Never add `set -x` or `curl -v` to the `refresh-context7` step** to "debug" a failure. GHA only masks the verbatim secret value; `curl -v` prints the `Authorization: Bearer <token>` header, which is a transformed form that GHA's masking does not catch. Read the captured response body instead — it carries the same diagnostic signal without the leak risk.
 
