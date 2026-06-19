@@ -15,25 +15,27 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(__dirname, "..");
 
 describe("browser entry (./client)", () => {
-  it("bundles for platform:browser with no unresolved node: imports", async () => {
-    // esbuild with platform:browser marks node: imports as external by default
-    // and logs them as errors if bundle:true is set and they are actually referenced.
-    // We capture the result and assert no errors / warnings about node: builtins.
+  it("bundles for platform:browser with no node: builtins in the dependency graph", async () => {
+    // esbuild platform:browser silently shims node: builtins rather than erroring,
+    // so result.errors alone cannot detect them. Instead we bundle with metafile:true
+    // and inspect the resolved input graph: any key beginning with "node:" indicates
+    // a node builtin was pulled in transitively.
     const result = await esbuild.build({
       entryPoints: [path.join(pkgRoot, "src", "client-entry.ts")],
       bundle: true,
       platform: "browser",
       format: "esm",
       write: false,
-      // Treat node: imports as errors (they won't resolve in a browser bundle).
-      // Any reference to a node: builtin will appear in result.errors.
-      external: [],
-      // logLevel: silent so esbuild doesn't print to console during test
+      metafile: true,
       logLevel: "silent",
     });
 
-    // Zero errors means no unresolvable node: builtins pulled in transitively.
     expect(result.errors).toHaveLength(0);
+
+    const nodeBuiltins = Object.keys(result.metafile.inputs).filter((k) =>
+      k.startsWith("node:"),
+    );
+    expect(nodeBuiltins).toHaveLength(0);
   });
 
   it("client-entry exports EmailClient", async () => {
