@@ -233,10 +233,27 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 ## Versioning & Contract Governance
 
-- **`apiVersion`** (SemVer) is the host-facing contract version, advertised on `/version`. Breaking REST changes bump its major.
+`apiVersion` is the host-facing contract version (SemVer), advertised on `GET /version` and defined as a single constant — `SCHEMA_VERSION` in `hub/agents/python/email/gaia_agent_email/contract.py`, aliased as `API_VERSION` in `version.py`. Bumping the contract automatically bumps the API version; they cannot drift.
+
+### `apiVersion` bump policy
+
+| Change type | Example | Version bump |
+|-------------|---------|-------------|
+| Field removed, renamed, or retyped on any request/response model | Remove `is_phishing`, rename `body` → `text` | **MAJOR** |
+| Enum value removed or renamed | Remove `PROMOTIONAL` from `EmailCategory` | **MAJOR** |
+| Endpoint removed or its method changed | Delete `POST /triage` | **MAJOR** |
+| New required field added to a request model | Add required `locale` to `EmailTriageRequest` | **MAJOR** |
+| New optional field added to a request or response | Add optional `thread_summary` to `EmailTriageResult` | **minor** |
+| New endpoint added | Add `GET /v1/email/threads` | **minor** |
+| New enum value added | Add `CALENDAR_INVITE` to `EmailCategory` | **minor** |
+| Bug fix with no wire-format change | Fix a 500 on malformed input | none (patch only) |
+
+**Clients must reject a server whose `apiVersion` major is higher than what they support** — fail loudly with an actionable error, never fall back to best-effort parsing against an incompatible schema.  Clients may accept any minor version equal to or greater than their compiled-against minor.
+
+**How to apply a bump:** update `SCHEMA_VERSION` in `contract.py`, regenerate the spec (`python -m gaia_agent_email.export_openapi`), and run `python -m pytest hub/agents/python/email/tests/test_rest_contract.py tests/test_email_openapi_conformance.py` to confirm no drift.
+
 - **Package version** tracks the agent build; the npm package, the R2 binary version (`agents/email/<version>/…`), and the pinned `binaries.lock.json` manifest always publish in lockstep — the manifest references the matching R2 version, never a floating one.
-- The **OpenAPI spec is the single source of truth** — client, Python server, and C++ server are all validated against it in CI. A change to the contract that isn't reflected in all three fails CI.
-- Client refuses a binary whose `apiVersion` major it doesn't support — **fail loudly**, never best-effort against an incompatible server.
+- The **OpenAPI spec (`openapi.email.json`) is the single source of truth** — client, Python server, and C++ server are all validated against it in CI. A change to the contract that isn't reflected in the committed artifact fails CI (`test_rest_contract.py::test_committed_openapi_artifact_is_up_to_date`), and a running server that doesn't conform to the spec fails the conformance suite (`tests/test_email_openapi_conformance.py`).
 
 ---
 
