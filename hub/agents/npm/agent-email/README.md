@@ -13,6 +13,45 @@ and helpers to spawn / health-check / version-check / shut down the sidecar.
 > triage round-trip with **no Python present** — see
 > `hub/agents/python/email/packaging/README.md`. This package is the npm side.
 
+## How it fits together
+
+Three tiers, all on the user's machine — no cloud, and **no separate GAIA
+install**:
+
+```
+┌─────────────────────────┐   fetchBinary → spawnSidecar (the "." entry, Node-only)
+│  your app  (Node host)  │ ─────────────────────────────────────────────┐
+└─────────────────────────┘                                               │ spawns + owns
+            │ HTTP (EmailClient)                                          ▼
+            │                                          ┌──────────────────────────────────┐
+            └────────────────────────────────────────▶│  email-agent sidecar             │
+                                                       │  (frozen FastAPI binary, no       │
+                                                       │   Python on the host)             │
+                                                       └──────────────────────────────────┘
+                                                                          │ local HTTP
+                                                                          ▼
+                                                       ┌──────────────────────────────────┐
+                                                       │  Lemonade Server (local LLM)      │
+                                                       │  → does the triage inference      │
+                                                       └──────────────────────────────────┘
+```
+
+- **Your app** depends on this package and, from a **Node** process, fetches +
+  spawns the sidecar via the `.` entry. It does **not** attach to an
+  already-running GAIA instance — the package **launches and owns its own
+  sidecar** and tears it down on `shutdown()`.
+- **The sidecar** is a self-contained, PyInstaller-frozen `email-agent` binary
+  serving the five REST endpoints. **No Python is required on the host.**
+- **Lemonade Server** is the one external runtime dependency: the sidecar calls a
+  **local** Lemonade for the actual LLM inference. With none reachable,
+  `POST /v1/email/triage` returns HTTP 502. (Lemonade is GAIA's model server, not
+  GAIA the framework.)
+
+Once a sidecar is running, **anything that speaks HTTP can drive it** — including a
+browser or Electron **renderer** via the [`./client`](#browser--electron-renderer-client)
+entry, which carries zero Node built-ins. You only need Node to *launch and
+supervise* the binary, not to *talk to* it.
+
 ## Why this location
 
 It lives under **`hub/agents/npm/agent-email/`**, mirroring the existing
