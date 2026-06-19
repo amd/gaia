@@ -47,6 +47,7 @@ from uuid import uuid4
 import numpy as np
 
 from gaia.agents.base.memory_store import (
+    EXTRACTABLE_CATEGORIES,
     MAX_CONTENT_LENGTH,
     VALID_CATEGORIES,
 )
@@ -1028,6 +1029,7 @@ class MemoryMixin:
             else load_synthesis_config(_load_memory_settings()).similarity_tau
         )
         skills: List[Skill] = []
+        recalled_ids: List[str] = []
         for procedure_id, score in matches:
             if score < tau:
                 continue
@@ -1050,6 +1052,19 @@ class MemoryMixin:
                     tools_required=row.get("tools_required") or [],
                 )
             )
+            recalled_ids.append(procedure_id)
+
+        # Stamp last_used_at so `gaia memory status` can report reuse. Telemetry
+        # only — a write hiccup must not crash the turn or drop the recall.
+        if recalled_ids:
+            try:
+                store.touch_skills(recalled_ids)
+            except Exception as e:
+                logger.debug(
+                    "[MemoryMixin] last_used_at touch failed "
+                    "(recall still served): %s",
+                    e,
+                )
         return skills
 
     def _build_recalled_skills_prompt(self, goal: str) -> str:
@@ -1427,8 +1442,16 @@ class MemoryMixin:
                     continue
                 op_type = op["op"]
                 if op_type == "add" and "content" in op and "category" in op:
-                    if op["category"] in VALID_CATEGORIES:
+                    if op["category"] in EXTRACTABLE_CATEGORIES:
                         valid_ops.append(op)
+                    elif op["category"] in VALID_CATEGORIES:
+                        # Privileged category (system/profile/permission): only
+                        # explicit tools may write these — never the extractor.
+                        logger.debug(
+                            "[MemoryMixin] dropped extracted op with privileged "
+                            "category %r (extractor cannot write it)",
+                            op["category"],
+                        )
                 elif op_type == "update" and "knowledge_id" in op and "content" in op:
                     valid_ops.append(op)
                 elif op_type == "delete" and "knowledge_id" in op:
@@ -1750,14 +1773,23 @@ class MemoryMixin:
                         vec = self._embed_text(summary)
                         store.store_embedding(summary_id, _embedding_to_blob(vec))
                         self._faiss_add(summary_id, vec)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # Non-fatal: the row is stored; the vector is backfilled
+                        # on the next init. Logged so the gap is never silent.
+                        logger.debug(
+                            "[MemoryMixin] consolidation summary embed failed "
+                            "(id=%s, backfilled on restart): %s",
+                            summary_id,
+                            e,
+                        )
 
                 # Store extracted knowledge items
                 knowledge_items = data.get("knowledge", [])
                 for ki in knowledge_items:
                     if isinstance(ki, dict) and "content" in ki and "category" in ki:
-                        if ki["category"] in VALID_CATEGORIES:
+                        # EXTRACTABLE_CATEGORIES, not VALID_CATEGORIES: a session
+                        # summary must not mint a system/profile/permission row.
+                        if ki["category"] in EXTRACTABLE_CATEGORIES:
                             try:
                                 kid = store.store(
                                     category=ki["category"],
@@ -1772,8 +1804,16 @@ class MemoryMixin:
                                     vec = self._embed_text(ki["content"])
                                     store.store_embedding(kid, _embedding_to_blob(vec))
                                     self._faiss_add(kid, vec)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    # Non-fatal: row stored; vector backfilled on
+                                    # next init. Logged so the gap is not silent.
+                                    logger.debug(
+                                        "[MemoryMixin] consolidation item embed "
+                                        "failed (id=%s, backfilled on restart): "
+                                        "%s",
+                                        kid,
+                                        e,
+                                    )
                                 result["extracted_items"] += 1
                             except Exception as e:
                                 logger.debug(
@@ -1993,8 +2033,16 @@ class MemoryMixin:
                     reconciled_b.append(id_a)
                     merged_b["reconciled_with"] = reconciled_b
                     store.update(id_b, metadata=merged_b)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Loud: a failed mark means this pair is re-examined (and
+                    # re-sent to the LLM) on every startup until it succeeds.
+                    logger.warning(
+                        "[MemoryMixin] failed to mark pair %s/%s reconciled — "
+                        "it will be re-checked next startup: %s",
+                        id_a[:8],
+                        id_b[:8],
+                        e,
+                    )
 
             except json.JSONDecodeError:
                 logger.debug(

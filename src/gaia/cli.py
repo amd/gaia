@@ -5384,23 +5384,17 @@ def _handle_memory_status():
             print(f"    Success rate:  {t['overall_success_rate']:.0%}")
             print(f"    Total errors:  {t['total_errors']}")
 
-        # Procedures section (procedural memory / skills, #887).  Synthesis is
-        # the only writer, so every row counts as "synthesized"; recall uses
-        # only the enabled, non-superseded subset.  High limit keeps the count
-        # exact — procedures are low-cardinality (one per repeated workflow).
-        procedures = store.search_skills(
-            enabled_only=False, include_superseded=True, limit=100000
-        )
-        print(f"\n  Procedures (skills): {len(procedures)} synthesized")
-        if procedures:
-            active = sum(
-                1 for p in procedures if p["enabled"] and not p["superseded_by"]
-            )
-            if active != len(procedures):
-                print(f"    Active (recallable): {active}")
-            recalled = [p["last_used_at"] for p in procedures if p["last_used_at"]]
-            if recalled:
-                print(f"    Last recalled: {max(recalled)[:10]}")
+        # Procedures section (procedural memory / skills, #887). Counts come
+        # from get_stats() COUNT(*) queries — synthesis is the only writer, so
+        # every row is "synthesized"; recall uses the enabled, non-superseded
+        # subset.
+        proc = stats["procedures"]
+        print(f"\n  Procedures (skills): {proc['total']} synthesized")
+        if proc["total"]:
+            if proc["active"] != proc["total"]:
+                print(f"    Active (recallable): {proc['active']}")
+            if proc["last_recalled"]:
+                print(f"    Last recalled: {proc['last_recalled'][:10]}")
 
         # Temporal section
         tp = stats["temporal"]

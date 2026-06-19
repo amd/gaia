@@ -4930,6 +4930,34 @@ class TestProceduresCRUD:
         assert len(store.search_skills()) == 1
         assert len(store.search_skills(enabled_only=False)) == 2
 
+    def test_touch_skills_stamps_last_used_at(self, store):
+        """touch_skills() records last_used_at (recall telemetry for status)."""
+        sid = self._sample(store)
+        assert store.search_skills(skill_id=sid)[0]["last_used_at"] is None
+
+        updated = store.touch_skills([sid])
+
+        assert updated == 1
+        assert store.search_skills(skill_id=sid)[0]["last_used_at"] is not None
+
+    def test_touch_skills_empty_is_noop(self, store):
+        """touch_skills([]) writes nothing and returns 0 (no SQL with empty IN)."""
+        assert store.touch_skills([]) == 0
+
+    def test_get_stats_reports_procedure_counts(self, store):
+        """get_stats()['procedures'] counts total/active and last recall time."""
+        active = self._sample(store, name="active-proc")
+        store.put_skill(
+            name="disabled-proc", when_to_use="t", markdown_body="b", enabled=False
+        )
+        store.touch_skills([active])
+
+        proc = store.get_stats()["procedures"]
+
+        assert proc["total"] == 2
+        assert proc["active"] == 1  # the disabled row is excluded
+        assert proc["last_recalled"] is not None
+
     def test_search_skills_by_name(self, store):
         """search_skills(name=...) filters by exact name."""
         self._sample(store)

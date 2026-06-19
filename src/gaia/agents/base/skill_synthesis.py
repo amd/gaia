@@ -3,13 +3,12 @@
 """Skill auto-synthesis pipeline — procedural memory (GAIA #887).
 
 This module is the DETECT → CLUSTER → DISTILL → RECONCILE half of the procedural
-memory loop that extends PR #606's CoALA memory layer.  It turns clusters of
-successful tool sequences (recorded in ``tool_history``) into reusable,
-``SKILL.md``-shaped procedures stored in the ``procedures`` table.
+memory loop.  It turns clusters of successful tool sequences (recorded in
+``tool_history``) into reusable, ``SKILL.md``-shaped procedures stored in the
+``procedures`` table.
 
-The pipeline is intentionally framework-light and reuses #606 primitives — the
-nomic-768 embedder, the ``self.chat`` LLM seam, and the ``MemoryStore`` — rather
-than introducing a new model or store engine.  The functions here are pure-ish
+The pipeline reuses the #606 memory primitives (the nomic-768 embedder, the
+``self.chat`` LLM seam, the ``MemoryStore``).  The functions here are pure-ish
 (they take the store / an embed callable / a send-messages callable as
 arguments) so they can be unit-tested without a live backend; the
 ``MemoryMixin._synthesize_skills`` driver in ``memory.py`` wires them to the real

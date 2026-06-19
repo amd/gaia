@@ -107,6 +107,17 @@ VALID_CATEGORIES: frozenset = frozenset(
     }
 )
 
+#: Privileged categories that only an explicit memory tool / the system may
+#: write — never the LLM conversation extractor. A chat turn must not be able to
+#: mint a permission grant, a system fact, or a profile entry by emitting that
+#: category, so the extraction/consolidation paths validate against
+#: EXTRACTABLE_CATEGORIES below, not VALID_CATEGORIES.
+_PRIVILEGED_CATEGORIES: frozenset = frozenset({"system", "profile", "permission"})
+
+#: Categories the LLM conversation extractor and consolidation pass may emit.
+#: Subset of VALID_CATEGORIES; mirrors the set advertised in _EXTRACTION_PROMPT.
+EXTRACTABLE_CATEGORIES: frozenset = VALID_CATEGORIES - _PRIVILEGED_CATEGORIES
+
 #: Maximum stored content length (chars).  Longer content is truncated by
 #: callers before reaching store() so the database stays compact.
 MAX_CONTENT_LENGTH: int = 2000
@@ -1912,6 +1923,19 @@ class MemoryStore:
                 (now_iso,),
             ).fetchone()[0]
 
+            # Procedures (procedural memory / skills, #887). COUNT(*) instead of
+            # fetching rows so a large procedure table never loads into memory.
+            p_total = self._conn.execute("SELECT COUNT(*) FROM procedures").fetchone()[
+                0
+            ]
+            p_active = self._conn.execute(
+                "SELECT COUNT(*) FROM procedures "
+                "WHERE enabled = 1 AND superseded_by IS NULL"
+            ).fetchone()[0]
+            p_last_recalled = self._conn.execute(
+                "SELECT MAX(last_used_at) FROM procedures"
+            ).fetchone()[0]
+
         # DB size
         try:
             db_size = os.path.getsize(str(self._db_path))
@@ -1947,6 +1971,11 @@ class MemoryStore:
             "temporal": {
                 "upcoming_count": upcoming_count,
                 "overdue_count": overdue_count,
+            },
+            "procedures": {
+                "total": p_total,
+                "active": p_active,
+                "last_recalled": p_last_recalled,
             },
             "db_size_bytes": db_size,
         }
@@ -2634,6 +2663,35 @@ class MemoryStore:
                 ).rowcount
                 self._conn.commit()
                 return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def touch_skills(self, skill_ids: List[str], when: str | None = None) -> int:
+        """Stamp ``last_used_at`` on the given procedures (recall telemetry).
+
+        Called when ``recall_skill`` surfaces procedures for a goal so
+        ``gaia memory status`` can report when a skill was last reused.
+
+        Args:
+            skill_ids: procedure ids that were just recalled.
+            when: ISO 8601 timestamp to record; defaults to now.
+
+        Returns:
+            Number of rows updated.
+        """
+        if not skill_ids:
+            return 0
+        stamp = when or _now_iso()
+        placeholders = ",".join("?" for _ in skill_ids)
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    f"UPDATE procedures SET last_used_at = ? WHERE id IN ({placeholders})",
+                    (stamp, *skill_ids),
+                ).rowcount
+                self._conn.commit()
+                return rowcount
             except Exception:
                 self._conn.rollback()
                 raise
