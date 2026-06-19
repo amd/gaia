@@ -15,26 +15,10 @@ and helpers to spawn / health-check / version-check / shut down the sidecar.
 
 ## How it fits together
 
+![@amd-gaia/agent-email architecture — your Node code spawns and drives a frozen email-agent sidecar (127.0.0.1:8131) over HTTP, which runs triage inference on a local Lemonade Server; a browser/Electron renderer drives the same sidecar over HTTP via the ./client entry.](https://raw.githubusercontent.com/amd/gaia/main/hub/agents/npm/agent-email/assets/architecture.webp)
+
 Three tiers, all on the user's machine — no cloud, and **no separate GAIA
 install**:
-
-```
-┌─────────────────────────┐   fetchBinary → spawnSidecar (the "." entry, Node-only)
-│  your app  (Node host)  │ ─────────────────────────────────────────────┐
-└─────────────────────────┘                                               │ spawns + owns
-            │ HTTP (EmailClient)                                          ▼
-            │                                          ┌──────────────────────────────────┐
-            └────────────────────────────────────────▶│  email-agent sidecar             │
-                                                       │  (frozen FastAPI binary, no       │
-                                                       │   Python on the host)             │
-                                                       └──────────────────────────────────┘
-                                                                          │ local HTTP
-                                                                          ▼
-                                                       ┌──────────────────────────────────┐
-                                                       │  Lemonade Server (local LLM)      │
-                                                       │  → does the triage inference      │
-                                                       └──────────────────────────────────┘
-```
 
 - **Your app** depends on this package and, from a **Node** process, fetches +
   spawns the sidecar via the `.` entry. It does **not** attach to an
