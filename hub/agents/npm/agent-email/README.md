@@ -120,7 +120,8 @@ the bad file is not left on disk.
 ### `EmailClient`
 Typed wrapper over the five endpoints. Methods: `triage`, `draft`, `send`,
 `health`, `version`. Every non-2xx response throws `HttpError` (carrying
-`status`, `url`, `bodyText`) — never a silent empty/null result.
+`status`, `url`, `bodyText`) — never a silent empty/null result. Only `send`
+needs a connected mailbox — see [Auth & connectors](#auth--connectors).
 
 ### Fetcher
 - `fetchBinary(opts)` → download + verify + install; returns `{ binaryPath, sha256, cached, ... }`.
@@ -133,6 +134,54 @@ Typed wrapper over the five endpoints. Methods: `triage`, `draft`, `send`,
 - `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
 - `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The frozen one-file binary orphans a child otherwise (packaging/README.md, gotcha 6).
 - `startSidecar(opts)` → `spawn` → `waitForHealth` → `checkVersion` in one call; shuts down on any failure so a failed start never leaks a process.
+
+## Auth & connectors
+
+**The rule:** an endpoint that works on the **content you pass in the request** is
+**standalone** — it needs nothing but the local Lemonade LLM. An action that
+**reads from or acts on the live Gmail/Outlook mailbox or calendar** (send,
+archive, mark spam, label, create a calendar invite, …) requires the **Google or
+Microsoft connector** (OAuth), configured in GAIA under *Settings → Connectors*.
+
+### What this package's REST API exposes today
+
+| Endpoint | Auth | What it needs |
+|----------|------|---------------|
+| `POST /v1/email/triage` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* |
+| `POST /v1/email/draft` | **Standalone** | Nothing external — wraps your `(to, subject, body)` and returns a single-use confirmation token. |
+| `POST /v1/email/send` | **Connector** | A connected Google/Microsoft mailbox **and** a valid confirmation token. Actually transmits mail (`503` if no mailbox connected, `400` if 2+ are). |
+| `GET /health` | **Standalone** | Nothing — liveness only. |
+| `GET /version` | **Standalone** | Nothing — version negotiation. |
+
+So you can integrate and verify **triage + draft + health + version with zero
+connector setup** — only `send` needs a connected mailbox.
+
+### Mailbox/calendar actions always need a connector
+
+The full GAIA email agent also *acts on* the live mailbox and calendar. These are
+connector-gated **by definition** — they change state in Gmail/Outlook — and are
+**not exposed through this package's REST API yet** (only triage/draft/send are):
+
+| Action | Requires |
+|--------|----------|
+| Read inbox, get/search messages, list labels | Google / Microsoft (read) |
+| Archive, mark read/unread, star, label, move | Google / Microsoft |
+| Mark spam / quarantine phishing, trash, delete | Google / Microsoft |
+| Send / forward a reply | Google / Microsoft |
+| Calendar: list events, accept/decline invite, create event from an email | Google / Microsoft Calendar |
+
+> Detecting spam/phishing or a meeting request is **standalone** (it analyzes the
+> content you pass). *Acting* on it — moving to spam, creating the invite — is what
+> needs the connector.
+
+### No token injection (yet)
+
+`send` resolves its OAuth token from the **local GAIA connector store**
+(`gaia.connectors`) on the host — `EmailSendRequest` has **no `access_token`
+field** (`provider` is only a routing hint). There is **no way to pass or forward
+a connection through this package's API**, so connector-backed calls only work on
+a machine where the mailbox is already connected in GAIA. Triage and draft, which
+need no connector, work anywhere.
 
 ## Module format
 
