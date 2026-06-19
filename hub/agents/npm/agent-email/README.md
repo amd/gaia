@@ -25,7 +25,7 @@ install**:
   already-running GAIA instance — the package **launches and owns its own
   sidecar** and tears it down on `shutdown()`.
 - **The sidecar** is a self-contained, PyInstaller-frozen `email-agent` binary
-  serving the five REST endpoints. **No Python is required on the host.**
+  serving the email REST endpoints. **No Python is required on the host.**
 - **Lemonade Server** is the one external runtime dependency: the sidecar calls a
   **local** Lemonade for the actual LLM inference. With none reachable,
   `POST /v1/email/triage` returns HTTP 502. (Lemonade is GAIA's model server, not
@@ -55,6 +55,25 @@ npm install @amd-gaia/agent-email
 > behind a proxy, run with Node's system CA store:
 > `NODE_OPTIONS=--use-system-ca npm install` (Node ≥ 22). Same class of issue the
 > Python spike hit with `uv --system-certs`.
+
+## Prerequisites (runtime)
+
+This package fetches and spawns the sidecar **binary**, but it does **not**
+provision the model stack. Before `triage` (or any LLM call) will succeed, the
+host must already have:
+
+1. **A running Lemonade Server** — `lemonade-server serve`.
+2. **The configured model pulled and loadable** — provisioned out-of-band via
+   `gaia init` (installs Lemonade + downloads/tests the model).
+
+The package does none of this for you: no model download, no version check, no
+warmup. On a fresh machine, the binary boots fine but the first `triage` returns
+**HTTP 502** until Lemonade + the model are in place.
+
+> ⚠️ **`health()` is liveness-only — it does NOT check Lemonade or the model.** A
+> green `/health` means "the REST surface is up," **not** "triage will work." The
+> only real readiness signal today is a `triage` call returning `200` (vs `502`).
+> A dedicated `/v1/init` readiness/provisioning endpoint is planned — see #1795.
 
 ## Quick start
 
@@ -118,10 +137,14 @@ the bad file is not left on disk.
 ## API
 
 ### `EmailClient`
-Typed wrapper over the five endpoints. Methods: `triage`, `draft`, `send`,
-`health`, `version`. Every non-2xx response throws `HttpError` (carrying
-`status`, `url`, `bodyText`) — never a silent empty/null result. Only `send`
-needs a connected mailbox — see [Auth & connectors](#auth--connectors).
+Typed wrapper over the sidecar's full HTTP surface. Methods: `triage`, `draft`,
+`send`, `health`, `version`, `emailHealth`, `emailVersion`, `spec`, `openapi`.
+`health`/`version` hit the **root** routes (the standalone sidecar);
+`emailHealth`/`emailVersion` hit the **`/v1/email`-scoped** mirrors (for when the
+router is mounted on a product app). `spec` returns the raw HTML endpoint page;
+`openapi` returns the OpenAPI document. Every non-2xx response throws `HttpError`
+(carrying `status`, `url`, `bodyText`) — never a silent empty/null result. Only
+`send` needs a connected mailbox — see [Auth & connectors](#auth--connectors).
 
 ### Fetcher
 - `fetchBinary(opts)` → download + verify + install; returns `{ binaryPath, sha256, cached, ... }`.
@@ -145,16 +168,22 @@ Microsoft connector** (OAuth), configured in GAIA under *Settings → Connectors
 
 ### What this package's REST API exposes today
 
-| Endpoint | Auth | What it needs |
-|----------|------|---------------|
-| `POST /v1/email/triage` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* |
-| `POST /v1/email/draft` | **Standalone** | Nothing external — wraps your `(to, subject, body)` and returns a single-use confirmation token. |
-| `POST /v1/email/send` | **Connector** | A connected Google/Microsoft mailbox **and** a valid confirmation token. Actually transmits mail (`503` if no mailbox connected, `400` if 2+ are). |
-| `GET /health` | **Standalone** | Nothing — liveness only. |
-| `GET /version` | **Standalone** | Nothing — version negotiation. |
+| Endpoint | Client method | Auth | What it needs |
+|----------|---------------|------|---------------|
+| `POST /v1/email/triage` | `triage()` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* |
+| `POST /v1/email/draft` | `draft()` | **Standalone** | Nothing external — wraps your `(to, subject, body)` and returns a single-use confirmation token. |
+| `POST /v1/email/send` | `send()` | **Connector** | A connected Google/Microsoft mailbox **and** a valid confirmation token. Actually transmits mail (`503` if no mailbox connected, `400` if 2+ are). |
+| `GET /health` | `health()` | **Standalone** | Liveness only — does **not** check Lemonade/model (see [Prerequisites](#prerequisites-runtime)). |
+| `GET /version` | `version()` | **Standalone** | Nothing — version negotiation. |
+| `GET /v1/email/health` | `emailHealth()` | **Standalone** | Router-scoped liveness (for the mounted-on-app case). |
+| `GET /v1/email/version` | `emailVersion()` | **Standalone** | Router-scoped version. |
+| `GET /v1/email/spec` | `spec()` | **Standalone** | Human-readable HTML endpoint page. |
+| `GET /openapi.json` | `openapi()` | **Standalone** | Machine-readable OpenAPI document. |
 
-So you can integrate and verify **triage + draft + health + version with zero
-connector setup** — only `send` needs a connected mailbox.
+The interactive `GET /docs` (Swagger UI) and `GET /redoc` pages are also served but
+are browser UIs, not wrapped by the client. So **everything except `send` is
+standalone** — you can integrate and verify the whole surface with zero connector
+setup; only `send` needs a connected mailbox.
 
 ### Mailbox/calendar actions always need a connector
 
