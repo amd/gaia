@@ -11,15 +11,15 @@ __version__ = "0.21.2"
 # Lemonade version used across CI and installer.
 #
 # DO NOT bump past this pin until the embedding regression below is verified fixed.
-# v10.7.0 (llama.cpp b9585) crashes loading the nomic-embed-text-v2-moe-GGUF
+# Lemonade's newer bundled llama.cpp crashes loading the nomic-embed-text-v2-moe-GGUF
 # embedding model -- llama-server "failed to start" -- breaking RAG / code-index /
 # agent-memory embeddings. Regular LLM GGUFs load fine, so CI fails ONLY on the
-# embedding jobs. The regression entered the llama.cpp build range b8766..b9585;
-# 10.6.0 (b9253) is pinned as the most recent version expected to still load the
-# model -- confirmed by the embeddings/RAG CI jobs, which now print the llama-server
-# stderr on load failure so the exact bad build can be bisected. Last proven-good
-# fallback if 10.6.0 also fails is 10.2.0. Tracked by gaia#941.
-LEMONADE_VERSION = "10.6.0"
+# embedding jobs. CI proved 10.2.0 (pre-b8766) loads the model and BOTH 10.6.0 (b9253)
+# and 10.7.0 (b9585) crash, so the regression entered the build range b8766..b9253.
+# 10.2.0 is the proven last-known-good and is pinned here until a newer version is
+# verified to load this model -- the embeddings/RAG CI jobs print the llama-server
+# log on load failure so a future bump can confirm before landing. Tracked by gaia#941.
+LEMONADE_VERSION = "10.2.0"
 
 
 def get_package_version() -> str:
