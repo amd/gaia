@@ -28,13 +28,14 @@ Task state machine:
 Thread-safe via threading.Lock.
 """
 
+import json
 import logging
 import sqlite3
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -77,10 +78,39 @@ AgentMode = Literal[
 
 Priority = Literal["low", "medium", "high"]
 
+Action = Literal[
+    "file_write",
+    "file_read",
+    "shell_exec",
+    "web_fetch",
+    "api_call",
+    "other",
+]
+
+Risk = Literal["low", "medium", "high", "critical"]
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class Proposal:
+    """A proactive proposal submitted by on_first_run or on_heartbeat."""
+
+    action: str
+    rationale: str
+    action_class: Action = "other"
+    risk: Risk = "medium"
+
+    def to_dict(self) -> Dict[str, str]:
+        return {
+            "action": self.action,
+            "rationale": self.rationale,
+            "action_class": self.action_class,
+            "risk": self.risk,
+        }
 
 
 @dataclass
@@ -498,6 +528,70 @@ class GoalStore:
     def get_pending_approval(self) -> List[Goal]:
         """Goals waiting for the user to approve or reject."""
         return self.list_goals(status="pending_approval")
+
+    def propose(
+        self,
+        proposal: "Proposal",
+        proposer: str = "agent",
+        source: GoalSource = "agent_inferred",
+        priority: Priority = "medium",
+    ) -> Optional[Goal]:
+        """Submit a proactive proposal to GoalStore as pending approval.
+
+        Low-risk actions (risk=\"low\") are auto-approved and queued.
+        Medium/high/critical actions start as ``pending_approval``.
+        Returns the created Goal, or None on DB error.
+        """
+        from gaia.agents.base.goal_store import _now_iso
+
+        now = _now_iso()
+        goal_id = str(uuid4())
+
+        # Low-risk proposals auto-approve per the spec's trust tier
+        if proposal.risk == "low":
+            status = "queued"
+            approved = True
+        else:
+            status = "pending_approval"
+            approved = False
+
+        description = f"[{source}] {proposal.rationale}"
+        if source == "agent_inferred":
+            source_label = "agent_inferred"
+        elif source == "agent_scheduled":
+            source_label = "agent_scheduled"
+        else:
+            source_label = "user"
+
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute(
+                """INSERT INTO goals
+                   (id, title, description, status, source, mode_required,
+                    approved_for_auto, priority, progress_notes, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    goal_id,
+                    f"Proposal: {proposal.action}",
+                    description,
+                    status,
+                    source_label,
+                    "goal_driven",
+                    int(approved),
+                    priority,
+                    json.dumps(proposal.to_dict()),
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+        logger.debug(
+            "[GoalStore] proposal %s → goal %s (status=%s)",
+            proposal.action,
+            goal_id,
+            status,
+        )
+        return self.get_goal(goal_id)
 
     def get_actionable_goals(self) -> List[Goal]:
         """Approved goals that are queued or in-progress — ready for the agent loop.
