@@ -107,55 +107,64 @@ jobs:
             # v10 -- GGUF weights live in the HuggingFace hub cache -- so it was
             # a silent no-op and has been removed.
 
-            # --- Stale HF-cache experiment (gaia#941) ---------------------------
-            # The embedding-load 500 reproduces on EVERY Lemonade version we tried
-            # (10.2.0 / 10.6.0 / 10.7.0) while LLMs load fine on the same runner,
-            # and the upstream GGUF is unchanged since 2025-05. That rules out a
-            # server-version regression and points at a stale/corrupt nomic GGUF in
-            # the HuggingFace hub cache, which version-reconcile never wipes (it only
-            # clears the llama.cpp backend under .cache\lemonade\bin). Inspect the
-            # cached files, then wipe them so the pull below re-downloads a clean
-            # copy. If the load then succeeds, the runner cache was the culprit.
-            Write-Host "`n=== Inspecting + clearing cached nomic GGUF (HF hub) ==="
+            # --- Embedding-model load on the Vulkan stx runners (gaia#941) -------
+            # The nomic-embed-text-v2-moe (MoE) model crashes llama-server on the
+            # Vulkan backend on these runners: it loads + runs fine on Metal locally
+            # and LLMs load fine on Vulkan here, yet this MoE embedding model fails
+            # identically across Lemonade 10.2/10.6/10.7 -- a runner Vulkan/GPU-driver
+            # issue, not a version or model-file problem. Lemonade launches the
+            # embedder with `-ngl 99` (full GPU offload), which builds the crashing
+            # Vulkan MoE kernels. Loading with `-ngl 0` keeps compute on the CPU
+            # (embeddings are cheap) and sidesteps the broken Vulkan path.
             $hubRoots = @(
                 "$env:USERPROFILE\.cache\huggingface\hub",
                 "C:\windows\system32\config\systemprofile\.cache\huggingface\hub"
             )
             if ($env:HF_HOME) { $hubRoots += (Join-Path $env:HF_HOME "hub") }
-            foreach ($hub in ($hubRoots | Select-Object -Unique)) {
-                if (-not (Test-Path $hub)) { continue }
-                Get-ChildItem $hub -Directory -Filter "*nomic*" -ErrorAction SilentlyContinue | ForEach-Object {
-                    Write-Host "Cached: $($_.FullName)"
-                    Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Length -gt 1MB } |
-                        ForEach-Object { Write-Host ("   {0,14:N0} bytes  {1}" -f $_.Length, $_.Name) }
-                    Write-Host "Removing to force clean re-download: $($_.FullName)"
-                    Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            function Get-NomicGguf {
+                foreach ($hub in ($hubRoots | Select-Object -Unique)) {
+                    if (-not (Test-Path $hub)) { continue }
+                    $f = Get-ChildItem $hub -Recurse -File -Filter "*nomic*moe*.gguf" -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Length -gt 100MB } | Select-Object -First 1
+                    if ($f) { return $f }
                 }
+                return $null
             }
 
-            # Pull embedding model (actual model used in tests)
+            # Pull embedding model and WAIT for the download to land (REST /pull is
+            # async and returns immediately).
             Write-Host "`n=== Pulling Embedding Model ==="
             Write-Host "Pulling nomic-embed-text-v2-moe-GGUF..."
             try {
                 $body = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
-                $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" `
-                    -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
-                Write-Host "   [OK] Model pull initiated"
+                Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" `
+                    -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600 | Out-Null
+                Write-Host "   [OK] Pull request accepted"
             } catch {
-                Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
+                Write-Host "   [WARN] Pull request error: $($_.Exception.Message)"
             }
+            $deadline = (Get-Date).AddMinutes(10)
+            while (-not (Get-NomicGguf) -and (Get-Date) -lt $deadline) {
+                Start-Sleep -Seconds 10
+                Write-Host "   waiting for nomic GGUF download..."
+            }
+            $g = Get-NomicGguf
+            if (-not $g) { throw "nomic GGUF not present after pull -- download did not complete" }
+            Write-Host ("   downloaded: {0:N0} bytes  {1}" -f $g.Length, $g.Name)
 
-            # Load embedding model into memory (required in Lemonade v9.x)
-            Write-Host "`n=== Loading Embedding Model ==="
+            # Load embedding model, forcing CPU offload (-ngl 0) to avoid the Vulkan
+            # MoE crash. Lemonade forwards llamacpp_args to llama-server; the later
+            # -ngl wins, overriding Lemonade's default -ngl 99.
+            Write-Host "`n=== Loading Embedding Model (CPU offload, -ngl 0) ==="
             try {
                 $loadRequest = @{
-                    model_name = "nomic-embed-text-v2-moe-GGUF"
+                    model_name    = "nomic-embed-text-v2-moe-GGUF"
+                    llamacpp_args = "-ngl 0"
                 } | ConvertTo-Json
 
-                Write-Host "Loading model: nomic-embed-text-v2-moe-GGUF"
+                Write-Host "Loading model: nomic-embed-text-v2-moe-GGUF (llamacpp_args='-ngl 0')"
                 $loadResponse = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" `
-                    -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 60
+                    -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 120
                 Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
             } catch {
                 Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
