@@ -1292,6 +1292,18 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
 
     <h3 style="margin-top:34px">Endpoints</h3>
 
+    <div class="endpoint" id="ep-init">
+      <span class="badge">GET</span><span class="path">/v1/email/init</span>
+      <p class="desc">Readiness preflight for the whole triage stack (<a class="iss" href="https://github.com/amd/gaia/issues/1795" target="_blank" rel="noopener">#1795</a>). Returns <b>200</b> when ready and <b>503</b> when not, with an actionable <code>hint</code>. Unlike <code class="inl">/health</code> (liveness-only — never touches the LLM), this probes the local Lemonade Server and confirms the triage model is downloaded, so a host can verify &ldquo;ready to triage,&rdquo; not just &ldquo;process up.&rdquo; Read-only — probes only, no model pull or provisioning is triggered.</p>
+      <h4>Response body — InitResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>ready</code></td><td>bool</td><td>True only when Lemonade is reachable <b>and</b> the triage model is present.</td></tr>
+        <tr><td><code>lemonade</code></td><td>object</td><td><code>{ reachable: bool, base_url: string }</code> — the <code>/api/v1</code> base that was probed.</td></tr>
+        <tr><td><code>model</code></td><td>object</td><td><code>{ id: string, present: bool, loadable: bool|null }</code>. <code>present</code> is a cheap model-list lookup; <code>loadable</code> is <code>null</code> in v1 (forcing a load is heavy).</td></tr>
+        <tr><td><code>hint</code></td><td>string | null</td><td>Actionable next step when not ready (what failed / what to do); <code>null</code> when ready.</td></tr>
+      </tbody></table>
+    </div>
+
     <div class="endpoint" id="ep-triage">
       <span class="badge">POST</span><span class="path">/v1/email/triage</span>
       <p class="desc">Triage a single email or a full thread. Returns category, spam/phishing signals, summary, action items, and an optional draft proposal. Reads/sends no mail — analyzes only the payload.</p>
@@ -1357,7 +1369,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
         <tr><td><code>403</code></td><td>Forbidden — send gate</td><td><a class="eplink" href="#ep-send"><code>/v1/email/send</code></a> called without a valid, payload-bound <code>confirmation_token</code>. Mint one with <a class="eplink" href="#ep-draft"><code>/v1/email/draft</code></a>.</td></tr>
         <tr><td><code>422</code></td><td>Validation error</td><td>Request violates the contract — unknown field, missing required field, or malformed address. The contract is strict (extra fields are rejected).</td></tr>
         <tr><td><code>502</code></td><td>Upstream error</td><td><code>/triage</code>: the local-LLM triage call failed. <code>/send</code>: the mail backend accepted the send but returned no message id.</td></tr>
-        <tr><td><code>503</code></td><td>Backend unavailable</td><td>The mailbox account isn't connected. Connect the provider before sending.</td></tr>
+        <tr><td><code>503</code></td><td>Backend unavailable / not ready</td><td><code>/send</code>: the mailbox account isn't connected — connect the provider first. <a class="eplink" href="#ep-init"><code>/v1/email/init</code></a>: the triage stack isn't ready (Lemonade unreachable or the model not downloaded); the <code>hint</code> names the fix.</td></tr>
       </tbody>
     </table>
 

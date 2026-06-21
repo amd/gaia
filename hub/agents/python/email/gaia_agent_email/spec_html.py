@@ -18,8 +18,6 @@ import webbrowser
 from pathlib import Path
 from typing import Any, List, Optional, Tuple, Type, Union, get_args, get_origin
 
-from pydantic import BaseModel
-
 from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
@@ -33,6 +31,7 @@ from gaia_agent_email.contract import (
     SingleEmailInput,
     ThreadInput,
 )
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -360,6 +359,9 @@ def render_endpoint_spec_html() -> str:
         EmailDraftResponse,
         EmailSendRequest,
         EmailSendResponse,
+        InitLemonadeStatus,
+        InitModelStatus,
+        InitResponse,
     )
 
     draft_block = _endpoint_block(
@@ -384,6 +386,26 @@ def render_endpoint_spec_html() -> str:
         ),
         request_sections=[("EmailSendRequest", EmailSendRequest)],
         response_sections=[("EmailSendResponse", EmailSendResponse)],
+    )
+
+    # Readiness preflight (#1795). GET, response-only — documents the
+    # structured status a host polls before triaging. Derived from the live
+    # route models so the table cannot drift from what the endpoint returns.
+    init_block = (
+        f'<div class="endpoint-block">'
+        f'<span class="method-badge">GET</span>'
+        f'<span class="path">/v1/email/init</span>'
+        f'<p class="desc">Readiness preflight for the whole triage stack. '
+        f"Returns HTTP 200 when ready and 503 when not, with an actionable "
+        f"<code>hint</code>. Unlike <code>/health</code> (liveness-only), this "
+        f"probes the local Lemonade Server and confirms the triage model is "
+        f"downloaded — so a host can verify &ldquo;ready to triage,&rdquo; not "
+        f"just &ldquo;process up.&rdquo; Read-only: probes only, no model pull.</p>"
+        f"<h3>Response body</h3>"
+        f"{_model_table(InitResponse, 'InitResponse')}"
+        f"{_model_table(InitLemonadeStatus, 'InitLemonadeStatus')}"
+        f"{_model_table(InitModelStatus, 'InitModelStatus')}"
+        f"</div>"
     )
 
     body = f"""<!DOCTYPE html>
@@ -414,6 +436,8 @@ def render_endpoint_spec_html() -> str:
 {draft_block}
 
 {send_block}
+
+{init_block}
 
 <div class="footer">
   GAIA Email Triage Agent &mdash; schema_version {_esc(SCHEMA_VERSION)} &mdash; amd-gaia.ai

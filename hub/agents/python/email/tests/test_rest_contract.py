@@ -47,6 +47,7 @@ _EXPECTED_RESPONSE_MODELS = {
     ("post", "/v1/email/send"): "EmailSendResponse",
     ("get", "/v1/email/health"): "HealthResponse",
     ("get", "/v1/email/version"): "VersionResponse",
+    ("get", "/v1/email/init"): "InitResponse",
 }
 
 

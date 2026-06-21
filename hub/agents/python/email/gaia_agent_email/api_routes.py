@@ -48,9 +48,9 @@ import hmac
 import re
 import secrets
 import threading
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Literal, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import HTMLResponse
 from gaia_agent_email.contract import (
     ActionItem,
@@ -128,6 +128,93 @@ _MAX_SUMMARY_CHARS = 300
 # down" into a prompt 502 instead of a 30s hang.
 _LEMONADE_PROBE_CONNECT_TIMEOUT = 2.0
 _LEMONADE_PROBE_READ_TIMEOUT = 3.0
+
+
+def _resolve_probe_base(base_url: Optional[str]) -> str:
+    """Resolve the Lemonade ``/api/v1`` base URL for a health/model probe.
+
+    An explicit ``base_url`` is normalised to end in ``/api/v1`` (callers often
+    omit it); ``None`` falls back to the env-derived default via
+    ``_get_lemonade_config``. Shared by the reachability probe and the
+    model-presence probe so both target the exact same server.
+    """
+    from gaia.llm.lemonade_client import _get_lemonade_config
+
+    if base_url:
+        probe_base = base_url.rstrip("/")
+        if not probe_base.endswith("/api/v1"):
+            probe_base = f"{probe_base}/api/v1"
+        return probe_base
+    _, _, probe_base = _get_lemonade_config()
+    return probe_base
+
+
+def _probe_lemonade_reachable(base_url: Optional[str] = None) -> Tuple[bool, str]:
+    """Probe Lemonade's ``/health`` with a short connect timeout (#1677).
+
+    Returns ``(reachable, probe_base)``. Any HTTP response — even an error
+    status — means the server is up; only a connection/timeout failure counts
+    as unreachable (auth/model errors surface later on the real chat call,
+    where their messages are specific). Never raises: the readiness endpoint
+    reports the boolean rather than failing.
+    """
+    import requests
+
+    probe_base = _resolve_probe_base(base_url)
+    try:
+        requests.get(
+            f"{probe_base}/health",
+            timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
+        )
+        return True, probe_base
+    except requests.exceptions.RequestException:
+        return False, probe_base
+
+
+def _probe_model_present(probe_base: str, model_id: str) -> bool:
+    """Cheaply check whether ``model_id`` is downloaded on the Lemonade server.
+
+    Queries the model list (downloaded models only) with the same short
+    timeout as the reachability probe and matches on the ``id`` field. Sends
+    the resolved Lemonade auth header so an authenticated server answers
+    instead of 401-ing. Raises ``requests.RequestException`` on a transport
+    failure — the caller turns that into an actionable readiness hint rather
+    than silently reporting "absent".
+
+    "Present" is intentionally cheap (a list lookup, no model load). Whether
+    the model actually *loads* (``loadable``) is not probed in v1 — forcing a
+    load is heavy, so the readiness response reports ``loadable=null``.
+    """
+    import requests
+
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
+    resp = requests.get(
+        f"{probe_base}/models",
+        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    data = payload.get("data", []) if isinstance(payload, dict) else []
+    return any(isinstance(m, dict) and m.get("id") == model_id for m in data)
+
+
+def _resolve_email_model_id() -> str:
+    """Resolve the Lemonade model id the email agent triages with.
+
+    Mirrors the agent's own resolution (``config.model_id or
+    DEFAULT_MODEL_NAME``) so the readiness probe reports the exact model the
+    triage path will load.
+    """
+    from gaia_agent_email.config import EmailAgentConfig
+
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    return EmailAgentConfig().model_id or DEFAULT_MODEL_NAME
 
 
 def _split_sentences(text: str) -> List[str]:
@@ -257,14 +344,8 @@ class EmailTriageService:
         real chat call, where their messages are specific).
         """
         import requests
-        from gaia.llm.lemonade_client import _get_lemonade_config
 
-        if base_url:
-            probe_base = base_url.rstrip("/")
-            if not probe_base.endswith("/api/v1"):
-                probe_base = f"{probe_base}/api/v1"
-        else:
-            _, _, probe_base = _get_lemonade_config()
+        probe_base = _resolve_probe_base(base_url)
         health_url = f"{probe_base}/health"
 
         try:
@@ -800,6 +881,57 @@ class VersionResponse(_Strict):
     agentVersion: str = Field(..., description="Package build version.")
 
 
+class InitLemonadeStatus(_Strict):
+    """Reachability of the local Lemonade Server the triage path depends on."""
+
+    reachable: bool = Field(
+        ..., description="True when Lemonade answered the /health probe."
+    )
+    base_url: str = Field(..., description="The /api/v1 base URL that was probed.")
+
+
+class InitModelStatus(_Strict):
+    """Presence (and, when cheap, loadability) of the triage model."""
+
+    id: str = Field(..., description="Resolved Lemonade model id for triage.")
+    present: bool = Field(
+        ..., description="True when the model is downloaded on the server."
+    )
+    loadable: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether the model actually loads. Not probed in v1 (forcing a "
+            "load is heavy), so this is null — `present` is the readiness "
+            "signal. Reserved for an opt-in deeper check."
+        ),
+    )
+
+
+class InitResponse(_Strict):
+    """Readiness preflight for the whole triage stack (#1795).
+
+    ``ready`` is True only when Lemonade is reachable AND the triage model is
+    present. The route returns HTTP 200 when ready and 503 when not, with an
+    actionable ``hint`` naming what to fix — so an integrator can verify "ready
+    to triage," not just "process up." Read-only: probes only, no model pull.
+    """
+
+    ready: bool = Field(
+        ..., description="True when the triage stack is ready to serve."
+    )
+    lemonade: InitLemonadeStatus = Field(
+        ..., description="Lemonade Server reachability."
+    )
+    model: InitModelStatus = Field(..., description="Triage model status.")
+    hint: Optional[str] = Field(
+        default=None,
+        description=(
+            "Actionable next step when not ready (what failed / what to do). "
+            "Null when ready."
+        ),
+    )
+
+
 class EmailDraftRequest(_Strict):
     """Propose a reply and obtain a confirmation token for it."""
 
@@ -982,6 +1114,86 @@ async def email_version() -> VersionResponse:
     return VersionResponse(apiVersion=API_VERSION, agentVersion=AGENT_VERSION)
 
 
+def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
+    """Probe the triage stack and return its structured readiness status.
+
+    Read-only: checks (1) Lemonade reachable, then (2) the triage model is
+    downloaded. Never pulls a model. Returns a not-ready ``InitResponse`` with
+    an actionable ``hint`` for each failure mode rather than raising, so the
+    route can serialize the same body under both 200 and 503.
+    """
+    import requests
+
+    model_id = _resolve_email_model_id()
+    reachable, probe_base = _probe_lemonade_reachable(base_url)
+    lemonade = InitLemonadeStatus(reachable=reachable, base_url=probe_base)
+
+    if not reachable:
+        return InitResponse(
+            ready=False,
+            lemonade=lemonade,
+            model=InitModelStatus(id=model_id, present=False, loadable=None),
+            hint=(
+                f"Local Lemonade Server is not reachable at {probe_base} — start "
+                "it with `lemonade-server serve` (or run `gaia init`), then retry."
+            ),
+        )
+
+    try:
+        present = _probe_model_present(probe_base, model_id)
+    except requests.exceptions.RequestException as exc:
+        # Lemonade answered /health but its model list could not be read.
+        # Surface loudly (still 503) rather than silently reporting "absent".
+        return InitResponse(
+            ready=False,
+            lemonade=lemonade,
+            model=InitModelStatus(id=model_id, present=False, loadable=None),
+            hint=(
+                f"Lemonade is reachable but its model list at {probe_base}/models "
+                f"could not be read ({type(exc).__name__}: {exc}). Make sure the "
+                "server is healthy, then retry."
+            ),
+        )
+
+    if not present:
+        return InitResponse(
+            ready=False,
+            lemonade=lemonade,
+            model=InitModelStatus(id=model_id, present=False, loadable=None),
+            hint=(
+                f"Model `{model_id}` not downloaded — run `gaia init` (or pull it "
+                "via Lemonade), then retry."
+            ),
+        )
+
+    return InitResponse(
+        ready=True,
+        lemonade=lemonade,
+        model=InitModelStatus(id=model_id, present=True, loadable=None),
+        hint=None,
+    )
+
+
+@router.get(
+    "/init",
+    response_model=InitResponse,
+    responses={503: {"model": InitResponse}},
+)
+async def email_init(response: Response) -> InitResponse:
+    """Readiness preflight: validate the whole triage stack (#1795).
+
+    Returns HTTP 200 when ready, 503 when not (with an actionable ``hint``).
+    Unlike ``/health`` (liveness-only — never touches the LLM), this probes the
+    local Lemonade Server and confirms the triage model is downloaded, so a host
+    can verify "ready to triage," not just "process up." Read-only — no model
+    pull or provisioning is triggered.
+    """
+    status = await asyncio.to_thread(_compute_init_status)
+    if not status.ready:
+        response.status_code = 503
+    return status
+
+
 @router.get("/spec", response_class=HTMLResponse, include_in_schema=False)
 async def email_spec() -> HTMLResponse:
     """Serve the self-contained HTML endpoint spec page.
@@ -1006,6 +1218,9 @@ __all__ = [
     "EmailSendResponse",
     "HealthResponse",
     "VersionResponse",
+    "InitResponse",
+    "InitLemonadeStatus",
+    "InitModelStatus",
     # Shared formatting helpers reused by the MCP surface.
     "_format_address",
     "_payload_fingerprint",

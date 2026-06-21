@@ -80,6 +80,15 @@ def test_send_endpoint_present():
     assert "/v1/email/send" in _html()
 
 
+def test_init_endpoint_present():
+    # Readiness preflight (#1795) must be documented on the spec page.
+    html = _html()
+    assert "/v1/email/init" in html
+    assert "InitResponse" in html
+    # The GET method badge must render (init is the only GET endpoint shown).
+    assert ">GET<" in html
+
+
 # ---------------------------------------------------------------------------
 # Contract field names — sourced from the models so a contract change that
 # drops a field will break this test, not slip through silently.
