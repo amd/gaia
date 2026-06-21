@@ -289,6 +289,45 @@ describe("installSafetyNet", () => {
     exitSpy.mockRestore();
   });
 
+  // ── Test 9b: GPU child-process crash is non-fatal (issue #1800) ────────────
+  // GPU crashes are recoverable — Chromium falls back to software rendering.
+  // The app must NOT exit, so GPU-less envs (Windows Sandbox/VM) keep running.
+
+  test("GPU child-process-gone does not call fatal/exit", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(false);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+
+    installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
+    app.emit("child-process-gone", {}, { type: "GPU", reason: "crashed" });
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(dialog.showErrorBox).not.toHaveBeenCalled();
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+    // The crash is still recorded for forensics.
+    expect(fs.readFileSync(logPath, "utf8")).toContain("GPU_CRASH");
+
+    exitSpy.mockRestore();
+  });
+
+  // ── Test 9c: non-GPU child-process crash stays fatal ──────────────────────
+  // A utility/plugin child dying unexpectedly is still treated as fatal.
+
+  test("non-GPU child-process-gone calls fatal/exit", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(false);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+
+    installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
+    app.emit("child-process-gone", {}, { type: "Utility", reason: "crashed" });
+
+    expect(exitSpy).toHaveBeenCalled();
+
+    exitSpy.mockRestore();
+  });
+
   // ── Test 10: fatal handler writes to log before showing dialog ─────────────
   // If dialog.showErrorBox itself crashes, the log must already have the entry.
 
