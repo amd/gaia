@@ -85,6 +85,12 @@ class SystemStatus(BaseModel):
     # Boot-time initialization tracking (populated from DispatchQueue)
     init_state: str = "ready"  # "initializing" | "ready" | "degraded"
     init_tasks: List["InitTaskInfo"] = Field(default_factory=list)
+    # Multi-device support (issue #1220): hardware devices detected on this host.
+    # Populated from Lemonade ``/system-info``. The frontend uses this to filter
+    # which device options to show in the per-agent device dropdown.
+    detected_devices: List[str] = Field(default_factory=list)
+    # Active profile from ``~/.gaia/config.json`` (e.g. "chat", "npu").
+    active_profile: str = "chat"
 
 
 # ── Tasks ──────────────────────────────────────────────────────────────────
@@ -188,6 +194,11 @@ class AgentInfo(BaseModel):
     # Each entry is a serialized ``ConnectorRequirement``:
     # {connector_id: str, scopes: list[str], reason: str}.
     required_connections: List[dict] = Field(default_factory=list)
+    # True when the agent loads MCP servers dynamically at runtime (e.g. the
+    # chat agent) and gates their tools through the activation ledger. The
+    # Settings "Active for" panel lists such agents as activatable for
+    # MCP-server connectors even without a static ``required_connections`` entry.
+    consumes_mcp_servers: bool = False
     # T-X2: opaque grant-ledger key. Built-ins use ``builtin:<id>``; custom
     # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
     # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.
@@ -198,6 +209,14 @@ class AgentInfo(BaseModel):
     icon: str = ""  # lucide icon name
     tools_count: int = 0
     language: str = "python"  # "python" | "cpp"
+    # Multi-device support (issue #1220): declared device configurations.
+    # Each entry is a serialized ``DeviceConfig`` from the registry.
+    device_configs: List[dict] = Field(default_factory=list)
+    # Model-size tiers (issue #1162): "full" vs "lite" (~4B). Each entry is a
+    # serialized ``ModelTier``. The frontend renders a single agent card with a
+    # model-size selector instead of duplicate "… Lite" cards. Empty for agents
+    # that expose only one model size.
+    model_tiers: List[dict] = Field(default_factory=list)
 
 
 class AgentListResponse(BaseModel):
@@ -236,6 +255,10 @@ class CreateSessionRequest(BaseModel):
     document_ids: List[str] = Field(default_factory=list)
     private: bool = False
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    device: Optional[str] = None
+    # Mailbox provider for email-backed agents. Gmail by default; "microsoft"
+    # routes the email agent to the Outlook backend (see EmailAgentConfig).
+    mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
 
 
 class UpdateSessionRequest(BaseModel):
@@ -246,6 +269,8 @@ class UpdateSessionRequest(BaseModel):
     document_ids: Optional[List[str]] = None
     private: Optional[bool] = None
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    device: Optional[str] = None
+    mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
 
 
 class SessionResponse(BaseModel):
@@ -261,6 +286,9 @@ class SessionResponse(BaseModel):
     document_ids: List[str] = Field(default_factory=list)
     private: bool = False
     agent_type: str = "chat"
+    device: str = "gpu"
+    # Mailbox FILTER (#1596): None = every connected mailbox (no pick).
+    mail_provider: Optional[str] = None
 
 
 class SessionListResponse(BaseModel):
@@ -391,6 +419,7 @@ class DocumentResponse(BaseModel):
     indexing_status: str = (
         "complete"  # pending | indexing | complete | failed | cancelled | missing
     )
+    last_error: Optional[str] = None
 
 
 class DocumentListResponse(BaseModel):

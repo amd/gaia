@@ -27,6 +27,7 @@ if str(_REPO_ROOT) not in sys.path:
 # parallel branch — explicitly importing them here makes them available.
 from tests.fixtures.email.conftest import (  # noqa: F401, E402
     baseline_accuracy,
+    corpus_inbox_path,
     ground_truth,
     stub_inbox_path,
     synthetic_inbox,

@@ -45,7 +45,7 @@
 }
 
 .agent-hub-search:focus-within {
-    border-color: var(--amd-red);
+    border-color: var(--accent);
 }
 
 .agent-hub-search input {
@@ -78,6 +78,113 @@
     border-color: var(--text-secondary);
 }
 
+/* ── Tabs (Installed / Available) ───────────────────────────────────────── */
+
+.agent-hub-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.agent-hub-tab {
+    padding: 6px 14px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: var(--radius-md);
+    border: 1px solid transparent;
+    transition: all 200ms ease;
+    white-space: nowrap;
+}
+
+.agent-hub-tab:hover {
+    color: var(--text-primary);
+    background: var(--bg-card);
+}
+
+.agent-hub-tab.active {
+    color: var(--accent);
+    background: var(--accent-dim);
+    border-color: var(--accent-dim);
+}
+
+/* ── Banners (offline / error) ──────────────────────────────────────────── */
+
+.agent-hub-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    margin-bottom: 16px;
+}
+
+.agent-hub-banner svg {
+    flex-shrink: 0;
+}
+
+.agent-hub-banner-offline {
+    background: rgba(232, 168, 48, 0.1);
+    color: var(--accent-gold);
+    border: 1px solid rgba(232, 168, 48, 0.25);
+}
+
+.agent-hub-banner-error {
+    background: rgba(239, 68, 68, 0.08);
+    color: var(--accent-red, #ef4444);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.agent-hub-retry {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    padding: 4px 10px;
+    border: 1px solid currentColor;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    cursor: pointer;
+    transition: opacity 200ms ease;
+}
+
+.agent-hub-retry:hover {
+    opacity: 0.8;
+}
+
+/* ── Loading state ──────────────────────────────────────────────────────── */
+
+.agent-hub-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 40px 20px;
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+.agent-hub-spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: agentHubSpin 700ms linear infinite;
+}
+
+@keyframes agentHubSpin {
+    to { transform: rotate(360deg); }
+}
+
 /* ── Card Grid ──────────────────────────────────────────────────────────── */
 
 .agent-hub-grid {
@@ -88,10 +195,18 @@
 
 .agent-hub-empty {
     grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
     text-align: center;
     padding: 40px 20px;
     color: var(--text-muted);
     font-size: 14px;
+}
+
+.agent-hub-empty p {
+    margin: 0;
 }
 
 /* ── Agent Hub Card ─────────────────────────────────────────────────────── */
@@ -130,8 +245,8 @@
 }
 
 .agent-hub-card.active {
-    border-color: var(--amd-red);
-    box-shadow: inset 3px 0 0 var(--amd-red), 0 0 0 1px var(--amd-red-dim);
+    border-color: var(--accent);
+    box-shadow: inset 3px 0 0 var(--accent), 0 0 0 1px var(--accent-dim);
 }
 
 .agent-hub-card.disabled {
@@ -159,8 +274,8 @@
     width: 36px;
     height: 36px;
     border-radius: var(--radius-md);
-    background: var(--amd-red-dim);
-    color: var(--amd-red);
+    background: var(--accent-dim);
+    color: var(--accent);
     flex-shrink: 0;
 }
 
@@ -218,6 +333,93 @@
     opacity: 0.7;
 }
 
+/* ── Device selector row ────────────────────────────────────────────────── */
+
+.agent-hub-card-device {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 12px;
+}
+
+.agent-hub-device-select {
+    padding: 3px 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 200ms ease;
+}
+
+.agent-hub-device-select:hover {
+    border-color: var(--text-secondary);
+}
+
+.agent-hub-device-select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.agent-hub-device-label {
+    padding: 3px 8px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 11px;
+    letter-spacing: 0.03em;
+}
+
+.agent-hub-device-verified {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+}
+
+.agent-hub-device-verified.verified {
+    color: var(--accent-green, #22c55e);
+}
+
+.agent-hub-device-verified.unverified {
+    color: var(--accent-gold);
+}
+
+/* Model-size tier selector (#1162) */
+.agent-hub-card-tier {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.agent-hub-tier-select {
+    padding: 3px 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 200ms ease;
+}
+
+.agent-hub-tier-select:hover {
+    border-color: var(--text-secondary);
+}
+
+.agent-hub-tier-select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
 /* Conversation starter preview */
 .agent-hub-card-starter {
     font-size: 12px;
@@ -252,8 +454,8 @@
     padding: 7px 14px;
     border: none;
     border-radius: var(--radius-sm);
-    background: var(--amd-red);
-    color: #fff;
+    background: var(--accent);
+    color: #1a1a1a;
     font-family: var(--font-sans);
     font-size: 13px;
     font-weight: 500;
@@ -262,7 +464,7 @@
 }
 
 .agent-hub-card-actions .btn-start-chat:hover {
-    background: var(--amd-red-dark);
+    background: var(--accent-dark);
 }
 
 .agent-hub-card-actions .btn-start-chat:disabled {
@@ -287,6 +489,157 @@
     color: var(--text-primary);
 }
 
+/* ── Available-tab card (not a select target) ───────────────────────────── */
+
+.agent-hub-card.available-card {
+    cursor: default;
+}
+
+.agent-hub-card.available-card:hover {
+    border-color: var(--text-secondary);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+}
+
+/* ── Compatibility indicator dot ────────────────────────────────────────── */
+
+.agent-compat-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 4px;
+    cursor: help;
+}
+
+.agent-compat-compatible {
+    background: var(--accent-green, #22c55e);
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
+}
+
+.agent-compat-warning {
+    background: var(--accent-gold);
+    box-shadow: 0 0 0 3px rgba(232, 168, 48, 0.15);
+}
+
+.agent-compat-incompatible {
+    background: var(--accent-red, #ef4444);
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
+
+/* ── Install progress ───────────────────────────────────────────────────── */
+
+.agent-install-progress {
+    margin-bottom: 12px;
+}
+
+.agent-install-progress-head {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 5px;
+}
+
+.agent-install-bar {
+    height: 6px;
+    width: 100%;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.agent-install-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 300ms ease;
+}
+
+.agent-install-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--accent-red, #ef4444);
+    margin-bottom: 12px;
+    line-height: 1.4;
+}
+
+.agent-install-error svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+/* ── Install / uninstall / cancel buttons ───────────────────────────────── */
+
+.agent-hub-card-actions .btn-install {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--accent);
+    color: #1a1a1a;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 200ms ease;
+}
+
+.agent-hub-card-actions .btn-install:hover:not(:disabled) {
+    background: var(--accent-dark);
+}
+
+.agent-hub-card-actions .btn-install:disabled {
+    background: var(--text-muted);
+    cursor: not-allowed;
+}
+
+.agent-hub-card-actions .btn-install-cancel {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 200ms ease;
+}
+
+.agent-hub-card-actions .btn-install-cancel:hover {
+    border-color: var(--accent-red, #ef4444);
+    color: var(--accent-red, #ef4444);
+}
+
+.agent-hub-card-actions .btn-uninstall {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 200ms ease;
+}
+
+.agent-hub-card-actions .btn-uninstall:hover {
+    border-color: var(--accent-red, #ef4444);
+    color: var(--accent-red, #ef4444);
+}
+
 /* ── Badges ─────────────────────────────────────────────────────────────── */
 
 .agent-badge {
@@ -301,8 +654,8 @@
 }
 
 .agent-badge-builtin {
-    background: var(--amd-red-dim);
-    color: var(--amd-red);
+    background: var(--accent-dim);
+    color: var(--accent);
 }
 
 .agent-badge-custom {
@@ -325,6 +678,49 @@
     color: var(--accent-gold);
 }
 
+.agent-badge-update {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: rgba(232, 168, 48, 0.16);
+    color: var(--accent-gold);
+}
+
+.agent-badge-version {
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.agent-badge-tier-verified,
+.agent-badge-tier-community,
+.agent-badge-tier-experimental,
+.agent-badge-deprecated {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.agent-badge-tier-verified {
+    background: rgba(34, 197, 94, 0.12);
+    color: var(--accent-green, #22c55e);
+}
+
+.agent-badge-tier-community {
+    background: rgba(59, 158, 255, 0.1);
+    color: var(--accent-blue);
+}
+
+.agent-badge-tier-experimental {
+    background: rgba(168, 85, 247, 0.12);
+    color: var(--accent-purple, #a855f7);
+}
+
+.agent-badge-deprecated {
+    background: rgba(239, 68, 68, 0.1);
+    color: var(--accent-red, #ef4444);
+}
+
 /* ── Create Agent CTA Card ──────────────────────────────────────────────── */
 
 .agent-hub-card.create-new {
@@ -338,8 +734,8 @@
 }
 
 .agent-hub-card.create-new:hover {
-    border-color: var(--amd-red);
-    background: var(--amd-red-dim2);
+    border-color: var(--accent);
+    background: var(--accent-dim2);
 }
 
 .agent-hub-card.create-new .create-icon {
@@ -349,8 +745,8 @@
     width: 44px;
     height: 44px;
     border-radius: 50%;
-    background: var(--amd-red-dim);
-    color: var(--amd-red);
+    background: var(--accent-dim);
+    color: var(--accent);
     margin-bottom: 12px;
 }
 
@@ -360,6 +756,23 @@
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: 4px;
+}
+
+/* Small "Alpha" pill on the Build-a-Custom-Agent card — mirrors the
+   experimental-tier badge look (purple, rounded). */
+.create-alpha-badge {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    background: rgba(168, 85, 247, 0.12);
+    color: var(--accent-purple, #a855f7);
+    vertical-align: middle;
 }
 
 .agent-hub-card.create-new .create-desc {
@@ -417,8 +830,8 @@
     width: 48px;
     height: 48px;
     border-radius: var(--radius-md);
-    background: var(--amd-red-dim);
-    color: var(--amd-red);
+    background: var(--accent-dim);
+    color: var(--accent);
     flex-shrink: 0;
 }
 
@@ -526,9 +939,9 @@
 }
 
 .agent-detail-starter-chip:hover {
-    border-color: var(--amd-red);
-    color: var(--amd-red);
-    background: var(--amd-red-dim2);
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim2);
 }
 
 /* Tags list */
@@ -568,4 +981,77 @@
     font-size: 13px;
     color: var(--text-muted);
     font-style: italic;
+}
+
+/* ── Install confirmation (native trust / deprecation) ──────────────────── */
+
+.install-confirm-modal {
+    max-width: 480px;
+}
+
+.install-confirm-icon {
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--accent-red, #ef4444);
+}
+
+.install-confirm-subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.install-confirm-warnings {
+    list-style: none;
+    margin: 0 0 20px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.install-confirm-warning {
+    display: flex;
+    gap: 10px;
+    padding: 12px;
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+}
+
+.install-confirm-warning-native_trust .install-confirm-warning-icon {
+    color: var(--accent-red, #ef4444);
+}
+
+.install-confirm-warning-deprecated .install-confirm-warning-icon {
+    color: var(--accent-gold);
+}
+
+.install-confirm-warning-icon {
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.install-confirm-warning-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+.install-confirm-warning-detail {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.install-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.install-confirm-proceed {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }

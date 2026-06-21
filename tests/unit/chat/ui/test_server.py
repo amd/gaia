@@ -829,6 +829,33 @@ class TestSessionEndpoints:
         resp = client.get("/api/sessions/nonexistent-uuid")
         assert resp.status_code == 404
 
+    def test_create_session_default_mail_provider_is_null(self, client):
+        # #1596: no pick → null in the API response, so the UI selector shows
+        # "no pick" (scan all) instead of a phantom google selection.
+        data = client.post("/api/sessions", json={}).json()
+        assert data["mail_provider"] is None
+
+    def test_create_session_microsoft_mail_provider(self, client):
+        resp = client.post(
+            "/api/sessions",
+            json={"agent_type": "email", "mail_provider": "microsoft"},
+        )
+        assert resp.status_code == 200
+        sid = resp.json()["id"]
+        assert resp.json()["mail_provider"] == "microsoft"
+        # Persists across a fresh GET.
+        assert client.get(f"/api/sessions/{sid}").json()["mail_provider"] == "microsoft"
+
+    def test_create_session_invalid_mail_provider_rejected(self, client):
+        resp = client.post("/api/sessions", json={"mail_provider": "yahoo"})
+        assert resp.status_code == 422  # pattern validation fails loudly
+
+    def test_update_session_mail_provider(self, client):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        resp = client.put(f"/api/sessions/{sid}", json={"mail_provider": "microsoft"})
+        assert resp.status_code == 200
+        assert resp.json()["mail_provider"] == "microsoft"
+
     def test_update_session_title(self, client):
         create_resp = client.post("/api/sessions", json={"title": "Original"})
         session_id = create_resp.json()["id"]
@@ -1447,11 +1474,12 @@ class TestValidateFilePath:
     def test_rejects_legacy_office_extensions(self):
         """Office formats without extractors must be rejected, not silently
         indexed as binary garbage. Regression test for the allowlist cleanup
-        that removed .doc/.docx/.ppt/.pptx/.xls — GAIA does not currently
-        ship python-docx/python-pptx/xlrd so these would produce garbage."""
+        that removed .doc/.docx/.ppt/.xls — GAIA does not currently
+        ship python-docx/xlrd so these would produce garbage.
+        NOTE: .pptx IS supported (python-pptx ships with GAIA)."""
         from pathlib import Path
 
-        for ext in [".doc", ".docx", ".ppt", ".pptx", ".xls"]:
+        for ext in [".doc", ".docx", ".ppt", ".xls"]:
             with pytest.raises(Exception) as exc_info:
                 _validate_file_path(Path(f"/home/user/file{ext}").resolve())
             assert exc_info.value.status_code == 400

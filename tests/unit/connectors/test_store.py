@@ -90,6 +90,41 @@ class TestRoundTrip:
         ids = list_connections()
         assert "google" in ids
 
+    def test_list_connections_finds_microsoft_only(self):
+        # Registry-driven enumeration (#1603): a stored Microsoft connection
+        # with NO google must surface — the old hardcoded ("google",) tuple
+        # made every generic consumer Microsoft-blind.
+        save_connection(
+            provider="microsoft",
+            account_email="m@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        ids = list_connections()
+        assert ids == ["microsoft"]
+
+    def test_list_connections_finds_both_providers(self):
+        save_connection(
+            provider="google",
+            account_email="g@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        save_connection(
+            provider="microsoft",
+            account_email="m@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        ids = list_connections()
+        assert set(ids) == {"google", "microsoft"}
+        # Only oauth_pkce providers are enumerated — MCP-server connectors have
+        # no keyring connection and must not appear.
+        assert "mcp-git" not in ids
+
 
 class TestSingleBlobAtomicity:
     def test_one_keyring_slot_per_connection(self):

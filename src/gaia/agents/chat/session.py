@@ -499,7 +499,7 @@ class SessionManager:
 
         except Exception as e:
             logger.error(f"Error during session cleanup: {e}")
-            return {"error": str(e), "total_deleted": 0, "remaining_sessions": 0}
+            return {"error": str(e), "total_deleted": 0, "remaining_sessions": 0}  # type: ignore[dict-item]
 
     def clear_path_permissions(self):
         """Clear all cached path permissions."""

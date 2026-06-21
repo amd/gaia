@@ -39,6 +39,7 @@ import httpx
 
 from gaia.connectors.errors import (
     AuthRequiredError,
+    ConfigurationError,
     ConnectionRevokedError,
     ConnectorsError,
 )
@@ -201,6 +202,39 @@ async def _refresh_token(
             "docs/security/connections.mdx."
         )
 
+    if response.status_code == 401:
+        # Google returns 401 invalid_client when the client_secret is
+        # absent or wrong in the refresh POST.  Distinguish the two cases
+        # so the error tells the user what to do rather than just "try again":
+        #   - No client_secret configured → ConfigurationError (fix: re-enter
+        #     credentials in Settings → Connections).
+        #   - Secret is present but token rejected → AuthRequiredError (fix:
+        #     reconnect from Settings → Connections).
+        try:
+            err_payload = response.json()
+        except Exception:
+            err_payload = {}
+        client_secret = getattr(provider, "client_secret", None)
+        if not client_secret:
+            raise ConfigurationError(
+                f"Token endpoint returned 401 for {provider.provider_id}: "
+                "client_secret is not configured. Open Settings → Connections "
+                f"→ {provider.provider_id} and re-enter the Client Secret, or "
+                "set the GAIA_GOOGLE_CLIENT_SECRET environment variable. "
+                "See docs/runbooks/google-oauth-client.md."
+            )
+        raise AuthRequiredError(
+            AuthRequiredError.Reason.REAUTH_REQUIRED,
+            provider=provider.provider_id,
+            message=(
+                f"Token endpoint returned 401 for {provider.provider_id} "
+                f"({err_payload.get('error', 'invalid_client')}). "
+                "Reconnect from Settings → Connections → "
+                f"{provider.provider_id}. "
+                "See docs/runbooks/google-oauth-client.md."
+            ),
+        )
+
     if response.status_code != 200:
         raise ConnectorsError(
             f"Token endpoint returned {response.status_code} for "
@@ -230,15 +264,20 @@ def get_or_refresh_sync(
     Synchronous wrapper around ``get_or_refresh`` for sync agent contexts.
 
     Must NOT be called from a thread that already has a running asyncio
-    event loop — ``asyncio.run`` would raise ``RuntimeError``. Use
-    ``await get_or_refresh(...)`` directly from async code instead. This
-    guard makes the failure surface as an actionable error rather than a
-    confusing crash deep inside the runtime.
+    event loop. Use ``await get_or_refresh(...)`` directly from async code
+    instead. This guard makes the failure surface as an actionable error
+    rather than a confusing crash deep inside the runtime.
 
-    Inherits the calling thread's contextvars into the new event loop's
-    context (via ``asyncio.run`` → ``contextvars.copy_context()``). This is
-    the bridge from ``Agent.process_query`` (sync, runs in
-    ``ThreadPoolExecutor``) to the async refresh code path. See
+    Submits the coroutine to the persistent connector event loop (see
+    ``_loop.py``) and blocks with a bounded wait. The persistent loop avoids
+    two bugs that ``asyncio.run`` caused (#1579): the cross-loop Lock error
+    (Python ≤ 3.11) and the Windows ProactorEventLoop teardown hang on
+    repeated create/destroy cycles.
+
+    Contextvar propagation: the persistent-loop bridge captures
+    ``copy_context()`` at submit time, so the agent-id contextvar set by
+    the agent runtime is visible inside the async refresh code — the same
+    guarantee the previous ``asyncio.run`` path provided. See
     ``tests/unit/connectors/test_agent_bridge.py``.
     """
     try:
@@ -252,4 +291,6 @@ def get_or_refresh_sync(
             "from async code instead, or schedule this call on a worker "
             "thread without a running loop."
         )
-    return asyncio.run(get_or_refresh(provider_id, account_email=account_email))
+    from gaia.connectors._loop import run_sync
+
+    return run_sync(get_or_refresh(provider_id, account_email=account_email))

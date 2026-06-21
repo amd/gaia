@@ -46,13 +46,15 @@ logger = logging.getLogger(__name__)
 # etc.) and poisons retrieval quality.
 #
 # Notable intentional exclusions (no parser ships with GAIA today):
-#   .doc/.docx/.ppt/.pptx — need python-docx / python-pptx
-#   .xls (legacy BIFF)    — openpyxl only handles .xlsx; would raise on open
+#   .doc/.docx/.ppt — need python-docx / python-pptx (legacy .ppt)
+#   .xls (legacy BIFF) — openpyxl only handles .xlsx; would raise on open
+# NOTE: .pptx IS supported — python-pptx ships with GAIA since v0.21.
 # See ``_UNSUPPORTED_CATEGORIES`` below for the user-facing rejection hint.
 # Image formats are tracked by issue #730 (VLM-based indexing).
 ALLOWED_EXTENSIONS = frozenset(
     {
         ".pdf",
+        ".pptx",
         ".txt",
         ".md",
         ".csv",
@@ -138,6 +140,10 @@ def session_to_response(session: dict) -> SessionResponse:
         document_ids=session.get("document_ids", []),
         private=bool(session.get("private", 0)),
         agent_type=session.get("agent_type") or "chat",
+        device=session.get("device") or "gpu",
+        # Filter semantics (#1596): null = "every connected mailbox" — must
+        # reach the frontend as null so the selector shows no phantom pick.
+        mail_provider=session.get("mail_provider"),
     )
 
 
@@ -202,6 +208,7 @@ def doc_to_response(doc: dict) -> DocumentResponse:
         last_accessed_at=doc.get("last_accessed_at"),
         sessions_using=doc.get("sessions_using", 0),
         indexing_status=doc.get("indexing_status", "complete"),
+        last_error=doc.get("last_error"),
     )
 
 
@@ -285,12 +292,12 @@ def sanitize_document_path(user_path: str) -> Path:
                 "Tip: Export your data to CSV or JSON format, then index those files.",
             ),
             "office": (
-                {".doc", ".docx", ".ppt", ".pptx", ".xls"},
-                "Microsoft Word, PowerPoint, and legacy Excel (.xls) files "
+                {".doc", ".docx", ".ppt", ".xls"},
+                "Microsoft Word, legacy PowerPoint (.ppt), and legacy Excel (.xls) files "
                 "are not yet supported — GAIA does not currently ship the "
                 "parsers needed to extract text from these formats. "
-                "Tip: Save as PDF from Word/PowerPoint, or re-save .xls as "
-                ".xlsx — GAIA supports PDFs and modern .xlsx workbooks.",
+                "Tip: Save as PDF from Word, or re-save .xls as "
+                ".xlsx — GAIA supports PDFs, PPTX, and modern .xlsx workbooks.",
             ),
         }
 
@@ -307,7 +314,7 @@ def sanitize_document_path(user_path: str) -> Path:
 
         detail = (
             f"{hint} "
-            f"Supported formats: PDF, TXT, MD, CSV, JSON, XLSX, "
+            f"Supported formats: PDF, PPTX, TXT, MD, CSV, JSON, XLSX, "
             f"HTML, XML, YAML, and 30+ code file formats. "
             f"Want support for {category + ' files' if category else 'this file type'}? "
             f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"

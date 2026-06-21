@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hub.amd-gaia.ai/schemas/index.schema.json",
+  "title": "GAIA Agent Hub Catalog Index",
+  "description": "Lightweight catalog served at GET /index.json. One entry per agent, summarising the latest published version. Field names mirror gaia-agent.yaml (see docs/spec/agent-hub-restructure.mdx). This is the contract the website Hub pages build from (website/src/data/catalog.ts).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "agents"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Index schema version; bumped on breaking shape changes."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp of the last index rebuild."
+    },
+    "agents": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/indexEntry" }
+    }
+  },
+  "definitions": {
+    "indexEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "description",
+        "category",
+        "latest_version",
+        "icon",
+        "language",
+        "author",
+        "security_tier",
+        "download_size_bytes",
+        "tags",
+        "tools_count",
+        "models",
+        "min_gaia_version",
+        "permissions",
+        "deprecated",
+        "requirements",
+        "readme"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$",
+          "description": "Agent slug used in hub URLs (/agents/<id>)."
+        },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "latest_version": {
+          "type": "string",
+          "description": "Highest published SemVer for this agent."
+        },
+        "icon": { "type": "string" },
+        "language": { "type": "string", "enum": ["python", "cpp"] },
+        "author": { "type": "string" },
+        "security_tier": {
+          "type": "string",
+          "enum": ["verified", "community", "experimental"]
+        },
+        "download_size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Size of the latest version's artifact in bytes."
+        },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "tools_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of tools the agent registers; 0 when the manifest omits it."
+        },
+        "models": { "type": "array", "items": { "type": "string" } },
+        "min_gaia_version": {
+          "type": "string",
+          "description": "Minimum GAIA version (SemVer); empty string when the manifest omits it."
+        },
+        "permissions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Declared permission strings; empty array when the manifest omits them."
+        },
+        "deprecated": { "type": "boolean" },
+        "deprecation_message": {
+          "type": "string",
+          "description": "Only present when the latest version's manifest declares one."
+        },
+        "requirements": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "min_memory_gb",
+            "min_disk_gb",
+            "min_context_size",
+            "platforms",
+            "npu",
+            "gpu_vram_gb"
+          ],
+          "properties": {
+            "min_memory_gb": { "type": "number", "minimum": 0 },
+            "min_disk_gb": { "type": "number", "minimum": 0 },
+            "min_context_size": { "type": "number", "minimum": 0 },
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "win-x64",
+                  "win-arm64",
+                  "linux-x64",
+                  "linux-arm64",
+                  "darwin-x64",
+                  "darwin-arm64"
+                ]
+              }
+            },
+            "npu": {
+              "type": "string",
+              "enum": ["required", "optional"],
+              "description": "\"required\" when the manifest sets requirements.npu: true, else \"optional\"."
+            },
+            "gpu_vram_gb": { "type": "number", "minimum": 0 }
+          }
+        },
+        "readme": {
+          "type": "string",
+          "description": "README.md markdown of the latest version; empty string if none was published."
+        }
+      }
+    }
+  }
+}

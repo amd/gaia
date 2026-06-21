@@ -60,20 +60,20 @@ Think of RAG as a smart research assistant:
 This happens once when you index documents:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
-    A(["PDF Document"]) --> B(["EXTRACT TEXT"])
+    A(["PDF / PPTX Document"]) --> B(["EXTRACT TEXT"])
     B --> C(["SPLIT INTO CHUNKS"])
     C --> D(["GENERATE EMBEDDINGS"])
     D --> E[("STORE IN FAISS")]
 
     style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
-    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style D fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style B fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
+    style C fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style D fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
     style E fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
 
-    linkStyle 0,1,2,3 stroke:#ED1C24,stroke-width:2px
+    linkStyle 0,1,2,3 stroke:#E2A33E,stroke-width:2px
 ```
 
 ### Phase 2: Query (Retrieval)
@@ -81,7 +81,7 @@ flowchart TD
 This happens each time you ask a question:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     F(["User Question"]) --> G(["EMBED QUESTION"])
     G --> H(["SIMILARITY SEARCH"])
@@ -91,14 +91,14 @@ flowchart TD
     K --> L(["GENERATE ANSWER"])
 
     style F fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
-    style G fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style H fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style G fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
+    style H fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
     style I fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
-    style J fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
-    style K fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style J fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
+    style K fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
     style L fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
 
-    linkStyle 0,1,2,3,4,5 stroke:#ED1C24,stroke-width:2px
+    linkStyle 0,1,2,3,4,5 stroke:#E2A33E,stroke-width:2px
 ```
 
 <Note>
@@ -177,7 +177,7 @@ Chunking is the most important concept in RAG. Let's understand it deeply.
 LLMs have limited context windows. You can't send a 500-page PDF directly. Instead:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A(["Large PDF"]) --> B(["Split into chunks"])
     B --> C(["Many chunks created"])
@@ -186,13 +186,13 @@ flowchart TD
     E --> F(["Send to LLM"])
 
     style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
-    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
+    style B fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
     style C fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
-    style D fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style E fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style D fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style E fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
     style F fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
 
-    linkStyle 0,1,2,3,4 stroke:#ED1C24,stroke-width:2px
+    linkStyle 0,1,2,3,4 stroke:#E2A33E,stroke-width:2px
 ```
 
 ### What is `chunk_size`?
@@ -206,7 +206,7 @@ config = RAGConfig(chunk_size=500)  # 500 tokens ≈ 375 words ≈ 2-3 paragraph
 | chunk_size | Roughly equals | Best for |
 |------------|----------------|----------|
 | `256` | ~1 paragraph | FAQs, short Q&A pairs, definitions |
-| `512` | ~2-3 paragraphs | General documents, manuals (default) |
+| `500` | ~2-3 paragraphs | General documents, manuals (default) |
 | `1024` | ~4-6 paragraphs | Technical papers, code with context |
 | `2048` | ~1-2 pages | Long-form analysis, narratives |
 
@@ -383,18 +383,18 @@ Traditional RAG follows a simple pattern: **one question → one search → one 
 <Tabs>
 <Tab title="Traditional RAG">
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart LR
     A(["Question"]) --> B(["Single Search"])
     B --> C(["Top Chunks"])
     C --> D(["Generate Answer"])
 
     style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
-    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style B fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
+    style C fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
     style D fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
 
-    linkStyle 0,1,2 stroke:#ED1C24,stroke-width:2px
+    linkStyle 0,1,2 stroke:#E2A33E,stroke-width:2px
 ```
 
 **How it works:** User asks a question, system searches once for relevant chunks, top chunks are sent to LLM, LLM generates answer from those chunks.
@@ -403,7 +403,7 @@ flowchart LR
 </Tab>
 <Tab title="Agentic RAG">
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A(["Question"]) --> B(["Agent Analyzes"])
     B --> C{"What info needed"}
@@ -416,16 +416,16 @@ flowchart TD
     E -->|"Not found"| I(["Report Gap"])
 
     style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
-    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style D fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style B fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
+    style C fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style D fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
     style E fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
-    style F fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style G fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style F fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style G fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
     style H fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
     style I fill:#6c757d,stroke:#495057,stroke-width:2px,color:#fff
 
-    linkStyle 0,1,2,3,4,5,6 stroke:#ED1C24,stroke-width:2px
+    linkStyle 0,1,2,3,4,5,6 stroke:#E2A33E,stroke-width:2px
     linkStyle 7 stroke:#28a745,stroke-width:2px
     linkStyle 8 stroke:#6c757d,stroke-width:2px
 ```
@@ -485,7 +485,7 @@ result = agent.process_query(
 **What happens under the hood:**
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'primaryTextColor':'#fff', 'primaryBorderColor':'#C8171E', 'lineColor':'#F4484D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A(["Compare Q3 and Q4 revenue"]) --> B(["Agent analyzes"])
     B --> C(["Search Q3 data"])
@@ -496,15 +496,15 @@ flowchart TD
     G --> H(["Final answer"])
 
     style A fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
-    style B fill:#ED1C24,stroke:#C8171E,stroke-width:2px,color:#fff
-    style C fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style B fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
+    style C fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
     style D fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
-    style E fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style E fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
     style F fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
-    style G fill:#C8171E,stroke:#C8171E,stroke-width:2px,color:#fff
+    style G fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
     style H fill:#28a745,stroke:#1e7e34,stroke-width:2px,color:#fff
 
-    linkStyle 0,1,2,3,4,5,6 stroke:#ED1C24,stroke-width:2px
+    linkStyle 0,1,2,3,4,5,6 stroke:#E2A33E,stroke-width:2px
 ```
 
 ### The RAG Tool Interface

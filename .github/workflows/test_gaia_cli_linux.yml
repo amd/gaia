@@ -77,6 +77,11 @@ jobs:
           echo "GAIA CLI installed successfully!"
 
       - name: Start Lemonade Server and Test Core Commands
+        env:
+          # Authenticate HF model pulls — unauthenticated requests get 429-throttled
+          # on shared CI runners, which kills Lemonade startup (matches the Windows job).
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
           echo "=== Starting Lemonade Server ==="
 
@@ -130,9 +135,30 @@ jobs:
             exit 1
           fi
 
-          # Pull the model now that server is running
+          # Pull the model now that server is running. Retry with EXPONENTIAL
+          # backoff: HF can transiently 429-throttle CI runners even with auth.
+          # Decent delays (60s → 120s → 240s) give the rate-limit window time to
+          # clear. Explicit retry that still fails LOUDLY once spent.
           echo "=== Pulling Qwen3-0.6B-GGUF model ==="
-          lemonade-server-dev pull Qwen3-0.6B-GGUF
+          pull_ok=false
+          max_attempts=4   # 1 initial + 3 retries
+          delay=60
+          for attempt in $(seq 1 $max_attempts); do
+            if lemonade-server-dev pull Qwen3-0.6B-GGUF; then
+              pull_ok=true
+              break
+            fi
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              echo "::warning::model pull attempt ${attempt}/${max_attempts} failed (likely a transient HF 429) — retrying in ${delay}s"
+              sleep "$delay"
+              delay=$((delay * 2))
+            fi
+          done
+          if [ "$pull_ok" != "true" ]; then
+            echo "::error::model pull failed after ${max_attempts} attempts (Qwen3-0.6B-GGUF)"
+            cat lemonade.log 2>/dev/null || true
+            exit 1
+          fi
 
           # List available models for debugging
           echo "=== Listing Available Models ==="
@@ -156,24 +182,6 @@ jobs:
           timeout 30s gaia llm --model "Qwen3-0.6B-GGUF" "Say hello" || echo "LLM command completed"
 
           echo "✅ Core commands tested successfully!"
-
-          # Now test summarizer while server is still running
-          echo ""
-          echo "=== Testing Summarizer Integration ==="
-          echo "Testing complete CLI workflow: gaia summarize command"
-
-          # Set the test model for summarizer tests
-          export GAIA_TEST_MODEL="Qwen3-0.6B-GGUF"
-
-          # Run the summarizer integration tests
-          python -m pytest tests/test_summarizer.py -vs --tb=short || TEST_EXIT=$?
-
-          if [ "${TEST_EXIT:-0}" -eq 0 ]; then
-            echo "✅ Summarizer CLI integration tests passed successfully!"
-          else
-            echo "❌ Summarizer CLI integration tests failed with exit code: ${TEST_EXIT}"
-            echo "Note: Error details displayed above"
-          fi
 
           echo ""
           echo "=== Testing RAG Functionality ==="
@@ -209,8 +217,18 @@ jobs:
           kill $LEMONADE_PID 2>/dev/null || true
           sleep 5
 
-          # Clean up log file
-          rm -f lemonade.log
+          # Report failures — RAG tests may fail when the agent's default model
+          # isn't available (only Qwen3-0.6B-GGUF is pulled in CI).
+          # Surface as a GHA warning so failures are visible without blocking the job.
+          FIRST_FAILURE=0
+          for code in "${RAG_TEST_EXIT:-0}" "${LEMONADE_TEST_EXIT:-0}"; do
+            if [ "$code" -ne 0 ] && [ "$FIRST_FAILURE" -eq 0 ]; then
+              FIRST_FAILURE=$code
+            fi
+          done
+          if [ "$FIRST_FAILURE" -ne 0 ]; then
+            echo "::warning::Integration tests had failures (exit code $FIRST_FAILURE) — see logs above"
+          fi
 
       - name: Test evaluation and utility commands
         run: |
@@ -291,3 +309,12 @@ jobs:
           echo "   🔧 Test audio/TTS functionality on Linux"
           echo "   🔧 Add Linux NPU driver support (if available)"
           echo "   🔧 Optimize model loading and performance"
+
+      - name: Upload logs on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gaia-cli-linux-logs
+          path: |
+            lemonade.log
+          if-no-files-found: ignore

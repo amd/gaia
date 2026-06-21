@@ -36,6 +36,8 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const https = require("https");
+const http = require("http");
+const tls = require("tls");
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -61,6 +63,11 @@ const NETWORK_CHECK_HOSTS = Object.freeze([
   "https://astral.sh",
 ]);
 const NETWORK_CHECK_TIMEOUT_MS = 5000;
+
+// Pip-install resilience: the install stage fetches heavy transitive deps from
+// PyPI, so retry a transient network failure a few times before giving up.
+const INSTALL_MAX_ATTEMPTS = 3;
+const INSTALL_RETRY_BACKOFF_MS = 3000;
 
 // ── Bundled `uv` binary ──────────────────────────────────────────────────────
 //
@@ -468,6 +475,68 @@ function runCommand(cmd, args, { env, stageLabel } = {}) {
   });
 }
 
+/**
+ * Detect the Windows "file in use" signature in command output. An upgrade's
+ * `uv pip install --refresh` can't replace gaia.exe while a previous GAIA
+ * process still holds it open — pip reports os error 32 (issue #1388).
+ */
+function isFileLockedError(output) {
+  if (!output) return false;
+  return /os error 32/i.test(output) || /being used by another process/i.test(output);
+}
+
+/**
+ * Detect a transient network failure in `uv pip install` output so the
+ * install stage can retry instead of failing the whole bootstrap. The
+ * install stage downloads heavy transitive deps (scipy, numpy, torch) from
+ * PyPI; a single mid-stream hiccup ("stream closed because of a broken pipe")
+ * otherwise fails the entire backend install — and, in the release pipeline,
+ * the whole AppImage smoke test that gates publishing.
+ *
+ * Matches only network-shaped failures — NOT dependency-resolution errors
+ * ("No solution found") or disk-full, which retrying cannot fix.
+ */
+function isTransientNetworkError(output) {
+  if (!output) return false;
+  return (
+    /broken pipe/i.test(output) ||
+    /stream closed/i.test(output) ||
+    /failed to fetch/i.test(output) ||
+    /error sending request/i.test(output) ||
+    /connection (?:error|reset|closed|refused|aborted)/i.test(output) ||
+    /could not connect/i.test(output) ||
+    /(?:request|operation|connection)?\s*tim(?:ed\s*out|eout)/i.test(output) ||
+    /temporary failure in name resolution/i.test(output) ||
+    /(?:could not resolve|failed to lookup|dns error)/i.test(output) ||
+    /network is unreachable/i.test(output)
+  );
+}
+
+/**
+ * Detect a TLS trust failure in `uv pip install` output. Behind a corporate
+ * MITM proxy, PyPI is presented with a certificate signed by a custom root CA
+ * that uv's bundled webpki roots don't include, so uv reports
+ * "invalid peer certificate: UnknownIssuer" (issue #1693). It surfaces wrapped
+ * in "Failed to fetch" / "error sending request", so isTransientNetworkError
+ * also matches it — the install loop MUST check this first and retry with
+ * --native-tls (the OS trust store, where IT installs the corporate CA) rather
+ * than burning the transient retries on the same bundled roots.
+ */
+function isTlsCertError(output) {
+  if (!output) return false;
+  return (
+    /invalid peer certificate/i.test(output) ||
+    /unknownissuer/i.test(output) ||
+    /certificate verify failed/i.test(output) ||
+    /unable to get local issuer certificate/i.test(output) ||
+    /self[- ]signed certificate/i.test(output)
+  );
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ── Pre-checks ───────────────────────────────────────────────────────────────
 
 /**
@@ -544,69 +613,234 @@ function checkDiskSpace() {
 }
 
 /**
- * Best-effort network reachability check. Performs a HEAD request to
- * https://astral.sh (where the uv installer lives). Resolves { ok, message? }.
+ * Read the OS trust store. Node 22+ exposes `tls.getCACertificates("system")`;
+ * older Node lacks it, so this returns `[]` there (callers fall back to
+ * NODE_EXTRA_CA_CERTS / the bundled Mozilla set).
+ *
+ * Why this exists: behind a corporate TLS-inspection proxy, the proxy's root
+ * CA is installed in the OS trust store but NOT in Node's bundled Mozilla set,
+ * so every HTTPS handshake fails with UNABLE_TO_GET_ISSUER_CERT_LOCALLY and the
+ * machine looks "offline" when it is online (issue #1572).
+ */
+function _systemCaCertificates() {
+  try {
+    if (typeof tls.getCACertificates === "function") {
+      return tls.getCACertificates("system") || [];
+    }
+  } catch (err) {
+    log(`Could not read system CA store: ${err.message}`);
+  }
+  return [];
+}
+
+/** Read a pinned corporate root CA from NODE_EXTRA_CA_CERTS (any Node version). */
+function _extraCaCertificates() {
+  const file = process.env.NODE_EXTRA_CA_CERTS;
+  if (!file) return [];
+  try {
+    return [fs.readFileSync(file, "utf8")];
+  } catch (err) {
+    log(`Could not read NODE_EXTRA_CA_CERTS (${file}): ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Build the CA trust bundle for the network probe. Passing `ca` to
+ * `https.request` REPLACES Node's default trust store, so when we add system /
+ * extra certs we must re-include the bundled Mozilla set. Returns `undefined`
+ * when there is nothing extra to add (probe uses Node's default trust store —
+ * behaviour unchanged).
+ */
+function buildCaBundle() {
+  const extra = [..._systemCaCertificates(), ..._extraCaCertificates()];
+  if (extra.length === 0) return undefined;
+  return [...new Set([...tls.rootCertificates, ...extra])];
+}
+
+/** First non-empty proxy URL from the standard env vars, or null. */
+function proxyForHttps() {
+  return (
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    null
+  );
+}
+
+/**
+ * Classify a network error so the caller can tell a trust-store gap (NOT
+ * offline) apart from genuine connectivity loss.
+ *   - "tls"          → certificate/handshake failure (machine is online)
+ *   - "timeout"      → request timed out
+ *   - "connectivity" → DNS/connect failure (likely offline)
+ */
+function classifyNetworkError(err) {
+  const code = (err && err.code) || "";
+  const message = (err && err.message) || "";
+  if (/CERT|SELF_SIGNED|UNABLE_TO_|_SIGNATURE|ALTNAME/.test(code)) {
+    return "tls";
+  }
+  if (code === "ETIMEDOUT" || /timed out/i.test(message)) {
+    return "timeout";
+  }
+  return "connectivity";
+}
+
+/** HEAD-probe `target` (a URL) directly, trusting `ca`. */
+function _probeDirect(target, ca, finish, setSock) {
+  const opts = {
+    host: target.hostname,
+    port: target.port || 443,
+    path: target.pathname || "/",
+    method: "HEAD",
+    servername: target.hostname,
+    headers: { "User-Agent": "gaia-backend-installer/1.0" },
+  };
+  if (ca) opts.ca = ca;
+  try {
+    const req = https.request(opts, (res) => {
+      res.resume();
+      finish({ ok: true, status: res.statusCode });
+    });
+    setSock(req);
+    req.on("error", (err) =>
+      finish({ ok: false, kind: classifyNetworkError(err), message: `${target.href}: ${err.message}` })
+    );
+    req.end();
+  } catch (err) {
+    finish({ ok: false, kind: classifyNetworkError(err), message: `${target.href}: ${err.message}` });
+  }
+}
+
+/** HEAD-probe `target` through an HTTP CONNECT proxy, trusting `ca`. */
+function _probeViaProxy(target, proxy, ca, finish, setSock) {
+  let proxyUrl;
+  try {
+    proxyUrl = new URL(proxy);
+  } catch {
+    finish({ ok: false, kind: "connectivity", message: `${target.href}: invalid proxy URL "${proxy}"` });
+    return;
+  }
+  const headers = {};
+  if (proxyUrl.username) {
+    const cred = `${decodeURIComponent(proxyUrl.username)}:${decodeURIComponent(proxyUrl.password)}`;
+    headers["Proxy-Authorization"] = "Basic " + Buffer.from(cred).toString("base64");
+  }
+  const connectReq = http.request({
+    host: proxyUrl.hostname,
+    port: proxyUrl.port || 80,
+    method: "CONNECT",
+    path: `${target.hostname}:${target.port || 443}`,
+    headers,
+  });
+  setSock(connectReq);
+  connectReq.on("connect", (res, socket) => {
+    if (res.statusCode !== 200) {
+      try { socket.destroy(); } catch { /* ignore */ }
+      finish({ ok: false, kind: "connectivity", message: `${target.href}: proxy CONNECT returned ${res.statusCode}` });
+      return;
+    }
+    setSock(socket);
+    const opts = {
+      host: target.hostname,
+      port: target.port || 443,
+      path: target.pathname || "/",
+      method: "HEAD",
+      socket,
+      agent: false,
+      servername: target.hostname,
+      headers: { "User-Agent": "gaia-backend-installer/1.0" },
+    };
+    if (ca) opts.ca = ca;
+    try {
+      const req = https.request(opts, (r) => {
+        r.resume();
+        finish({ ok: true, status: r.statusCode });
+      });
+      req.on("error", (err) =>
+        finish({ ok: false, kind: classifyNetworkError(err), message: `${target.href}: ${err.message}` })
+      );
+      req.end();
+    } catch (err) {
+      finish({ ok: false, kind: classifyNetworkError(err), message: `${target.href}: ${err.message}` });
+    }
+  });
+  connectReq.on("error", (err) =>
+    finish({ ok: false, kind: classifyNetworkError(err), message: `${target.href}: ${err.message}` })
+  );
+  connectReq.end();
+}
+
+/**
+ * Best-effort reachability probe for a single host. A HEAD that gets any
+ * response (even 3xx/4xx) proves connectivity. Trusts the system / pinned CA
+ * store (issue #1572) and honors HTTPS_PROXY/HTTP_PROXY. Resolves
+ * { ok, status? } or { ok:false, kind, message }.
  */
 function _checkOneHost(url) {
   return new Promise((resolve) => {
     let settled = false;
+    let sock = null;
+    let timer = null;
     const finish = (result) => {
       if (settled) return;
       settled = true;
+      if (timer) clearTimeout(timer);
+      if (sock) {
+        try { sock.destroy(); } catch { /* ignore */ }
+      }
       resolve(result);
     };
-
-    try {
-      const req = https.request(
-        url,
-        {
-          method: "HEAD",
-          timeout: NETWORK_CHECK_TIMEOUT_MS,
-          headers: { "User-Agent": "gaia-backend-installer/1.0" },
-        },
-        (res) => {
-          // Any response (even 3xx/4xx) means we have basic connectivity.
-          res.resume();
-          finish({ ok: true, status: res.statusCode });
-        }
-      );
-      req.on("timeout", () => {
-        req.destroy();
-        finish({
-          ok: false,
-          message: `${url}: timed out after ${NETWORK_CHECK_TIMEOUT_MS / 1000}s`,
-        });
-      });
-      req.on("error", (err) => {
-        finish({
-          ok: false,
-          message: `${url}: ${err.message}`,
-        });
-      });
-      req.end();
-    } catch (err) {
+    const setSock = (s) => {
+      sock = s;
+    };
+    timer = setTimeout(() => {
       finish({
         ok: false,
-        message: `${url}: ${err.message}`,
+        kind: "timeout",
+        message: `${url}: timed out after ${NETWORK_CHECK_TIMEOUT_MS / 1000}s`,
       });
+    }, NETWORK_CHECK_TIMEOUT_MS);
+
+    let target;
+    try {
+      target = new URL(url);
+    } catch (err) {
+      finish({ ok: false, kind: "connectivity", message: `${url}: ${err.message}` });
+      return;
+    }
+    const ca = buildCaBundle();
+    const proxy = proxyForHttps();
+    if (proxy) {
+      _probeViaProxy(target, proxy, ca, finish, setSock);
+    } else {
+      _probeDirect(target, ca, finish, setSock);
     }
   });
 }
 
 /**
- * Probe each host in ``NETWORK_CHECK_HOSTS`` sequentially. Succeed as
- * soon as ANY host responds (even 3xx/4xx counts — it proves
- * connectivity). Only fail if ALL hosts are unreachable.
+ * Probe each host in ``NETWORK_CHECK_HOSTS`` sequentially. Succeed as soon as
+ * ANY host responds (even 3xx/4xx counts — it proves connectivity). On total
+ * failure, report the dominant failure `kind` so the caller can distinguish a
+ * trust-store gap ("tls" — online but Node doesn't trust the proxy CA) from a
+ * genuine outage ("connectivity").
  */
 async function checkNetwork() {
   const errors = [];
+  const kinds = new Set();
   for (const url of NETWORK_CHECK_HOSTS) {
     const result = await _checkOneHost(url);
-    if (result.ok) return result;
+    if (result.ok) return { ok: true, status: result.status };
     errors.push(result.message);
+    kinds.add(result.kind || "connectivity");
   }
+  const allTls = kinds.size > 0 && [...kinds].every((k) => k === "tls");
   return {
     ok: false,
+    kind: allTls ? "tls" : kinds.has("connectivity") ? "connectivity" : [...kinds][0] || "connectivity",
     message: `Network check failed for all hosts: ${errors.join("; ")}`,
   };
 }
@@ -1146,16 +1380,90 @@ async function installBackend(opts = {}) {
     pipArgs.push("--extra-index-url", "https://download.pytorch.org/whl/cpu");
   }
 
-  const installResult = await runCommand("uv", pipArgs, { stageLabel: "pip" });
+  // Retry the install on transient PyPI/network failures. The heavy
+  // transitive deps (scipy, numpy, torch) are fetched live from PyPI even
+  // when the gaia wheel itself is local, so a single broken-pipe mid-download
+  // would otherwise fail the whole bootstrap (and block a release). File-lock
+  // failures (Windows os-error-32) are NOT retried — they need user action.
+  let installResult;
+  let useNativeTls = false;
+  let nativeTlsAttempted = false;
+  // The TLS branch flips useNativeTls and `continue`s, consuming an iteration.
+  // If the signature only surfaces on the final attempt, extend the loop once
+  // so the promised --native-tls retry actually runs (issue #1693 review).
+  for (
+    let attempt = 1;
+    attempt <= INSTALL_MAX_ATTEMPTS || (useNativeTls && !nativeTlsAttempted);
+    attempt++
+  ) {
+    const attemptArgs = useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs;
+    if (useNativeTls) nativeTlsAttempted = true;
+    installResult = await runCommand("uv", attemptArgs, { stageLabel: "pip" });
+    if (installResult.code === 0) break;
+    const attemptOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
+    // A corporate proxy's custom root CA isn't in uv's bundled webpki roots, so
+    // the fetch fails with UnknownIssuer. This LOOKS transient ("Failed to
+    // fetch") but retrying the bundled roots can't fix it — retry once with
+    // --native-tls so uv trusts the OS certificate store instead (issue #1693).
+    if (!useNativeTls && isTlsCertError(attemptOutput)) {
+      useNativeTls = true;
+      log(
+        "TLS trust failure (corporate proxy CA not in uv's bundled roots) — " +
+          "retrying install with --native-tls to use the OS certificate store"
+      );
+      report(
+        STAGES.INSTALL_PACKAGE,
+        0,
+        "Certificate trust issue — retrying with the system certificate store"
+      );
+      continue;
+    }
+    const canRetry =
+      attempt < INSTALL_MAX_ATTEMPTS &&
+      isTransientNetworkError(attemptOutput) &&
+      !isFileLockedError(attemptOutput);
+    if (!canRetry) break;
+    const backoffMs = INSTALL_RETRY_BACKOFF_MS * attempt;
+    log(
+      `Transient network error during install (attempt ${attempt}/${INSTALL_MAX_ATTEMPTS}). ` +
+        `Retrying in ${Math.round(backoffMs / 1000)}s…`
+    );
+    report(
+      STAGES.INSTALL_PACKAGE,
+      0,
+      `Network hiccup — retrying install (attempt ${attempt + 1}/${INSTALL_MAX_ATTEMPTS})`
+    );
+    await sleep(backoffMs);
+  }
   if (installResult.code !== 0) {
+    // Windows: an upgrade can't replace gaia.exe while a previous GAIA
+    // process still holds it open (issue #1388). The orphan cleanup in
+    // main.cjs should have killed it first; if the lock persists, point the
+    // user at the live process rather than the generic manual-install hint.
+    const output = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
+    let suggestion;
+    if (isFileLockedError(output)) {
+      suggestion =
+        "A running GAIA process is locking the install. Close GAIA completely (including any leftover gaia.exe in Task Manager), then relaunch.";
+    } else if (isTlsCertError(output)) {
+      suggestion =
+        "PyPI's certificate isn't trusted on this network — usually a corporate proxy presenting its own root CA. " +
+        (nativeTlsAttempted
+          ? "GAIA retried with the OS certificate store and it still failed. "
+          : "") +
+        "Ask IT to install the proxy's root CA in your system's trusted certificate store, then relaunch GAIA. " +
+        "See https://amd-gaia.ai/quickstart#cli-install";
+    } else {
+      suggestion = `Try installing manually:\n  uv pip install ${pipPackage} --python ${
+        IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
+      }\nThen restart GAIA. See https://amd-gaia.ai/quickstart#cli-install`;
+    }
     throw new InstallError(
       `Failed to install ${pipPackage} (pip exit ${installResult.code}).`,
       {
         stage: STAGES.INSTALL_PACKAGE,
         code: installResult.code,
-        suggestion: `Try installing manually:\n  uv pip install ${pipPackage} --python ${
-          IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
-        }\nThen restart GAIA. See https://amd-gaia.ai/quickstart#cli-install`,
+        suggestion,
       }
     );
   }
@@ -1346,18 +1654,25 @@ async function ensureBackend(opts = {}) {
       throw err;
     }
 
-    // Network check failure: fatal, surface as InstallError.
+    // Network check is ADVISORY, never fatal. A failed HEAD probe is most often
+    // a corporate TLS-inspection proxy whose root CA isn't in Node's bundled
+    // trust store (#1572) — the machine is online and `uv`/`pip`, which honor
+    // HTTPS_PROXY and the system trust store, install fine. If the host really
+    // is unreachable, the install step below fails loudly with an accurate
+    // uv/pip error, which is more actionable than a generic "offline".
     if (!preChecks.network.ok) {
-      const err = new InstallError(
-        `You appear to be offline. ${preChecks.network.message || "Could not reach any network host."}`,
-        {
-          stage: STAGES.PRE_CHECKS,
-          suggestion:
-            "Connect to the internet and try again. If you are behind a corporate proxy, configure HTTPS_PROXY and re-launch GAIA.",
-        }
-      );
-      setState(STATES.FAILED, { stage: STAGES.PRE_CHECKS, message: err.message });
-      throw err;
+      if (preChecks.network.kind === "tls") {
+        log(
+          `Network pre-check hit a TLS/certificate error (not offline): ${preChecks.network.message}. ` +
+            "Typically a corporate proxy root CA missing from Node's trust store — " +
+            "set NODE_EXTRA_CA_CERTS to it (or relaunch with --use-system-ca) if the install fails. Proceeding."
+        );
+      } else {
+        log(
+          `Network pre-check could not reach any host: ${preChecks.network.message}. ` +
+            "Proceeding anyway; the install step will surface an accurate error if the network is truly unreachable."
+        );
+      }
     }
 
     // Fast-path: already installed at the expected version.
@@ -1439,6 +1754,13 @@ module.exports = {
   runPreChecks,
   checkDiskSpace,
   checkNetwork,
+  isFileLockedError,
+  isTransientNetworkError,
+  isTlsCertError,
+  buildCaBundle,
+  proxyForHttps,
+  classifyNetworkError,
+  _checkOneHost,
 
   // State machine
   getState,

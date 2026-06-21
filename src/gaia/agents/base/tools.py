@@ -13,14 +13,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Tool registry to store registered tools
-_TOOL_REGISTRY = {}
+_TOOL_REGISTRY: dict[str, dict] = {}
 
 
 def tool(
-    func: Callable = None,
+    func: Callable | None = None,
     *,
     atomic: bool = False,
     display_label: str | None = None,
+    timeout: float | None = None,
     **kwargs,  # pylint: disable=unused-argument
 ) -> Callable:
     """
@@ -33,6 +34,12 @@ def tool(
     Args:
         func: Function to register as a tool (when used as @tool)
         atomic: If True, marks this tool as atomic (can execute without multi-step planning)
+        display_label: Optional user-facing label for UI progress strips
+        timeout: Per-tool execution limit in seconds. Overrides the global
+            ``GAIA_AGENT_TOOL_TIMEOUT`` default in ``Agent._execute_tool``. Set
+            this on tools that legitimately run long (e.g. image generation that
+            may download a model) so they aren't capped by the global default.
+            ``None`` (the default) means "use the global default".
         **kwargs: Optional arguments (ignored, for backward compatibility)
 
     Returns:
@@ -76,6 +83,7 @@ def tool(
             "function": f,
             "atomic": atomic,
             "display_label": display_label,
+            "timeout": timeout,
         }
 
         # Return the function unchanged
@@ -109,7 +117,7 @@ def get_tool_display_name(tool_name: str) -> str:
     tool = _TOOL_REGISTRY.get(tool_name)
     if not tool:
         return tool_name
-    return tool.get("display_name", tool_name)
+    return tool.get("display_name", tool_name)  # type: ignore[no-any-return]
 
 
 def get_tool_display_label(tool_name: str) -> str:
@@ -120,8 +128,8 @@ def get_tool_display_label(tool_name: str) -> str:
     """
     tool = _TOOL_REGISTRY.get(tool_name)
     if not tool:
-        return None
-    return tool.get("display_label")
+        return None  # type: ignore[return-value]
+    return tool.get("display_label")  # type: ignore[return-value]
 
 
 def get_tool_metadata(tool_name: str):

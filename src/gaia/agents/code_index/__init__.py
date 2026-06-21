@@ -2,6 +2,6 @@
 # SPDX-License-Identifier: MIT
 """Code-index agent tooling (mixin composed into CodeAgent)."""
 
-from gaia.agents.code_index.tools.mixin import CodeIndexToolsMixin
+from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 
 __all__ = ["CodeIndexToolsMixin"]

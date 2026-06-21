@@ -1,0 +1,134 @@
+---
+title: "Microsoft"
+icon: "microsoft"
+description: "Connect GAIA to Outlook mail, calendar, and OneDrive via Microsoft Graph."
+---
+
+<Info>
+  **Connector ID:** `microsoft` · **Type:** `oauth_pkce` · **Catalog entry:** [`src/gaia/connectors/catalog/microsoft.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/microsoft.py)
+</Info>
+
+GAIA connects to your **personal** Microsoft account — Outlook.com, Hotmail,
+or Live — using the Microsoft identity platform v2.0 with PKCE. Work and
+school (Microsoft Entra ID) accounts are not supported in this release.
+
+## What you'll need
+
+Microsoft requires every app — including GAIA running locally — to identify
+itself with an **App registration** that you create once in the Azure portal.
+For a single-developer machine it takes a few minutes and is free.
+
+You will register one app and paste a single value into the GAIA Agent UI: an
+**Application (client) ID**. Unlike Google, the standard desktop flow needs
+**no client secret** — Microsoft forbids secrets for public (desktop) clients.
+GAIA stores the Client ID encrypted in your OS keyring.
+
+## Step 1 — Register an app in Azure
+
+1. Go to the [Azure portal → App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade).
+2. Click **New registration**.
+3. **Name**: `GAIA Personal` (or whatever you like).
+4. **Supported account types**: choose **Personal Microsoft accounts only**.
+   <Tooltip tip="This maps to the 'consumers' tenant GAIA uses. Picking a work/school option would target a tenant GAIA does not authenticate against in this release.">Why this option?</Tooltip>
+5. Click **Register**. The **Overview** page shows the **Application (client)
+   ID** — copy it for Step 3.
+
+## Step 2 — Add the loopback redirect URI
+
+GAIA runs a temporary loopback web server on `127.0.0.1` to receive the OAuth
+callback, so it needs a localhost redirect URI of the public-client type.
+
+1. In your app, go to **Authentication → Add a platform**.
+2. Pick **Mobile and desktop applications**.
+3. Check (or add) the redirect URI **`http://localhost`**.
+   <Tooltip tip="GAIA picks an ephemeral port at connect time, e.g. http://127.0.0.1:54321/callback. Microsoft treats http://localhost as a special public-client redirect that matches any port, so you only register the base.">Why just http://localhost?</Tooltip>
+4. Click **Configure** / **Save**.
+
+You do **not** need to create a client secret for the standard flow.
+
+## Step 3 — Paste the Client ID into GAIA
+
+1. Launch the Agent UI: `gaia chat --ui`.
+2. Click **Settings** (gear) → **Connections**.
+3. Click the **Microsoft** tile to expand it.
+4. Paste the **Application (client) ID** from Step 1. Leave the **Client
+   Secret** field blank.
+5. Click **Save & Connect**.
+
+GAIA will:
+
+1. Store the Client ID in your OS keyring (macOS Keychain on Mac,
+   gnome-keyring/kwallet on Linux, Credential Locker on Windows).
+2. Open Microsoft's consent screen in your default browser.
+3. Receive the callback on a temporary loopback server.
+4. Exchange the auth code for a refresh token (also stored in the keyring).
+   The refresh token is issued because GAIA requests the `offline_access`
+   scope.
+
+The tile flips to **Connected as you@outlook.com** once the flow completes.
+
+## Step 4 — Grant scopes to specific agents
+
+Connecting Microsoft doesn't automatically give every agent access to your
+mailbox. Each agent must be granted the specific Graph scopes it needs:
+
+```bash
+# Grant an agent read-only Outlook mail access
+gaia connectors grants grant microsoft builtin:chat \
+  --scopes https://graph.microsoft.com/Mail.Read
+```
+
+The scopes a connection can request are listed in the spec at
+[`src/gaia/connectors/catalog/microsoft.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/microsoft.py):
+
+| Scope | Grants |
+| --- | --- |
+| `https://graph.microsoft.com/Mail.Read` | Read your email |
+| `https://graph.microsoft.com/Mail.Send` | Send email on your behalf |
+| `https://graph.microsoft.com/Mail.ReadWrite` | Read, organize, and manage your email |
+| `https://graph.microsoft.com/Calendars.Read` | Read your calendar events |
+| `https://graph.microsoft.com/Calendars.ReadWrite` | Manage your calendar events |
+
+## Common issues
+
+### `AADSTS50011: redirect URI mismatch`
+
+The redirect URI in your app registration doesn't include `http://localhost`,
+or you added it under the wrong platform. Re-check Step 2 — it must be a
+**Mobile and desktop applications** platform redirect, not **Web**.
+
+### `AADSTS700016` / `unauthorized_client`
+
+The Client ID is wrong, or the app was registered for the wrong account type.
+Confirm you copied the **Application (client) ID** from the Overview page and
+chose **Personal Microsoft accounts only** in Step 1.
+
+### `AADSTS65001` / consent required
+
+You declined consent, or the agent is requesting a scope you didn't approve.
+Reconnect from the UI and accept the consent prompt; then grant the agent the
+scope (Step 4).
+
+### Token endpoint returned no `refresh_token`
+
+GAIA always requests `offline_access`, which is what makes Microsoft issue a
+refresh token. If you see this, disconnect and reconnect from the UI to
+restart the flow with the full default scope set.
+
+## Revoking access
+
+Two places — both work:
+
+- **From GAIA**: Settings → Connections → Microsoft → **Disconnect**. Removes
+  the refresh token from the keyring; the next API call errors with
+  `NOT_CONNECTED`.
+- **From Microsoft**: <a href="https://account.live.com/consent/Manage"
+  target="_blank">account.live.com/consent/Manage</a> → find your app →
+  **Remove these permissions**.
+
+## See also
+
+- [Connectors overview](/connectors)
+- [Microsoft identity platform — auth code + PKCE](https://learn.microsoft.com/entra/identity-platform/v2-oauth2-auth-code-flow)
+- [Microsoft Graph permissions reference](https://learn.microsoft.com/graph/permissions-reference)
+- [Connectors security model](/security/connections)

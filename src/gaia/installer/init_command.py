@@ -95,6 +95,22 @@ INIT_PROFILES = {
         "min_context_size": 32768,
         "pip_extras": [],
     },
+    "npu": {
+        "description": "Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU)",
+        "agent": "chat",
+        "models": ["gemma4-it-e2b-FLM"],
+        "approx_size": "~3 GB",
+        "min_lemonade_version": "10.2.0",
+        # FLM default context on NPU. Smaller than GPU (32768) because NPU
+        # memory is more constrained; 4096 is the FLM --ctx-size default.
+        # Adjust upward if FLM supports larger windows on newer hardware.
+        "min_context_size": 4096,
+        "pip_extras": [],
+        # NPU-specific keys (not present on other profiles):
+        "recipe": "flm",
+        "backend": "flm:npu",
+        "required_device": "amd_npu",
+    },
     "all": {
         "description": "All models for all agents",
         "agent": "all",
@@ -127,6 +143,12 @@ class InitCommand:
     3. Download models for profile
     4. Verify setup
     """
+
+    # Per-model context verification state, set dynamically during model
+    # verification. Declared here (without assignment) so its *absence* on the
+    # instance keeps meaning "verification not attempted" while satisfying the
+    # pylint attribute-defined-outside-init check.
+    _ctx_verified: "Optional[int]"
 
     def __init__(
         self,
@@ -199,8 +221,9 @@ class InitCommand:
             console=self.console,
         )
 
-        # Context verification state (set during model loading)
-        self._ctx_verified = None
+        # Context verification state. _ctx_verified is set per-model during
+        # verification (only for LLM models with a min context size); its
+        # absence means verification was not attempted for that model.
         self._ctx_warning = None
 
     def _print(self, message: str, end: str = "\n"):
@@ -369,42 +392,51 @@ class InitCommand:
 
         extras_str = ",".join(pip_extras)
 
-        # Detect editable vs package install
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "show", "amd-gaia"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            editable = False
-            location = ""
+        # Package-manager frontends to try, most-preferred first. The standalone
+        # ``uv`` binary leads because uv-created venvs ship neither ``pip`` nor
+        # the ``uv`` module, so ``python -m uv`` / ``python -m pip`` both fail
+        # there; the standalone binary honours the active VIRTUAL_ENV instead.
+        frontends = [
+            ["uv", "pip"],
+            [sys.executable, "-m", "uv", "pip"],
+            [sys.executable, "-m", "pip"],
+        ]
+
+        # Detect editable vs package install using whichever frontend responds.
+        editable = False
+        location = ""
+        for frontend in frontends:
+            try:
+                result = subprocess.run(
+                    frontend + ["show", "amd-gaia"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except (FileNotFoundError, OSError):
+                continue
+            if result.returncode != 0:
+                continue
             for line in result.stdout.splitlines():
                 if line.startswith("Editable project location:"):
                     editable = True
                     location = line.split(":", 1)[1].strip()
                     break
-        except Exception:
-            editable = False
-            location = ""
+            break
 
         if editable and location:
             install_spec = f'uv pip install -e ".[{extras_str}]"'
-            install_args = ["-e", f"{location}[{extras_str}]"]
+            install_args = ["install", "-e", f"{location}[{extras_str}]"]
         else:
-            install_spec = f'pip install "amd-gaia[{extras_str}]"'
-            install_args = [f"amd-gaia[{extras_str}]"]
+            install_spec = f'uv pip install "amd-gaia[{extras_str}]"'
+            install_args = ["install", f"amd-gaia[{extras_str}]"]
 
         self._print_success(f"Installing extras: {extras_str}")
 
-        # Try uv pip first, fall back to regular pip
-        for pip_cmd in [
-            [sys.executable, "-m", "uv", "pip", "install"] + install_args,
-            [sys.executable, "-m", "pip", "install"] + install_args,
-        ]:
+        for frontend in frontends:
             try:
                 result = subprocess.run(
-                    pip_cmd,
+                    frontend + install_args,
                     capture_output=True,
                     text=True,
                     timeout=300,
@@ -413,7 +445,7 @@ class InitCommand:
                 if result.returncode == 0:
                     self._print_success(f"Installed [{extras_str}] dependencies")
                     return True
-            except FileNotFoundError:
+            except (FileNotFoundError, OSError):
                 continue
             except subprocess.TimeoutExpired:
                 self._print_warning(
@@ -425,7 +457,7 @@ class InitCommand:
 
         self._print_warning(
             f"Could not install [{extras_str}] extras automatically. "
-            f"Please run: pip install {install_spec}"
+            f"Please run: {install_spec}"
         )
         return True  # Warn but don't fail
 
@@ -444,7 +476,14 @@ class InitCommand:
         _webui_src = Path(__file__).resolve().parent.parent / "apps" / "webui" / "src"
         _is_dev_install = _webui_src.is_dir()
 
+        has_device_check = bool(profile_config.get("required_device"))
+        has_backend_install = bool(profile_config.get("backend"))
+
         total_steps = 4 if not self.skip_models else 3
+        if has_device_check:
+            total_steps += 1
+        if has_backend_install:
+            total_steps += 1
         if has_pip_extras:
             total_steps += 1
         if _is_dev_install:
@@ -486,7 +525,28 @@ class InitCommand:
             if not self._ensure_server_running():
                 return 1
 
-            # Step 3: Download models (unless skipped)
+            # NPU-specific: Detect hardware
+            if has_device_check:
+                step_num += 1
+                self._print("")
+                self._print_step(step_num, total_steps, "Detecting NPU hardware...")
+                if not self._check_device_available():
+                    return 1
+
+            # NPU-specific: Install backend
+            if has_backend_install:
+                step_num += 1
+                self._print("")
+                backend_spec = profile_config.get("backend", "")
+                self._print_step(
+                    step_num,
+                    total_steps,
+                    f"Installing {backend_spec} backend...",
+                )
+                if not self._install_backend():
+                    return 1
+
+            # Step 3+: Download models (unless skipped)
             if not self.skip_models:
                 step_num += 1
                 self._print("")
@@ -530,6 +590,18 @@ class InitCommand:
             if not self._verify_setup():
                 return 1
 
+            # Persist profile choice to ~/.gaia/config.json
+            try:
+                from gaia.config import GaiaConfig
+
+                config = GaiaConfig(
+                    profile=self.profile,
+                    default_device="npu" if self.profile == "npu" else "gpu",
+                )
+                config.save()
+            except Exception as e:
+                log.warning(f"Failed to save config: {e}")
+
             # Success!
             self._print_completion()
             return 0
@@ -565,6 +637,71 @@ class InitCommand:
             )
             return False
 
+        # First, try probing any configured LEMONADE_BASE_URL (or localhost
+        # at the default port) to detect a running server even when the
+        # lemonade-server binary isn't visible to this process (for example
+        # when running from an AppImage that strips PATH). If a healthy
+        # server responds we treat it as present and skip installation.
+        try:
+            from gaia.llm.lemonade_client import (
+                DEFAULT_LEMONADE_URL,
+                LemonadeClient,
+                LemonadeClientError,
+            )
+
+            prev_env = os.environ.get("LEMONADE_BASE_URL")
+            try:
+                # Prefer explicit env var provided by the user/session
+                probe_urls = []
+                if self._lemonade_base_url:
+                    probe_urls.append(self._lemonade_base_url)
+
+                # Also probe the well-known local URL used by Lemonade (use
+                # client constant so tests and future port changes remain in
+                # sync with Lemonade defaults). Avoid duplicate probes.
+                if DEFAULT_LEMONADE_URL not in probe_urls:
+                    probe_urls.append(DEFAULT_LEMONADE_URL)
+
+                for url in probe_urls:
+                    try:
+                        os.environ["LEMONADE_BASE_URL"] = url
+                        client = LemonadeClient(verbose=self.verbose)
+                        # Use a short timeout for probes to avoid hanging the init
+                        # process on poorly responsive networks or captive portals.
+                        try:
+                            health = client._send_request(
+                                "get", f"{client.base_url}/health", timeout=5
+                            )
+                        except TypeError:
+                            # Fall back to health_check() if _send_request signature
+                            # differs; keep health_check as a last resort.
+                            health = client.health_check()
+
+                        if health:
+                            # Good enough to consider Lemonade present
+                            self._print_success(f"Using Lemonade Server at {url}")
+                            # Restore prior env and continue (server is reachable)
+                            return True
+                    except (
+                        OSError,
+                        ConnectionError,
+                        TimeoutError,
+                        LemonadeClientError,
+                    ) as e:
+                        # Network-level probe failures are expected; log and continue
+                        log.debug("Probe failed for %s: %s", url, e)
+                        continue
+            finally:
+                # Restore original environment variable if present
+                if prev_env is None:
+                    os.environ.pop("LEMONADE_BASE_URL", None)
+                else:
+                    os.environ["LEMONADE_BASE_URL"] = prev_env
+        except Exception as e:
+            # Import errors or client failures should not block install flow,
+            # but include exception text to aid debugging per 'fail loud' rule.
+            log.debug("Could not probe LEMONADE_BASE_URL for existing server: %s", e)
+
         info = self.installer.check_installation()
 
         if info.installed and info.version:
@@ -596,6 +733,7 @@ class InitCommand:
             if not self._prompt_yes_no(
                 f"Install/update Lemonade v{LEMONADE_VERSION}?", default=True
             ):
+                self._print("")
                 self._print("   Skipping update. Will verify server connectivity.")
                 # Continue to next step - server health check will verify connectivity
                 return True
@@ -1181,6 +1319,100 @@ class InitCommand:
             log.debug(f"Model verification failed for {model_id}: {e}")
             return (False, "server_error")
 
+    def _check_device_available(self) -> bool:
+        """Check that the required hardware device is available.
+
+        Only called for profiles with a ``required_device`` key (e.g. NPU).
+        Fails loudly if the device is not detected — no silent fallback.
+
+        Returns:
+            True if device is available, False on failure.
+        """
+        profile_config = INIT_PROFILES[self.profile]
+        required = profile_config.get("required_device")
+        if not required:
+            return True
+
+        try:
+            from gaia.llm.lemonade_client import LemonadeClient
+
+            client = LemonadeClient(verbose=self.verbose)
+            sysinfo = client.get_system_info()
+            devices = sysinfo.get("devices", {})
+
+            device_info = devices.get(required, {})
+            available = device_info.get("available", False)
+
+            if available:
+                name = device_info.get("name", required)
+                self._print_success(f"Detected: {name}")
+                return True
+
+            # Device not available — actionable error
+            device_label = required.replace("amd_", "AMD ").upper()
+            self._print_error(
+                f"No {device_label} detected. "
+                f"The '{self.profile}' profile requires {device_label} hardware "
+                f"(Ryzen AI 300/400/Max series with XDNA2)."
+            )
+            self._print_error(
+                "Run 'gaia init --profile chat' for GPU-based setup instead."
+            )
+            return False
+        except ConnectionError as e:
+            self._print_error(f"Cannot reach Lemonade Server to detect hardware: {e}")
+            self._print_error(
+                "Ensure Lemonade Server is running: lemonade-server serve"
+            )
+            return False
+        except Exception as e:
+            self._print_error(f"Failed to detect hardware: {e}")
+            log.error("Hardware detection error", exc_info=True)
+            return False
+
+    def _install_backend(self) -> bool:
+        """Install the Lemonade backend required by the current profile.
+
+        Only called for profiles with a ``backend`` key (e.g. ``"flm:npu"``).
+        Checks recipe status first to skip if already installed.
+
+        Returns:
+            True if backend is ready, False on failure.
+        """
+        profile_config = INIT_PROFILES[self.profile]
+        backend_spec = profile_config.get("backend")
+        if not backend_spec:
+            return True
+
+        try:
+            from gaia.llm.lemonade_client import LemonadeClient
+
+            client = LemonadeClient(verbose=self.verbose)
+
+            # Check if already installed via recipe status
+            recipe_name = profile_config.get("recipe", backend_spec.split(":")[0])
+            recipe_status = client.get_recipe_status(recipe_name)
+
+            if recipe_status:
+                backends = recipe_status.get("backends", {})
+                backend_key = backend_spec.split(":")[-1] if ":" in backend_spec else ""
+                backend_info = backends.get(backend_key, {})
+
+                if backend_info.get("state") == "installed":
+                    self._print_success(f"Backend '{backend_spec}' already installed")
+                    return True
+
+            # Install the backend
+            self._print(f"   Installing backend: {backend_spec}...")
+            client.install_backend(backend_spec)
+            self._print_success(f"Backend '{backend_spec}' installed")
+            return True
+
+        except Exception as e:
+            self._print_error(f"Failed to install backend '{backend_spec}': {e}")
+            self._print_error(f"Try manually: lemonade backends install {backend_spec}")
+            return False
+
     def _download_models(self) -> bool:
         """
         Download models for the selected profile.
@@ -1206,9 +1438,10 @@ class InitCommand:
             else:
                 model_ids = client.get_required_models(profile_config["agent"])
 
-            # Include default CPU model for profiles that need gaia llm
-            # SD profile has its own LLM (Qwen3-8B) and doesn't need the 0.5B model
-            if self.profile != "sd":
+            # Include default GPU model for profiles that use llamacpp.
+            # SD profile has its own LLM and doesn't need the default model.
+            # NPU profile uses FLM models exclusively — don't append GGUF model.
+            if self.profile not in ("sd", "npu"):
                 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
                 if DEFAULT_MODEL_NAME not in model_ids:
@@ -1253,12 +1486,19 @@ class InitCommand:
                         except Exception as e:
                             self._print_error(f"Failed to delete {model_id}: {e}")
 
-            # Download each model via LemonadeClient API
+            # Download each model via LemonadeClient API.
+            # NPU/FLM models (e.g. ``gemma4-it-e2b-FLM``) are built-in Lemonade
+            # models — pull them by name only. Passing ``recipe`` makes Lemonade
+            # treat the call as a *new* model registration, which requires the
+            # ``user.`` prefix and 400s on built-in names (#1655). The recipe is
+            # baked into the built-in model and applied at load time.
+            recipe = profile_config.get("recipe")
             success = True
             for model_id in model_ids:
                 self._print("")
+                label = f"{model_id} (recipe={recipe})" if recipe else model_id
                 self.agent_console.print(
-                    f"   [bold cyan]Downloading:[/bold cyan] {model_id}"
+                    f"   [bold cyan]Downloading:[/bold cyan] {label}"
                 )
                 if client.ensure_model_downloaded(model_id):
                     self._print_success(f"Downloaded {model_id}")
@@ -1502,10 +1742,20 @@ class InitCommand:
                         )
                         continue
 
+                    # Reset per-model context state. _test_model_inference
+                    # sets _ctx_verified only for LLM models that declare a min
+                    # context size; SD/embedding models leave verification N/A
+                    # and must not inherit a stale "unverified" flag from
+                    # __init__ or a prior model.
+                    if hasattr(self, "_ctx_verified"):
+                        delattr(self, "_ctx_verified")
+                    self._ctx_warning = None
+
                     # Test the model
                     success, error = self._test_model_inference(client, model_id)
                     if success:
-                        # Check if context was verified
+                        # Show context only when verification was attempted
+                        # (LLM models with a min_ctx requirement).
                         ctx_msg = ""
                         if hasattr(self, "_ctx_verified"):
                             if self._ctx_verified:
@@ -1519,8 +1769,6 @@ class InitCommand:
                             elif self._ctx_verified is None:
                                 # Context could not be verified
                                 ctx_msg = " [yellow]⚠️ Context unverified![/yellow]"
-
-                            delattr(self, "_ctx_verified")  # Reset for next model
 
                         self.console.print(
                             f"   [green]✓[/green]  [cyan]{model_id}[/cyan] [dim]- OK[/dim]{ctx_msg}"
@@ -1578,8 +1826,10 @@ class InitCommand:
                             f"     [cyan]{model_id}[/cyan]: [dim]{model_path}[/dim]"
                         )
                         if sys.platform == "win32":
+                            # PowerShell is GAIA's assumed Windows shell; cmd's
+                            # `rmdir /s /q` is not valid PowerShell syntax.
                             self.console.print(
-                                f'       [yellow]rmdir /s /q[/yellow] [cyan]"{model_path}"[/cyan]'
+                                f'       [yellow]Remove-Item -Recurse -Force[/yellow] [cyan]"{model_path}"[/cyan]'
                             )
                         else:
                             self.console.print(
@@ -1637,6 +1887,19 @@ class InitCommand:
                 self.console.print(
                     "    [cyan]gaia chat --watch ./docs[/cyan]             Auto-index a folder of docs"
                 )
+                self.console.print(
+                    "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
+                )
+            elif self.profile == "npu":
+                self.console.print(
+                    "    [cyan]gaia chat --device npu[/cyan]             Chat using Ryzen AI NPU"
+                )
+                self.console.print(
+                    "    [cyan]gaia chat --ui[/cyan]                     Agent UI (select NPU in device dropdown)"
+                )
+                self.console.print(
+                    "    [dim]Note: NPU inference is active. Use --device gpu to switch back.[/dim]"
+                )
             elif self.profile == "vlm":
                 self.console.print(
                     "    [cyan]gaia cache status[/cyan]      Verify VLM model is available"
@@ -1659,6 +1922,9 @@ class InitCommand:
                 # Default commands for other profiles
                 self.console.print(
                     "    [cyan]gaia chat[/cyan]              Start interactive chat"
+                )
+                self.console.print(
+                    "    [cyan]gaia chat --ui[/cyan]         Launch the Agent UI (browser-based)"
                 )
                 self.console.print(
                     "    [cyan]gaia llm 'Hello'[/cyan]       Quick LLM query"
@@ -1694,6 +1960,20 @@ class InitCommand:
                 self._print(
                     "    gaia chat --watch ./docs             # Auto-index a folder of docs"
                 )
+                self._print(
+                    "    gaia chat --ui                       # Launch the Agent UI (browser-based)"
+                )
+            elif self.profile == "npu":
+                self._print(
+                    "    gaia chat --device npu             # Chat using Ryzen AI NPU"
+                )
+                self._print(
+                    "    gaia chat --ui                     # Agent UI (select NPU in device dropdown)"
+                )
+                self._print("")
+                self._print(
+                    "  Note: NPU inference is active. Use --device gpu to switch back."
+                )
             elif self.profile == "vlm":
                 self._print(
                     "    gaia cache status      # Verify VLM model is available"
@@ -1713,6 +1993,9 @@ class InitCommand:
             else:
                 # Default commands for other profiles
                 self._print("    gaia chat              # Start interactive chat")
+                self._print(
+                    "    gaia chat --ui         # Launch the Agent UI (browser-based)"
+                )
                 self._print("    gaia llm 'Hello'       # Quick LLM query")
                 self._print("    gaia talk              # Voice interaction")
             self._print("")

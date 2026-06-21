@@ -3,6 +3,12 @@
 
 cmake_minimum_required(VERSION 3.14)
 
+# Select the MSVC runtime library via CMAKE_MSVC_RUNTIME_LIBRARY (the static-CRT
+# logic below). Must be set before project() to govern the runtime abstraction.
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+
 # Auto-detect or bootstrap vcpkg for optional OpenSSL support.
 # Must be included before project() so the toolchain is set in time.
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/vcpkg-auto-setup.cmake)
@@ -16,6 +22,18 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Enable C++ exception handling on MSVC (required for try/catch/throw)
 if(MSVC)
     add_compile_options(/EHsc)
+endif()
+
+# ---------------------------------------------------------------------------
+# Static-binary packaging (Agent Hub, issue #1094)
+# ---------------------------------------------------------------------------
+# When building against a vcpkg *-static triplet (e.g. x64-windows-static), the
+# produced binaries must link the C runtime statically too — otherwise the .exe
+# still depends on the MSVC runtime DLLs and is not self-contained. Detect the
+# static triplet and switch the MSVC runtime to the static (/MT) variant.
+if(MSVC AND DEFINED VCPKG_TARGET_TRIPLET AND VCPKG_TARGET_TRIPLET MATCHES "-static$")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    message(STATUS "GAIA packaging: static MSVC runtime (/MT) for ${VCPKG_TARGET_TRIPLET}")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -73,6 +91,27 @@ if(NOT httplib_FOUND)
     FetchContent_MakeAvailable(httplib)
 endif()
 
+# FTXUI — reactive TUI framework (optional, gated behind GAIA_BUILD_TUI)
+# FTXUI must always be built static — it doesn't export symbols for DLL builds,
+# so BUILD_SHARED_LIBS=ON causes LNK1181 on Windows.
+option(GAIA_BUILD_TUI "Build FTXUI-based TUI console" ON)
+if(GAIA_BUILD_TUI)
+    find_package(ftxui QUIET)
+    if(NOT ftxui_FOUND)
+        message(STATUS "FTXUI not found -- fetching via FetchContent")
+        # Save and override BUILD_SHARED_LIBS so FTXUI always builds static
+        set(_GAIA_SAVE_BSL ${BUILD_SHARED_LIBS})
+        set(BUILD_SHARED_LIBS OFF)
+        FetchContent_Declare(
+            ftxui
+            GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI
+            GIT_TAG        v6.1.9
+        )
+        FetchContent_MakeAvailable(ftxui)
+        set(BUILD_SHARED_LIBS ${_GAIA_SAVE_BSL})
+    endif()
+endif()
+
 # Google Test (unit tests and/or integration tests)
 if(GAIA_BUILD_TESTS OR GAIA_BUILD_INTEGRATION_TESTS)
     find_package(GTest QUIET)
@@ -103,7 +142,22 @@ add_library(gaia_core
     src/mcp_client.cpp
     src/security.cpp
     src/sse_parser.cpp
+    src/process.cpp
+    src/file_tools.cpp
+    src/git_tools.cpp
+    src/session.cpp
+    src/repl.cpp
+    src/json_event_handler.cpp
 )
+
+# TUI sources (conditional on FTXUI availability)
+if(GAIA_BUILD_TUI)
+    target_sources(gaia_core PRIVATE
+        src/tui_console.cpp
+        src/tui_markdown.cpp
+    )
+    target_compile_definitions(gaia_core PUBLIC GAIA_HAS_TUI=1)
+endif()
 
 add_library(gaia::gaia_core ALIAS gaia_core)
 
@@ -163,6 +217,16 @@ if(WIN32)
     target_link_libraries(gaia_core PRIVATE ws2_32)
 endif()
 
+# FTXUI (TUI console — optional)
+if(GAIA_BUILD_TUI)
+    target_link_libraries(gaia_core PRIVATE
+        ftxui::component ftxui::dom ftxui::screen
+    )
+    message(STATUS "GAIA TUI: enabled (FTXUI)")
+else()
+    message(STATUS "GAIA TUI: disabled")
+endif()
+
 # HTTPS support — auto-detected. No flags required; OpenSSL is used when available.
 find_package(OpenSSL QUIET)
 if(OpenSSL_FOUND)
@@ -173,6 +237,36 @@ if(OpenSSL_FOUND)
 else()
     set(GAIA_REQUIRE_FIND_OPENSSL FALSE)
     message(STATUS "GAIA SSL: not available (HTTP only)")
+endif()
+
+# ---------------------------------------------------------------------------
+# gaia-bash agent binary
+# ---------------------------------------------------------------------------
+option(GAIA_BUILD_BASH_AGENT "Build the gaia-bash coding agent" ON)
+if(GAIA_BUILD_BASH_AGENT)
+    add_executable(gaia-bash
+        agents/bash/main.cpp
+        agents/bash/bash_agent.cpp
+        agents/bash/bash_tools.cpp
+        agents/bash/api_server.cpp
+        agents/bash/mcp_server.cpp
+    )
+    target_include_directories(gaia-bash PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/agents/bash
+    )
+    target_link_libraries(gaia-bash PRIVATE gaia::gaia_core)
+
+    # API server needs httplib (already a dependency of gaia_core but PRIVATE)
+    if(httplib_FOUND)
+        target_link_libraries(gaia-bash PRIVATE httplib::httplib)
+    else()
+        target_include_directories(gaia-bash SYSTEM PRIVATE
+            $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+    if(OpenSSL_FOUND)
+        target_compile_definitions(gaia-bash PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(gaia-bash PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -218,11 +312,18 @@ if(GAIA_BUILD_TESTS)
         tests/test_decision.cpp
         tests/test_security.cpp
         tests/test_sse_parser.cpp
+        tests/test_process.cpp
+        tests/test_file_tools.cpp
+        tests/test_git_tools.cpp
+        tests/test_session.cpp
+        tests/test_repl.cpp
+        tests/test_json_event_handler.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
         gaia::gaia_core
         GTest::gtest_main
+        GTest::gmock
     )
 
     # VLM tests need httplib (mock LLM server) and the fixtures directory.
@@ -241,6 +342,14 @@ if(GAIA_BUILD_TESTS)
         GAIA_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
     )
     target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+
+    # TUI tests (conditional -- requires FTXUI)
+    if(GAIA_BUILD_TUI)
+        target_sources(tests_mock PRIVATE tests/test_tui_console.cpp)
+        target_link_libraries(tests_mock PRIVATE
+            ftxui::component ftxui::dom ftxui::screen
+        )
+    endif()
 
     include(GoogleTest)
     gtest_discover_tests(tests_mock)

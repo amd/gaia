@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
  * Auto-update status surfaced by the Electron main process via the
  * `gaiaUpdater` contextBridge API (see src/gaia/apps/webui/preload.cjs
  * and services/auto-updater.cjs). Phase F of the desktop installer plan.
+ * Issue #1336: adds rollback support (listReleases, installVersion, resumeUpdates).
  */
 export type UpdateStatus =
     | 'idle'
@@ -23,20 +24,39 @@ export interface UpdateState {
     progress: number;
     releaseNotes: string | null;
     error: string | null;
+    /** The version currently running in the app (from app.getVersion()). */
+    currentVersion: string | null;
+    /** The pinned version tag (e.g. "v0.20.0") or null if not pinned. */
+    pinnedVersion: string | null;
+}
+
+/** Info about a single published release, as returned by listReleases(). */
+export interface ReleaseInfo {
+    version: string;
+    tag: string;
+    date: string | null;
+    notesUrl: string | null;
+    isCurrent: boolean;
+    isPinned: boolean;
 }
 
 interface GaiaUpdaterBridge {
     getStatus: () => Promise<UpdateState>;
     check: () => Promise<UpdateState>;
     onStatusChange: (cb: (state: UpdateState) => void) => () => void;
+    listReleases: () => Promise<ReleaseInfo[] | { error: string }>;
+    installVersion: (tag: string) => Promise<UpdateState>;
+    resumeUpdates: () => Promise<UpdateState>;
 }
 
-const INITIAL_STATE: UpdateState = {
+export const INITIAL_STATE: UpdateState = {
     status: 'idle',
     version: null,
     progress: 0,
     releaseNotes: null,
     error: null,
+    currentVersion: null,
+    pinnedVersion: null,
 };
 
 /**
@@ -48,7 +68,7 @@ const INITIAL_STATE: UpdateState = {
  * don't need a desktop-app update indicator.
  */
 export function useUpdateStatus(): UpdateState {
-    const [state, setState] = useState<UpdateState>(INITIAL_STATE);
+    const [state, setState] = useState<UpdateState>({ ...INITIAL_STATE });
 
     useEffect(() => {
         const updater: GaiaUpdaterBridge | undefined = (window as unknown as {

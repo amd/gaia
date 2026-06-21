@@ -10,11 +10,11 @@ import type { GaiaNotification } from '../types/agent';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
-import type { Message, StreamEvent, AgentStep, Attachment, Session } from '../types';
+import { getAgentIcon } from './agentIcons';
+import type { Message, StreamEvent, AgentStep, Attachment, Session, AgentInfo } from '../types';
 
 import './ChatView.css';
 import DashboardProgress from './DashboardProgress';
-
 
 const EMPTY_SUGGESTIONS = [
     'Summarize a document',
@@ -22,6 +22,17 @@ const EMPTY_SUGGESTIONS = [
     'Analyze a spreadsheet',
     'Show my recent files',
 ];
+
+function formatAgentCapabilities(agent?: AgentInfo): string {
+    if (!agent) return '';
+    const parts: string[] = [];
+    if (typeof agent.tools_count === 'number' && agent.tools_count > 0) {
+        parts.push(`${agent.tools_count} ${agent.tools_count === 1 ? 'tool' : 'tools'}`);
+    }
+    const tags = (agent.tags ?? []).filter(Boolean).slice(0, 3);
+    if (tags.length > 0) parts.push(tags.join(', '));
+    return parts.join(' | ');
+}
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -195,6 +206,15 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // Resolve human-readable agent names for the message header
     const sessionAgentName = agents.find((a) => a.id === session?.agent_type)?.name;
     const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name;
+    const displayedAgent = useMemo(
+        () => agents.find((a) => a.id === displayedAgentId),
+        [agents, displayedAgentId],
+    );
+    const displayedAgentCapabilities = useMemo(
+        () => formatAgentCapabilities(displayedAgent),
+        [displayedAgent],
+    );
+    const DisplayedAgentIcon = getAgentIcon(displayedAgent?.icon);
 
     // Close agent picker on outside click
     useEffect(() => {
@@ -260,7 +280,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const abortRef = useRef<AbortController | null>(null);
     const stepIdRef = useRef(0);
     const toolOccurredRef = useRef(false);
-    const sendMessageRef = useRef<(text?: string) => void>(() => {});
+    const sendMessageRef = useRef<(text?: string, options?: { attach?: boolean }) => void>(() => {});
 
     // ── Streaming chunk buffer ──────────────────────────────────────
     // Buffer SSE chunks in a ref and flush to the store via rAF.
@@ -278,12 +298,23 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
      *  earlier messages won't be interrupted by new streaming content. */
     const isNearBottomRef = useRef(true);
 
+    // True once the user has navigated to another session. The store's
+    // currentSessionId flips synchronously on switch (the displayed view lags
+    // ~220ms behind it), so an in-flight stream callback can detect it's now
+    // writing for a background session and bail before mutating shared state
+    // (#1580).
+    const isStale = useCallback(
+        () => useChatStore.getState().currentSessionId !== sessionId,
+        [sessionId],
+    );
+
     const flushStreamBuffer = useCallback(() => {
         streamRafRef.current = null;
+        if (isStale()) return; // don't flush into the now-active session's store
         if (streamBufferRef.current) {
             setStreamContent(streamBufferRef.current);
         }
-    }, [setStreamContent]);
+    }, [setStreamContent, isStale]);
 
     // Load messages on mount, then poll for external changes (MCP, API)
     const msgPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -440,6 +471,12 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     // Stop streaming — reads fresh state from store to avoid stale closures
     const handleStop = useCallback(() => {
         log.stream.warn('User stopped generation');
+        // Tell the backend to cancel the run. Since runs now outlive the SSE
+        // connection (#1580), aborting the client alone only detaches us — the
+        // agent would keep generating in the background. The cancel endpoint
+        // sets the handler's cancelled flag so the producer bails at its next
+        // step boundary.
+        api.cancelStream(sessionId).catch(() => { /* best-effort */ });
         if (abortRef.current) {
             abortRef.current.abort();
             abortRef.current = null;
@@ -601,7 +638,13 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     }, []);
 
     // Send message
-    const sendMessage = useCallback(async (overrideText?: string) => {
+    const sendMessage = useCallback(async (overrideText?: string, options?: { attach?: boolean }) => {
+        // attach=true re-subscribes to a run already in flight server-side
+        // (revisiting a backgrounded session, #1580). It reuses the entire
+        // stream-event handling below but skips composing/sending a new turn:
+        // no optimistic user message, no input/attachment handling, and the
+        // controller comes from api.attachToRun instead of api.sendMessageStream.
+        const attach = options?.attach === true;
         const text = (overrideText || input).trim();
         const hasAttachments = attachments.length > 0 && attachments.some(a => a.uploaded);
 
@@ -610,7 +653,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         isNearBottomRef.current = true;
 
         const isInitializing = systemStatus?.init_state === 'initializing';
-        if ((!text && !hasAttachments) || isStreaming || isInitializing) {
+        if (attach) {
+            // Don't double-attach if a stream is already live in this view.
+            if (isStreaming) return;
+        } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
             if (isInitializing) log.chat.debug('Send blocked: system initializing');
@@ -619,43 +665,47 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
         // Build message text with attachment references
         let messageText = text;
-        const uploadedAttachments = attachments.filter(a => a.uploaded && a.serverUrl);
-        if (uploadedAttachments.length > 0) {
-            const attachmentLines = uploadedAttachments.map(a => {
-                if (a.isImage) {
-                    return `![${a.name}](${a.serverUrl})`;
-                }
-                return `[${a.name}](${a.serverUrl})`;
-            }).join('\n');
-            messageText = messageText
-                ? `${messageText}\n\n${attachmentLines}`
-                : attachmentLines;
+        if (!attach) {
+            const uploadedAttachments = attachments.filter(a => a.uploaded && a.serverUrl);
+            if (uploadedAttachments.length > 0) {
+                const attachmentLines = uploadedAttachments.map(a => {
+                    if (a.isImage) {
+                        return `![${a.name}](${a.serverUrl})`;
+                    }
+                    return `[${a.name}](${a.serverUrl})`;
+                }).join('\n');
+                messageText = messageText
+                    ? `${messageText}\n\n${attachmentLines}`
+                    : attachmentLines;
+            }
+
+            log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
+
+            setInput('');
+            if (inputRef.current) {
+                inputRef.current.style.height = 'auto';
+                inputRef.current.focus();
+            }
+
+            // Clear attachments
+            setAttachments(prev => {
+                prev.forEach(a => { if (a.url) URL.revokeObjectURL(a.url); });
+                return [];
+            });
+
+            // Optimistic user message
+            const userMsg: Message = {
+                id: Date.now(),
+                session_id: sessionId,
+                role: 'user',
+                content: messageText,
+                created_at: new Date().toISOString(),
+                rag_sources: null,
+            };
+            addMessage(userMsg);
+        } else {
+            log.chat.info(`Re-attaching to background run for session=${sessionId}`);
         }
-
-        log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
-
-        setInput('');
-        if (inputRef.current) {
-            inputRef.current.style.height = 'auto';
-            inputRef.current.focus();
-        }
-
-        // Clear attachments
-        setAttachments(prev => {
-            prev.forEach(a => { if (a.url) URL.revokeObjectURL(a.url); });
-            return [];
-        });
-
-        // Optimistic user message
-        const userMsg: Message = {
-            id: Date.now(),
-            session_id: sessionId,
-            role: 'user',
-            content: messageText,
-            created_at: new Date().toISOString(),
-            rag_sources: null,
-        };
-        addMessage(userMsg);
 
         // Start streaming
         setStreaming(true);
@@ -672,8 +722,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         let doneHandled = false;
         streamBufferRef.current = '';
 
-        const controller = api.sendMessageStream(sessionId, messageText, {
+        const streamCallbacks: api.StreamCallbacks = {
             onChunk: (event) => {
+                if (isStale()) return; // stop writing after a session switch (#1580)
                 const content = event.content || '';
                 if (content) {
                     // 'answer' events carry the full final text (not a delta),
@@ -715,6 +766,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 }
             },
             onAgentEvent: (event) => {
+                // Ignore events from a stream the user navigated away from so its
+                // steps don't leak into the new session's view (#1580).
+                if (isStale()) return;
                 // ── Tool confirmation popup ──────────────────────────────
                 if (event.type === 'tool_confirm') {
                     if (!event.confirm_id) {
@@ -952,6 +1006,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 }
                 streamBufferRef.current = '';
 
+                // A completion for a backgrounded session is persisted
+                // server-side, so don't touch the shared store (#1580).
+                if (isStale()) return;
+
                 const content = event.content || fullContent;
                 log.chat.timed(`Agent response complete: ${content.length} chars`, streamStart);
 
@@ -992,7 +1050,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 setTimeout(() => {
                     api.getMessages(sessionId)
                         .then((data) => {
-                            if (useChatStore.getState().currentSessionId !== sessionId) return;
+                            if (isStale()) return;
                             const msgs: Message[] = (data.messages || []).map((m: any) => {
                                 return {
                                     ...m,
@@ -1007,7 +1065,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 }, 300);
 
                 // Auto-title on first message
-                if (session && session.title === 'New Task') {
+                // Skip client-side auto-title when re-attaching (no user text in
+                // hand and the run's lifecycle already titles server-side, #1580).
+                if (!attach && session && session.title === 'New Task') {
                     const autoTitle = text.slice(0, 50) + (text.length > 50 ? '...' : '');
                     api.updateSession(sessionId, { title: autoTitle })
                         .then(() => updateSessionInList(sessionId, { title: autoTitle }))
@@ -1021,6 +1081,10 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     streamRafRef.current = null;
                 }
                 streamBufferRef.current = '';
+
+                // A real error event arriving on a backgrounded stream isn't
+                // the active view's concern, so don't surface it (#1580).
+                if (isStale()) return;
 
                 log.chat.error(`Chat error for session=${sessionId}`, err);
                 // Provide a user-friendly error message based on the error type
@@ -1070,13 +1134,50 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     .then((data) => useChatStore.getState().setAgents(data.agents || []))
                     .catch(() => { /* non-critical */ });
             },
-        }, undefined, undefined, activeAgentId);
+        };
+
+        const controller = attach
+            ? api.attachToRun(sessionId, streamCallbacks)
+            : api.sendMessageStream(sessionId, messageText, streamCallbacks, undefined, undefined, activeAgentId);
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId, addNotification]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId, addNotification, isStale]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
+
+    // Re-attach to an in-flight background run on mount (#1580). When the
+    // user revisits a session whose turn is still running server-side, hook
+    // back into its live stream so progress resumes in the view instead of
+    // sitting static until the run finishes. Once per session mount; the
+    // attach path no-ops if a stream is already live here.
+    const reattachedRef = useRef(false);
+    useEffect(() => {
+        reattachedRef.current = false;
+    }, [sessionId]);
+    useEffect(() => {
+        const attemptAttach = () => {
+            if (reattachedRef.current) return;
+            if (useChatStore.getState().isStreaming) return;
+            reattachedRef.current = true;
+            log.chat.info(`Resuming live view of background run for session=${sessionId}`);
+            sendMessageRef.current(undefined, { attach: true });
+        };
+        // Fast path: the global poll already knows this session is running.
+        if (useChatStore.getState().runningSessionIds.includes(sessionId)) {
+            attemptAttach();
+            return;
+        }
+        // Otherwise confirm once with the backend on mount.
+        let cancelled = false;
+        api.getActiveRuns()
+            .then(({ session_ids }) => {
+                if (cancelled) return;
+                if (session_ids.includes(sessionId)) attemptAttach();
+            })
+            .catch(() => { /* non-critical — sidebar spinner still signals running */ });
+        return () => { cancelled = true; };
+    }, [sessionId]);
 
     // Listen for programmatic message dispatches from rich-content
     // components (currently the EmailPreScanCard's Approve / Reply
@@ -1120,13 +1221,13 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 // Reload messages on error to restore accurate state
                 api.getMessages(sessionId)
                     .then((data) => {
-                        if (useChatStore.getState().currentSessionId !== sessionId) return;
+                        if (isStale()) return;
                         setMessages(data.messages || []);
                     })
                     .catch(() => {});
             }
         }, 250);
-    }, [sessionId, isStreaming, removeMessage, setMessages]);
+    }, [sessionId, isStreaming, removeMessage, setMessages, isStale]);
 
     // Resend a user message: delete it and everything below, then re-send
     const handleResendMessage = useCallback(async (message: Message) => {
@@ -1144,7 +1245,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             // Reload messages on error
             api.getMessages(sessionId)
                 .then((data) => {
-                    if (useChatStore.getState().currentSessionId !== sessionId) return;
+                    if (isStale()) return;
                     setMessages(data.messages || []);
                 })
                 .catch(() => {});
@@ -1153,7 +1254,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
         // Re-send the same message text
         sendMessage(text);
-    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, sendMessage]);
+    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, sendMessage, isStale]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -1271,6 +1372,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     };
 
     const showEmptyState = !isLoadingMessages && messages.length === 0 && !isStreaming;
+    const emptyStateSuggestions = displayedAgent?.conversation_starters?.length
+        ? displayedAgent.conversation_starters
+        : EMPTY_SUGGESTIONS;
 
     // Pre-compute per-message latency: time from preceding user message to each
     // assistant message. O(N) single pass, avoids repeated backward scans in render.
@@ -1324,6 +1428,23 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     )}
                 </div>
                 <div className="task-header-right">
+                    {displayedAgent && (
+                        <div
+                            className="active-agent-indicator"
+                            aria-label="Active agent"
+                            title={displayedAgentCapabilities
+                                ? `${displayedAgent.name}: ${displayedAgentCapabilities}`
+                                : displayedAgent.name}
+                        >
+                            <DisplayedAgentIcon size={13} className="active-agent-icon" />
+                            <span className="active-agent-copy">
+                                <span className="active-agent-name">{displayedAgent.name}</span>
+                                {displayedAgentCapabilities && (
+                                    <span className="active-agent-capabilities">{displayedAgentCapabilities}</span>
+                                )}
+                            </span>
+                        </div>
+                    )}
                     <span
                         className={`model-badge ${!systemStatus?.model_loaded ? 'no-model' : ''}`}
                         title={
@@ -1472,15 +1593,24 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
                 {showEmptyState && (
                     <div className="empty-task">
-                        <div className="empty-task-icon">
-                            <MessageSquare size={36} strokeWidth={1.2} />
+                        <div className={`empty-task-icon${displayedAgent ? ' agent-aware' : ''}`}>
+                            {displayedAgent ? (
+                                <DisplayedAgentIcon size={36} strokeWidth={1.2} />
+                            ) : (
+                                <MessageSquare size={36} strokeWidth={1.2} />
+                            )}
                         </div>
-                        <h4 className="empty-task-title">What can I help you with?</h4>
-                        <p className="empty-task-desc">
-                            Ask about your documents, search files, or analyze data &mdash; powered by local AI.
+                        <h4 className="empty-task-title">{displayedAgent?.name || 'What can I help you with?'}</h4>
+                        <p className={`empty-task-desc${displayedAgentCapabilities ? '' : ' empty-task-desc-spaced'}`}>
+                            {displayedAgent?.description || (
+                                <>Ask about your documents, search files, or analyze data &mdash; powered by local AI.</>
+                            )}
                         </p>
+                        {displayedAgentCapabilities && (
+                            <div className="empty-task-capabilities">{displayedAgentCapabilities}</div>
+                        )}
                         <div className="empty-task-suggestions">
-                            {EMPTY_SUGGESTIONS.map((s) => (
+                            {emptyStateSuggestions.map((s) => (
                                 <button
                                     key={s}
                                     className="empty-task-chip"
@@ -1674,8 +1804,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             <button
                                 className="create-agent-btn"
                                 onClick={onCreateAgent}
-                                title="Build a custom agent"
-                                aria-label="Build a custom agent"
+                                title="Build a custom agent template"
+                                aria-label="Build a custom agent template"
                             >
                                 <Plus size={10} />
                             </button>

@@ -345,6 +345,62 @@ def test_concurrent_second_thread_skips_load():
 
 
 # ---------------------------------------------------------------------------
+# 11b. Wrong chat model resident → unload BEFORE load (issue #1382)
+# ---------------------------------------------------------------------------
+
+
+def test_wrong_model_resident_unloads_before_load():
+    """Issue #1382: a different chat model resident (e.g. Gemma-4 preloaded at
+    boot) must be unloaded before loading the expected model. Lemonade does not
+    evict on /load, so without the unload both models stay resident — a
+    double-load that wastes memory and can degrade output (the slash-spew)."""
+    wrong = _health_ok([_model("llm", name="Gemma-4-E4B-it-GGUF")])
+
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=wrong),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        mock_instance = MagicMock()
+        mock_cls.return_value = mock_instance
+
+        _maybe_load_expected_model(_EXPECTED_LLM)
+
+        mock_instance.unload_model.assert_called_once()
+        mock_instance.load_model.assert_called_once()
+        order = [c[0] for c in mock_instance.method_calls]
+        assert order.index("unload_model") < order.index(
+            "load_model"
+        ), f"unload must precede load; got call order {order}"
+
+
+# ---------------------------------------------------------------------------
+# 11c. Nothing resident → load WITHOUT a wasteful unload
+# ---------------------------------------------------------------------------
+
+
+def test_no_resident_model_skips_unload():
+    """Fresh Lemonade (no chat model resident) → load_model is called but
+    unload_model is NOT (nothing to evict)."""
+    health = _health_ok([])
+
+    with (
+        patch(_LEMONADE_MANAGER) as mock_mgr,
+        patch(_HTTPX_GET, return_value=health),
+        patch(_LEMONADE_CLIENT) as mock_cls,
+    ):
+        mock_mgr.get_base_url.return_value = _BASE_URL
+        mock_instance = MagicMock()
+        mock_cls.return_value = mock_instance
+
+        _maybe_load_expected_model(_EXPECTED_LLM)
+
+        mock_instance.load_model.assert_called_once()
+        mock_instance.unload_model.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # 12. Re-check inside lock returns non-200 → load_model still called
 # ---------------------------------------------------------------------------
 

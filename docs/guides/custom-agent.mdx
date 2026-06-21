@@ -32,14 +32,14 @@ The fastest way to create an agent is to use the built-in **Gaia Builder Agent**
   </Step>
   <Step title="Click the + button">
     In the chat input footer, click the **+** icon (to the left of the agent picker).
-    On the welcome screen, click **Build a Custom Agent**.
+    On the welcome screen, click **Build a Custom Agent Template**.
 
-    {/* TODO(screenshot): Capture "Build a Custom Agent" button on the welcome screen.
+    {/* TODO(screenshot): Capture "Build a Custom Agent Template" button on the welcome screen.
         Save to docs/assets/img/custom-agent/builder-entry-point.png and add a Frame
         block here pointing at /assets/img/custom-agent/builder-entry-point.png. */}
   </Step>
   <Step title="Follow the prompts">
-    The Builder Agent will greet you, ask for a name, and create your agent automatically.
+    The Builder (an **alpha** feature) greets you, asks what to name the agent and what it should do, and asks whether you want MCP support — then scaffolds a starter agent with a personality and conversation starters tailored to your description.
 
     {/* TODO(screenshot): Capture the Builder Agent conversation creating a new agent.
         Save to docs/assets/img/custom-agent/builder-conversation.png and add a Frame
@@ -54,8 +54,7 @@ The fastest way to create an agent is to use the built-in **Gaia Builder Agent**
   </Step>
 </Steps>
 
-The builder creates a fully working agent scaffold in `~/.gaia/agents/<your-agent-name>/agent.py`.
-Open that file to customize the instructions and add tools.
+The Builder creates a **starter template** at `~/.gaia/agents/<your-agent-name>/agent.py` — a tailored persona and conversation starters (plus MCP wiring if you asked for it). It's a starting point you extend, not a turnkey agent: it won't fetch data or perform complex tasks on its own until you add tools. Open the file to refine the instructions and add capabilities (see [Python Agent](#python-agent) below).
 
 <Tip>
   Need your agent to read real data — Gmail, GitHub, your calendar? Skip ahead to [Using GAIA connectors](#using-gaia-connectors).
@@ -120,10 +119,10 @@ GAIA ships with ready-to-use tool mixins. To enable them, inherit the mixin and 
 
 | Tool | Mixin | Register call |
 |------|-------|---------------|
-| `rag` | `gaia.agents.chat.tools.rag_tools.RAGToolsMixin` | `self.register_rag_tools()` |
+| `rag` | `gaia.agents.tools.rag_tools.RAGToolsMixin` | `self.register_rag_tools()` |
 | `file_search` | `gaia.agents.tools.file_tools.FileSearchToolsMixin` | `self.register_file_search_tools()` |
-| `file_io` | `gaia.agents.code.tools.file_io.FileIOToolsMixin` | `self.register_file_io_tools()` |
-| `shell` | `gaia.agents.chat.tools.shell_tools.ShellToolsMixin` | `self.register_shell_tools()` |
+| `file_io` | `gaia.agents.tools.file_io_tools.FileIOToolsMixin` | `self.register_file_io_tools()` |
+| `shell` | `gaia.agents.tools.shell_tools.ShellToolsMixin` | `self.register_shell_tools()` |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | `self.register_screenshot_tools()` |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | `self.register_sd_tools()` |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | `self.register_vlm_tools()` |
@@ -138,7 +137,7 @@ If your agent needs a specific model, set `model_id` in `__init__()`:
 
 ```python
 def __init__(self, **kwargs):
-    kwargs.setdefault("model_id", "Qwen3-0.6B-GGUF")
+    kwargs.setdefault("model_id", "Gemma-4-E4B-it-GGUF")
     super().__init__(**kwargs)
 ```
 
@@ -170,7 +169,7 @@ A connector lets users:
 Declare what your agent needs by setting `REQUIRED_CONNECTORS` on the
 class, and call `get_credential_sync(connector_id, agent_id, required_scopes=[...])`
 from inside a tool to get a usable token. The
-[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/src/gaia/agents/connectors_demo/agent.py)
+[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/hub/agents/python/connectors-demo/gaia_agent_connectors_demo/agent.py)
 is a working reference for both `oauth_pkce` (Google) and `mcp_server`
 (GitHub) connectors.
 
@@ -291,7 +290,7 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.console import AgentConsole
     from gaia.agents.base.tools import _TOOL_REGISTRY
-    from gaia.agents.chat.tools.rag_tools import RAGToolsMixin
+    from gaia.agents.tools.rag_tools import RAGToolsMixin
     from gaia.agents.tools.file_tools import FileSearchToolsMixin
 
 
@@ -327,8 +326,8 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.console import AgentConsole
     from gaia.agents.base.tools import _TOOL_REGISTRY
-    from gaia.agents.chat.tools.shell_tools import ShellToolsMixin
-    from gaia.agents.code.tools.file_io import FileIOToolsMixin
+    from gaia.agents.tools.shell_tools import ShellToolsMixin
+    from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
 
     class CodeReviewAgent(Agent, FileIOToolsMixin, ShellToolsMixin):

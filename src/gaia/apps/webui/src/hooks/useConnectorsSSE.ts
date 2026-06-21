@@ -16,6 +16,7 @@
  *   - ``connector.oauth.completed``   ({connector_id, account_email})
  *   - ``connector.oauth.error``       ({connector_id, error})
  *   - ``connector.grant.changed``     ({connector_id, agent_id, scopes})
+ *   - ``connector.activation.changed`` ({connector_id, agent_id, active})
  *
  * For backwards compatibility, the legacy event names emitted by
  * ``src/gaia/connectors/flow.py`` (``connection.connected`` /
@@ -47,7 +48,8 @@ export type ConnectorChangeReason =
     | 'oauth_completed'
     | 'oauth_error'
     | 'tested'
-    | 'grant_changed';
+    | 'grant_changed'
+    | 'activation_changed';
 
 export interface ConnectorChangeEvent {
     /** Which connector changed, if the payload identified one. */
@@ -87,6 +89,8 @@ function reasonFor(eventType: string): ConnectorChangeReason | null {
             return 'disabled';
         case 'connector.grant.changed':
             return 'grant_changed';
+        case 'connector.activation.changed':
+            return 'activation_changed';
         default:
             return null;
     }

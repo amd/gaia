@@ -18,13 +18,13 @@
     margin-bottom: 18px;
 }
 .drop-zone:hover, .drop-zone.drag-over {
-    border-color: var(--amd-red);
-    background: var(--amd-red-dim2);
-    color: var(--amd-red);
+    border-color: var(--accent);
+    background: var(--accent-dim2);
+    color: var(--accent);
     transform: translateY(-1px);
 }
 .drop-zone.uploading {
-    border-color: var(--amd-red);
+    border-color: var(--accent);
     cursor: default;
 }
 .drop-zone p { margin-top: 10px; font-size: 14px; font-weight: 500; font-family: var(--font-sans); }
@@ -33,7 +33,7 @@
 .upload-spinner {
     width: 28px; height: 28px;
     border: 3px solid var(--border);
-    border-top-color: var(--amd-red);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
@@ -57,7 +57,7 @@
     font-family: var(--font-mono);
     transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease);
 }
-.path-input:focus { border-color: var(--amd-red); }
+.path-input:focus { border-color: var(--accent); }
 .path-input::placeholder { color: var(--text-muted); }
 
 /* Stats */
@@ -83,7 +83,7 @@
     border-radius: var(--radius-md);
     transition: border-color var(--duration) var(--ease), background var(--duration) var(--ease);
 }
-.doc-row:hover { border-color: var(--amd-red-light); background: var(--tint-subtle); }
+.doc-row:hover { border-color: var(--accent-light); background: var(--tint-subtle); }
 
 .doc-info { flex: 1; min-width: 0; }
 .doc-name {
@@ -141,7 +141,7 @@
 .doc-open-folder:hover { color: var(--amd-blue, #0096d6); }
 
 .doc-delete { color: var(--text-muted); }
-.doc-delete:hover { color: var(--amd-red); }
+.doc-delete:hover { color: var(--danger); }
 
 /* Empty state */
 .empty-docs {
@@ -154,3 +154,36 @@
 }
 .empty-docs p { font-size: 14px; margin-top: 8px; }
 .empty-docs span { font-size: 12px; margin-top: 4px; }
+
+/* Failed-doc status: badge + retry need breathing room between them */
+.doc-indexing-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Retry button for failed documents — subtle ghost, not a second heavy red pill
+   crowding the Failed badge */
+.btn-retry {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.btn-retry:hover {
+    background: var(--accent-danger-dim);
+    color: var(--accent-danger, #e74c3c);
+}
+.btn-retry:disabled {
+    opacity: 0.6;
+    cursor: default;
+    background: transparent;
+    color: var(--text-muted);
+}

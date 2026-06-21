@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import {
     X, Search, Folder, FileText, Home, Download, Monitor, ChevronRight,
     File, FolderOpen, ArrowUp, Brain, Upload, HardDrive,
-    Table, Code
+    Table, Code, Eye
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
@@ -46,6 +46,12 @@ function formatDate(iso: string): string {
     const days = Math.floor(hours / 24);
     if (days < 7) return `${days}d ago`;
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+}
+
+function formatSearchScope(locations: string[]): string {
+    if (locations.length === 0) return '';
+    const [first, ...rest] = locations;
+    return rest.length > 0 ? `${first} (+${rest.length} more)` : first;
 }
 
 // Quick link icon mapping
@@ -174,6 +180,7 @@ export function FileBrowser() {
     // Search state
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState<any[] | null>(null);
+    const [searchedLocations, setSearchedLocations] = useState<string[]>([]);
     const [isSearching, setIsSearching] = useState(false);
     const [typeFilter, setTypeFilter] = useState('');
 
@@ -197,6 +204,7 @@ export function FileBrowser() {
         setError(null);
         setSearchResults(null);
         setSearchQuery('');
+        setSearchedLocations([]);
         try {
             const data: BrowseResponse = await api.browseFiles(path);
             setCurrentPath(data.current_path);
@@ -228,6 +236,7 @@ export function FileBrowser() {
     const handleSearch = useCallback(async () => {
         if (!searchQuery.trim()) {
             setSearchResults(null);
+            setSearchedLocations([]);
             return;
         }
         setIsSearching(true);
@@ -235,6 +244,7 @@ export function FileBrowser() {
         try {
             const data = await api.searchFiles(searchQuery.trim(), typeFilter || undefined, 30);
             setSearchResults(data.results);
+            setSearchedLocations(data.searched_locations ?? []);
             log.ui.info(`Search "${searchQuery}": ${data.total} results`);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Search failed';
@@ -267,6 +277,15 @@ export function FileBrowser() {
         } finally {
             setPreviewLoading(false);
         }
+    }, []);
+
+    const toggleSelection = useCallback((path: string) => {
+        setSelectedFiles(prev => {
+            const next = new Set(prev);
+            if (next.has(path)) next.delete(path);
+            else next.add(path);
+            return next;
+        });
     }, []);
 
     const handleIndexSelected = useCallback(async () => {
@@ -392,6 +411,7 @@ export function FileBrowser() {
         label: seg,
         path: pathSegments.slice(0, i + 1).join('/') + (i === 0 && seg.includes(':') ? '/' : ''),
     }));
+    const searchScope = formatSearchScope(searchedLocations);
 
     // Items to display: search results or browse entries
     const displayItems = searchResults
@@ -448,7 +468,7 @@ export function FileBrowser() {
                             {searchQuery && (
                                 <button
                                     className="fb-search-clear"
-                                    onClick={() => { setSearchQuery(''); setSearchResults(null); }}
+                                    onClick={() => { setSearchQuery(''); setSearchResults(null); setSearchedLocations([]); }}
                                     aria-label="Clear search"
                                 >
                                     <X size={12} />
@@ -503,8 +523,18 @@ export function FileBrowser() {
                     {/* Search results header */}
                     {searchResults && (
                         <div className="fb-search-header">
-                            <span>Found {searchResults.length} result(s) for "{searchQuery}"</span>
-                            <button className="fb-back-btn" onClick={() => { setSearchResults(null); setSearchQuery(''); }}>
+                            <div className="fb-search-summary">
+                                <span>Found {searchResults.length} result(s) for "{searchQuery}"</span>
+                                {searchScope && (
+                                    <span
+                                        className="fb-search-scope"
+                                        title={searchedLocations.join('\n')}
+                                    >
+                                        Searching in: <code>{searchScope}</code>
+                                    </span>
+                                )}
+                            </div>
+                            <button className="fb-back-btn" onClick={() => { setSearchResults(null); setSearchQuery(''); setSearchedLocations([]); }}>
                                 Back to browsing
                             </button>
                         </div>
@@ -533,7 +563,7 @@ export function FileBrowser() {
                                 <div
                                     key={entry.path}
                                     className={`fb-entry ${entry.type} ${selectedFiles.has(entry.path) ? 'selected' : ''} ${fileUnsupported ? 'unsupported' : ''}`}
-                                    onClick={() => entry.type === 'folder' ? handleEntryClick(entry) : handleFilePreview(entry.path)}
+                                    onClick={() => entry.type === 'folder' ? handleEntryClick(entry) : toggleSelection(entry.path)}
                                     onDoubleClick={() => entry.type === 'folder' ? handleEntryClick(entry) : undefined}
                                     title={fileUnsupported ? `${unsupportedCat?.label || 'This'} file type cannot be indexed` : entry.path}
                                 >
@@ -541,14 +571,7 @@ export function FileBrowser() {
                                         type="checkbox"
                                         className="fb-entry-checkbox"
                                         checked={selectedFiles.has(entry.path)}
-                                        onChange={() => {
-                                            setSelectedFiles(prev => {
-                                                const next = new Set(prev);
-                                                if (next.has(entry.path)) next.delete(entry.path);
-                                                else next.add(entry.path);
-                                                return next;
-                                            });
-                                        }}
+                                        onChange={() => toggleSelection(entry.path)}
                                         onClick={(e) => e.stopPropagation()}
                                         aria-label={`Select ${entry.name}`}
                                     />
@@ -558,6 +581,17 @@ export function FileBrowser() {
                                         <span className="fb-unsupported-badge">
                                             Not indexable
                                         </span>
+                                    )}
+                                    {entry.type === 'file' && (
+                                        <button
+                                            type="button"
+                                            className="fb-entry-preview-btn"
+                                            onClick={(e) => { e.stopPropagation(); handleFilePreview(entry.path); }}
+                                            aria-label={`Preview ${entry.name}`}
+                                            title="Preview file"
+                                        >
+                                            <Eye size={14} />
+                                        </button>
                                     )}
                                     <span className="fb-entry-size">{entry.type === 'file' ? formatSize(entry.size) : ''}</span>
                                     <span className="fb-entry-date">{formatDate(entry.modified)}</span>

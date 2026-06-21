@@ -197,8 +197,7 @@ def stop_server(port: int = 8080) -> None:
                 check=False,
             )
 
-            pids = result.stdout.strip().split("\n")
-            pids = [pid for pid in pids if pid]  # Filter empty strings
+            pids = {pid for pid in result.stdout.strip().split("\n") if pid}
 
             if pids:
                 for pid in pids:

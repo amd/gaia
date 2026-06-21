@@ -27,8 +27,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-import keyring
-
+from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec
@@ -263,12 +262,15 @@ class McpServerHandler:
             except keyring.errors.PasswordDeleteError:
                 pass  # already absent — idempotent
 
-        # Wipe per-agent grants. If the same connector_id is re-added later
-        # (custom MCP, repeat OAuth, etc.) the new connector must NOT inherit
-        # the previous user's consent without an explicit re-grant.
+        # Wipe per-agent grants AND activations. If the same connector_id is
+        # re-added later the new connector must NOT inherit the previous user's
+        # consent (grant) or tool visibility (activation) without explicit
+        # re-grant + re-activate.
+        from gaia.connectors.activations import revoke_all_activations_for
         from gaia.connectors.grants import revoke_all_grants_for
 
         revoke_all_grants_for(spec.id)
+        revoke_all_activations_for(spec.id)
 
         logger.info("mcp_server: disconnected connector_id=%s", spec.id)
 

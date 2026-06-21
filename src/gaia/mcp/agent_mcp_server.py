@@ -6,10 +6,11 @@ Generic MCP Server for MCPAgent Subclasses
 Wraps any MCPAgent and exposes it via the MCP Python SDK
 """
 
+import inspect
 import io
 import json
 import sys
-from typing import Any, Dict, Type
+from typing import Any, Dict, Literal, Type
 
 from mcp.server.fastmcp import FastMCP
 
@@ -21,6 +22,23 @@ logger = get_logger(__name__)
 # Default MCP server configuration
 MCP_DEFAULT_PORT = 8080
 MCP_DEFAULT_HOST = "localhost"
+
+# Selectable MCP transports. ``streamable-http`` is the long-standing default
+# (binds a port, serves /mcp). ``stdio`` speaks JSON-RPC over the process's
+# stdin/stdout — the transport desktop MCP clients (VSCode, Copilot, Claude
+# Desktop) launch by default. See ``AgentMCPServer.start``.
+Transport = Literal["streamable-http", "stdio"]
+
+# JSON-Schema -> python annotation for typed tool registration. Anything not
+# listed maps to ``Any`` (FastMCP then emits an open schema for that param).
+_JSON_TYPE_TO_PY = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+    "object": dict,
+    "array": list,
+}
 
 
 class AgentMCPServer:
@@ -34,6 +52,8 @@ class AgentMCPServer:
         host: str = None,
         verbose: bool = False,
         agent_params: Dict[str, Any] = None,
+        transport: Transport = "streamable-http",
+        register_typed_tools: bool = False,
     ):
         """
         Initialize MCP server for an agent.
@@ -41,10 +61,20 @@ class AgentMCPServer:
         Args:
             agent_class: MCPAgent subclass to wrap
             name: Display name for the server
-            port: Port to listen on (default: 8080)
-            host: Host to bind to (default: localhost)
+            port: Port to listen on (default: 8080). Ignored for stdio.
+            host: Host to bind to (default: localhost). Ignored for stdio.
             verbose: Enable verbose logging
             agent_params: Parameters to pass to agent __init__
+            transport: Default transport for ``start()`` — ``"streamable-http"``
+                (binds a port) or ``"stdio"`` (JSON-RPC over stdin/stdout).
+                ``start()`` accepts an override.
+            register_typed_tools: When True, register each tool with an
+                explicit typed signature derived from its ``inputSchema`` so a
+                standard MCP client gets a precise parameter schema and
+                ``structuredContent`` back. When False (default), use the
+                legacy ``**kwargs`` wrapper that tolerates VSCode/Copilot's
+                ``{"kwargs": ...}`` envelope. New agents that want clean
+                schemas opt in; existing HTTP agents keep the legacy behavior.
         """
         # Verify agent_class is MCPAgent subclass
         if not issubclass(agent_class, MCPAgent):
@@ -59,6 +89,8 @@ class AgentMCPServer:
         self.port = port or MCP_DEFAULT_PORT
         self.host = host or MCP_DEFAULT_HOST
         self.verbose = verbose
+        self.transport: Transport = transport
+        self.register_typed_tools = register_typed_tools
 
         # Create FastMCP server
         server_info = self.agent.get_mcp_server_info()
@@ -74,6 +106,11 @@ class AgentMCPServer:
     def _register_agent_tools(self):
         """Dynamically register agent tools with FastMCP"""
         tools = self.agent.get_mcp_tool_definitions()
+
+        if self.register_typed_tools:
+            for tool_def in tools:
+                self._register_typed_tool(tool_def)
+            return
 
         for tool_def in tools:
             tool_name = tool_def["name"]
@@ -199,10 +236,101 @@ class AgentMCPServer:
             if self.verbose:
                 logger.info(f"Registered tool: {tool_name}")
 
-    def start(self):
-        """Start the MCP server with Streamable HTTP transport"""
-        self._print_startup_info()
+    def _register_typed_tool(self, tool_def: Dict[str, Any]) -> None:
+        """Register one tool with an explicit, typed signature.
 
+        FastMCP derives a tool's JSON schema from the wrapper function's
+        signature + annotations. A bare ``**kwargs`` wrapper makes FastMCP emit
+        a single required ``kwargs`` property — which standard MCP clients
+        cannot satisfy. So when ``register_typed_tools`` is set we synthesize a
+        signature whose keyword-only parameters mirror the tool's
+        ``inputSchema`` properties, giving the client a precise schema and the
+        agent a clean kwargs dict. The agent's ``execute_mcp_tool`` is the sole
+        executor — parity with REST comes from there, not from this glue.
+        """
+        name = tool_def["name"]
+        description = tool_def.get("description", "")
+        schema = tool_def.get("inputSchema", {}) or {}
+        properties: Dict[str, Any] = schema.get("properties", {}) or {}
+        required = set(schema.get("required", []) or [])
+
+        parameters = []
+        annotations: Dict[str, Any] = {}
+        for prop_name, prop_schema in properties.items():
+            py_type = _JSON_TYPE_TO_PY.get(
+                (prop_schema or {}).get("type", "string"), Any
+            )
+            annotations[prop_name] = py_type
+            if prop_name in required:
+                parameters.append(
+                    inspect.Parameter(
+                        prop_name,
+                        inspect.Parameter.KEYWORD_ONLY,
+                        annotation=py_type,
+                    )
+                )
+            else:
+                parameters.append(
+                    inspect.Parameter(
+                        prop_name,
+                        inspect.Parameter.KEYWORD_ONLY,
+                        annotation=py_type,
+                        default=(prop_schema or {}).get("default", None),
+                    )
+                )
+        annotations["return"] = Dict[str, Any]
+
+        agent = self.agent
+        verbose = self.verbose
+
+        async def tool_wrapper(**kwargs) -> Dict[str, Any]:
+            # Drop keys the client omitted that we defaulted to None so the
+            # agent sees only the arguments actually supplied.
+            args = {k: v for k, v in kwargs.items() if v is not None}
+            try:
+                return agent.execute_mcp_tool(name, args)
+            except Exception as e:  # noqa: BLE001 - boundary: structured error out
+                logger.error(f"[MCP] Error executing tool {name}: {e}")
+                if verbose:
+                    import traceback
+
+                    logger.error(f"[MCP] Traceback: {traceback.format_exc()}")
+                return {"error": str(e), "success": False}
+
+        tool_wrapper.__name__ = name
+        tool_wrapper.__doc__ = description
+        tool_wrapper.__signature__ = inspect.Signature(parameters)
+        tool_wrapper.__annotations__ = annotations
+
+        self.mcp.tool()(tool_wrapper)
+
+        if self.verbose:
+            logger.info(f"Registered typed tool: {name}")
+
+    def start(self, transport: Transport = None):
+        """Start the MCP server.
+
+        Args:
+            transport: Override the instance default. ``"streamable-http"``
+                binds ``host:port`` and serves ``/mcp`` (HTTP POST + SSE).
+                ``"stdio"`` speaks JSON-RPC over stdin/stdout — the transport
+                desktop MCP clients launch by default.
+
+        In stdio mode the startup banner is routed to **stderr**, never
+        stdout: stdio framing requires stdout to carry *only* JSON-RPC bytes,
+        and a single stray line corrupts the client's message parser.
+        """
+        transport = transport or self.transport
+
+        if transport == "stdio":
+            self._print_startup_info(stream=sys.stderr, transport="stdio")
+            try:
+                self.mcp.run(transport="stdio")
+            except KeyboardInterrupt:
+                pass
+            return
+
+        self._print_startup_info()
         try:
             # Run with streamable-http transport (industry standard)
             # This automatically serves at /mcp endpoint
@@ -219,28 +347,49 @@ class AgentMCPServer:
         This method is kept for API compatibility.
         """
 
-    def _print_startup_info(self):
-        """Print startup banner"""
-        # Fix Windows Unicode
-        if sys.platform == "win32":
+    def _print_startup_info(self, stream=None, transport: Transport = None):
+        """Print the startup banner.
+
+        Args:
+            stream: Where to write. Defaults to stdout (HTTP mode). Stdio mode
+                passes ``sys.stderr`` so the banner never pollutes the
+                JSON-RPC channel on stdout.
+            transport: Which transport's banner to render. Defaults to the
+                instance transport. Drives the banner *content* (HTTP endpoint
+                vs. stdio note) independently of the output stream, so the
+                format is correct even when ``stream`` is a test buffer.
+        """
+        stream = stream or sys.stdout
+        transport = transport or self.transport
+        # Fix Windows Unicode only on the real stdout (don't rewrap stderr).
+        if sys.platform == "win32" and stream is sys.stdout:
             sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+            stream = sys.stdout
 
         tools = self.agent.get_mcp_tool_definitions()
+        is_stdio = transport == "stdio"
 
-        print("=" * 60)
-        print(f"🚀 {self.name}")
-        print("=" * 60)
-        print(f"Server: http://{self.host}:{self.port}")
-        print(f"Agent: {self.agent_class.__name__}")
-        print(f"Tools: {len(tools)}")
+        print("=" * 60, file=stream)
+        print(f"🚀 {self.name}", file=stream)
+        print("=" * 60, file=stream)
+        if is_stdio:
+            print("Transport: stdio (JSON-RPC over stdin/stdout)", file=stream)
+        else:
+            print(f"Server: http://{self.host}:{self.port}", file=stream)
+        print(f"Agent: {self.agent_class.__name__}", file=stream)
+        print(f"Tools: {len(tools)}", file=stream)
         for tool in tools:
-            print(f"  - {tool['name']}: {tool.get('description', 'No description')}")
+            print(
+                f"  - {tool['name']}: {tool.get('description', 'No description')}",
+                file=stream,
+            )
         if self.verbose:
-            print("\n🔍 Verbose Mode: ENABLED")
-        print("\n📍 MCP Endpoint:")
-        print(f"  http://{self.host}:{self.port}/mcp")
-        print("\n  Supports:")
-        print("    - HTTP POST for requests")
-        print("    - SSE streaming for real-time responses")
-        print("=" * 60)
-        print("\nPress Ctrl+C to stop\n")
+            print("\n🔍 Verbose Mode: ENABLED", file=stream)
+        if not is_stdio:
+            print("\n📍 MCP Endpoint:", file=stream)
+            print(f"  http://{self.host}:{self.port}/mcp", file=stream)
+            print("\n  Supports:", file=stream)
+            print("    - HTTP POST for requests", file=stream)
+            print("    - SSE streaming for real-time responses", file=stream)
+        print("=" * 60, file=stream)
+        print("\nPress Ctrl+C to stop\n", file=stream)

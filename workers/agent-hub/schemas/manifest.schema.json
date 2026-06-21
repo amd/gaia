@@ -1,0 +1,154 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hub.amd-gaia.ai/schemas/manifest.schema.json",
+  "title": "GAIA Agent Hub Per-Agent Manifest",
+  "description": "Aggregate manifest served at GET /agents/<id>/manifest.json. Holds full display metadata plus every published version. Source of truth for version immutability. Field names mirror gaia-agent.yaml (docs/spec/agent-hub-restructure.mdx) and src/gaia/hub/manifest.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "description",
+    "author",
+    "license",
+    "language",
+    "category",
+    "tags",
+    "icon",
+    "security_tier",
+    "models",
+    "tools_count",
+    "permissions",
+    "requirements",
+    "interfaces",
+    "latest_version",
+    "deprecated",
+    "versions"
+  ],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "author": { "type": "string" },
+    "license": { "type": "string" },
+    "language": { "type": "string", "enum": ["python", "cpp"] },
+    "category": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "icon": { "type": "string" },
+    "security_tier": {
+      "type": "string",
+      "enum": ["verified", "community", "experimental"]
+    },
+    "min_gaia_version": { "type": "string" },
+    "models": { "type": "array", "items": { "type": "string" } },
+    "tools_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of tools the agent registers; 0 when the manifest omits it."
+    },
+    "permissions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Declared permission strings; empty array when the manifest omits them."
+    },
+    "requirements": { "$ref": "#/definitions/requirements" },
+    "interfaces": { "$ref": "#/definitions/interfaces" },
+    "latest_version": { "type": "string" },
+    "deprecated": { "type": "boolean" },
+    "deprecation_message": {
+      "type": "string",
+      "description": "Only present when the latest version's manifest declares one."
+    },
+    "versions": {
+      "type": "object",
+      "description": "Map of version string -> published version entry.",
+      "additionalProperties": { "$ref": "#/definitions/versionEntry" }
+    }
+  },
+  "definitions": {
+    "requirements": {
+      "type": "object",
+      "required": [
+        "platforms",
+        "min_memory_gb",
+        "min_disk_gb",
+        "min_context_size",
+        "npu",
+        "gpu_vram_gb"
+      ],
+      "description": "Always fully populated: numbers default to 0 and npu to false when the uploaded gaia-agent.yaml omits them.",
+      "properties": {
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "win-x64",
+              "win-arm64",
+              "linux-x64",
+              "linux-arm64",
+              "darwin-x64",
+              "darwin-arm64"
+            ]
+          }
+        },
+        "min_memory_gb": { "type": "number", "minimum": 0 },
+        "min_disk_gb": { "type": "number", "minimum": 0 },
+        "min_context_size": { "type": "number", "minimum": 0 },
+        "npu": { "type": "boolean" },
+        "gpu_vram_gb": { "type": "number", "minimum": 0 }
+      }
+    },
+    "interfaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tui": { "type": "boolean" },
+        "cli": { "type": "boolean" },
+        "pipe": { "type": "boolean" },
+        "api_server": { "type": "boolean" },
+        "mcp_server": { "type": "boolean" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "path", "size_bytes", "sha256", "content_type"],
+      "properties": {
+        "filename": { "type": "string" },
+        "path": {
+          "type": "string",
+          "description": "R2 object key: agents/<id>/<version>/<filename>."
+        },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 generated server-side by the Worker."
+        },
+        "content_type": { "type": "string" }
+      }
+    },
+    "versionEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "published_at", "publisher", "deprecated", "artifact", "artifacts"],
+      "properties": {
+        "version": { "type": "string" },
+        "published_at": { "type": "string", "format": "date-time" },
+        "publisher": { "type": "string" },
+        "deprecated": { "type": "boolean" },
+        "artifact": {
+          "$ref": "#/definitions/artifact",
+          "description": "Primary artifact (first published for this version). Kept for catalog display and single-artifact (wheel) agents."
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Every artifact published under this version (one per platform for native binary releases). Append-only per distinct filename.",
+          "items": { "$ref": "#/definitions/artifact" }
+        }
+      }
+    }
+  }
+}

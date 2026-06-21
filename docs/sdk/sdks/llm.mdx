@@ -66,6 +66,10 @@ llm_claude = create_client(use_claude=True)
 # OpenAI API
 llm_openai = create_client(use_openai=True)
 
+# LiteLLM gateway — 100+ providers (Bedrock, Vertex AI, Groq, Azure, ...)
+# Requires: pip install 'gaia[litellm]'
+llm_litellm = create_client("litellm", model="anthropic/claude-sonnet-4-6")
+
 # Use same interface
 response = llm_claude.generate("Explain Python decorators")
 ```
@@ -80,7 +84,7 @@ response = llm_claude.generate("Explain Python decorators")
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, DEFAULT_LEMONADE_URL
 
 # Default configuration
-MODEL = DEFAULT_MODEL_NAME  # "Qwen3-0.6B-GGUF"
+MODEL = DEFAULT_MODEL_NAME  # "Gemma-4-E4B-it-GGUF"
 URL = DEFAULT_LEMONADE_URL   # "http://localhost:13305/api/v1"
 
 # Used internally by LLMClient when no provider specified

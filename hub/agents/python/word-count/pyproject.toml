@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaia-agent-word-count"
+version = "0.1.0"
+description = "GAIA Word Count agent — single-tool reference implementation"
+authors = [{ name = "AMD" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+# [api] makes this runnable as a standalone REST/MCP sidecar (fastapi/uvicorn; the
+# stdio MCP server is built-in and keyring is core). Mirrors the email agent's packaging
+# so the declared api_server/mcp_server interfaces work on a bare install.
+dependencies = ["amd-gaia[api]>=0.20.0"]
+
+[project.entry-points."gaia.agent"]
+word-count = "gaia_agent_word_count:build_registration"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["gaia_agent_word_count*"]

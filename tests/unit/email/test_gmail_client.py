@@ -16,13 +16,18 @@ from typing import Callable, List, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-import pytest
 
-from gaia.agents.email.gmail_backend import (
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
+# skip when a framework-only env lacks it.
+import pytest  # noqa: E402
+
+pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.gmail_backend import (
     GmailBackend,
     LiveGmailBackend,
     _build_rfc822,
 )
+
 from gaia.connectors.errors import ConnectorsError
 
 # ---------------------------------------------------------------------------
@@ -155,6 +160,16 @@ class TestRequestShape:
         backend, rec, _ = _backend(lambda r: _ok({"id": "m1", "labelIds": ["INBOX"]}))
         backend.untrash_message("m1")
         assert rec.requests[0].url.path.endswith("/messages/m1/untrash")
+
+    def test_untrash_readds_inbox_label(self):
+        # Quarantine/soft-delete undo must restore the inbox view: after the
+        # untrash POST, a modify re-adds INBOX so the message returns to where
+        # it started rather than All Mail (#1709).
+        backend, rec, _ = _backend(lambda r: _ok({"id": "m1", "labelIds": ["INBOX"]}))
+        backend.untrash_message("m1")
+        assert rec.requests[0].url.path.endswith("/messages/m1/untrash")
+        assert rec.requests[1].url.path.endswith("/messages/m1/modify")
+        assert json.loads(rec.requests[1].content) == {"addLabelIds": ["INBOX"]}
 
     def test_permanent_delete_uses_delete_method(self):
         backend, rec, _ = _backend(lambda r: httpx.Response(204))

@@ -355,12 +355,13 @@ def collect_system_info() -> List[Dict[str, str]]:
     except Exception:
         pass
 
-    # 12. Init date
+    # 12. Collection date — regenerated on every refresh, so it reflects the
+    # most recent collection, not a first-ever capture.
     try:
         today = datetime.now().strftime("%Y-%m-%d")
         facts.append(
             {
-                "content": f"System profile first captured on: {today}",
+                "content": f"System profile last collected on: {today}",
                 "domain": "system:meta",
             }
         )

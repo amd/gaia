@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-CLI for ``gaia connectors {list|connect|configure|test|disconnect|grants ...}``.
+CLI for ``gaia connectors {list|connect|configure|test|disconnect|grants|activations ...}``.
 
 Subcommands:
 - ``list``        → catalog entries with configured/not status
@@ -9,7 +9,8 @@ Subcommands:
 - ``configure``   → configure via the handler dispatcher (KEY=VALUE or --json)
 - ``test``        → health check for a configured connector
 - ``disconnect``  → remove credentials and reset connector state
-- ``grants list|grant|revoke`` → per-agent scope grants ledger
+- ``grants list|grant|revoke`` → per-agent scope grants ledger (every connector type)
+- ``activations list|activate|deactivate`` → per-agent MCP tool-visibility ledger (mcp_server only)
 """
 
 from __future__ import annotations
@@ -76,12 +77,26 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="OAuth scopes to request (connector-specific)",
     )
 
-    # configure (generic dispatcher)
+    # configure (generic dispatcher + OAuth-client convenience flags)
     p_cfg = sub.add_parser(
         "configure",
         help="Configure a connector (MCP API keys, OAuth client creds, etc.)",
     )
     p_cfg.add_argument("connector_id", help="Connector id")
+    p_cfg.add_argument(
+        "--client-id",
+        dest="client_id",
+        help=(
+            "OAuth client id for an oauth_pkce connector (e.g. the Google "
+            "Desktop-app client). Persists to the keyring; requires --client-secret. "
+            "Run 'gaia connectors connect <id>' afterward to complete login."
+        ),
+    )
+    p_cfg.add_argument(
+        "--client-secret",
+        dest="client_secret",
+        help="OAuth client secret (paired with --client-id; stored encrypted in the keyring)",
+    )
     p_cfg.add_argument(
         "--set",
         action="append",
@@ -135,6 +150,54 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_gr.add_argument("connector_id")
     p_gr.add_argument("agent_id")
 
+    # activations (issue #1005)
+    p_acts = sub.add_parser(
+        "activations",
+        help="Manage per-agent MCP tool-visibility activations (mcp_server only)",
+        description=(
+            "Activations gate which agents see an MCP server's tools in "
+            "their prompt. A tool is visible to an agent only if the agent "
+            "both has a grant (credential access) and an activation (tool "
+            "visibility) for the connector. Activations apply to "
+            "mcp_server connectors only — OAuth connectors have no MCP "
+            "tool surface and are rejected with exit code 3 (use "
+            "'gaia connectors grants' to control OAuth access per agent)."
+        ),
+    )
+    a = p_acts.add_subparsers(dest="activations_action", metavar="<subcommand>")
+
+    p_al = a.add_parser("list", help="List agent activations for a connector")
+    p_al.add_argument(
+        "connector_id",
+        nargs="?",
+        help="Connector id (lists every connector when omitted)",
+    )
+    p_al.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit machine-readable JSON",
+    )
+
+    p_aa = a.add_parser("activate", help="Activate a connector for an agent")
+    p_aa.add_argument("connector_id")
+    p_aa.add_argument(
+        "agent_id",
+        help="Namespaced agent id, e.g. 'builtin:chat' or 'custom:abc:inbox'",
+    )
+    p_aa.add_argument(
+        "--scopes",
+        nargs="+",
+        help=(
+            "Scopes to auto-grant if no grant exists yet. Required when "
+            "the agent has no prior grant for this connector."
+        ),
+    )
+
+    p_ad = a.add_parser("deactivate", help="Deactivate a connector for an agent")
+    p_ad.add_argument("connector_id")
+    p_ad.add_argument("agent_id")
+
 
 def handle(args: argparse.Namespace) -> int:
     """Dispatch a parsed ``gaia connectors ...`` command. Returns exit code."""
@@ -158,6 +221,8 @@ def handle(args: argparse.Namespace) -> int:
             return _handle_disconnect(args)
         if action == "grants":
             return _handle_grants(args)
+        if action == "activations":
+            return _handle_activations(args)
     except ConfigurationError as e:
         sys.stderr.write(f"Configuration error: {e}\n")
         return 3
@@ -258,6 +323,16 @@ def _handle_configure(args: argparse.Namespace) -> int:
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     from gaia.connectors.handler import configure
 
+    client_id = getattr(args, "client_id", None)
+    client_secret = getattr(args, "client_secret", None)
+
+    # OAuth-client convenience path (#1084): --client-id / --client-secret
+    # persist the application's OAuth client creds to the same keyring slot the
+    # provider reads from, completing OAuth *config* without the Agent UI. The
+    # interactive browser login stays a separate `gaia connectors connect`.
+    if client_id is not None or client_secret is not None:
+        return _handle_configure_client_credentials(args, client_id, client_secret)
+
     config: dict = {}
     if getattr(args, "config_json", None):
         try:
@@ -288,6 +363,80 @@ def _handle_configure(args: argparse.Namespace) -> int:
     sys.stdout.write(f"Configured {args.connector_id}.\n")
     if result.get("authorization_url"):
         sys.stdout.write(f"Complete OAuth flow at:\n  {result['authorization_url']}\n")
+    return 0
+
+
+def _handle_configure_client_credentials(
+    args: argparse.Namespace,
+    client_id: str | None,
+    client_secret: str | None,
+) -> int:
+    """Persist an oauth_pkce connector's OAuth *client* credentials (#1084).
+
+    Writes ``client_id`` / ``client_secret`` to the keyring slot the provider
+    resolves from (``store.peek_provider_credentials``) and evicts the cached
+    provider so the next construction re-reads them. Does NOT start the PKCE
+    flow — the browser login stays a separate ``gaia connectors connect``.
+
+    Both flags are required together: Google rejects token requests that omit
+    the secret even for Desktop PKCE clients, so a half-configured client would
+    fail loudly later instead of here. Mixing with ``--set`` / ``--json`` is a
+    usage error to avoid an ambiguous double-write.
+    """
+    if not client_id:
+        sys.stderr.write(
+            "gaia connectors configure: --client-secret requires --client-id.\n"
+        )
+        return 2
+    if not client_secret:
+        sys.stderr.write(
+            "gaia connectors configure: --client-id requires --client-secret "
+            "(Google requires the secret even for Desktop-app PKCE clients).\n"
+        )
+        return 2
+    if getattr(args, "config_pairs", None) or getattr(args, "config_json", None):
+        sys.stderr.write(
+            "gaia connectors configure: --client-id/--client-secret cannot be "
+            "combined with --set/--json. Use one configuration style at a time.\n"
+        )
+        return 2
+
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.providers import _registry as _provider_registry
+    from gaia.connectors.registry import REGISTRY
+    from gaia.connectors.store import save_provider_credentials
+
+    try:
+        spec = REGISTRY.get(args.connector_id)
+    except KeyError:
+        sys.stderr.write(
+            f"gaia connectors configure: unknown connector {args.connector_id!r}\n"
+        )
+        return 1
+
+    if spec.type != "oauth_pkce":
+        sys.stderr.write(
+            f"gaia connectors configure: --client-id/--client-secret apply only to "
+            f"oauth_pkce connectors; {args.connector_id!r} is type {spec.type!r}.\n"
+        )
+        return 2
+
+    provider_id = spec.oauth_provider_ref or spec.id
+    save_provider_credentials(
+        provider_id,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    # Evict any cached provider instance so the next get_provider() re-reads the
+    # freshly persisted creds instead of a stale id/secret.
+    _provider_registry.pop(provider_id, None)
+
+    sys.stdout.write(
+        f"Configured {args.connector_id}. OAuth client credentials saved to the "
+        "keyring.\n"
+        f"Next: run 'gaia connectors connect {args.connector_id}' to sign in and "
+        "authorize.\n"
+    )
     return 0
 
 
@@ -363,6 +512,64 @@ def _handle_grants(args: argparse.Namespace) -> int:
     sys.stderr.write(
         "gaia connectors grants: missing subcommand. "
         "Try 'gaia connectors grants --help'.\n"
+    )
+    return 2
+
+
+def _handle_activations(args: argparse.Namespace) -> int:
+    """Handle ``gaia connectors activations {list|activate|deactivate}``."""
+    from gaia.connectors.activations import (
+        list_agent_activations,
+        load_activations,
+    )
+    from gaia.connectors.api import activate, deactivate
+
+    sub = getattr(args, "activations_action", None)
+    if sub == "list":
+        connector_id = getattr(args, "connector_id", None)
+        if connector_id:
+            listing = {connector_id: list_agent_activations(connector_id)}
+        else:
+            listing = load_activations()
+
+        if getattr(args, "as_json", False):
+            sys.stdout.write(json.dumps(listing, indent=2, sort_keys=True) + "\n")
+            return 0
+
+        any_rows = False
+        for cid, agents in sorted(listing.items()):
+            for agent_id, active in sorted(agents.items()):
+                state = "active" if active else "inactive"
+                sys.stdout.write(f"{cid} {agent_id}: {state}\n")
+                any_rows = True
+        if not any_rows:
+            sys.stdout.write("No activations.\n")
+        return 0
+
+    if sub == "activate":
+        scopes = getattr(args, "scopes", None) or None
+        auto_granted = activate(
+            args.connector_id, args.agent_id, scopes_for_grant=scopes
+        )
+        if auto_granted:
+            sys.stdout.write(
+                f"Auto-granted scopes {', '.join(scopes or [])} "
+                f"to {args.agent_id} for {args.connector_id}.\n"
+            )
+        sys.stdout.write(f"Activated {args.connector_id} for {args.agent_id}.\n")
+        return 0
+
+    if sub == "deactivate":
+        # Use the api wrapper so the MCP-only type guard fires uniformly
+        # across CLI/SDK/HTTP. The bare ``deactivate_agent`` ledger call
+        # would bypass it.
+        deactivate(args.connector_id, args.agent_id)
+        sys.stdout.write(f"Deactivated {args.connector_id} for {args.agent_id}.\n")
+        return 0
+
+    sys.stderr.write(
+        "gaia connectors activations: missing subcommand. "
+        "Try 'gaia connectors activations --help'.\n"
     )
     return 2
 

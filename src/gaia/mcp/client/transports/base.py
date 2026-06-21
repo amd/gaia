@@ -3,7 +3,7 @@
 """Base transport interface for MCP protocol communication."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 class MCPTransport(ABC):
@@ -29,7 +29,7 @@ class MCPTransport(ABC):
 
     @abstractmethod
     def send_request(
-        self, method: str, params: Dict[str, Any] = None
+        self, method: str, params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Send a JSON-RPC request to the server.
 

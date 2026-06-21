@@ -1,0 +1,293 @@
+{
+  "version": 1,
+  "description": "Bash coding agent evaluation scenarios",
+  "scenarios": [
+    {
+      "id": "bash-write-dedup",
+      "category": "script_writing",
+      "prompt": "Write a script that finds duplicate files by MD5 checksum in a given directory",
+      "tools_expected": ["file_write", "bash_execute"],
+      "acceptance_criteria": [
+        "Uses set -euo pipefail or equivalent error handling",
+        "Uses find + md5sum or shasum for checksumming",
+        "Handles filenames with spaces",
+        "Groups and reports duplicates",
+        "Accepts directory as argument with sensible default"
+      ]
+    },
+    {
+      "id": "bash-write-backup",
+      "category": "script_writing",
+      "prompt": "Write a backup script that uses rsync with incremental snapshots and date-stamped directories",
+      "tools_expected": ["file_write"],
+      "acceptance_criteria": [
+        "Uses rsync with --link-dest for incremental backups",
+        "Creates date-stamped snapshot directories",
+        "Handles errors and reports failures",
+        "Configurable source and destination"
+      ]
+    },
+    {
+      "id": "bash-write-csv",
+      "category": "script_writing",
+      "prompt": "Write a script to parse a CSV file and extract a specific column by number",
+      "tools_expected": ["file_write"],
+      "acceptance_criteria": [
+        "Uses awk or cut for column extraction",
+        "Accepts column number as argument",
+        "Handles CSV with headers option",
+        "Handles edge cases like empty fields"
+      ]
+    },
+    {
+      "id": "bash-write-cron",
+      "category": "script_writing",
+      "prompt": "Write a cron job manager script that can add, remove, and list crontab entries",
+      "tools_expected": ["file_write"],
+      "acceptance_criteria": [
+        "Uses crontab -l and crontab - for read/write",
+        "Supports add, remove, and list subcommands",
+        "Uses getopts or case for argument parsing",
+        "Validates cron expression format"
+      ]
+    },
+    {
+      "id": "bash-write-logrotate",
+      "category": "script_writing",
+      "prompt": "Write a log rotation script that compresses old logs and enforces a retention period",
+      "tools_expected": ["file_write"],
+      "acceptance_criteria": [
+        "Uses find -mtime for age-based selection",
+        "Compresses with gzip or xz",
+        "Configurable retention days and log directory",
+        "Reports what was compressed and deleted"
+      ]
+    },
+    {
+      "id": "bash-write-parallel-dl",
+      "category": "script_writing",
+      "prompt": "Write a script that downloads a list of URLs in parallel using xargs and curl",
+      "tools_expected": ["file_write"],
+      "acceptance_criteria": [
+        "Uses xargs -P for parallel execution",
+        "Uses curl with retry and timeout flags",
+        "Reads URLs from file or stdin",
+        "Reports success/failure per URL"
+      ]
+    },
+    {
+      "id": "bash-write-systemd",
+      "category": "script_writing",
+      "prompt": "Write a script that generates a systemd service file for a given binary",
+      "tools_expected": ["file_write"],
+      "acceptance_criteria": [
+        "Generates valid [Unit], [Service], [Install] sections",
+        "Accepts binary path and service name as arguments",
+        "Sets sensible defaults (restart, user, working dir)",
+        "Outputs to /etc/systemd/system/ or stdout"
+      ]
+    },
+    {
+      "id": "bash-write-sshkey",
+      "category": "script_writing",
+      "prompt": "Write a script to deploy SSH keys to multiple remote hosts from a hosts file",
+      "tools_expected": ["file_write"],
+      "acceptance_criteria": [
+        "Reads hosts from a file (one per line)",
+        "Uses ssh-copy-id or manual key deployment",
+        "Handles connection failures gracefully",
+        "Reports success/failure per host"
+      ]
+    },
+    {
+      "id": "bash-review-injection",
+      "category": "script_review",
+      "prompt": "Review this script for security issues:\n\n#!/bin/bash\nUSER_INPUT=$1\nresult=$(eval \"echo $USER_INPUT\")\nfiles=$(ls $result)\nfor f in $files; do\n  cat $f\ndone",
+      "tools_expected": ["file_read"],
+      "acceptance_criteria": [
+        "Identifies eval with unsanitized input as command injection",
+        "Identifies unquoted variable expansions",
+        "Recommends quoting all variables",
+        "Suggests removing eval entirely"
+      ]
+    },
+    {
+      "id": "bash-review-portability",
+      "category": "script_review",
+      "prompt": "Review this script for portability issues:\n\n#!/bin/sh\ndeclare -A counts\nfor f in $(ls *.txt); do\n  if [[ -f \"$f\" ]]; then\n    counts[$f]=$(wc -l < \"$f\")\n  fi\ndone\necho \"${!counts[@]}\"",
+      "tools_expected": ["file_read"],
+      "acceptance_criteria": [
+        "Identifies declare -A as bash-only (not POSIX sh)",
+        "Identifies [[ ]] as bashism",
+        "Identifies ${!array[@]} as bashism",
+        "Suggests POSIX alternatives for each"
+      ]
+    },
+    {
+      "id": "bash-review-performance",
+      "category": "script_review",
+      "prompt": "Review this script for performance:\n\n#!/bin/bash\ncat access.log | grep 'ERROR' | grep -v 'DEBUG' | awk '{print $1}' | sort | uniq -c | sort -rn | head -10",
+      "tools_expected": [],
+      "acceptance_criteria": [
+        "Identifies useless use of cat",
+        "Suggests combining grep + awk into single awk",
+        "Notes sort | uniq -c can be sort -u or awk",
+        "Provides optimized one-liner"
+      ]
+    },
+    {
+      "id": "bash-review-errors",
+      "category": "script_review",
+      "prompt": "Review this script for error handling:\n\n#!/bin/bash\ncd /tmp/workdir\nrm -rf output/\nmkdir output\ncp important.dat output/\nprocess_data output/important.dat > output/result.txt\necho \"Done\"",
+      "tools_expected": [],
+      "acceptance_criteria": [
+        "Identifies missing set -e or error checking after cd",
+        "Notes rm -rf without confirming directory exists",
+        "Warns cd could fail silently leaving us in wrong directory",
+        "Recommends set -euo pipefail or explicit checks"
+      ]
+    },
+    {
+      "id": "bash-review-race",
+      "category": "script_review",
+      "prompt": "Review this script for race conditions:\n\n#!/bin/bash\nTMPFILE=/tmp/myapp_$$\nif [ ! -f $TMPFILE ]; then\n  echo \"data\" > $TMPFILE\nfi\ncat $TMPFILE\nrm $TMPFILE",
+      "tools_expected": [],
+      "acceptance_criteria": [
+        "Identifies TOCTOU race between test and write",
+        "Notes predictable temp filename from PID",
+        "Recommends mktemp for safe temp file creation",
+        "Suggests trap for cleanup on exit"
+      ]
+    },
+    {
+      "id": "bash-tool-filesearch",
+      "category": "tool_usage",
+      "prompt": "List all Python files in the current directory recursively",
+      "tools_expected": ["file_search"],
+      "acceptance_criteria": [
+        "Uses file_search tool with pattern *.py",
+        "Returns file paths in results"
+      ]
+    },
+    {
+      "id": "bash-tool-gitlog",
+      "category": "tool_usage",
+      "prompt": "Show me the git log for the last 5 commits",
+      "tools_expected": ["git_log"],
+      "acceptance_criteria": [
+        "Uses git_log tool with count=5",
+        "Returns commit history"
+      ]
+    },
+    {
+      "id": "bash-tool-fileread",
+      "category": "tool_usage",
+      "prompt": "Read the first 20 lines of the file cpp/CMakeLists.txt",
+      "tools_expected": ["file_read"],
+      "acceptance_criteria": [
+        "Uses file_read with start_line and end_line parameters",
+        "Returns the requested lines"
+      ]
+    },
+    {
+      "id": "bash-tool-execute",
+      "category": "tool_usage",
+      "prompt": "Run 'echo hello world' and show me the output",
+      "tools_expected": ["bash_execute"],
+      "acceptance_criteria": [
+        "Uses bash_execute tool",
+        "Returns stdout containing 'hello world'",
+        "Exit code is 0"
+      ]
+    },
+    {
+      "id": "bash-tool-envcheck",
+      "category": "tool_usage",
+      "prompt": "Check what development tools are installed on this system",
+      "tools_expected": ["env_inspect"],
+      "acceptance_criteria": [
+        "Uses env_inspect tool",
+        "Reports shell version and installed tools"
+      ]
+    },
+    {
+      "id": "bash-tool-search-todo",
+      "category": "tool_usage",
+      "prompt": "Search for TODO comments in all shell scripts in this repository",
+      "tools_expected": ["file_search"],
+      "acceptance_criteria": [
+        "Uses file_search with content_pattern for TODO",
+        "Filters to *.sh files"
+      ]
+    },
+    {
+      "id": "bash-tool-gitdiff",
+      "category": "tool_usage",
+      "prompt": "Show the git diff for staged changes",
+      "tools_expected": ["git_diff"],
+      "acceptance_criteria": [
+        "Uses git_diff tool with staged=true",
+        "Returns diff output"
+      ]
+    },
+    {
+      "id": "bash-error-nonexistent",
+      "category": "error_handling",
+      "prompt": "Run this command: ls /nonexistent/path/that/does/not/exist",
+      "tools_expected": ["bash_execute"],
+      "acceptance_criteria": [
+        "Uses bash_execute",
+        "Returns non-zero exit code",
+        "Error message in stderr",
+        "Does not crash the agent"
+      ]
+    },
+    {
+      "id": "bash-error-timeout",
+      "category": "error_handling",
+      "prompt": "Execute 'sleep 60' with a 2-second timeout",
+      "tools_expected": ["bash_execute"],
+      "acceptance_criteria": [
+        "Uses bash_execute with timeout_ms parameter",
+        "Returns timed_out=true",
+        "Process is killed after timeout"
+      ]
+    },
+    {
+      "id": "bash-error-readonly",
+      "category": "error_handling",
+      "prompt": "Try to write the text 'test' to /etc/shadow",
+      "tools_expected": ["file_write"],
+      "acceptance_criteria": [
+        "Returns error about permission denied",
+        "Does not crash the agent",
+        "Does not actually modify /etc/shadow"
+      ]
+    },
+    {
+      "id": "bash-posix-convert",
+      "category": "posix_compliance",
+      "prompt": "Convert this bash script to POSIX sh:\n\n#!/bin/bash\ndeclare -a files\nfor f in *.txt; do\n  if [[ -f \"$f\" ]]; then\n    content=$(<\"$f\")\n    files+=(\"$f\")\n  fi\ndone\necho \"Found ${#files[@]} files\"",
+      "tools_expected": ["file_write"],
+      "acceptance_criteria": [
+        "Replaces declare -a with positional params or manual list",
+        "Replaces [[ ]] with [ ]",
+        "Replaces $(<file) with $(cat file)",
+        "Replaces array operations with POSIX alternatives",
+        "Output script runs under /bin/sh"
+      ]
+    },
+    {
+      "id": "bash-posix-explain",
+      "category": "posix_compliance",
+      "prompt": "Explain the difference between [ ] and [[ ]] in shell scripting, and when to use each",
+      "tools_expected": [],
+      "acceptance_criteria": [
+        "Explains [ is a command (test builtin), [[ is bash keyword",
+        "Notes [[ supports pattern matching and regex",
+        "Notes [[ doesn't word-split or glob-expand variables",
+        "Recommends [ ] for POSIX portability, [[ ]] for bash-only scripts"
+      ]
+    }
+  ]
+}

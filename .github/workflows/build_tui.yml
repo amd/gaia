@@ -1,0 +1,120 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# This workflow builds and tests the Go TUI binary in tui/
+# Produces cross-compiled binaries for 6 platform targets:
+#   linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, windows/arm64
+
+name: TUI Build & Test
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tui/**'
+      - '.github/workflows/build_tui.yml'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'tui/**'
+      - '.github/workflows/build_tui.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
+
+      - name: Run tests
+        run: go test ./... -v -count=1
+
+      - name: Vet
+        run: go vet ./...
+
+  build:
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
+
+      - name: Build
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
+          PKG=github.com/amd/gaia/tui/internal/cli
+          go build -ldflags="-s -w -X ${PKG}.version=${{ github.ref_name }} -X ${PKG}.commit=${{ github.sha }} -X ${PKG}.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o ../bin/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
+            ./cmd/gaia
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: gaia-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bin/gaia-*
+          retention-days: 14
+
+  size-check:
+    name: Binary size check
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download linux/amd64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: gaia-linux-amd64
+
+      - name: Check size
+        run: |
+          SIZE=$(stat --printf="%s" gaia-linux-amd64)
+          SIZE_MB=$((SIZE / 1024 / 1024))
+          echo "Binary size: ${SIZE_MB}MB (${SIZE} bytes)"
+          if [ "$SIZE" -gt 15728640 ]; then
+            echo "::warning::Binary size ${SIZE_MB}MB exceeds 15MB target"
+          fi

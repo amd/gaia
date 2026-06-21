@@ -59,6 +59,7 @@ SKIP_DOMAINS = {
     "dl.acm.org",  # Blocks automated requests with CAPTCHAs
     "platform.openai.com",  # Rate-limits CI bots
     "www.npmjs.com",  # Returns 403 to automated requests
+    "support.microsoft.com",  # Intermittently 400s/429s datacenter IPs
 }
 
 # URL patterns to skip

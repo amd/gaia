@@ -8,8 +8,8 @@ title: "CLIToolsMixin"
 
 <Note>
 **Component:** CLIToolsMixin
-**Module:** `gaia.agents.code.tools.cli_tools`
-**Import:** `from gaia.agents.code.tools.cli_tools import CLIToolsMixin`
+**Module:** `gaia_agent_code.tools.cli_tools`
+**Import:** `from gaia_agent_code.tools.cli_tools import CLIToolsMixin`
 </Note>
 ---
 
@@ -456,7 +456,7 @@ if not result["success"] and "port" in result:
     print(f"Port {result['port']} is in use by PID {result['blocking_pid']}")
 
     # Kill the blocking process
-    from gaia.agents.code.tools.cli_tools import kill_process_on_port
+    from gaia_agent_code.tools.cli_tools import kill_process_on_port
     if kill_process_on_port(result['port']):
         print("Killed blocking process, retrying...")
         result = agent.run_cli_command(...)
@@ -472,7 +472,7 @@ if not result["success"] and "port" in result:
 
 ```python
 import pytest
-from gaia.agents.code.tools.cli_tools import (
+from gaia_agent_code.tools.cli_tools import (
     CLIToolsMixin,
     is_port_available,
     find_available_port,

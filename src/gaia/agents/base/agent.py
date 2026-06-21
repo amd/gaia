@@ -16,9 +16,20 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Literal, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+)
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
@@ -37,6 +48,91 @@ logger = logging.getLogger(__name__)
 # Content truncation thresholds
 CHUNK_TRUNCATION_THRESHOLD = 5000
 CHUNK_TRUNCATION_SIZE = 2500
+
+# Global default for how many reasoning/tool steps an agent may take before it
+# stops and reports progress. This is the single knob for the whole fleet:
+# change DEFAULT_MAX_STEPS here, or set GAIA_AGENT_MAX_STEPS=<n> at runtime to
+# override every agent at once. Agents that genuinely need more (e.g. CodeAgent
+# for multi-file generation) override it explicitly in their own config.
+DEFAULT_MAX_STEPS = 50
+
+
+def default_max_steps() -> int:
+    """Resolve the global default agent step limit.
+
+    Reads ``GAIA_AGENT_MAX_STEPS`` at call time (not import) so the env var can
+    be set after this module is imported and still take effect. Returns
+    ``DEFAULT_MAX_STEPS`` when the var is unset; raises on a present-but-invalid
+    value so a typo surfaces immediately instead of silently capping agents.
+    """
+    raw = os.environ.get("GAIA_AGENT_MAX_STEPS")
+    if raw is None or raw == "":
+        return DEFAULT_MAX_STEPS
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {raw!r}. "
+            f"Unset it to use the default ({DEFAULT_MAX_STEPS})."
+        ) from e
+    if value <= 0:
+        raise ValueError(
+            f"GAIA_AGENT_MAX_STEPS must be a positive integer, got {value}. "
+            f"Unset it to use the default ({DEFAULT_MAX_STEPS})."
+        )
+    return value
+
+
+# Default per-tool execution limit (seconds). Bounds a single ``tool(**args)``
+# call so a hung tool (e.g. a stuck connector/network call) surfaces an
+# actionable error in a sensible window instead of blocking the agent loop —
+# and the producer thread — indefinitely. Well under the UI's 600s consumer cap.
+# Tools that legitimately run longer (e.g. ``generate_image``, which may
+# download a model) opt out via ``@tool(timeout=...)``.
+DEFAULT_TOOL_TIMEOUT = 180.0
+
+
+def tool_execution_timeout() -> float:
+    """Resolve the global default per-tool execution timeout in seconds.
+
+    Reads ``GAIA_AGENT_TOOL_TIMEOUT`` at call time (not import) so the env var
+    can be set after this module is imported and still take effect. Returns
+    ``DEFAULT_TOOL_TIMEOUT`` when the var is unset; raises on a present-but-
+    invalid value so a typo surfaces immediately instead of silently removing
+    the guard.
+    """
+    raw = os.environ.get("GAIA_AGENT_TOOL_TIMEOUT")
+    if raw is None or raw == "":
+        return DEFAULT_TOOL_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"GAIA_AGENT_TOOL_TIMEOUT must be a positive number of seconds, "
+            f"got {raw!r}. Unset it to use the default ({DEFAULT_TOOL_TIMEOUT})."
+        ) from e
+    if value <= 0:
+        raise ValueError(
+            f"GAIA_AGENT_TOOL_TIMEOUT must be a positive number of seconds, "
+            f"got {value}. Unset it to use the default ({DEFAULT_TOOL_TIMEOUT})."
+        )
+    return value
+
+
+class ToolExecutionTimeout(Exception):
+    """Raised when a tool body exceeds its bounded execution window.
+
+    Caught inside ``Agent._execute_tool`` and converted into a fail-loud,
+    actionable error result; it is not meant to propagate to callers.
+    """
+
+    def __init__(self, tool_name: str, timeout: float):
+        self.tool_name = tool_name
+        self.timeout = timeout
+        super().__init__(
+            f"Tool '{tool_name}' exceeded its {timeout:g}s execution limit"
+        )
+
 
 # Tools that require explicit user confirmation before execution.
 # Adding a tool name here causes _execute_tool() to call
@@ -62,6 +158,10 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "accept_invite",
     "decline_invite",
     "create_event_from_email",
+    # Phishing quarantine (#1271) — mutates message state (removes from INBOX
+    # and applies a quarantine label). Reversible via unquarantine_message but
+    # must not auto-execute without explicit user confirmation.
+    "quarantine_phishing_message",
 }
 
 
@@ -81,6 +181,26 @@ class HardwareRequirement:
 # Prefixes for tools that represent SD (Stable Diffusion) capability.
 # Used to detect whether the agent has attempted image-generation tools.
 _SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
+
+
+# Tools that mutate external state (mark read, archive, star, …). A small
+# model that loses track of sequential state may re-issue an identical
+# mutation (same tool + same id). Unlike query dedup we key on the *args*,
+# not the result — re-issuing mark_read on the same id returns a *different*
+# result ("already read"), so a result hash would miss the repeat (#1317).
+_MUTATION_TOOLS: Tuple[str, ...] = (
+    "mark_read",
+    "mark_read_batch",
+    "mark_unread",
+    "mark_unread_batch",
+    "archive_message",
+    "archive_message_batch",
+    "add_star",
+    "add_star_batch",
+    "remove_star",
+    "remove_star_batch",
+    "trash_message",
+)
 
 
 def _repair_invalid_json_escapes(s: str) -> str:
@@ -148,6 +268,12 @@ class Agent(abc.ABC):
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
 
+    # Dynamic tool loader (#1449): the sorted subset of tool names to surface
+    # this turn, or ``None`` to render the full registry (legacy, byte-identical).
+    # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
+    # both render paths and the ``_openai_tools`` property.
+    _active_tool_filter: Optional[List[str]] = None
+
     # Define state constants
     STATE_PLANNING = "PLANNING"
     STATE_EXECUTING_PLAN = "EXECUTING_PLAN"
@@ -167,6 +293,9 @@ class Agent(abc.ABC):
     # ``get_access_token`` call on a per-agent grant for these scopes.
     # Empty list = no external connections required (the default for built-ins).
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = []
+
+    # Registry reads this to include dynamic MCP consumers in the Settings "Active for" panel.
+    CONSUMES_MCP_SERVERS: ClassVar[bool] = False
 
     # Declarative per-agent hardware requirement.  Agents that need a
     # minimum tier (e.g., NPU) should set this ClassVar to a
@@ -235,7 +364,7 @@ Do NOT wrap conversational replies in JSON.
         claude_model: str = "claude-sonnet-4-20250514",
         base_url: Optional[str] = None,
         model_id: str = None,
-        max_steps: int = 20,
+        max_steps: Optional[int] = None,
         debug_prompts: bool = False,
         show_prompts: bool = False,
         output_dir: str = None,
@@ -248,6 +377,7 @@ Do NOT wrap conversational replies in JSON.
         max_consecutive_repeats: int = 4,
         min_context_size: int = 32768,
         skip_lemonade: bool = False,
+        device: Optional[str] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -258,7 +388,9 @@ Do NOT wrap conversational replies in JSON.
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-4-20250514")
             base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
             model_id: The ID of the model to use with LLM server (default for local)
-            max_steps: Maximum number of steps the agent can take before terminating
+            max_steps: Maximum number of steps the agent can take before terminating.
+                When None, falls back to the global default_max_steps() (env
+                GAIA_AGENT_MAX_STEPS, else DEFAULT_MAX_STEPS).
             debug_prompts: If True, includes prompts in the conversation history
             show_prompts: If True, displays prompts sent to LLM in console (default: False)
             output_dir: Directory for storing JSON output files (default: current directory)
@@ -272,14 +404,19 @@ Do NOT wrap conversational replies in JSON.
             min_context_size: Minimum context size required for this agent (default: 32768).
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
+            device: Runtime device selector ('cpu', 'gpu', 'npu') chosen by the
+                          user (Agent UI dropdown / CLI --device). Validated against
+                          detected hardware at startup via LemonadeManager.ensure_ready;
+                          an unavailable device fails loudly (default: None = no check).
 
         Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
         """
+        self.device = device
         self.error_history = []  # Store error history for learning
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
-        self.max_steps = max_steps
+        self.max_steps = max_steps if max_steps is not None else default_max_steps()
         self.debug_prompts = debug_prompts
         self.show_prompts = show_prompts  # Separate flag for displaying prompts
         self.output_dir = output_dir if output_dir else os.getcwd()
@@ -293,6 +430,10 @@ Do NOT wrap conversational replies in JSON.
         self._current_query: Optional[str] = (
             None  # Store current query for error context
         )
+        # Optional cooperative cancel signal. When set (e.g. by the Agent UI's
+        # stream-timeout/disconnect cleanup), the process_query loop bails at the
+        # next step boundary so the producer thread is torn down, not leaked.
+        self._cancel_event: Optional[threading.Event] = None
 
         # Read base_url from environment if not provided
         if base_url is None:
@@ -312,6 +453,7 @@ Do NOT wrap conversational replies in JSON.
                 quiet=silent_mode,
                 base_url=base_url,
                 required_min_device=required_min_device,
+                device=device,
             )
 
         # Initialize state management
@@ -435,8 +577,14 @@ Do NOT wrap conversational replies in JSON.
                     fragment = getattr(self, attr_name)()
                     if fragment:
                         prompts.append(fragment)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # A raising fragment is dropped from the composed prompt; surface it
+                    # so a silently degraded system prompt is diagnosable.
+                    logger.warning(
+                        "system-prompt fragment %s() raised, skipping it: %s",
+                        attr_name,
+                        e,
+                    )
 
         return prompts
 
@@ -469,11 +617,21 @@ Do NOT wrap conversational replies in JSON.
         if custom:
             parts.append(custom)
 
-        # Add tool descriptions (if tools registered)
+        # When a dynamic tool filter is active, the tool block is volatile (it
+        # grows as new tools are selected), so it must come LAST — after the
+        # stable response-format template — to keep the KV-cache prefix warm on
+        # non-expansion turns. With no filter (``None``) we keep the legacy
+        # order (tools before the format template) so the composed prompt stays
+        # byte-identical for every existing agent.
+        tool_filter = self._active_tool_filter
+        tools_block = None
         if hasattr(self, "_format_tools_for_prompt"):
-            tools_description = self._format_tools_for_prompt()
+            tools_description = self._format_tools_for_prompt(filter_to=tool_filter)
             if tools_description:
-                parts.append(f"==== AVAILABLE TOOLS ====\n{tools_description}")
+                tools_block = f"==== AVAILABLE TOOLS ====\n{tools_description}"
+
+        if tool_filter is None and tools_block is not None:
+            parts.append(tools_block)
 
         # Add embedded-JSON response format only for models that don't support
         # native tool_calls. For tool_calling models we pass tools=[] instead,
@@ -483,6 +641,9 @@ Do NOT wrap conversational replies in JSON.
 
             if not is_tool_calling_model(getattr(self, "model_id", None)):
                 parts.append(self._response_format_template)
+
+        if tool_filter is not None and tools_block is not None:
+            parts.append(tools_block)
 
         return "\n\n".join(p for p in parts if p)
 
@@ -573,11 +734,24 @@ Do NOT wrap conversational replies in JSON.
         """
         self._instance_tools = dict(_TOOL_REGISTRY)
 
-    def _format_tools_for_prompt(self) -> str:
-        """Format the registered tools into a string for the prompt."""
+    def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
+        """Format the registered tools into a string for the prompt.
+
+        Args:
+            filter_to: When ``None`` (default), render every registered tool in
+                registry order — byte-identical to the legacy path. When a list,
+                render only those names, in the given (pre-sorted) order,
+                skipping any not present in the registry.
+        """
         tool_descriptions = []
 
-        for name, tool_info in self._tools_registry.items():
+        if filter_to is None:
+            items = list(self._tools_registry.items())
+        else:
+            registry = self._tools_registry
+            items = [(n, registry[n]) for n in filter_to if n in registry]
+
+        for name, tool_info in items:
             params_str = ", ".join(
                 [
                     f"{param_name}{'' if param_info['required'] else '?'}: {param_info['type']}"
@@ -603,8 +777,48 @@ Do NOT wrap conversational replies in JSON.
         from gaia.llm.lemonade_client import is_tool_calling_model
 
         if is_tool_calling_model(getattr(self, "model_id", None)):
-            return self._build_openai_tool_schemas() or None
+            return (
+                self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
+                or None
+            )
         return None
+
+    def _select_tools_for_turn(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> Optional[List[str]]:
+        """Return the sorted tool-name subset to surface this turn, or ``None``.
+
+        Default: ``None`` — render the full registry (legacy behavior). Agents
+        with a dynamic tool loader override this to return a selection.
+        """
+        return None
+
+    def _on_tool_invoked(self, tool_name: str) -> None:
+        """Hook called when a tool is about to execute (after registry lookup).
+
+        Default: no-op. Agents with a dynamic tool loader override this to
+        record tool-use recency. Execution itself always uses the full registry,
+        so this never gates execution.
+        """
+
+    def _refresh_active_tool_filter(self, user_input: str) -> None:
+        """Update the active tool filter for this turn, recomputing on change.
+
+        Calls ``_select_tools_for_turn`` and, **only when the selection
+        changes**, swaps ``_active_tool_filter`` and recomputes the cached
+        system prompt. Both filters are sorted lists (or ``None``), so ``!=`` is
+        a correct change test; a stable selection leaves the cached prompt — and
+        thus the backend's KV-cache prefix — untouched. ``None`` is the legacy
+        full-registry path. ``_openai_tools`` is a property, so all native
+        ``tools=`` call sites pick up the new filter automatically.
+        """
+        # The base hook returns None, but ChatAgent overrides it to return
+        # Optional[List[str]] — pylint's None-inference is wrong here.
+        # pylint: disable-next=assignment-from-none
+        new_filter = self._select_tools_for_turn(user_input)
+        if new_filter != self._active_tool_filter:
+            self._active_tool_filter = new_filter
+            self._system_prompt_cache = self._compose_system_prompt()
 
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.
@@ -685,6 +899,13 @@ Do NOT wrap conversational replies in JSON.
         "Let me search for that.\n{"thought": "...", "tool": "query_documents",
          "tool_args": {"query": "..."}}"
 
+        Decision logic over all {…} candidates that contain a "tool" key,
+        each tagged fenced/unfenced:
+          1. ≥1 unfenced candidate → return the first (unchanged — zero regression).
+          2. else exactly one fenced candidate → return it (the fix for #1428).
+          3. else >1 fenced, 0 unfenced → ambiguous (looks like docs) → None + warning.
+          4. else → None.
+
         This method finds the JSON block using brace-depth matching and returns
         the parsed tool call if it contains a "tool" key.  Returns None if no
         embedded tool call is found, allowing the caller to treat the response
@@ -695,7 +916,6 @@ Do NOT wrap conversational replies in JSON.
             return None
 
         # Build a set of character ranges inside code fences (```...```)
-        # so we don't accidentally extract example JSON from markdown.
         _code_ranges: list[tuple[int, int]] = []
         _search_from = 0
         while True:
@@ -713,17 +933,31 @@ Do NOT wrap conversational replies in JSON.
         def _inside_code_fence(pos: int) -> bool:
             return any(start <= pos < end for start, end in _code_ranges)
 
-        # Walk through looking for { that starts a JSON-like block with "tool"
+        def _parse_candidate(raw: str) -> Optional[Dict[str, Any]]:
+            """Return the parsed dict if raw is valid JSON with a 'tool' key, else None."""
+            try:
+                fixed = re.sub(r",\s*}", "}", raw)
+                fixed = re.sub(r",\s*]", "]", fixed)
+                parsed = json.loads(fixed)
+                if isinstance(parsed, dict) and "tool" in parsed:
+                    if "tool_args" not in parsed:
+                        parsed["tool_args"] = {}
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+            return None
+
+        # Collect all tool-call candidates, tagged by whether they are inside a fence
+        unfenced: list[Dict[str, Any]] = []
+        fenced: list[Dict[str, Any]] = []
+
         idx = 0
         while idx < len(response):
             brace_pos = response.find("{", idx)
             if brace_pos == -1:
                 break
 
-            # Skip JSON inside markdown code fences (example/documentation)
-            if _inside_code_fence(brace_pos):
-                idx = brace_pos + 1
-                continue
+            is_fenced = _inside_code_fence(brace_pos)
 
             # Look ahead for "tool" near this brace (within 200 chars)
             look_ahead = response[brace_pos : brace_pos + 200]
@@ -756,30 +990,42 @@ Do NOT wrap conversational replies in JSON.
                             break
 
             if depth != 0:
-                # Unclosed braces — skip
                 idx = brace_pos + 1
                 continue
 
-            candidate = response[brace_pos : end_pos + 1]
-            try:
-                # Fix common trailing comma issues
-                fixed = re.sub(r",\s*}", "}", candidate)
-                fixed = re.sub(r",\s*]", "]", fixed)
-                parsed = json.loads(fixed)
-
-                # Only accept if it has a "tool" key (it's a tool call)
-                if isinstance(parsed, dict) and "tool" in parsed:
-                    if "tool_args" not in parsed:
-                        parsed["tool_args"] = {}
-                    logger.debug(
-                        f"[PARSE] Extracted embedded tool call: "
-                        f"{parsed.get('tool')}"
-                    )
-                    return parsed
-            except json.JSONDecodeError:
-                pass
+            raw = response[brace_pos : end_pos + 1]
+            parsed = _parse_candidate(raw)
+            if parsed is not None:
+                if is_fenced:
+                    fenced.append(parsed)
+                else:
+                    unfenced.append(parsed)
 
             idx = brace_pos + 1
+
+        # Decision logic
+        if unfenced:
+            # Rule 1: prefer unfenced (unchanged behaviour — zero regression)
+            logger.debug(
+                "[PARSE] Extracted embedded tool call: %s", unfenced[0].get("tool")
+            )
+            return unfenced[0]
+
+        if len(fenced) == 1:
+            # Rule 2: exactly one fenced call — trust it (fix for #1428)
+            logger.debug(
+                "[PARSE] Extracted fenced tool call: %s", fenced[0].get("tool")
+            )
+            return fenced[0]
+
+        if len(fenced) > 1:
+            # Rule 3: multiple fenced calls — ambiguous, likely documentation examples
+            logger.warning(
+                "[PARSE] ambiguous: %d fenced tool-call candidates found and no "
+                "unfenced call; cannot determine which is real — returning None",
+                len(fenced),
+            )
+            return None
 
         return None
 
@@ -1036,8 +1282,15 @@ Do NOT wrap conversational replies in JSON.
 
         return json_response
 
-    def _build_openai_tool_schemas(self) -> list:
-        """Build OpenAI-format function-calling schemas from the tool registry."""
+    def _build_openai_tool_schemas(self, filter_to: Optional[List[str]] = None) -> list:
+        """Build OpenAI-format function-calling schemas from the tool registry.
+
+        Args:
+            filter_to: When ``None`` (default), build a schema for every
+                registered tool in registry order — byte-identical to the legacy
+                path. When a list, build only those names, in the given
+                (pre-sorted) order, skipping any not present in the registry.
+        """
 
         def _python_to_json_type(py_type: str) -> str:
             return {
@@ -1049,8 +1302,14 @@ Do NOT wrap conversational replies in JSON.
                 "dict": "object",
             }.get(py_type.lower().strip(), "string")
 
+        if filter_to is None:
+            items = list(self._tools_registry.items())
+        else:
+            registry = self._tools_registry
+            items = [(n, registry[n]) for n in filter_to if n in registry]
+
         schemas = []
-        for name, tool_info in self._tools_registry.items():
+        for name, tool_info in items:
             properties = {}
             required = []
             for param_name, param_info in tool_info["parameters"].items():
@@ -1580,6 +1839,49 @@ Do NOT wrap conversational replies in JSON.
             return matches[0]
         return None
 
+    def _resolve_tool_timeout(self, tool_name: str) -> float:
+        """Resolve the execution timeout (seconds) for a tool.
+
+        A per-tool ``@tool(timeout=...)`` override wins; otherwise the global
+        ``GAIA_AGENT_TOOL_TIMEOUT`` default applies.
+        """
+        entry = self._tools_registry.get(tool_name) or {}
+        override = entry.get("timeout")
+        if override is not None:
+            return float(override)
+        return tool_execution_timeout()
+
+    def _call_tool_bounded(
+        self, tool: Callable, tool_args: Dict[str, Any], tool_name: str
+    ) -> Any:
+        """Run a tool body under a bounded execution window.
+
+        The tool runs in a daemon worker thread joined with the resolved
+        timeout. On success the worker's return value is returned and any
+        exception it raised is re-raised in the caller (so the existing
+        ``_execute_tool`` error handling applies unchanged). On timeout a
+        ``ToolExecutionTimeout`` is raised — the worker keeps running (Python
+        cannot kill a thread) but it is a daemon, so it cannot block process
+        exit and the agent loop is freed immediately.
+        """
+        timeout = self._resolve_tool_timeout(tool_name)
+        holder: Dict[str, Any] = {}
+
+        def _target():
+            try:
+                holder["result"] = tool(**tool_args)
+            except BaseException as exc:  # noqa: BLE001 — re-raised in caller
+                holder["exc"] = exc
+
+        worker = threading.Thread(target=_target, name=f"tool:{tool_name}", daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            raise ToolExecutionTimeout(tool_name, timeout)
+        if "exc" in holder:
+            raise holder["exc"]
+        return holder.get("result")
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
@@ -1659,6 +1961,13 @@ Do NOT wrap conversational replies in JSON.
                     "error": f"Tool '{tool_name}' was denied by the user.",
                 }
 
+        # Dynamic tool loader (#1449): record use for LRU recency. The name is
+        # fully resolved and confirmed in the registry here. Execution stays on
+        # the full registry — recording never gates it — so a model that names
+        # an unlisted tool still runs it (free non-tool-calling recovery), and
+        # the loader logs that as an escape-hatch signal.
+        self._on_tool_invoked(tool_name)
+
         tool = self._tools_registry[tool_name]["function"]
         sig = inspect.signature(tool)
 
@@ -1683,9 +1992,29 @@ Do NOT wrap conversational replies in JSON.
             return {"status": "error", "error": error_msg}
 
         try:
-            result = tool(**tool_args)
+            result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
             return result
+        except ToolExecutionTimeout as e:
+            # Bounded-execution guard fired: the tool body blocked past its
+            # limit. Fail loud with an actionable message — name the tool, the
+            # window, and the override knob — instead of hanging the agent loop.
+            error_msg = (
+                f"Tool '{tool_name}' did not return within {e.timeout:g}s and "
+                f"was abandoned. The call may be hung (e.g. an unreachable "
+                f"service or stuck network request). Check the tool/connector, "
+                f"or raise GAIA_AGENT_TOOL_TIMEOUT if it legitimately needs "
+                f"longer."
+            )
+            logger.error(error_msg)
+            self.error_history.append(error_msg)
+            self.console.print_error(error_msg)
+            return {
+                "status": "error",
+                "error": error_msg,
+                "timeout": True,
+                "tool_name": tool_name,
+            }
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout specifically
             error_msg = f"Tool {tool_name} timed out: {str(e)}"
@@ -2207,6 +2536,36 @@ Do NOT wrap conversational replies in JSON.
         half = max_chars // 2 - 20
         return f"{content_str[:half]}\n...[truncated]...\n{content_str[-half:]}"
 
+    def _namespaced_agent_id(self) -> Optional[str]:
+        """Return the registry-assigned namespaced agent id, or None.
+
+        The registry wraps each factory with ``_wrap_factory_with_namespaced_id``
+        so production agent instances always carry ``_gaia_namespaced_agent_id``.
+        Tests that construct agents directly (without going through the registry)
+        fall back to bare ``AGENT_ID``; both keys may legitimately resolve to
+        ``None`` for ad-hoc agents that opt out of the activation/grant layer
+        entirely.
+        """
+        return getattr(self, "_gaia_namespaced_agent_id", None) or getattr(
+            self, "AGENT_ID", None
+        )
+
+    def _active_mcp_servers(self, manager) -> List[str]:
+        """Return MCP server names whose tools should be visible to this agent.
+
+        Per issue #1005, MCP tools are gated by the activations ledger
+        (``~/.gaia/connectors/activations.json``). When no namespaced agent
+        id is available (e.g. test agents constructed directly), every
+        connected server is returned — the activation filter only applies
+        to agents that participate in the registry's identity scheme.
+        """
+        if manager is None:
+            return []
+        ns_id = self._namespaced_agent_id()
+        if ns_id is None:
+            return list(manager.list_servers())
+        return list(manager.servers_for_agent(ns_id))
+
     def process_query(
         self,
         user_input: str,
@@ -2261,6 +2620,10 @@ Do NOT wrap conversational replies in JSON.
         self._current_query = user_input
         self._single_tool_done = False
 
+        # Dynamic tool selection (#1449): pick this turn's tool subset and
+        # recompute the cached system prompt only when it changes.
+        self._refresh_active_tool_filter(user_input)
+
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
@@ -2289,6 +2652,9 @@ Do NOT wrap conversational replies in JSON.
         query_result_cache: dict[str, int] = (
             {}
         )  # result_hash → call count (result-based dedup)
+        mutation_call_cache: dict[str, int] = (
+            {}
+        )  # (tool, normalized args) → call count (input-based dedup, #1317)
         last_error = None  # Track the last error to handle it properly
         previous_outputs = []  # Track previous tool outputs (truncated for context)
         step_results = []  # Track full tool results for parameter substitution
@@ -2328,6 +2694,25 @@ Do NOT wrap conversational replies in JSON.
 
         # Process the query in steps, allowing for multiple tool usages
         while steps_taken < steps_limit and final_answer is None:
+            # Cooperative cancellation: if a consumer (e.g. the Agent UI's
+            # stream-timeout/disconnect cleanup) signalled cancel, stop here so
+            # the producer thread is torn down rather than left running. Checked
+            # at the step boundary; per-tool timeouts keep each step bounded so
+            # this point is always reached in finite time.
+            cancel_event = getattr(self, "_cancel_event", None)
+            if cancel_event is not None and cancel_event.is_set():
+                logger.warning(
+                    "Agent run cancelled at step %d/%d via cancel_event",
+                    steps_taken,
+                    steps_limit,
+                )
+                final_answer = (
+                    "The request was stopped because it exceeded the allowed "
+                    "time before completing. Try a simpler request or break it "
+                    "into smaller steps."
+                )
+                break
+
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
             steps_taken += 1
@@ -2996,7 +3381,7 @@ Do NOT wrap conversational replies in JSON.
             # nudge the model to retry with simpler args, and continue the loop.
             try:
                 parsed = self._parse_llm_response(response)
-            except (ValueError, NotImplementedError) as parse_exc:
+            except ValueError as parse_exc:
                 logger.warning(
                     "Tool-call parse failed (step %d): %s — recovering with retry prompt",
                     steps_taken,
@@ -3043,19 +3428,10 @@ Do NOT wrap conversational replies in JSON.
                             "rephrase or break the request into smaller pieces?"
                         )
                     break
-                # Push a synthetic assistant turn + recovery user message so the
-                # next LLM call has context. Don't include the raw envelope to
-                # keep noise out of the conversation history.
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": (
-                            "[I tried to call a tool but my arguments were "
-                            "malformed.]"
-                        ),
-                    }
+                assistant_msg = (
+                    "[I tried to call a tool but my arguments were malformed.]"
                 )
-                _recovery_content = (
+                user_msg = (
                     "Your last tool call had malformed arguments. "
                     "Please try again. Use ONLY the documented enum "
                     "values for each argument (e.g. 'brief', "
@@ -3063,24 +3439,29 @@ Do NOT wrap conversational replies in JSON.
                     "If you don't need a tool, answer in plain text."
                 )
                 if _last_image_path:
-                    _recovery_content += (
+                    user_msg += (
                         f"\n\nYour previous step generated an image at "
                         f"`{_last_image_path}`. If your next tool call "
                         "needs this path, copy that string VERBATIM — do "
                         "not retype it."
                     )
-                    # Marker so production-log triage can tell "model
-                    # received the canonical path and still mangled it"
-                    # from "model never saw the hint."  Pre-mortem note
-                    # in the plan flagged this gap.
                     logger.info(
                         "[PARSE-RECOVERY] injected canonical image_path=%s",
                         _last_image_path,
                     )
+                # Push a synthetic assistant turn + recovery user message so the
+                # next LLM call has context. Don't include the raw envelope to
+                # keep noise out of the conversation history.
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": assistant_msg,
+                    }
+                )
                 messages.append(
                     {
                         "role": "user",
-                        "content": _recovery_content,
+                        "content": user_msg,
                     }
                 )
                 steps_taken += 1
@@ -3415,6 +3796,12 @@ Do NOT wrap conversational replies in JSON.
                             )
                             messages.append({"role": "user", "content": dedup_msg})
 
+                    # Input-based dedup for mutation tools (#1317): catch an
+                    # identical mutation re-issue at the first repeat.
+                    self._dedup_mutation_call(
+                        tool_name, tool_args, mutation_call_cache, messages
+                    )
+
                     # Domain hooks. A returned plan switches the agent into
                     # STATE_EXECUTING_PLAN for prereq-style recovery. The
                     # base impl returns None but the hook's annotation is
@@ -3634,6 +4021,12 @@ Do NOT wrap conversational replies in JSON.
                             "OR state that the information was not found in the document."
                         )
                         messages.append({"role": "user", "content": dedup_msg})
+
+                # Input-based dedup for mutation tools (#1317): catch an
+                # identical mutation re-issue at the first repeat.
+                self._dedup_mutation_call(
+                    tool_name, tool_args, mutation_call_cache, messages
+                )
 
                 # Handle domain-specific post-processing.
                 # A returned plan switches into STATE_EXECUTING_PLAN. The
@@ -4246,6 +4639,51 @@ Do NOT wrap conversational replies in JSON.
                 "or check that the underlying service is running."
             )
         return f"Task completed with {tool_name}. No further action needed."
+
+    def _dedup_mutation_call(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        mutation_call_cache: Dict[str, int],
+        messages: List[Dict[str, Any]],
+    ) -> None:
+        """Catch a repeated identical mutation at the FIRST repeat (#1317).
+
+        Query dedup hashes the *result*; mutations must key on the *args*
+        instead — re-issuing the same mutation (e.g. ``mark_read`` on an
+        already-read id) returns a *different* result the second time, so a
+        result hash would miss the repeat. Keying on ``(tool, normalized
+        args)`` also leaves mutations on *different* ids untouched. Mirrors
+        the query-dedup corrective signal: inject a re-plan prompt rather
+        than silently dropping the call, so the model gets a chance to move
+        on instead of waiting for the slow reactive loop-detector.
+        """
+        if tool_name not in _MUTATION_TOOLS:
+            return
+        # Normalize so {"a":1,"b":2} and {"b":2,"a":1} hash identically.
+        try:
+            normalized = json.dumps(tool_args, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            normalized = str(tool_args)
+        call_key = f"{tool_name}:{normalized}"
+        mutation_call_cache[call_key] = mutation_call_cache.get(call_key, 0) + 1
+        if mutation_call_cache[call_key] >= 2:
+            logger.debug(
+                "[DEDUP] Identical mutation %s issued %d times — injecting re-plan signal",
+                tool_name,
+                mutation_call_cache[call_key],
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"[SYSTEM] You already called {tool_name} with these exact "
+                        f"arguments {mutation_call_cache[call_key]} times. The change "
+                        "is already applied — repeating it has no effect. Move on to "
+                        "the next item in your plan, or finish if nothing is left."
+                    ),
+                }
+            )
 
     def _post_process_tool_result(
         self, _tool_name: str, _tool_args: Dict[str, Any], _tool_result: Dict[str, Any]

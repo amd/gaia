@@ -3,7 +3,9 @@
 
 /** API client for the GAIA memory dashboard endpoints. */
 
-const API_BASE = '/api';
+import { getApiBase } from '../utils/apiBase';
+
+const API_BASE = getApiBase();
 
 async function memFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${API_BASE}${path}`;

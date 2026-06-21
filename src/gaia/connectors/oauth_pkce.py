@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from gaia.connectors.errors import (
     AuthRequiredError,
+    ConfigurationError,
     ConnectorsError,
 )
 from gaia.connectors.flow import (
@@ -34,6 +35,37 @@ from gaia.connectors.store import DEFAULT_ACCOUNT, delete_connection
 from gaia.connectors.tokens import get_or_refresh
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_provider_secret(provider_id: str) -> None:
+    """Raise ``ConfigurationError`` if the provider requires a client_secret
+    but none is configured (env var or keyring).
+
+    Called before starting a PKCE flow so users get an actionable error at
+    connect time rather than a cryptic 401 on first token refresh (#1592 AC5).
+    Only validates providers known to require a secret (currently Google);
+    unknown providers are passed through without checking.
+    """
+    # Only Google Desktop PKCE clients are known to require the secret.
+    if provider_id != "google":
+        return
+    from gaia.connectors.providers import get as _get_provider
+
+    try:
+        provider = _get_provider(provider_id)
+    except (ConfigurationError, KeyError):
+        # If the provider can't be loaded (e.g. no client_id configured yet),
+        # a more specific error will surface during start_authorization.
+        return
+    if not getattr(provider, "client_secret", None):
+        raise ConfigurationError(
+            "Google OAuth client_secret is not configured. "
+            "Open Settings → Connections → Google and enter the Client Secret "
+            "from your Google Cloud Console Desktop-app OAuth credential, "
+            "or set the GAIA_GOOGLE_CLIENT_SECRET environment variable. "
+            "Without the secret, token refresh will fail with 401. "
+            "See docs/runbooks/google-oauth-client.md."
+        )
 
 
 class OAuthPkceHandler:
@@ -122,6 +154,13 @@ class OAuthPkceHandler:
             # Caller has already handled the browser step.
             return await complete_authorization(config["flow_id"])
 
+        # Validate that a client_secret is available before starting the
+        # flow.  Google requires it even for Desktop PKCE clients (#1592
+        # AC5): a "connected" entry without a secret will 401 on every
+        # token refresh, which is confusing and hard to debug at that point.
+        # Fail loudly here with an actionable message instead.
+        _validate_provider_secret(provider_id)
+
         # Start a new PKCE flow; caller will open the URL.
         return await start_authorization(provider_id, scopes=scopes)
 
@@ -141,12 +180,19 @@ class OAuthPkceHandler:
         account_email = account_id or DEFAULT_ACCOUNT
         delete_connection(provider_id, account_email=account_email)
 
-        # Wipe per-agent grants for this connector_id. Local import keeps the
-        # module-level dependency graph identical to before (grants depends on
-        # nothing else here).
+        # Wipe per-agent grants for this connector_id. Local import keeps
+        # the module-level dependency graph identical to before.
+        from gaia.connectors.activations import revoke_all_activations_for
         from gaia.connectors.grants import revoke_all_grants_for
 
         revoke_all_grants_for(spec.id)
+        # Defensive sweep: OAuth connectors never accept activation writes
+        # (rejected at the api layer — see ``_require_mcp_server_for_activation``),
+        # so this is a no-op today. Kept as a belt-and-braces guard against
+        # ledger entries that pre-date the type check or are written via
+        # future migration paths — re-adding the same connector_id must
+        # never silently inherit prior state.
+        revoke_all_activations_for(spec.id)
 
         logger.info("oauth_pkce: disconnected connector_id=%s", spec.id)
 

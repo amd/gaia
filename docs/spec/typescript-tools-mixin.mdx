@@ -8,8 +8,8 @@ title: "TypeScriptToolsMixin"
 
 <Note>
 **Component:** TypeScriptToolsMixin
-**Module:** `gaia.agents.code.tools.typescript_tools`
-**Import:** `from gaia.agents.code.tools.typescript_tools import TypeScriptToolsMixin`
+**Module:** `gaia_agent_code.tools.typescript_tools`
+**Import:** `from gaia_agent_code.tools.typescript_tools import TypeScriptToolsMixin`
 </Note>
 ---
 
@@ -285,7 +285,7 @@ except FileNotFoundError:
 ```python
 import pytest
 from pathlib import Path
-from gaia.agents.code.tools.typescript_tools import TypeScriptToolsMixin
+from gaia_agent_code.tools.typescript_tools import TypeScriptToolsMixin
 
 def test_validate_typescript(tmp_path):
     """Test TypeScript validation."""
@@ -389,7 +389,7 @@ logger = logging.getLogger(__name__)
 # TypeScript validation is also available in ValidationToolsMixin
 # with additional Tier 4 error messaging
 
-from gaia.agents.code.tools.validation_tools import ValidationToolsMixin
+from gaia_agent_code.tools.validation_tools import ValidationToolsMixin
 
 result = validation_mixin.validate_typescript(project_dir)
 # Returns enhanced error messages with rule citations

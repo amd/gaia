@@ -53,7 +53,7 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
 
 - **No Claude attribution anywhere** — not in PR titles, PR bodies, commit messages (no `Co-Authored-By: Claude ...` trailer), release notes, code comments, or the Discord announcement.
 - **No silent fallbacks** — if a validator fails, a step times out, or a workflow run isn't found, stop with an actionable error. Do not retry blindly. Do not "proceed anyway."
-- **Match house style for release notes** — factual, not opinionated. No "finally", "silently", "no more crashes", "we're excited to announce". Read the **last 2–3 release notes** before drafting. Patch releases do **not** include a `pip install` block. Use the `Why upgrade:` framing with a short bullet list, then `## What's New`, then `## Bug Fixes`, then `## Full Changelog`.
+- **Match house style for release notes** — see *Generation parameters* in Phase 1. In short: value-prop first, **local agents are the headline** (not the SDK), one agent/command per highlight, plain language, engaging but factual, and **no emoji, no fluff** (full banned-phrase list under *Generation parameters*). Read the **last 2–3 release notes** before drafting. Patch releases do **not** include a `pip install` block. Use the `Why upgrade:` framing with a short bullet list, then `## What's New`, then `## Bug Fixes`, then `## Full Changelog`.
 - **Match the previous release PR body shape exactly** — read the most recent merged `Release vX.Y.Z` PR (e.g. `gh pr list --repo amd/gaia --state merged --search "Release v in:title" --limit 3`). Open with `# GAIA vX.Y.Z Release Notes` (no MDX frontmatter in the PR body), end with a `Release checklist` section. Style drift here costs review cycles.
 - **Bulletproof commits only** — every change made by this skill must satisfy the four criteria in CLAUDE.md (validated, critiqued, scope-clean, no half-finished work) before being committed.
 - **Pushing tags is irreversible.** Always confirm the SHA the tag will point to and the green status of the pre-tag verification run before `git push origin v<version>`.
@@ -90,12 +90,12 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
 
    If the requested version doesn't match the rubric, **stop and surface the mismatch**: *"You asked for `v<requested>` (patch). I see N feat commits since `<prev>` including `<one or two examples>` — this looks minor-shaped. Continue as patch, or bump to `v<suggested>`?"* Do not silently proceed.
 
-2. **Read the last 2–3 release notes** to match style and length.
+2. **Read the last 2–3 release notes** to match structure and length (not tone — see *Generation parameters*).
    - [docs/releases/v0.17.4.mdx](docs/releases/v0.17.4.mdx)
    - [docs/releases/v0.17.3.mdx](docs/releases/v0.17.3.mdx)
    - [docs/releases/v0.17.2.mdx](docs/releases/v0.17.2.mdx)
 
-   Cross-check: same frontmatter shape, same section headings, same tone, same level of detail per entry. Patch releases are short; minor/major releases include `pip install` and may have a "Highlights" block.
+   Cross-check: same frontmatter shape, same section headings, same *structure* and length per entry — but **not** the prior tone. The last few releases predate the *Generation parameters* below; match their shape, not their dryness. Patch releases are short; minor/major releases include `pip install` and may have a "Highlights" block.
 
 3. **Create [docs/releases/v<version>.mdx](docs/releases/)** with this skeleton (adapt to whether it's patch / minor / major):
 
@@ -117,9 +117,13 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
 
    ## What's New
 
-   ### <Feature title>
+   ### <What the user can now do> — `<gaia command>`
 
-   <Two short paragraphs: what changed, why it matters, link the PR(s) inline.>
+   <Lead with the outcome and why it matters, in plain language that makes the reader
+   want to try it. Then one line on how to run it, PR linked inline. One agent or
+   command per entry — add another `### ` block for the next one. Not every highlight
+   is a command — for UI / SDK / perf items, use a plain title with no trailing
+   command.>
 
    ---
 
@@ -138,6 +142,40 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
 
    Full Changelog: [v<previous>...v<version>](https://github.com/amd/gaia/compare/v<previous>...v<version>)
    ```
+
+   **Generation parameters (apply to every entry — this is the point of the skill).**
+   GAIA's notes have historically read dry and engineering-first: they say *what
+   changed* but not *why a user should care or want to try it*. Generate against these
+   every time:
+
+   - **Value-prop first.** Open each entry with what the user can now do and why it
+     matters — the outcome, not the implementation. "Triage your inbox in one command"
+     before "added EmailAgent with Gmail polling".
+   - **Local agents are the headline.** Lead with the agents that solve real problems
+     (`gaia browse`, `gaia analyze`, email triage, …); SDK / infra / refactors are
+     supporting detail. People come for the agents, not the SDK.
+   - **One agent or command per highlight.** `gaia browse` and `gaia analyze` each get
+     their own `### ` entry with its own one-line utility — never lumped together.
+   - **Plain, human language.** Write like you're telling a colleague what they can do
+     now. Short sentences; plain words over jargon.
+   - **Engaging, still factual.** Make the reader want to try it without overselling —
+     no invented benchmarks, no "fastest ever". The pull comes from a clear, real
+     capability, not adjectives.
+   - **No fluff, no emoji.** Banned: emoji in headings or body, "we're excited to
+     announce", "finally", "blazing(-fast)", "Here's the good stuff", "no more
+     crashes", "silently", "game-changer".
+
+   **Example — one highlight, done right:**
+
+   > **Bad** (dry, implementation-first, no reason to care):
+   > ### EmailAgent
+   > Adds an EmailAgent with Gmail polling and a rules engine for classification.
+
+   > **Good** (value-first, plain, makes you want to try it):
+   > ### Triage your inbox from the terminal — `gaia email`
+   > Point GAIA at your inbox and it sorts the noise from what needs you: drafts
+   > replies to routine mail, flags what's urgent, leaves the rest. Runs locally, so
+   > your mail never leaves your machine. Try it: `gaia email`.
 
 4. **Update [docs/docs.json](docs/docs.json):**
    - Add `releases/v<version>` to the Releases tab.
@@ -355,7 +393,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    ```
    Required artifacts: `.whl`, `.tar.gz`, `.deb`, `.AppImage`, `.dmg`, `.exe`, and the `latest*.yml` files for the Electron auto-updater. If any are missing, the corresponding build job didn't run or didn't upload — investigate.
 
-3. **Draft the Discord announcement** using the template below. Read the just-shipped release notes (`docs/releases/v<version>.mdx`) to populate the highlight list — one bullet per "What's New" entry plus any Bug Fix worth surfacing, written in the same voice as the notes (factual, no marketing).
+3. **Draft the Discord announcement** using the template below. Read the just-shipped release notes (`docs/releases/v<version>.mdx`) to populate the highlight list — one bullet per "What's New" entry plus any Bug Fix worth surfacing, written in the same voice as the notes — apply the same *Generation parameters* (value-prop first, plain, engaging, no fluff/emoji).
 
    **Template (copy verbatim, fill the bracketed fields):**
 

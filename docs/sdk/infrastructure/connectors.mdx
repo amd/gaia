@@ -63,7 +63,7 @@ async def main():
 
     # 3. Fetch a short-lived access token (refresh is automatic).
     token = await conn.get_access_token(
-        connector_id="google",
+        provider="google",
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         agent_id="my-agent",
     )
@@ -81,6 +81,86 @@ asyncio.run(main())
 | `AGENT_NOT_GRANTED` | This agent has no per-agent scope grant. |
 | `CONNECTION_MISSING_SCOPES` | Grant exists but covers fewer scopes. |
 | `REAUTH_REQUIRED` | OAuth client ID was rotated. |
+
+## Forwarded connections (no re-auth)
+
+When a host app has **already** authenticated the user (its own OAuth flow),
+it can FORWARD that connection to GAIA instead of triggering a second consent
+screen. GAIA persists the forwarded grant and refreshes **as the host app's
+client** — credential forwarding, not a GAIA-run OAuth flow.
+
+The host app forwards three things: the OAuth client it was issued under
+(`client_id` + `client_secret`) and the user's long-lived `refresh_token`.
+
+```python
+import gaia.connectors as conn
+
+summary = conn.import_forwarded_connection(
+    provider="google",
+    client_id="<host-app-client-id>.apps.googleusercontent.com",
+    client_secret="<host-app-client-secret>",
+    refresh_token="<user-refresh-token>",
+    scopes=[
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar.events",
+    ],
+    account_email="alice@example.com",   # display-only in v1
+    grant_agents=["installed:email"],       # agents that may use it
+)
+# summary carries metadata only — never the refresh token or client secret.
+```
+
+### REST: `POST /v1/connections/{provider}`
+
+The same ingestion is exposed over REST by the Agent UI server (which binds
+`localhost` by default and gates remote/tunnel access behind a token).
+Mutating routes require the `X-Gaia-UI: 1` header.
+
+```bash
+curl -X POST http://localhost:4200/v1/connections/google \
+  -H "X-Gaia-UI: 1" -H "Content-Type: application/json" \
+  -d '{
+        "client_id": "<host-app-client-id>",
+        "client_secret": "<host-app-client-secret>",
+        "refresh_token": "<user-refresh-token>",
+        "scopes": ["https://www.googleapis.com/auth/gmail.modify",
+                   "https://www.googleapis.com/auth/gmail.send",
+                   "https://www.googleapis.com/auth/calendar.events"],
+        "account_email": "alice@example.com",
+        "grant_agents": ["installed:email"]
+      }'
+```
+
+| Method / path | Purpose |
+|---|---|
+| `POST /v1/connections/{provider}` | Persist a forwarded grant (201). No browser step. |
+| `GET /v1/connections` | List connections — **metadata only, secrets omitted**. |
+| `GET /v1/connections/{provider}` | One connection's metadata (404 if absent). |
+| `DELETE /v1/connections/{provider}` | Revoke: clears token, client, grants, caches. |
+
+After a successful POST the agent resolves the connection ambiently — the
+triage request carries **no credentials**; `get_access_token` reads the
+persisted grant and refreshes transparently.
+
+<Warning>
+**The host app's initial consent must request the UNION of every scope both
+it and GAIA need.** GAIA refreshes with the forwarded `refresh_token` and
+**cannot widen scope at refresh time** — a refresh only ever returns the
+scopes the original consent granted. If the forwarded `scopes` don't cover
+what the target agent needs (for the Email agent: `gmail.modify`,
+`gmail.send`, and a calendar scope), the import **fails loudly** with
+`ScopeMismatchError` (HTTP 403 + `missing_scopes`) rather than silently
+under-provisioning. Re-consent by the host app — with the wider scope set —
+is the only fix.
+</Warning>
+
+<Note>
+GAIA refuses to persist tokens to an insecure keyring backend (plaintext /
+weak file-backed stores). On such a backend the import fails loudly with an
+actionable error pointing at the system credential-store setup. Forwarded
+secrets are never written to `~/.gaia/` and never echoed in any response.
+</Note>
 
 ## SDK use — MCP server
 
@@ -121,11 +201,19 @@ gaia connectors status
 # Test health of a configured connector
 gaia connectors test github
 
-# Per-agent grants (OAuth only)
+# Per-agent grants (every connector type)
 gaia connectors grants grant google builtin:chat \
     --scopes https://www.googleapis.com/auth/gmail.readonly
 gaia connectors grants list google
 gaia connectors grants revoke google builtin:chat
+
+# Per-agent activations — gate which agents see this MCP server's tools.
+# Activations apply to mcp_server connectors only; OAuth connectors are
+# rejected with exit 3 (use per-scope grants above instead).
+gaia connectors activations activate mcp-github builtin:chat \
+    --scopes use   # --scopes is only consulted when no prior grant exists
+gaia connectors activations list mcp-github
+gaia connectors activations deactivate mcp-github builtin:chat
 
 # Disconnect
 gaia connectors disconnect google
@@ -162,7 +250,7 @@ class GmailAgent(Agent):
     @tool(description="List the 5 newest Gmail subjects")
     def _list_recent_subjects(self) -> list[str]:
         token = get_access_token_sync(
-            connector_id="google",
+            provider="google",
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         )
         import requests
@@ -180,12 +268,120 @@ The Agent UI consent dialog renders `reason` in plain language. After
 the user grants the scopes, subsequent `get_access_token_sync` calls
 return fresh tokens transparently.
 
+If instead your agent loads MCP servers dynamically at runtime (from
+`~/.gaia/mcp_servers.json`) rather than declaring specific connectors, set
+`CONSUMES_MCP_SERVERS = True` so the Settings → Connectors "Active for"
+panel lists it for every `mcp_server` connector:
+
+```python
+class MyAgent(Agent):
+    CONSUMES_MCP_SERVERS: ClassVar[bool] = True
+```
+
+## Per-agent activation (MCP servers only)
+
+Activations are the second axis of the per-agent authorization model
+(issue #1005) and apply to **`mcp_server` connectors only**:
+
+- **Grant** (`grants.json`) — agent X is *allowed* to use connector Y's
+  credentials with scopes S. Gates **credential access**
+  (`get_access_token`). Applies to every connector type.
+- **Activation** (`activations.json`) — agent X *currently has* MCP
+  connector Y's tools surfaced in its toolset. Gates **MCP tool
+  visibility** (`MCPClientManager.tools_for_agent`).
+
+A tool from an MCP connector is visible to an agent if and only if:
+
+```text
+grant exists for (connector_id, agent_id)  AND  is_agent_active(...)
+```
+
+Activations default to **inactive** when absent — least-privilege opt-in.
+The ledger stores explicit `true`/`false` entries; an unknown pair returns
+`is_agent_active == False`.
+
+<Warning>
+**OAuth connectors do not accept activations.** Agents reach OAuth providers
+(Google, etc.) through native Python `@tool` functions that call
+`get_credential_sync` directly — there is no MCP tool surface to gate.
+Per-agent access for OAuth connectors is controlled entirely by the
+per-scope grant toggles above.
+
+Calling `activate()` / `deactivate()` for an OAuth connector raises
+`ConfigurationError`; the HTTP `PUT` / `DELETE` returns `400 Bad Request`;
+the CLI exits with code 3. The Agent UI hides the "Active for" section
+for OAuth tiles for the same reason.
+</Warning>
+
+**One-click activation:** activating an agent with no prior grant
+auto-creates a grant using the agent's declared `REQUIRED_CONNECTORS`
+scopes. This is the path Settings → Connectors → "Active for" takes when
+the user ticks an agent that has never been granted access:
+
+```python
+from gaia.connectors import activate, deactivate
+
+# Activate (auto-grants if no prior grant exists). mcp-github is the
+# catalog id for the GitHub MCP server; activations only accept
+# mcp_server connectors.
+activate("mcp-github", "builtin:chat", scopes_for_grant=["use"])
+
+# Deactivate (preserves grant — re-activate is one click)
+deactivate("mcp-github", "builtin:chat")
+```
+
+```bash
+gaia connectors activations activate mcp-github builtin:chat --scopes use
+gaia connectors activations list mcp-github
+gaia connectors activations deactivate mcp-github builtin:chat
+```
+
+### Which agents appear in the "Active for" panel
+
+For an `mcp_server` connector the panel lists agents from **two** sources:
+
+1. Agents that declare the connector in `REQUIRED_CONNECTORS` (static).
+2. Agents that set `CONSUMES_MCP_SERVERS = True` — they load MCP servers
+   dynamically at runtime (from `~/.gaia/mcp_servers.json`) and gate the
+   tools through this same activation ledger, so they can use **any** MCP
+   connector once activated. `builtin:chat` is the canonical example.
+
+Category (2) agents declare no scopes of their own, so one-click activation
+auto-grants the canonical `use` scope. The registry surfaces the flag on
+each agent as `consumes_mcp_servers`. OAuth connectors have no activatable
+agents — the panel is hidden for them entirely.
+
+The HTTP router exposes:
+
+```text
+GET    /api/connectors/{id}/activations
+PUT    /api/connectors/{id}/activations/{agent_id}     # body: {"scopes": [...]}?
+DELETE /api/connectors/{id}/activations/{agent_id}
+```
+
+Both mutating routes reject non-`mcp_server` connectors with `400 Bad
+Request` (after the standard `X-Gaia-UI` CSRF check).
+
+Every activation change emits the SSE event `connector.activation.changed`
+(`{connector_id, agent_id, active}`) so an open Agent UI Settings tab
+refreshes the "Active for" state without a manual reload. The emit is
+centralized in `api.activate` / `api.deactivate`, so HTTP, SDK, and CLI
+callers all notify through one path. Because the CLI runs in a separate
+process from the UI server, the server also runs a background watcher on
+`activations.json` that emits the same event (within ~1 s) when an
+out-of-process writer changes the ledger.
+
+Disconnecting a connector wipes both grants **and** activations for that
+connector — re-adding the same `connector_id` must not silently inherit
+the previous user's tool-visibility decisions.
+
 ## Where things live
 
 | Path | Contents |
 |------|----------|
 | `~/.gaia/connectors/state.json` | Non-secret connector metadata (configured, account_id, scopes). Mode 0600. |
 | `~/.gaia/connectors/grants.json` | Per-agent scope grants. Mode 0600. |
+| `~/.gaia/connectors/activations.json` | Per-agent tool-visibility activations. Mode 0600. |
 | OS keychain `gaia.connections` | Encrypted refresh tokens + MCP API keys. |
 
 ## Adding a new OAuth provider

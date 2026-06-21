@@ -1,0 +1,250 @@
+---
+title: "Agent Hub Restructure"
+description: "Migration of production agents from the core wheel into standalone hub/agents/ packages"
+icon: "folder-tree"
+---
+
+<Note>
+**Tracking issue:** [#1102](https://github.com/amd/gaia/issues/1102) · **Milestone:** v0.22.0 — Agent Hub Platform [OSS] · **Status:** In Progress
+</Note>
+
+## Migration status
+
+Step 1 (mixin promotion) and the registry's installed-agent discovery are
+landed. Production agents are migrating to `hub/agents/python/<id>/` in batches.
+
+| Agent(s) | Status | Package |
+|----------|--------|---------|
+| `summarize`, `sd`, `docker`, `jira`, `fileio`, `blender`, `emr` | ✅ Migrated | `gaia-agent-<id>` under `hub/agents/python/` |
+| `chat` (chat/doc/file profiles + lite), `analyst` (data), `browser` (web), `docqa`, `email`, `code`, `routing`, `connectors-demo` | ⏳ Pending | still in `src/gaia/agents/` |
+
+The pending set is deferred because of deeper coupling: `chat`/`doc`/`file`
+sit on the Agent UI hot path (13+ callsites), `email` has a large API/MCP/eval
+surface, `code`↔`routing` are interdependent, and `docqa` depends on
+`chat.tools`. They migrate once their callsites are rewired through the
+registry. `gaia-code` stays as a core console script until `code` moves.
+
+Migrated agents install as standalone wheels (`pip install gaia-agent-<id>` or
+`pip install -e hub/agents/python/<id>`) and are discovered via the `gaia.agent`
+entry-point group. The core `amd-gaia` wheel no longer ships them; in-core
+callsites lazy-import each agent and fail loudly when the wheel is absent.
+
+## Problem
+
+Production agents (chat, code, jira, blender, etc.) currently live inside `src/gaia/agents/` and ship as part of the core `amd-gaia` wheel. This couples every agent to the framework's release cycle, prevents independent versioning, and gives third-party contributors no pattern to follow — their agents would have to live inside the AMD source tree.
+
+## Goal
+
+Move production agents to `hub/agents/` as **standalone packages** that depend on the published `amd-gaia` PyPI package — not the source tree. The core wheel ships only the framework. Third-party contributors follow the identical pattern AMD uses for its own agents.
+
+```
+Before:                          After:
+src/gaia/agents/                 src/gaia/agents/        ← framework only
+├── base/        (framework)     ├── base/
+├── tools/       (framework)     ├── tools/              ← + promoted shared mixins
+├── registry.py  (framework)     ├── registry.py
+├── builder/     (framework)     ├── builder/
+├── chat/        (agent) ──┐     └── __init__.py
+├── code/        (agent)   │
+├── jira/        (agent)   │     hub/agents/
+└── ...          (agent) ──┘     ├── python/
+                                 │   ├── chat/           ← standalone package
+                                 │   │   ├── gaia-agent.yaml
+                                 │   │   ├── pyproject.toml   (depends on amd-gaia)
+                                 │   │   ├── gaia_agent_chat/
+                                 │   │   ├── tests/
+                                 │   │   └── README.md
+                                 │   └── ...
+                                 └── cpp/
+                                     └── ...
+```
+
+## Key Decisions
+
+1. **Framework-only core wheel.** `pip install amd-gaia` provides `Agent`, `@tool`, `MCPAgent`, `AgentConsole`, registry, LLM clients, RAG, MCP. No production agents.
+2. **Agents are separate wheels.** `gaia-agent-chat`, `gaia-agent-jira`, `gaia-agent-code`, etc. — installable via `gaia agent install <id>`, `pip install gaia-agent-{id}`, or `amd-gaia[agents]` for all of them. One wheel per **codebase**, not per registry ID: the `chat` package ships multiple prompt profiles (`doc`, `file`, `data`, `web`) and model presets (lite variants) selectable via config — they are not separate wheels (see [#1162](https://github.com/amd/gaia/issues/1162)).
+3. **Shared tool mixins promoted to framework.** RAG, FileIO, Shell, CodeIndex mixins move into `src/gaia/agents/tools/` so agents don't depend on each other for tools.
+4. **Entry-point discovery.** Agents register via the `gaia.agent` entry point group. The registry discovers installed agent wheels at startup — no hardcoded agent list.
+5. **Framework-provided generic server.** `src/gaia/agents/base/server.py` wraps any Agent into an OpenAI-compatible REST API + MCP stdio server. Agents don't implement server logic.
+
+## Pre-requisite: Promote shared tool mixins
+
+The current codebase has cross-agent tool dependencies that block independent packaging:
+
+| Mixin | Currently in | Used by | New location |
+|-------|-------------|---------|--------------|
+| `RAGToolsMixin` | `agents/chat/tools/rag_tools.py` | ChatAgent, DocQAAgent | `agents/tools/rag_tools.py` |
+| `FileIOToolsMixin` | `agents/code/tools/file_io.py` | ChatAgent, CodeAgent, DocQA, FileIO | `agents/tools/file_io_tools.py` |
+| `ShellToolsMixin` | `agents/chat/tools/shell_tools.py` | ChatAgent, FileIOAgent | `agents/tools/shell_tools.py` |
+| `CodeIndexToolsMixin` | `agents/code_index/tools/mixin.py` | CodeAgent | `agents/tools/code_index_tools.py` |
+
+After promotion, every `KNOWN_TOOLS` entry in `registry.py` points to `gaia.agents.tools.*`. No agent-specific tool paths remain. Old paths get deprecated re-exports for backward compatibility.
+
+## Package Format
+
+### `gaia-agent.yaml`
+
+```yaml
+id: chat
+name: Chat
+version: 0.1.0                      # independent of framework version
+description: "General conversation — fast, personality-first"
+author: AMD
+license: MIT
+
+category: conversation
+tags: [chat, general, personality]
+icon: message-circle
+tools_count: 0
+
+language: python
+min_gaia_version: "0.18.0"
+models: [Qwen3.5-35B-A3B-GGUF]
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+interfaces:
+  tui: true
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: true
+```
+
+### `pyproject.toml`
+
+```toml
+[project]
+name = "gaia-agent-chat"
+version = "0.1.0"
+dependencies = ["amd-gaia>=0.18.0"]
+
+[project.entry-points."gaia.agent"]
+chat = "gaia_agent_chat.agent:ChatAgent"
+```
+
+Agents with cross-agent dependencies (e.g. RoutingAgent uses CodeAgent) declare them as package dependencies: `dependencies = ["amd-gaia>=0.18.0", "gaia-agent-code>=0.1.0"]`.
+
+## Implementation Steps
+
+<Steps>
+<Step title="Promote shared tool mixins (#1396)">
+Move RAG, FileIO, Shell, CodeIndex mixins to `src/gaia/agents/tools/`. Update all imports and `KNOWN_TOOLS`. Add deprecated re-exports. Run full test suite — no behavior change.
+</Step>
+<Step title="Create agent package skeletons">
+For each of the 16 agents, create `hub/agents/python/{id}/` with `gaia-agent.yaml`, `pyproject.toml`, `gaia_agent_{id}/` package dir, `tests/`, and `README.md`.
+</Step>
+<Step title="Move first agent (summarize)">
+Start with `summarize` — simplest, fewest dependencies. Proves the pattern end-to-end before bulk migration.
+</Step>
+<Step title="Move remaining agents in batches">
+Migrate the other 15 agents. Rewrite internal imports (`gaia.agents.{name}` → `gaia_agent_{name}`). Framework imports stay. Cross-agent deps become package deps.
+</Step>
+<Step title="Strip the core wheel">
+Remove agent packages from `setup.py`. Remove `gaia-emr`/`gaia-code` console scripts. Add `amd-gaia[agents]` and per-agent extras.
+</Step>
+<Step title="Update the registry">
+`_register_builtin_agents()` keeps only `builder`. Add `_discover_installed_agents()` using the `gaia.agent` entry point group.
+</Step>
+<Step title="Update CLI / UI / API callsites">
+Replace ~16 direct agent imports in `cli.py`, `ui/_chat_helpers.py`, `ui/agent_loop.py`, and apps with `registry.create_agent(id)`.
+</Step>
+<Step title="Add framework generic server">
+`src/gaia/agents/base/server.py` wraps any Agent into REST API + MCP server. Enables `gaia agent run <id> --api` and `--mcp`.
+</Step>
+<Step title="Add CI/CD workflow">
+`.github/workflows/build_agents.yml` matrix-builds the C++ agent binaries;
+`.github/workflows/publish_agents.yml` matrix-builds every Python agent wheel
+(matrix derived from `setup.py`'s `agents` extra via
+`util/list_agent_packages.py`) and publishes it to PyPI on a `v*` tag using
+`pypa/gh-action-pypi-publish` with `skip-existing: true` (PyPI-native version
+immutability). R2 publishing is handled at author time by `gaia agent publish`.
+</Step>
+<Step title="Relocate tests">
+Move agent-specific tests to `hub/agents/python/{id}/tests/`. Framework tests stay in `tests/`.
+</Step>
+</Steps>
+
+## Legacy Agent Modernization
+
+Several agents predate the Agent UI and the connectors framework. They work only via standalone CLI/app entry points, aren't in the registry, lack the modern class attributes, and have no web UI presence. Moving them to `hub/agents/` is not enough — they must also be **modernized** to the Agent Hub package standard.
+
+| Agent | Registered? | Standalone CLI/app | Modern class attrs | Status |
+|-------|:-----------:|:------------------:|:------------------:|--------|
+| chat, analyst, browser | ✅ (factory) | — | factory-based | **Modern** |
+| email, connectors-demo | ✅ | email has `cli.py` | ✅ full attrs + connectors | **Modern** |
+| builder | ✅ (hidden) | — | factory-based | **Modern** |
+| **jira** | ❌ | — | ❌ | **Legacy** |
+| **docker** | ❌ | — (MCPAgent base) | ❌ | **Legacy** |
+| **blender** | ❌ | `app.py` | ❌ | **Legacy** |
+| **sd** | ❌ | — | ❌ | **Legacy** |
+| **emr** | ❌ | `cli.py` + `gaia-emr` | ❌ | **Legacy** |
+| **code** | entry_points only | `cli.py` + `gaia-code` | ❌ | **Partial** |
+| docqa, fileio, summarize | ❌ | — | ❌ | **Example/util** |
+| routing | ❌ | — | not an `Agent` subclass | **Utility** (keep as-is) |
+
+**Modernization per legacy agent** (tracked in [#1397](https://github.com/amd/gaia/issues/1397)):
+
+1. Add modern class attributes: `AGENT_ID`, `AGENT_NAME`, `AGENT_DESCRIPTION`, `CONVERSATION_STARTERS`, and `REQUIRED_CONNECTORS` where applicable (e.g. jira → Atlassian OAuth).
+2. Author the `gaia-agent.yaml` manifest (category, icon, tags, requirements, interfaces) so the agent renders as a Hub card.
+3. Register via the `gaia.agent` entry point — discoverable in the web UI, not just standalone CLI.
+4. Adopt the conversational/streaming response mode so the agent works in the chat surface.
+5. Keep the standalone CLI/app as a thin wrapper over the registry-created agent (no duplicate logic).
+6. `docker` inherits `MCPAgent` — confirm it composes with the framework server (Step 8) or document why it diverges.
+
+**Not modernized:** `routing` stays a utility dispatcher (not user-discoverable). `docqa`/`fileio`/`summarize` are example/building-block agents — `summarize` becomes the migration pilot (Step 3); `docqa`/`fileio` may collapse into the `chat` profiles (see [#1162](https://github.com/amd/gaia/issues/1162)).
+
+## Cross-Agent Dependencies
+
+The exploration found these agent-to-agent couplings that must be resolved:
+
+| Dependency | Resolution |
+|-----------|-----------|
+| RoutingAgent → CodeAgent | `gaia-agent-routing` declares `gaia-agent-code` dependency |
+| ChatAgent → FileIOToolsMixin (from code) | Resolved by mixin promotion (Step 1) |
+| DocQAAgent → RAG + FileIO mixins | Resolved by mixin promotion (Step 1) |
+| FileIOAgent → Shell + FileIO mixins | Resolved by mixin promotion (Step 1) |
+| code/cli.py → RoutingAgent, CodeAgent | Internal to code package, no external visibility |
+
+## Risks
+
+| Risk | Mitigation |
+|------|-----------|
+| 252 import references across the codebase break | Promote mixins first (Step 1), then migrate one agent at a time |
+| `pip install amd-gaia` no longer ships agents (breaking change) | `amd-gaia[agents]` extras preserves the "everything" install; document migration |
+| Editable dev workflow friction | `pip install -e hub/agents/python/{id}/` registers via entry points |
+| Registry can't find agents | Entry-point discovery + `~/.gaia/agents/` scan; fail loudly if an agent's `min_gaia_version` is unmet |
+
+## Verification
+
+```bash
+# Step 1 — mixin promotion, no regressions
+python -m pytest tests/ -x
+
+# Step 3 — first agent works as standalone package
+pip install -e hub/agents/python/summarize/
+gaia agent run summarize --prompt "Summarize this text"
+python -m pytest hub/agents/python/summarize/tests/ -xvs
+
+# Step 5 — core wheel is framework-only
+pip install -e ".[dev]"        # framework
+pip install -e ".[agents]"     # framework + all agents
+
+# Step 8 — generic server
+gaia agent run chat --api --port 8080
+curl http://localhost:8080/v1/chat/completions \
+  -d '{"messages":[{"role":"user","content":"hello"}]}'
+
+# Full integration
+gaia agent list
+gaia agent run chat --prompt "hello"
+```
+
+## Related
+
+- [Agent Hub UI](/plans/agent-hub-ui) — the display + distribution platform plan
+- [Agent Hub](/plans/agent-hub) — original hub vision
+- [#1091](https://github.com/amd/gaia/issues/1091) — `gaia-agent.yaml` manifest parser (unblocked by this restructure)
+- [#1162](https://github.com/amd/gaia/issues/1162) — consolidate regular/lite agent variants

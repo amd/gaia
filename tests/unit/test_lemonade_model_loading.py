@@ -2,9 +2,17 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for LemonadeClient model loading functionality."""
 
+import sys
 from unittest.mock import MagicMock, Mock, patch
 
-from gaia.llm.lemonade_client import LemonadeClient, LemonadeStatus
+import pytest
+
+from gaia.llm.lemonade_client import (
+    LemonadeClient,
+    LemonadeClientError,
+    LemonadeStatus,
+    _prompt_user_for_delete,
+)
 
 
 class TestEnsureModelLoaded:
@@ -335,3 +343,215 @@ class TestModelLoadingIntegration:
 
         # Verify load_model was NOT called (model already loaded)
         mock_load.assert_not_called()
+
+
+# A message that ``_is_corrupt_download_error`` classifies as corrupt
+# (see ``_CORRUPT_DOWNLOAD_PHRASES`` in lemonade_client.py).
+_CORRUPT_ERROR_MESSAGE = "download validation failed: files are incomplete"
+
+
+class TestPromptUserForDeleteNonInteractive:
+    """``_prompt_user_for_delete`` must not call ``input()`` without a TTY.
+
+    Its siblings ``_prompt_user_for_download`` and ``_prompt_user_for_repair``
+    already guard on ``sys.stdin.isatty()/sys.stdout.isatty()`` and return the
+    proceed-default in a non-interactive environment. ``_prompt_user_for_delete``
+    lacks that guard, so on the FastAPI lifespan threadpool (no TTY) it calls
+    ``input()`` and raises ``EOFError`` — dead-ending first boot (#1293).
+    """
+
+    def test_delete_prompt_returns_proceed_default_without_tty(self):
+        """No TTY -> auto-proceed (return True), never call input()."""
+        with (
+            patch.object(sys.stdin, "isatty", return_value=False),
+            patch.object(sys.stdout, "isatty", return_value=False),
+            patch("builtins.input") as mock_input,
+        ):
+            result = _prompt_user_for_delete("Qwen3-0.6B-GGUF")
+
+        assert result is True
+        mock_input.assert_not_called()
+
+    def test_delete_prompt_does_not_raise_eoferror_without_tty(self):
+        """Reproduce the #1293 dead-end: an idle/closed stdin makes ``input()``
+        raise ``EOFError``. With the isatty guard in place we must never reach
+        ``input()``, so no ``EOFError`` escapes.
+        """
+        with (
+            patch.object(sys.stdin, "isatty", return_value=False),
+            patch.object(sys.stdout, "isatty", return_value=False),
+            patch("builtins.input", side_effect=EOFError),
+        ):
+            # Must NOT raise — the guard short-circuits before input().
+            result = _prompt_user_for_delete("Qwen3-0.6B-GGUF")
+
+        assert result is True
+
+
+def _make_client():
+    return LemonadeClient(host="localhost", port=13305)
+
+
+class TestLoadModelCorruptNonInteractive:
+    """``load_model(prompt=False)`` must auto-heal a corrupt model without any
+    interactive prompt, bounded to a single delete+redownload (#1293).
+    """
+
+    @patch("gaia.llm.lemonade_client._prompt_user_for_delete")
+    @patch("gaia.llm.lemonade_client._prompt_user_for_repair")
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
+    def test_prompt_false_never_calls_repair_or_delete_prompt(
+        self, mock_send, mock_pull, mock_repair, mock_delete
+    ):
+        """With ``prompt=False`` neither prompt helper may be invoked, even
+        though the load failure is corrupt-classified. Resume succeeds here.
+        """
+        # First load fails corrupt; resume download completes; reload OK.
+        mock_send.side_effect = [
+            Exception(_CORRUPT_ERROR_MESSAGE),
+            {"status": "loaded"},
+        ]
+        mock_pull.return_value = iter([{"event": "complete"}])
+
+        client = _make_client()
+        result = client.load_model("Qwen3-0.6B-GGUF", prompt=False)
+
+        assert result == {"status": "loaded"}
+        mock_repair.assert_not_called()
+        mock_delete.assert_not_called()
+
+    @patch("gaia.llm.lemonade_client._prompt_user_for_delete")
+    @patch("gaia.llm.lemonade_client._prompt_user_for_repair")
+    @patch.object(LemonadeClient, "delete_model")
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
+    def test_resume_failure_triggers_single_delete_and_redownload(
+        self, mock_send, mock_pull, mock_delete_model, mock_repair, mock_delete_prompt
+    ):
+        """Resume fails -> exactly ONE delete + ONE fresh re-download, then a
+        successful reload. No prompts, bounded recovery.
+        """
+        # send_request: initial load fails corrupt, then final reload succeeds.
+        mock_send.side_effect = [
+            Exception(_CORRUPT_ERROR_MESSAGE),
+            {"status": "loaded"},
+        ]
+        # pull_model_stream: first call (resume) errors, second (fresh) completes.
+        mock_pull.side_effect = [
+            iter([{"event": "error", "error": "resume broke"}]),
+            iter([{"event": "progress", "percent": 50}, {"event": "complete"}]),
+        ]
+
+        client = _make_client()
+        result = client.load_model("Qwen3-0.6B-GGUF", prompt=False)
+
+        assert result == {"status": "loaded"}
+        mock_repair.assert_not_called()
+        mock_delete_prompt.assert_not_called()
+        # Bounded: exactly one delete, exactly two pull attempts (resume + fresh).
+        assert mock_delete_model.call_count == 1
+        assert mock_pull.call_count == 2
+
+    @patch("gaia.llm.lemonade_client._prompt_user_for_delete")
+    @patch("gaia.llm.lemonade_client._prompt_user_for_repair")
+    @patch.object(LemonadeClient, "delete_model")
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
+    def test_unrecoverable_raises_actionable_error_no_eoferror(
+        self, mock_send, mock_pull, mock_delete_model, mock_repair, mock_delete_prompt
+    ):
+        """Both resume and the single fresh re-download fail -> a single loud,
+        actionable ``LemonadeClientError`` naming the recovery action and the
+        Lemonade server log. No ``EOFError``, no hang, no silent swallow.
+        """
+        # Initial load fails corrupt; no successful reload ever happens.
+        mock_send.side_effect = Exception(_CORRUPT_ERROR_MESSAGE)
+        # Both pull attempts error out.
+        mock_pull.side_effect = [
+            iter([{"event": "error", "error": "resume broke"}]),
+            iter([{"event": "error", "error": "fresh broke"}]),
+        ]
+
+        client = _make_client()
+        with pytest.raises(LemonadeClientError) as exc_info:
+            client.load_model("Qwen3-0.6B-GGUF", prompt=False)
+
+        message = str(exc_info.value)
+        # Actionable: names a recovery affordance and where to look.
+        assert "Qwen3-0.6B-GGUF" in message
+        assert "redownload" in message.lower() or "re-download" in message.lower()
+        assert "server.log" in message.lower() or "server log" in message.lower()
+        # No prompts; bounded recovery (single delete, two pulls).
+        mock_repair.assert_not_called()
+        mock_delete_prompt.assert_not_called()
+        assert mock_delete_model.call_count == 1
+        assert mock_pull.call_count == 2
+
+    @patch("gaia.llm.lemonade_client._prompt_user_for_delete")
+    @patch("gaia.llm.lemonade_client._prompt_user_for_repair")
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
+    def test_recovery_logs_progress_at_info(
+        self, mock_send, mock_pull, mock_repair, mock_delete, caplog
+    ):
+        """Auto-heal must emit INFO progress from the pull stream so the boot
+        log (tailed by the UI) shows movement and doesn't look frozen.
+        """
+        mock_send.side_effect = [
+            Exception(_CORRUPT_ERROR_MESSAGE),
+            {"status": "loaded"},
+        ]
+        mock_pull.return_value = iter(
+            [
+                {
+                    "event": "progress",
+                    "percent": 40,
+                    "bytes_downloaded": 4 * 1024**3,
+                    "bytes_total": 10 * 1024**3,
+                },
+                {"event": "complete"},
+            ]
+        )
+
+        client = _make_client()
+        import logging
+
+        with caplog.at_level(logging.INFO, logger=client.log.name):
+            client.load_model("Qwen3-0.6B-GGUF", prompt=False)
+
+        info_text = " ".join(
+            r.getMessage() for r in caplog.records if r.levelno >= logging.INFO
+        )
+        assert "40" in info_text
+
+
+class TestLoadModelCorruptInteractive:
+    """A real TTY (``prompt=True``) must still prompt as before (#1293 must not
+    weaken the interactive path).
+    """
+
+    @patch("gaia.llm.lemonade_client._prompt_user_for_repair", return_value=True)
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
+    def test_prompt_true_with_tty_reaches_repair_prompt(
+        self, mock_send, mock_pull, mock_repair
+    ):
+        """prompt=True + simulated TTY -> the repair prompt is reached. The
+        helper is patched so the test never blocks on real stdin.
+        """
+        mock_send.side_effect = [
+            Exception(_CORRUPT_ERROR_MESSAGE),
+            {"status": "loaded"},
+        ]
+        mock_pull.return_value = iter([{"event": "complete"}])
+
+        client = _make_client()
+        with (
+            patch.object(sys.stdin, "isatty", return_value=True),
+            patch.object(sys.stdout, "isatty", return_value=True),
+        ):
+            result = client.load_model("Qwen3-0.6B-GGUF", prompt=True)
+
+        assert result == {"status": "loaded"}
+        mock_repair.assert_called_once()

@@ -17,7 +17,7 @@ const { app, BrowserWindow, dialog, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { spawn, spawnSync } = require("child_process");
+const { spawn } = require("child_process");
 const { pathToFileURL } = require("url");
 
 // ── Shared log path ───────────────────────────────────────────────────────────
@@ -57,6 +57,7 @@ const TrayManager = require("./services/tray-manager.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
 const PortManager = require("./services/port-manager.cjs");
+const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
 const { buildIndexQuery } = require("./services/index-query.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
 const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
@@ -78,6 +79,11 @@ app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 // all Linux launch paths behave identically.
 if (process.platform === "linux") {
   app.commandLine.appendSwitch("no-sandbox");
+
+  // Workaround: disable Chromium's Wayland color management which crashes on
+  // some Wayland compositors that implement the wp_color_manager protocol
+  // partially. See issue reports about wayland_wp_color_manager.cc SIGTRAP.
+  app.commandLine.appendSwitch("disable-features", "WaylandColorManagement");
 }
 
 // ── F7: Log tee to ~/.gaia/electron-main.log (issue #782) ───────────────────
@@ -220,6 +226,57 @@ let isQuitting = false;
 // ── Backend Process ────────────────────────────────────────────────────────
 
 /**
+ * Terminate a backend left running from a previous launch.
+ *
+ * The desktop app may be double-clicked multiple times or crash, leaving an
+ * orphaned `gaia chat --ui` process. On Windows that process keeps an open
+ * handle on `gaia.exe`, so the next upgrade's `uv pip install --refresh` fails
+ * with `os error 32` (file in use) — issue #1388. We MUST run this BEFORE the
+ * installer (`bootstrapBackend()`), not just before spawning the new backend,
+ * so the executable can be replaced.
+ *
+ * The PID is read from ~/.gaia/backend.pid and verified to be a GAIA backend
+ * (conservative match) before signalling, so we never kill unrelated user
+ * processes (issue #782 TOCTOU mitigation). Idempotent: the pidfile is removed
+ * after the first call, so later calls are no-ops.
+ */
+async function cleanupOrphanedBackend() {
+  try {
+    const pidFile = path.join(_GAIA_DIR, "backend.pid");
+    if (!fs.existsSync(pidFile)) return;
+    try {
+      const existingPid = parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
+      if (!Number.isNaN(existingPid)) {
+        console.log(`[main] Found existing backend pidfile (${existingPid}) — verifying process identity`);
+
+        let isBackend = false;
+        try {
+          isBackend = isGaiaBackendProcess(existingPid);
+        } catch (err) {
+          console.warn(`[main] Could not verify pid ${existingPid}: ${err.message}`);
+        }
+
+        if (!isBackend) {
+          console.log(`[main] PID ${existingPid} does not appear to be a GAIA backend; skipping kill`);
+        } else {
+          try {
+            await portManager.killBackend(existingPid);
+            console.log(`[main] Cleaned up previous backend pid ${existingPid}`);
+          } catch (err) {
+            console.warn(`[main] Could not clean previous backend pid ${existingPid}: ${err.message}`);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[main] Failed reading backend pidfile: ${err.message}`);
+    }
+    try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
+  } catch (err) {
+    console.warn(`[main] PID cleanup check failed: ${err.message}`);
+  }
+}
+
+/**
  * Start the GAIA Python backend. Expects the backend installer to have
  * already ensured the venv is populated — callers should await
  * `bootstrapBackend()` first.
@@ -248,70 +305,10 @@ async function startBackend() {
     backendPort = DEFAULT_BACKEND_PORT;
   }
   healthCheckUrl = `http://localhost:${backendPort}/api/health`;
-  // Clean up any stale backend PID left from previous runs. The AppImage
-  // may be double-clicked multiple times or crash, leaving orphaned
-  // backend processes. We store a PID file under ~/.gaia/backend.pid and
-  // attempt to SIGTERM any still-running PID before starting a new backend.
-  try {
-    const pidFile = path.join(_GAIA_DIR, "backend.pid");
-    if (fs.existsSync(pidFile)) {
-      try {
-        const existingPid = parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
-        if (!Number.isNaN(existingPid)) {
-          console.log(`[main] Found existing backend pidfile (${existingPid}) — verifying process identity`);
-
-          // Verify the PID belongs to a GAIA backend before signalling it.
-          // Prefer a conservative match on the process command to avoid
-          // accidentally killing unrelated user processes (TOCTOU mitigation).
-          let isBackend = false;
-          try {
-            if (process.platform === "linux") {
-              const procCmd = `/proc/${existingPid}/cmdline`;
-              if (fs.existsSync(procCmd)) {
-                const raw = fs.readFileSync(procCmd, "utf8");
-                // /proc/<pid>/cmdline is NUL-separated; use a stricter match to
-                // avoid killing unrelated Python processes (Jupyter, LSP, etc.).
-                // Legitimate backend uses: `gaia chat --ui --ui-port <port>`
-                const looksLikeGaiaBackend = raw.includes("gaia") && (raw.includes("chat") || raw.includes("--ui-port"));
-                if (looksLikeGaiaBackend) {
-                  isBackend = true;
-                }
-              }
-            } else if (process.platform === "darwin") {
-              try {
-                const out = spawnSync("ps", ["-p", String(existingPid), "-o", "command="], { encoding: "utf8" });
-                const cmd = (out && out.stdout) ? out.stdout : "";
-                const looksLikeGaiaBackend = cmd.includes("gaia") && (cmd.includes("chat") || cmd.includes("--ui-port"));
-                if (looksLikeGaiaBackend) {
-                  isBackend = true;
-                }
-              } catch {
-                // fallthrough
-              }
-            }
-          } catch (err) {
-            console.warn(`[main] Could not verify pid ${existingPid}: ${err.message}`);
-          }
-
-          if (!isBackend) {
-            console.log(`[main] PID ${existingPid} does not appear to be a GAIA backend; skipping kill`);
-          } else {
-            try {
-              await portManager.killBackend(existingPid);
-              console.log(`[main] Cleaned up previous backend pid ${existingPid}`);
-            } catch (err) {
-              console.warn(`[main] Could not clean previous backend pid ${existingPid}: ${err.message}`);
-            }
-          }
-        }
-      } catch (err) {
-        console.warn(`[main] Failed reading backend pidfile: ${err.message}`);
-      }
-      try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
-    }
-  } catch (err) {
-    console.warn(`[main] PID cleanup check failed: ${err.message}`);
-  }
+  // Defensively clean up any orphaned backend in case bootstrap was skipped
+  // on this path. cleanupOrphanedBackend() is idempotent and a no-op once the
+  // pidfile has already been consumed earlier in app startup.
+  await cleanupOrphanedBackend();
 
   console.log(`Starting backend: ${gaiaCmd} chat --ui --ui-port ${backendPort}`);
 
@@ -795,6 +792,12 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.warn("[main] Agent seeding failed (non-fatal):", err);
   }
+
+  // Phase A0: kill any orphaned backend from a previous launch BEFORE the
+  // installer runs. On Windows a live `gaia chat --ui` holds an open handle on
+  // gaia.exe, so an upgrade's `uv pip install --refresh` fails with os error 32
+  // unless that process is gone first (issue #1388).
+  await cleanupOrphanedBackend();
 
   // Phase A: ensure the Python backend is installed BEFORE creating the
   // main window. The progress dialog owns the UI during this phase.

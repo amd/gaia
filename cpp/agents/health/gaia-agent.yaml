@@ -1,0 +1,40 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Packaging manifest for the native (C++) health agent. The binary is built
+# from cpp/examples/health_agent.cpp by .github/workflows/build_agents.yml and
+# packaged into dist/health/ by cpp/packaging/package_agents.py.
+id: health
+name: System Health
+version: 0.1.0
+description: "Diagnose a slow or unhealthy Windows system via the Windows MCP server."
+author: AMD
+license: MIT
+
+category: system
+tags: [health, system, diagnostics, mcp, windows]
+icon: heart-pulse
+
+language: cpp
+min_gaia_version: "0.18.0"
+models: [Qwen3-4B-Instruct-2507-GGUF]
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64]
+
+cpp:
+  static_linked: true
+  binaries:
+    win-x64: health-win-x64.exe
+
+permissions:
+  - process:read
+  - system:read
+
+interfaces:
+  tui: true
+  cli: false
+  pipe: false
+  api_server: false
+  mcp_server: false

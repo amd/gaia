@@ -45,6 +45,9 @@ from pydantic import BaseModel, Field
 
 import gaia.connectors as connections
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+from gaia.connectors.activations import list_agent_activations
+from gaia.connectors.api import activate as activate_connector_for_agent
+from gaia.connectors.api import deactivate as deactivate_connector_for_agent
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -81,6 +84,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/connectors", tags=["connectors"])
 
+# Issue #1292 — forwarded pre-authenticated connections. Separate prefix
+# (``/v1/connections``) per the issue's REST contract: a host app that already
+# authenticated a user POSTs the forwarded grant here; GAIA persists it and
+# acts on the mailbox as the host app's client — no second OAuth. The UI
+# server binds localhost by default and gates remote/tunnel access behind a
+# token (see ``TunnelAuthMiddleware``); mutating routes also require the
+# ``X-Gaia-UI`` CSRF header below.
+forwarded_router = APIRouter(prefix="/v1/connections", tags=["connections"])
+
 
 # ─────────────────────────────────────────────────────────────────
 # CSRF guard (plan amendment A8)
@@ -97,6 +109,31 @@ def _require_ui_header(request: Request) -> None:
         raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
+def _require_mcp_server(connector_id: str) -> None:
+    """Reject activation writes for non-MCP-server connectors.
+
+    Activations gate MCP tool visibility via ``MCPClientManager.tools_for_agent``
+    (see issue #1005). OAuth-only connectors have no MCP tool surface — their
+    agent access is gated by per-scope grants, not by this ledger — so allowing
+    a write here would create a switch that does nothing.
+    """
+    try:
+        spec = REGISTRY.get(connector_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown connector: {connector_id!r}"
+        )
+    if spec.type != "mcp_server":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Activations apply to MCP-server connectors only; "
+                f"{connector_id!r} is type {spec.type!r}. Use per-agent grants "
+                "to control access for OAuth connectors."
+            ),
+        )
+
+
 # ─────────────────────────────────────────────────────────────────
 # Request / response models
 # ─────────────────────────────────────────────────────────────────
@@ -110,8 +147,44 @@ class GrantRequest(BaseModel):
     scopes: List[str] = Field(default_factory=list)
 
 
+class ActivationRequest(BaseModel):
+    """Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
+
+    Valid only for ``mcp_server`` connectors — see ``_require_mcp_server``.
+
+    ``scopes`` is optional: when present and no grant exists for the pair,
+    it is used to auto-create the grant (one-click convenience). When the
+    pair already has a grant the body is ignored — see issue #1005.
+    """
+
+    scopes: Optional[List[str]] = None
+
+
 class ConfigureRequest(BaseModel):
     config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ForwardConnectionRequest(BaseModel):
+    """Body for ``POST /v1/connections/{provider}`` (#1292).
+
+    A host app forwards the OAuth client it authenticated the user under
+    (``client_id`` + ``client_secret``) plus the user's ``refresh_token``.
+    GAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second
+    OAuth, no consent step.
+
+    ``refresh_token`` / ``client_secret`` are secret INPUTS — they are never
+    echoed back in any response. ``account_email`` is display-only in v1
+    (the keyring slot is single-account per provider). ``grant_agents`` is
+    the list of namespaced agent ids (e.g. ``installed:email``) to grant the
+    forwarded scopes so they can resolve the connection ambiently.
+    """
+
+    client_id: str = Field(min_length=1)
+    client_secret: str = Field(default="")
+    refresh_token: str = Field(min_length=1)
+    scopes: List[str] = Field(default_factory=list)
+    account_email: str = Field(default="")
+    grant_agents: List[str] = Field(default_factory=list)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -305,6 +378,14 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
                     e,
                 )
 
+    # Activations ledger snapshot (issue #1005). Read-only here; the
+    # frontend toggles each entry via PUT/DELETE
+    # /api/connectors/{id}/activations/{agent_id} — mutating routes
+    # accept ``mcp_server`` connectors only (see ``_require_mcp_server``).
+    # The dict is always returned (empty ``{}`` for OAuth) so the response
+    # shape stays uniform across connector types.
+    activations = list_agent_activations(spec.id)
+
     return {
         "id": spec.id,
         "display_name": spec.display_name,
@@ -321,6 +402,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "account_id": account_id,
         "scopes": scopes,
         "enabled": enabled,
+        "activations": activations,
         "mcp_env_keys": list(spec.mcp_env_keys),
         "default_scopes": list(spec.default_scopes),
         "available_scopes": list(spec.available_scopes),
@@ -375,6 +457,7 @@ async def connector_events() -> StreamingResponse:
       - ``connector.oauth.completed``   ({connector_id, account_email})
       - ``connector.oauth.error``       ({connector_id, error})
       - ``connector.grant.changed``     ({connector_id, agent_id, scopes})
+      - ``connector.activation.changed`` ({connector_id, agent_id, active})
     """
     queue = await _emitter.subscribe()
 
@@ -503,6 +586,11 @@ async def list_agent_mcps(request: Request) -> Dict[str, Any]:
 @router.get("/{connector_id}/grants")
 async def get_grants(connector_id: str) -> Dict[str, Any]:
     return {"grants": list_agent_grants(connector_id)}
+
+
+@router.get("/{connector_id}/activations")
+async def get_activations(connector_id: str) -> Dict[str, Any]:
+    return {"activations": list_agent_activations(connector_id)}
 
 
 @router.get("/{connector_id}")
@@ -695,4 +783,195 @@ async def delete_grant(connector_id: str, agent_id: str) -> Response:
         "connector.grant.changed",
         {"connector_id": connector_id, "agent_id": agent_id, "scopes": []},
     )
+    return Response(status_code=204)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Activations endpoints (issue #1005)
+#
+# Activations gate MCP tool visibility (``MCPClientManager.tools_for_agent``).
+# The PUT/DELETE routes accept ``mcp_server`` connectors only — OAuth
+# connectors have no MCP tool surface and are rejected with HTTP 400 via
+# ``_require_mcp_server``. The GET route is type-agnostic so frontends
+# that fetch indiscriminately keep working (returns ``{}`` for OAuth).
+# ─────────────────────────────────────────────────────────────────
+
+
+@router.put(
+    "/{connector_id}/activations/{agent_id:path}",
+    dependencies=[Depends(_require_ui_header)],
+)
+async def put_activation(
+    connector_id: str, agent_id: str, body: ActivationRequest
+) -> Dict[str, Any]:
+    """Activate ``agent_id`` for ``connector_id``.
+
+    Auto-grants when no grant exists and ``body.scopes`` is provided.
+    Returns 400 if no grant exists and the body omits scopes — the
+    frontend must look up REQUIRED_CONNECTORS scopes for the agent and
+    pass them in.
+    """
+    _require_mcp_server(connector_id)
+    try:
+        auto_granted = activate_connector_for_agent(
+            connector_id, agent_id, scopes_for_grant=body.scopes
+        )
+    except ConfigurationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
+
+    if auto_granted:
+        # Auto-grant fired — also surface the grant change so subscribed
+        # UIs refresh both panels.
+        await _emitter.emit(
+            "connector.grant.changed",
+            {
+                "connector_id": connector_id,
+                "agent_id": agent_id,
+                "scopes": list(body.scopes or []),
+            },
+        )
+    # ``connector.activation.changed`` is emitted by ``api.activate`` so CLI,
+    # SDK, and HTTP callers all notify through one path (#1226).
+    return {
+        "connector_id": connector_id,
+        "agent_id": agent_id,
+        "active": True,
+        "auto_granted": auto_granted,
+    }
+
+
+@router.delete(
+    "/{connector_id}/activations/{agent_id:path}",
+    status_code=204,
+    dependencies=[Depends(_require_ui_header)],
+)
+async def delete_activation(connector_id: str, agent_id: str) -> Response:
+    """Deactivate ``agent_id`` for ``connector_id``. Idempotent.
+
+    Non-destructive — the grant is preserved so a later re-activate is
+    one click. To wipe the grant call ``DELETE
+    /api/connectors/{id}/grants/{agent_id}`` instead.
+    """
+    # Route through ``api.deactivate`` so the MCP-only guard and the
+    # ``connector.activation.changed`` emit fire on one path for all callers
+    # (#1226). Previously this called the bare ledger function and emitted
+    # inline, bypassing the guard.
+    _require_mcp_server(connector_id)
+    deactivate_connector_for_agent(connector_id, agent_id)
+    return Response(status_code=204)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Forwarded pre-authenticated connections — /v1/connections (#1292)
+#
+# A consuming app that ALREADY authenticated a user FORWARDS that connection
+# to GAIA. GAIA persists it and acts on the mailbox as the host app's client —
+# no second OAuth. Read routes return metadata only (secrets masked); the POST
+# requires the X-Gaia-UI CSRF header; the whole surface is localhost-bound /
+# tunnel-token-gated by the UI server.
+# ─────────────────────────────────────────────────────────────────
+
+
+@forwarded_router.post(
+    "/{provider}", status_code=201, dependencies=[Depends(_require_ui_header)]
+)
+async def forward_connection(
+    request: Request, provider: str, body: ForwardConnectionRequest
+) -> Dict[str, Any]:
+    """Persist a forwarded grant — no browser/consent step (AC1, AC3, AC4).
+
+    Fails loudly: empty client_id/refresh_token → 422 (pydantic ``min_length``);
+    insecure keyring backend → 500; missing required scopes → 403 +
+    ``missing_scopes``. Returns a metadata-only summary — never the refresh
+    token or client secret.
+
+    Required scopes are resolved from the granted agents' ``REQUIRED_CONNECTORS``
+    declarations (single source of truth). This means scope requirements
+    auto-tighten as agents add new ``ConnectorRequirement`` entries — no
+    duplication in the router.
+    """
+    required: set[str] = set()
+    if body.grant_agents:
+        registry = getattr(request.app.state, "agent_registry", None)
+        if registry is None:
+            raise HTTPException(
+                status_code=503, detail="Agent registry not initialized"
+            )
+        by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
+        unknown_agents = [nsid for nsid in body.grant_agents if nsid not in by_nsid]
+        if unknown_agents:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "unknown_agent",
+                    "agent_ids": unknown_agents,
+                },
+            )
+        for nsid in body.grant_agents:
+            reg = by_nsid[nsid]
+            for cr in reg.required_connections:
+                if cr.connector_id == provider:
+                    required.update(cr.scopes)
+
+    try:
+        summary = connections.import_forwarded_connection(
+            provider=provider,
+            client_id=body.client_id,
+            client_secret=body.client_secret,
+            refresh_token=body.refresh_token,
+            scopes=body.scopes,
+            account_email=body.account_email,
+            grant_agents=body.grant_agents,
+            required_scopes=sorted(required),
+        )
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
+
+    await _emitter.emit(
+        "connector.configured",
+        {"connector_id": provider, "account_id": summary.get("account_email")},
+    )
+    return summary
+
+
+@forwarded_router.get("")
+@forwarded_router.get("/")
+async def list_forwarded_connections() -> Dict[str, Any]:
+    """List persisted connections — metadata only, secrets omitted (AC4)."""
+    return {"connections": connections.list_connections()}
+
+
+@forwarded_router.get("/{provider}")
+async def get_forwarded_connection(provider: str) -> Dict[str, Any]:
+    """Return one connection's metadata, or 404 — secrets omitted (AC4)."""
+    entry = connections.get_connection(provider)
+    if entry is None:
+        raise HTTPException(
+            status_code=404, detail=f"No connection for provider {provider!r}"
+        )
+    return entry
+
+
+@forwarded_router.delete(
+    "/{provider}", status_code=204, dependencies=[Depends(_require_ui_header)]
+)
+async def revoke_forwarded_connection(provider: str) -> Response:
+    """Revoke a forwarded connection: clear the refresh token, the forwarded
+    OAuth client credentials, every per-agent grant, and the cached provider /
+    token state (AC4). Idempotent."""
+    from gaia.connectors.grants import revoke_all_grants_for
+    from gaia.connectors.providers import _registry as _provider_registry
+    from gaia.connectors.store import clear_provider_credentials
+    from gaia.connectors.tokens import _cache as _token_cache
+
+    connections.revoke_connection(provider)
+    clear_provider_credentials(provider)
+    revoke_all_grants_for(provider)
+    _provider_registry.pop(provider, None)
+    for key in [k for k in _token_cache if k[0] == provider]:
+        _token_cache.pop(key, None)
+
+    await _emitter.emit("connector.disconnected", {"connector_id": provider})
     return Response(status_code=204)

@@ -1,0 +1,405 @@
+/* Schedule Manager */
+.schedule-modal { width: 640px; max-height: 80vh; display: flex; flex-direction: column; }
+
+.schedule-modal .modal-body { overflow-y: auto; flex: 1; }
+
+/* Create form */
+.schedule-create-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.schedule-form-row {
+    display: flex;
+    gap: 8px;
+}
+
+.schedule-form-row input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: var(--font-sans);
+}
+
+.schedule-form-row input:focus {
+    outline: none;
+    border-color: var(--amd-red);
+}
+
+.schedule-form-row input::placeholder {
+    color: var(--text-muted);
+}
+
+.schedule-prompt-input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    resize: vertical;
+    min-height: 60px;
+}
+
+.schedule-prompt-input:focus {
+    outline: none;
+    border-color: var(--amd-red);
+}
+
+.schedule-prompt-input::placeholder {
+    color: var(--text-muted);
+}
+
+.schedule-create-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.schedule-form-error {
+    font-size: 12px;
+    color: var(--amd-red);
+    margin-top: -4px;
+}
+
+/* Schedule list */
+.schedule-section {
+    margin-bottom: 20px;
+}
+
+.schedule-section:last-child {
+    margin-bottom: 0;
+}
+
+.schedule-section h4 {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+
+.schedule-empty {
+    font-size: 13px;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 24px 12px;
+}
+
+.schedule-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* Individual schedule card */
+.schedule-card {
+    display: flex;
+    flex-direction: column;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease);
+}
+
+.schedule-card:hover {
+    background: var(--bg-hover);
+}
+
+.schedule-card.selected {
+    border-color: var(--amd-red);
+    background: var(--bg-hover);
+}
+
+.schedule-card.just-ran {
+    animation: schedule-flash 1.5s ease-out;
+}
+
+@keyframes schedule-flash {
+    0% { border-color: var(--accent-green); box-shadow: 0 0 8px rgba(78, 201, 50, 0.3); }
+    100% { border-color: var(--border-light); box-shadow: none; }
+}
+
+.schedule-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.schedule-card-name {
+    font-size: 13px;
+    font-weight: 600;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.schedule-card-status {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+}
+
+.schedule-card-status.active {
+    color: #22c55e;
+    background: rgba(34, 197, 94, 0.1);
+}
+
+.schedule-card-status.paused {
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.1);
+}
+
+.schedule-card-status.cancelled {
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+}
+
+.schedule-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.schedule-card-prompt {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.schedule-card-actions {
+    display: flex;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+.schedule-card-actions .btn-sm {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease);
+}
+
+.schedule-card-actions .btn-sm:hover {
+    background: var(--bg-active);
+}
+
+.schedule-card-actions .btn-sm.chat {
+    color: #3b82f6;
+    border-color: #3b82f6;
+}
+
+.schedule-card-actions .btn-sm.chat:hover {
+    background: rgba(59, 130, 246, 0.1);
+}
+
+.schedule-card-actions .btn-sm.danger {
+    color: var(--amd-red);
+    border-color: var(--amd-red);
+}
+
+.schedule-card-actions .btn-sm.danger:hover {
+    background: rgba(237, 28, 36, 0.1);
+}
+
+/* Results panel */
+.schedule-results {
+    margin-top: 16px;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+}
+
+.schedule-results h4 {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+
+.schedule-results-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.schedule-result-item {
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    font-size: 12px;
+}
+
+.schedule-result-time {
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+.schedule-result-content {
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 60px;
+    overflow-y: auto;
+}
+
+.schedule-result-error {
+    color: var(--amd-red);
+}
+
+.schedule-results-empty {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 12px;
+}
+
+/* NL input */
+.schedule-nl-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    resize: vertical;
+    min-height: 50px;
+}
+
+.schedule-nl-input:focus {
+    outline: none;
+    border-color: var(--amd-red);
+}
+
+.schedule-nl-input::placeholder {
+    color: var(--text-muted);
+}
+
+/* Parsed preview */
+.schedule-parsed-preview {
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-light);
+    background: var(--bg-tertiary);
+    font-size: 12px;
+}
+
+.schedule-parsed-preview.valid {
+    border-color: #22c55e;
+    background: rgba(34, 197, 94, 0.05);
+}
+
+.schedule-parsed-preview.invalid {
+    border-color: var(--amd-red);
+    background: rgba(237, 28, 36, 0.05);
+}
+
+.schedule-parsed-loading {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.schedule-parsed-description {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.schedule-parsed-next {
+    color: var(--text-secondary);
+    font-size: 11px;
+    margin-bottom: 6px;
+}
+
+.schedule-parsed-details {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.schedule-parsed-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+/* Missing field highlight */
+.schedule-field-missing {
+    border-color: #f59e0b !important;
+    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3);
+}
+
+.btn-primary {
+    padding: 6px 16px;
+    border-radius: var(--radius-sm);
+    border: none;
+    background: var(--amd-red);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease);
+}
+
+.btn-primary:hover {
+    background: var(--amd-red-dark);
+}
+
+.btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    padding: 6px 16px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease);
+}
+
+.btn-secondary:hover {
+    background: var(--bg-active);
+}

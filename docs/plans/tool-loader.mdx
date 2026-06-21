@@ -1,0 +1,423 @@
+---
+title: "Dynamic Tool Loader"
+---
+
+<Info>
+  **Source Code:** [`src/gaia/agents/base/tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) · bundles [`src/gaia/agents/chat/tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py)
+</Info>
+
+<Note>
+**Component:** Per-turn tool visibility for agents (issue [#688](https://github.com/amd/gaia/issues/688))
+**Module:** `gaia.agents.base.tool_loader`
+**Status:** **Part 0 (#1448) + Part 1 (#1449) landed.** Part 1 ships the selection mechanism behind a default-off toggle on the ChatAgent `doc` profile. Parts 2–3 (explicit escape hatch, skill signal) are still proposed.
+**Target agent (v1):** `ChatAgent` (`doc` profile), behind a default-off toggle.
+</Note>
+
+---
+
+## Why this exists
+
+Every tool registered in `_TOOL_REGISTRY` is rendered into the agent's prompt
+**on every turn**, whether or not the conversation needs it. That couples prompt
+cost to the *size of the toolbox* rather than to *what the turn actually needs*.
+Two concrete problems follow — and this spec exists to fix both:
+
+1. **Cold-start latency (the user-felt problem).** On local inference the model
+   must **prefill** the entire system prompt before emitting the first token. The
+   *first* query of a session is the worst case — nothing is cached, so the whole
+   prompt is processed from scratch. A large tool block directly inflates
+   first-turn **time-to-first-token (TTFT)**. Trimming it is the most visible win:
+   users perceive a slow first reply, never a token count.
+
+2. **Scaling headroom (the architectural problem).** As agents gain tools (MCP
+   connectors, skills, new mixins), the prompt grows linearly with the registry.
+   Today's absolute waste may be modest, but the *slope* is the problem: every
+   tool added taxes every turn forever. This mechanism breaks that link — prompt
+   cost scales with tools *loaded*, not tools *registered*.
+
+<Warning>
+The original issue-body spec justified this on a fixed "~12K tokens / ~400 tokens
+per tool" figure. **That premise does not match the current renderer** (see
+[Correcting the original spec](#correcting-the-original-spec)). Do not build
+against the 12K number — measure first, then justify on TTFT and slope.
+</Warning>
+
+## Decided design
+
+A semantic selector over a CORE floor, with a model-driven safety net — plus a
+skill-driven signal added later once #887 lands (see
+[Part 3](#part-3-skill-driven-signal-gated-on-887)). Keyword matching is
+**explicitly out** — it is too brittle to maintain and was the source of repeated
+review failures on the prior attempts (#811 / #922 / #957 / #958).
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ CORE  — always loaded. The functional floor.             │
+│   e.g. memory, read/write, search, finish (set TBD).     │
+├──────────────────────────────────────────────────────────┤
+│ SEMANTIC  — primary mechanism.                           │
+│   embed(conversation) → cosine vs. embedded tool docs    │
+│   score tool docs ≥ τ → open matched tools' bundles.     │
+├──────────────────────────────────────────────────────────┤
+│ ESCAPE HATCH  — safety net for semantic misses.          │
+│   recovery is PATH-DEPENDENT (see "Escape hatch"):       │
+│   non-tool-calling → unlisted tool still executes;       │
+│   native tool-calling → explicit load_tools meta-tool.   │
+├──────────────────────────────────────────────────────────┤
+│ SKILL  — future signal, gated on #887 (Part 3).          │
+│   recall_skill(goal) → union matched skills' tools.      │
+│   precision booster; returns [] cleanly until #887.      │
+└──────────────────────────────────────────────────────────┘
+   loaded = CORE ∪ SKILL ∪ SEMANTIC ∪ (escape-hatch additions)
+```
+
+### Bundles are cohesion groups, not triggers
+
+With keyword gone, a **bundle** is just "these tools belong together." Semantic
+matching scores individual tool descriptions, but tools often need their
+siblings (`query_table` is useless without `create_table`). So when a tool
+matches, **pull in its bundle-mates.** A bundle carries no activation policy —
+only a name, a one-line description (used for the escape-hatch menu), and its
+member tools.
+
+### The escape hatch — free on one path, explicit on the other
+
+How the model recovers from a semantic miss depends on the render path (the same
+split that governs filtering — see [the two render paths](#the-two-render-paths-most-important-correction)):
+
+- **Non-tool-calling models — recovery is nearly free.** The model emits
+  free-form tool names, and `Agent._execute_tool` validates against
+  `self._tools_registry` — the **full** registry — with unknown-name resolution
+  (MCP-prefix stripping, bare-prefix candidate lists) already built in. So if the
+  loader filters only the *prompt* and leaves the registry whole, a tool the model
+  names that semantic didn't surface **still executes.** The escape hatch's only
+  extra job here is re-surfacing that tool's bundle in later turns.
+
+- **Native tool-calling models — recovery must be explicit.** These models are
+  physically constrained to the schemas passed in `tools=`; they **cannot** emit a
+  call for a tool that isn't listed. Reactive-via-execution is impossible. This
+  path needs an always-loaded **`load_tools(bundle)` meta-tool** (in the schema
+  list every turn) plus a short menu of bundle names + one-liners; the model calls
+  it, and the next turn's `tools=` includes the expanded set. On a small local
+  model this is the less-reliable path — measure whether it actually fires.
+
+<Warning>
+**Design rule: never tighten `_execute_tool` to the loaded subset.** Keeping
+execution validated against the full registry is what makes recovery automatic on
+the non-tool-calling path. Restricting it re-introduces the catastrophic failure
+mode — "the model wanted a real tool and was refused."
+</Warning>
+
+## When memory is off, all tools load (the legacy path)
+
+Semantic selection rides on the memory subsystem's embedder
+(`MemoryMixin._embed_text`), and **memory is a user-controlled setting** — users
+can turn it off deliberately. Dynamic tool loading must inherit that switch
+cleanly:
+
+<Warning>
+**When memory is disabled, the loader reverts to the legacy behavior: every
+registered tool is exposed, exactly as before this feature existed.** No semantic
+selection, no filtering. This is a *documented off-state*, not a degradation — the
+user chose it, and the agent must behave identically to a build without the tool
+loader.
+</Warning>
+
+This collapses three distinct conditions onto the **same** safe behavior — load
+everything — so a user can never lose access to a tool by toggling memory:
+
+| Condition | Who triggers it | Tool-loader behavior |
+|---|---|---|
+| **Memory disabled by the user** | Deliberate user setting | Legacy path: expose **all** registered tools. No-op loader. |
+| **Loader's own toggle off** (default in v1) | Deliberate (default-off) | Legacy path: expose **all** registered tools. |
+| **Embedder unavailable** (Lemonade down, model missing) | Failure | Disable loading for the session, expose **all** tools, **log loudly**. |
+
+The distinction matters for messaging, not mechanism: the user-disabled and
+toggle-off cases are silent and expected; the embedder-failure case logs an
+actionable error (it's a fault, not a choice). All three land on "all tools
+available," so the old method is always the floor the loader degrades to.
+
+## Correcting the original spec
+
+The issue-body spec drifted from the code. These are the corrections an
+implementer must internalize:
+
+| Original spec said | Reality in the code | Consequence |
+|---|---|---|
+| ~12K tokens, ~400/tool | `_format_tools_for_prompt` emits **one line per tool** (~30–60 tokens) | The text block is ~1–2K, not 12K. Justify on TTFT + slope, not absolute waste. |
+| Filter `_format_tools_for_prompt` | There are **two** render paths | Must also filter the native path or tool-calling models get **zero** benefit. |
+| Three tiers incl. skill (#887) | #887 not landed; #606 memory **has** | Defer the skill tier to Part 3 (gated on #887); v1 is CORE + semantic. Reuse `MemoryMixin._embed_text` — it exists and is already in ChatAgent. |
+| Tidy hook into `_compose_system_prompt` | System prompt is **cached** (`_system_prompt_cache`) and takes no user turn | Must recompute when selection changes and thread the user message in. |
+| Embedder unavailable → default raise, opt-in degrade | Memory v2 **disables itself for the session** on embedder failure | Mirror memory v2: embedder down → disable dynamic loading for the session, fall back to full registry, log loudly. |
+
+### The two render paths (most important correction)
+
+Tool descriptions reach the model **two different ways**, depending on the model:
+
+- **Non-tool-calling models** → `_format_tools_for_prompt()` renders text into the
+  system prompt (cheap, one line per tool).
+- **Tool-calling models** → `_build_openai_tool_schemas()` (via the `_openai_tools`
+  property) passes full JSON function schemas as the `tools=` API param. **This is
+  where the real tokens live.**
+
+A single tool selection must drive **both** renderers. Filtering only the text
+path was the gap every prior PR missed.
+
+## KPIs
+
+Savings alone is a trap — it is maximized by loading nothing, which breaks the
+agent. The KPI set is **benefit gated by no-harm**:
+
+| KPI | Type | Target |
+|---|---|---|
+| **First-turn TTFT reduction** | Headline (user-felt) | Materially lower vs. unfiltered baseline; concrete target set from the Part-0 measurement |
+| **Prompt-cost slope** (tokens per added tool) | Architectural | ≈ flat — adding N tools ≈ 0 extra prompt cost |
+| **Tool recall** (turns where every needed tool was available) | Hard guardrail | ~100% — the merge gate |
+| **Task success rate** | Outcome guardrail | Within ~2% of unfiltered baseline |
+| **Later-turn TTFT** | Regression guardrail | **No** regression from cache thrash (see below) |
+| **Escape-hatch activation rate** | Tuning signal | Low; rising = τ too strict |
+
+**Measuring recall without hand-labeling:** run the unfiltered agent as baseline
+and record which tools it actually calls per turn — that is the "needed" set. Run
+the loader and check each needed tool was visible when called. A miss is a recall
+failure.
+
+## The cache-thrash trap (TTFT's flip side)
+
+The cold-start win and a later-turn regression come from the same mechanism, so
+the design must handle both:
+
+- After turn 1 the system-prompt prefix is **KV-cached** — that is why turns 2+
+  are fast. If the loader recomputes selection every turn and the tool set
+  *changes*, it invalidates the cache and **re-prefills every turn**, turning a
+  first-turn win into an every-turn tax.
+
+Two rules follow:
+
+1. **Select once at conversation start (or change rarely), not aggressively
+   per-turn.** Stable selection preserves both the cold-start win and warm-cache
+   reuse.
+2. **Place the dynamic tool block at the *end* of the prompt**, after all stable
+   instructions. KV cache is prefix-based: everything stays cached up to the
+   first byte that differs, so the volatile part must come last. Note this is a
+   *text-path* lever — native tool-calling models carry tools in the `tools=`
+   param, not the prompt body, so there the only lever is **set stability** (rule
+   1), not ordering.
+
+## Phased build
+
+Ship in distinct reviewable phases so each layer earns its place with data — not
+one 1,000-line drop like the prior attempts.
+
+### Part 0 — Measure first (do this before any loader code)
+
+Measure the *real* tool-prompt cost on ChatAgent across **both** render paths,
+and the prompt-cost slope (add dummy tools, show the unfiltered prompt grows
+while the loaded one stays flat). This validates the TTFT/slope justification —
+and sets the concrete TTFT target — before more is built.
+
+**Success criteria:**
+- A reproducible harness reports tool-prompt token cost for ChatAgent on **both**
+  the text path (`_format_tools_for_prompt`) and the native path
+  (`_build_openai_tool_schemas`).
+- Prompt-cost **slope** (tokens per added tool) is quantified for both paths.
+- Baseline **first-turn TTFT** is recorded for the unfiltered agent.
+- A go/no-go note states whether the measured cost justifies the loader, and sets
+  the concrete TTFT-reduction target Part 1 must hit.
+
+### Part 1 — Selection + dual-path filtering ✅ landed (#1449)
+
+- Wire selection into `_compose_system_prompt`; filter **both**
+  `_format_tools_for_prompt` and `_build_openai_tool_schemas`.
+- `CORE` always-on + semantic via `_embed_text`; bundles as cohesion groups.
+- Fix the caching seam: recompute when selection changes; tool block last.
+- Embedder down → session-disable fallback (mirror memory v2), logged.
+- **Memory disabled or loader toggle off → expose all tools (legacy path).**
+  See [When memory is off](#when-memory-is-off-all-tools-load-the-legacy-path).
+- **Leave `_execute_tool` on the full registry.** This alone gives the free
+  non-tool-calling recovery (an unlisted tool the model names still runs) — so
+  Part 1 is *not* without a safety net, even though the explicit escape-hatch
+  machinery lands in Part 2.
+- Default-off toggle; scope to ChatAgent `doc`.
+
+**Success criteria:**
+- **First-turn TTFT** drops by at least the Part-0 target with the loader on.
+- **Tool recall ~100%** — every tool the unfiltered baseline called was available
+  when the loader-on run called it (the merge gate).
+- **Task success within ~2%** of the unfiltered baseline on `gaia eval agent`.
+- **No later-turn TTFT regression** — turns 2+ stay warm-cached (selection stable).
+- **Both render paths verified** — text block *and* native `tools=` schemas
+  measurably shrink, not just one.
+- **All three off-states revert to all tools** — memory disabled, loader toggle
+  off, and embedder unavailable each expose the full registry (the last logs).
+
+#### How Part 1 shipped (implementation reference)
+
+**Toggle & tunables.** Default-off `ChatAgentConfig` fields, each overridable by
+an env var (env wins) so the eval harness can flip them without code changes:
+
+| Knob | Config field | Env override | Default |
+|------|--------------|--------------|---------|
+| Enable | `dynamic_tools` | `GAIA_DYNAMIC_TOOLS` (`1`/`true`/`yes`/`on`) | `False` |
+| Match threshold τ | `dynamic_tools_threshold` | `GAIA_DYNAMIC_TOOLS_TAU` | `0.20` (inclusive) |
+| Loaded-set cap | `dynamic_tools_max` | `GAIA_DYNAMIC_TOOLS_MAX` | `14` |
+
+A malformed `*_TAU` / `*_MAX` value raises at construction (no silent default).
+The loader is built **only** for `prompt_profile == "doc"` with the toggle on;
+otherwise `self.tool_loader is None` and the agent stays on the legacy path.
+
+**CORE (10, always-on, cap- & eviction-exempt)** — defined in
+[`tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py):
+`remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`,
+`read_file`, `query_documents`, `query_specific_file`, `set_loop_state`,
+`request_user_input`.
+
+**Bundles (cohesion groups, pulled in whole on a member match):** `rag_query`,
+`rag_index`, `file_search`, `file_browse`, `file_edit`, `data`, `shell`,
+`clipboard`, `desktop`, `vision`, `memory`, `loop_control`. CORE ∪ all bundle
+members must equal the 37-tool `doc` registry exactly. The drift guard is the CI
+test `test_chat_tool_bundles.py` (it compares both sets, so a new doc tool forces
+a conscious bundling decision); `ToolLoader.validate_registry`, called once on
+first `select`, additionally fails loudly at runtime if a CORE/bundle name is
+missing from the registry.
+
+**Selection each turn** = CORE ∪ semantically-matched tools (+ their bundles),
+accumulated into a session-scoped *loaded set* that only grows, then sorted. The
+query embedded is the **previous user message + current**, trailing 4,000 chars
+(Open Q4). Below the cap the set is monotonic; at the cap a non-CORE tool is
+**LRU-evicted** (oldest `last_call_ts`, falling back to load time for
+never-called tools); CORE and tools admitted this turn are exempt; if nothing is
+evictable the candidate is skipped and logged. Each turn emits one structured
+`TOOL_LOADER {json}` INFO line (scores, matched, bundle_pulled, admitted,
+evicted, skipped, loaded) for Part-2 tuning and the recall gate.
+
+**Caching seam.** The system prompt is recomputed **only** when the sorted
+selection changes, so steady-state turns serialize byte-identically and the
+backend KV prefix stays warm. When a filter is active the tools block moves
+**after** the response-format template (volatile content last); with no filter
+the legacy order and bytes are preserved exactly.
+
+**Native known gap (Amendment 2).** `_execute_tool` is never tightened, so a
+non-tool-calling model that names an unlisted tool still runs it (free recovery)
+and the loader logs `TOOL_LOADER_ESCAPE_HATCH`. Native tool-calling models have
+no such hatch until Part 2's `load_tools`; on first activation the agent logs the
+miss as a *known gap* rather than padding the loaded set.
+
+**Approved deviations from this sketch** (flagged in the #1449 PR):
+
+1. **No `finish` in CORE** — turn completion is protocol-level in GAIA; there is
+   no `finish` registry tool. CORE = 10 real names.
+2. **`max_tools=14`, not 8–12** — CORE alone is 10 and eviction-exempt, so the
+   cap is 10 CORE + 4 dynamic slots.
+3. **Config via `ChatAgentConfig` + env, not `config.toml`** — the repo has no
+   `[agent.tool_loader]` TOML section; tunables live on the dataclass with
+   `GAIA_DYNAMIC_TOOLS*` env overrides, leaving `GaiaConfig` untouched.
+
+<Warning>
+**Measured reduction is smaller than the original estimate.** The 5 memory CORE
+tools carry verbose docstrings, so CORE alone renders ~40% of the 37-tool native
+baseline — meaning **CORE-only is the ~60%-reduction best case** and a full
+14-tool loaded set lands around ~50% of baseline (~50% token reduction), not the
+~68% first guessed. Token count is only a proxy; the authoritative ≥60%
+*first-turn TTFT* gate is the live `gaia.eval.tool_cost --live-ttft --filter` run.
+`test_tool_loader_token_budget.py` pins these filtered costs as a static guard.
+</Warning>
+
+### Part 2 — Explicit escape hatch + tuning
+
+- Add bundle re-surfacing + a discoverability menu of bundle names, and the
+  `load_tools` meta-tool that native tool-calling models need (the free recovery
+  from Part 1 covers only the non-tool-calling path).
+- Instrument escape-hatch activation rate as the semantic-threshold tuning dial.
+
+**Success criteria:**
+- A **native tool-calling** model recovers a semantically-missed tool via
+  `load_tools` within one extra turn (demonstrated end-to-end).
+- The **non-tool-calling** free-recovery path is verified (an unlisted tool the
+  model names still executes).
+- **Hard recall failures = 0** — with recovery in place, no task fails because a
+  needed tool was permanently unreachable.
+- **Escape-hatch activation rate** is logged per session and usable as the
+  threshold-tuning signal (rising rate ⇒ τ too strict).
+
+### Part 3 — Skill-driven signal (gated on #887)
+
+A third selection signal, added **only after** [#887](https://github.com/amd/gaia/issues/887)
+(skill auto-synthesis) lands. A *skill* is a procedure the agent distilled from
+its own successful multi-step runs; each `SKILL.md` declares the exact
+`tools_required` for that recipe in its YAML frontmatter.
+
+- When `recall_skill(goal)` matches the user's goal, union in the matched skills'
+  `tools_required` **ahead of** semantic results.
+- This is **high precision, low recall**: it fires only for goals solved before,
+  but when it does it is exact — the tools come from a recorded successful run,
+  not a similarity guess. It complements semantic match (high recall, lower
+  precision), it does not replace it.
+- **Same retrieval mechanism, different corpus.** Skills are stored *semantically*
+  in the same `MemoryStore` as #606 memory — each procedure carries an `embedding`,
+  and `recall_skill(goal)` is a vector search over `procedures.embedding`. So this
+  tier reuses the same embedder as the semantic tier; it just searches learned
+  procedures instead of tool docs.
+- **Additive, not a reshape.** It slots in as one more input to the same
+  selector: `loaded = CORE ∪ SKILL ∪ SEMANTIC ∪ escape-hatch`. Precedence is
+  CORE > SKILL > SEMANTIC. Nothing in Parts 0–2 changes.
+- **Soft dependency.** Until #887 ships, this signal returns `[]` cleanly and the
+  loader runs on CORE + semantic exactly as in Parts 1–2 — so Parts 1–2 must not
+  assume it exists.
+
+**Success criteria:**
+- When a skill matches the goal, its `tools_required` are loaded **ahead of**
+  semantic results (verified with a fixture skill).
+- **Measurable precision lift** on tasks with a known matching skill — fewer
+  escape-hatch activations and/or higher recall than the Part 1–2 baseline.
+- **Graceful absence** — with #887 disabled/absent, the signal returns `[]` and
+  Parts 0–2 behavior is byte-for-byte unchanged (regression test).
+- **No regression** when no skill matches the goal (falls through to semantic).
+
+## Open questions — resolved in Part 1
+
+These were open in the design sketch; Part 1 (#1449) decided them as follows:
+
+1. **Bundle definitions and CORE membership** — *decided.* CORE = 10 names and 12
+   bundles, in [`tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py)
+   (see [How Part 1 shipped](#part-1-selection-dual-path-filtering-landed-1449)),
+   pinned to cover the 37-tool `doc` registry exactly.
+2. **Similarity threshold τ / cap** — *decided.* τ = `0.20` inclusive, cap = `14`
+   (both tunable via config/env). τ was calibrated against live nomic
+   embeddings: question↔tool-description similarity is weak (real scores
+   ~0.05–0.25), so the original `0.55` guess made the semantic tier inert
+   (CORE-only). `0.20` surfaces document-action tools while excluding noise.
+3. **Selection stability policy** — *decided.* Re-select every turn, but the
+   loaded set only grows ("expand-on-new-match") and the prompt is recomputed
+   only when it changes, so non-expansion turns stay KV-warm. At the cap a
+   non-CORE tool is LRU-evicted.
+4. **Query construction** — *decided.* Previous user message + current, trailing
+   4,000 chars (assistant/RAG text excluded by construction).
+5. **Config / toggle location** — *decided.* `ChatAgentConfig` fields +
+   `GAIA_DYNAMIC_TOOLS*` env overrides (no `config.toml` section; `GaiaConfig`
+   untouched).
+6. **Part-0 methodology** — *decided in #1448.* `gaia.eval.tool_cost` measures
+   deterministic cost/slope and live prompt-prefill TTFT.
+
+## Current state of the code
+
+`tool_loader.py` is the **live semantic loader** (Part 1, #1449): `ChatAgent`
+builds it for the `doc` profile when the toggle is on, calls `select()` each turn
+via the base `_select_tools_for_turn` hook, and both render paths filter from the
+same selection. The old keyword/bundle-policy skeleton was removed; the class name
+`ToolLoader` and `reset_session()` were kept so the existing (guarded) call sites
+in `cli.py` / `chat/app.py` needed no change. Recall recovery for native
+tool-calling models (the `load_tools` meta-tool) is still **Part 2**.
+
+## Dependencies
+
+- **#606 (memory v2)** — *landed.* Provides `MemoryMixin._embed_text`
+  (`nomic-embed-text-v2-moe-GGUF`, 768-dim) already mixed into ChatAgent. Hard
+  dependency for semantic selection; no new infra needed. Note memory is
+  **user-controllable** — when the user turns it off, the loader reverts to the
+  legacy all-tools path (see
+  [When memory is off](#when-memory-is-off-all-tools-load-the-legacy-path)).
+- **#887 (procedural memory / skills)** — *not landed.* Provides `recall_skill`
+  and `SKILL.md` `tools_required` frontmatter. The skill tier is **deferred to
+  [Part 3](#part-3-skill-driven-signal-gated-on-887)**, not in v1 (Parts 0–2);
+  it slots in additively once #887 lands and returns `[]` cleanly until then.

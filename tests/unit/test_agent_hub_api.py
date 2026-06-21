@@ -85,13 +85,17 @@ class TestBuiltinAgentHubMetadata:
         assert reg.icon == "message-circle"
         assert reg.language == "python"
 
-    def test_gaia_lite_metadata(self, registry):
+    def test_gaia_lite_resolves_to_doc_with_lite_tier(self, registry):
+        # #1162: gaia-lite is a legacy alias for the doc agent on the lite tier,
+        # not a standalone registration.
+        assert registry.canonical_id("gaia-lite") == "doc"
         reg = registry.get("gaia-lite")
         assert reg is not None
+        assert reg.id == "doc"
         assert reg.category == "documents"
-        assert "lightweight" in reg.tags
-        assert reg.icon == "zap"
-        assert reg.tools_count > 0
+        lite = next(t for t in reg.model_tiers if t.name == "lite")
+        assert lite.models
+        assert lite.min_memory_gb == 5.0
 
     def test_builder_metadata(self, registry):
         reg = registry.get("builder")
@@ -183,3 +187,24 @@ class TestAgentInfoApiModel:
         )
         assert info.source == "native"
         assert info.language == "cpp"
+
+
+class TestConsumesMcpServersExposure:
+    """The /api/agents serializer surfaces ``consumes_mcp_servers`` so the
+    Settings "Active for" panel can list dynamic MCP consumers."""
+
+    def test_reg_to_info_exposes_flag_for_chat(self):
+        from gaia.ui.routers.agents import _reg_to_info
+
+        registry = AgentRegistry()
+        registry._register_builtin_agents()
+        info = _reg_to_info(registry.get("chat"))
+        assert info.consumes_mcp_servers is True
+
+    def test_reg_to_info_defaults_false_for_non_consumer(self):
+        from gaia.ui.routers.agents import _reg_to_info
+
+        registry = AgentRegistry()
+        registry._register_builtin_agents()
+        info = _reg_to_info(registry.get("doc"))
+        assert info.consumes_mcp_servers is False

@@ -18,7 +18,6 @@ every sink listed above.
 
 from __future__ import annotations
 
-import json
 import traceback
 
 import httpx
@@ -103,16 +102,59 @@ class TestPydanticDump:
 
 
 class TestOpenApi:
-    """A14: OpenAPI schema must not name a field that exposes the token."""
+    """A14: OpenAPI RESPONSE schemas must not name a field that exposes the
+    token.
 
-    def test_openapi_schema_does_not_expose_token_fields(self, ui_api_client):
+    A ``refresh_token`` field is legitimate on a *request* body — the
+    forwarded-connection POST (#1292) accepts one as input. The hygiene
+    invariant is that no *response* model exposes it. We therefore walk every
+    operation's response content schemas (resolving ``$ref`` into
+    ``components.schemas``) and assert ``refresh_token`` / ``client_secret``
+    never appears as a returned property name.
+    """
+
+    def test_openapi_response_schemas_do_not_expose_token_fields(self, ui_api_client):
         resp = ui_api_client.get("/openapi.json")
         assert resp.status_code == 200
-        schema = json.dumps(resp.json())
-        # Schema strings are field names, not values — but if anyone
-        # ever adds a "refresh_token" property to a public response model
-        # this catches it.
-        assert "refresh_token" not in schema
+        spec = resp.json()
+        components = spec.get("components", {}).get("schemas", {})
+
+        def _walk(schema: object, seen: set) -> set:
+            """Return the set of property names reachable from ``schema``,
+            resolving local ``$ref``s into ``components.schemas``."""
+            names: set = set()
+            if not isinstance(schema, dict):
+                return names
+            ref = schema.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/components/schemas/"):
+                name = ref.rsplit("/", 1)[-1]
+                if name in seen:
+                    return names
+                seen.add(name)
+                return _walk(components.get(name, {}), seen)
+            for prop in schema.get("properties") or {}:
+                names.add(prop)
+            for prop_schema in (schema.get("properties") or {}).values():
+                names |= _walk(prop_schema, seen)
+            for key in ("items", "additionalProperties"):
+                if isinstance(schema.get(key), dict):
+                    names |= _walk(schema[key], seen)
+            for key in ("allOf", "anyOf", "oneOf"):
+                for sub in schema.get(key, []) or []:
+                    names |= _walk(sub, seen)
+            return names
+
+        leaked: set = set()
+        for path_item in spec.get("paths", {}).values():
+            for op in path_item.values():
+                if not isinstance(op, dict):
+                    continue
+                for resp_obj in (op.get("responses") or {}).values():
+                    for media in (resp_obj.get("content") or {}).values():
+                        props = _walk(media.get("schema", {}), set())
+                        leaked |= {"refresh_token", "client_secret"} & props
+
+        assert not leaked, f"secret field(s) exposed in a response schema: {leaked}"
 
 
 class TestFiles:

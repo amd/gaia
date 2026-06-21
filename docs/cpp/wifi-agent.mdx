@@ -115,7 +115,7 @@ Full diagnostic run on a Ryzen AI PC: the agent calls 5 tools in sequence, reads
 The agent loop is a conversation between your C++ code and the LLM:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'14px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'14px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 sequenceDiagram
     participant U as User
     participant A as Agent (C++)
@@ -246,7 +246,7 @@ All string arguments from the LLM are validated with `isSafeShellArg()` to rejec
 The system prompt teaches the LLM this decision tree. Each fix loops back to re-verify before declaring success:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'14px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'14px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 flowchart TD
     A["1. check_adapter<br/>Wi-Fi adapter present?"] -->|Yes| B["2. check_ip_config<br/>IP address via DHCP?"]
     A -->|"Radio Off"| F4["FIX: toggle_wifi_radio"]
@@ -267,17 +267,17 @@ flowchart TD
     F4 --> A
     F5 --> A
 
-    style A fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style B fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style C fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style D fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style E fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style BW fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style F1 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style F2 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style F3 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style F4 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style F5 fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style A fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style B fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style C fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style D fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style E fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style BW fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style F1 fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style F2 fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style F3 fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style F4 fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style F5 fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
     style R fill:#2d8a2d,stroke:#4CAF50,stroke-width:2px,color:#fff
     style M fill:#d4a017,stroke:#FFC107,stroke-width:2px,color:#000
 ```

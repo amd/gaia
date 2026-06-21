@@ -14,6 +14,7 @@ Endpoints:
 """
 
 import asyncio
+import importlib.util
 import json
 import logging
 import os
@@ -39,11 +40,41 @@ from .schemas import (
 
 # Configure logging
 logger = logging.getLogger(__name__)
+_REDACTED_LOG_VALUE = "[redacted]"
 
 # Set logger level based on debug flag
 if os.environ.get("GAIA_API_DEBUG") == "1":
     logger.setLevel(logging.DEBUG)
     logger.info("Debug logging enabled for API server")
+
+
+def _api_debug_enabled() -> bool:
+    return os.environ.get("GAIA_API_DEBUG") == "1"
+
+
+def _log_header_summary(headers) -> None:
+    """Log header names and value sizes without persisting header values."""
+    logger.debug("Headers:")
+    for name, value in headers.items():
+        logger.debug("  %s: %s (%d chars)", name, _REDACTED_LOG_VALUE, len(value))
+
+
+def _log_message_summary(index: int, message) -> None:
+    content_length = len(message.content or "")
+    logger.debug("Message %d:", index)
+    logger.debug("  Role: %s", message.role)
+    logger.debug("  Content: %s (%d chars)", _REDACTED_LOG_VALUE, content_length)
+    if message.tool_calls is not None:
+        logger.debug("  Tool calls: %d", len(message.tool_calls))
+    if message.tool_call_id is not None:
+        logger.debug("  Tool call ID: %s", _REDACTED_LOG_VALUE)
+
+
+def _log_request_parameter_summary(request: ChatCompletionRequest) -> None:
+    logger.debug("Request parameters:")
+    for field_name in ("temperature", "max_tokens", "top_p"):
+        value = getattr(request, field_name, None)
+        logger.debug("  %s: %s", field_name, "set" if value is not None else "not set")
 
 
 def extract_workspace_root(messages):
@@ -94,6 +125,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Email Triage Agent REST surface (#1229): POST /v1/email/{triage,draft,send}.
+# Ships with the standalone ``gaia-agent-email`` wheel (#1102); mount it only
+# when that wheel is installed so the core API server still starts without it.
+# Gate on the wheel's presence via find_spec (no import side effect), then
+# import the router OUTSIDE the gate so a genuine broken import inside an
+# installed wheel fails loudly rather than being swallowed as "not installed"
+# (no-silent-fallback rule).
+if importlib.util.find_spec("gaia_agent_email") is None:
+    logger.info(
+        "Email REST routes unavailable: install the email agent "
+        "(`pip install gaia-agent-email`) to enable POST /v1/email/*."
+    )
+else:
+    from gaia_agent_email.api_routes import router as email_router
+
+    app.include_router(email_router)
+
 
 # Raw request logging middleware (debug mode only)
 @app.middleware("http")
@@ -102,15 +150,13 @@ async def log_raw_requests(request: Request, call_next):
     Middleware to log raw HTTP requests when debug mode is enabled.
     For streaming endpoints, only log headers to avoid breaking SSE.
     """
-    if os.environ.get("GAIA_API_DEBUG") == "1":
+    if _api_debug_enabled():
         logger.debug("=" * 80)
         logger.debug("📥 RAW HTTP REQUEST")
         logger.debug("=" * 80)
         logger.debug(f"Path: {request.url.path}")
         logger.debug(f"Method: {request.method}")
-        logger.debug("Headers:")
-        for name, value in request.headers.items():
-            logger.debug(f"  {name}: {value}")
+        _log_header_summary(request.headers)
 
         # DON'T read body for streaming endpoints - it breaks ASGI message flow
         # Per FastAPI docs: "Never read the request body in middleware for streaming responses"
@@ -124,16 +170,8 @@ async def log_raw_requests(request: Request, call_next):
             logger.debug(f"Body (raw bytes length): {len(body_bytes)}")
             if body_bytes:
                 try:
-                    body_str = body_bytes.decode("utf-8")
-                    logger.debug("Body (decoded UTF-8):")
-                    logger.debug(body_str)
-                    # Try to pretty-print JSON
-                    try:
-                        body_json = json.loads(body_str)
-                        logger.debug("Body (parsed JSON):")
-                        logger.debug(json.dumps(body_json, indent=2))
-                    except json.JSONDecodeError:
-                        pass
+                    body_bytes.decode("utf-8")
+                    logger.debug("Body (decoded UTF-8): %s", _REDACTED_LOG_VALUE)
                 except UnicodeDecodeError:
                     logger.debug("Body contains non-UTF-8 data")
 
@@ -183,7 +221,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         ```
     """
     # Debug logging: trace incoming request
-    if os.environ.get("GAIA_API_DEBUG") == "1":
+    if _api_debug_enabled():
         logger.debug("=" * 80)
         logger.debug("📥 INCOMING CHAT COMPLETION REQUEST")
         logger.debug("=" * 80)
@@ -193,25 +231,10 @@ async def create_chat_completion(request: ChatCompletionRequest):
         logger.debug("-" * 80)
 
         for i, msg in enumerate(request.messages):
-            logger.debug(f"Message {i}:")
-            logger.debug(f"  Role: {msg.role}")
-            # Preview content (truncate if too long); guard against None content
-            content_text = msg.content or ""
-            content_preview = (
-                content_text[:500] if len(content_text) > 500 else content_text
-            )
-            if len(content_text) > 500:
-                content_preview += (
-                    f"\n  ... (truncated, total length: {len(content_text)} chars)"
-                )
-            logger.debug(f"  Content:\n{content_preview}")
+            _log_message_summary(i, msg)
             logger.debug("-" * 40)
 
-        # Log additional request parameters
-        logger.debug("Request parameters:")
-        logger.debug(f"  temperature: {getattr(request, 'temperature', 'not set')}")
-        logger.debug(f"  max_tokens: {getattr(request, 'max_tokens', 'not set')}")
-        logger.debug(f"  top_p: {getattr(request, 'top_p', 'not set')}")
+        _log_request_parameter_summary(request)
         logger.debug("=" * 80)
 
     # Validate model exists
@@ -222,8 +245,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
     # Extract workspace root from messages (for converting relative paths to absolute)
     workspace_root = extract_workspace_root(request.messages)
-    if os.environ.get("GAIA_API_DEBUG") == "1" and workspace_root:
-        logger.debug(f"📁 Extracted workspace root: {workspace_root}")
+    if _api_debug_enabled() and workspace_root:
+        logger.debug("📁 Extracted workspace root: %s", _REDACTED_LOG_VALUE)
 
     # Extract user query from messages (get last user message)
     user_message = next(
@@ -236,11 +259,13 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
 
     # Debug logging: show what we're passing to the agent
-    if os.environ.get("GAIA_API_DEBUG") == "1":
+    if _api_debug_enabled():
         logger.debug("🔄 EXTRACTED FOR AGENT:")
-        logger.debug(f"Passing to agent: {user_message[:500]}...")
-        if len(user_message) > 500:
-            logger.debug(f"(Total length: {len(user_message)} chars)")
+        logger.debug(
+            "Passing to agent: %s (%d chars)",
+            _REDACTED_LOG_VALUE,
+            len(user_message),
+        )
         logger.debug("=" * 80)
 
     # Get agent instance for this model
@@ -252,7 +277,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     # Handle streaming vs non-streaming
     if request.stream:
         # Debug logging for streaming mode
-        if os.environ.get("GAIA_API_DEBUG") == "1":
+        if _api_debug_enabled():
             logger.debug("🌊 Using STREAMING mode")
 
         return StreamingResponse(
@@ -268,20 +293,21 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
     else:
         # Debug logging for non-streaming mode
-        if os.environ.get("GAIA_API_DEBUG") == "1":
+        if _api_debug_enabled():
             logger.debug("📦 Using NON-STREAMING mode")
 
         # Process query synchronously with workspace root
         result = agent.process_query(user_message, workspace_root=workspace_root)
 
         # Debug logging: show what agent returned
-        if os.environ.get("GAIA_API_DEBUG") == "1":
+        if _api_debug_enabled():
             logger.debug("=" * 80)
             logger.debug("📤 AGENT RESPONSE (NON-STREAMING)")
             logger.debug("=" * 80)
             logger.debug(f"Result type: {type(result)}")
             logger.debug(
-                f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}"
+                "Result key count: %s",
+                len(result.keys()) if isinstance(result, dict) else "N/A",
             )
             logger.debug(
                 f"Status: {result.get('status') if isinstance(result, dict) else 'N/A'}"
@@ -289,12 +315,16 @@ async def create_chat_completion(request: ChatCompletionRequest):
             logger.debug(
                 f"Steps taken: {result.get('steps_taken') if isinstance(result, dict) else 'N/A'}"
             )
-            result_preview = (
-                str(result.get("result", ""))[:200]
+            result_length = (
+                len(str(result.get("result", "")))
                 if isinstance(result, dict)
-                else str(result)[:200]
+                else len(str(result))
             )
-            logger.debug(f"Result preview: {result_preview}...")
+            logger.debug(
+                "Result preview: %s (%d chars)",
+                _REDACTED_LOG_VALUE,
+                result_length,
+            )
             logger.debug("=" * 80)
 
         # Extract content from result
@@ -355,7 +385,7 @@ async def create_sse_stream(
         data: [DONE]
     """
     # Debug logging - FIRST LINE to confirm generator starts
-    if os.environ.get("GAIA_API_DEBUG") == "1":
+    if _api_debug_enabled():
         logger.debug("🎬 Generator started! Client is consuming the stream.")
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -375,12 +405,12 @@ async def create_sse_stream(
             }
         ],
     }
-    if os.environ.get("GAIA_API_DEBUG") == "1":
+    if _api_debug_enabled():
         logger.debug(f"📤 Sending first chunk: {json.dumps(first_chunk)}")
     yield f"data: {json.dumps(first_chunk)}\n\n"
 
     # Debug logging
-    if os.environ.get("GAIA_API_DEBUG") == "1":
+    if _api_debug_enabled():
         logger.debug("🔄 Starting agent query processing in thread pool...")
 
     # Process query in thread pool to avoid blocking event loop
@@ -409,7 +439,7 @@ async def create_sse_stream(
                     # Check if this event should be streamed to client
                     if not output_handler.should_stream_as_content(event_type):
                         # Still log it in debug mode
-                        if os.environ.get("GAIA_API_DEBUG") == "1":
+                        if _api_debug_enabled():
                             logger.debug(f"📝 Skipping event: {event_type}")
                         continue
 
@@ -434,9 +464,12 @@ async def create_sse_stream(
                         ],
                     }
 
-                    if os.environ.get("GAIA_API_DEBUG") == "1":
+                    if _api_debug_enabled():
                         logger.debug(
-                            f"📤 Streaming event: {event_type} -> {content_text[:100]}"
+                            "📤 Streaming event: %s -> %s (%d chars)",
+                            event_type,
+                            _REDACTED_LOG_VALUE,
+                            len(content_text),
                         )
 
                     yield f"data: {json.dumps(content_chunk)}\n\n"
@@ -480,13 +513,14 @@ async def create_sse_stream(
                 yield f"data: {json.dumps(content_chunk)}\n\n"
 
         # Debug logging: show what agent returned
-        if os.environ.get("GAIA_API_DEBUG") == "1":
+        if _api_debug_enabled():
             logger.debug("=" * 80)
             logger.debug("📤 AGENT RESPONSE (STREAMING)")
             logger.debug("=" * 80)
             logger.debug(f"Result type: {type(result)}")
             logger.debug(
-                f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}"
+                "Result key count: %s",
+                len(result.keys()) if isinstance(result, dict) else "N/A",
             )
             logger.debug(
                 f"Status: {result.get('status') if isinstance(result, dict) else 'N/A'}"
@@ -494,12 +528,16 @@ async def create_sse_stream(
             logger.debug(
                 f"Steps taken: {result.get('steps_taken') if isinstance(result, dict) else 'N/A'}"
             )
-            result_preview = (
-                str(result.get("result", ""))[:200]
+            result_length = (
+                len(str(result.get("result", "")))
                 if isinstance(result, dict)
-                else str(result)[:200]
+                else len(str(result))
             )
-            logger.debug(f"Result preview: {result_preview}...")
+            logger.debug(
+                "Result preview: %s (%d chars)",
+                _REDACTED_LOG_VALUE,
+                result_length,
+            )
             logger.debug("=" * 80)
 
     except Exception as e:
@@ -515,12 +553,12 @@ async def create_sse_stream(
         "model": model,
         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
     }
-    if os.environ.get("GAIA_API_DEBUG") == "1":
+    if _api_debug_enabled():
         logger.debug("📤 Sending final chunk with finish_reason=stop")
     yield f"data: {json.dumps(final_chunk)}\n\n"
 
     # Done marker
-    if os.environ.get("GAIA_API_DEBUG") == "1":
+    if _api_debug_enabled():
         logger.debug("✅ SSE stream complete. Sending [DONE] marker.")
     yield "data: [DONE]\n\n"
 

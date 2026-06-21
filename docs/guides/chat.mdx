@@ -102,7 +102,7 @@ gaia chat --query "Hello" --show-stats
 ## Document Q&A (RAG)
 
 <Note>
-RAG (Retrieval-Augmented Generation) enables chatting with PDF documents using semantic search and context retrieval.
+RAG (Retrieval-Augmented Generation) enables chatting with PDF and PowerPoint (.pptx) documents using semantic search and context retrieval.
 </Note>
 
 ### CLI with RAG
@@ -110,15 +110,16 @@ RAG (Retrieval-Augmented Generation) enables chatting with PDF documents using s
 <Tabs>
   <Tab title="Single Document">
     ```bash
-    # Chat with single document
+    # Chat with a PDF or PowerPoint document
     gaia chat --index manual.pdf
+    gaia chat --index slides.pptx
     ```
   </Tab>
 
   <Tab title="Multiple Documents">
     ```bash
-    # Chat with multiple documents
-    gaia chat --index doc1.pdf doc2.pdf doc3.pdf
+    # Chat with multiple documents (PDF and PPTX supported)
+    gaia chat --index doc1.pdf doc2.pdf slides.pptx
     ```
   </Tab>
 
@@ -131,7 +132,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with PDF documents using s
 
   <Tab title="Watch Folder">
     ```bash
-    # Auto-index every PDF in a folder, and any new ones dropped in later
+    # Auto-index every PDF/PPTX in a folder, and any new ones dropped in later
     gaia chat --watch ./docs
     ```
   </Tab>
@@ -152,7 +153,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with PDF documents using s
 </Tabs>
 
 <Note>
-  **PDF Indexing Requirements:** Processing PDFs with images requires a Vision Language Model (VLM). GAIA uses `Qwen3-VL-4B-Instruct-GGUF` by default for extracting text from images in PDFs.
+  **Document Indexing Requirements:** Processing PDFs and PPTX files with images requires a Vision Language Model (VLM). GAIA uses `Qwen3-VL-4B-Instruct-GGUF` by default for extracting text from images in documents.
 
   To download all models needed for chat (including VLM):
   ```bash
@@ -299,6 +300,43 @@ print(result)
     ```
   </Accordion>
 </AccordionGroup>
+
+## Dynamic Tool Loading
+
+<Note>
+**Off by default, `doc` profile only.** This is the first stage of a phased
+rollout ([Dynamic Tool Loader plan](/plans/tool-loader)); enable it explicitly to
+try it.
+</Note>
+
+The `doc` profile can load tools **semantically per turn** instead of showing the
+LLM every registered tool on every turn. A small always-on CORE set is combined
+with tools whose descriptions best match the conversation, which shrinks the
+first-turn prompt and speeds up the first reply.
+
+It activates only on the `doc` profile (the registered `doc` agent, the SDK with
+`ChatAgentConfig(prompt_profile="doc")`, or `gaia eval agent --agent-type doc`).
+Turn it on with the config field or an environment variable — the env var wins,
+which is handy for the eval harness:
+
+```python
+from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+
+agent = ChatAgent(ChatAgentConfig(prompt_profile="doc", dynamic_tools=True))
+```
+
+```bash
+# Env override (applies wherever a doc-profile ChatAgent runs)
+GAIA_DYNAMIC_TOOLS=1 gaia eval agent --category tool_selection --agent-type doc
+
+# Optional tuning: match threshold (cosine, inclusive) and loaded-set cap
+GAIA_DYNAMIC_TOOLS_TAU=0.20 GAIA_DYNAMIC_TOOLS_MAX=14 GAIA_DYNAMIC_TOOLS=1 ...
+```
+
+It needs memory enabled (it reuses the memory embedder). If memory is off, the
+toggle is off, or the embedder is unreachable, the agent automatically falls back
+to showing **all** tools — so a turn never loses access to a tool it needs. See
+the [Dynamic Tool Loader plan](/plans/tool-loader) for the full design.
 
 ## Next Steps
 

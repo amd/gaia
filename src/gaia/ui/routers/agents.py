@@ -98,6 +98,14 @@ def _reg_to_info(reg) -> AgentInfo:
                 }
             )
 
+    # Serialize DeviceConfig dataclasses into dicts for the API response.
+    import dataclasses as _dc
+
+    device_configs = [_dc.asdict(dc) for dc in getattr(reg, "device_configs", [])]
+
+    # Serialize ModelTier dataclasses (issue #1162) for the size selector.
+    model_tiers = [_dc.asdict(t) for t in getattr(reg, "model_tiers", [])]
+
     return AgentInfo(
         id=reg.id,
         name=reg.name,
@@ -107,12 +115,15 @@ def _reg_to_info(reg) -> AgentInfo:
         models=reg.models,
         min_memory_gb=reg.min_memory_gb,
         required_connections=connections,
+        consumes_mcp_servers=getattr(reg, "consumes_mcp_servers", False),
         namespaced_agent_id=reg.namespaced_agent_id,
         category=reg.category,
         tags=reg.tags,
         icon=reg.icon,
         tools_count=reg.tools_count,
         language=reg.language,
+        device_configs=device_configs,
+        model_tiers=model_tiers,
     )
 
 

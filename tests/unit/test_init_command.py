@@ -416,6 +416,96 @@ class TestDownloadModels(unittest.TestCase):
             self.assertGreaterEqual(mock_client.delete_model.call_count, 1)
             self.assertGreaterEqual(mock_client.ensure_model_downloaded.call_count, 1)
 
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_npu_profile_pulls_builtin_model_without_recipe(self, mock_installer_class):
+        """NPU/FLM models are built-in; pulling with a recipe 400s (#1655).
+
+        The npu profile must download ``gemma4-it-e2b-FLM`` via
+        ensure_model_downloaded (pull by name), never pull_model(recipe=...),
+        which Lemonade rejects unless the name carries a ``user.`` prefix.
+        """
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="npu", yes=True)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.ensure_model_downloaded.return_value = True
+            mock_client_class.return_value = mock_client
+
+            result = cmd._download_models()
+            self.assertTrue(result)
+            mock_client.ensure_model_downloaded.assert_called_once_with(
+                "gemma4-it-e2b-FLM"
+            )
+            # Regression guard: no recipe-bearing pull_model call.
+            mock_client.pull_model.assert_not_called()
+
+
+class TestInstallPipExtras(unittest.TestCase):
+    """Test _install_pip_extras frontend selection and messaging."""
+
+    def _make_cmd(self, profile):
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            return InitCommand(profile=profile, yes=True)
+
+    def test_no_extras_skips_install(self):
+        """Profiles without pip_extras short-circuit without shelling out."""
+        cmd = self._make_cmd("minimal")  # minimal declares no pip_extras
+        with patch("subprocess.run") as mock_run:
+            self.assertTrue(cmd._install_pip_extras())
+            mock_run.assert_not_called()
+
+    def test_standalone_uv_attempted_first(self):
+        """The standalone ``uv`` binary leads the install attempts.
+
+        uv-created venvs ship neither pip nor the uv module, so a bare
+        ``uv pip install`` is the only frontend that works inside them.
+        """
+        cmd = self._make_cmd("rag")  # rag pulls the [rag] extra
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "Name: amd-gaia\n"  # non-editable
+            return result
+
+        with patch("subprocess.run", side_effect=fake_run):
+            self.assertTrue(cmd._install_pip_extras())
+
+        install_calls = [c for c in calls if "install" in c]
+        self.assertTrue(install_calls, "expected an install attempt")
+        self.assertEqual(
+            install_calls[0][:2],
+            ["uv", "pip"],
+            "standalone uv must be the first install frontend",
+        )
+
+    def test_warning_has_no_doubled_pip_install(self):
+        """The fallback warning must not print 'pip install pip install'."""
+        cmd = self._make_cmd("rag")
+        warnings = []
+        cmd._print_warning = lambda msg: warnings.append(msg)
+        cmd._print_success = lambda msg: None
+
+        def fail_run(args, **kwargs):
+            result = MagicMock()
+            result.returncode = 1  # every frontend fails
+            result.stdout = ""
+            return result
+
+        with patch("subprocess.run", side_effect=fail_run):
+            self.assertTrue(cmd._install_pip_extras())
+
+        joined = " ".join(warnings)
+        self.assertTrue(warnings, "expected a fallback warning")
+        self.assertNotIn("pip install pip install", joined)
+        self.assertIn('uv pip install "amd-gaia[rag]"', joined)
+
 
 class TestVersionCompatibility(unittest.TestCase):
     """Test _check_version_compatibility version policy.
@@ -644,6 +734,86 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
 
         self.assertTrue(result)
         cmd._upgrade_lemonade.assert_called_once_with("8.0.0")
+
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_skip_install_when_probe_succeeds(self, mock_client_cls):
+        """Lemonade running (AUR/systemd) but binary not in PATH → probe short-circuits."""
+        mock_client = MagicMock()
+        # Probe uses _send_request with a short timeout; mock that to return
+        # a healthy response so the probe short-circuits installation.
+        mock_client._send_request.return_value = {"status": "ok"}
+        mock_client.health_check.return_value = {"status": "ok"}
+        mock_client_cls.return_value = mock_client
+
+        cmd, mock_installer = self._make_cmd(
+            LemonadeInfo(installed=False, version=None, path=None)
+        )
+        result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
+        mock_installer.check_installation.assert_not_called()
+        mock_installer.download_installer.assert_not_called()
+
+    @patch.dict("os.environ", {"LEMONADE_BASE_URL": "http://127.0.0.1:13305/api/v1"})
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_skip_install_when_env_var_set_and_probe_succeeds(self, mock_client_cls):
+        """If LEMONADE_BASE_URL is set to a reachable server, probe short-circuits."""
+        mock_client = MagicMock()
+        mock_client._send_request.return_value = {"status": "ok"}
+        mock_client.health_check.return_value = {"status": "ok"}
+        mock_client_cls.return_value = mock_client
+
+        cmd, mock_installer = self._make_cmd(
+            LemonadeInfo(installed=False, version=None, path=None)
+        )
+        result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
+        mock_installer.check_installation.assert_not_called()
+        mock_installer.download_installer.assert_not_called()
+
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_falls_through_to_binary_check_when_probe_fails(self, mock_client_cls):
+        """No running server → probe raises, falls through to check_installation."""
+        mock_client = MagicMock()
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        # Simulate _send_request raising the client's error (real-world path)
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
+        mock_client.health_check.side_effect = LemonadeClientError("connection refused")
+        mock_client_cls.return_value = mock_client
+
+        info = LemonadeInfo(
+            installed=True, version=LEMONADE_VERSION, path="/usr/bin/lemonade-server"
+        )
+        cmd, mock_installer = self._make_cmd(info)
+        result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
+        mock_installer.check_installation.assert_called_once()
+
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_falls_through_when_health_check_raises_client_error(self, mock_client_cls):
+        """LemonadeClientError (real-world path) also falls through to binary check."""
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        mock_client = MagicMock()
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
+        mock_client.health_check.side_effect = LemonadeClientError("connection refused")
+        mock_client_cls.return_value = mock_client
+
+        info = LemonadeInfo(
+            installed=True, version=LEMONADE_VERSION, path="/usr/bin/lemonade-server"
+        )
+        cmd, mock_installer = self._make_cmd(info)
+        result = cmd._ensure_lemonade_installed()
+
+        self.assertTrue(result)
+        mock_installer.check_installation.assert_called_once()
 
 
 class TestLegacyFallback(unittest.TestCase):

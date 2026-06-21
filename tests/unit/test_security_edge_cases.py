@@ -344,12 +344,10 @@ class TestIsWriteBlockedException:
         assert is_blocked is True
         assert "unable to validate" in reason.lower()
 
-    def test_exception_from_path_resolve_returns_blocked(self, validator):
-        """When Path.resolve() raises, is_write_blocked returns (True, reason)."""
+    def test_exception_from_path_construction_returns_blocked(self, validator):
+        """When path construction raises, is_write_blocked returns (True, reason)."""
         with patch("os.path.realpath", return_value="/tmp/test.txt"):
-            with patch.object(
-                Path, "resolve", side_effect=RuntimeError("Resolve failed")
-            ):
+            with patch("os.path.normpath", side_effect=RuntimeError("Normpath failed")):
                 is_blocked, reason = validator.is_write_blocked("/tmp/test.txt")
 
         assert is_blocked is True
@@ -546,6 +544,115 @@ class TestFormatSizeBoundaries:
     def test_zero_bytes(self):
         """0 bytes should display as '0 B'."""
         assert _format_size(0) == "0 B"
+
+
+class TestPromptGuardCallbacks:
+    """Tests for on_prompt_start / on_prompt_end callback support (#1089)."""
+
+    def test_callbacks_invoked_on_access_prompt(self, tmp_path):
+        """on_prompt_start and on_prompt_end are called around _prompt_user_for_access."""
+        calls = []
+        validator = PathValidator(
+            allowed_paths=[str(tmp_path)],
+            on_prompt_start=lambda: calls.append("start"),
+            on_prompt_end=lambda: calls.append("end"),
+        )
+        outside = tmp_path / "nonexistent_dir" / "file.txt"
+        with (
+            patch("builtins.input", return_value="n"),
+            patch("gaia.security._is_interactive", return_value=True),
+        ):
+            result = validator._prompt_user_for_access(outside)
+        assert result is False
+        assert calls == ["start", "end"]
+
+    def test_callbacks_invoked_on_overwrite_prompt(self, tmp_path):
+        """on_prompt_start and on_prompt_end are called around _prompt_overwrite."""
+        calls = []
+        validator = PathValidator(
+            allowed_paths=[str(tmp_path)],
+            on_prompt_start=lambda: calls.append("start"),
+            on_prompt_end=lambda: calls.append("end"),
+        )
+        existing = tmp_path / "file.txt"
+        existing.write_text("content")
+        with (
+            patch("builtins.input", return_value="y"),
+            patch("gaia.security._is_interactive", return_value=True),
+        ):
+            result = validator._prompt_overwrite(existing, 7)
+        assert result is True
+        assert calls == ["start", "end"]
+
+    def test_no_callbacks_when_none(self, tmp_path):
+        """Default PathValidator (no callbacks) prompts without error."""
+        validator = PathValidator(allowed_paths=[str(tmp_path)])
+        outside = tmp_path / "nonexistent_dir" / "file.txt"
+        with (
+            patch("builtins.input", return_value="y"),
+            patch("gaia.security._is_interactive", return_value=True),
+        ):
+            result = validator._prompt_user_for_access(outside)
+        assert result is True
+
+    def test_callback_exception_does_not_break_prompt(self, tmp_path):
+        """A failing on_prompt_start callback must not prevent the prompt."""
+
+        def bad_callback():
+            raise RuntimeError("spinner exploded")
+
+        validator = PathValidator(
+            allowed_paths=[str(tmp_path)],
+            on_prompt_start=bad_callback,
+        )
+        outside = tmp_path / "nonexistent_dir" / "file.txt"
+        with (
+            patch("builtins.input", return_value="n"),
+            patch("gaia.security._is_interactive", return_value=True),
+        ):
+            result = validator._prompt_user_for_access(outside)
+        assert result is False
+
+    def test_on_prompt_end_called_after_prompt(self, tmp_path):
+        """on_prompt_end is called even when only on_prompt_end is wired."""
+        calls = []
+        validator = PathValidator(
+            allowed_paths=[str(tmp_path)],
+            on_prompt_start=lambda: calls.append("start"),
+            on_prompt_end=lambda: calls.append("end"),
+        )
+        outside = tmp_path / "nonexistent_dir" / "file.txt"
+        with (
+            patch("builtins.input", return_value="y"),
+            patch("gaia.security._is_interactive", return_value=True),
+        ):
+            validator._prompt_user_for_access(outside)
+        assert "end" in calls
+        assert calls.index("start") < calls.index("end")
+
+    def test_spinner_resumes_after_prompt_via_pause_resume(self, tmp_path):
+        """Simulates the real agent pattern: pause_progress on start, resume_progress on end."""
+        from gaia.agents.base.console import AgentConsole
+
+        console = AgentConsole()
+        console.start_progress("Thinking...")
+        assert console.progress.is_running
+
+        validator = PathValidator(
+            allowed_paths=[str(tmp_path)],
+            on_prompt_start=lambda: console.pause_progress(),
+            on_prompt_end=lambda: console.resume_progress(),
+        )
+
+        outside = tmp_path / "nonexistent_dir" / "file.txt"
+        with (
+            patch("builtins.input", return_value="y"),
+            patch("gaia.security._is_interactive", return_value=True),
+        ):
+            validator._prompt_user_for_access(outside)
+
+        assert console.progress.is_running
+        console.stop_progress()
 
 
 if __name__ == "__main__":

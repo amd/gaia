@@ -11,18 +11,18 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'src/gaia/agents/code/**'
+      - 'hub/agents/python/code/**'
       - 'src/gaia/agents/base/**'
-      - 'tests/test_code_agent*.py'
+      - 'src/gaia/agents/routing/**'
       - 'setup.py'
       - '.github/workflows/test_code_agent.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'src/gaia/agents/code/**'
+      - 'hub/agents/python/code/**'
       - 'src/gaia/agents/base/**'
-      - 'tests/test_code_agent*.py'
+      - 'src/gaia/agents/routing/**'
       - 'setup.py'
       - '.github/workflows/test_code_agent.yml'
   merge_group:
@@ -59,6 +59,8 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system -e .[dev]
+          # CodeAgent ships as the standalone gaia-agent-code wheel (#1397, #1102)
+          uv pip install --system -e hub/agents/python/code
           # Install optional dependencies for code agent
           uv pip install --system black pylint
 
@@ -71,7 +73,7 @@ jobs:
           echo ""
 
           # Run mixin tests
-          python -m pytest tests/test_code_agent_mixins.py -v --tb=short
+          python -m pytest hub/agents/python/code/tests/test_code_agent_mixins.py -v --tb=short
 
           # Store the result
           MIXIN_TEST_EXIT=$?
@@ -93,18 +95,15 @@ jobs:
           echo ""
 
           # Run with pytest for better output formatting
-          python -m pytest tests/test_code_agent.py::TestCodeAgent -v --tb=short \
-            -k "not workflow and not integration and not process_query" \
-            || true
+          python -m pytest hub/agents/python/code/tests/test_code_agent.py::TestCodeAgent -v --tb=short \
+            -k "not workflow and not integration and not process_query"
 
-          # Store the result
-          UNIT_TEST_EXIT=$?
-
-          if [ $UNIT_TEST_EXIT -eq 0 ]; then
-            echo "[SUCCESS] Unit tests passed"
-          else
-            echo "[WARNING] Some unit tests failed (non-blocking for now)"
-          fi
+          # Validators and write-guardrail tests (moved here from tests/unit and
+          # tests/ root during the hub migration; keep them gated).
+          python -m pytest \
+            hub/agents/python/code/tests/test_code_validators.py \
+            hub/agents/python/code/tests/test_file_io_guardrails.py \
+            -v --tb=short
 
       - name: Run Code Agent Integration Tests
         run: |
@@ -116,19 +115,13 @@ jobs:
           echo ""
 
           # Run integration tests
-          python -m pytest tests/test_code_agent.py::TestCodeAgentIntegration -v --tb=short \
-            || true
-
-          # Store the result
-          INTEGRATION_TEST_EXIT=$?
-
-          if [ $INTEGRATION_TEST_EXIT -eq 0 ]; then
-            echo "[SUCCESS] Integration tests passed"
-          else
-            echo "[WARNING] Some integration tests failed (non-blocking for now)"
-          fi
+          python -m pytest hub/agents/python/code/tests/test_code_agent.py::TestCodeAgentIntegration -v --tb=short
 
       - name: Run Code Agent Workflow Tests
+        # Workflow tests invoke process_query which requires a running LLM.
+        # No Lemonade server in this CI job — failures are expected and surfaced
+        # as a warning annotation rather than blocking the job.
+        continue-on-error: true
         run: |
           echo ""
           echo "================================================================"
@@ -138,20 +131,8 @@ jobs:
           echo ""
 
           # Run workflow tests with timeout
-          timeout 300 python -m pytest tests/test_code_agent.py -v --tb=short \
-            -k "workflow or process_query or complete_workflow" \
-            || true
-
-          # Store the result
-          WORKFLOW_TEST_EXIT=$?
-
-          if [ $WORKFLOW_TEST_EXIT -eq 0 ]; then
-            echo "[SUCCESS] Workflow tests passed"
-          elif [ $WORKFLOW_TEST_EXIT -eq 124 ]; then
-            echo "[WARNING] Workflow tests timed out (5 min limit)"
-          else
-            echo "[WARNING] Some workflow tests failed (non-blocking for now)"
-          fi
+          timeout 300 python -m pytest hub/agents/python/code/tests/test_code_agent.py -v --tb=short \
+            -k "workflow or process_query or complete_workflow"
 
       - name: Test Summary
         if: always()
@@ -174,7 +155,4 @@ jobs:
           echo "  - Pylint and Black integration"
           echo "  - Error recovery mechanisms"
           echo "  - Complete workflow simulations"
-          echo "================================================================"
-          echo ""
-          echo "Note: Tests are currently non-blocking to allow for gradual fixes"
           echo "================================================================"

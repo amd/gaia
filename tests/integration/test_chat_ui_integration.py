@@ -2114,6 +2114,13 @@ class TestSplitAgentsMcpStatusReport:
     """
 
     def _run_send(self, tmp_path, monkeypatch, agent_type: str):
+        # web/data ship as the gaia-agent-browser / gaia-agent-analyst wheels
+        # (#1102); skip when a framework-only env lacks the agent.
+        import pytest
+
+        pytest.importorskip(
+            "gaia_agent_browser" if agent_type == "web" else "gaia_agent_analyst"
+        )
         # Redirect HOME so AnalystAgent's default ~/.gaia/scratchpad.db lands
         # under tmp_path instead of polluting the developer's real home.
         # Both patches are needed: Path.home() in registry.discover() reads

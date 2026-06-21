@@ -22,6 +22,7 @@ from starlette.background import BackgroundTask
 from ..database import ChatDatabase
 from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
+from ..run_manager import run_manager
 from ..sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THOUGHT_JSON_SUB_RE,
@@ -86,22 +87,23 @@ async def send_message(
     sid = request.session_id
     session_lock = session_locks.setdefault(sid, asyncio.Lock())
 
-    # Acquire session lock — if a previous request is stuck (hung LLM
-    # connection, crashed stream), force-release and proceed rather than
-    # leaving the user permanently stuck with "request already in progress".
-    try:
-        await asyncio.wait_for(session_lock.acquire(), timeout=5.0)
-    except asyncio.TimeoutError:
-        logger.warning(
-            "Force-releasing stuck session lock for %s "
-            "(previous request likely hung)",
-            sid,
+    # Reject overlapping turns for the same session. Force-releasing an
+    # asyncio.Lock held by another coroutine is unsafe because the lock
+    # has no ownership tracking.
+    #
+    # The lock guards the synchronous request window; ``run_manager`` guards
+    # the *background tail* — a streaming run keeps going (and persisting)
+    # after the client disconnects and the HTTP lock is released (#1580), so
+    # a new turn for the same session must also be rejected while that
+    # background run is still active, or it would corrupt the cached agent's
+    # conversation state.
+    if session_lock.locked() or run_manager.is_running(sid):
+        raise HTTPException(
+            status_code=409,
+            detail="A chat request is already in progress for this session. "
+            "Please wait for it to finish.",
         )
-        try:
-            session_lock.release()
-        except RuntimeError:
-            pass  # Lock wasn't held — race condition, safe to ignore
-        await session_lock.acquire()
+    await session_lock.acquire()
 
     # ── Global concurrency gate ──────────────────────────────────────
     # Queue rather than immediately reject: wait up to 60 s for a slot.
@@ -142,10 +144,12 @@ async def send_message(
 
             async def _stream():
                 db.add_message(request.session_id, "user", request.message)
+                # The run's detached lifecycle owns producer + persistence and
+                # fires the AgentLoop notify on real completion; this subscriber
+                # just relays buffered + live events to the browser. Detaching
+                # (client disconnect) no longer cancels the run (#1580).
                 async for chunk in srv._stream_chat_response(db, session, request):
                     yield chunk
-                # Notify AgentLoop after the streaming response completes
-                _notify_loop(request.session_id)
 
             sem_released = True
             return StreamingResponse(
@@ -259,3 +263,42 @@ async def cancel_stream(request: CancelStreamRequest):
         )
     handler.cancelled.set()
     return {"status": "ok", "cancelled": True}
+
+
+@router.get("/api/chat/active")
+async def list_active_runs():
+    """Return the session ids with a currently-running chat turn.
+
+    The Agent UI polls this to render a "still running" indicator on
+    backgrounded sessions in the sidebar — runs continue server-side after
+    the user navigates away, so this is the source of truth independent of
+    any open SSE connection (#1580 follow-up).
+    """
+    return {"session_ids": run_manager.active_sessions()}
+
+
+@router.get("/api/chat/attach")
+async def attach_stream(session_id: str):
+    """Re-attach to an in-flight background run and stream its events (SSE).
+
+    Used when the user revisits a session whose turn is still running. The
+    response replays every event emitted so far, then streams live events
+    to completion. No session lock is taken — the originating ``/send`` run
+    already owns the turn; this is a read-only subscriber.
+    """
+    if not run_manager.is_running(session_id):
+        raise HTTPException(
+            status_code=404,
+            detail="No active run for this session.",
+        )
+
+    srv = _server_mod()
+    return StreamingResponse(
+        srv._attach_chat_stream(session_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

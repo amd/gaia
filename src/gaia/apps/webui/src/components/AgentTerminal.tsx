@@ -37,7 +37,7 @@ const TAB_CONFIG: { id: TerminalTab; label: string; description: string }[] = [
 const LINE_TYPE_COLORS: Record<TerminalLineType, string> = {
   info: 'var(--text-secondary)',
   warn: 'var(--accent-yellow)',
-  error: 'var(--amd-red)',
+  error: 'var(--danger)',
   tool: 'var(--accent-blue)',
   permission: 'var(--accent-yellow)',
   rpc: 'var(--text-muted)',

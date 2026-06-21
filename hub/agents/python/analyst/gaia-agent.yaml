@@ -1,0 +1,32 @@
+id: data
+name: Analyst Agent
+version: 0.1.0
+description: "GAIA analyst agent — structured data analysis (CSV/Excel, scratchpad SQL)"
+author: AMD
+license: MIT
+
+category: productivity
+tags: [data, csv, excel, analysis]
+icon: table
+tools_count: 10
+
+language: python
+min_gaia_version: "0.20.0"
+models: [Qwen3.5-35B-A3B-GGUF]
+
+python:
+  entry_module: gaia_agent_analyst
+  entry_class: AnalystAgent
+  dependencies:
+    - "amd-gaia>=0.20.0"
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+interfaces:
+  tui: false
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: false

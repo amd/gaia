@@ -6,7 +6,7 @@ description: Patterns, gotchas, and conventions for threading changes through Le
 # Lemonade Client Patterns
 
 ## Context
-`src/gaia/llm/lemonade_client.py` is GAIA's primary Lemonade HTTP client (~3900 lines). Changes to its interface ripple through `LemonadeProvider`, `VLMClient`, Agent UI routers, `_chat_helpers.py`, `server.py`, and `agents/base/agent.py`. The test suite mixes `responses` (for `requests`-based calls) and `mocker.patch` on `httpx` (for async calls).
+`src/gaia/llm/lemonade_client.py` is GAIA's primary Lemonade HTTP client (~4000 lines). Changes to its interface ripple through `LemonadeProvider`, `VLMClient`, Agent UI routers, `_chat_helpers.py`, `server.py`, and `agents/base/agent.py`. The test suite mixes `responses` (for `requests`-based calls) and `mocker.patch` on `httpx` (for async calls).
 
 ## Key Patterns
 
@@ -33,7 +33,7 @@ Misconfigured reverse proxies can reflect the `Authorization` header back in a 4
 
 ## Important Files & Locations
 
-- `src/gaia/llm/lemonade_client.py` — Primary client (~3900 lines); `_send_request` is the central chokepoint but 4 bypass sites exist
+- `src/gaia/llm/lemonade_client.py` — Primary client (~4000 lines); `_send_request` is the central chokepoint but 4 bypass sites exist
 - `src/gaia/llm/providers/lemonade.py` — `LemonadeProvider.__init__` uses `backend_kwargs` dict to forward to `LemonadeClient`; add new params with `if param is not None: backend_kwargs["param"] = param`
 - `src/gaia/llm/vlm_client.py` — `VLMClient.__init__` uses deferred import of `LemonadeClient`
 - `src/gaia/ui/routers/system.py` — already imports `DEFAULT_CONTEXT_SIZE` from `lemonade_client` (established cross-package import precedent)

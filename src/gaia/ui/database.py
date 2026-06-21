@@ -24,6 +24,14 @@ DEFAULT_DB_PATH = Path.home() / ".gaia" / "chat" / "gaia_chat.db"
 # any code that reads session["model"] and falls back when the field is NULL.
 SESSION_DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
 
+# Sentinel used by update_document_status to distinguish "caller passed None to clear
+# last_error" from "caller did not pass last_error at all" (leaving it unchanged).
+_UNSET = object()
+
+# Cap stored indexing error messages -- they are surfaced verbatim in a UI
+# tooltip and a raw traceback/exception string can be very large (#1749 review).
+_MAX_LAST_ERROR_LEN = 500
+
 SCHEMA_SQL = """
 -- Global document library
 CREATE TABLE IF NOT EXISTS documents (
@@ -34,7 +42,8 @@ CREATE TABLE IF NOT EXISTS documents (
     file_size INTEGER DEFAULT 0,
     chunk_count INTEGER DEFAULT 0,
     indexed_at TEXT DEFAULT (datetime('now')),
-    last_accessed_at TEXT
+    last_accessed_at TEXT,
+    last_error TEXT
 );
 
 -- Sessions (conversations)
@@ -44,7 +53,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
-    system_prompt TEXT
+    system_prompt TEXT,
+    device TEXT DEFAULT 'gpu',
+    -- Mailbox FILTER (#1596): NULL = every connected mailbox; the legacy
+    -- ALTER migration below still backfills pre-Phase-2 rows to 'google'.
+    mail_provider TEXT
 );
 
 -- Many-to-many: which docs are attached to which session
@@ -73,17 +86,43 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id               TEXT PRIMARY KEY,
+    name             TEXT UNIQUE NOT NULL,
+    interval_seconds INTEGER NOT NULL,
+    prompt           TEXT NOT NULL,
+    status           TEXT DEFAULT 'active',
+    created_at       TEXT,
+    last_run_at      TEXT,
+    next_run_at      TEXT,
+    last_result      TEXT,
+    run_count        INTEGER DEFAULT 0,
+    error_count      INTEGER DEFAULT 0,
+    session_id       TEXT,
+    schedule_config  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS schedule_results (
+    id          TEXT PRIMARY KEY,
+    task_id     TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+    executed_at TEXT NOT NULL,
+    result      TEXT,
+    error       TEXT
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_session_docs ON session_documents(session_id);
+CREATE INDEX IF NOT EXISTS idx_schedule_results_task
+    ON schedule_results(task_id, executed_at DESC);
 """
 
 
 class ChatDatabase:
     """SQLite database for Agent UI sessions, messages, and documents."""
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str | None = None):
         """Initialize database connection.
 
         Args:
@@ -179,6 +218,19 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for file_mtime: %s", e)
 
+        # Add last_error column for persisting indexing failure messages
+        try:
+            doc_cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(documents)").fetchall()
+            ]
+            if "last_error" not in doc_cols:
+                self._conn.execute("ALTER TABLE documents ADD COLUMN last_error TEXT")
+                self._conn.commit()
+                logger.info("Migrated documents table: added last_error column")
+        except Exception as e:
+            logger.debug("Migration check for last_error: %s", e)
+
         # Add private column to sessions for per-session incognito mode,
         # and agent_type column for per-session agent selection.
         try:
@@ -204,6 +256,43 @@ class ChatDatabase:
                 logger.info("Migrated sessions table: added agent_type column")
         except Exception as e:
             logger.debug("Migration check for sessions columns: %s", e)
+
+        # Add device column for multi-device support (issue #1220)
+        try:
+            sess_cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+            ]
+            if "device" not in sess_cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN device TEXT DEFAULT 'gpu'"
+                )
+                self._conn.execute(
+                    "UPDATE sessions SET device = 'gpu' WHERE device IS NULL"
+                )
+                self._conn.commit()
+                logger.info("Migrated sessions table: added device column")
+        except Exception as e:
+            logger.debug("Migration check for device column: %s", e)
+
+        # Add mail_provider column for per-session email-backend selection
+        # (Gmail vs Outlook). See EmailAgentConfig.mail_provider.
+        try:
+            sess_cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+            ]
+            if "mail_provider" not in sess_cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN mail_provider TEXT DEFAULT 'google'"
+                )
+                self._conn.execute(
+                    "UPDATE sessions SET mail_provider = 'google' WHERE mail_provider IS NULL"
+                )
+                self._conn.commit()
+                logger.info("Migrated sessions table: added mail_provider column")
+        except Exception as e:
+            logger.debug("Migration check for mail_provider column: %s", e)
 
     def close(self):
         """Close database connection."""
@@ -232,24 +321,29 @@ class ChatDatabase:
 
     def create_session(
         self,
-        title: str = None,
-        model: str = None,
-        system_prompt: str = None,
-        document_ids: List[str] = None,
+        title: str | None = None,
+        model: str | None = None,
+        system_prompt: str | None = None,
+        document_ids: List[str] | None = None,
         private: bool = False,
-        agent_type: str = None,
-    ) -> Dict[str, Any]:
+        agent_type: str | None = None,
+        device: str | None = None,
+        mail_provider: str | None = None,
+    ) -> Optional[Dict[str, Any]]:
         """Create a new chat session."""
         session_id = str(uuid.uuid4())
         now = self._now()
         model = model or SESSION_DEFAULT_MODEL
         title = title or "New Chat"
         agent_type = agent_type or "chat"
+        device = device or "gpu"
+        # mail_provider is a FILTER (#1596): no pick stays NULL ("every
+        # connected mailbox") — never silently coerce to google.
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private, agent_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private, agent_type, device, mail_provider)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     title,
@@ -259,6 +353,8 @@ class ChatDatabase:
                     system_prompt,
                     1 if private else 0,
                     agent_type,
+                    device,
+                    mail_provider,
                 ),
             )
 
@@ -326,24 +422,30 @@ class ChatDatabase:
         """Count total sessions."""
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*) as cnt FROM sessions").fetchone()
-            return row["cnt"]
+            return int(row["cnt"])
 
     def update_session(
         self,
         session_id: str,
-        title: str = None,
-        system_prompt: str = None,
-        document_ids: list = None,
-        private: bool = None,
-        agent_type: str = None,
+        title: str | None = None,
+        system_prompt: str | None = None,
+        document_ids: list | None = None,
+        private: bool | None = None,
+        agent_type: str | None = None,
+        device: str | None = None,
+        model: str | None = None,
+        mail_provider: str | None = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title, system prompt, agent_type, private flag, and/or document_ids."""
-        updates = []
-        params = []
+        """Update session title, system prompt, agent_type, device, model, mail_provider, private flag, and/or document_ids."""
+        updates: list[str] = []
+        params: list[Any] = []
 
         if title is not None:
             updates.append("title = ?")
             params.append(title)
+        if model is not None:
+            updates.append("model = ?")
+            params.append(model)
         if system_prompt is not None:
             updates.append("system_prompt = ?")
             params.append(system_prompt)
@@ -353,6 +455,12 @@ class ChatDatabase:
         if agent_type is not None:
             updates.append("agent_type = ?")
             params.append(agent_type)
+        if device is not None:
+            updates.append("device = ?")
+            params.append(device)
+        if mail_provider is not None:
+            updates.append("mail_provider = ?")
+            params.append(mail_provider)
 
         updates.append("updated_at = ?")
         params.append(self._now())
@@ -406,11 +514,11 @@ class ChatDatabase:
         session_id: str,
         role: str,
         content: str,
-        rag_sources: List[Dict] = None,
-        agent_steps: List[Dict] = None,
-        tokens_prompt: int = None,
-        tokens_completion: int = None,
-        inference_stats: Dict = None,
+        rag_sources: List[Dict] | None = None,
+        agent_steps: List[Dict] | None = None,
+        tokens_prompt: int | None = None,
+        tokens_completion: int | None = None,
+        inference_stats: Dict | None = None,
     ) -> int:
         """Add a message to a session. Returns message ID."""
         sources_json = json.dumps(rag_sources) if rag_sources else None
@@ -443,7 +551,65 @@ class ChatDatabase:
             )
             msg_id = cursor.lastrowid
 
-        return msg_id
+        return msg_id or 0
+
+    def upsert_message(
+        self,
+        session_id: str,
+        msg_id: int | None,
+        role: str,
+        content: str,
+        rag_sources: List[Dict] | None = None,
+        agent_steps: List[Dict] | None = None,
+        tokens_prompt: int | None = None,
+        tokens_completion: int | None = None,
+        inference_stats: Dict | None = None,
+    ) -> int:
+        """Atomically replace a message with a fresh row. Returns the new ID.
+
+        When ``msg_id`` is not None the old row is deleted and the new row is
+        inserted in the SAME transaction, so a crash or exception can never leave
+        the session without the message (the failure mode of a separate
+        ``delete_message`` + ``add_message``). A new id is minted rather than
+        reusing ``msg_id`` to keep the delete-then-insert id semantics.
+        """
+        sources_json = json.dumps(rag_sources) if rag_sources else None
+        steps_json = json.dumps(agent_steps) if agent_steps else None
+        stats_json = json.dumps(inference_stats) if inference_stats else None
+
+        with self._transaction():
+            if msg_id is not None:
+                self._conn.execute(
+                    "DELETE FROM messages WHERE id = ? AND session_id = ?",
+                    (msg_id, session_id),
+                )
+
+            cursor = self._conn.execute(
+                """INSERT INTO messages
+                   (session_id, role, content, created_at, rag_sources,
+                    agent_steps, tokens_prompt, tokens_completion, inference_stats)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    role,
+                    content,
+                    self._now(),
+                    sources_json,
+                    steps_json,
+                    tokens_prompt,
+                    tokens_completion,
+                    stats_json,
+                ),
+            )
+
+            # Update session timestamp
+            self._conn.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?",
+                (self._now(), session_id),
+            )
+            new_id = cursor.lastrowid
+
+        return new_id or 0
 
     def get_messages(
         self, session_id: str, limit: int = 100, offset: int = 0
@@ -540,7 +706,7 @@ class ChatDatabase:
                 "SELECT COUNT(*) as cnt FROM messages WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
-            return row["cnt"]
+            return int(row["cnt"])
 
     # ── Documents ───────────────────────────────────────────────────────
 
@@ -552,7 +718,7 @@ class ChatDatabase:
         file_size: int = 0,
         chunk_count: int = 0,
         file_mtime: Optional[float] = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Add a document to the library. Returns existing doc if hash matches.
 
         Uses a single lock acquisition for the check-then-insert pattern
@@ -707,7 +873,11 @@ class ChatDatabase:
     # ── Document Status ────────────────────────────────────────────
 
     def update_document_status(
-        self, doc_id: str, status: str, chunk_count: int = None
+        self,
+        doc_id: str,
+        status: str,
+        chunk_count: int | None = None,
+        last_error: str | None = _UNSET,
     ) -> bool:
         """Update a document's indexing status and optionally its chunk count.
 
@@ -715,6 +885,10 @@ class ChatDatabase:
             doc_id: Document ID.
             status: New status ('pending', 'indexing', 'complete', 'failed', 'cancelled').
             chunk_count: If provided, also update the chunk count.
+            last_error: Controls the stored error message.
+                        Omit (default) to leave the existing value unchanged.
+                        Pass None to clear the column (SQL NULL).
+                        Pass a string to store that error message.
 
         Returns:
             True if the document was found and updated.
@@ -725,6 +899,19 @@ class ChatDatabase:
             if chunk_count is not None:
                 parts.append("chunk_count = ?")
                 params.append(chunk_count)
+            # Successful indexing always clears any prior error message.
+            # For other statuses, only write last_error when explicitly passed.
+            if status == "complete":
+                parts.append("last_error = ?")
+                params.append(None)
+            elif last_error is not _UNSET:
+                parts.append("last_error = ?")
+                if (
+                    isinstance(last_error, str)
+                    and len(last_error) > _MAX_LAST_ERROR_LEN
+                ):
+                    last_error = last_error[: _MAX_LAST_ERROR_LEN - 1] + "…"
+                params.append(last_error)
             parts.append("last_accessed_at = ?")
             params.append(self._now())
             params.append(doc_id)
@@ -798,7 +985,7 @@ class ChatDatabase:
 
     # ── Settings ──────────────────────────────────────────────────────
 
-    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+    def get_setting(self, key: str, default: str | None = None) -> Optional[str]:
         """Get a setting value by key."""
         with self._lock:
             row = self._conn.execute(
@@ -822,6 +1009,105 @@ class ChatDatabase:
         with self._lock:
             rows = self._conn.execute("SELECT key, value FROM settings").fetchall()
             return {row["key"]: row["value"] for row in rows}
+
+    # ── Scheduled tasks ─────────────────────────────────────────────────
+
+    def create_scheduled_task(self, row: Dict[str, Any]) -> None:
+        """Insert a scheduled task row.
+
+        Args:
+            row: Mapping with keys id, name, interval_seconds, prompt, status,
+                created_at, next_run_at, run_count, error_count, session_id,
+                schedule_config.
+
+        Raises:
+            sqlite3.IntegrityError: if a task with the same name exists.
+        """
+        with self._transaction():
+            self._conn.execute(
+                """INSERT INTO scheduled_tasks
+                   (id, name, interval_seconds, prompt, status, created_at,
+                    next_run_at, run_count, error_count, session_id, schedule_config)
+                   VALUES (:id, :name, :interval_seconds, :prompt, :status,
+                           :created_at, :next_run_at, :run_count, :error_count,
+                           :session_id, :schedule_config)""",
+                row,
+            )
+
+    def update_scheduled_task(
+        self,
+        task_id: str,
+        *,
+        status: str,
+        last_run_at: str | None = None,
+        next_run_at: str | None = None,
+        last_result: str | None = None,
+        run_count: int = 0,
+        error_count: int = 0,
+        session_id: str | None = None,
+        schedule_config: str | None = None,
+    ) -> None:
+        """Update the mutable fields of a scheduled task row."""
+        with self._transaction():
+            self._conn.execute(
+                """UPDATE scheduled_tasks
+                   SET status = ?, last_run_at = ?, next_run_at = ?, last_result = ?,
+                       run_count = ?, error_count = ?, session_id = ?, schedule_config = ?
+                   WHERE id = ?""",
+                (
+                    status,
+                    last_run_at,
+                    next_run_at,
+                    last_result,
+                    run_count,
+                    error_count,
+                    session_id,
+                    schedule_config,
+                    task_id,
+                ),
+            )
+
+    def delete_scheduled_task(self, task_id: str) -> None:
+        """Delete a scheduled task and its results."""
+        with self._transaction():
+            self._conn.execute(
+                "DELETE FROM schedule_results WHERE task_id = ?", (task_id,)
+            )
+            self._conn.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
+
+    def list_scheduled_tasks(self) -> List[Dict[str, Any]]:
+        """Load all scheduled task rows."""
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM scheduled_tasks").fetchall()
+            return [dict(r) for r in rows]
+
+    def store_schedule_result(
+        self,
+        result_id: str,
+        task_id: str,
+        executed_at: str,
+        result: str | None,
+        error: str | None,
+    ) -> None:
+        """Store one schedule execution result."""
+        with self._transaction():
+            self._conn.execute(
+                """INSERT INTO schedule_results (id, task_id, executed_at, result, error)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (result_id, task_id, executed_at, result, error),
+            )
+
+    def get_schedule_results(
+        self, task_id: str, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """Get past execution results for a task, newest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT * FROM schedule_results WHERE task_id = ?
+                   ORDER BY executed_at DESC LIMIT ?""",
+                (task_id, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     # ── Stats ───────────────────────────────────────────────────────────
 

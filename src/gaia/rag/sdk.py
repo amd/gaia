@@ -15,6 +15,7 @@ import re
 import secrets
 import threading
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -29,14 +30,19 @@ except ImportError:
     except ImportError:
         PdfReader = None
 
+# Not just ImportError: a broken native dependency (e.g. torchcodec/FFmpeg
+# pulled in by sentence-transformers, or an arch-mismatched faiss build) raises
+# RuntimeError/OSError at import. Treat that the same as "not installed" so a
+# bad install can't crash every module that transitively imports RAG; the loud,
+# actionable error is deferred to RAGSDK._check_dependencies() at point of use.
 try:
     from sentence_transformers import SentenceTransformer
-except ImportError:
+except Exception:  # pylint: disable=broad-except
     SentenceTransformer = None
 
 try:
     import faiss
-except ImportError:
+except Exception:  # pylint: disable=broad-except
     faiss = None
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
@@ -224,6 +230,38 @@ class RAGSDK:
                 f"Or install packages directly:\n"
                 f"  uv pip install {' '.join(missing)}\n"
             )
+            # A package that is installed but failed to import (broken native
+            # deps) needs a different fix than a missing one — name the cause.
+            # Re-import on this (already-failing) path to recover the reason,
+            # skipping genuinely-missing packages (ImportError) which the
+            # install instructions above already cover.
+            broken = []
+            for pkg, label in (
+                ("sentence_transformers", "sentence-transformers"),
+                ("faiss", "faiss"),
+            ):
+                if (pkg == "sentence_transformers" and SentenceTransformer is None) or (
+                    pkg == "faiss" and faiss is None
+                ):
+                    try:
+                        # Use the import statement (__import__), not
+                        # importlib.import_module — the latter bypasses
+                        # builtins.__import__, so this path can't be exercised
+                        # by tests that intercept imports, and re-running the
+                        # real import is what re-surfaces the native cause.
+                        __import__(pkg)
+                    except ImportError:
+                        pass  # genuinely missing → covered by install instructions
+                    except Exception as exc:  # pylint: disable=broad-except
+                        broken.append(f"  {label}: {exc}")
+            if broken:
+                error_msg += (
+                    "\nThe package(s) below are installed but failed to load — "
+                    "reinstalling won't help until the underlying error is fixed "
+                    "(e.g. a missing FFmpeg for torchcodec):\n"
+                    + "\n".join(broken)
+                    + "\n"
+                )
             raise ImportError(error_msg)
 
     def _safe_open(self, file_path: str, mode="rb"):
@@ -432,9 +470,12 @@ class RAGSDK:
     def _load_embedder(self):
         """Load embedding model via Lemonade server for hardware acceleration.
 
-        Forces a fresh load with --ubatch-size 2048 to prevent llama.cpp issues
-        after VLM processing. Must unload first since Lemonade skips reload
-        if model already loaded.
+        Model-scoped refresh: unload ONLY the embedder slot, then reload it
+        with --ubatch-size 2048 (a fresh load avoids llama.cpp issues after VLM
+        processing). Lemonade holds the chat model and embedder at the same
+        time, so the chat model is never evicted (issue #1544). A scoped-unload
+        or load failure surfaces — no fall-back to a global unload, which would
+        evict the co-resident chat model and trigger a ~100s cold reload.
         """
         if self.embedder is None:
             self.log.info(
@@ -446,25 +487,25 @@ class RAGSDK:
             if not hasattr(self, "llm_client") or self.llm_client is None:
                 self.llm_client = LemonadeClient()
 
-            # Force fresh load - must unload first
-            try:
-                self.llm_client.unload_model()
-            except Exception:
-                pass  # Ignore if nothing to unload
-
-            try:
-                self.llm_client.load_model(
-                    self.config.embedding_model,
-                    llamacpp_args="--ubatch-size 2048",
-                )
-                self.log.info("Loaded embedding model with ubatch-size=2048")
-            except Exception as e:
-                self.log.warning(f"Could not pre-load embedding model: {e}")
+            # Scoped unload of the embedder ONLY — a global /unload would evict
+            # the co-resident chat model and trigger a ~100s cold reload (#1544).
+            # ignore_if_not_loaded: on a cold start the embedder slot is empty
+            # and Lemonade 404s "Model not loaded" — a benign no-op here, since
+            # we reload it on the next line anyway.
+            self.llm_client.unload_model(
+                self.config.embedding_model, ignore_if_not_loaded=True
+            )
+            self.llm_client.load_model(
+                self.config.embedding_model,
+                llamacpp_args="--ubatch-size 2048",
+            )
 
             self.embedder = self.llm_client
             self.use_lemonade_embeddings = True
 
-            self.log.info("Using Lemonade server for hardware-accelerated embeddings")
+            self.log.info(
+                "Loaded embedding model (ubatch-size=2048); chat model left resident"
+            )
 
     def _encode_texts(
         self, texts: List[str], show_progress: bool = False
@@ -850,6 +891,355 @@ class RAGSDK:
             self.log.error(f"Error reading PDF {pdf_path}: {e}")
             raise
 
+    def _extract_text_from_pptx(self, pptx_path: str) -> tuple:
+        """
+        Extract text from PowerPoint (.pptx) file with VLM for embedded images.
+
+        Mirrors :meth:`_extract_text_from_pdf` — same per-slide loop, VLM
+        integration, merge strategy, and metadata structure.
+
+        Returns:
+            ``(text, num_slides, metadata)`` tuple where metadata contains:
+
+            - num_slides: int
+            - vlm_slides: int (slides enhanced with VLM)
+            - total_images: int (total images processed)
+            - vlm_checked: bool
+            - vlm_available: bool
+            - pptx_status: str (``"readable"`` or ``"corrupted"``)
+        """
+        import time as time_module  # pylint: disable=reimported
+
+        file_name = Path(pptx_path).name
+
+        # Step 0: Open the PPTX. python-pptx raises PackageNotFoundError or
+        # similar for corrupt / non-PPTX files.
+        try:
+            from pptx import Presentation  # pylint: disable=import-outside-toplevel
+        except ImportError:
+            raise ImportError(
+                "python-pptx is required for PowerPoint processing. "
+                "Install it with: uv pip install python-pptx"
+            )
+
+        # Guard against zip bombs: .pptx is a ZIP container. Check that
+        # the total uncompressed size is sane before handing it to python-pptx.
+
+        try:
+            with zipfile.ZipFile(pptx_path, "r") as zf:
+                total_uncompressed = sum(info.file_size for info in zf.infolist())
+                max_uncompressed = 500 * 1024 * 1024  # 500 MB
+                if total_uncompressed > max_uncompressed:
+                    msg = (
+                        f"PowerPoint file too large after decompression: {file_name}\n"
+                        f"Uncompressed size: {total_uncompressed / (1024*1024):.0f} MB "
+                        f"(limit: {max_uncompressed / (1024*1024):.0f} MB)\n"
+                        "The file may be a zip bomb or contain very large embedded media.\n"
+                        "Suggestions:\n"
+                        "  1. Remove unnecessary images/media to reduce file size\n"
+                        "  2. Save as PDF and index the PDF instead"
+                    )
+                    self.log.error(
+                        f"PPTX zip bomb guard: {pptx_path} ({total_uncompressed} bytes uncompressed)"
+                    )
+                    raise ValueError(msg)
+        except zipfile.BadZipFile as e:
+            msg = (
+                f"Could not read PowerPoint file: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a valid .pptx file.\n"
+                "Suggestions:\n"
+                "  1. Re-download or re-export the presentation\n"
+                "  2. Try opening the file in PowerPoint to confirm it is readable\n"
+                "  3. Save as PDF and index the PDF instead"
+            )
+            self.log.error(f"Corrupted PPTX (bad zip): {pptx_path}: {e}")
+            raise ValueError(msg) from e
+
+        try:
+            prs = Presentation(pptx_path)
+        except Exception as e:
+            msg = (
+                f"Could not read PowerPoint file: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a valid .pptx file.\n"
+                "Suggestions:\n"
+                "  1. Re-download or re-export the presentation\n"
+                "  2. Try opening the file in PowerPoint to confirm it is readable\n"
+                "  3. Save as PDF and index the PDF instead"
+            )
+            self.log.error(f"Corrupted PPTX {pptx_path}: {e}")
+            raise ValueError(msg) from e
+
+        try:
+            extract_start = time_module.time()
+            total_slides = len(prs.slides)
+            self.log.info(f"📊 Extracting text from {total_slides} slides...")
+
+            from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
+                convert_pptx_to_pdf,
+                extract_notes_from_slide,
+                extract_text_from_slide,
+            )
+
+            # ----------------------------------------------------------
+            # Fast path: PPTX → PDF via PowerPoint COM, then existing
+            # PDF pipeline.  Captures charts, SmartArt, and visual
+            # layout that python-pptx cannot access.
+            # ----------------------------------------------------------
+            pdf_conversion_path = None
+            tmp_dir = None
+            try:
+                import tempfile as _tempfile
+
+                tmp_dir = _tempfile.mkdtemp(prefix="gaia_pptx_")
+                pdf_conversion_path = convert_pptx_to_pdf(
+                    str(Path(pptx_path).resolve()), tmp_dir
+                )
+            except Exception as conv_err:
+                self.log.debug("PPTX→PDF conversion not available: %s", conv_err)
+
+            if pdf_conversion_path:
+                try:
+                    if self.config.show_stats:
+                        print(
+                            "  📊 Using PowerPoint→PDF conversion for full-fidelity extraction"
+                        )
+                    self.log.info("Using PowerPoint→PDF conversion for %s", file_name)
+                    pdf_text, pdf_pages, pdf_metadata = self._extract_text_from_pdf(
+                        pdf_conversion_path
+                    )
+
+                    # Append speaker notes (not in PDF render)
+                    notes_parts = []
+                    for i, slide in enumerate(prs.slides, 1):
+                        notes = extract_notes_from_slide(slide)
+                        if notes:
+                            notes_parts.append(
+                                f"\n[Page {i}] **Speaker Notes:**\n{notes}"
+                            )
+                    if notes_parts:
+                        pdf_text += "\n\n" + "\n".join(notes_parts)
+
+                    metadata = {
+                        "num_slides": pdf_pages,
+                        "vlm_slides": pdf_metadata.get("vlm_pages", 0),
+                        "total_images": pdf_metadata.get("total_images", 0),
+                        "vlm_checked": pdf_metadata.get("vlm_checked", False),
+                        "vlm_available": pdf_metadata.get("vlm_available", False),
+                        "pptx_status": "readable",
+                        "conversion": "powerpoint_com",
+                    }
+
+                    extract_duration = time_module.time() - extract_start
+                    self.log.info(
+                        f"📝 Extracted {len(pdf_text):,} characters via PDF conversion in {extract_duration:.2f}s"
+                    )
+                    return pdf_text, pdf_pages, metadata
+                except Exception as pdf_err:
+                    self.log.warning(
+                        "PDF extraction from converted PPTX failed, falling back: %s",
+                        pdf_err,
+                    )
+                finally:
+                    import shutil
+
+                    if tmp_dir:
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            # ----------------------------------------------------------
+            # Fallback: python-pptx native extraction
+            # ----------------------------------------------------------
+
+            # Initialize VLM client (auto-enabled if available)
+            vlm = None
+            vlm_available = False
+            try:
+                from gaia.llm import (  # pylint: disable=import-outside-toplevel
+                    VLMClient,
+                )
+                from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
+                    count_images_in_slide,
+                    extract_images_from_slide,
+                )
+
+                vlm = VLMClient(
+                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
+                )
+                vlm_available = vlm.check_availability()
+
+                if vlm_available and self.config.show_stats:
+                    print("  🔍 VLM enabled: Will extract text from slide images")
+                elif not vlm_available and self.config.show_stats:
+                    print("  ⚠️  VLM not available - images will not be processed")
+                    print("  📥 To enable VLM image extraction:")
+                    print(
+                        "     1. Open Lemonade Model Manager (http://localhost:13305)"
+                    )
+                    print(f"     2. Download model: {self.config.vlm_model}")
+
+            except Exception as vlm_error:
+                if self.config.show_stats:
+                    print(f"  ⚠️  VLM initialization failed: {vlm_error}")
+                self.log.warning(f"VLM initialization failed: {vlm_error}")
+                vlm_available = False
+
+            if self.config.show_stats:
+                print(f"\n{'='*60}")
+                print("  📊 COMPUTE INTENSIVE: PowerPoint Text Extraction")
+                print(f"  📊 Total slides: {total_slides}")
+                print(f"  ⏱️  Estimated time: {total_slides * 0.2:.1f} seconds")
+                if vlm_available:
+                    print("  🖼️  VLM: Enabled for image text extraction")
+                else:
+                    print("  🖼️  VLM: Disabled (text-only extraction)")
+                print(f"{'='*60}")
+
+            pages_data = []
+            vlm_slides_count = 0
+            total_images_processed = 0
+
+            for i, slide in enumerate(prs.slides, 1):
+                page_start = time_module.time()
+
+                # Step 1: Extract native text from shapes / tables
+                slide_text = extract_text_from_slide(slide, slide_num=i)
+
+                # Step 2: Extract speaker notes
+                notes_text = extract_notes_from_slide(slide)
+                if notes_text:
+                    slide_text = (
+                        slide_text + "\n\n**Speaker Notes:**\n" + notes_text
+                        if slide_text
+                        else "**Speaker Notes:**\n" + notes_text
+                    )
+
+                # Step 3: Check for images
+                has_imgs = False
+                num_imgs = 0
+                if vlm_available:
+                    try:
+                        has_imgs, num_imgs = count_images_in_slide(slide)
+                    except Exception as e:  # pylint: disable=broad-except
+                        self.log.debug(
+                            "count_images_in_slide failed on slide %d: %s", i, e
+                        )
+
+                # Step 4: Extract from images if present
+                image_texts = []
+                if has_imgs and vlm_available:
+                    try:
+                        images = extract_images_from_slide(slide, slide_num=i)
+                        if images:
+                            image_texts = vlm.extract_from_page_images(
+                                images, page_num=i
+                            )
+                            if image_texts:
+                                vlm_slides_count += 1
+                                total_images_processed += len(image_texts)
+                    except Exception as img_error:
+                        self.log.warning(
+                            f"Image extraction failed on slide {i}: {img_error}"
+                        )
+
+                # Step 5: Merge native text + VLM image texts
+                merged_text = self._merge_page_texts(
+                    slide_text, image_texts, page_num=i
+                )
+
+                pages_data.append(
+                    {
+                        "page": i,
+                        "text": merged_text,
+                        "has_images": has_imgs,
+                        "num_images": num_imgs,
+                        "vlm_used": len(image_texts) > 0,
+                    }
+                )
+
+                page_duration = time_module.time() - page_start
+
+                if self.config.show_stats:
+                    progress_pct = (i / total_slides) * 100
+                    avg_time = (time_module.time() - extract_start) / i
+                    eta = avg_time * (total_slides - i)
+                    vlm_indicator = " 🖼️" if len(image_texts) > 0 else ""
+                    print(
+                        f"  📊 Slide {i}/{total_slides} ({progress_pct:.0f}%){vlm_indicator} | "
+                        f"⏱️  {page_duration:.2f}s | ETA: {eta:.1f}s" + " " * 10,
+                        end="\r",
+                        flush=True,
+                    )
+
+            # Cleanup VLM
+            if vlm_available and vlm:
+                try:
+                    vlm.cleanup()
+                except Exception as e:  # pylint: disable=broad-except
+                    self.log.debug("VLM cleanup failed: %s", e)
+
+            extract_duration = time_module.time() - extract_start
+
+            # Build full text — uses [Page N] markers for downstream compatibility
+            # with chunking/retrieval code that parses [Page N] patterns.
+            full_text = "\n\n".join(
+                [f"[Page {p['page']}]\n{p['text']}" for p in pages_data]
+            )
+
+            if self.config.show_stats:
+                print(
+                    f"\n  ✅ Extracted {len(full_text):,} characters from {total_slides} slides"
+                )
+                slides_per_sec = (
+                    total_slides / extract_duration
+                    if extract_duration > 0
+                    else float("inf")
+                )
+                print(
+                    f"  ⏱️  Total extraction time: {extract_duration:.2f}s ({slides_per_sec:.1f} slides/sec)"
+                )
+                print(f"  💾 Text size: {len(full_text) / 1024:.1f} KB")
+                if vlm_slides_count > 0:
+                    print(
+                        f"  🖼️  VLM enhanced: {vlm_slides_count} slides, {total_images_processed} images"
+                    )
+                print(f"{'='*60}\n")
+
+            self.log.info(
+                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_slides_count} slides)"
+            )
+
+            # Check for empty presentation
+            has_any_content = any((p["text"] or "").strip() for p in pages_data)
+            if not has_any_content:
+                msg = (
+                    f"No extractable text in PowerPoint: {file_name}\n"
+                    f"The file has {total_slides} slide(s) but none contained text.\n"
+                    "Suggestions:\n"
+                    "  1. Ensure the presentation has text content (not just images)\n"
+                    "  2. Enable VLM image extraction by downloading "
+                    f"{self.config.vlm_model} in Lemonade\n"
+                    "  3. Save as PDF and index the PDF instead"
+                )
+                self.log.error(f"Empty PPTX (no text): {pptx_path}")
+                raise ValueError(msg)
+
+            metadata = {
+                "num_slides": total_slides,
+                "vlm_slides": vlm_slides_count,
+                "total_images": total_images_processed,
+                "vlm_checked": True,
+                "vlm_available": vlm_available,
+                "pptx_status": "readable",
+            }
+
+            return full_text, total_slides, metadata
+        except ValueError:
+            raise
+        except Exception as e:
+            self.log.error(f"Error reading PPTX {pptx_path}: {e}")
+            raise
+
     def _merge_page_texts(
         self, pypdf_text: str, image_texts: list, page_num: int
     ) -> str:
@@ -1217,9 +1607,9 @@ These positions indicate where to split the text."""
 
         Returns:
             (text, metadata_dict) tuple where metadata_dict contains:
-            - num_pages: int (for PDFs) or None
-            - vlm_pages: int (for PDFs with VLM) or None
-            - total_images: int (for PDFs with VLM) or None
+            - num_pages: int (for PDFs/PPTX) or None
+            - vlm_pages: int (for PDFs/PPTX with VLM) or None
+            - total_images: int (for PDFs/PPTX with VLM) or None
         """
         file_type = self._get_file_type(file_path)
         metadata = {"num_pages": None, "vlm_pages": None, "total_images": None}
@@ -1230,6 +1620,14 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_pages
             metadata["vlm_pages"] = pdf_metadata.get("vlm_pages", 0)
             metadata["total_images"] = pdf_metadata.get("total_images", 0)
+            return text, metadata
+
+        # PowerPoint files
+        elif file_type == ".pptx":
+            text, num_slides, pptx_metadata = self._extract_text_from_pptx(file_path)
+            metadata["num_pages"] = num_slides
+            metadata["vlm_pages"] = pptx_metadata.get("vlm_slides", 0)
+            metadata["total_images"] = pptx_metadata.get("total_images", 0)
             return text, metadata
 
         # Text-based files
@@ -1600,7 +1998,17 @@ These positions indicate where to split the text."""
             return trimmed[first_space + 1 :]
         return trimmed
 
-    def _create_vector_index(self, chunks: List[str]) -> tuple:
+    def _create_faiss_index(self, embeddings: "np.ndarray"):
+        """Build a FAISS L2 index from precomputed embeddings."""
+        dimension = embeddings.shape[1]
+        index = faiss.IndexFlatL2(dimension)
+        # pylint: disable=no-value-for-parameter
+        index.add(embeddings.astype("float32"))
+        return index
+
+    def _create_vector_index(
+        self, chunks: List[str], return_embeddings: bool = False
+    ) -> tuple:
         """Create FAISS vector index from chunks with progress reporting."""
         import time as time_module  # pylint: disable=reimported
 
@@ -1635,10 +2043,7 @@ These positions indicate where to split the text."""
             print("\n  🏗️  Building FAISS search index...")
 
         index_start = time_module.time()
-        dimension = embeddings.shape[1]
-        index = faiss.IndexFlatL2(dimension)
-        # pylint: disable=no-value-for-parameter
-        index.add(embeddings.astype("float32"))
+        index = self._create_faiss_index(embeddings)
         index_duration = time_module.time() - index_start
 
         if self.config.show_stats:
@@ -1654,6 +2059,8 @@ These positions indicate where to split the text."""
             f"📚 Index ready with {index.ntotal} vectors "
             f"(embed: {embed_duration:.2f}s, index: {index_duration:.2f}s)"
         )
+        if return_embeddings:
+            return index, chunks, embeddings
         return index, chunks
 
     def _snapshot_query_state(self) -> Dict[str, Any]:
@@ -1909,7 +2316,7 @@ These positions indicate where to split the text."""
         Index a document for retrieval.
 
         Supports:
-        - Documents: PDF, TXT, MD, CSV, JSON
+        - Documents: PDF, PPTX, TXT, MD, CSV, JSON
         - Backend Code: Python, Java, C/C++, Go, Rust, Ruby, PHP, Swift, Kotlin, Scala
         - Web Code: JavaScript/TypeScript, HTML, CSS/SCSS/SASS/LESS, Vue, Svelte, Astro
         - Config: YAML, XML, TOML, INI, ENV, Properties
@@ -2107,10 +2514,13 @@ These positions indicate where to split the text."""
                         stats["memory_limit_reached"] = True
                         return stats
 
-                    # Track chunk indices for this file and publish only after the
-                    # rebuilt index succeeds so partial state is never visible.
+                    # Encode once; reuse for both the global and per-file index.
                     if self.index is None:
-                        rebuilt_chunks_source = list(cached_chunks)
+                        new_index, rebuilt_chunks, file_embeddings = (
+                            self._create_vector_index(
+                                list(cached_chunks), return_embeddings=True
+                            )
+                        )
                         file_chunk_indices = list(range(len(cached_chunks)))
                         rebuilt_chunk_to_file = {
                             idx: file_path for idx in file_chunk_indices
@@ -2118,26 +2528,36 @@ These positions indicate where to split the text."""
                     else:
                         old_chunks = list(self.chunks)
                         old_count = len(old_chunks)
-                        rebuilt_chunks_source = old_chunks + list(cached_chunks)
                         start_idx = len(old_chunks)
                         file_chunk_indices = list(
                             range(start_idx, start_idx + len(cached_chunks))
                         )
+                        rebuilt_chunks = old_chunks + list(cached_chunks)
                         rebuilt_chunk_to_file = dict(self.chunk_to_file)
                         for chunk_idx in file_chunk_indices:
                             rebuilt_chunk_to_file[chunk_idx] = file_path
                         if self.config.show_stats:
                             print(
-                                f"  🔄 Rebuilding index ({old_count} + {len(cached_chunks)} = {len(rebuilt_chunks_source)} chunks)"
+                                f"  ➕ Appending {len(cached_chunks)} cached chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                             )
+                        self._load_embedder()
+                        file_embeddings = self._encode_texts(
+                            list(cached_chunks), show_progress=False
+                        )
 
-                    rebuilt_index, rebuilt_chunks = self._create_vector_index(
-                        rebuilt_chunks_source
-                    )
-                    self.index = rebuilt_index
+                    file_index = self._create_faiss_index(file_embeddings)
+
+                    if self.index is None:
+                        self.index = new_index
+                    else:
+                        # Append after the per-file index is ready.
+                        self.index.add(file_embeddings.astype("float32"))
                     self.chunks = rebuilt_chunks
                     self.chunk_to_file = rebuilt_chunk_to_file
                     self.file_to_chunk_indices[file_path] = file_chunk_indices
+
+                    self.file_indices[file_path] = file_index
+                    self.file_embeddings[file_path] = file_embeddings
 
                     # Restore metadata in memory
                     if cached_full_text or cached_metadata:
@@ -2147,32 +2567,6 @@ These positions indicate where to split the text."""
                         }
 
                     self.indexed_files.add(file_path)
-
-                    # Build per-file FAISS index NOW so retrieval-time queries
-                    # don't have to rebuild it on every call. Pre-#1030
-                    # follow-up: this block was only present on the
-                    # fresh-index path (~line 2289 below), so any document
-                    # loaded from cache hit ``cached_file_index is None`` in
-                    # _retrieve_chunks_from_file and rebuilt the FAISS index
-                    # from scratch on every query — adding ~3 s × N queries
-                    # of avoidable work. One-time cost on cache load instead.
-                    try:
-                        self._load_embedder()
-                        _file_embeddings = self._encode_texts(
-                            list(cached_chunks), show_progress=False
-                        )
-                        _file_dim = _file_embeddings.shape[1]
-                        _file_index = faiss.IndexFlatL2(_file_dim)
-                        # pylint: disable=no-value-for-parameter
-                        _file_index.add(_file_embeddings.astype("float32"))
-                        self.file_indices[file_path] = _file_index
-                        self.file_embeddings[file_path] = _file_embeddings
-                    except Exception as _e:  # pylint: disable=broad-except
-                        self.log.debug(
-                            "Couldn't pre-build per-file index for %s: %s",
-                            file_path,
-                            _e,
-                        )
 
                     # Track access time for LRU (was missing — pre-existing bug)
                     current_time = time.time()
@@ -2276,57 +2670,54 @@ These positions indicate where to split the text."""
                     stats["memory_limit_reached"] = True
                     return stats
 
-                # Track which chunks belong to this file and only publish them after
-                # the rebuilt global index succeeds.
-                if self.chunks:
+                # Encode once; reuse for both the global and per-file index.
+                if self.index is None:
+                    if self.config.show_stats:
+                        print("🏗️  Building initial search index...")
+                    new_index, rebuilt_chunks, file_embeddings = (
+                        self._create_vector_index(
+                            list(new_chunks), return_embeddings=True
+                        )
+                    )
+                    file_chunk_indices = list(range(len(new_chunks)))
+                    rebuilt_chunk_to_file = {
+                        idx: file_path for idx in file_chunk_indices
+                    }
+                else:
                     old_chunks = list(self.chunks)
                     old_count = len(old_chunks)
-                    rebuilt_chunks_source = old_chunks + list(new_chunks)
                     start_idx = len(old_chunks)
                     file_chunk_indices = list(
                         range(start_idx, start_idx + len(new_chunks))
                     )
+                    rebuilt_chunks = old_chunks + list(new_chunks)
                     rebuilt_chunk_to_file = dict(self.chunk_to_file)
                     for chunk_idx in file_chunk_indices:
                         rebuilt_chunk_to_file[chunk_idx] = file_path
 
                     if self.config.show_stats:
                         print(
-                            f"🔄 Rebuilding search index ({old_count} + {len(new_chunks)} = {len(rebuilt_chunks_source)} total chunks)"
+                            f"➕ Appending {len(new_chunks)} new chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                         )
-                else:
-                    file_chunk_indices = list(range(len(new_chunks)))
-                    rebuilt_chunks_source = list(new_chunks)
-                    rebuilt_chunk_to_file = {
-                        idx: file_path for idx in file_chunk_indices
-                    }
 
-                    if self.config.show_stats:
-                        print("🏗️  Building initial search index...")
+                    self._load_embedder()
+                    file_embeddings = self._encode_texts(
+                        new_chunks, show_progress=False
+                    )
 
-                rebuilt_index, rebuilt_chunks = self._create_vector_index(
-                    rebuilt_chunks_source
-                )
-                self.index = rebuilt_index
-                self.chunks = rebuilt_chunks
-                self.chunk_to_file = rebuilt_chunk_to_file
-                self.file_to_chunk_indices[file_path] = file_chunk_indices
-
-                # Build and cache per-file FAISS index for fast file-specific searches
                 if self.config.show_stats:
                     print("🔍 Building per-file search index...")
 
-                self._load_embedder()
-                # Generate embeddings for this file's chunks only
-                file_embeddings = self._encode_texts(new_chunks, show_progress=False)
+                file_index = self._create_faiss_index(file_embeddings)
 
-                # Create FAISS index for this file
-                dimension = file_embeddings.shape[1]
-                file_index = faiss.IndexFlatL2(dimension)
-                # pylint: disable=no-value-for-parameter
-                file_index.add(file_embeddings.astype("float32"))
-
-                # Cache the index and embeddings for this file
+                if self.index is None:
+                    self.index = new_index
+                else:
+                    # Append after the per-file index is ready.
+                    self.index.add(file_embeddings.astype("float32"))
+                self.chunks = rebuilt_chunks
+                self.chunk_to_file = rebuilt_chunk_to_file
+                self.file_to_chunk_indices[file_path] = file_chunk_indices
                 self.file_indices[file_path] = file_index
                 self.file_embeddings[file_path] = file_embeddings
 
@@ -2390,6 +2781,8 @@ These positions indicate where to split the text."""
             stats["total_chunks"] = len(self.chunks)
             if file_type == ".pdf":
                 stats["pdf_status"] = "readable"
+            elif file_type == ".pptx":
+                stats["pptx_status"] = "readable"
             return stats
 
         except PDFExtractionError as e:

@@ -28,10 +28,19 @@ from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
 
-# Optional imports
+# Optional imports — degrades to BLENDER_AVAILABLE = False when the blender
+# agent (or the Blender MCP client) is not installed.
 try:
-    from gaia.agents.blender.agent import BlenderAgent
+    # BlenderAgent now ships as the external ``gaia_agent_blender`` wheel
+    # (#1102), splitting it from the gaia.mcp import below; both must stay in
+    # this guarded optional-import block, so the gaia.mcp import is necessarily
+    # ungrouped from the top-of-file gaia imports.
+    from gaia_agent_blender.agent import BlenderAgent
+
+    # pylint: disable=ungrouped-imports
     from gaia.mcp.blender_mcp_client import MCPClient
+
+    # pylint: enable=ungrouped-imports
 
     BLENDER_AVAILABLE = True
 except ImportError:
@@ -597,6 +606,103 @@ async def async_main(action, **kwargs):
             debug_mode = kwargs.get("debug", False)
             use_silent_mode = not debug_mode  # Hide processing steps unless debugging
 
+            # Resolve device to model_id when --device is set and --model is not.
+            # GPU is the default when no --device is specified.
+            # Fallback policy:
+            #   - Explicit --device: fail loudly if unavailable (no fallback)
+            #   - Default (no --device): GPU default, fallback to CPU with warning
+            explicit_model = kwargs.get("model", None)
+            device = kwargs.get("device", None)
+            device_was_explicit = device is not None
+            effective_device = device or "gpu"
+
+            # Check device availability when Lemonade is reachable
+            if not explicit_model:
+                from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+                try:
+                    _dev_client = LemonadeClient(verbose=False)
+                    _sysinfo = _dev_client.get_system_info()
+                    _devices = _sysinfo.get("devices", {})
+
+                    if effective_device == "npu":
+                        npu_info = _devices.get("amd_npu", {})
+                        if not npu_info.get("available"):
+                            if device_was_explicit:
+                                print(
+                                    "❌ NPU not available on this system. "
+                                    "Requires Ryzen AI 300/400/Max (XDNA2). "
+                                    "Run `gaia init --profile npu` to set it up, "
+                                    "or choose --device gpu.",
+                                    file=sys.stderr,
+                                )
+                                sys.exit(1)
+                            effective_device = "gpu"
+                    elif effective_device == "gpu":
+                        has_gpu = any(
+                            "gpu" in k.lower()
+                            and isinstance(v, dict)
+                            and v.get("available")
+                            for k, v in _devices.items()
+                        )
+                        if not has_gpu and not device_was_explicit:
+                            # Default GPU target unavailable — announce the
+                            # *reason* for the CPU fallback so it doesn't read
+                            # like a deliberate user choice.
+                            print(
+                                "No GPU detected; falling back to CPU (slower). "
+                                "Run `gaia init` to set up GPU acceleration."
+                            )
+                            effective_device = "cpu"
+                except LemonadeClientError as _probe_err:
+                    # Only treat "server not reachable yet" (connection refused /
+                    # timeout) as a soft pass. A reachable but broken server
+                    # (HTTP 4xx/5xx, 401 auth) must NOT silently let an explicit
+                    # --device proceed; surface it so the user sees the real
+                    # failure. The agent runtime re-validates the device
+                    # regardless (LemonadeManager.ensure_ready).
+                    #
+                    # Prefer the original requests exception preserved in the
+                    # cause chain over message-string matching — the client
+                    # wraps RequestException without an HTTP status, but the
+                    # exact wrapper text can change independently of this guard.
+                    import requests
+
+                    _cause = _probe_err.__cause__ or _probe_err.__context__
+                    _unreachable = isinstance(
+                        _cause,
+                        (
+                            requests.exceptions.ConnectionError,
+                            requests.exceptions.Timeout,
+                        ),
+                    ) or (
+                        # Fallback for wrappers that don't preserve __cause__.
+                        str(_probe_err).startswith("Request failed:")
+                        and "with status" not in str(_probe_err)
+                    )
+                    if not _unreachable:
+                        raise
+                    log.debug(
+                        "Device probe: Lemonade not reachable yet (%s)", _probe_err
+                    )
+
+                for dc in DEFAULT_DEVICE_CONFIGS:
+                    if dc.device == effective_device:
+                        explicit_model = dc.model
+                        break
+
+            # Always announce which device the agent will run on.
+            device_labels = {"cpu": "CPU", "gpu": "GPU", "npu": "NPU (Ryzen AI)"}
+            device_label = device_labels.get(effective_device, effective_device.upper())
+            print(f"🖥️  Device: {device_label}  |  Model: {explicit_model or 'auto'}")
+            if effective_device == "cpu":
+                print(
+                    "   ⚠️  Running on CPU — expect significantly slower response "
+                    "times. Use 'gaia init' to set up GPU acceleration."
+                )
+            if effective_device == "npu":
+                print("   ℹ️  NPU mode requires: gaia init --profile npu")
+
             # Create configuration with CLI values
             config = ChatAgentConfig(
                 use_claude=kwargs.get("use_claude", False),
@@ -606,8 +712,11 @@ async def async_main(action, **kwargs):
                     "base_url",
                     os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
                 ),
-                model_id=kwargs.get("model", None),
-                max_steps=kwargs.get("max_steps", 100),
+                model_id=explicit_model,
+                device=effective_device,
+                # None falls through to the global default (default_max_steps,
+                # honoring $GAIA_AGENT_MAX_STEPS) resolved in Agent.__init__.
+                max_steps=kwargs.get("max_steps"),
                 streaming=kwargs.get("stream", False),
                 show_prompts=kwargs.get("show_prompts", False),
                 show_stats=kwargs.get("show_stats", False),
@@ -694,48 +803,40 @@ async def async_main(action, **kwargs):
             except Exception:  # pylint: disable=broad-except
                 pass
     elif action in ("browse", "analyze"):
-        if action == "browse":
-            from gaia.agents.browser.agent import BrowserAgent, BrowserAgentConfig
+        # BrowserAgent (id="web") and AnalystAgent (id="data") ship as the
+        # standalone gaia-agent-browser / gaia-agent-analyst wheels (#1102);
+        # resolve them through the registry so the framework doesn't hard-import
+        # the external packages.
+        from gaia.agents.registry import AgentRegistry
 
-            agent = BrowserAgent(
-                BrowserAgentConfig(
-                    use_claude=kwargs.get("use_claude", False),
-                    use_chatgpt=kwargs.get("use_chatgpt", False),
-                    claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
-                    base_url=kwargs.get("base_url"),
-                    model_id=kwargs.get("model", None),
-                    max_steps=kwargs.get("max_steps", 100),
-                    streaming=kwargs.get("stream", False),
-                    show_prompts=kwargs.get("show_prompts", False),
-                    show_stats=kwargs.get("show_stats", False),
-                    silent_mode=not (
-                        kwargs.get("debug", False) or kwargs.get("list_tools", False)
-                    ),
-                    debug=kwargs.get("debug", False),
-                    allowed_paths=kwargs.get("allowed_paths", None),
-                )
+        agent_id = "web" if action == "browse" else "data"
+        wheel = "gaia-agent-browser" if action == "browse" else "gaia-agent-analyst"
+        agent_config_kwargs = dict(
+            use_claude=kwargs.get("use_claude", False),
+            use_chatgpt=kwargs.get("use_chatgpt", False),
+            claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
+            base_url=kwargs.get("base_url"),
+            model_id=kwargs.get("model", None),
+            # None → global default (default_max_steps / env) in Agent.
+            max_steps=kwargs.get("max_steps"),
+            streaming=kwargs.get("stream", False),
+            show_prompts=kwargs.get("show_prompts", False),
+            show_stats=kwargs.get("show_stats", False),
+            silent_mode=not (
+                kwargs.get("debug", False) or kwargs.get("list_tools", False)
+            ),
+            debug=kwargs.get("debug", False),
+            allowed_paths=kwargs.get("allowed_paths", None),
+        )
+        registry = AgentRegistry()
+        registry.discover()
+        if registry.get(agent_id) is None:
+            raise RuntimeError(
+                f"The '{action}' agent is not installed. Install it with "
+                f'`uv pip install {wheel}` (or `uv pip install "amd-gaia[agents]"` '
+                f"for all agents), then re-run `gaia {action}`."
             )
-        else:
-            from gaia.agents.analyst.agent import AnalystAgent, AnalystAgentConfig
-
-            agent = AnalystAgent(
-                AnalystAgentConfig(
-                    use_claude=kwargs.get("use_claude", False),
-                    use_chatgpt=kwargs.get("use_chatgpt", False),
-                    claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
-                    base_url=kwargs.get("base_url"),
-                    model_id=kwargs.get("model", None),
-                    max_steps=kwargs.get("max_steps", 100),
-                    streaming=kwargs.get("stream", False),
-                    show_prompts=kwargs.get("show_prompts", False),
-                    show_stats=kwargs.get("show_stats", False),
-                    silent_mode=not (
-                        kwargs.get("debug", False) or kwargs.get("list_tools", False)
-                    ),
-                    debug=kwargs.get("debug", False),
-                    allowed_paths=kwargs.get("allowed_paths", None),
-                )
-            )
+        agent = registry.create_agent(agent_id, **agent_config_kwargs)
 
         try:
             if kwargs.get("list_tools", False):
@@ -841,9 +942,11 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             log.info(f"Using remote Lemonade server: {base_url}")
             print(f"Remote Lemonade server: {base_url}")
 
-        log.info(f"Starting GAIA Agent UI on http://localhost:{port}")
-        print(f"Starting GAIA Agent UI on http://localhost:{port}")
-        print(f"   Open your browser to http://localhost:{port}")
+        # Advertise 127.0.0.1 to match the bind host below — on Windows
+        # "localhost" can resolve to IPv6 ::1 and fail against this IPv4 listener.
+        log.info(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
+        print(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
+        print(f"   Open your browser to http://127.0.0.1:{port}")
         print("   Press Ctrl+C to stop")
         print()
         if not base_url:
@@ -870,7 +973,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print("   Install them with:\n")
         print('     uv pip install -e ".[ui]"')
         print("\n   Or if you installed from PyPI:\n")
-        print("     pip install amd-gaia[ui]")
+        print('     uv pip install "amd-gaia[ui]"')
         print()
         sys.exit(1)
     except OSError as e:
@@ -1174,8 +1277,9 @@ def build_parser():
     parent_parser.add_argument(
         "--max-steps",
         type=int,
-        default=100,
-        help="Maximum conversation steps (default: 100)",
+        default=None,
+        help="Maximum conversation steps. Defaults to the global agent step "
+        "limit (50, or $GAIA_AGENT_MAX_STEPS if set).",
     )
     parent_parser.add_argument(
         "--list-tools",
@@ -1220,6 +1324,12 @@ def build_parser():
         default=512,
         help="Maximum number of tokens to generate (default: 512)",
     )
+    prompt_parser.add_argument(
+        "--device",
+        choices=["cpu", "gpu", "npu"],
+        default=None,
+        help="Inference device: cpu, gpu (default), or npu (Ryzen AI)",
+    )
 
     chat_parser = subparsers.add_parser(
         "chat",
@@ -1238,6 +1348,13 @@ def build_parser():
         "--show-prompts", action="store_true", help="Display prompts sent to LLM"
     )
     chat_parser.add_argument("--debug", action="store_true", help="Enable debug output")
+    chat_parser.add_argument(
+        "--device",
+        choices=["cpu", "gpu", "npu"],
+        default=None,
+        help="Inference device: cpu, gpu (default), or npu (Ryzen AI). "
+        "Selects the model and backend for this agent session.",
+    )
 
     # RAG configuration
     chat_parser.add_argument(
@@ -1473,7 +1590,11 @@ def build_parser():
         help="Run a specific example (1-6), if not specified run interactive mode",
     )
     blender_parser.add_argument(
-        "--steps", type=int, default=5, help="Maximum number of steps per query"
+        "--steps",
+        type=int,
+        default=None,
+        help="Maximum number of steps per query. Defaults to the global agent "
+        "step limit (50, or $GAIA_AGENT_MAX_STEPS if set).",
     )
     blender_parser.add_argument(
         "--output-dir",
@@ -1644,6 +1765,24 @@ def build_parser():
         help=(
             "Debug mode — adds full prompt + LLM response logging to "
             "verbose output. Sensitive payloads in logs."
+        ),
+    )
+    email_parser.add_argument(
+        "--spec",
+        action="store_true",
+        help=(
+            "Generate the HTML endpoint spec page, write it to disk, and open "
+            "it in a browser. No LLM or Lemonade required."
+        ),
+    )
+    email_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to write the HTML spec (default: ~/.gaia/email/endpoint-spec.html). "
+            "Only used with --spec."
         ),
     )
 
@@ -1835,6 +1974,60 @@ def build_parser():
     s_daemon.set_defaults(schedule_action="daemon")
 
     schedule_parser.set_defaults(action="schedule")
+
+    # Knowledge command — web research via the Tavily wrapper
+    knowledge_parser = subparsers.add_parser(
+        "knowledge",
+        help="Web research via Tavily (search|extract|usage), with caching and a credit budget",
+    )
+    knowledge_subparsers = knowledge_parser.add_subparsers(
+        dest="knowledge_action", help="knowledge action to perform"
+    )
+
+    k_search = knowledge_subparsers.add_parser("search", help="Run a web search")
+    k_search.add_argument("query", help="Search query")
+    k_search.add_argument(
+        "--max-results", type=int, default=5, help="Max results (default: 5)"
+    )
+    k_search.add_argument(
+        "--depth",
+        choices=("basic", "advanced"),
+        default="basic",
+        help="Search depth — advanced costs more credits (default: basic)",
+    )
+    k_search.add_argument(
+        "--budget",
+        type=int,
+        default=None,
+        help="Credit cap for this session; omit for unlimited",
+    )
+    k_search.add_argument(
+        "--no-block",
+        action="store_true",
+        help="Warn instead of blocking when the budget cap is exceeded",
+    )
+
+    k_extract = knowledge_subparsers.add_parser(
+        "extract", help="Extract clean content from one or more URLs (requires Tavily)"
+    )
+    k_extract.add_argument("urls", nargs="+", help="One or more URLs to extract")
+    k_extract.add_argument(
+        "--depth",
+        choices=("basic", "advanced"),
+        default="basic",
+        help="Extract depth (default: basic)",
+    )
+    k_extract.add_argument(
+        "--budget", type=int, default=None, help="Credit cap for this session"
+    )
+    k_extract.add_argument(
+        "--no-block",
+        action="store_true",
+        help="Warn instead of blocking when the budget cap is exceeded",
+    )
+
+    knowledge_subparsers.add_parser("usage", help="Show cached credit-usage totals")
+    knowledge_parser.set_defaults(action="knowledge")
 
     # Add model download command
     download_parser = subparsers.add_parser(
@@ -2238,6 +2431,82 @@ Examples:
         help="Output format for results (default: json+markdown as today). "
         "'junit' writes a JUnit XML file for CI integration.",
     )
+    agent_eval_parser.add_argument(
+        "--device",
+        choices=["cpu", "gpu", "npu"],
+        default=None,
+        help="Inference device for eval scenarios: cpu, gpu (default), or npu. "
+        "Selects the model and backend from the agent's device_configs. "
+        "Results are tagged with the device for cross-device comparison.",
+    )
+
+    # Email-triage throughput benchmark subcommand: gaia eval benchmark [OPTIONS] (#1233)
+    benchmark_eval_parser = eval_subparsers.add_parser(
+        "benchmark",
+        help="Email-triage throughput benchmark (TTFT / tok-per-sec / latency)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Benchmark the primary on-device model over the committed corpus
+  gaia eval benchmark --model Gemma-4-E4B-it-GGUF --limit 50
+
+  # Repeat 3 times for variance + compare against a saved baseline
+  gaia eval benchmark --experiments 3 --compare eval/results/bench_baseline.json
+
+  # Save this run as the throughput baseline
+  gaia eval benchmark --save-baseline
+        """,
+    )
+    benchmark_eval_parser.add_argument(
+        "--model",
+        default="Gemma-4-E4B-it-GGUF",
+        help="Lemonade model id to benchmark (default: Gemma-4-E4B-it-GGUF).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Target message count steered to the agent's triage call "
+        "(default: 50). The committed stub corpus is smaller, so the "
+        "effective count is min(limit, corpus size).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--experiments",
+        type=int,
+        default=1,
+        help="Repeat count per model for variance analysis (default: 1).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--mbox-path",
+        default=None,
+        help="MBOX corpus to triage (default: the committed stub fixture).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--ground-truth",
+        default=None,
+        help="Ground-truth JSON for quality scoring (default: the fixture's).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--backend",
+        default=None,
+        help="Lemonade base URL (default: the agent's configured base URL).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory to write scorecard.json / summary.md (optional).",
+    )
+    benchmark_eval_parser.add_argument(
+        "--compare",
+        metavar="PATH",
+        default=None,
+        help="Compare this run's throughput against a saved baseline scorecard.",
+    )
+    benchmark_eval_parser.add_argument(
+        "--save-baseline",
+        action="store_true",
+        help="Save this run's scorecard as the throughput baseline.",
+    )
 
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
@@ -2552,11 +2821,17 @@ Examples:
     # Agent command (export/import custom agent bundles)
     agent_parser = subparsers.add_parser(
         "agent",
-        help="Manage custom agents (export/import bundles)",
+        help="Author and manage agents (init/version/test, export/import)",
     )
     agent_subparsers = agent_parser.add_subparsers(
         dest="agent_action", help="Agent action to perform"
     )
+
+    # Developer workflow (init / version / test) lives in gaia.cli_agent to keep
+    # this file lean. It adds its subcommands to the same 'agent' group.
+    from gaia import cli_agent
+
+    cli_agent.register_subparsers(agent_subparsers)
 
     # Agent export command
     agent_export_parser = agent_subparsers.add_parser(
@@ -2602,8 +2877,8 @@ Examples:
         "--profile",
         "-p",
         default="chat",
-        choices=["minimal", "sd", "chat", "code", "rag", "mcp", "vlm", "all"],
-        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, mcp, vlm (vision), all (default: chat)",
+        choices=["minimal", "sd", "chat", "code", "rag", "mcp", "vlm", "npu", "all"],
+        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, mcp, vlm (vision), npu (Ryzen AI NPU), all (default: chat)",
     )
     init_parser.add_argument(
         "--minimal",
@@ -3904,9 +4179,25 @@ Let me know your answer!
                     print(f"[ITER] Iteration {iter_idx + 1}/{iterations}")
                     print(f"{'=' * 60}")
 
+                # Resolve --device to model when --model not explicit
+                eval_model = args.model
+                eval_device = getattr(args, "device", None)
+                if eval_device and not eval_model:
+                    from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+                    for dc in DEFAULT_DEVICE_CONFIGS:
+                        if dc.device == eval_device:
+                            eval_model = dc.model
+                            break
+                    device_labels = {"cpu": "CPU", "gpu": "GPU", "npu": "NPU"}
+                    print(
+                        f"🖥️  Eval device: {device_labels.get(eval_device, eval_device)}  |  "
+                        f"Model: {eval_model}"
+                    )
+
                 runner = AgentEvalRunner(
                     backend_url=args.backend,
-                    model=args.model,
+                    model=eval_model,
                     budget_per_scenario=args.budget,
                     timeout_per_scenario=args.timeout,
                     agent_type=getattr(args, "agent_type", None),
@@ -3947,6 +4238,124 @@ Let me know your answer!
                 print(f"[BASELINE] Saved baseline → {baseline_path}")
             return
 
+        # Email-triage throughput benchmark: gaia eval benchmark (#1233)
+        if getattr(args, "eval_command", None) == "benchmark":
+            import tempfile
+
+            from gaia.eval.benchmark import (
+                THROUGHPUT_BAR_TPS,
+                THROUGHPUT_STRETCH_TPS,
+                load_ground_truth,
+                run_benchmark,
+                summarize_benchmark,
+            )
+            from gaia.eval.runner import REPO_ROOT, RESULTS_DIR
+
+            fixtures = REPO_ROOT / "tests" / "fixtures" / "email"
+            mbox_path = args.mbox_path or str(fixtures / "_stub_inbox.mbox")
+            gt_path = args.ground_truth or str(fixtures / "ground_truth.json")
+            ground_truth = (
+                load_ground_truth(gt_path) if Path(gt_path).exists() else None
+            )
+            if ground_truth is None:
+                print(
+                    f"[WARN] ground truth not found at {gt_path}; "
+                    "quality scoring skipped"
+                )
+
+            with tempfile.TemporaryDirectory(prefix="gaia-bench-") as tmp:
+                results = run_benchmark(
+                    args.model,
+                    mbox_path=mbox_path,
+                    limit=args.limit,
+                    experiments=args.experiments,
+                    base_url=args.backend,
+                    ground_truth=ground_truth,
+                    db_path=str(Path(tmp) / "state.db"),
+                )
+
+            run_id = f"bench-{args.model.replace('/', '-').lower()}"
+            summary = summarize_benchmark(results, run_id=run_id)
+            perf = summary["scorecard"]["performance"]
+            tps = perf.get("avg_tokens_per_second")
+            ttft = perf.get("avg_time_to_first_token")
+            bar_ok = isinstance(tps, (int, float)) and tps >= THROUGHPUT_BAR_TPS
+
+            print(f"\n{'=' * 60}")
+            print(f"  Email-Triage Throughput Benchmark — {args.model}")
+            print(f"{'=' * 60}")
+            print(
+                f"  Experiments:  {args.experiments}  " f"(limit {args.limit} emails)"
+            )
+            print(
+                f"  Throughput:   {tps} tok/s  "
+                f"(bar ≥{THROUGHPUT_BAR_TPS}, stretch {THROUGHPUT_STRETCH_TPS})"
+            )
+            print(f"  TTFT:         {ttft} s")
+            if results and isinstance(results[0].get("quality"), dict):
+                print(f"  Category acc: {results[0]['quality']['category_accuracy']}")
+            print(
+                f"  Committed bar (≥{THROUGHPUT_BAR_TPS} tok/s): "
+                f"{'PASS' if bar_ok else 'MISS'} (non-gating demo)"
+            )
+            print(f"{'=' * 60}\n")
+
+            # Variance report across repeated experiments.
+            if args.experiments > 1:
+                from gaia.eval.statistics import (
+                    compare_runs_by_model,
+                    print_comparison_report,
+                )
+
+                for report in compare_runs_by_model(results).values():
+                    print_comparison_report(report)
+
+            if args.output_dir:
+                from gaia.eval.scorecard import write_summary_md
+
+                outdir = Path(args.output_dir)
+                outdir.mkdir(parents=True, exist_ok=True)
+                (outdir / "scorecard.json").write_text(
+                    json.dumps(summary["scorecard"], indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                (outdir / "summary.md").write_text(
+                    write_summary_md(summary["scorecard"]), encoding="utf-8"
+                )
+                (outdir / "variance.json").write_text(
+                    json.dumps(summary["variance"], indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(
+                    f"[OUT] wrote scorecard.json / summary.md / variance.json "
+                    f"→ {outdir}"
+                )
+
+            if getattr(args, "save_baseline", False):
+                RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+                baseline_path = RESULTS_DIR / "bench_baseline.json"
+                baseline_path.write_text(
+                    json.dumps(summary["scorecard"], indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(f"[BASELINE] saved throughput baseline → {baseline_path}")
+
+            if args.compare:
+                cmp_path = Path(args.compare)
+                if not cmp_path.exists():
+                    print(f"[ERROR] baseline not found: {cmp_path}")
+                    sys.exit(1)
+                base = json.loads(cmp_path.read_text(encoding="utf-8"))
+                base_tps = base.get("performance", {}).get("avg_tokens_per_second")
+                if isinstance(base_tps, (int, float)) and isinstance(tps, (int, float)):
+                    print(
+                        f"[COMPARE] throughput {tps} vs baseline {base_tps} "
+                        f"tok/s (Δ{round(tps - base_tps, 1):+})  [non-gating]"
+                    )
+                else:
+                    print("[COMPARE] insufficient throughput data to compare")
+            return
+
         # Bare "gaia eval" without subcommand - show help
         print("Usage: gaia eval agent [OPTIONS]")
         print("")
@@ -3961,6 +4370,11 @@ Let me know your answer!
     # Handle Cache command
     if args.action == "cache":
         handle_cache_command(args)
+        return
+
+    # Handle Knowledge command (Tavily web research)
+    if args.action == "knowledge":
+        handle_knowledge_command(args)
         return
 
     # Handle Memory command
@@ -4391,6 +4805,22 @@ def handle_email_command(args):
     """
     log = get_logger(__name__)
 
+    # --spec: generate the HTML endpoint spec and open it in a browser.
+    # No LLM, no Lemonade — short-circuit before any server check.
+    if getattr(args, "spec", False):
+        try:
+            from gaia_agent_email.spec_html import write_and_open_spec
+        except ImportError as e:
+            raise RuntimeError(
+                "The email agent is not installed. Install it with "
+                '`pip install gaia-agent-email` (or `pip install "amd-gaia[agents]"` '
+                "for all agents), then re-run `gaia email --spec`."
+            ) from e
+
+        dest = write_and_open_spec(getattr(args, "output", None))
+        print(dest)
+        sys.exit(0)
+
     # Initialize Lemonade — local LLM only. The email agent's config will
     # also reject any non-local base_url at construction time, but the
     # CLI manager check gives a friendlier "start Lemonade first" message.
@@ -4405,7 +4835,7 @@ def handle_email_command(args):
             sys.exit(1)
 
     try:
-        from gaia.agents.email.cli import main as email_main
+        from gaia_agent_email.cli import main as email_main
 
         # Normalize args the agent CLI expects.
         if not hasattr(args, "verbose"):
@@ -4425,7 +4855,10 @@ def handle_email_command(args):
     except ImportError as e:
         log.error(f"Failed to import Email agent: {e}")
         print("❌ Error: Email agent components are not available")
-        print("Make sure GAIA is installed properly: uv pip install -e .")
+        print(
+            "Install the email agent with `pip install gaia-agent-email` "
+            '(or `pip install "amd-gaia[agents]"` for all agents).'
+        )
         sys.exit(1)
     except Exception as e:
         log.error(f"Error running Email agent: {e}")
@@ -4626,7 +5059,14 @@ def handle_sd_command(args):
         print("  gaia sd -i")
         return
 
-    from gaia.agents.sd import SDAgent, SDAgentConfig
+    try:
+        from gaia_agent_sd import SDAgent, SDAgentConfig
+    except ImportError as e:
+        raise ImportError(
+            "The sd agent is not installed. Install it with "
+            '`uv pip install gaia-agent-sd` (or `uv pip install "amd-gaia[agents]"` for '
+            "all AMD agents). See https://amd-gaia.ai/docs/guides/sd."
+        ) from e
 
     # Ensure Lemonade is ready with proper context size for SD agent
     # SD agent needs 8K context for image + story workflow
@@ -4862,6 +5302,69 @@ def handle_blender_command(args):
         blender_log.error(f"Error running Blender agent: {e}")
         print(f"❌ Error: {e}")
         sys.exit(1)
+
+
+def _print_knowledge_usage(client):
+    """Print a one-line credit-usage summary for a Tavily client."""
+    usage = client.usage()
+    cap = usage["cap"]
+    cap_str = "unlimited" if cap is None else str(cap)
+    print(f"\n💳 Credits used: {usage['total_credits']} (cap: {cap_str})")
+
+
+def handle_knowledge_command(args):
+    """Handle `gaia knowledge` — Tavily web research with caching + budget.
+
+    Args:
+        args: Parsed command-line arguments
+    """
+    action = getattr(args, "knowledge_action", None)
+    if action is None:
+        print("❌ Error: No knowledge action specified")
+        print("Available actions: search, extract, usage")
+        print("Run 'gaia knowledge --help' for more information")
+        return
+
+    from gaia.web.tavily import (
+        BudgetConfig,
+        TavilyBudgetExceeded,
+        TavilyClient,
+        TavilyConfigError,
+    )
+
+    budget = BudgetConfig(
+        cap=getattr(args, "budget", None),
+        block=not getattr(args, "no_block", False),
+    )
+    client = TavilyClient(budget=budget)
+    try:
+        if action == "search":
+            result = client.search(
+                args.query, search_depth=args.depth, max_results=args.max_results
+            )
+            source = result.get("source", "tavily")
+            print(f"\n=== Results for {args.query!r} (source: {source}) ===")
+            for i, r in enumerate(result.get("results", []), 1):
+                print(f"{i}. {r.get('title', '')}")
+                print(f"   {r.get('url', '')}")
+                content = r.get("content") or r.get("snippet") or ""
+                if content:
+                    print(f"   {content[:200]}")
+            _print_knowledge_usage(client)
+        elif action == "extract":
+            result = client.extract(args.urls, extract_depth=args.depth)
+            print(json.dumps(result, indent=2))
+            _print_knowledge_usage(client)
+        elif action == "usage":
+            _print_knowledge_usage(client)
+    except TavilyBudgetExceeded as e:
+        print(f"🛑 {e}")
+        sys.exit(1)
+    except TavilyConfigError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    finally:
+        client.close()
 
 
 def handle_cache_command(args):
@@ -5979,9 +6482,18 @@ def handle_agent_command(args):
     Args:
         args: Parsed command-line arguments
     """
+    # Developer-workflow actions (init / version / test) handled in cli_agent.
+    from gaia import cli_agent
+
+    if cli_agent.handle(args):
+        return
+
     if not hasattr(args, "agent_action") or args.agent_action is None:
         print("❌ Error: No agent action specified")
-        print("Available actions: export, import")
+        print(
+            "Available actions: init, version, test, configure, health, status, "
+            "export, import"
+        )
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)
 
@@ -6772,11 +7284,11 @@ def handle_mcp_list(args):
     if not servers:
         print("📋 No MCP servers configured")
         print(f"   Config: {config_path}")
-        print("\nAdd a server with: gaia mcp add <name> <command>")
-        if args.config:
-            print(
-                f"                or: gaia mcp add <name> <command> --config {args.config}"
-            )
+        print(f"\nAdd a server by editing {config_path}, for example:")
+        print(
+            '   {"mcpServers": {"time": {"command": "uvx", "args": ["mcp-server-time"]}}}'
+        )
+        print("See https://amd-gaia.ai/docs/guides/mcp/client for details.")
         return
 
     print(f"📋 Configured MCP Servers ({len(servers)}):")

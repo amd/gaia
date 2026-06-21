@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaia-agent-doc-search"
+version = "0.1.0"
+description = "GAIA Doc Search agent — RAG reference implementation"
+authors = [{ name = "AMD" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+# [api] = standalone REST/MCP sidecar (fastapi/uvicorn; the stdio MCP server is built-in, keyring is core).
+# [rag] = the RAGToolsMixin deps this agent composes (faiss-cpu, sentence-transformers,
+# pdf/pptx parsers) — required, not optional, for a RAG agent.
+dependencies = ["amd-gaia[api,rag]>=0.20.0"]
+
+[project.entry-points."gaia.agent"]
+doc-search = "gaia_agent_doc_search:build_registration"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["gaia_agent_doc_search*"]
