@@ -6,6 +6,6 @@ Telegram). Persisted in ``~/.gaia/schedules.toml`` and driven by a long-running
 ``gaia schedule daemon``.
 """
 
-from gaia.schedule.store import Schedule, ScheduleStore
+from gaia.schedule.store import Schedule, ScheduleStore, TomlScheduleStore
 
-__all__ = ["Schedule", "ScheduleStore"]
+__all__ = ["Schedule", "ScheduleStore", "TomlScheduleStore"]

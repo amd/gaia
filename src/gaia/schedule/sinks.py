@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import platform
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Dict
 
@@ -70,7 +69,7 @@ def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
     system = platform.system()
     try:
         if system == "Darwin":
-            script = f'display notification {_osa(output)} with title {_osa(title)}'
+            script = f"display notification {_osa(output)} with title {_osa(title)}"
             subprocess.run(["osascript", "-e", script], check=True)
         elif system == "Linux":
             subprocess.run(["notify-send", title, output], check=True)
@@ -112,9 +111,7 @@ def _to_telegram(output: str, sink_args: Dict[str, Any]) -> None:
         )
     url = f"{TELEGRAM_API}/bot{token}/sendMessage"
     try:
-        resp = requests.post(
-            url, json={"chat_id": to, "text": output}, timeout=30
-        )
+        resp = requests.post(url, json={"chat_id": to, "text": output}, timeout=30)
     except requests.RequestException as e:
         raise RuntimeError(
             f"telegram sink could not reach {TELEGRAM_API}: {e}. "

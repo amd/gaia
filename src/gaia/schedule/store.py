@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
 # tomllib is stdlib on 3.11+; fall back to tomli on 3.10 (python_requires>=3.10).
 try:
@@ -34,6 +34,9 @@ class Schedule:
     sink: str = "stdout"
     sink_args: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
+    last_run: Optional[str] = None
+    next_run: Optional[str] = None
+    session_ref: Optional[str] = None
     created_at: str = ""
 
     def __post_init__(self) -> None:
@@ -58,6 +61,12 @@ class Schedule:
             d["prompt"] = self.prompt
         if self.sink_args:
             d["sink_args"] = self.sink_args
+        if self.last_run:
+            d["last_run"] = self.last_run
+        if self.next_run:
+            d["next_run"] = self.next_run
+        if self.session_ref:
+            d["session_ref"] = self.session_ref
         return d
 
     @classmethod
@@ -70,11 +79,40 @@ class Schedule:
             sink=data.get("sink", "stdout"),
             sink_args=data.get("sink_args", {}) or {},
             enabled=data.get("enabled", True),
+            last_run=data.get("last_run"),
+            next_run=data.get("next_run"),
+            session_ref=data.get("session_ref"),
             created_at=data.get("created_at", ""),
         )
 
 
-class ScheduleStore:
+@runtime_checkable
+class ScheduleStore(Protocol):
+    """Storage-backend interface for schedules.
+
+    :class:`TomlScheduleStore` is the default, file-backed implementation. The
+    Protocol exists so an alternative backend (e.g. database-backed) can be
+    swapped in without changing the daemon or CLI.
+    """
+
+    def load(self) -> Dict[str, Schedule]: ...
+
+    def save(self, schedules: Dict[str, Schedule]) -> None: ...
+
+    def add(self, schedule: Schedule) -> None: ...
+
+    def remove(self, name: str) -> None: ...
+
+    def get(self, name: str) -> Schedule: ...
+
+    def set_enabled(self, name: str, enabled: bool) -> Schedule: ...
+
+    def mark_run(
+        self, name: str, last_run: str, next_run: Optional[str] = None
+    ) -> Schedule: ...
+
+
+class TomlScheduleStore:
     """Load/save a collection of :class:`Schedule` objects to a TOML file."""
 
     def __init__(self, path: Path = DEFAULT_STORE_PATH):
@@ -93,9 +131,7 @@ class ScheduleStore:
 
     def save(self, schedules: Dict[str, Schedule]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        doc = {
-            "schedules": {s.name: s.to_toml_dict() for s in schedules.values()}
-        }
+        doc = {"schedules": {s.name: s.to_toml_dict() for s in schedules.values()}}
         with open(self.path, "wb") as f:
             tomli_w.dump(doc, f)
 
@@ -136,5 +172,20 @@ class ScheduleStore:
                 f"run `gaia schedule list` to see registered schedules"
             )
         schedules[name].enabled = enabled
+        self.save(schedules)
+        return schedules[name]
+
+    def mark_run(
+        self, name: str, last_run: str, next_run: Optional[str] = None
+    ) -> Schedule:
+        schedules = self.load()
+        if name not in schedules:
+            raise KeyError(
+                f"no schedule named {name!r} in {self.path}; "
+                f"run `gaia schedule list` to see registered schedules"
+            )
+        schedules[name].last_run = last_run
+        if next_run is not None:
+            schedules[name].next_run = next_run
         self.save(schedules)
         return schedules[name]

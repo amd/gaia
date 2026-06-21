@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import signal
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -16,18 +17,29 @@ from apscheduler.triggers.cron import CronTrigger
 
 from gaia.logger import get_logger
 from gaia.schedule import runner
-from gaia.schedule.store import DEFAULT_STORE_PATH, Schedule, ScheduleStore
+from gaia.schedule.store import (
+    DEFAULT_STORE_PATH,
+    Schedule,
+    ScheduleStore,
+    TomlScheduleStore,
+)
 
 log = get_logger(__name__)
 
 
-def _job(schedule: Schedule) -> None:
+def _job(schedule: Schedule, store: ScheduleStore) -> None:
     # A failing job must not kill the daemon, but it must be loud (no silent
     # swallow): log with full traceback and keep the other schedules alive.
     try:
         runner.fire(schedule)
     except Exception:
         log.exception("schedule %r failed", schedule.name)
+        return
+    store.mark_run(
+        schedule.name,
+        datetime.now(timezone.utc).isoformat(),
+        next_run=next_fire_time(schedule.cron),
+    )
 
 
 def build_scheduler(store: ScheduleStore) -> BackgroundScheduler:
@@ -42,19 +54,19 @@ def build_scheduler(store: ScheduleStore) -> BackgroundScheduler:
         scheduler.add_job(
             _job,
             trigger=CronTrigger.from_crontab(schedule.cron),
-            args=[schedule],
+            args=[schedule, store],
             id=schedule.name,
             name=schedule.name,
             replace_existing=True,
         )
         armed += 1
-    log.info("armed %d schedule(s) from %s", armed, store.path)
+    log.info("armed %d schedule(s)", armed)
     return scheduler
 
 
 def run_daemon(store_path: Path = DEFAULT_STORE_PATH) -> None:
     """Start the scheduler and block until SIGINT/SIGTERM."""
-    store = ScheduleStore(store_path)
+    store = TomlScheduleStore(store_path)
     scheduler = build_scheduler(store)
     scheduler.start()
 
@@ -62,7 +74,7 @@ def run_daemon(store_path: Path = DEFAULT_STORE_PATH) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
 
-    log.info("schedule daemon running; press Ctrl-C to stop")
+    log.info("schedule daemon running (store=%s); press Ctrl-C to stop", store.path)
     try:
         stop.wait()
     finally:

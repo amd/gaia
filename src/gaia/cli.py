@@ -2686,10 +2686,10 @@ def _handle_schedule(args):
     """Dispatch `gaia schedule <action>` (issue #892)."""
     from gaia.schedule import daemon as schedule_daemon
     from gaia.schedule import runner as schedule_runner
-    from gaia.schedule.store import Schedule, ScheduleStore
+    from gaia.schedule.store import Schedule, TomlScheduleStore
 
     action = getattr(args, "schedule_action", None)
-    store = ScheduleStore()
+    store = TomlScheduleStore()
 
     if action == "add":
         sink_args = {}
@@ -2744,8 +2744,15 @@ def _handle_schedule(args):
         return
 
     if action == "run":
+        from datetime import datetime, timezone
+
         schedule = store.get(args.name)
         schedule_runner.fire(schedule)
+        store.mark_run(
+            schedule.name,
+            datetime.now(timezone.utc).isoformat(),
+            next_run=schedule_daemon.next_fire_time(schedule.cron),
+        )
         return
 
     if action == "daemon":
