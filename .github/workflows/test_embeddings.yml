@@ -107,6 +107,33 @@ jobs:
             # v10 -- GGUF weights live in the HuggingFace hub cache -- so it was
             # a silent no-op and has been removed.
 
+            # --- Stale HF-cache experiment (gaia#941) ---------------------------
+            # The embedding-load 500 reproduces on EVERY Lemonade version we tried
+            # (10.2.0 / 10.6.0 / 10.7.0) while LLMs load fine on the same runner,
+            # and the upstream GGUF is unchanged since 2025-05. That rules out a
+            # server-version regression and points at a stale/corrupt nomic GGUF in
+            # the HuggingFace hub cache, which version-reconcile never wipes (it only
+            # clears the llama.cpp backend under .cache\lemonade\bin). Inspect the
+            # cached files, then wipe them so the pull below re-downloads a clean
+            # copy. If the load then succeeds, the runner cache was the culprit.
+            Write-Host "`n=== Inspecting + clearing cached nomic GGUF (HF hub) ==="
+            $hubRoots = @(
+                "$env:USERPROFILE\.cache\huggingface\hub",
+                "C:\windows\system32\config\systemprofile\.cache\huggingface\hub"
+            )
+            if ($env:HF_HOME) { $hubRoots += (Join-Path $env:HF_HOME "hub") }
+            foreach ($hub in ($hubRoots | Select-Object -Unique)) {
+                if (-not (Test-Path $hub)) { continue }
+                Get-ChildItem $hub -Directory -Filter "*nomic*" -ErrorAction SilentlyContinue | ForEach-Object {
+                    Write-Host "Cached: $($_.FullName)"
+                    Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Length -gt 1MB } |
+                        ForEach-Object { Write-Host ("   {0,14:N0} bytes  {1}" -f $_.Length, $_.Name) }
+                    Write-Host "Removing to force clean re-download: $($_.FullName)"
+                    Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+
             # Pull embedding model (actual model used in tests)
             Write-Host "`n=== Pulling Embedding Model ==="
             Write-Host "Pulling nomic-embed-text-v2-moe-GGUF..."
@@ -136,15 +163,41 @@ jobs:
                     Write-Host "Error details: $($_.ErrorDetails.Message)"
                 }
                 # Lemonade returns a generic 500 "llama-server failed to start" and
-                # swallows the backend's own stderr -- the only place the real cause
-                # (e.g. a GGML_ASSERT vocab crash) is visible is the server job stream
-                # (lemonade-server is launched with 2>&1, so the llama-server child's
-                # stderr is merged in). Dump it before failing. See gaia#941 / #1571.
+                # hides the backend's own stderr. Surface everything we can so the
+                # real cause is debuggable (gaia#941):
+                #   1) the cached GGUF files + sizes (a truncated/corrupt download
+                #      shows a wrong size and is the leading hypothesis),
+                #   2) Lemonade's own log files (the llama-server subprocess error is
+                #      written there, NOT to the serve job's stdout -- an earlier
+                #      Receive-Job dump came back empty, so we read the log files).
+                Write-Host "`n=== Cached nomic GGUF after pull ==="
+                foreach ($hub in ($hubRoots | Select-Object -Unique)) {
+                    if (-not (Test-Path $hub)) { continue }
+                    Get-ChildItem $hub -Directory -Filter "*nomic*" -ErrorAction SilentlyContinue |
+                        Get-ChildItem -Recurse -File -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Length -gt 1MB } |
+                        ForEach-Object { Write-Host ("   {0,14:N0} bytes  {1}" -f $_.Length, $_.Name) }
+                }
+                Write-Host "`n=== Lemonade log files (most recent, tail 80) ==="
+                $logRoots = @(
+                    "$env:USERPROFILE\.cache\lemonade",
+                    "$env:LOCALAPPDATA\lemonade_server",
+                    "C:\windows\system32\config\systemprofile\AppData\Local\lemonade_server",
+                    "C:\windows\system32\config\systemprofile\.cache\lemonade",
+                    "."
+                )
+                foreach ($lr in ($logRoots | Select-Object -Unique)) {
+                    if (-not (Test-Path $lr)) { continue }
+                    Get-ChildItem $lr -Recurse -File -Filter "*.log" -ErrorAction SilentlyContinue |
+                        Sort-Object LastWriteTime -Descending | Select-Object -First 4 | ForEach-Object {
+                            Write-Host "--- $($_.FullName) (tail 80) ---"
+                            Get-Content $_.FullName -Tail 80 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                        }
+                }
                 if ($env:LEMONADE_JOB_ID) {
-                    Write-Host "`n=== Lemonade / llama-server output (job $env:LEMONADE_JOB_ID) ==="
+                    Write-Host "`n=== Lemonade serve job stream (often empty) ==="
                     $jobOutput = Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                    if ($jobOutput) { $jobOutput | ForEach-Object { Write-Host $_ } }
-                    else { Write-Host "(no server job output captured)" }
+                    if ($jobOutput) { $jobOutput | ForEach-Object { Write-Host $_ } } else { Write-Host "(empty)" }
                 }
                 throw "Failed to load embedding model"
             }
