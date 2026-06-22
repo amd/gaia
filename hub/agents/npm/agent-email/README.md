@@ -120,6 +120,15 @@ await shutdown(sidecar); // free function — not sidecar.shutdown()
    (`dist/email-agent/email-agent`), not at the parent directory.
 3. **`description`, not `text`** — action items use the field name `description`
    (e.g. `result.action_items[0].description`).
+4. **Running the built binary** — the `freeze.py` binary is dynamically linked
+   against the build host's glibc, so run it on the same machine or a newer OS.
+   A binary built on glibc 2.39 fails to start on an older runtime (e.g.
+   Debian 12 / `node:18` images ship glibc 2.36 → `GLIBC_2.38 not found`); a
+   glibc ≥ 2.38 base (e.g. `node:22-trixie` / Ubuntu 24.04) works. When the
+   consumer app runs in a container, the sidecar reaches a Lemonade on the host
+   via `host.docker.internal` — set
+   `LEMONADE_BASE_URL=http://host.docker.internal:13305` (this also satisfies
+   the local-only allowlist).
 
 ## The `fetch` CLI
 
