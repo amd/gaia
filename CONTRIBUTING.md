@@ -40,7 +40,7 @@ For security issues, **do not file a public issue** — open a private [security
 
 ## Submitting a pull request
 
-1. **Claim the issue** — comment on it so others know you're working on it.
+1. **Claim the issue** — comment `.take` on it to assign it to yourself (works even without repo access), or comment normally so others know you're working on it.
 2. **Branch off `main`** with a descriptive name (e.g. `fix/lemonade-startup-error`, `feat/jira-bulk-update`).
 3. **Use the [PR template](.github/pull_request_template.md)** — every field matters. Don't delete sections; if a section doesn't apply, say so.
 4. **Link the issue** with `Closes #N` (or `Fixes #N`, `Refs #N` for partial work). GitHub will auto-close the issue on merge.
