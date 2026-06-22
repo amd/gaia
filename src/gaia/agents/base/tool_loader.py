@@ -57,8 +57,9 @@ logger = logging.getLogger(__name__)
 # tools (index/summarize/RAG) for doc-oriented turns while excluding lower-
 # scoring noise; plain content questions fall back to the CORE set. Overridable.
 DEFAULT_THRESHOLD = 0.20
-# Default cap: 10 CORE + 4 dynamic slots = 14 (≈62% shrink on the 37-tool doc
-# profile, clears the ≥60% Part-0 TTFT-reduction gate). See the plan deviations.
+# Default cap: 11 CORE (doc profile, incl. the load_tools escape hatch) + 3
+# dynamic slots = 14 (≈62% shrink on the 37-tool doc profile, clears the
+# ≥60% Part-0 TTFT-reduction gate). See the plan deviations.
 DEFAULT_MAX_TOOLS = 14
 
 
@@ -156,6 +157,13 @@ class ToolLoader:
         self._loaded: Dict[str, _ToolState] = {}
         self._turn = 0
         self._session_disabled = False
+        # Escape-hatch activation counters (Part 2, #1450). Both recovery paths
+        # feed the τ-tuning signal: the non-tool-calling free recovery
+        # (record_tool_use on an unlisted tool) and the native explicit recovery
+        # (load_bundle). Summarized on reset_session(), aggregated from logs by
+        # the eval. A rising per-turn rate ⇒ τ too strict.
+        self._escape_hatch_count = 0
+        self._load_tools_count = 0
 
     # ── public API ───────────────────────────────────────────────────────
 
@@ -284,21 +292,23 @@ class ToolLoader:
 
         If the tool is loaded, refresh its ``last_call_ts``. If it is **not**
         loaded, the model reached a tool the prompt didn't list (a free
-        non-tool-calling recovery via the full registry); log it as the
-        escape-hatch signal. This does *not* auto-load the tool — that is
-        Part 2's job.
+        non-tool-calling recovery via the full registry); count and log it as the
+        escape-hatch signal. This does *not* auto-load the tool; a native model
+        re-surfaces a missed tool through the explicit :meth:`load_bundle` path
+        (the ``load_tools`` meta-tool).
         """
         state = self._loaded.get(tool_name)
         if state is not None:
             state.last_call_ts = time.time()
             return
+        self._escape_hatch_count += 1
         logger.info(
             json.dumps(
                 {
                     "event": "TOOL_LOADER_ESCAPE_HATCH",
                     "tool": tool_name,
                     "turn": self._turn,
-                    "note": "executed unlisted tool via full registry (Part-2 gap)",
+                    "note": "executed unlisted tool via full registry (free recovery)",
                 }
             )
         )
@@ -306,14 +316,115 @@ class ToolLoader:
     def reset_session(self) -> None:
         """Clear per-session state for a new conversation.
 
-        The content-keyed embedding cache survives — embeddings depend only on
-        the tool docs, not on the conversation.
+        Emits the per-session escape-hatch summary (the τ-tuning signal) for the
+        conversation just ending **before** clearing, then zeroes the counters
+        alongside the existing state clears. The content-keyed embedding cache
+        survives — embeddings depend only on the tool docs, not the conversation.
         """
+        if self._turn > 0:
+            self._log_session_summary()
         self._loaded.clear()
         self._turn = 0
         self._session_disabled = False
+        self._escape_hatch_count = 0
+        self._load_tools_count = 0
+
+    def bundle_names(self) -> List[str]:
+        """Return the configured bundle names, sorted (the ``load_tools`` menu)."""
+        return sorted(b.name for b in self._bundles)
+
+    def format_bundle_menu(self) -> str:
+        """Return a compact ``"- {name}: {description}"`` menu over all bundles.
+
+        Used both for the native-model system-prompt menu and for the
+        unknown-bundle error text, so the model always sees the same valid names.
+        """
+        return "\n".join(
+            f"- {b.name}: {b.description}" if b.description else f"- {b.name}"
+            for b in self._bundles
+        )
+
+    def load_bundle(self, bundle: str, registry: Dict[str, dict]) -> List[str]:
+        """Admit a bundle's tools into the loaded set (the explicit escape hatch).
+
+        Resolves *bundle* to a :class:`ToolBundle` — exact bundle-name match
+        first, else (robustness nicety) a bare tool name resolved to its
+        bundle(s) via the reverse index — and admits each member present in
+        *registry* and not already loaded, **cap-aware**: under the cap via
+        :meth:`_admit`; at the cap by LRU-evicting a non-CORE tool that is not
+        being loaded right now (or skipping + logging if nothing is evictable),
+        mirroring :meth:`select`'s admission loop. So ``max_tools`` holds at all
+        times. Emits a same-turn ``TOOL_LOADER`` *loaded superset* line so the
+        recall parser sees the mid-loop expansion.
+
+        Args:
+            bundle: A bundle name from the menu, or a bare tool name to resolve
+                to its owning bundle(s).
+            registry: The live tool registry (same object passed to
+                :meth:`select`); members absent from it are not admitted.
+
+        Returns:
+            The sorted loaded set after admission.
+
+        Raises:
+            KeyError: *bundle* is neither a known bundle name nor a known tool
+                name — the caller turns this into an actionable error listing the
+                valid bundle names.
+        """
+        members, resolved_name = self._resolve_bundle_members(bundle)
+
+        protected = set(self._core) | set(members)
+        sel = _Selection()
+        for member in sorted(members):
+            if member not in registry or member in self._loaded:
+                continue
+            if len(self._loaded) < self._max_tools:
+                self._admit(member, sel)
+                continue
+            victim = self._pick_eviction_victim(protected)
+            if victim is None:
+                sel.skipped_at_cap.append(member)
+                continue
+            del self._loaded[victim]
+            sel.evicted.append(victim)
+            self._admit(member, sel)
+
+        self._load_tools_count += 1
+        logger.info(
+            "TOOL_LOADER %s",
+            json.dumps(
+                {
+                    "turn": self._turn,
+                    "event": "load_tools",
+                    "bundle": resolved_name,
+                    "admitted": sorted(sel.admitted),
+                    "evicted": sorted(sel.evicted),
+                    "skipped_at_cap": sorted(sel.skipped_at_cap),
+                    "loaded": sorted(self._loaded),
+                }
+            ),
+        )
+        return sorted(self._loaded)
 
     # ── internals ────────────────────────────────────────────────────────
+
+    def _resolve_bundle_members(self, bundle: str) -> tuple["FrozenSet[str]", str]:
+        """Resolve *bundle* to ``(members, resolved_name)``, or raise ``KeyError``.
+
+        Exact bundle-name match first; else a bare tool name resolved to the
+        union of its owning bundles' members via the reverse index.
+        ``resolved_name`` is the matched bundle name (exact match) or the owning
+        bundle name(s) joined with ``+`` (tool-name match), so the ``load_tools``
+        log line records the bundle actually pulled, not the bare tool name.
+        """
+        for b in self._bundles:
+            if b.name == bundle:
+                return b.members, b.name
+        owning = self._tool_to_bundles.get(bundle)
+        if owning:
+            members = frozenset().union(*(b.members for b in owning))
+            return members, "+".join(b.name for b in owning)
+        raise KeyError(bundle)
 
     def _admit(self, name: str, sel: _Selection) -> None:
         """Add *name* to the loaded set with fresh bookkeeping."""
@@ -400,6 +511,28 @@ class ToolLoader:
                     "evicted": sorted(sel.evicted),
                     "skipped_at_cap": sorted(sel.skipped_at_cap),
                     "loaded": loaded_sorted,
+                }
+            ),
+        )
+
+    def _log_session_summary(self) -> None:
+        """Emit one ``TOOL_LOADER_SESSION`` INFO line — the τ-tuning signal.
+
+        ``escape_hatch_rate`` is per turn over both recovery paths (free
+        non-tool-calling recovery + native ``load_tools``); the two component
+        counts are reported separately so the tuner can see which path fired.
+        """
+        logger.info(
+            "TOOL_LOADER_SESSION %s",
+            json.dumps(
+                {
+                    "turns": self._turn,
+                    "escape_hatch_count": self._escape_hatch_count,
+                    "load_tools_count": self._load_tools_count,
+                    "escape_hatch_rate": (
+                        self._escape_hatch_count + self._load_tools_count
+                    )
+                    / max(self._turn, 1),
                 }
             ),
         )
