@@ -89,6 +89,16 @@ describe('renderMarkdown sanitization', () => {
     expect(html).toContain('<p');
   });
 
+  // Regression: a pipe-wrapped line (isBlockStart === true) with no delimiter row
+  // is consumed by neither the table branch nor the paragraph loop, so the
+  // renderer used to spin forever on it — a hang on untrusted hub-README content.
+  it('does not hang on a `| … |` line that has no following delimiter row', () => {
+    const html = renderMarkdown('| some prose |\nnext line');
+    expect(html).not.toContain('<table'); // no delimiter → not a table
+    expect(html).toContain('next line'); // the loop advanced past the orphan
+    expect(html).toContain('some prose'); // and the orphan content is preserved
+  });
+
   it('escapes raw HTML smuggled inside a table cell', () => {
     const md = '| x |\n|---|\n| <img src=x onerror=alert(1)> |';
     const html = renderMarkdown(md);
