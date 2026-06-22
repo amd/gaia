@@ -48,9 +48,18 @@ jobs:
 
             const issueNumber = context.payload.issue.number;
             const commenter = context.payload.comment.user.login;
-            const assignees = context.payload.issue.assignees || [];
 
-            if (context.payload.issue.state === 'closed') {
+            // Read assignees/state LIVE rather than from the event payload —
+            // the payload is a snapshot from comment-creation time, so the
+            // concurrency guard only prevents double-assign if we re-fetch the
+            // current state here after serialization.
+            const { data: issue } = await github.rest.issues.get({
+              ...context.repo,
+              issue_number: issueNumber,
+            });
+            const assignees = issue.assignees || [];
+
+            if (issue.state === 'closed') {
               await github.rest.issues.createComment({
                 ...context.repo,
                 issue_number: issueNumber,
