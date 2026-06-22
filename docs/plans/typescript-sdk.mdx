@@ -827,7 +827,7 @@ shape after schema drift.
 | Layer | Tooling | Coverage target |
 |---|---|---|
 | Unit (TS) | Vitest | Pure logic in SDK (URL composition, event parsing, capability negotiation, retry logic, error mapping). Mocked transport. |
-| Integration (TS <-> live GAIA) | Vitest + real GAIA via `@amd-gaia/embedded` | Each service module exercised against a real backend. Streaming endpoints covered. |
+| Integration (TS &lt;-&gt; live GAIA) | Vitest + real GAIA via `@amd-gaia/embedded` | Each service module exercised against a real backend. Streaming endpoints covered. |
 | Contract | Vitest | Boots GAIA, dumps OpenAPI, asserts identical to the committed schema. Catches Python-side changes that bypass the drift gate. |
 | Browser parity | Vitest browser mode + Playwright | Every method that runs in browser -- chat, agent observe -- exercised in real Chromium. |
 | SSE fault injection | Vitest with proxy that drops connections | Reconnect, resume-via-`since`, message-loss bounds. |
@@ -1080,7 +1080,7 @@ Publishing:
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Pydantic <-> TS drift | High over time | High | Mandatory CI drift gate (§14.3). |
+| Pydantic &lt;-&gt; TS drift | High over time | High | Mandatory CI drift gate (§14.3). |
 | OpenAPI export carries `Any` / untyped fields → generated TS is `unknown` | High | High | Phase 0 audit + lint rule blocks regressions (§17 Phase 0). |
 | Streaming reconnect edge cases (network flap, server restart) | Medium | Medium | Resume-via-`since`, ring buffer, `gap_detected` event, fault-injection tests (§9.2.1, §9.3). |
 | Embedded process orphans on crash | Low | Medium | Parent-PID watchdog; on parent death, exit. Tested in CI. |
