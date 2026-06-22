@@ -3704,3 +3704,96 @@ class TestRecalledSkillInjection:
             "forget",
             "search_past_conversations",
         } <= registered
+
+
+# ===========================================================================
+# AC2 (#887) — recall reduces the tool-step count on a repeated goal
+# ===========================================================================
+
+
+def _run_surrogate_planner(system_prompt, needed_tools, candidate_tools):
+    """Deterministic stand-in for the planner LLM, returning the tools it ran.
+
+    The true 4th-attempt reduction is a behavioral property of the planner
+    model (and of the tool-loader consumer, #1451) and belongs to the eval
+    harness. What #1794 owns — and what this surrogate pins — is the *lever*:
+    a recalled procedure hands the planner the exact ordered tool sequence in
+    its system prompt, so it runs only those steps; with no recall the planner
+    must DISCOVER the sequence, probing candidate tools in registry order until
+    it has covered the goal.
+    """
+    marker = "RECALLED PROCEDURES"
+    if marker in system_prompt:
+        block = system_prompt.split(marker, 1)[1]
+        # Follow the recipe: run the needed tools in their order of appearance
+        # in the recalled block — zero discovery overhead.
+        return sorted(
+            (t for t in needed_tools if t in block),
+            key=lambda t: block.index(t),
+        )
+    # No recipe: undirected discovery — probe candidates in registry order,
+    # stopping once every needed tool has been executed.
+    executed, remaining = [], set(needed_tools)
+    for tool in candidate_tools:
+        executed.append(tool)
+        remaining.discard(tool)
+        if not remaining:
+            break
+    return executed
+
+
+class TestRecallReducesToolSteps:
+    """AC2 (#887): recall measurably reduces the tool-step count on a match.
+
+    Pins the #1794-owned lever behind the acceptance criterion with a
+    deterministic planner surrogate (see _run_surrogate_planner). The
+    end-to-end, real-LLM measurement is the eval harness's job.
+    """
+
+    def test_recalled_recipe_cuts_tool_steps_vs_baseline(self, composing_host):
+        pytest.importorskip("faiss")
+        composing_host._memory_post_init_pending = False  # isolate from synthesis
+
+        needed = ["query_documents", "read_file", "remember"]
+        # The agent's tool space is larger than the recipe, so without a recipe
+        # the planner has to probe the leading non-recipe tools first.
+        candidates = [
+            "search_web",
+            "list_files",
+            "query_documents",
+            "read_file",
+            "remember",
+        ]
+        goal = "triage this inbound support ticket"
+
+        # --- Baseline: no procedure yet (the 1st-3rd attempts). ---
+        composing_host.process_query(goal)
+        assert "RECALLED PROCEDURES" not in composing_host.system_prompt
+        baseline = _run_surrogate_planner(
+            composing_host.system_prompt, needed, candidates
+        )
+
+        # --- 4th attempt: the synthesized procedure is now recalled. ---
+        _seed_procedure(
+            composing_host,
+            name="triage-support-ticket",
+            when_to_use="Triage an inbound support ticket end to end.",
+            body=(
+                "# Triage a Support Ticket\n"
+                "1. Pull policy docs with `query_documents`.\n"
+                "2. Read the attached log with `read_file`.\n"
+                "3. Record the disposition with `remember`.\n"
+                "## Edge cases\n- escalate if no policy doc matches"
+            ),
+            tools_required=needed,
+        )
+        composing_host.process_query(goal)
+        assert "RECALLED PROCEDURES" in composing_host.system_prompt
+        recall = _run_surrogate_planner(
+            composing_host.system_prompt, needed, candidates
+        )
+
+        # The measurable reduction: the recalled recipe eliminates discovery.
+        assert len(recall) < len(baseline)  # 3 < 5
+        assert recall == needed  # follows the recipe exactly
+        assert len(baseline) > len(needed)  # baseline pays a discovery cost
