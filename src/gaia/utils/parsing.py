@@ -58,10 +58,24 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
             logger.debug("No JSON object found in text")
             return None
 
-        # Count braces to find matching close
+        # Count braces to find matching close, ignoring braces inside JSON
+        # string values (and handling escaped characters within them) so a "}"
+        # in a string does not terminate the object prematurely.
         brace_count = 0
+        in_string = False
+        escaped = False
         for i, char in enumerate(text[start:], start):
-            if char == "{":
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
                 brace_count += 1
             elif char == "}":
                 brace_count -= 1
