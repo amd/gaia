@@ -22,7 +22,7 @@ jobs:
   behavior-e2e:
     runs-on: [self-hosted, strix-halo]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv

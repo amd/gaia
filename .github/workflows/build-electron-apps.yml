@@ -31,7 +31,7 @@ jobs:
       matrix: ${{ steps.discover.outputs.matrix }}
       has_apps: ${{ steps.discover.outputs.has_apps }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
@@ -89,7 +89,7 @@ jobs:
         app: ${{ fromJson(needs.discover-apps.outputs.matrix).app }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v6

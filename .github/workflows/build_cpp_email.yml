@@ -58,7 +58,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Guard: the C++ email agent module must exist before we try to build it.
       # The path filters above mean this job normally only runs once
