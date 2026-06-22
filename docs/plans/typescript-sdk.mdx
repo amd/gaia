@@ -1080,7 +1080,7 @@ Publishing:
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Pydantic <-> TS drift | High over time | High | Mandatory CI drift gate (§14.3). |
+| Pydantic &lt;-&gt; TS drift | High over time | High | Mandatory CI drift gate (§14.3). |
 | OpenAPI export carries `Any` / untyped fields → generated TS is `unknown` | High | High | Phase 0 audit + lint rule blocks regressions (§17 Phase 0). |
 | Streaming reconnect edge cases (network flap, server restart) | Medium | Medium | Resume-via-`since`, ring buffer, `gap_detected` event, fault-injection tests (§9.2.1, §9.3). |
 | Embedded process orphans on crash | Low | Medium | Parent-PID watchdog; on parent death, exit. Tested in CI. |
