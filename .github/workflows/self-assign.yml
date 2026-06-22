@@ -26,6 +26,7 @@ jobs:
     # no trim() function.
     if: >-
       github.event.issue.pull_request == null &&
+      github.event.comment.user.type != 'Bot' &&
       contains(github.event.comment.body, '.take')
     runs-on: ubuntu-latest
     steps:
@@ -71,11 +72,24 @@ jobs:
               return;
             }
 
-            await github.rest.issues.addAssignees({
+            // addAssignees silently ignores a user it can't assign (still 200),
+            // so confirm the commenter actually landed before reacting success.
+            const result = await github.rest.issues.addAssignees({
               ...context.repo,
               issue_number: issueNumber,
               assignees: [commenter],
             });
+            const assigned = (result.data.assignees || []).some(
+              (a) => a.login === commenter
+            );
+            if (!assigned) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: issueNumber,
+                body: `@${commenter} I couldn't assign this issue to you automatically. A maintainer will assign it shortly.`,
+              });
+              return;
+            }
             await github.rest.reactions.createForIssueComment({
               ...context.repo,
               comment_id: context.payload.comment.id,
