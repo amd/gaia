@@ -5,7 +5,7 @@
  *
  * These types are **hand-written** to mirror two Python sources:
  *  - `hub/agents/python/email/gaia_agent_email/contract.py` — the frozen #1262
- *    triage request/response contract (schema 2.0, single source of truth).
+ *    triage request/response contract (single source of truth).
  *  - `hub/agents/python/email/gaia_agent_email/api_routes.py` — the local
  *    (non-frozen) draft/send handshake models.
  *

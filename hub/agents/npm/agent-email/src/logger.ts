@@ -5,9 +5,6 @@
  * `DEBUG` env var (substring match on `agent-email`, or `*`). Everything goes to
  * stderr so it never corrupts machine-readable stdout (e.g. a `--print-openapi`
  * pipe or a CLI that emits JSON).
- *
- * Browser-safe: the `process.env.DEBUG` access is guarded so this module can be
- * imported from the `./client` entry without triggering Node-only globals.
  */
 
 function debugEnabled(): boolean {
