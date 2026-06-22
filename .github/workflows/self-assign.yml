@@ -19,6 +19,12 @@ on:
 permissions:
   issues: write
 
+# Serialize per issue so two near-simultaneous `.take` comments don't both read
+# an empty assignees list and double-assign.
+concurrency:
+  group: self-assign-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   self-assign:
     # Gate loosely here to skip PRs and most comments; the exact `.take`
@@ -30,7 +36,7 @@ jobs:
       contains(github.event.comment.body, '.take')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v9
         with:
           script: |
             // Require the comment to START with `.take` (a command), not merely
