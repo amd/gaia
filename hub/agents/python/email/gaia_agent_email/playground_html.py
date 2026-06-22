@@ -182,18 +182,26 @@ function setRow(dotId, txtId, state, text){
   d.textContent = state === "ok" ? "✓" : state === "bad" ? "✗" : "…";
   $(txtId).textContent = text;
 }
+// status 0 = network/transport failure (connection refused, sidecar gone), so
+// callers can diagnose it uniformly instead of seeing an undefined status.
+function httpError(status, body){ const e = new Error(body || ("HTTP " + status)); e.status = status; e.body = body || ""; return e; }
 async function getJSON(path){
-  const r = await fetch(path, { headers: { accept: "application/json" } });
+  let r;
+  try{ r = await fetch(path, { headers: { accept: "application/json" } }); }
+  catch(err){ throw httpError(0, String(err && err.message || err)); }
   const t = await r.text();
-  if(!r.ok){ const e = new Error(t); e.status = r.status; e.body = t; throw e; }
+  if(!r.ok){ throw httpError(r.status, t); }
   return t ? JSON.parse(t) : null;
 }
 async function postJSON(path, body){
-  const r = await fetch(path, { method:"POST",
-    headers:{ accept:"application/json", "content-type":"application/json" },
-    body: JSON.stringify(body) });
+  let r;
+  try{
+    r = await fetch(path, { method:"POST",
+      headers:{ accept:"application/json", "content-type":"application/json" },
+      body: JSON.stringify(body) });
+  }catch(err){ throw httpError(0, String(err && err.message || err)); }
   const t = await r.text();
-  if(!r.ok){ const e = new Error(t); e.status = r.status; e.body = t; throw e; }
+  if(!r.ok){ throw httpError(r.status, t); }
   return t ? JSON.parse(t) : null;
 }
 // Mirror examples/demo.mjs diagnoseTriage — specific causes before generic timeout.
@@ -218,9 +226,10 @@ async function healthCheck(){
   setRow("d-lemonade","t-lemonade","wait","checking…");
   $("fix-lemonade").style.display = "none";
   $("health-note").textContent = "";
-  // Sidecar: we were served by it, but confirm /version.
+  // Confirm via the email-scoped version so this works standalone AND when the
+  // router is mounted on a product app (where root /version is the host's).
   try{
-    const v = await getJSON("/version");
+    const v = await getJSON("/v1/email/version");
     setRow("d-sidecar","t-sidecar","ok", "up · apiVersion=" + v.apiVersion + " · agentVersion=" + v.agentVersion);
     $("ver").textContent = "apiVersion " + v.apiVersion + " · agentVersion " + v.agentVersion;
   }catch(e){
@@ -258,7 +267,7 @@ async function doTriage(){
   }catch(e){
     out.textContent = ""; const d = diagnose(e);
     const p = document.createElement("div");
-    p.innerHTML = ""; p.textContent = (e.status===502||e.status===0) ? ("✗ " + d.cause + " — " + d.hint + (d.cmd?(" ("+d.cmd+")"):"")) : ("✗ HTTP " + e.status + ": " + (e.body||e.message));
+    p.textContent = (e.status===502||e.status===0) ? ("✗ " + d.cause + " — " + d.hint + (d.cmd?(" ("+d.cmd+")"):"")) : ("✗ HTTP " + e.status + ": " + (e.body||e.message));
     out.appendChild(p);
   }
 }
@@ -284,7 +293,7 @@ async function doDraft(){
     const res = await postJSON("/v1/email/draft", { to:[{ email:$("df-to").value }],
       subject:$("df-subject").value, body:$("df-body").value });
     out.textContent = "";
-    const a = document.createElement("div"); a.innerHTML="";
+    const a = document.createElement("div");
     a.textContent = "✓ confirmation_token: "; const c = document.createElement("code"); c.className="cmd"; c.textContent = res.confirmation_token;
     a.appendChild(c); out.appendChild(a);
     const n = document.createElement("div"); n.className="note"; n.textContent = "Single-use, bound to (to, subject, body). Echo it to /v1/email/send to authorize sending."; out.appendChild(n);
