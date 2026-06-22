@@ -75,6 +75,20 @@ platform, then spawns and health-checks the sidecar. The `/v1/email/*` routes
 are a versioned contract shared by the Python agent and the frozen binary —
 `openapi.email.json` is the source of truth.
 
+## Playground
+
+A zero-setup, **localhost-only** page the sidecar serves at
+`http://127.0.0.1:8131/v1/email/playground` — a stack-health check (is Lemonade
+up? is the model downloaded?), live **triage** and **draft** against the running
+sidecar, a button that runs the `/v1/email/init` readiness check, and copy-paste
+install shortcuts.
+
+![GAIA Email Agent playground — stack health, live triage/draft, and a readiness check, all running against the local sidecar](https://raw.githubusercontent.com/amd/gaia/main/docs/assets/img/email-playground.webp)
+
+It's served same-origin with a `Content-Security-Policy: connect-src 'self'`
+header, so the page can only ever reach your local sidecar — email content never
+leaves the machine. Start the sidecar and open the URL in a browser.
+
 ## Requirements
 
 - **Platforms:** Windows x64, Linux x64, and macOS on Apple Silicon
