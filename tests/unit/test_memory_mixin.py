@@ -1749,6 +1749,54 @@ class TestLLMToolParameterClamping:
         results = result.get("results", [])
         assert len(results) <= 50
 
+    def test_search_past_conversations_string_days(self, mixin_with_tools):
+        """String-typed days ("7") is coerced, not a TypeError (issue #1763)."""
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        # Pre-fix this raised: '<' not supported between instances of 'int' and 'str'
+        result = func(days="7")
+        assert result.get("status") in ("found", "empty")
+
+    def test_search_past_conversations_string_days_clamped(self, mixin_with_tools):
+        """String-typed days above the cap is coerced then clamped to 365."""
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func(days="99999")
+        assert result.get("status") in ("found", "empty")
+
+    def test_search_past_conversations_string_limit(self, mixin_with_tools):
+        """String-typed limit ("10") is coerced and clamped without raising."""
+        store = mixin_with_tools.memory_store
+        for i in range(60):
+            store.store_turn("s1", "user", f"conversation message number {i}")
+
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func(query="conversation", limit="9999")
+        results = result.get("results", [])
+        assert len(results) <= 50
+
+    def test_search_past_conversations_non_numeric_days_errors(self, mixin_with_tools):
+        """Non-numeric days fails loudly with an arg-naming error, not a TypeError."""
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func(days="soon")
+        assert result.get("status") == "error"
+        assert "days" in result.get("message", "")
+
+    def test_search_past_conversations_non_numeric_limit_errors(self, mixin_with_tools):
+        """Non-numeric limit fails loudly with an arg-naming error."""
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func(query="conversation", limit="lots")
+        assert result.get("status") == "error"
+        assert "limit" in result.get("message", "")
+
 
 # ===========================================================================
 # 12. remember tool — category alignment with REST API
