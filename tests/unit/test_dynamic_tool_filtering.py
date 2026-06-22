@@ -128,10 +128,13 @@ class _SpyAgent:
         self.compose_calls += 1
         return f"PROMPT::{self._active_tool_filter}"
 
-    # Bind the real method under test.
+    # Bind the real methods under test. ``_refresh_active_tool_filter`` now
+    # delegates the filter+prompt swap to ``_apply_tool_filter`` (#1450), so the
+    # spy must borrow both to exercise the real recompute-on-change path.
     from gaia.agents.base.agent import Agent
 
     _refresh_active_tool_filter = Agent._refresh_active_tool_filter
+    _apply_tool_filter = Agent._apply_tool_filter
 
 
 def test_recompute_only_on_change():
