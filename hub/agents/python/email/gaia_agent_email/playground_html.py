@@ -48,8 +48,22 @@ _HTML = r"""<!doctype html>
   .badge{font-size:11.5px;font-weight:600;letter-spacing:.04em;border-radius:999px;padding:4px 11px;
     background:var(--soft);border:1px solid var(--line);color:var(--gold)}
   .sub{color:var(--muted);font-size:14px;margin:4px 0 26px}
-  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 22px;margin:16px 0}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;margin:14px 0}
   .card h2{font-size:13px;font-weight:600;letter-spacing:.10em;text-transform:uppercase;color:var(--muted);margin:0 0 14px}
+  /* Accordion: each section is a native <details> dropdown. */
+  details.card{transition:border-color .15s}
+  details.card[open]{border-color:var(--line)}
+  details.card>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:12px;
+    padding:16px 22px;user-select:none}
+  details.card>summary::-webkit-details-marker{display:none}
+  .sum-title{font-size:13px;font-weight:600;letter-spacing:.10em;text-transform:uppercase;color:var(--muted)}
+  .sum-desc{font-size:12.5px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0}
+  details.card>summary:hover .sum-title,details.card[open]>summary .sum-title{color:var(--gold)}
+  .chev{margin-left:auto;color:var(--muted);font-size:17px;line-height:1;transition:transform .18s ease}
+  details.card[open]>summary .chev{transform:rotate(90deg);color:var(--gold)}
+  .sum-stat{font-size:11px;font-weight:600;border-radius:999px;padding:2px 9px;background:var(--soft);
+    border:1px solid var(--line);color:var(--gold);text-transform:none;letter-spacing:0}
+  .card-body{padding:2px 22px 20px}
   .row{display:flex;align-items:flex-start;gap:12px;padding:9px 0;border-top:1px solid var(--border)}
   .row:first-of-type{border-top:0}
   .dot{flex:0 0 auto;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;
@@ -96,80 +110,99 @@ _HTML = r"""<!doctype html>
   <div class="sub">Served by your local sidecar — code, data, and inference never leave this machine.</div>
 
   <!-- Stack health -->
-  <div class="card">
-    <h2>Stack health</h2>
-    <div id="health">
-      <div class="row"><div class="dot wait" id="d-sidecar">…</div>
-        <div class="body"><div class="name">Sidecar</div><div class="detail" id="t-sidecar">checking…</div></div></div>
-      <div class="row"><div class="dot wait" id="d-lemonade">…</div>
-        <div class="body"><div class="name">Lemonade + model</div><div class="detail" id="t-lemonade">checking…</div>
-          <div class="fix" id="fix-lemonade" style="display:none"></div></div></div>
+  <details class="card" open>
+    <summary><span class="sum-title">Stack health</span>
+      <span class="sum-desc">sidecar · Lemonade · model</span>
+      <span class="sum-stat" id="health-stat">checking…</span><span class="chev">›</span></summary>
+    <div class="card-body">
+      <div id="health">
+        <div class="row"><div class="dot wait" id="d-sidecar">…</div>
+          <div class="body"><div class="name">Sidecar</div><div class="detail" id="t-sidecar">checking…</div></div></div>
+        <div class="row"><div class="dot wait" id="d-lemonade">…</div>
+          <div class="body"><div class="name">Lemonade + model</div><div class="detail" id="t-lemonade">checking…</div>
+            <div class="fix" id="fix-lemonade" style="display:none"></div></div></div>
+      </div>
+      <div class="actions"><button id="recheck">Re-check</button>
+        <button id="do-init" class="ghost">Run readiness check · /v1/init</button>
+        <span class="note" id="health-note"></span></div>
+      <div class="out" id="init-out"></div>
     </div>
-    <div class="actions"><button id="recheck">Re-check</button>
-      <button id="do-init" class="ghost">Run readiness check · /v1/init</button>
-      <span class="note" id="health-note"></span></div>
-    <div class="out" id="init-out"></div>
-  </div>
+  </details>
 
   <!-- Triage -->
-  <div class="card">
-    <h2>Triage an email (standalone — no mailbox)</h2>
-    <div class="grid2">
-      <div><label>From</label><input id="tr-from" value="Sarah Chen &lt;sarah@example.com&gt;" /></div>
-      <div><label>Subject</label><input id="tr-subject" value="Prod incident follow-up" /></div>
+  <details class="card">
+    <summary><span class="sum-title">Triage an email</span>
+      <span class="sum-desc">standalone · no mailbox</span><span class="chev">›</span></summary>
+    <div class="card-body">
+      <div class="grid2">
+        <div><label>From</label><input id="tr-from" value="Sarah Chen &lt;sarah@example.com&gt;" /></div>
+        <div><label>Subject</label><input id="tr-subject" value="Prod incident follow-up" /></div>
+      </div>
+      <label style="display:block;margin-top:10px">Body</label>
+      <textarea id="tr-body">Please review the incident report and reply by Friday. Action required.</textarea>
+      <div class="actions"><button id="do-triage">Triage</button>
+        <span class="note">Needs Lemonade + the model (see Stack health).</span></div>
+      <div class="out" id="tr-out"></div>
     </div>
-    <label style="display:block;margin-top:10px">Body</label>
-    <textarea id="tr-body">Please review the incident report and reply by Friday. Action required.</textarea>
-    <div class="actions"><button id="do-triage">Triage</button>
-      <span class="note">Needs Lemonade + the model (see Stack health).</span></div>
-    <div class="out" id="tr-out"></div>
-  </div>
+  </details>
 
   <!-- Draft -->
-  <div class="card">
-    <h2>Draft a reply → confirmation token (standalone)</h2>
-    <div class="grid2">
-      <div><label>To</label><input id="df-to" value="sarah@example.com" /></div>
-      <div><label>Subject</label><input id="df-subject" value="Re: Prod incident follow-up" /></div>
+  <details class="card">
+    <summary><span class="sum-title">Draft a reply</span>
+      <span class="sum-desc">standalone · mints a send token</span><span class="chev">›</span></summary>
+    <div class="card-body">
+      <div class="grid2">
+        <div><label>To</label><input id="df-to" value="sarah@example.com" /></div>
+        <div><label>Subject</label><input id="df-subject" value="Re: Prod incident follow-up" /></div>
+      </div>
+      <label style="display:block;margin-top:10px">Reply body</label>
+      <textarea id="df-body">Reviewed — I'll reply by Friday.</textarea>
+      <div class="actions"><button id="do-draft">Mint draft token</button>
+        <span class="note">Works with no Lemonade and no mailbox — it just mints a single-use send token.</span></div>
+      <div class="out" id="df-out"></div>
     </div>
-    <label style="display:block;margin-top:10px">Reply body</label>
-    <textarea id="df-body">Reviewed — I'll reply by Friday.</textarea>
-    <div class="actions"><button id="do-draft">Mint draft token</button>
-      <span class="note">Works with no Lemonade and no mailbox — it just mints a single-use send token.</span></div>
-    <div class="out" id="df-out"></div>
-  </div>
+  </details>
 
   <!-- Send (connector-gated) -->
-  <div class="card">
-    <h2>Send a reply</h2>
-    <div class="row" style="border:0;padding-top:0">
-      <div class="dot bad">⬤</div>
-      <div class="body"><div class="name">Connector required</div>
-        <div class="detail">Sending touches a live mailbox, so it needs a connected Gmail/Outlook account (OAuth).
-          Not available in this local playground yet.</div></div>
+  <details class="card">
+    <summary><span class="sum-title">Send a reply</span>
+      <span class="sum-desc">connector required</span><span class="chev">›</span></summary>
+    <div class="card-body">
+      <div class="row" style="border:0;padding-top:0">
+        <div class="dot bad">⬤</div>
+        <div class="body"><div class="name">Connector required</div>
+          <div class="detail">Sending touches a live mailbox, so it needs a connected Gmail/Outlook account (OAuth).
+            Not available in this local playground yet.</div></div>
+      </div>
     </div>
-  </div>
+  </details>
 
   <!-- Contract -->
-  <div class="card">
-    <h2>Contract</h2>
-    <div class="actions">
-      <button class="ghost" onclick="window.open('/v1/email/spec','_blank')">Open HTML spec</button>
-      <button class="ghost" onclick="window.open('/openapi.json','_blank')">Open openapi.json</button>
-      <span class="note" id="ver"></span>
+  <details class="card">
+    <summary><span class="sum-title">Contract</span>
+      <span class="sum-desc">spec · openapi</span><span class="chev">›</span></summary>
+    <div class="card-body">
+      <div class="actions">
+        <button class="ghost" onclick="window.open('/v1/email/spec','_blank')">Open HTML spec</button>
+        <button class="ghost" onclick="window.open('/openapi.json','_blank')">Open openapi.json</button>
+        <span class="note" id="ver"></span>
+      </div>
     </div>
-  </div>
+  </details>
 
   <!-- Install / setup -->
-  <div class="card">
-    <h2>Install &amp; setup</h2>
-    <div class="fix"><code class="cmd" id="c-npm">npm i @amd-gaia/agent-email</code><button class="copy" data-copy="c-npm">copy</button></div>
-    <div class="fix" style="margin-top:9px"><code class="cmd" id="c-lemon">lemonade-server serve</code><button class="copy" data-copy="c-lemon">copy</button>
-      <span class="muted">start the local LLM</span></div>
-    <div class="fix" style="margin-top:9px"><code class="cmd" id="c-init">gaia init</code><button class="copy" data-copy="c-init">copy</button>
-      <span class="muted">install Lemonade + download &amp; test the model</span></div>
-    <div class="note">Docs: <a href="https://amd-gaia.ai/docs/guides/email" target="_blank" rel="noopener">amd-gaia.ai/docs/guides/email</a></div>
-  </div>
+  <details class="card">
+    <summary><span class="sum-title">Install &amp; setup</span>
+      <span class="sum-desc">npm · Lemonade · gaia init</span><span class="chev">›</span></summary>
+    <div class="card-body">
+      <div class="fix"><code class="cmd" id="c-npm">npm i @amd-gaia/agent-email</code><button class="copy" data-copy="c-npm">copy</button></div>
+      <div class="fix" style="margin-top:9px"><code class="cmd" id="c-lemon">lemonade-server serve</code><button class="copy" data-copy="c-lemon">copy</button>
+        <span class="muted">start the local LLM</span></div>
+      <div class="fix" style="margin-top:9px"><code class="cmd" id="c-init">gaia init</code><button class="copy" data-copy="c-init">copy</button>
+        <span class="muted">install Lemonade + download &amp; test the model</span></div>
+      <div class="note">Docs: <a href="https://amd-gaia.ai/docs/guides/email" target="_blank" rel="noopener">amd-gaia.ai/docs/guides/email</a></div>
+    </div>
+  </details>
 
   <div class="foot">Inference runs on local Lemonade · this page can only reach <span class="kbd">'self'</span> (CSP) · nothing is sent off your machine.</div>
 </div>
@@ -181,6 +214,15 @@ function setRow(dotId, txtId, state, text){
   const d = $(dotId); d.className = "dot " + state;
   d.textContent = state === "ok" ? "✓" : state === "bad" ? "✗" : "…";
   $(txtId).textContent = text;
+}
+// At-a-glance status in the Stack health summary, so the collapsed dropdown
+// still says whether the stack is ready.
+function setStat(text, ok){
+  const s = $("health-stat"); if(!s) return;
+  s.textContent = text;
+  s.style.background = ok ? "var(--soft)" : "rgba(232,122,122,.14)";
+  s.style.borderColor = ok ? "var(--line)" : "rgba(232,122,122,.4)";
+  s.style.color = ok ? "var(--gold)" : "var(--bad)";
 }
 // status 0 = network/transport failure (connection refused, sidecar gone), so
 // callers can diagnose it uniformly instead of seeing an undefined status.
@@ -226,6 +268,7 @@ async function healthCheck(){
   setRow("d-lemonade","t-lemonade","wait","checking…");
   $("fix-lemonade").style.display = "none";
   $("health-note").textContent = "";
+  setStat("checking…", true);
   // Confirm via the email-scoped version so this works standalone AND when the
   // router is mounted on a product app (where root /version is the host's).
   try{
@@ -234,15 +277,18 @@ async function healthCheck(){
     $("ver").textContent = "apiVersion " + v.apiVersion + " · agentVersion " + v.agentVersion;
   }catch(e){
     setRow("d-sidecar","t-sidecar","bad", "not reachable — is the sidecar running?");
+    setStat("offline", false);
   }
   // Lemonade + model: probe via triage.
   try{
     const res = await postJSON("/v1/email/triage", probePayload());
     setRow("d-lemonade","t-lemonade","ok", "ready · live triage → category=" + res.result.category);
+    setStat("ready", true);
   }catch(e){
     if(e.status === 502 || e.status === 0){
       const d = diagnose(e);
       setRow("d-lemonade","t-lemonade","bad", d.cause + " — " + d.hint);
+      setStat("not ready", false);
       if(d.cmd){
         const fx = $("fix-lemonade"); fx.style.display = "flex"; fx.innerHTML = "";
         const code = document.createElement("code"); code.className = "cmd"; code.textContent = d.cmd;
@@ -252,6 +298,7 @@ async function healthCheck(){
       }
     } else {
       setRow("d-lemonade","t-lemonade","bad", "unexpected error (HTTP " + e.status + ")");
+      setStat("error", false);
     }
   }
 }
