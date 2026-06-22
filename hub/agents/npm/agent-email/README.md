@@ -35,20 +35,25 @@ npm install @amd-gaia/agent-email
 
 ## Quick start
 
+There are two ways to use this package, depending on whether you need the full
+agent (live inbox, real send) or a lightweight local binary (triage + draft only).
+
+### Path A — full GAIA (live inbox, all capabilities)
+
+Point `EmailClient` at a GAIA server that mounts `/v1/email/*`. This path
+supports the complete feature set: triage, draft, send, organize, calendar.
+
 ```ts
-import { fetchBinary, startSidecar, shutdown } from "@amd-gaia/agent-email";
+// Browser apps: import from the browser-safe subpath (no Node built-ins).
+// Node apps can use "@amd-gaia/agent-email" directly.
+import { EmailClient } from "@amd-gaia/agent-email/client";
 
-// 1. Build-time: download + verify the binary for this platform.
-const { binaryPath } = await fetchBinary({
-  outDir: "resources",
-  baseUrl: process.env.AGENT_EMAIL_BASE_URL, // real R2 URL pending #1648
-});
+// baseUrl is the GAIA server that exposes /v1/email/*:
+//   gaia api start   → http://localhost:8080  (default)
+//   gaia chat --ui   → http://localhost:4200
+const client = new EmailClient({ baseUrl: "http://localhost:8080" });
 
-// 2. Runtime: spawn -> wait for /health -> version-check.
-const sidecar = await startSidecar({ binaryPath, port: 8131 });
-
-// 3. Use the typed client.
-const res = await sidecar.client.triage({
+const { result } = await client.triage({
   payload: {
     kind: "single",
     principal: { email: "me@example.com" },
@@ -60,11 +65,61 @@ const res = await sidecar.client.triage({
     },
   },
 });
-console.log(res.result.category, res.result.summary);
+console.log(result.category, result.summary);
 
-// 4. Clean shutdown (kills the whole process tree).
-await shutdown(sidecar);
+// Send goes through a draft → confirmation-token → send handshake.
+// A send() without a valid confirmation token is rejected with HTTP 403.
 ```
+
+### Path B — frozen sidecar (no Python; triage + draft only)
+
+The sidecar is a self-contained native binary that runs inference locally via
+Lemonade. **Triage and draft only** — there is no `/v1/connections`, and `send`
+cannot complete (no connected mailbox): a direct `send()` returns **HTTP 403**
+(missing confirmation token), and even a `/draft`-confirmed send returns
+**HTTP 503** (no connected mailbox). Use Path A to send mail.
+
+```ts
+import { startSidecar, shutdown } from "@amd-gaia/agent-email";
+
+// `fetchBinary()` is intentionally blocked until #1648 — binaries.lock.json
+// ships placeholder hashes and fetchBinary() throws a PlatformError.
+// Build the sidecar locally instead:
+//   python hub/agents/python/email/packaging/freeze.py
+// One-dir build (default): binaryPath points at the executable INSIDE the
+// dist directory, not the directory itself.
+const binaryPath =
+  "hub/agents/python/email/packaging/dist/email-agent/email-agent"; // .exe on Windows
+const sidecar = await startSidecar({ binaryPath, port: 8131 });
+
+const { result } = await sidecar.client.triage({
+  payload: {
+    kind: "single",
+    principal: { email: "me@example.com" },
+    message: {
+      message_id: "m1",
+      from: { name: "Sarah Chen", email: "sarah@example.com" },
+      subject: "Prod incident follow-up",
+      body: "Please review the report and reply by Friday.",
+    },
+  },
+  // Full payload schema: see openapi.email.json (served live at GET /openapi.json)
+});
+console.log(result.category, result.summary);
+// result.action_items[0].description  ← field is "description", not "text"
+
+await shutdown(sidecar); // free function — not sidecar.shutdown()
+```
+
+**Consumer gotchas:**
+1. **Absolute `file:` path** — when your app lives outside the package tree, use
+   an absolute path in `package.json` (`file:/abs/path/to/agent-email`); a
+   relative `file:` becomes a broken symlink in npm workspaces.
+2. **One-dir `binaryPath`** — the default PyInstaller build produces a directory
+   (`dist/email-agent/`); `binaryPath` must point at the executable *inside* it
+   (`dist/email-agent/email-agent`), not at the parent directory.
+3. **`description`, not `text`** — action items use the field name `description`
+   (e.g. `result.action_items[0].description`).
 
 ## The `fetch` CLI
 

@@ -28,6 +28,10 @@ a cloud LLM; local-only inference is enforced at startup.
 Works with **Gmail** (Google connector) and **Outlook.com** (Microsoft
 connector); connect one or both and the agent triages them together.
 
+> **Frozen REST sidecar (JS/TS Path B below):** the standalone binary exposes
+> only **triage and draft** — read/organize/send/calendar are full agent-loop
+> features that require a connected mailbox (Path A).
+
 ## Use it
 
 ### In GAIA (no setup)
@@ -55,25 +59,101 @@ It registers via the `gaia.agent` entry-point group, so the GAIA registry
 discovers it automatically and exposes its REST (`/v1/email/*`) and MCP (stdio)
 surfaces.
 
-JavaScript / TypeScript — embed the agent as a local REST sidecar (no Python
-required) with the companion npm client:
+JavaScript / TypeScript — two paths, depending on whether you want the full
+agent or a lightweight local binary:
 
 ```bash
 npm install @amd-gaia/agent-email
 ```
 
-```ts
-import { fetchBinary, startSidecar } from "@amd-gaia/agent-email";
+**Path A — full GAIA (live inbox, real send, all capabilities)**
 
-const { binaryPath } = await fetchBinary({ outDir: "resources" });
-const sidecar = await startSidecar({ binaryPath, port: 8131 });
-const brief = await sidecar.client.triage({ /* … */ });
+Point `EmailClient` at a running GAIA server that mounts `/v1/email/*` (started
+with `gaia api start` or `gaia chat --ui`). This gives you the complete feature
+set — triage, draft, send, organize, calendar — backed by a connected Gmail or
+Outlook.com mailbox.
+
+```ts
+// Browser apps: import from the browser-safe subpath (no Node built-ins).
+// Node apps: "@amd-gaia/agent-email" works too.
+import { EmailClient } from "@amd-gaia/agent-email/client";
+
+// baseUrl is the GAIA API server that exposes /v1/email/*:
+//   gaia api start   → http://localhost:8080  (default)
+//   gaia chat --ui   → http://localhost:4200
+const client = new EmailClient({ baseUrl: "http://localhost:8080" });
+
+const { result } = await client.triage({
+  payload: {
+    kind: "single",
+    principal: { email: "me@example.com" },
+    message: {
+      message_id: "m1",
+      from: { name: "Sarah Chen", email: "sarah@example.com" },
+      subject: "Prod incident follow-up",
+      body: "Please review the report and reply by Friday.",
+    },
+  },
+});
+console.log(result.category, result.summary);
+
+// Send goes through a draft → confirmation-token → send handshake.
+// A send() without a valid confirmation token is rejected with HTTP 403.
 ```
 
-The package downloads and SHA-256-verifies the right native binary for your
-platform, then spawns and health-checks the sidecar. The `/v1/email/*` routes
-are a versioned contract shared by the Python agent and the frozen binary —
-`openapi.email.json` is the source of truth.
+**Path B — frozen sidecar (no Python required; triage + draft only)**
+
+The sidecar is a self-contained native binary that runs inference locally via
+Lemonade. It exposes only `POST /v1/email/triage` and `POST /v1/email/draft` —
+there is no `/v1/connections`, and `send` cannot complete (no connected mailbox):
+a direct `send()` returns **HTTP 403** (missing confirmation token), and even a
+`/draft`-confirmed send returns **HTTP 503** (no connected mailbox). Use Path A
+for anything that sends mail.
+
+```ts
+import { startSidecar, shutdown } from "@amd-gaia/agent-email";
+
+// `fetchBinary()` is intentionally blocked until #1648 — the binaries.lock.json
+// contains placeholder hashes and fetchBinary() throws a PlatformError.
+// Build the sidecar locally instead:
+//   python hub/agents/python/email/packaging/freeze.py
+// Note: one-dir build (default) — binaryPath points at the executable INSIDE
+// the dist directory, not the directory itself.
+const binaryPath =
+  "hub/agents/python/email/packaging/dist/email-agent/email-agent"; // .exe on Windows
+const sidecar = await startSidecar({ binaryPath, port: 8131 });
+
+const { result } = await sidecar.client.triage({
+  payload: {
+    kind: "single",
+    principal: { email: "me@example.com" },
+    message: {
+      message_id: "m1",
+      from: { name: "Sarah Chen", email: "sarah@example.com" },
+      subject: "Prod incident follow-up",
+      body: "Please review the report and reply by Friday.",
+    },
+  },
+  // Full payload schema: see openapi.email.json (served live at GET /openapi.json)
+});
+console.log(result.category, result.summary);
+// result.action_items[0].description  ← field is "description", not "text"
+
+await shutdown(sidecar); // free function — not sidecar.shutdown()
+```
+
+**Consumer gotchas:**
+1. **Absolute `file:` path** — when your app lives outside the package tree, use
+   an absolute path in `package.json` (`file:/abs/path/to/agent-email`); a
+   relative `file:` becomes a broken symlink in npm workspaces.
+2. **One-dir `binaryPath`** — the default PyInstaller build produces a directory
+   (`dist/email-agent/`); `binaryPath` must point at the executable *inside* it
+   (`dist/email-agent/email-agent`), not at the parent directory.
+3. **`description`, not `text`** — action items in `EmailTriageResult` use the
+   field name `description` (e.g. `result.action_items[0].description`).
+
+The `/v1/email/*` routes are a versioned contract shared by the Python agent and
+the frozen binary — `openapi.email.json` is the source of truth.
 
 ## Requirements
 
