@@ -758,12 +758,12 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 - **Helpful:** Provide next steps, code examples, or links to documentation
 - **Honest:** If you don't know something, say so and suggest escalation to @kovtcharov-amd
 
-#### Comment Format — Human Summary First, Technical Details Collapsed
+#### Comment Format — Lead Human, Add Technical Depth When It Helps
 
-GitHub PR reviews and issue/PR replies — bot-posted *and* hand-written — use a two-part shape so a maintainer skimming gets the verdict in seconds and anyone who needs depth expands one block. Keep this identical to the `claude.yml` bot prompts: the two surfaces are one contract.
+PR reviews and issue/PR replies serve two readers at once: a **human** skimming for the verdict, and an **AI agent / engineer** who needs `file:line`-level depth to act on it. Lead with a plain-language summary for the human; put the technical depth below for whoever has to act. This mirrors the `claude.yml` bot prompts. The aim is whatever is most effective and actionable for both readers — not a fixed template.
 
-1. **Human summary (always visible, on top)** — plain language, minimal jargon: the verdict / answer / diagnosis, a 1–3 sentence bottom line, and the headline issues in plain words (what's wrong + what to do, not how). Keep it short. **No** `file.py:line`, symbol names, or ```suggestion blocks here.
-2. **Technical details (collapsed, underneath)** — all the depth: per-severity issues with `file.py:line` refs, symbols, ```suggestion blocks, and reasoning. Wrap it exactly as below — the blank line after `</summary>` is required for GitHub to render the markdown inside:
+- **Human summary (lead with this):** plain language, minimal jargon — the verdict / answer / diagnosis, the bottom line, and the headline issues in plain words (what's wrong + what to do, not how). Keep it short.
+- **Technical details (add when there is real depth):** `file.py:line` refs, symbols, ```suggestion blocks, reasoning. When that depth runs more than a couple of lines, collapse it under a `<details>` block so the summary stays scannable — the blank line after `</summary>` is required for GitHub to render the markdown inside:
 
    ```
    <details>
@@ -773,7 +773,7 @@ GitHub PR reviews and issue/PR replies — bot-posted *and* hand-written — use
    </details>
    ```
 
-**Never collapse** a 🔒 security note (see Security Handling Protocol below) or an auto-fix **Test plan** checklist — those stay visible. For a one-line reply or a trivial finding, the visible summary alone is fine — skip the `<details>` block when there's no real depth to hide.
+Use discretion — this is a guide, not a ritual. Many comments are a single plain-language part with no technical block at all; adding an empty `<details>`, a boilerplate test plan, or a security note where none is warranted is just noise. Add each section only where it genuinely helps. The one firm rule: when a 🔒 security concern or an auto-fix **Test plan** *does* apply, keep it visible — never bury it inside `<details>`.
 
 #### Security Handling Protocol (CRITICAL)
 
