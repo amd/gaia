@@ -132,7 +132,7 @@ jobs:
       allowed_non_write_users: "*"
       prompt: |
             Review this pull request following the custom_instructions exactly.
-            Then post one structured review comment with: Summary → Issues (grouped by severity) → Strengths → Verdict.
+            Then post one review comment in the TWO-part format defined under "Output format — TWO parts" below: a visible human summary on top (verdict + headline issues in plain words), with the per-severity issues, `file:line`, and ```suggestion blocks tucked into the collapsed `<details>` block.
             Post the review via: `gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md` (write body to /tmp/review.md first).
 
             You are reviewing a GAIA pull request. Provide a thorough, professional code review following GAIA standards.
