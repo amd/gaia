@@ -1,12 +1,13 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""ChatAgent wiring for the dynamic tool loader (#1449).
+"""ChatAgent wiring for the dynamic tool loader (#1449, Part 2 #1450).
 
 Covers the ChatAgent-level glue without a Lemonade backend: loader construction
 gating (profile + toggle + env), the three off-states reverting to the full
 registry (``None`` filter), the selection-query builder, the LRU record hook,
-env-override parsing (incl. loud failure on malformed values), and the
-native-model known-gap warning.
+env-override parsing (incl. loud failure on malformed values), the ``load_tools``
+escape hatch + native-only menu, and that the Part-1 native known-gap warning is
+gone now that Part 2 closes the gap.
 
 ChatAgent is built via ``__new__`` with only the attributes each method needs —
 ``Agent.__init__`` (Lemonade) is never run.
@@ -32,6 +33,7 @@ for _mod in ("faiss", "sentence_transformers", "pdfplumber", "pypdf", "pypdfium2
 
 from gaia.agents.base.tool_loader import ToolLoader  # noqa: E402
 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia.eval.tool_cost import build_doc_agent_skeleton  # noqa: E402
 
 for _mod in _stubbed:
     sys.modules.pop(_mod, None)
@@ -44,7 +46,6 @@ def _bare_agent(**attrs) -> ChatAgent:
     a.conversation_history = []
     a.tool_loader = None
     a._memory_store = object()
-    a._dynamic_tools_native_warned = False
     a._dynamic_tools_validated = False
     a.model_id = None
     for k, v in attrs.items():
@@ -183,7 +184,7 @@ def test_query_builder_excludes_assistant_and_truncates():
     assert q.endswith("C" * 100)  # current turn always fully included
 
 
-# ── record hook + known gap ───────────────────────────────────────────────
+# ── record hook ────────────────────────────────────────────────────────────
 
 
 def test_on_tool_invoked_forwards_to_loader():
@@ -198,29 +199,119 @@ def test_on_tool_invoked_noop_when_no_loader():
     a._on_tool_invoked("read_file")  # must not raise
 
 
-def test_native_model_known_gap_warned_once(caplog):
+def test_native_model_no_longer_warns_known_gap(caplog):
+    """Part 2 (#1450) closed the native gap via load_tools — the warning is gone."""
     loader = MagicMock()
     loader.session_disabled = False
     loader.select.return_value = ["c1"]
-    a = _bare_agent(tool_loader=loader, model_id="Gemma-4-E4B-it-GGUF")
+    a = _bare_agent(tool_loader=loader, model_id="Gemma-4-E4B-it-GGUF")  # native
     with patch.object(
         ChatAgent, "_tools_registry", new_callable=lambda: property(lambda self: {})
     ):
         with caplog.at_level(logging.WARNING):
             a._select_tools_for_turn("q1")
             a._select_tools_for_turn("q2")
-    gap_logs = [r for r in caplog.records if "known gap" in r.getMessage()]
-    assert len(gap_logs) == 1  # logged exactly once
+    assert not any(
+        "known gap" in r.getMessage() or "no escape hatch" in r.getMessage()
+        for r in caplog.records
+    )
 
 
-def test_non_native_model_no_known_gap_warning(caplog):
-    loader = MagicMock()
-    loader.session_disabled = False
-    loader.select.return_value = ["c1"]
-    a = _bare_agent(tool_loader=loader, model_id=None)  # non-tool-calling
-    with patch.object(
-        ChatAgent, "_tools_registry", new_callable=lambda: property(lambda self: {})
-    ):
-        with caplog.at_level(logging.WARNING):
-            a._select_tools_for_turn("q1")
-    assert not any("known gap" in r.getMessage() for r in caplog.records)
+# ── _apply_tool_filter invariant (Part 2 mid-loop recovery) ────────────────
+
+
+def test_apply_tool_filter_swaps_filter_and_recomputes_prompt():
+    """The base helper moves the filter and the cached prompt together."""
+    a = ChatAgent.__new__(ChatAgent)
+    a.observers = []  # quiet __del__ during GC
+    a._active_tool_filter = None
+    a._system_prompt_cache = "OLD"
+    a._compose_system_prompt = lambda: f"PROMPT::{a._active_tool_filter}"
+    a._apply_tool_filter(["load_tools", "search_file"])
+    assert a._active_tool_filter == ["load_tools", "search_file"]
+    assert a._system_prompt_cache == "PROMPT::['load_tools', 'search_file']"
+
+
+# ── load_tools registration + handler (Part 2, #1450) ──────────────────────
+
+
+def test_load_tools_registered_only_when_loader_active():
+    on = build_doc_agent_skeleton(profile="doc", deterministic=True, dynamic_tools=True)
+    off = build_doc_agent_skeleton(
+        profile="doc", deterministic=True, dynamic_tools=False
+    )
+    assert "load_tools" in on._tools_registry
+    assert "load_tools" not in off._tools_registry
+
+
+def test_load_tools_handler_admits_bundle_and_applies_filter():
+    agent = build_doc_agent_skeleton(
+        profile="doc", deterministic=True, dynamic_tools=True
+    )
+    applied: dict = {}
+    agent._apply_tool_filter = lambda f: applied.__setitem__("filter", f)
+    load_tools = agent._tools_registry["load_tools"]["function"]
+
+    result = load_tools("file_search")
+    assert result["status"] == "success"
+    assert result["bundle"] == "file_search"
+    # The bundle's tools are now in the loaded set, and that set was applied as
+    # the active filter so the next model step sees them.
+    assert "search_file" in result["loaded_tools"]
+    assert applied["filter"] == result["loaded_tools"]
+
+
+def test_load_tools_handler_resolves_bare_tool_name():
+    agent = build_doc_agent_skeleton(
+        profile="doc", deterministic=True, dynamic_tools=True
+    )
+    agent._apply_tool_filter = lambda f: None
+    load_tools = agent._tools_registry["load_tools"]["function"]
+    result = load_tools("search_file")  # bare tool name → its bundle
+    assert result["status"] == "success"
+    assert "search_file" in result["loaded_tools"]
+
+
+def test_load_tools_handler_unknown_bundle_returns_actionable_error():
+    agent = build_doc_agent_skeleton(
+        profile="doc", deterministic=True, dynamic_tools=True
+    )
+    agent._apply_tool_filter = lambda f: None
+    load_tools = agent._tools_registry["load_tools"]["function"]
+    result = load_tools("does_not_exist")
+    assert result["status"] == "error"
+    assert "Unknown bundle 'does_not_exist'" in result["error"]
+    assert "file_search" in result["error"]  # lists valid bundle names
+
+
+# ── native-only escape-hatch menu ──────────────────────────────────────────
+
+
+def test_native_doc_prompt_includes_load_tools_menu():
+    agent = build_doc_agent_skeleton(
+        profile="doc", deterministic=True, dynamic_tools=True
+    )
+    agent.rag = None  # no-docs branch keeps _get_system_prompt light
+    prompt = agent._get_system_prompt()
+    assert "LOADABLE TOOL BUNDLES" in prompt
+    assert "load_tools(bundle)" in prompt
+    assert "- file_search:" in prompt  # a real bundle line from the menu
+
+
+def test_non_native_doc_prompt_omits_load_tools_menu():
+    agent = build_doc_agent_skeleton(
+        profile="doc", deterministic=True, dynamic_tools=True
+    )
+    agent.rag = None
+    agent.model_id = None  # non-tool-calling → free recovery, no menu
+    prompt = agent._get_system_prompt()
+    assert "LOADABLE TOOL BUNDLES" not in prompt
+
+
+def test_loader_off_doc_prompt_omits_load_tools_menu():
+    agent = build_doc_agent_skeleton(
+        profile="doc", deterministic=True, dynamic_tools=False
+    )
+    agent.rag = None
+    prompt = agent._get_system_prompt()
+    assert "LOADABLE TOOL BUNDLES" not in prompt

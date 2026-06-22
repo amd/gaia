@@ -2349,6 +2349,25 @@ class MemoryMixin:
             time_to: str = "",
         ) -> dict:
             """Search past conversations. Use query for keywords, days for time range, time_from/time_to for ISO 8601 boundaries, or combinations."""
+            # Smaller models often emit numeric args as JSON strings ("7", "10");
+            # coerce before any comparison so clamping below doesn't raise TypeError.
+            for _name, _value in (("days", days), ("limit", limit)):
+                if isinstance(_value, str):
+                    _stripped = _value.strip()
+                    if not _stripped:
+                        continue  # empty string -> keep the int default
+                    try:
+                        _coerced = int(_stripped)
+                    except ValueError:
+                        return {
+                            "status": "error",
+                            "message": f"Invalid '{_name}': expected an integer, got {_value!r}.",
+                        }
+                    if _name == "days":
+                        days = _coerced
+                    else:
+                        limit = _coerced
+
             if not query and not days and not time_from and not time_to:
                 return {
                     "status": "error",
