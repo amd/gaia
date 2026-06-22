@@ -18,23 +18,23 @@ function clientReturning(apiVersion: string, agentVersion = "0.1.0"): EmailClien
 }
 
 describe("checkVersion", () => {
-  it("accepts a matching apiVersion", async () => {
-    const info = await checkVersion(clientReturning("1.0"));
-    expect(info.apiVersion).toBe("1.0");
+  it("accepts matching apiVersion 2.0", async () => {
+    const info = await checkVersion(clientReturning("2.0"));
+    expect(info.apiVersion).toBe("2.0");
   });
 
   it("accepts a higher MINOR within the same MAJOR (backward-compatible)", async () => {
-    const info = await checkVersion(clientReturning("1.5"), { expectedApiVersion: "1.0" });
-    expect(info.apiVersion).toBe("1.5");
+    const info = await checkVersion(clientReturning("2.5"), { expectedApiVersion: "2.0" });
+    expect(info.apiVersion).toBe("2.5");
   });
 
   it("rejects a higher MAJOR (breaking)", async () => {
     await expect(
-      checkVersion(clientReturning("2.0"), { expectedApiVersion: "1.0" }),
+      checkVersion(clientReturning("3.0"), { expectedApiVersion: "2.0" }),
     ).rejects.toBeInstanceOf(VersionMismatchError);
   });
 
-  it("rejects a lower MAJOR", async () => {
+  it("rejects major 1 (old contract)", async () => {
     await expect(
       checkVersion(clientReturning("1.0"), { expectedApiVersion: "2.0" }),
     ).rejects.toBeInstanceOf(VersionMismatchError);

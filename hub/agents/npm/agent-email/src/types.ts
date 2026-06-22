@@ -5,30 +5,27 @@
  *
  * These types are **hand-written** to mirror two Python sources:
  *  - `hub/agents/python/email/gaia_agent_email/contract.py` — the frozen #1262
- *    triage request/response contract (single source of truth).
+ *    triage request/response contract (schema 2.0, single source of truth).
  *  - `hub/agents/python/email/gaia_agent_email/api_routes.py` — the local
  *    (non-frozen) draft/send handshake models.
- *
- * Why hand-written and not generated from `/openapi.json`: the contract is
- * small, stable (SCHEMA_VERSION is frozen at "1.0"), and hand-writing keeps the
- * published package free of an openapi-typegen build step and its dependency
- * tree. If the contract grows, regenerate from the live `/openapi.json` (the
- * server exposes it) and replace this file. The `apiVersion` check in
- * `lifecycle.ts` guards against silent drift at runtime.
  *
  * Wire note: `EmailMessage.from` is the JSON key on the wire (Python aliases its
  * `from_` field to `from`), so this interface uses `from` directly.
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "1.0" as const;
+export const SCHEMA_VERSION = "2.0" as const;
 
-/** The frozen four-bucket triage taxonomy (contract.py: EmailCategory). */
+/**
+ * The five-bucket triage taxonomy (contract.py: EmailCategory, schema 2.0).
+ * Values are uppercase wire strings matching the Python enum.
+ */
 export type EmailCategory =
-  | "urgent"
-  | "actionable"
-  | "informational"
-  | "low priority";
+  | "URGENT"
+  | "NEEDS_RESPONSE"
+  | "FYI"
+  | "PROMOTIONAL"
+  | "PERSONAL";
 
 /** A single email participant (contract.py: EmailAddress). */
 export interface EmailAddress {
@@ -83,20 +80,44 @@ export interface ThreadInput {
 /** Discriminated union on `kind` (contract.py: EmailInput). */
 export type EmailInput = SingleEmailInput | ThreadInput;
 
+/**
+ * Optional caller-supplied context that biases categorization/summary
+ * (contract.py: TriageContext, #1541).
+ */
+export interface TriageContext {
+  /** Important people whose mail should weigh higher. */
+  people?: string[];
+  /** Active projects the principal cares about. */
+  projects?: string[];
+  /** Preferred summary tone, e.g. "concise". */
+  tone?: string | null;
+  /** The principal's own address, so the model knows who "I" is. */
+  self_email?: string | null;
+}
+
 /** Top-level triage request envelope (contract.py: EmailTriageRequest). */
 export interface EmailTriageRequest {
   /** Contract version. Defaults to SCHEMA_VERSION; mismatch fails loudly. */
   schema_version?: string;
   /** The single-email or full-thread input. */
   payload: EmailInput;
+  /** Optional context biasing categorization and summary. */
+  context?: TriageContext | null;
 }
 
-/** A single extracted action (contract.py: ActionItem). */
+/** A single extracted action (contract.py: ActionItem, schema 2.0). */
 export interface ActionItem {
   /** Imperative action, e.g. "Reply to Bob". */
   description: string;
   /** Free-text due hint as written ("Friday", "EOD"); not parsed. */
   due_hint?: string | null;
+  /**
+   * Discriminator: "text" for a plain imperative action; "link" when the
+   * action involves following a URL (url is then required and non-empty).
+   */
+  type?: "text" | "link";
+  /** The URL to follow for a "link" action item; null/absent for "text". */
+  url?: string | null;
 }
 
 /** A drafted reply the agent proposes (contract.py: DraftReply). */
@@ -109,9 +130,21 @@ export interface DraftReply {
   body: string;
 }
 
-/** The structured analysis of one email or thread (contract.py: EmailTriageResult). */
+/** LLM usage metrics for a triage (contract.py: TriageUsage, schema 2.0). */
+export interface TriageUsage {
+  /** Sum of input tokens across the LLM calls. */
+  prompt_tokens: number;
+  /** Sum of output (completion) tokens across the LLM calls. */
+  completion_tokens: number;
+  /** Sum of input + output tokens across the LLM calls. */
+  total_tokens: number;
+  /** Aggregate decode throughput (total output tokens / total decode time). */
+  tokens_per_second: number;
+}
+
+/** The structured analysis of one email or thread (contract.py: EmailTriageResult, schema 2.0). */
 export interface EmailTriageResult {
-  /** One of the four buckets. */
+  /** One of the five taxonomy buckets (schema 2.0). */
   category: EmailCategory;
   /** Spam signal (independent). */
   is_spam: boolean;
@@ -123,8 +156,15 @@ export interface EmailTriageResult {
   action_items: ActionItem[];
   /** Proposed reply, or null when none is suggested. */
   draft?: DraftReply | null;
+  /**
+   * Suggested next action: reply (URGENT/NEEDS_RESPONSE), archive (PROMOTIONAL),
+   * or none (FYI/PERSONAL).
+   */
+  suggested_action?: "reply" | "none" | "archive";
   /** Echoes the provider message-id / thread-id from the request. */
   message_id?: string | null;
+  /** LLM usage metrics; null on the heuristic-only path. */
+  usage?: TriageUsage | null;
 }
 
 /** Top-level triage response envelope (contract.py: EmailTriageResponse). */

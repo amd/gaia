@@ -19,6 +19,7 @@ Endpoint implementations are split into router modules under
 """
 
 import asyncio
+import importlib.util
 import logging
 import os
 import shutil  # noqa: F401  # pylint: disable=unused-import
@@ -222,6 +223,14 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         registry = AgentRegistry()
         registry.discover()
+        # Temporarily disable the in-UI email triage agent: hide it from the
+        # agent selector so it can't be picked or activated in chat. Scoped to
+        # the UI registry only — the gaia-agent-email wheel, its /v1/email REST
+        # mount, and connectors (which read registry.list() directly) stay
+        # intact. Remove this block to re-enable.
+        _email_reg = registry.get("email")
+        if _email_reg is not None:
+            _email_reg.hidden = True
         app.state.agent_registry = registry
         set_agent_registry(registry)
         agent_ids = [r.id for r in registry.list()]
@@ -583,6 +592,19 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(connectors_router_mod.router)
     # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).
     app.include_router(connectors_router_mod.forwarded_router)
+    # Email triage REST surface (#1229 / Path 2): POST /v1/email/{triage,draft,send}.
+    # Ships with the standalone gaia-agent-email wheel; mount only when installed.
+    # Gate via find_spec (no import side effect); import INSIDE the else so a
+    # broken installed wheel fails loud rather than being swallowed as "not installed".
+    if importlib.util.find_spec("gaia_agent_email") is None:
+        logger.info(
+            "Email REST routes unavailable: install the email agent "
+            "(`pip install gaia-agent-email`) to enable POST /v1/email/*."
+        )
+    else:
+        from gaia_agent_email.api_routes import router as email_router
+
+        app.include_router(email_router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.
