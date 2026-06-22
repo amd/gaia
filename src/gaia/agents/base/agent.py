@@ -509,8 +509,9 @@ Do NOT wrap conversational replies in JSON.
         # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
         # Note: Context size is configured when starting Lemonade server, not here
-        # Use the configured default model (Gemma) when no explicit model_id
-        # is provided. The 0.5B model is too small for complex agent tasks.
+        # Default an agent with no explicit model_id to Qwen3.5-35B-A3B — small
+        # models are too weak for complex agent tasks. (This is the *agent* default;
+        # `gaia llm` defaults to DEFAULT_MODEL_NAME / Gemma-4-E4B via a separate path.)
         chat_config = AgentConfig(
             model=model_id or "Qwen3.5-35B-A3B-GGUF",
             use_claude=use_claude,
