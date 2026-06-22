@@ -83,7 +83,7 @@ up? is the model downloaded?), live **triage** and **draft** against the running
 sidecar, a button that runs the `/v1/email/init` readiness check, and copy-paste
 install shortcuts.
 
-![GAIA Email Agent playground — stack health, live triage/draft, and a readiness check, all running against the local sidecar](https://raw.githubusercontent.com/amd/gaia/main/docs/assets/img/email-playground.webp)
+![GAIA Email Agent playground — stack health, live triage/draft, and a readiness check, all running against the local sidecar](https://hub.amd-gaia.ai/agents/email/0.1.0/playground.webp)
 
 It's served same-origin with a `Content-Security-Policy: connect-src 'self'`
 header, so the page can only ever reach your local sidecar — email content never
