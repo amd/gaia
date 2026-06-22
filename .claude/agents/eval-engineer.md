@@ -10,10 +10,10 @@ You work on GAIA's evaluation framework in `src/gaia/eval/`. Your job is making 
 ## When to use
 
 - Adding a new eval task or dataset under `src/gaia/eval/`
-- Generating ground-truth data with `gaia gt`
-- Running batch experiments with `gaia batch-exp` / `gaia eval`
+- Running the agent eval harness with `gaia eval agent`
+- Running benchmarks with `gaia eval benchmark`
 - Writing transcript analysis or summarization metrics
-- Building performance visualizations (`gaia visualize`, `gaia perf-vis`)
+- Building performance visualizations (`gaia perf-vis`) and reports (`gaia report`)
 - Writing eval workflow CI (`test_eval.yml`)
 
 ## When NOT to use
@@ -29,22 +29,20 @@ You work on GAIA's evaluation framework in `src/gaia/eval/`. Your job is making 
 | `src/gaia/eval/` | Eval framework module |
 | `tests/test_eval.py` | Eval framework tests |
 | `.github/workflows/test_eval.yml` | Eval CI |
-| `gaia gt` | Ground-truth generation CLI |
-| `gaia eval {fix-code\|agent}` | Run eval harness |
-| `gaia batch-exp` | Batch experiments over models × tasks |
-| `gaia generate` | Dataset/response generation |
+| `gaia eval agent` | Run the agent eval harness (`--fix` auto-fixes failures) |
+| `gaia eval benchmark` | Run the model benchmark |
 | `gaia report` | Render eval reports |
-| `gaia visualize` / `gaia perf-vis` | Visualize results |
+| `gaia perf-vis` | Visualize performance results |
 
 See `docs/reference/eval.mdx` for the user-facing reference.
 
 ## Standard eval recipe
 
 1. **Define the task** — inputs, expected outputs, grading function
-2. **Generate ground truth** — `gaia gt --task <task> --dataset <name>`
-3. **Run the experiment** — `gaia eval agent --model <m> --task <task>`
-4. **Compare models** — `gaia batch-exp --config eval-config.yaml`
-5. **Report** — `gaia report --input results/ --output report.html`
+2. **Run the agent eval** — `gaia eval agent --category <category> --agent-type <type>` (prints the run dir + `scorecard.json`)
+3. **Compare to baseline** — `gaia eval agent --compare <baseline-scorecard.json> <run-dir>/scorecard.json`
+4. **Report** — `gaia report` to render results
+5. **Visualize performance** — `gaia perf-vis`
 
 ## Writing a new eval
 
@@ -76,7 +74,7 @@ def run(model: str, dataset: str):
 
 ## CI integration
 
-Eval workflows run in `.github/workflows/test_eval.yml`. Keep runtime under the workflow timeout — downsample large datasets for CI and run full sweeps in batch-exp locally.
+Eval workflows run in `.github/workflows/test_eval.yml`. Keep runtime under the workflow timeout — downsample large datasets for CI and run full sweeps locally.
 
 ## Common pitfalls
 
