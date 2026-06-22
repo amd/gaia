@@ -83,6 +83,20 @@ _HTML = r"""<!doctype html>
   button:disabled{opacity:.45;cursor:not-allowed}
   button.ghost{background:transparent;border-color:var(--border);color:var(--muted)}
   button.copy{padding:4px 9px;font-size:11.5px}
+  button.primary{background:var(--gold);color:#0a0a0b;border-color:var(--gold)}
+  button.primary:hover{background:#eab556}
+  /* gaia init streaming terminal */
+  .term{display:none;margin-top:12px;background:#08080a;border:1px solid var(--border);border-radius:9px;
+    padding:12px 14px;max-height:240px;overflow:auto;
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:12px;line-height:1.55;color:#d8d8d4}
+  .term.show{display:block}
+  .term-bar{display:flex;align-items:center;gap:8px;margin:12px 0 0;font-size:12px;color:var(--muted)}
+  .term-bar .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+  .term-bar .dot.run{background:var(--gold);animation:pulse 1s infinite}
+  .term-bar .dot.ok{background:var(--ok)} .term-bar .dot.bad{background:var(--bad)}
+  @keyframes pulse{50%{opacity:.35}}
+  .term-line{white-space:pre-wrap;word-break:break-word}
+  .term-line.ok{color:var(--ok)} .term-line.bad{color:var(--bad)} .term-line.cmd{color:var(--gold)}
   textarea,input{width:100%;background:var(--card);border:1px solid var(--border);border-radius:9px;
     color:var(--text);font:inherit;font-size:13.5px;padding:9px 11px;margin-top:5px}
   textarea{min-height:96px;resize:vertical;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:12.5px}
@@ -193,13 +207,20 @@ _HTML = r"""<!doctype html>
   <!-- Install / setup -->
   <details class="card">
     <summary><span class="sum-title">Install &amp; setup</span>
-      <span class="sum-desc">npm · Lemonade · gaia init</span><span class="chev">›</span></summary>
+      <span class="sum-desc">run gaia init · npm · Lemonade</span><span class="chev">›</span></summary>
     <div class="card-body">
+      <div class="actions" style="margin:0 0 2px">
+        <button id="do-provision" class="primary">Run gaia init</button>
+        <span class="note">downloads &amp; tests the email model via the sidecar — streamed below</span></div>
+      <div class="term-bar" id="term-bar" style="display:none"><span class="dot" id="term-dot"></span><span id="term-status"></span></div>
+      <div class="term" id="term"></div>
+
+      <div class="note" style="margin:16px 0 6px">Or run the steps yourself:</div>
       <div class="fix"><code class="cmd" id="c-npm">npm i @amd-gaia/agent-email</code><button class="copy" data-copy="c-npm">copy</button></div>
       <div class="fix" style="margin-top:9px"><code class="cmd" id="c-lemon">lemonade-server serve</code><button class="copy" data-copy="c-lemon">copy</button>
         <span class="muted">start the local LLM</span></div>
-      <div class="fix" style="margin-top:9px"><code class="cmd" id="c-init">gaia init</code><button class="copy" data-copy="c-init">copy</button>
-        <span class="muted">install Lemonade + download &amp; test the model</span></div>
+      <div class="fix" style="margin-top:9px"><code class="cmd" id="c-init">gaia init --profile email</code><button class="copy" data-copy="c-init">copy</button>
+        <span class="muted">install Lemonade + download &amp; test the email model</span></div>
       <div class="note">Docs: <a href="https://amd-gaia.ai/docs/guides/email" target="_blank" rel="noopener">amd-gaia.ai/docs/guides/email</a></div>
     </div>
   </details>
@@ -386,8 +407,64 @@ async function doInit(){
   out.appendChild(ul);
   if(d.hint){ const h = document.createElement("div"); h.className = "note"; h.textContent = "→ " + d.hint; out.appendChild(h); }
 }
+// "Run gaia init" — POST /v1/email/init triggers provisioning (pull + test the
+// email model via Lemonade) and STREAMS terminal output. Built to the contract
+// the /init PR (#1813) will serve: GET = readiness probe, POST = provision.
+function termLine(text, cls){
+  const t = $("term");
+  const d = document.createElement("div");
+  d.className = "term-line" + (cls ? " " + cls : "");
+  d.textContent = text; t.appendChild(d); t.scrollTop = t.scrollHeight;
+}
+function termStatus(state, text){
+  $("term-bar").style.display = "flex";
+  $("term-dot").className = "dot " + state;
+  $("term-status").textContent = text;
+}
+function emitLine(raw){
+  const line = String(raw).replace(/\r$/, "").replace(/^data:\s?/, "");  // tolerate SSE framing
+  if(line === "") return;
+  const lc = line.toLowerCase();
+  const cls = /error|fail|✗|✘/.test(lc) ? "bad" : /done|ready|✓|success/.test(lc) ? "ok" : "";
+  termLine(line, cls);
+}
+async function doProvision(){
+  const btn = $("do-provision");
+  $("term").className = "term show"; $("term").textContent = "";
+  btn.disabled = true; termStatus("run", "running…");
+  termLine("$ gaia init  →  POST /v1/email/init", "cmd");
+  let res;
+  try{
+    res = await fetch("/v1/email/init", { method:"POST", headers:{ accept:"text/event-stream, text/plain" } });
+  }catch(e){
+    termLine("✗ network error: " + (e && e.message), "bad"); termStatus("bad","failed"); btn.disabled=false; return;
+  }
+  if(res.status === 404 || res.status === 405){
+    termLine("✗ provisioning endpoint not available on this sidecar yet — ships with the /v1/email/init PR (#1813).", "bad");
+    termStatus("bad","unavailable"); btn.disabled=false; return;
+  }
+  if(res.body && res.body.getReader){
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    for(;;){
+      const { done, value } = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, { stream:true });
+      let nl;
+      while((nl = buf.indexOf("\n")) >= 0){ emitLine(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
+    }
+    if(buf) emitLine(buf);
+  } else {
+    (await res.text()).split("\n").forEach(emitLine);
+  }
+  const ok = res.ok;
+  termLine(ok ? "✓ done" : ("✗ exited with HTTP " + res.status), ok ? "ok" : "bad");
+  termStatus(ok ? "ok" : "bad", ok ? "ready" : "failed");
+  btn.disabled = false;
+  if(ok) healthCheck();  // refresh stack health after provisioning
+}
 $("recheck").onclick = healthCheck;
 $("do-init").onclick = doInit;
+$("do-provision").onclick = doProvision;
 $("do-triage").onclick = doTriage;
 $("do-draft").onclick = doDraft;
 healthCheck();
