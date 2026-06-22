@@ -20,9 +20,13 @@ from __future__ import annotations
 
 from gaia.agents.base.tool_loader import ToolBundle
 
-# Always-on set (10 tools): memory v2, file-read + RAG-query entry points, and
-# loop control. The design sketch listed a "finish" tool, dropped here — turn
-# completion is protocol-level in GAIA, there is no such registry tool.
+# Always-on set (11 tools): memory v2, file-read + RAG-query entry points, loop
+# control, and the Part-2 escape hatch. The design sketch listed a "finish" tool,
+# dropped here — turn completion is protocol-level in GAIA, there is no such
+# registry tool. ``load_tools`` (#1450) is CORE-only — never in a bundle — so it
+# renders in both the text prompt and the native ``tools=`` schema every active
+# turn, cap- and eviction-exempt, giving native models a way back to any tool a
+# semantic miss didn't surface.
 DOC_CORE_TOOLS = frozenset(
     {
         # memory v2 — persistent recall is always relevant
@@ -38,6 +42,8 @@ DOC_CORE_TOOLS = frozenset(
         # loop control — autonomous-turn signalling
         "set_loop_state",
         "request_user_input",
+        # escape hatch (#1450) — always-on explicit tool loader for native models
+        "load_tools",
     }
 )
 
