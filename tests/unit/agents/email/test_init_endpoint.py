@@ -30,6 +30,7 @@ import gaia_agent_email.api_routes as ar  # noqa: E402
 import requests  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from gaia_agent_email.api_routes import (  # noqa: E402
+    _probe_lemonade_health,
     _probe_lemonade_reachable,
     _probe_model_present,
     _pull_model,
@@ -37,6 +38,7 @@ from gaia_agent_email.api_routes import (  # noqa: E402
     _resolve_probe_base,
 )
 from gaia_agent_email.export_openapi import build_app  # noqa: E402
+from gaia_agent_email.version import MIN_LEMONADE_VERSION  # noqa: E402
 
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME  # noqa: E402
 
@@ -107,6 +109,38 @@ def test_unreachable_probe_returns_false_not_raises():
     assert base == "http://localhost:9999/api/v1"
 
 
+def test_health_probe_extracts_server_version_from_body():
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"version": "10.3.1", "all_models_loaded": []}
+    with patch("requests.get", return_value=resp) as mock_get:
+        reachable, base, version = _probe_lemonade_health("http://localhost:9999")
+    assert reachable is True
+    assert base == "http://localhost:9999/api/v1"
+    assert version == "10.3.1"
+    # Shares the same /health probe target + short timeout as reachability.
+    args, kwargs = mock_get.call_args
+    assert args[0] == "http://localhost:9999/api/v1/health"
+    assert kwargs["timeout"] == _EXPECTED_TIMEOUT
+
+
+def test_health_probe_version_none_when_not_advertised():
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"all_models_loaded": []}  # no 'version' key
+    with patch("requests.get", return_value=resp):
+        _, _, version = _probe_lemonade_health("http://localhost:9999")
+    assert version is None
+
+
+def test_health_probe_version_none_when_body_not_json():
+    resp = MagicMock(status_code=200)
+    resp.json.side_effect = ValueError("no json")
+    with patch("requests.get", return_value=resp):
+        reachable, _, version = _probe_lemonade_health("http://localhost:9999")
+    # Server is up (HTTP responded) even though the body wasn't JSON.
+    assert reachable is True
+    assert version is None
+
+
 # ---------------------------------------------------------------------------
 # 3. Model-presence probe — boundary shape
 # ---------------------------------------------------------------------------
@@ -162,14 +196,20 @@ def test_resolve_email_model_id_defaults_to_agent_default():
 # 5. Route — ready / not-ready status codes and structured body
 # ---------------------------------------------------------------------------
 
+_BASE = "http://localhost:8000/api/v1"
+
+
+def _patch_health(version):
+    """Patch the GET readiness path's /health probe to a reachable server at
+    ``version`` (None = server doesn't advertise one)."""
+    return patch.object(
+        ar, "_probe_lemonade_health", return_value=(True, _BASE, version)
+    )
+
 
 def test_init_ready_returns_200(client):
     with (
-        patch.object(
-            ar,
-            "_probe_lemonade_reachable",
-            return_value=(True, "http://localhost:8000/api/v1"),
-        ),
+        _patch_health(MIN_LEMONADE_VERSION),
         patch.object(ar, "_probe_model_present", return_value=True),
     ):
         resp = client.get("/v1/email/init")
@@ -179,7 +219,10 @@ def test_init_ready_returns_200(client):
     assert body["ready"] is True
     assert body["lemonade"] == {
         "reachable": True,
-        "base_url": "http://localhost:8000/api/v1",
+        "base_url": _BASE,
+        "version": MIN_LEMONADE_VERSION,
+        "min_version": MIN_LEMONADE_VERSION,
+        "compatible": True,
     }
     assert body["model"]["present"] is True
     assert body["model"]["id"] == DEFAULT_MODEL_NAME
@@ -189,11 +232,7 @@ def test_init_ready_returns_200(client):
 
 
 def test_init_lemonade_down_returns_503_with_actionable_hint(client):
-    with patch.object(
-        ar,
-        "_probe_lemonade_reachable",
-        return_value=(False, "http://localhost:8000/api/v1"),
-    ):
+    with patch.object(ar, "_probe_lemonade_health", return_value=(False, _BASE, None)):
         resp = client.get("/v1/email/init")
 
     assert resp.status_code == 503
@@ -207,13 +246,70 @@ def test_init_lemonade_down_returns_503_with_actionable_hint(client):
     assert body["model"]["present"] is False
 
 
+def test_init_lemonade_too_old_returns_503_with_upgrade_hint(client):
+    # Reachable + model present, but the server is older than the required
+    # minimum → not ready, with a found-vs-required upgrade hint.
+    with (
+        _patch_health("9.0.0"),
+        patch.object(ar, "_probe_model_present", return_value=True),
+    ):
+        resp = client.get("/v1/email/init")
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["ready"] is False
+    assert body["lemonade"]["version"] == "9.0.0"
+    assert body["lemonade"]["min_version"] == MIN_LEMONADE_VERSION
+    assert body["lemonade"]["compatible"] is False
+    assert "9.0.0" in body["hint"]
+    assert MIN_LEMONADE_VERSION in body["hint"]
+    assert "upgrade" in body["hint"].lower()
+
+
+def test_init_too_old_takes_priority_over_missing_model(client):
+    # An older-than-min Lemonade is the more fundamental blocker — its hint wins
+    # even when the model is also absent (upgrade first).
+    with (
+        _patch_health("9.0.0"),
+        patch.object(ar, "_probe_model_present", return_value=False),
+    ):
+        body = client.get("/v1/email/init").json()
+    assert body["ready"] is False
+    assert body["lemonade"]["compatible"] is False
+    assert "older than" in body["hint"]
+
+
+def test_init_newer_lemonade_is_compatible(client):
+    with (
+        _patch_health("11.5.0"),
+        patch.object(ar, "_probe_model_present", return_value=True),
+    ):
+        resp = client.get("/v1/email/init")
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["ready"] is True
+    assert body["lemonade"]["compatible"] is True
+
+
+def test_init_unknown_version_is_indeterminate_not_blocking(client):
+    # Server didn't advertise a version → compatible=null and readiness is NOT
+    # blocked on it (mirrors gaia init's don't-block-on-unparseable policy).
+    with (
+        _patch_health(None),
+        patch.object(ar, "_probe_model_present", return_value=True),
+    ):
+        resp = client.get("/v1/email/init")
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["ready"] is True
+    assert body["lemonade"]["version"] is None
+    assert body["lemonade"]["compatible"] is None
+    assert body["hint"] is None
+
+
 def test_init_model_missing_returns_503_with_model_hint(client):
     with (
-        patch.object(
-            ar,
-            "_probe_lemonade_reachable",
-            return_value=(True, "http://localhost:8000/api/v1"),
-        ),
+        _patch_health(MIN_LEMONADE_VERSION),
         patch.object(ar, "_probe_model_present", return_value=False),
     ):
         resp = client.get("/v1/email/init")
@@ -222,6 +318,7 @@ def test_init_model_missing_returns_503_with_model_hint(client):
     body = resp.json()
     assert body["ready"] is False
     assert body["lemonade"]["reachable"] is True
+    assert body["lemonade"]["compatible"] is True
     assert body["model"]["present"] is False
     assert body["model"]["id"] == DEFAULT_MODEL_NAME
     assert "not downloaded" in body["hint"]
@@ -232,11 +329,7 @@ def test_init_model_list_unreadable_returns_503_loudly(client):
     # Lemonade answered /health but its /models list errored — surface loudly
     # (503 + hint), never silently report "present".
     with (
-        patch.object(
-            ar,
-            "_probe_lemonade_reachable",
-            return_value=(True, "http://localhost:8000/api/v1"),
-        ),
+        _patch_health(MIN_LEMONADE_VERSION),
         patch.object(
             ar,
             "_probe_model_present",
@@ -255,17 +348,61 @@ def test_init_response_forbids_unknown_fields(client):
     # _Strict response models — the serialized body carries exactly the
     # documented keys, no silent extras.
     with (
-        patch.object(
-            ar,
-            "_probe_lemonade_reachable",
-            return_value=(True, "http://localhost:8000/api/v1"),
-        ),
+        _patch_health(MIN_LEMONADE_VERSION),
         patch.object(ar, "_probe_model_present", return_value=True),
     ):
         body = client.get("/v1/email/init").json()
     assert set(body) == {"ready", "lemonade", "model", "hint"}
-    assert set(body["lemonade"]) == {"reachable", "base_url"}
+    assert set(body["lemonade"]) == {
+        "reachable",
+        "base_url",
+        "version",
+        "min_version",
+        "compatible",
+    }
     assert set(body["model"]) == {"id", "present", "loadable"}
+
+
+# ---------------------------------------------------------------------------
+# 5b. Version helpers + manifest lock-step
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("found", "minimum", "expected"),
+    [
+        ("10.2.0", "10.2.0", True),
+        ("10.3.0", "10.2.0", True),
+        ("11.0.0", "10.2.0", True),
+        ("9.9.9", "10.2.0", False),
+        ("10.1.9", "10.2.0", False),
+        ("v10.2.0", "10.2.0", True),  # leading 'v' tolerated
+        (None, "10.2.0", None),  # unknown → indeterminate
+        ("not-a-version", "10.2.0", None),
+    ],
+)
+def test_version_meets_min(found, minimum, expected):
+    from gaia_agent_email.api_routes import _version_meets_min
+
+    assert _version_meets_min(found, minimum) is expected
+
+
+def test_min_lemonade_version_locksteps_with_manifest():
+    # ONE source of truth: the runtime constant and the gaia-agent.yaml manifest
+    # value `gaia init` reads MUST match, or readiness and install disagree.
+    import gaia_agent_email
+    import yaml
+    from gaia_agent_email.version import MIN_LEMONADE_VERSION as RUNTIME_MIN
+
+    manifest_path = (
+        Path(gaia_agent_email.__file__).resolve().parents[1] / "gaia-agent.yaml"
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    declared = manifest["requirements"]["min_lemonade_version"]
+    assert declared == RUNTIME_MIN, (
+        f"gaia-agent.yaml min_lemonade_version ({declared!r}) != "
+        f"version.MIN_LEMONADE_VERSION ({RUNTIME_MIN!r}) — keep in lock-step."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -308,8 +445,8 @@ def test_init_route_mounted_via_packaging_server():
     # test never hits the network.
     with patch.object(
         ar,
-        "_probe_lemonade_reachable",
-        return_value=(False, "http://localhost:8000/api/v1"),
+        "_probe_lemonade_health",
+        return_value=(False, "http://localhost:8000/api/v1", None),
     ):
         resp = TestClient(app).get("/v1/email/init")
     assert resp.status_code != 404, "/v1/email/init is not mounted on the sidecar app"
@@ -467,8 +604,8 @@ def test_get_init_still_readiness_only_unchanged(client):
     with (
         patch.object(
             ar,
-            "_probe_lemonade_reachable",
-            return_value=(True, "http://localhost:8000/api/v1"),
+            "_probe_lemonade_health",
+            return_value=(True, "http://localhost:8000/api/v1", MIN_LEMONADE_VERSION),
         ),
         patch.object(ar, "_probe_model_present", return_value=True),
         patch.object(ar, "_pull_model") as mock_pull,

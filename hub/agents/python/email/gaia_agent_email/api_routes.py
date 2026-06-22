@@ -154,26 +154,48 @@ def _resolve_probe_base(base_url: Optional[str]) -> str:
     return probe_base
 
 
-def _probe_lemonade_reachable(base_url: Optional[str] = None) -> Tuple[bool, str]:
+def _probe_lemonade_health(
+    base_url: Optional[str] = None,
+) -> Tuple[bool, str, Optional[str]]:
     """Probe Lemonade's ``/health`` with a short connect timeout (#1677).
 
-    Returns ``(reachable, probe_base)``. Any HTTP response — even an error
-    status — means the server is up; only a connection/timeout failure counts
-    as unreachable (auth/model errors surface later on the real chat call,
-    where their messages are specific). Never raises: the readiness endpoint
-    reports the boolean rather than failing.
+    Returns ``(reachable, probe_base, version)``. Any HTTP response — even an
+    error status — means the server is up; only a connection/timeout failure
+    counts as unreachable (auth/model errors surface later on the real chat
+    call, where their messages are specific). ``version`` is Lemonade's
+    self-reported server version from the ``/health`` body (``None`` when the
+    server doesn't advertise one or the body isn't JSON). Never raises: the
+    readiness endpoint reports the values rather than failing.
     """
     import requests
 
     probe_base = _resolve_probe_base(base_url)
     try:
-        requests.get(
+        resp = requests.get(
             f"{probe_base}/health",
             timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
         )
-        return True, probe_base
     except requests.exceptions.RequestException:
-        return False, probe_base
+        return False, probe_base, None
+
+    version: Optional[str] = None
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            version = body.get("version")
+    except ValueError:
+        version = None
+    return True, probe_base, version
+
+
+def _probe_lemonade_reachable(base_url: Optional[str] = None) -> Tuple[bool, str]:
+    """Reachability-only view of :func:`_probe_lemonade_health`.
+
+    Kept for callers (the POST provisioning verb) that need only "is it up?",
+    not the version — so they share the single ``/health`` probe logic.
+    """
+    reachable, probe_base, _version = _probe_lemonade_health(base_url)
+    return reachable, probe_base
 
 
 def _probe_model_present(probe_base: str, model_id: str) -> bool:
@@ -250,6 +272,40 @@ def _resolve_email_model_id() -> str:
     from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
     return EmailAgentConfig().model_id or DEFAULT_MODEL_NAME
+
+
+def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
+    """Parse a dotted version string into a comparable int tuple.
+
+    Mirrors ``gaia.installer.init_command.InitCommand._parse_version`` (same
+    semantics: strip a leading ``v``, take the first three dotted parts as
+    ints). Kept LOCAL rather than imported because the frozen sidecar does not
+    bundle ``gaia.installer`` — importing it at runtime would ``ModuleNotFound``
+    in the binary this endpoint exists to serve. Returns ``None`` when the
+    string is missing or unparseable.
+    """
+    if not version:
+        return None
+    try:
+        return tuple(int(p) for p in version.lstrip("v").split(".")[:3])
+    except (ValueError, IndexError, AttributeError):
+        return None
+
+
+def _version_meets_min(found: Optional[str], minimum: str) -> Optional[bool]:
+    """Return whether ``found`` >= ``minimum`` (both dotted versions).
+
+    ``None`` means "can't tell" — the server didn't advertise a version or it
+    was unparseable. Readiness treats unknown as non-blocking (it does not
+    fabricate a pass/fail), mirroring ``gaia init``'s "don't block on an
+    unparseable version" policy, but surfaces ``compatible=null`` so a consumer
+    can see the check was indeterminate.
+    """
+    found_t = _parse_version(found)
+    min_t = _parse_version(minimum)
+    if found_t is None or min_t is None:
+        return None
+    return found_t >= min_t
 
 
 def _split_sentences(text: str) -> List[str]:
@@ -917,12 +973,33 @@ class VersionResponse(_Strict):
 
 
 class InitLemonadeStatus(_Strict):
-    """Reachability of the local Lemonade Server the triage path depends on."""
+    """Reachability AND version-compatibility of the local Lemonade Server."""
 
     reachable: bool = Field(
         ..., description="True when Lemonade answered the /health probe."
     )
     base_url: str = Field(..., description="The /api/v1 base URL that was probed.")
+    version: Optional[str] = Field(
+        default=None,
+        description=(
+            "Lemonade's self-reported server version (from /health). Null when "
+            "the server doesn't advertise one."
+        ),
+    )
+    min_version: str = Field(
+        ...,
+        description=(
+            "Minimum Lemonade version the triage stack requires "
+            "(gaia_agent_email.version.MIN_LEMONADE_VERSION)."
+        ),
+    )
+    compatible: Optional[bool] = Field(
+        default=None,
+        description=(
+            "True when version >= min_version. Null when the version could not "
+            "be determined (the check was indeterminate, not a pass)."
+        ),
+    )
 
 
 class InitModelStatus(_Strict):
@@ -1152,16 +1229,32 @@ async def email_version() -> VersionResponse:
 def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
     """Probe the triage stack and return its structured readiness status.
 
-    Read-only: checks (1) Lemonade reachable, then (2) the triage model is
-    downloaded. Never pulls a model. Returns a not-ready ``InitResponse`` with
-    an actionable ``hint`` for each failure mode rather than raising, so the
-    route can serialize the same body under both 200 and 503.
+    Read-only: checks (1) Lemonade reachable AND at a compatible version
+    (>= ``MIN_LEMONADE_VERSION``), then (2) the triage model is downloaded.
+    Never pulls a model. Returns a not-ready ``InitResponse`` with an actionable
+    ``hint`` for each failure mode rather than raising, so the route can
+    serialize the same body under both 200 and 503.
+
+    ``ready`` requires reachable + model present + version not-too-old. An
+    indeterminate version (server didn't advertise one) is reported as
+    ``compatible=null`` and does NOT block — mirroring ``gaia init``'s policy of
+    not failing on an unparseable version.
     """
     import requests
+    from gaia_agent_email.version import MIN_LEMONADE_VERSION
 
     model_id = _resolve_email_model_id()
-    reachable, probe_base = _probe_lemonade_reachable(base_url)
-    lemonade = InitLemonadeStatus(reachable=reachable, base_url=probe_base)
+    reachable, probe_base, version = _probe_lemonade_health(base_url)
+    compatible = (
+        _version_meets_min(version, MIN_LEMONADE_VERSION) if reachable else None
+    )
+    lemonade = InitLemonadeStatus(
+        reachable=reachable,
+        base_url=probe_base,
+        version=version,
+        min_version=MIN_LEMONADE_VERSION,
+        compatible=compatible,
+    )
 
     if not reachable:
         return InitResponse(
@@ -1190,11 +1283,27 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
             ),
         )
 
+    model = InitModelStatus(id=model_id, present=present, loadable=None)
+
+    # Version too old is the most fundamental blocker — surface it before the
+    # model hint (upgrading Lemonade comes first even if the model is missing).
+    if compatible is False:
+        return InitResponse(
+            ready=False,
+            lemonade=lemonade,
+            model=model,
+            hint=(
+                f"Lemonade {version} is older than the required "
+                f"{MIN_LEMONADE_VERSION} — upgrade it (see "
+                "https://lemonade-server.ai or run `gaia init`), then retry."
+            ),
+        )
+
     if not present:
         return InitResponse(
             ready=False,
             lemonade=lemonade,
-            model=InitModelStatus(id=model_id, present=False, loadable=None),
+            model=model,
             hint=(
                 f"Model `{model_id}` not downloaded — run `gaia init` (or pull it "
                 "via Lemonade), then retry."
@@ -1204,7 +1313,7 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
     return InitResponse(
         ready=True,
         lemonade=lemonade,
-        model=InitModelStatus(id=model_id, present=True, loadable=None),
+        model=model,
         hint=None,
     )
 
@@ -1219,9 +1328,10 @@ async def email_init(response: Response) -> InitResponse:
 
     Returns HTTP 200 when ready, 503 when not (with an actionable ``hint``).
     Unlike ``/health`` (liveness-only — never touches the LLM), this probes the
-    local Lemonade Server and confirms the triage model is downloaded, so a host
-    can verify "ready to triage," not just "process up." Read-only — no model
-    pull or provisioning is triggered.
+    local Lemonade Server, checks it is at a compatible VERSION (>= the agent's
+    ``MIN_LEMONADE_VERSION``), and confirms the triage model is downloaded — so a
+    host can verify "ready to triage," not just "process up." Read-only — no
+    model pull or provisioning is triggered.
     """
     status = await asyncio.to_thread(_compute_init_status)
     if not status.ready:
