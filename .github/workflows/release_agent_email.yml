@@ -297,6 +297,16 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Single-source version gate: every committed version reference (manifest,
+      # pyproject, package.json, the lock's agentVersion/baseUrl, README image
+      # URLs, the architecture.html badge) must match AGENT_VERSION before we
+      # publish. Stdlib-only; fails loudly on any drift so a release can't ship a
+      # stale static reference (e.g. a lock baseUrl still pointing at the prior
+      # version's hub directory). Mirrors the UI's bump-ui-version.mjs --check gate.
+      - name: Verify version references are in sync (single source of truth)
+        shell: bash
+        run: python hub/agents/python/email/packaging/stamp_version.py --check
+
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
