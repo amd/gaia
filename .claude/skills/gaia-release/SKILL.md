@@ -197,7 +197,7 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
    ```bash
    python util/validate_release_notes.py docs/releases/v<version>.mdx --tag v<version>
    ```
-   Must exit 0 — this is the gate the publish workflow runs on tag push. Fix any errors before continuing. If it fails for reasons unrelated to your changes (missing dep, broken import), stop and surface that — do not silently bypass. Re-running the validator with `--verbose` (if supported) helps localise the failure.
+   Must exit 0 — this is the gate the publish workflow runs on tag push. Fix any errors before continuing. If it fails for reasons unrelated to your changes (missing dep, broken import), stop and surface that — do not silently bypass. The validator prints the first failing check (missing/renamed section, absent `compare/` link, tag mismatch) — read that line to localise the fix; it has no `--verbose` flag.
 
 ### Gate 1 — show the user the draft
 
