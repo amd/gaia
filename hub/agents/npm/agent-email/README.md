@@ -15,7 +15,7 @@ and helpers to spawn / health-check / version-check / shut down the sidecar.
 
 ## How it fits together
 
-![@amd-gaia/agent-email architecture — your Node code spawns and drives a frozen email-agent sidecar (127.0.0.1:8131) over HTTP, which runs triage inference on a local Lemonade Server; a browser/Electron renderer drives the same sidecar over HTTP via the ./client entry.](https://raw.githubusercontent.com/amd/gaia/main/hub/agents/npm/agent-email/assets/architecture.webp)
+![@amd-gaia/agent-email architecture — your Node code spawns and drives a frozen email-agent sidecar (127.0.0.1:8131) over HTTP, which runs triage inference on a local Lemonade Server; a browser/Electron renderer drives the same sidecar over HTTP via the ./client entry.](https://hub.amd-gaia.ai/agents/email/0.2.0/architecture.webp)
 
 Three tiers, all on the user's machine — no cloud, and **no separate GAIA
 install**:
