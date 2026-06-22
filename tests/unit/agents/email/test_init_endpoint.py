@@ -298,5 +298,19 @@ def test_init_route_mounted_via_packaging_server():
     spec.loader.exec_module(module)
 
     app = module.build_app()
-    paths = {route.path for route in app.routes}
+    # ``app.routes`` mixes APIRoutes (which have ``.path``) with mounted
+    # sub-routers (``_IncludedRouter``, which do not), so read ``.path``
+    # defensively rather than assuming every route exposes it.
+    paths = {getattr(route, "path", None) for route in app.routes}
     assert "/v1/email/init" in paths
+
+    # Strongest proof it's actually reachable through the sidecar app: a real
+    # request returns the readiness status (503 here — Lemonade is down in the
+    # test env), not a 404. Probe patched so the test never hits the network.
+    with patch.object(
+        ar,
+        "_probe_lemonade_reachable",
+        return_value=(False, "http://localhost:8000/api/v1"),
+    ):
+        resp = TestClient(app).get("/v1/email/init")
+    assert resp.status_code == 503
