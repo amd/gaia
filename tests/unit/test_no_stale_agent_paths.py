@@ -45,9 +45,10 @@ STALE_PATH_RE = re.compile(
 
 def _instruction_files():
     files = []
-    claude_md = REPO_ROOT / "CLAUDE.md"
-    if claude_md.exists():
-        files.append(claude_md)
+    for root_doc in ("CLAUDE.md", "AGENTS.md"):
+        path = REPO_ROOT / root_doc
+        if path.exists():
+            files.append(path)
     for sub in (".claude/agents", ".claude/skills"):
         base = REPO_ROOT / sub
         if base.exists():
