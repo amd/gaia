@@ -1304,6 +1304,12 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       </tbody></table>
     </div>
 
+    <div class="endpoint" id="ep-provision">
+      <span class="badge">POST</span><span class="path">/v1/email/init</span>
+      <p class="desc">Provision the triage stack and <b>stream terminal-style progress</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1795" target="_blank" rel="noopener">#1795</a>). Tells the running local Lemonade Server to download the configured email model, streaming newline-delimited progress lines (<code>text/plain</code>) a consumer can render line by line. A line beginning <code>✓</code> marks success, <code>✗</code> a failure; the final line is authoritative.</p>
+      <p class="body-t"><b>Scope (frozen-binary reality):</b> the sidecar can’t run the full <code>gaia init</code> or install Lemonade itself (chicken-and-egg). If Lemonade is unreachable it returns <b>503</b> with an actionable line and pulls nothing. Once a pull starts the response is a committed <b>200</b> — the HTTP status can’t change mid-stream, so the trailing <code>✓</code>/<code>✗</code> line carries the real outcome. On success, re-run <a class="eplink" href="#ep-init"><code>GET /v1/email/init</code></a> to confirm readiness.</p>
+    </div>
+
     <div class="endpoint" id="ep-triage">
       <span class="badge">POST</span><span class="path">/v1/email/triage</span>
       <p class="desc">Triage a single email or a full thread. Returns category, spam/phishing signals, summary, action items, and an optional draft proposal. Reads/sends no mail — analyzes only the payload.</p>

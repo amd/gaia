@@ -48,10 +48,10 @@ import hmac
 import re
 import secrets
 import threading
-from typing import Any, List, Literal, Optional, Tuple
+from typing import Any, Iterator, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from gaia_agent_email.contract import (
     ActionItem,
     DraftReply,
@@ -129,6 +129,11 @@ _MAX_SUMMARY_CHARS = 300
 _LEMONADE_PROBE_CONNECT_TIMEOUT = 2.0
 _LEMONADE_PROBE_READ_TIMEOUT = 3.0
 
+# A model pull is a first-download of multi-GB weights — minutes, not seconds.
+# Generous ceiling so a slow link doesn't abort a real download; the connect
+# leg stays short so an unreachable server still fails fast.
+_LEMONADE_PULL_TIMEOUT = (5.0, 1800.0)
+
 
 def _resolve_probe_base(base_url: Optional[str]) -> str:
     """Resolve the Lemonade ``/api/v1`` base URL for a health/model probe.
@@ -201,6 +206,36 @@ def _probe_model_present(probe_base: str, model_id: str) -> bool:
     payload = resp.json()
     data = payload.get("data", []) if isinstance(payload, dict) else []
     return any(isinstance(m, dict) and m.get("id") == model_id for m in data)
+
+
+def _pull_model(probe_base: str, model_id: str) -> None:
+    """Tell a RUNNING Lemonade Server to download ``model_id``.
+
+    Posts to Lemonade's ``/pull`` with ONLY ``model_name`` — the email triage
+    model is a *built-in* Lemonade model, and sending ``recipe`` for a built-in
+    makes Lemonade 400 (the #1655 trap). Sends the resolved auth header so an
+    authenticated server accepts the request. Raises ``requests.RequestException``
+    (incl. ``HTTPError`` on a non-2xx) on failure — the caller surfaces it as a
+    loud provisioning-failed line rather than swallowing it.
+
+    This is the ONLY provisioning the frozen sidecar can do: it cannot run the
+    full ``gaia init`` (no bundled CLI/installer) and cannot install Lemonade
+    itself if Lemonade is what's missing (chicken-and-egg).
+    """
+    import requests
+
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
+    resp = requests.post(
+        f"{probe_base}/pull",
+        json={"model_name": model_id},
+        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        timeout=_LEMONADE_PULL_TIMEOUT,
+    )
+    resp.raise_for_status()
 
 
 def _resolve_email_model_id() -> str:
@@ -1192,6 +1227,127 @@ async def email_init(response: Response) -> InitResponse:
     if not status.ready:
         response.status_code = 503
     return status
+
+
+def _provision_progress(probe_base: str, model_id: str) -> Iterator[str]:
+    """Yield newline-terminated progress lines while provisioning the model.
+
+    The only realistic sidecar provisioning action: ask the already-running
+    local Lemonade to download the configured email model, narrating each step
+    so a consumer can render it terminal-style. The leading reachability check
+    is handled by the route (so it can return a real 503); this generator runs
+    only once Lemonade is confirmed up.
+
+    HTTP note: once a streamed 200 is committed the status can no longer change,
+    so the FINAL line is the authoritative success/failure signal — a line
+    starting ``✓`` for success, ``✗`` for failure.
+    """
+    import requests
+
+    def line(text: str) -> str:
+        return text + "\n"
+
+    yield line(f"→ Email triage model: {model_id}")
+    yield line(f"→ Lemonade reachable at {probe_base}")
+    yield line(f"→ Checking whether {model_id} is already downloaded…")
+
+    try:
+        present = _probe_model_present(probe_base, model_id)
+    except requests.exceptions.RequestException as exc:
+        yield line(
+            f"✗ Could not read Lemonade's model list ({type(exc).__name__}: {exc})."
+        )
+        yield line(
+            "✗ Provisioning aborted — make sure the Lemonade Server is healthy, then retry."
+        )
+        return
+
+    if present:
+        yield line(f"✓ {model_id} is already downloaded — nothing to pull.")
+        yield line(
+            "✓ Provisioning complete. Re-run GET /v1/email/init to confirm readiness."
+        )
+        return
+
+    yield line(
+        f"→ Pulling {model_id} via Lemonade — first download can take several "
+        "minutes…"
+    )
+    try:
+        _pull_model(probe_base, model_id)
+    except requests.exceptions.RequestException as exc:
+        yield line(f"✗ Provisioning failed: {type(exc).__name__}: {exc}")
+        yield line(
+            "✗ The model was not downloaded. Check the Lemonade Server logs, then retry."
+        )
+        return
+
+    yield line(f"✓ {model_id} downloaded.")
+
+    # Verify the pull actually registered the model. A verify hiccup is surfaced
+    # (not swallowed) but does not by itself fail a pull Lemonade reported OK.
+    try:
+        if _probe_model_present(probe_base, model_id):
+            yield line(f"✓ Verified {model_id} is registered with Lemonade.")
+        else:
+            yield line(
+                f"✗ {model_id} is still not listed after the pull — provisioning "
+                "incomplete. Check the Lemonade Server logs, then retry."
+            )
+            return
+    except requests.exceptions.RequestException as exc:
+        yield line(
+            f"⚠ Pull reported success but the model list could not be re-read "
+            f"({type(exc).__name__}). Re-run GET /v1/email/init to confirm."
+        )
+
+    yield line(
+        "✓ Provisioning complete. Re-run GET /v1/email/init to confirm readiness."
+    )
+
+
+@router.post("/init", include_in_schema=False)
+async def email_provision() -> StreamingResponse:
+    """Provision the triage stack and STREAM terminal-style progress (#1795).
+
+    The companion verb to ``GET /v1/email/init`` (readiness probe). It tells a
+    RUNNING local Lemonade to download the configured email model and streams
+    newline-delimited progress (``text/plain``) so a consumer can show what is
+    happening line by line.
+
+    Scope (frozen-binary reality): the sidecar cannot run the full ``gaia init``
+    or install Lemonade itself — if Lemonade is unreachable this returns a real
+    **503** with an actionable line and pulls nothing. Once a pull starts the
+    response is a committed **200**; the final ``✓``/``✗`` line is then the
+    authoritative outcome (the HTTP status can't change mid-stream).
+
+    Not in the OpenAPI JSON contract — it's a streaming operational verb, like
+    ``GET /spec`` — so it's documented in the HTML spec instead.
+    """
+    media_type = "text/plain; charset=utf-8"
+    model_id = _resolve_email_model_id()
+    reachable, probe_base = await asyncio.to_thread(_probe_lemonade_reachable)
+
+    if not reachable:
+        # Fail loudly BEFORE streaming so the status code is a truthful 503.
+        def _unreachable() -> Iterator[str]:
+            yield f"✗ Local Lemonade Server is not reachable at {probe_base}.\n"
+            yield (
+                "✗ Start it with `lemonade-server serve` (or run `gaia init`), "
+                "then POST /v1/email/init again.\n"
+            )
+            yield (
+                "✗ The sidecar can't install Lemonade itself — that's a host "
+                "prerequisite.\n"
+            )
+
+        return StreamingResponse(_unreachable(), media_type=media_type, status_code=503)
+
+    return StreamingResponse(
+        _provision_progress(probe_base, model_id),
+        media_type=media_type,
+        status_code=200,
+    )
 
 
 @router.get("/spec", response_class=HTMLResponse, include_in_schema=False)

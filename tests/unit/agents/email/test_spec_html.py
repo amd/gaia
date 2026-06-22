@@ -89,6 +89,14 @@ def test_init_endpoint_present():
     assert ">GET<" in html
 
 
+def test_provision_verb_documented():
+    # The POST provisioning verb (#1795 follow-up) streams progress and is not in
+    # the JSON OpenAPI, so the HTML spec is where it must be documented.
+    html = _html()
+    assert "stream terminal-style progress" in html.lower()
+    assert "text/plain" in html
+
+
 # ---------------------------------------------------------------------------
 # Contract field names — sourced from the models so a contract change that
 # drops a field will break this test, not slip through silently.

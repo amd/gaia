@@ -408,6 +408,30 @@ def render_endpoint_spec_html() -> str:
         f"</div>"
     )
 
+    # Provisioning verb (#1795 follow-up). POST on the same path, but it STREAMS
+    # terminal-style progress instead of returning JSON — so it is documented
+    # here rather than in the JSON OpenAPI contract.
+    provision_block = (
+        f'<div class="endpoint-block">'
+        f'<span class="method-badge">POST</span>'
+        f'<span class="path">/v1/email/init</span>'
+        f'<p class="desc">Provision the triage stack and <strong>stream '
+        f"terminal-style progress</strong>. Tells the running local Lemonade "
+        f"Server to download the configured email model, emitting "
+        f"newline-delimited progress lines (<code>text/plain</code>) a consumer "
+        f"can render line by line. A line beginning <code>✓</code> marks "
+        f"success, <code>✗</code> a failure; the final line is authoritative.</p>"
+        f'<p class="desc"><strong>Scope:</strong> the sidecar cannot run the full '
+        f"<code>gaia init</code> or install Lemonade itself. If Lemonade is "
+        f"unreachable this returns <strong>503</strong> with an actionable line "
+        f"and pulls nothing. Once a pull starts the response is a committed "
+        f"<strong>200</strong> (HTTP status cannot change mid-stream), so the "
+        f"trailing <code>✓</code>/<code>✗</code> line carries the real outcome. "
+        f"On success, re-run <code>GET /v1/email/init</code> to confirm "
+        f"readiness.</p>"
+        f"</div>"
+    )
+
     body = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -438,6 +462,8 @@ def render_endpoint_spec_html() -> str:
 {send_block}
 
 {init_block}
+
+{provision_block}
 
 <div class="footer">
   GAIA Email Triage Agent &mdash; schema_version {_esc(SCHEMA_VERSION)} &mdash; amd-gaia.ai

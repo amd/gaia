@@ -32,6 +32,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from gaia_agent_email.api_routes import (  # noqa: E402
     _probe_lemonade_reachable,
     _probe_model_present,
+    _pull_model,
     _resolve_email_model_id,
     _resolve_probe_base,
 )
@@ -314,3 +315,167 @@ def test_init_route_mounted_via_packaging_server():
     assert resp.status_code != 404, "/v1/email/init is not mounted on the sidecar app"
     assert resp.status_code == 503
     assert resp.json()["ready"] is False
+
+
+# ---------------------------------------------------------------------------
+# 7. POST /v1/email/init — provisioning (#1795 follow-up). Streams progress.
+# ---------------------------------------------------------------------------
+
+
+def test_pull_model_posts_only_model_name_no_recipe():
+    # Built-in models must NOT carry `recipe` or Lemonade 400s (#1655). Assert
+    # the SHAPE of the outgoing pull, not merely that it was called.
+    resp = MagicMock()
+    with patch("requests.post", return_value=resp) as mock_post:
+        _pull_model("http://localhost:9999/api/v1", DEFAULT_MODEL_NAME)
+    args, kwargs = mock_post.call_args
+    assert args[0] == "http://localhost:9999/api/v1/pull"
+    assert kwargs["json"] == {"model_name": DEFAULT_MODEL_NAME}
+    assert "recipe" not in kwargs["json"]
+    resp.raise_for_status.assert_called_once()  # non-2xx pulls fail loudly
+
+
+def test_pull_model_sends_auth_header_when_key_set(monkeypatch):
+    monkeypatch.setenv("LEMONADE_API_KEY", "secret-key")
+    with patch("requests.post", return_value=MagicMock()) as mock_post:
+        _pull_model("http://localhost:9999/api/v1", DEFAULT_MODEL_NAME)
+    _, kwargs = mock_post.call_args
+    assert kwargs["headers"].get("Authorization") == "Bearer secret-key"
+
+
+def test_provision_lemonade_down_returns_503_streamed_actionable(client):
+    with (
+        patch.object(
+            ar,
+            "_probe_lemonade_reachable",
+            return_value=(False, "http://localhost:8000/api/v1"),
+        ),
+        patch.object(ar, "_pull_model") as mock_pull,
+    ):
+        resp = client.post("/v1/email/init")
+
+    assert resp.status_code == 503
+    assert resp.headers["content-type"].startswith("text/plain")
+    body = resp.text
+    assert "not reachable" in body
+    assert "lemonade-server serve" in body
+    # No pull is attempted when Lemonade is down — the sidecar can't install it.
+    mock_pull.assert_not_called()
+
+
+def test_provision_model_already_present_streams_done_without_pull(client):
+    with (
+        patch.object(
+            ar,
+            "_probe_lemonade_reachable",
+            return_value=(True, "http://localhost:8000/api/v1"),
+        ),
+        patch.object(ar, "_probe_model_present", return_value=True),
+        patch.object(ar, "_pull_model") as mock_pull,
+    ):
+        resp = client.post("/v1/email/init")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    body = resp.text
+    assert "already downloaded" in body
+    # Final authoritative line is a success marker.
+    assert body.rstrip().splitlines()[-1].startswith("✓")
+    mock_pull.assert_not_called()
+
+
+def test_provision_pulls_missing_model_and_streams_success(client):
+    # First presence check → absent (triggers pull); post-pull verify → present.
+    with (
+        patch.object(
+            ar,
+            "_probe_lemonade_reachable",
+            return_value=(True, "http://localhost:8000/api/v1"),
+        ),
+        patch.object(ar, "_probe_model_present", side_effect=[False, True]),
+        patch.object(ar, "_pull_model") as mock_pull,
+    ):
+        resp = client.post("/v1/email/init")
+
+    assert resp.status_code == 200
+    body = resp.text
+    assert "Pulling" in body
+    assert "downloaded" in body
+    assert "Verified" in body
+    assert body.rstrip().splitlines()[-1].startswith("✓")
+    # Pull was invoked once for the resolved model against the probed server.
+    mock_pull.assert_called_once_with(
+        "http://localhost:8000/api/v1", DEFAULT_MODEL_NAME
+    )
+
+
+def test_provision_pull_failure_streams_failure_line(client):
+    with (
+        patch.object(
+            ar,
+            "_probe_lemonade_reachable",
+            return_value=(True, "http://localhost:8000/api/v1"),
+        ),
+        patch.object(ar, "_probe_model_present", side_effect=[False]),
+        patch.object(
+            ar,
+            "_pull_model",
+            side_effect=requests.exceptions.HTTPError("400 Bad Request"),
+        ),
+    ):
+        resp = client.post("/v1/email/init")
+
+    # Status was committed to 200 once streaming began; the final ✗ line is the
+    # authoritative failure signal (documented HTTP-streaming constraint).
+    assert resp.status_code == 200
+    body = resp.text
+    assert "Provisioning failed" in body
+    assert body.rstrip().splitlines()[-1].startswith("✗")
+
+
+def test_provision_model_list_unreadable_aborts(client):
+    with (
+        patch.object(
+            ar,
+            "_probe_lemonade_reachable",
+            return_value=(True, "http://localhost:8000/api/v1"),
+        ),
+        patch.object(
+            ar,
+            "_probe_model_present",
+            side_effect=requests.exceptions.ConnectionError("reset"),
+        ),
+        patch.object(ar, "_pull_model") as mock_pull,
+    ):
+        resp = client.post("/v1/email/init")
+
+    body = resp.text
+    assert "model list" in body
+    assert body.rstrip().splitlines()[-1].startswith("✗")
+    mock_pull.assert_not_called()
+
+
+def test_provision_verb_not_in_openapi_contract():
+    # POST is a streaming operational verb (like GET /spec), deliberately kept
+    # out of the JSON contract so the cross-impl OpenAPI stays JSON-only.
+    spec = build_app().openapi()
+    assert "post" not in spec["paths"].get("/v1/email/init", {})
+
+
+def test_get_init_still_readiness_only_unchanged(client):
+    # Guard: adding POST must not change GET's readiness semantics.
+    with (
+        patch.object(
+            ar,
+            "_probe_lemonade_reachable",
+            return_value=(True, "http://localhost:8000/api/v1"),
+        ),
+        patch.object(ar, "_probe_model_present", return_value=True),
+        patch.object(ar, "_pull_model") as mock_pull,
+    ):
+        resp = client.get("/v1/email/init")
+
+    assert resp.status_code == 200
+    assert resp.json()["ready"] is True
+    # GET never provisions.
+    mock_pull.assert_not_called()
