@@ -95,6 +95,18 @@ INIT_PROFILES = {
         "min_context_size": 32768,
         "pip_extras": [],
     },
+    "email": {
+        "description": "Email triage for Gmail/Outlook (local inference)",
+        "agent": "email",
+        "models": ["Gemma-4-E4B-it-GGUF"],
+        "approx_size": "~3 GB",
+        # Keep in lock-step with gaia_agent_email.version.MIN_LEMONADE_VERSION
+        # and the email gaia-agent.yaml manifest (the GET /v1/email/init readiness
+        # check reads the same minimum). A test asserts the three agree.
+        "min_lemonade_version": "10.2.0",
+        "min_context_size": 32768,
+        "pip_extras": [],
+    },
     "npu": {
         "description": "Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU)",
         "agent": "chat",
