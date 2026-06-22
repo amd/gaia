@@ -9,7 +9,7 @@ You own GAIA's retrieval-augmented generation stack: the `RAGSDK`, the `RAGTools
 
 ## When to use
 
-- Editing `src/gaia/rag/` (RAG SDK) or `src/gaia/agents/chat/tools/rag_tools.py`
+- Editing `src/gaia/rag/` (RAG SDK) or `src/gaia/agents/tools/rag_tools.py`
 - Tuning chunk size, overlap, re-ranking, or embedding model choice
 - Adding a new document loader / PDF handling
 - Integrating RAG into a new agent via `KNOWN_TOOLS["rag"]`
@@ -27,8 +27,8 @@ You own GAIA's retrieval-augmented generation stack: the `RAGSDK`, the `RAGTools
 |------|---------|
 | `src/gaia/rag/sdk.py` | `RAGSDK`, `RAGConfig` |
 | `src/gaia/rag/pdf_utils.py` | PDF parsing helpers |
-| `src/gaia/agents/chat/tools/rag_tools.py` | `RAGToolsMixin` (consumer side) |
-| `src/gaia/agents/registry.py:26` | `KNOWN_TOOLS["rag"]` binding |
+| `src/gaia/agents/tools/rag_tools.py` | `RAGToolsMixin` (consumer side) |
+| `src/gaia/agents/registry.py:39` | `KNOWN_TOOLS["rag"]` binding |
 | `docs/sdk/sdks/rag.mdx` | User-facing SDK reference |
 | `docs/guides/chat.mdx` | RAG-over-chat user guide |
 
@@ -76,7 +76,7 @@ Opt in via the mixin:
 from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.agents.base.agent import Agent
 
-class MyAgent(RAGToolsMixin, Agent):   # Agent last in MRO
+class MyAgent(Agent, RAGToolsMixin):   # Agent FIRST (GAIA convention)
     def _register_tools(self):
         super()._register_tools()      # registers rag tools from the mixin
         # ... additional tools

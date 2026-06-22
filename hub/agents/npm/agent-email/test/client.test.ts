@@ -195,4 +195,22 @@ describe("EmailClient", () => {
     const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
     await expect(client.spec()).rejects.toMatchObject({ status: 404 });
   });
+
+  it("invokes fetch bound to globalThis (browser 'Illegal invocation' guard)", async () => {
+    // Regression: a browser's `fetch` throws "Illegal invocation" when called
+    // as a method on any object other than window/globalThis. EmailClient must
+    // bind the impl; a non-arrow fn captures its call-time `this`. Node tests
+    // pass without the bind (which is why the original bug slipped through), so
+    // this asserts the binding directly.
+    let calledThis: unknown = "unset";
+    const fetchImpl = function (this: unknown) {
+      calledThis = this;
+      return Promise.resolve(
+        jsonResponse({ status: "ok", service: "gaia-agent-email" }),
+      );
+    } as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await client.health();
+    expect(calledThis).toBe(globalThis);
+  });
 });

@@ -9,7 +9,7 @@ You own the GAIA Jira integration: the `JiraAgent`, its JQL templates, the stand
 
 ## When to use
 
-- Editing `src/gaia/agents/jira/agent.py` or `jql_templates.py`
+- Editing `hub/agents/python/jira/gaia_agent_jira/agent.py` or `jql_templates.py`
 - Editing the Jira standalone app under `src/gaia/apps/jira/`
 - Adding JQL generation, field mapping, bulk-update, or sprint-planning tools
 - Wiring or debugging Atlassian MCP servers
@@ -25,8 +25,8 @@ You own the GAIA Jira integration: the `JiraAgent`, its JQL templates, the stand
 
 | File | Purpose |
 |------|---------|
-| `src/gaia/agents/jira/agent.py` | `JiraAgent` implementation |
-| `src/gaia/agents/jira/jql_templates.py` | JQL template library |
+| `hub/agents/python/jira/gaia_agent_jira/agent.py` | `JiraAgent` implementation |
+| `hub/agents/python/jira/gaia_agent_jira/jql_templates.py` | JQL template library |
 | `src/gaia/apps/jira/` | Standalone Jira app (webui + app.py) |
 | `scripts/jira_smoke.py` | Jira agent smoke tests (manual, not pytest) |
 | `docs/guides/jira.mdx` | User guide |
@@ -67,7 +67,7 @@ Jira config is discovered from (in order):
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 import pytest
-from gaia.agents.jira.agent import JiraAgent
+from gaia_agent_jira.agent import JiraAgent
 
 def test_nl_to_jql(mock_lemonade_client):
     agent = JiraAgent(debug=True)

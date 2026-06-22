@@ -27,13 +27,16 @@ You manage GAIA releases: version bumping, changelog generation, and orchestrati
 
 | Artifact | Source |
 |----------|--------|
-| PyPI package | `.github/workflows/pypi.yml` |
+| PyPI publish | `.github/workflows/publish.yml` (jobs `build-pypi` / `publish-pypi`, on `push: tags: ['v*']`) |
+| PyPI build-check (PR only) | `.github/workflows/pypi.yml` (does *not* publish) |
 | Windows installer | `.github/workflows/build-installers.yml` |
 | Release branch sync | `.github/workflows/update-release-branch.yml` |
 | Electron apps | `.github/workflows/build-electron-apps.yml` |
 | GitHub release | Tag + generated notes |
 
 Verify current workflow names with `ls .github/workflows/` — CI scaffolding changes.
+
+**Agent packages release separately:** GAIA agent sidecars (e.g. the email agent) publish on their own `agent-pkg-*` tag namespace via `release_agent_email.yml` / `build_agent_package.yml` — distinct from the core `v*` release tag.
 
 ## Standard release checklist
 

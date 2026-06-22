@@ -28,7 +28,7 @@ You review GAIA code through an architectural lens. Focus on how the change sits
 2. `src/gaia/llm/`, `src/gaia/sd/`, `src/gaia/vlm/`, `src/gaia/audio/`, `src/gaia/rag/` — service SDKs
 3. `src/gaia/agents/base/` — `Agent`, `MCPAgent`, `ApiAgent`, `@tool`, `AgentConsole`
 4. `src/gaia/agents/tools/`, `agents/<name>/tools/` — reusable mixins registered in `KNOWN_TOOLS`
-5. `src/gaia/agents/<name>/agent.py` — concrete agents
+5. `src/gaia/agents/<name>/agent.py` — in-core agents (chat, docqa, builder, routing); standalone concrete agents live under `hub/agents/python/<id>/gaia_agent_<id>/`
 6. `src/gaia/cli.py`, `src/gaia/api/`, `src/gaia/ui/` — user-facing surfaces
 
 **Rule:** dependencies must point downward in this stack. `base/` never imports from a concrete agent. A mixin never imports the CLI.
@@ -38,8 +38,8 @@ You review GAIA code through an architectural lens. Focus on how the change sits
 1. **Map the change** — which layer(s) does it modify?
 2. **Check dep direction** — any upward imports? Any circulars?
 3. **Check reuse** — is similar logic already in `base/`, a mixin, or `KNOWN_TOOLS`?
-4. **Check mixin MRO** — when composing, `Agent` must be last so `super().__init__()` terminates correctly
-5. **Check registry wiring** — new mixin? Add to `KNOWN_TOOLS` (`src/gaia/agents/registry.py:26`). New built-in agent? Add `_register_*_agent` block
+4. **Check mixin MRO** — when composing, `Agent` precedes the tool mixins; a state mixin like `MemoryMixin` may precede `Agent` (see `ChatAgent`). Mixins lazy-init since `Agent.__init__` doesn't call `super().__init__()`
+5. **Check registry wiring** — new mixin? Add to `KNOWN_TOOLS` (`src/gaia/agents/registry.py:38`). New built-in agent? Add `_register_*_agent` block
 6. **Check blast radius** — who depends on what's changing? `grep` for imports
 7. **Check docs & tests** — any user-visible API change without a guide/spec update?
 
@@ -50,7 +50,7 @@ Structure reviews as:
 - **Architectural impact** — High / Medium / Low, with one-line rationale
 - **Dependency direction** — clean / violates upward or circular
 - **Layering** — correct layer? Could it be pushed down for more reuse?
-- **Consistency** — matches existing patterns (`chat/`, `code/`, `jira/`)?
+- **Consistency** — matches existing in-core patterns (`chat/`, `docqa/`, `routing/`)? (Standalone agents live under `hub/agents/python/<id>/`.)
 - **Breaking changes** — surface area affected, migration path
 - **Recommendations** — concrete refactors with file paths
 
@@ -58,9 +58,9 @@ Structure reviews as:
 
 - **New tool class outside `tools/` or `<agent>/tools/`** — breaks mixin discoverability
 - **Mixin not added to `KNOWN_TOOLS`** — other agents can't compose it by name
-- **`Agent` subclass with wrong MRO** — mixin `__init__`s silently skipped
+- **`Agent` subclass with wrong MRO** — `Agent` precedes the tool mixins; a state mixin like `MemoryMixin` may precede `Agent` (see `ChatAgent`). Mixins lazy-init since `Agent.__init__` doesn't call `super()`
 - **Importing `gaia.cli` from a library module** — upward dependency
 - **Duplicated tool logic** — should be a mixin
-- **Hard-coded `http://localhost:8000`** — use `os.getenv("LEMONADE_BASE_URL", ...)` so Docker/CI can override
+- **Hard-coded `http://localhost:13305`** — use `os.getenv("LEMONADE_BASE_URL", ...)` so Docker/CI can override
 
 Good architecture enables change. Flag anything that makes future changes harder.
