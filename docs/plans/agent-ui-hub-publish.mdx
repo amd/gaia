@@ -391,7 +391,7 @@ its **Python backend** finishes a cold bootstrap: `backend-installer.cjs` runs
 - **Highest-leverage fix:** ship a **frozen/prebuilt backend** instead of a
   runtime pip install, so first-run is seconds and the PyPI/network failure mode
   is gone. **Caveat (verify first):** the email freeze
-  (`hub/agents/python/email/packaging/freeze.py`) gets to <90 MB by *excluding*
+  (`hub/agents/python/email/packaging/freeze.py`) gets to &lt;90 MB by *excluding*
   torch/transformers/faiss — but the UI backend can't, because `[ui]` directly
   declares `faiss-cpu` + `sentence-transformers` + `torch` and
   `gaia.ui.server` **boots faiss + sentence_transformers eagerly** (`setup.py:143`,
@@ -400,7 +400,7 @@ its **Python backend** finishes a cold bootstrap: `backend-installer.cjs` runs
   can be slimmed and *then* frozen small; (b) ship a **prebuilt venv / wheelhouse**
   (no PyInstaller) — bigger artifact but avoids freezing torch/faiss native libs,
   which is notoriously fragile; (c) accept a large (~GB) frozen artifact. Pick
-  before committing — the "<90 MB like email" expectation is wrong as written.
+  before committing — the "&lt;90 MB like email" expectation is wrong as written.
 - **Measure the baseline:** the "7–20 min" figure is an estimate, not a measured
   cold run. Time a real first-run on a clean machine before anchoring the roadmap
   to it.
