@@ -11,11 +11,12 @@
  */
 
 function debugEnabled(): boolean {
-  // Guard for browser environments where `process` is not defined.
+  // Guard against environments where `process` is not defined (e.g. browsers
+  // that don't polyfill it). `globalThis.process` is undefined in a raw browser
+  // context; bundlers that inject a process shim make this safe automatically,
+  // but we can't rely on that for the browser-safe ./client entry.
   const d =
-    typeof process !== "undefined" && process.env != null
-      ? (process.env["DEBUG"] ?? "")
-      : "";
+    (typeof process !== "undefined" && process.env?.["DEBUG"]) || "";
   return d === "*" || d.includes("agent-email");
 }
 

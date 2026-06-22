@@ -1,18 +1,22 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 /**
- * @amd-gaia/agent-email/client — browser-safe subpath entry.
+ * Browser-safe client-only entry for @amd-gaia/agent-email.
  *
- * Exports ONLY the HTTP client, request/response types, and error classes.
- * Imports ZERO `node:*` modules so a Vite/browser bundler can consume this
- * without polyfills or resolution errors.
+ * Import via the "./client" subpath export:
  *
- * Usage (React/Vite renderer):
+ *   import { EmailClient } from "@amd-gaia/agent-email/client";
  *
- *   import { EmailClient, type EmailTriageRequest } from "@amd-gaia/agent-email/client";
+ * This module re-exports ONLY symbols that have zero dependency on Node.js
+ * built-ins (no node:fs, node:crypto, node:child_process, node:path, etc.):
+ *   - EmailClient            — typed REST client (uses globalThis.fetch)
+ *   - EmailClientOptions     — constructor options type
+ *   - Error classes          — AgentEmailError and subclasses
+ *   - SCHEMA_VERSION         — frozen contract version constant
+ *   - All request/response types (TypeScript-only, erased at runtime)
  *
- *   const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131" });
- *   const res = await client.triage({ payload: { ... } });
+ * Node-only symbols (spawnSidecar, fetchBinary, platform helpers) remain
+ * on the "." entry and are intentionally absent here.
  */
 
 export { EmailClient } from "./client.js";

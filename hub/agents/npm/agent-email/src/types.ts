@@ -9,16 +9,26 @@
  *  - `hub/agents/python/email/gaia_agent_email/api_routes.py` — the local
  *    (non-frozen) draft/send handshake models.
  *
+ * Why hand-written and not generated from `/openapi.json`: the contract is
+ * small, stable, and hand-writing keeps the published package free of an
+ * openapi-typegen build step and its dependency tree. If the contract grows,
+ * regenerate from the live `/openapi.json` (the server exposes it) and replace
+ * this file. The `apiVersion` check in `lifecycle.ts` guards against silent
+ * drift at runtime.
+ *
  * Wire note: `EmailMessage.from` is the JSON key on the wire (Python aliases its
  * `from_` field to `from`), so this interface uses `from` directly.
+ *
+ * Schema 2.0 (#1615): five-bucket EmailCategory, suggested_action, TriageUsage,
+ * typed ActionItem (type/url discriminator).
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
 export const SCHEMA_VERSION = "2.0" as const;
 
 /**
- * The five-bucket triage taxonomy (contract.py: EmailCategory, schema 2.0).
- * Values are uppercase wire strings matching the Python enum.
+ * The five-bucket triage taxonomy (schema 2.0, #1615 — contract.py: EmailCategory).
+ * Values are the exact JSON wire strings the server emits.
  */
 export type EmailCategory =
   | "URGENT"
@@ -80,10 +90,7 @@ export interface ThreadInput {
 /** Discriminated union on `kind` (contract.py: EmailInput). */
 export type EmailInput = SingleEmailInput | ThreadInput;
 
-/**
- * Optional caller-supplied context that biases categorization/summary
- * (contract.py: TriageContext, #1541).
- */
+/** Optional caller-supplied context that biases categorization (contract.py: TriageContext). */
 export interface TriageContext {
   /** Important people whose mail should weigh higher. */
   people?: string[];
@@ -101,22 +108,23 @@ export interface EmailTriageRequest {
   schema_version?: string;
   /** The single-email or full-thread input. */
   payload: EmailInput;
-  /** Optional context biasing categorization and summary. */
+  /** Optional context that biases categorization and summary. */
   context?: TriageContext | null;
 }
 
-/** A single extracted action (contract.py: ActionItem, schema 2.0). */
+/**
+ * A single extracted action (contract.py: ActionItem — schema 2.0).
+ * `type` discriminates plain-text actions from link actions.
+ * When `type` is "link", `url` is required and non-empty.
+ */
 export interface ActionItem {
   /** Imperative action, e.g. "Reply to Bob". */
   description: string;
   /** Free-text due hint as written ("Friday", "EOD"); not parsed. */
   due_hint?: string | null;
-  /**
-   * Discriminator: "text" for a plain imperative action; "link" when the
-   * action involves following a URL (url is then required and non-empty).
-   */
+  /** "text" for a plain action; "link" when the action involves a URL. Default "text". */
   type?: "text" | "link";
-  /** The URL to follow for a "link" action item; null/absent for "text". */
+  /** URL for a "link" action item; absent/null for "text". */
   url?: string | null;
 }
 
@@ -130,7 +138,10 @@ export interface DraftReply {
   body: string;
 }
 
-/** LLM usage metrics for a triage (contract.py: TriageUsage, schema 2.0). */
+/**
+ * LLM usage metrics for a triage (contract.py: TriageUsage — schema 2.0).
+ * Null on the heuristic-only path where no LLM call was made.
+ */
 export interface TriageUsage {
   /** Sum of input tokens across the LLM calls. */
   prompt_tokens: number;
@@ -142,7 +153,7 @@ export interface TriageUsage {
   tokens_per_second: number;
 }
 
-/** The structured analysis of one email or thread (contract.py: EmailTriageResult, schema 2.0). */
+/** The structured analysis of one email or thread (contract.py: EmailTriageResult). */
 export interface EmailTriageResult {
   /** One of the five taxonomy buckets (schema 2.0). */
   category: EmailCategory;
@@ -157,8 +168,8 @@ export interface EmailTriageResult {
   /** Proposed reply, or null when none is suggested. */
   draft?: DraftReply | null;
   /**
-   * Suggested next action: reply (URGENT/NEEDS_RESPONSE), archive (PROMOTIONAL),
-   * or none (FYI/PERSONAL).
+   * Suggested next action (schema 2.0): "reply" for URGENT/NEEDS_RESPONSE,
+   * "archive" for PROMOTIONAL, "none" for FYI/PERSONAL. Default "none".
    */
   suggested_action?: "reply" | "none" | "archive";
   /** Echoes the provider message-id / thread-id from the request. */

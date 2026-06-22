@@ -8,7 +8,7 @@ import { EmailClient } from "../src/client.js";
 import { checkVersion } from "../src/lifecycle.js";
 import { VersionMismatchError } from "../src/errors.js";
 
-function clientReturning(apiVersion: string, agentVersion = "0.1.0"): EmailClient {
+function clientReturning(apiVersion: string, agentVersion = "0.2.0"): EmailClient {
   const fetchImpl = (async () =>
     new Response(JSON.stringify({ apiVersion, agentVersion }), {
       status: 200,
@@ -18,25 +18,25 @@ function clientReturning(apiVersion: string, agentVersion = "0.1.0"): EmailClien
 }
 
 describe("checkVersion", () => {
-  it("accepts matching apiVersion 2.0", async () => {
+  it("accepts apiVersion 2.0 (schema 2.0 default)", async () => {
     const info = await checkVersion(clientReturning("2.0"));
     expect(info.apiVersion).toBe("2.0");
   });
 
-  it("accepts a higher MINOR within the same MAJOR (backward-compatible)", async () => {
+  it("accepts a higher MINOR within the same MAJOR 2 (backward-compatible)", async () => {
     const info = await checkVersion(clientReturning("2.5"), { expectedApiVersion: "2.0" });
     expect(info.apiVersion).toBe("2.5");
   });
 
-  it("rejects a higher MAJOR (breaking)", async () => {
+  it("rejects a major-1 server (old sidecar — breaking)", async () => {
     await expect(
-      checkVersion(clientReturning("3.0"), { expectedApiVersion: "2.0" }),
+      checkVersion(clientReturning("1.0"), { expectedApiVersion: "2.0" }),
     ).rejects.toBeInstanceOf(VersionMismatchError);
   });
 
-  it("rejects major 1 (old contract)", async () => {
+  it("rejects a major-3 server (future incompatible major)", async () => {
     await expect(
-      checkVersion(clientReturning("1.0"), { expectedApiVersion: "2.0" }),
+      checkVersion(clientReturning("3.0"), { expectedApiVersion: "2.0" }),
     ).rejects.toBeInstanceOf(VersionMismatchError);
   });
 });
