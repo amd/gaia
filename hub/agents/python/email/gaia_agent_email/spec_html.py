@@ -45,63 +45,64 @@ _NONE_TYPE = type(None)
 
 _INLINE_CSS = """
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
                Helvetica, Arial, sans-serif;
-  background: #0f1117;
-  color: #e0e0e0;
+  background: #0a0a0b;
+  color: #f0f0ee;
   margin: 0;
   padding: 2rem;
   line-height: 1.6;
 }
 h1 {
-  color: #ed6b36;
+  color: #e2a33e;
   font-size: 2rem;
   margin-bottom: 0.25rem;
+  letter-spacing: -0.01em;
 }
 .subtitle {
-  color: #888;
+  color: #8e8e92;
   font-size: 0.95rem;
   margin-bottom: 2.5rem;
 }
 h2 {
-  color: #d97742;
+  color: #f0f0ee;
   margin-top: 2.5rem;
   margin-bottom: 0.5rem;
   font-size: 1.4rem;
 }
 h3 {
-  color: #c0bfe0;
+  color: #f0f0ee;
   margin-top: 1.5rem;
   margin-bottom: 0.4rem;
   font-size: 1.1rem;
 }
 .endpoint-block {
-  background: #1a1d27;
-  border: 1px solid #2d2f3e;
-  border-radius: 8px;
+  background: #111113;
+  border: 1px solid #1f1f22;
+  border-radius: 12px;
   padding: 1.5rem;
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
 }
 .method-badge {
   display: inline-block;
-  background: #4e6aff;
-  color: #fff;
+  background: #e2a33e;
+  color: #0a0a0b;
   font-size: 0.78rem;
   font-weight: 700;
   padding: 0.2rem 0.6rem;
-  border-radius: 4px;
+  border-radius: 5px;
   letter-spacing: 0.05em;
   margin-right: 0.75rem;
   vertical-align: middle;
 }
 .path {
-  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 1.05rem;
-  color: #a8d8a8;
+  color: #e2a33e;
   vertical-align: middle;
 }
 .desc {
-  color: #aaa;
+  color: #8e8e92;
   font-size: 0.93rem;
   margin-top: 0.5rem;
 }
@@ -113,32 +114,32 @@ table {
 }
 th {
   text-align: left;
-  color: #888;
+  color: #8e8e92;
   font-weight: 600;
-  border-bottom: 1px solid #2d2f3e;
+  border-bottom: 1px solid #1f1f22;
   padding: 0.4rem 0.6rem;
 }
 td {
   padding: 0.4rem 0.6rem;
-  border-bottom: 1px solid #1e2030;
+  border-bottom: 1px solid #1f1f22;
   vertical-align: top;
 }
 td:first-child {
-  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
-  color: #8fd8ff;
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  color: #e2a33e;
   white-space: nowrap;
 }
 td:nth-child(2) {
-  color: #d8a870;
+  color: #c9c9c6;
 }
 td:nth-child(3) {
-  color: #aaa;
+  color: #8e8e92;
 }
 .required-badge {
   display: inline-block;
   font-size: 0.72rem;
-  background: #6a3030;
-  color: #ff9a9a;
+  background: rgba(232, 122, 122, 0.14);
+  color: #e87a7a;
   padding: 0.05rem 0.4rem;
   border-radius: 3px;
   margin-left: 0.4rem;
@@ -147,8 +148,8 @@ td:nth-child(3) {
 .optional-badge {
   display: inline-block;
   font-size: 0.72rem;
-  background: #2a3040;
-  color: #8899bb;
+  background: #1f1f22;
+  color: #8e8e92;
   padding: 0.05rem 0.4rem;
   border-radius: 3px;
   margin-left: 0.4rem;
@@ -156,11 +157,12 @@ td:nth-child(3) {
 }
 .version-badge {
   display: inline-block;
-  background: #2a3040;
-  color: #8899bb;
+  background: rgba(226, 163, 62, 0.12);
+  color: #e2a33e;
+  border: 1px solid rgba(226, 163, 62, 0.35);
   font-size: 0.8rem;
   padding: 0.2rem 0.75rem;
-  border-radius: 4px;
+  border-radius: 999px;
   margin-left: 1rem;
   vertical-align: middle;
 }
@@ -171,26 +173,26 @@ td:nth-child(3) {
   margin-top: 0.5rem;
 }
 .category-tag {
-  background: #2a3040;
-  color: #a8d8a8;
-  border: 1px solid #3a4555;
-  border-radius: 4px;
+  background: rgba(226, 163, 62, 0.12);
+  color: #e2a33e;
+  border: 1px solid rgba(226, 163, 62, 0.35);
+  border-radius: 999px;
   padding: 0.2rem 0.75rem;
-  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 0.85rem;
 }
 .model-section {
-  background: #151821;
-  border: 1px solid #252838;
-  border-radius: 6px;
+  background: #0d0d0f;
+  border: 1px solid #1f1f22;
+  border-radius: 10px;
   padding: 1rem 1.25rem;
   margin-top: 1rem;
 }
 .footer {
   margin-top: 3rem;
-  color: #555;
+  color: #8e8e92;
   font-size: 0.8rem;
-  border-top: 1px solid #2d2f3e;
+  border-top: 1px solid #1f1f22;
   padding-top: 1rem;
 }
 """
@@ -414,6 +416,25 @@ def render_endpoint_spec_html() -> str:
 {draft_block}
 
 {send_block}
+
+<h2>Convenience pages</h2>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/spec</span>
+  <p class="desc">This page — a human-readable rendering of the contract above.
+    Not part of the OpenAPI schema.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/playground</span>
+  <p class="desc">A self-contained, localhost-only playground: a stack-health
+    check plus live triage/draft against this sidecar. Served same-origin with a
+    <code>Content-Security-Policy: connect-src 'self'</code> header, so the page
+    can only reach this sidecar and email content never leaves the machine. Not
+    part of the OpenAPI schema.</p>
+</div>
 
 <div class="footer">
   GAIA Email Triage Agent &mdash; schema_version {_esc(SCHEMA_VERSION)} &mdash; amd-gaia.ai
