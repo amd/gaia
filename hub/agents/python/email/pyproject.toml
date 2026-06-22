@@ -18,8 +18,13 @@ requires-python = ">=3.10"
 # release ships keyring-in-[api] for a hard version guarantee.
 dependencies = ["amd-gaia[api]>=0.20.0"]
 
-[project.entry-points."gaia.agent"]
-email = "gaia_agent_email:build_registration"
+# Agent registration temporarily disabled: with the entry point commented out,
+# `AgentRegistry.discover()` no longer surfaces the in-process email agent (it's
+# being superseded by the packaged REST sidecar). The package still ships the
+# `/v1/email` REST router + Python API — only the chat-agent registration is off.
+# Re-enable by uncommenting (and reinstalling the wheel).
+# [project.entry-points."gaia.agent"]
+# email = "gaia_agent_email:build_registration"
 
 [project.optional-dependencies]
 test = ["pytest"]
