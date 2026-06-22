@@ -47,6 +47,8 @@ _HTML = r"""<!doctype html>
   h1{font-size:23px;font-weight:700;letter-spacing:-.01em;margin:0}
   .badge{font-size:11.5px;font-weight:600;letter-spacing:.04em;border-radius:999px;padding:4px 11px;
     background:var(--soft);border:1px solid var(--line);color:var(--gold)}
+  .ver{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:600;color:var(--gold);
+    background:var(--soft);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
   .sub{color:var(--muted);font-size:14px;margin:4px 0 26px}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;margin:14px 0}
   .card h2{font-size:13px;font-weight:600;letter-spacing:.10em;text-transform:uppercase;color:var(--muted);margin:0 0 14px}
@@ -119,6 +121,7 @@ _HTML = r"""<!doctype html>
 <div class="wrap">
   <div class="top">
     <h1>GAIA Email Agent · Playground</h1>
+    <span class="ver" id="ver-badge"></span>
     <span class="badge">⬤ 100% local</span>
   </div>
   <div class="sub">Served by your local sidecar — code, data, and inference never leave this machine.</div>
@@ -296,6 +299,9 @@ async function healthCheck(){
     const v = await getJSON("/v1/email/version");
     setRow("d-sidecar","t-sidecar","ok", "up · apiVersion=" + v.apiVersion + " · agentVersion=" + v.agentVersion);
     $("ver").textContent = "apiVersion " + v.apiVersion + " · agentVersion " + v.agentVersion;
+    // Header badge mirrors the version stamped on architecture.webp — sourced
+    // live from /version, so the screenshot can never claim a stale version.
+    $("ver-badge").textContent = "v" + v.agentVersion;
   }catch(e){
     setRow("d-sidecar","t-sidecar","bad", "not reachable — is the sidecar running?");
     setStat("offline", false);
