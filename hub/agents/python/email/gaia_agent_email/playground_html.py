@@ -140,7 +140,7 @@ _HTML = r"""<!doctype html>
             <div class="fix" id="fix-lemonade" style="display:none"></div></div></div>
       </div>
       <div class="actions"><button id="recheck">Re-check</button>
-        <button id="do-init" class="ghost">Run readiness check · /v1/init</button>
+        <button id="do-init" class="ghost">Run readiness check · /v1/email/init</button>
         <span class="note" id="health-note"></span></div>
       <div class="out" id="init-out"></div>
     </div>
@@ -297,11 +297,12 @@ async function healthCheck(){
   // router is mounted on a product app (where root /version is the host's).
   try{
     const v = await getJSON("/v1/email/version");
-    setRow("d-sidecar","t-sidecar","ok", "up · apiVersion=" + v.apiVersion + " · agentVersion=" + v.agentVersion);
-    $("ver").textContent = "apiVersion " + v.apiVersion + " · agentVersion " + v.agentVersion;
+    const av = v.agentVersion || "?", api = v.apiVersion || "?";
+    setRow("d-sidecar","t-sidecar","ok", "up · apiVersion=" + api + " · agentVersion=" + av);
+    $("ver").textContent = "apiVersion " + api + " · agentVersion " + av;
     // Header badge mirrors the version stamped on architecture.webp — sourced
     // live from /version, so the screenshot can never claim a stale version.
-    $("ver-badge").textContent = "v" + v.agentVersion;
+    $("ver-badge").textContent = "v" + av;
   }catch(e){
     setRow("d-sidecar","t-sidecar","bad", "not reachable — is the sidecar running?");
     setStat("offline", false);
@@ -317,7 +318,7 @@ async function healthCheck(){
       setRow("d-lemonade","t-lemonade","bad", d.cause + " — " + d.hint);
       setStat("not ready", false);
       if(d.cmd){
-        const fx = $("fix-lemonade"); fx.style.display = "flex"; fx.innerHTML = "";
+        const fx = $("fix-lemonade"); fx.style.display = "flex"; fx.textContent = "";
         const code = document.createElement("code"); code.className = "cmd"; code.textContent = d.cmd;
         const btn = document.createElement("button"); btn.className = "copy"; btn.textContent = "copy";
         btn.onclick = () => copy(d.cmd, btn);
@@ -449,24 +450,32 @@ async function doProvision(){
     termLine("✗ provisioning endpoint not available on this sidecar yet — ships with the /v1/email/init PR (#1813).", "bad");
     termStatus("bad","unavailable"); btn.disabled=false; return;
   }
-  if(res.body && res.body.getReader){
-    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
-    for(;;){
-      const { done, value } = await reader.read();
-      if(done) break;
-      buf += dec.decode(value, { stream:true });
-      let nl;
-      while((nl = buf.indexOf("\n")) >= 0){ emitLine(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
+  // Wrap the read in try/finally so a mid-stream drop is reported and the
+  // button is always re-enabled (never left stuck disabled).
+  try{
+    if(res.body && res.body.getReader){
+      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+      for(;;){
+        const { done, value } = await reader.read();
+        if(done) break;
+        buf += dec.decode(value, { stream:true });
+        let nl;
+        while((nl = buf.indexOf("\n")) >= 0){ emitLine(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
+      }
+      if(buf) emitLine(buf);
+    } else {
+      (await res.text()).split("\n").forEach(emitLine);
     }
-    if(buf) emitLine(buf);
-  } else {
-    (await res.text()).split("\n").forEach(emitLine);
+    const ok = res.ok;
+    termLine(ok ? "✓ done" : ("✗ exited with HTTP " + res.status), ok ? "ok" : "bad");
+    termStatus(ok ? "ok" : "bad", ok ? "ready" : "failed");
+    if(ok) healthCheck();  // refresh stack health after provisioning
+  }catch(e){
+    termLine("✗ stream interrupted: " + (e && e.message), "bad");
+    termStatus("bad", "failed");
+  }finally{
+    btn.disabled = false;
   }
-  const ok = res.ok;
-  termLine(ok ? "✓ done" : ("✗ exited with HTTP " + res.status), ok ? "ok" : "bad");
-  termStatus(ok ? "ok" : "bad", ok ? "ready" : "failed");
-  btn.disabled = false;
-  if(ok) healthCheck();  // refresh stack health after provisioning
 }
 $("recheck").onclick = healthCheck;
 $("do-init").onclick = doInit;

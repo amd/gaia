@@ -49,9 +49,22 @@ class TestPlaygroundHtml:
             assert forbidden not in html, f"unexpected external resource: {forbidden!r}"
 
     def test_only_calls_relative_sidecar_paths(self):
+        # Assert the EXACT endpoints the JS calls (not substrings — "/version"
+        # is a substring of "/v1/email/version", which would pass by accident).
         html = render_playground_html()
-        for path in ("/version", "/v1/email/triage", "/v1/email/draft"):
-            assert path in html
+        for path in (
+            '"/v1/email/version"',
+            '"/v1/email/triage"',
+            '"/v1/email/draft"',
+            '"/v1/email/init"',
+        ):
+            assert path in html, f"expected the page to call {path}"
+
+    def test_no_innerhtml_sink(self):
+        # The local-only XSS guarantee rests on textContent-only DOM writes: a
+        # triaged email body / model string must never be able to inject markup.
+        # Pin it — the page must contain ZERO `.innerHTML` assignments.
+        assert ".innerHTML" not in render_playground_html()
 
 
 class TestPlaygroundRoute:
@@ -69,6 +82,12 @@ class TestPlaygroundRoute:
         )
         assert "default-src 'none'" in csp
         assert "connect-src 'self'" in csp
+        # The directives that actually close bypasses — a regression that
+        # loosened connect-src to a wildcard, or added unsafe-eval, must fail.
+        assert "connect-src *" not in csp
+        assert "unsafe-eval" not in csp
+        assert "base-uri 'none'" in csp
+        assert "form-action 'none'" in csp
 
     def test_excluded_from_openapi_schema(self, client):
         paths = client.get("/openapi.json").json().get("paths", {})
