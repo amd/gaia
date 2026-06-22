@@ -1,0 +1,72 @@
+---
+title: 'Guarding the model endpoint'
+description: 'A vendor-neutral pattern for inspecting model + MCP tool I/O in front of the Lemonade endpoint, fully offline.'
+icon: 'shield-halved'
+---
+
+<Info>
+  **Open ruleset (MIT):** [Agent Threat Rules](https://github.com/Agent-Threat-Rule/agent-threat-rules) · **Reference implementation (MIT):** [atr-lemonade-guard](https://github.com/Agent-Threat-Rule/atr-lemonade-guard). This page documents an integration pattern — GAIA core takes no dependency on either.
+</Info>
+
+# Guarding the model endpoint
+
+<Badge text="community" color="orange" />
+
+## Overview
+
+GAIA agents talk to Lemonade's OpenAI-compatible endpoint (`LEMONADE_BASE_URL`, e.g. `http://localhost:13305/api/v1`). For local / air-gapped agents that is ideal — but the model + tool I/O is not inspected against agent-specific attacks: prompt injection in user/content, and tool poisoning (malicious tool descriptions or tool results) on the MCP path.
+
+This pattern adds a thin, fully-offline guard at the **model I/O boundary**: point `LEMONADE_BASE_URL` at a local OpenAI-compatible proxy that scans messages — and, on the MCP path, tool definitions + results — against an open ruleset before forwarding to Lemonade.
+
+## How it complements `gaia.governance`
+
+GAIA already ships [`gaia.governance`](https://github.com/amd/gaia/blob/main/src/gaia/governance/README.md) with a pluggable `PolicyEngine` (`ALLOW` / `BLOCK` / `REVIEW`). The two operate at different boundaries:
+
+<CardGroup cols={2}>
+  <Card title="gaia.governance" icon="gavel">
+    Guards **tool calls**. `PolicyEngine.evaluate_action(ActionRequest)` returns a `GovernanceDecision` whose `.decision` is ALLOW / BLOCK / REVIEW for a given tool + args.
+  </Card>
+  <Card title="Guard proxy" icon="shield-halved">
+    Guards the **model I/O boundary** — prompt injection in content and tool poisoning on the MCP path, offline, before anything reaches Lemonade.
+  </Card>
+</CardGroup>
+
+Run both for defense in depth.
+
+## Quick start
+
+<Steps>
+  <Step title="Try the reference implementation offline">
+    The [atr-lemonade-guard](https://github.com/Agent-Threat-Rule/atr-lemonade-guard) reference proxy runs fully offline — no model download, no network:
+    ```bash
+    git clone https://github.com/Agent-Threat-Rule/atr-lemonade-guard
+    cd atr-lemonade-guard && npm install && npm run demo
+    ```
+    It sends a benign prompt (forwarded), a prompt-injection payload (blocked), and a tool-poisoning payload (blocked) through the proxy and prints a verdict table with the matched ATR rule ids.
+  </Step>
+  <Step title="Put it in front of Lemonade">
+    Run the proxy with your Lemonade endpoint as the upstream, then point GAIA at the proxy:
+    ```bash
+    # proxy forwards clean traffic to Lemonade; see the repo README for ports
+    UPSTREAM_URL=http://localhost:13305/api/v1 npm run proxy
+    export LEMONADE_BASE_URL=http://127.0.0.1:13310/v1
+    ```
+    The proxy is upstream-agnostic — Lemonade, Ollama, or any OpenAI-compatible server.
+  </Step>
+  <Step title="(Optional) cover the MCP path">
+    If your agent uses MCP, route tool definitions and results through the same engine so poisoned tool descriptions / results are caught before the model acts on them (`npm run demo:mcp` shows this against a mock MCP server).
+  </Step>
+</Steps>
+
+## Vendor-neutral by design
+
+The proxy is upstream-agnostic — Lemonade, Ollama, or any OpenAI-compatible server — and runs fully offline. GAIA core adds no dependency; the ruleset is linked externally, not vendored.
+
+## Honest limitations
+
+Detection at the I/O layer is **best-effort heuristic, not a guarantee**. Content-layer rules catch known injection / tool-poisoning shapes but can be evaded by novel phrasings. Pair this with [`gaia.governance`](https://github.com/amd/gaia/blob/main/src/gaia/governance/README.md) on the tool-call side, plus sandboxed execution and human-in-the-loop for high-blast-radius actions.
+
+## See also
+
+- [Connections — security model](/security/connections)
+- [`gaia.governance` README](https://github.com/amd/gaia/blob/main/src/gaia/governance/README.md)
