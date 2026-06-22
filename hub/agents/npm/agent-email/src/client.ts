@@ -55,15 +55,12 @@ export class EmailClient {
     // Normalize: strip trailing slashes so path joins are predictable.
     this.baseUrl = stripTrailingSlashes(opts.baseUrl);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const rawFetch = opts.fetchImpl ?? globalThis.fetch;
-    if (typeof rawFetch !== "function") {
+    this.fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+    if (typeof this.fetchImpl !== "function") {
       throw new TypeError(
         "global fetch is unavailable — use Node >= 18, or pass fetchImpl in EmailClientOptions",
       );
     }
-    // Bind to globalThis: the browser's `fetch` throws "Illegal invocation" if
-    // invoked as a method on any object other than window/globalThis.
-    this.fetchImpl = rawFetch.bind(globalThis);
   }
 
   /** Triage a single email or a full thread (POST /v1/email/triage). */
