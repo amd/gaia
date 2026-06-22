@@ -223,10 +223,11 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         registry = AgentRegistry()
         registry.discover()
-        # Temporarily disable the in-UI email triage agent: hide it from the
-        # agent selector so it can't be picked or activated in chat. Scoped to
-        # the UI registry only — the gaia-agent-email wheel, its /v1/email REST
-        # mount, and connectors (which read registry.list() directly) stay
+        # Temporarily hide the in-UI email triage agent from the agent selector
+        # (filters /api/agents only — a soft, reversible toggle, not a hard
+        # kill-switch: a session already pinned to "email" could still construct
+        # it). UI-registry scoped — the gaia-agent-email wheel, its /v1/email
+        # REST mount, and connectors (which read registry.list() directly) stay
         # intact. Remove this block to re-enable.
         _email_reg = registry.get("email")
         if _email_reg is not None:
