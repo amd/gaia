@@ -12,7 +12,8 @@ All tests run without a live backend — the embedder and the chat LLM are passe
 in as plain callables, and store-backed tests use a temp-file ``MemoryStore``.
 """
 
-from unittest.mock import MagicMock
+import logging
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -20,13 +21,16 @@ import yaml
 
 from gaia.agents.base.memory_store import MemoryStore
 from gaia.agents.base.skill_synthesis import (
+    _RECONCILE_SCAN_LIMIT,
     DISTILL_SYSTEM_PROMPT,
     DISTILL_TEMPERATURE,
+    SIMILARITY_TAU,
     GoalCluster,
     ReconcileResult,
     Skill,
     SynthesisConfig,
     _build_distill_user_prompt,
+    _nearest_enabled_procedure,
     cluster_by_goal,
     distill_cluster,
     load_synthesis_config,
@@ -478,7 +482,7 @@ class TestReconcileAndStore:
     def test_add_when_name_is_new(self, store):
         cluster = _cluster(n=4)  # success_count 12, attempt_count 12
         res = reconcile_and_store(
-            self._candidate(), cluster, store, embedding=b"\x00" * 4
+            self._candidate(), cluster, store, embedding=_unit([1, 0, 0]).tobytes()
         )
         assert res.action == "add"
         assert res.skill_id and res.skill_id.startswith("proc_")
@@ -488,32 +492,37 @@ class TestReconcileAndStore:
         assert rows[0]["provenance"]["from_sessions"] == list(cluster.from_sessions)
 
     def test_noop_when_existing_dominates(self, store):
-        # Existing row with a strong track record.
+        # Existing row with a strong track record AND a matching trigger vector
+        # (the new match key is meaning, so the prior must carry an embedding).
+        vec = _unit([1, 0, 0]).tobytes()
         store.put_skill(
             name="triage-support-ticket",
             when_to_use="t",
             markdown_body="b",
             success_count=99,
             attempt_count=100,
+            embedding=vec,
         )
         weak_cluster = _cluster(n=3)  # success_count 9 << 99
-        res = reconcile_and_store(self._candidate(), weak_cluster, store, embedding=b"")
+        res = reconcile_and_store(self._candidate(), weak_cluster, store, embedding=vec)
         assert res.action == "noop"
         assert res.skill_id is None
         # Still exactly one (enabled, non-superseded) row.
         assert len(store.search_skills(name="triage-support-ticket")) == 1
 
     def test_update_supersedes_lower_success_count(self, store):
+        vec = _unit([1, 0, 0]).tobytes()
         old_id = store.put_skill(
             name="triage-support-ticket",
             when_to_use="old trigger",
             markdown_body="old body",
             success_count=2,
             attempt_count=2,
+            embedding=vec,
         )
         strong_cluster = _cluster(n=5)  # success_count 15 > 2
         res = reconcile_and_store(
-            self._candidate(), strong_cluster, store, embedding=b""
+            self._candidate(), strong_cluster, store, embedding=vec
         )
 
         assert res.action == "update"
@@ -529,6 +538,144 @@ class TestReconcileAndStore:
         )
         assert len(old_row) == 1
         assert old_row[0]["superseded_by"] == res.skill_id
+
+    def test_matches_by_meaning_supersedes_under_name_drift(self, store):
+        """AC #1/#2: a drifted name with the same meaning supersedes — not a 2nd ADD.
+
+        The prior recipe is stored under one name; a later pass distills the same
+        goal under a *different* name with an identical trigger vector (cosine
+        1.0 >= tau, modelling the real fixed-vector embedder) and a stronger track
+        record.  The match is by meaning, so it UPDATEs, and the surviving row
+        must carry the *second* candidate's name AND body — pinning supersede
+        direction so a wrong-way supersede (old row surviving) is caught.
+        """
+        v = _unit([1, 0, 0]).tobytes()
+        old_id = store.put_skill(
+            name="summarize-unread-emails",
+            when_to_use="Summarize the user's unread emails.",
+            markdown_body="# Old\n1. step",
+            success_count=2,
+            attempt_count=2,
+            embedding=v,
+        )
+        drifted = Skill(
+            name="summarize-my-unread-emails",  # drifted name, same goal
+            when_to_use="Summarize my unread emails.",
+            body="# New\n1. better step",
+            tools_required=["list_emails", "summarize"],
+        )
+        strong_cluster = _cluster(n=5)  # success_count 15 > 2
+        res = reconcile_and_store(drifted, strong_cluster, store, embedding=v)
+
+        assert res.action == "update"
+        assert res.superseded_id == old_id
+        visible = store.search_skills()  # enabled, non-superseded
+        assert len(visible) == 1
+        assert visible[0]["id"] == res.skill_id
+        assert visible[0]["name"] == "summarize-my-unread-emails"
+        assert visible[0]["markdown_body"] == "# New\n1. better step"
+
+    def test_distinct_meaning_adds_even_with_same_name(self, store):
+        """The key is meaning, not name: same name + orthogonal vector -> ADD."""
+        store.put_skill(
+            name="triage-support-ticket",
+            when_to_use="Triage a support ticket.",
+            markdown_body="b",
+            success_count=2,
+            attempt_count=2,
+            embedding=_unit([1, 0, 0]).tobytes(),
+        )
+        res = reconcile_and_store(
+            self._candidate(name="triage-support-ticket"),  # identical name
+            _cluster(n=5),
+            store,
+            embedding=_unit([0, 1, 0]).tobytes(),  # cosine 0 < tau -> different goal
+        )
+        assert res.action == "add"
+        assert len(store.search_skills()) == 2
+
+    def test_lower_success_same_meaning_noops(self, store):
+        """Dominance is unchanged under the new key: drifted name + matching
+        vector but a weaker cluster -> NOOP (existing row dominates)."""
+        v = _unit([1, 0, 0]).tobytes()
+        store.put_skill(
+            name="summarize-unread-emails",
+            when_to_use="Summarize unread emails.",
+            markdown_body="b",
+            success_count=50,
+            attempt_count=50,
+            embedding=v,
+        )
+        drifted = Skill(
+            name="summarize-my-unread-emails",
+            when_to_use="Summarize my unread emails.",
+            body="weaker",
+            tools_required=["list_emails"],
+        )
+        res = reconcile_and_store(drifted, _cluster(n=3), store, embedding=v)  # 9 < 50
+        assert res.action == "noop"
+        assert len(store.search_skills()) == 1
+
+    def test_reconcile_queries_store_by_embedding_not_name(self, store):
+        """Contract-shape: the match scan queries enabled / non-superseded WITH
+        embeddings and NEVER by name — a name-keyed or embedding-less query would
+        silently reintroduce #1818."""
+        spy = MagicMock(wraps=store.search_skills)
+        with patch.object(store, "search_skills", spy):
+            reconcile_and_store(
+                self._candidate(),
+                _cluster(n=3),
+                store,
+                embedding=_unit([1, 0, 0]).tobytes(),
+            )
+        assert spy.call_count >= 1
+        first = spy.call_args_list[0].kwargs
+        assert first.get("enabled_only") is True
+        assert first.get("include_superseded") is False
+        assert first.get("with_embedding") is True
+        assert all(call.kwargs.get("name") is None for call in spy.call_args_list)
+
+    def test_dim_mismatch_prior_is_skipped(self, store):
+        """A stored row whose embedding dim differs from the candidate is skipped
+        (not fed to np.dot, which would raise) -> reconcile ADDs rather than
+        crashing.  Defensive: guards the match if the embedder dim ever changes."""
+        store.put_skill(
+            name="summarize-unread-emails",
+            when_to_use="x",
+            markdown_body="b",
+            success_count=2,
+            attempt_count=2,
+            embedding=_unit([1, 0, 0, 0]).tobytes(),  # 4-dim — wrong shape
+        )
+        res = reconcile_and_store(
+            self._candidate(name="summarize-my-unread-emails"),
+            _cluster(n=5),
+            store,
+            embedding=_unit([1, 0, 0]).tobytes(),  # 3-dim candidate
+        )
+        assert res.action == "add"
+        assert len(store.search_skills()) == 2
+
+    def test_scan_cap_saturation_warns_no_silent_cap(self, caplog):
+        """Fail-loud (#1818): a saturated scan window logs a WARNING — the cap is
+        never a silent drop.  Driven through a fake store so the test stays fast."""
+        blob = _unit([1, 0, 0]).tobytes()
+        rows = [
+            {"id": f"proc_{i}", "name": f"p{i}", "embedding": blob, "success_count": 1}
+            for i in range(_RECONCILE_SCAN_LIMIT)
+        ]
+
+        class _FakeStore:
+            def search_skills(self, **kwargs):
+                return rows
+
+        with caplog.at_level(
+            logging.WARNING, logger="gaia.agents.base.skill_synthesis"
+        ):
+            match = _nearest_enabled_procedure(_FakeStore(), blob, SIMILARITY_TAU)
+
+        assert match is not None  # a row still matched (cosine 1.0 >= tau)
+        assert "cap" in caplog.text.lower()
 
     def test_result_dataclass_shape(self):
         r = ReconcileResult(action="add", skill_id="proc_x")

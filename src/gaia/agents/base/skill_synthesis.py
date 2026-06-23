@@ -81,6 +81,11 @@ _MAX_NAME_LEN: int = 64
 #: Key in ``memory_settings.json`` carrying threshold overrides.
 _SETTINGS_SECTION: str = "skill_synthesis"
 
+#: Max enabled procedures scanned for the reconcile cosine match. The corpus is
+#: bounded (synthesis is gated + off-by-default), so this is generous; saturating
+#: it is logged loudly rather than silently dropping rows (#1818).
+_RECONCILE_SCAN_LIMIT: int = 500
+
 
 @dataclass(frozen=True)
 class SynthesisConfig:
@@ -572,39 +577,118 @@ def distill_cluster(
     return skill
 
 
+def _nearest_enabled_procedure(
+    store,
+    candidate_blob: Optional[bytes],
+    similarity_tau: float,
+) -> Optional[Dict]:
+    """Find the enabled, non-superseded procedure nearest the candidate by meaning.
+
+    Reconcile matches by ``when_to_use`` embedding cosine rather than exact
+    ``name`` (#1818): the distiller authors a fresh kebab ``name`` each pass, so a
+    recurring goal drifts (``summarize-unread-emails`` ->
+    ``summarize-my-unread-emails``) and an exact-name match would ADD a duplicate
+    instead of superseding.  Matching on the trigger vector keeps one proven
+    recipe per goal across phrasing drift.
+
+    The BLOB is the raw ``memory._embedding_to_blob`` float32 layout, decoded
+    locally with ``np.frombuffer`` (never importing ``memory``) so the
+    ``memory -> procedural_memory -> skill_synthesis`` import direction stays
+    one-way.  Vectors are L2-normalized at storage (``_embed_text``), but the
+    candidate and each row are re-normalized defensively so cosine == dot product.
+
+    Args:
+        store: The ``MemoryStore`` to scan (its ``search_skills`` is the boundary).
+        candidate_blob: The candidate's ``when_to_use`` embedding BLOB.  Falsy or
+            zero-norm means there is no meaning to match on -> treated as new.
+        similarity_tau: Cosine threshold; a row matches iff its score is
+            ``>= similarity_tau`` (the same tau used to cluster goals).
+
+    Returns:
+        The single highest-cosine procedure dict clearing ``similarity_tau``
+        (newest-first on ties, so the most recent row wins deterministically), or
+        None when nothing clears it or the candidate has no usable vector.
+    """
+    if not candidate_blob:
+        return None
+    cand = np.frombuffer(candidate_blob, dtype=np.float32)
+    cand_norm = np.linalg.norm(cand)
+    if cand_norm == 0:
+        return None
+    cand = cand / cand_norm
+
+    rows = store.search_skills(
+        enabled_only=True,
+        include_superseded=False,
+        with_embedding=True,
+        limit=_RECONCILE_SCAN_LIMIT,
+    )
+    if len(rows) >= _RECONCILE_SCAN_LIMIT:
+        logger.warning(
+            "[skill_synthesis] reconcile scan hit the %d-row cap; a drifted "
+            "duplicate beyond it could be missed (#1818)",
+            _RECONCILE_SCAN_LIMIT,
+        )
+
+    best: Optional[Dict] = None
+    best_score = -1.0
+    for row in rows:
+        blob = row.get("embedding")
+        if not blob:
+            continue
+        vec = np.frombuffer(blob, dtype=np.float32)
+        if vec.shape[0] != cand.shape[0]:  # wrong dim — not comparable, skip
+            continue
+        norm = np.linalg.norm(vec)
+        if norm == 0:
+            continue
+        score = float(np.dot(cand, vec / norm))
+        if score > best_score:  # strict-max keeps the newest row on ties
+            best_score = score
+            best = row
+
+    return best if best_score >= similarity_tau else None
+
+
 def reconcile_and_store(
     candidate: Skill,
     cluster: GoalCluster,
     store,
     embedding: Optional[bytes] = None,
+    similarity_tau: float = SIMILARITY_TAU,
 ) -> ReconcileResult:
     """RECONCILE/STORE — persist a distilled candidate as ADD / UPDATE / NOOP.
 
-    Matches an existing enabled, non-superseded procedure by ``name``:
+    Matches an existing enabled, non-superseded procedure by **``when_to_use``
+    embedding cosine ``>= similarity_tau``** (not by ``name``): the distiller
+    authors a fresh kebab ``name`` each pass, so a recurring goal drifts across
+    passes and a name match would ADD a duplicate instead of superseding (#1818).
 
-    * no match -> **ADD** a new row (Mem0 ADD).
-    * the candidate's cluster has a higher ``success_count`` than the existing
+    * no match (nothing clears ``similarity_tau``) -> **ADD** a new row (Mem0 ADD).
+    * the candidate's cluster has a higher ``success_count`` than the matched
       row -> **UPDATE**: store a new row and mark the old one ``superseded_by`` it
       (Zep lineage — the same insert-new-then-supersede shape #606 uses for a
       knowledge UPDATE).  The old row is kept, never deleted.
     * otherwise -> **NOOP**.
 
     No path ever DELETEs.  ``success_count`` is the dominance signal because it is
-    the procedure's empirical track record (the issue's stated supersede rule).
+    the procedure's empirical track record (the issue's stated supersede rule);
+    only the *match key* moved from name to meaning — dominance is unchanged.
 
     Args:
         candidate: The distilled ``Skill`` (intermediate fields).
         cluster: The cluster it was distilled from (track record + provenance).
         store: The ``MemoryStore`` to write to.
-        embedding: The ``when_to_use`` embedding BLOB (its own FAISS corpus).
+        embedding: The ``when_to_use`` embedding BLOB — now both persisted and
+            used as the match vector (previously persist-only).
+        similarity_tau: Cosine threshold for treating a stored procedure as the
+            same goal; defaults to the clustering ``SIMILARITY_TAU``.
 
     Returns:
         A ``ReconcileResult`` describing the action taken.
     """
     provenance = {"source": "synthesized", "from_sessions": cluster.from_sessions}
-    existing = store.search_skills(
-        name=candidate.name, enabled_only=True, include_superseded=False, limit=1
-    )
+    prior = _nearest_enabled_procedure(store, embedding, similarity_tau)
 
     def _insert() -> str:
         return store.put_skill(
@@ -619,30 +703,33 @@ def reconcile_and_store(
             embedding=embedding,
         )
 
-    if not existing:
+    if prior is None:
         new_id = _insert()
         logger.info(
             "[skill_synthesis] ADD procedure %s name=%s", new_id, candidate.name
         )
         return ReconcileResult(action="add", skill_id=new_id)
 
-    prior = existing[0]
     if cluster.success_count > int(prior.get("success_count", 0)):
         new_id = _insert()
         store.supersede_skill(prior["id"], new_id)
         logger.info(
-            "[skill_synthesis] UPDATE procedure name=%s: %s supersedes %s",
-            candidate.name,
+            "[skill_synthesis] UPDATE procedure %s supersedes %s "
+            "(matched by meaning, new name=%s, prior name=%s)",
             new_id,
             prior["id"],
+            candidate.name,
+            prior.get("name"),
         )
         return ReconcileResult(
             action="update", skill_id=new_id, superseded_id=prior["id"]
         )
 
     logger.info(
-        "[skill_synthesis] NOOP procedure name=%s: existing %s already dominates",
-        candidate.name,
+        "[skill_synthesis] NOOP procedure: existing %s already dominates "
+        "(matched by meaning, candidate name=%s, prior name=%s)",
         prior["id"],
+        candidate.name,
+        prior.get("name"),
     )
     return ReconcileResult(action="noop")

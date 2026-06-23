@@ -3328,6 +3328,69 @@ class TestSynthesizeSkills:
         rows = store.search_skills()
         assert len(rows) == 1  # one row, not duplicated, not deleted
 
+    def test_name_drift_across_passes_supersedes(self, mixin_host):
+        """AC #3: the same goal distilled under a drifted name across passes
+        yields ONE surviving row (an UPDATE), not a second ADD.
+
+        The fixture's fixed-vector embedder gives cosine 1.0 between passes, so
+        the two candidates differ only by name — the exact regression the fix
+        targets.  Under the old exact-name match this produced 2 enabled rows.
+        """
+        pytest.importorskip("faiss")
+        store = mixin_host._memory_store
+        goal = "Summarize my unread emails"
+
+        pass1_md = (
+            "---\n"
+            "name: summarize-unread-emails\n"
+            "when_to_use: Summarize the user's unread emails.\n"
+            "tools_required: [list_emails, summarize]\n"
+            "---\n\n"
+            "# Summarize Unread Emails\n\n"
+            "1. List unread with `list_emails`.\n"
+            "2. Summarize them with `summarize`.\n"
+        )
+        pass2_md = (
+            "---\n"
+            "name: summarize-my-unread-emails\n"  # drifted name, same goal
+            "when_to_use: Summarize my unread emails.\n"
+            "tools_required: [list_emails, summarize]\n"
+            "---\n\n"
+            "# Summarize My Unread Emails\n\n"
+            "1. Pull unread mail with `list_emails`.\n"
+            "2. Produce a digest with `summarize`.\n"
+        )
+
+        # Pass 1: 3 qualifying sessions → one ADD.
+        for sid in ["d1", "d2", "d3"]:
+            _seed_qualifying_session(store, sid, goal)
+        mixin_host.chat = _chat_returning(pass1_md)
+        first = mixin_host._synthesize_skills()
+        assert first["stored"] == 1
+        rows_after_1 = store.search_skills()
+        assert len(rows_after_1) == 1
+        assert rows_after_1[0]["name"] == "summarize-unread-emails"
+        pass1_id = rows_after_1[0]["id"]
+
+        # Pass 2: 2 more sessions raise the cluster's aggregate success_count; the
+        # distiller drifts the name. Match-by-meaning must UPDATE, not duplicate.
+        for sid in ["d4", "d5"]:
+            _seed_qualifying_session(store, sid, goal)
+        mixin_host.chat = _chat_returning(pass2_md)
+        second = mixin_host._synthesize_skills()
+        assert second["stored"] == 1  # an UPDATE — not a no-op, not a 2nd ADD
+
+        visible = store.search_skills()  # enabled, non-superseded
+        assert len(visible) == 1
+        assert visible[0]["name"] == "summarize-my-unread-emails"  # pass-2 name
+        assert "digest" in visible[0]["markdown_body"]  # pass-2 body
+        # The pass-1 row is superseded (kept, never deleted).
+        old = store.search_skills(
+            skill_id=pass1_id, include_superseded=True, enabled_only=False
+        )
+        assert len(old) == 1
+        assert old[0]["superseded_by"] == visible[0]["id"]
+
 
 # ===========================================================================
 # Phase 2 — Skill Recall + system-prompt injection (#887)

@@ -462,7 +462,11 @@ class ProceduralMemoryMixin:
             # Embed when_to_use (its own corpus).  Embedder failure RE-RAISES.
             vec = self._embed_text(candidate.when_to_use)
             res = reconcile_and_store(
-                candidate, cluster, store, embedding=_embedding_to_blob(vec)
+                candidate,
+                cluster,
+                store,
+                embedding=_embedding_to_blob(vec),
+                similarity_tau=config.similarity_tau,
             )
             if res.action in ("add", "update") and res.skill_id:
                 self._proc_faiss_add(res.skill_id, vec)
