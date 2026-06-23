@@ -361,6 +361,17 @@ class EmailTriageAgent(
 
     # -- Phase 2 multi-inbox routing (#1603) -------------------------------
 
+    def _refresh_mail_backends(self) -> None:
+        """Refresh connected mailbox backends for long-lived agent instances.
+
+        Agent UI sessions cache agent instances, while connector grants can
+        change after construction. Re-resolving here lets multi-mailbox scans
+        see newly connected providers without requiring a session restart.
+        """
+        backends = dict(self.config.resolve_mail_backends())
+        self._backends = backends
+        self._gmail = next(iter(backends.values()))
+
     def _remember_message_mailbox(
         self, message_id: Optional[str], provider: str
     ) -> None:
@@ -514,6 +525,7 @@ class EmailTriageAgent(
         force_llm = bool(getattr(self.config, "force_llm", False))
         debug_flag = bool(getattr(self.config, "debug", False))
 
+        self._refresh_mail_backends()
         backends = self._backends
         per_backend = max(1, max_messages // len(backends))
         merged: list[dict] = []
@@ -634,6 +646,7 @@ class EmailTriageAgent(
         force_llm = bool(getattr(self.config, "force_llm", False))
         debug_flag = bool(getattr(self.config, "debug", False))
 
+        self._refresh_mail_backends()
         backends = self._backends
         per_backend = max(1, max_messages // len(backends))
         urgent: list[dict] = []
