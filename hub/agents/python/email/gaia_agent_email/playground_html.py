@@ -576,8 +576,13 @@ async function loadConnectors(){
   const byId = {}; for(const p of (data.providers || [])) byId[p.provider] = p;
   const merged = CONN_PROVIDERS.map((s) =>
     Object.assign({ provider:s.id, label:s.label, connected:false }, byId[s.id] || {}));
-  renderConnectors(merged);
   const connected = merged.filter((p) => p.connected);
+  // Consistency: only show account emails if EVERY connected mailbox has one;
+  // otherwise show none, so we never mix "Gmail · addr" with a bare "Outlook".
+  if(!(connected.length && connected.every((p) => p.account_email))){
+    for(const p of merged) p.account_email = null;
+  }
+  renderConnectors(merged);
   setConnStat(connected.length ? (connected.length + " connected") : "none connected", connected.length > 0);
   populateSend(connected);
 }
