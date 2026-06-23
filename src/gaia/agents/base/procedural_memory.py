@@ -323,7 +323,11 @@ class ProceduralMemoryMixin:
         try:
             skills = self.recall_skill(goal, similarity_tau=config.similarity_tau)
         except Exception as e:
-            logger.debug("[MemoryMixin] recalled-skill prompt build failed: %s", e)
+            logger.debug(
+                "[MemoryMixin] per-turn skill recall failed "
+                "(turn degrades to pre-synthesis): %s",
+                e,
+            )
             return [], config
         return skills, config
 
