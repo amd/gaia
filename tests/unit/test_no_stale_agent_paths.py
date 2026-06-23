@@ -38,9 +38,7 @@ MIGRATED_AGENTS = (
 )
 
 # Trailing slash keeps `code/` from matching the in-core `code_index/`.
-STALE_PATH_RE = re.compile(
-    r"src/gaia/agents/(?:" + "|".join(MIGRATED_AGENTS) + r")/"
-)
+STALE_PATH_RE = re.compile(r"src/gaia/agents/(?:" + "|".join(MIGRATED_AGENTS) + r")/")
 
 
 def _instruction_files():
