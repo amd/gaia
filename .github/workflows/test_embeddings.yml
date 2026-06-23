@@ -137,6 +137,49 @@ jobs:
                 if ($_.ErrorDetails) {
                     Write-Host "Error details: $($_.ErrorDetails.Message)"
                 }
+                # Lemonade returns a generic 500 "llama-server failed to start"
+                # and hides the backend's own stderr. Surface ground truth so the
+                # real cause is debuggable (gaia#941): (1) the actual llama-server /
+                # server logs, and (2) where the llama.cpp backend binary actually
+                # lives + its build version, to confirm whether a stale newer
+                # backend survived an MSI downgrade or a fresh one still crashes.
+                Write-Host "`n=== Lemonade log files (most recent, tail 120) ==="
+                $logRoots = @(
+                    "$env:USERPROFILE\.cache\lemonade",
+                    "$env:LOCALAPPDATA\lemonade_server",
+                    "C:\windows\system32\config\systemprofile\AppData\Local\lemonade_server",
+                    "C:\windows\system32\config\systemprofile\.cache\lemonade"
+                ) | Where-Object { $_ } | Select-Object -Unique
+                foreach ($lr in $logRoots) {
+                    if (-not (Test-Path $lr)) { continue }
+                    Get-ChildItem $lr -Recurse -File -Include "*.log","server.log","*llama*server*.txt" -ErrorAction SilentlyContinue |
+                        Sort-Object LastWriteTime -Descending | Select-Object -First 4 | ForEach-Object {
+                            Write-Host "--- $($_.FullName) (tail 120) ---"
+                            Get-Content $_.FullName -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                        }
+                }
+                Write-Host "`n=== llama.cpp backend binaries found (path + size + version) ==="
+                foreach ($lr in $logRoots) {
+                    if (-not (Test-Path $lr)) { continue }
+                    Get-ChildItem $lr -Recurse -File -Filter "llama-server*" -ErrorAction SilentlyContinue |
+                        ForEach-Object {
+                            $ver = ""
+                            try { $ver = (Get-Item -LiteralPath $_.FullName).VersionInfo.ProductVersion } catch {}
+                            Write-Host ("   {0,14:N0} bytes  ver={1,-12}  {2}" -f $_.Length, $ver, $_.FullName)
+                        }
+                }
+                Write-Host "`n=== lemonade cache/install tree (dirs only, for layout) ==="
+                foreach ($lr in $logRoots) {
+                    if (-not (Test-Path $lr)) { continue }
+                    Write-Host "--- under $lr ---"
+                    Get-ChildItem $lr -Recurse -Directory -ErrorAction SilentlyContinue |
+                        Select-Object -First 60 | ForEach-Object { Write-Host "   $($_.FullName)" }
+                }
+                if ($env:LEMONADE_JOB_ID) {
+                    Write-Host "`n=== Lemonade serve job stream ==="
+                    $jobOutput = Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
+                    if ($jobOutput) { $jobOutput | ForEach-Object { Write-Host $_ } } else { Write-Host "(empty)" }
+                }
                 throw "Failed to load embedding model"
             }
 
