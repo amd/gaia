@@ -13,6 +13,7 @@ on:
       - 'src/gaia/vlm/**'
       - 'tests/test_rag*.py'
       - 'setup.py'
+      - 'src/gaia/version.py'
       - '.github/workflows/test_rag.yml'
   pull_request:
     branches: [ main ]
@@ -23,6 +24,7 @@ on:
       - 'src/gaia/vlm/**'
       - 'tests/test_rag*.py'
       - 'setup.py'
+      - 'src/gaia/version.py'
       - '.github/workflows/test_rag.yml'
   merge_group:
   workflow_dispatch:

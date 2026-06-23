@@ -12,6 +12,7 @@ on:
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
       - 'setup.py'
+      - 'src/gaia/version.py'
       - '.github/workflows/test_embeddings.yml'
   pull_request:
     branches: [ main ]
@@ -21,6 +22,7 @@ on:
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
       - 'setup.py'
+      - 'src/gaia/version.py'
       - '.github/workflows/test_embeddings.yml'
   merge_group:
   workflow_dispatch:
