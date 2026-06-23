@@ -119,6 +119,25 @@ class TestConnectorRoutes:
             "scopes": ["s1", "s2"],
         }
 
+    def test_complete_hides_default_account_sentinel(self, client, monkeypatch):
+        import gaia.connectors.api as capi
+
+        async def fake_complete(flow_id):
+            return {
+                "provider": "microsoft",
+                "account_email": "default",
+                "scopes": ["s1"],
+            }
+
+        monkeypatch.setattr(capi, "complete_authorization", fake_complete)
+        monkeypatch.setattr(capi, "grant_agent", lambda *a, **k: None)
+        body = client.post(
+            "/v1/email/connectors/microsoft/complete", json={"flow_id": "f1"}
+        ).json()
+        # The store's "default" no-email sentinel is normalized server-side.
+        assert body["connected"] is True
+        assert body["account_email"] is None
+
     def test_unknown_provider_is_404(self, client):
         r = client.post("/v1/email/connectors/yahoo/configure", json={"client_id": "x"})
         assert r.status_code == 404
