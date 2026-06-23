@@ -57,6 +57,8 @@ class TestPlaygroundHtml:
             '"/v1/email/triage"',
             '"/v1/email/draft"',
             '"/v1/email/init"',
+            '"/v1/email/send"',
+            '"/v1/email/connectors"',
         ):
             assert path in html, f"expected the page to call {path}"
 
@@ -65,6 +67,23 @@ class TestPlaygroundHtml:
         # triaged email body / model string must never be able to inject markup.
         # Pin it — the page must contain ZERO `.innerHTML` assignments.
         assert ".innerHTML" not in render_playground_html()
+
+    def test_connectors_section_degrades_gracefully(self):
+        # The sidecar always mounts /v1/email/connectors, but if the email router
+        # is ever mounted somewhere that did not (e.g. embedded in the Agent UI),
+        # the page must degrade to an explainer rather than break.
+        html = render_playground_html()
+        assert "Connectors" in html
+        assert "conn-providers" in html
+        assert "conn-unavailable" in html
+        assert "gaia connectors" in html
+
+    def test_send_has_always_present_mailbox_dropdown(self):
+        # Send picks the mailbox via an always-present dropdown, so a 2+ mailbox
+        # setup never hits the send API's "can't choose" 400.
+        html = render_playground_html()
+        assert 'id="send-from"' in html
+        assert "populateSend" in html
 
 
 class TestPlaygroundRoute:

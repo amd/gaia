@@ -17,7 +17,7 @@
 #      loud ::warning:: (the step outcome is unreliable — continue-on-error masks it
 #      and an install crash exits before outcome is set).
 #      CAVEAT: the retry gate (attempt 2) and this verification both depend on the
-#      `execution_file` output, which is specific to the pinned action SHA (v1.0.133).
+#      `execution_file` output, which is specific to the pinned action SHA (v1.0.140).
 #      A Dependabot bump of claude-code-action could rename or drop it and silently
 #      disable both — re-verify this output name when bumping the action.
 #

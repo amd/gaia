@@ -697,6 +697,23 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 - **Helpful:** Provide next steps, code examples, or links to documentation
 - **Honest:** If you don't know something, say so and suggest escalation to @kovtcharov-amd
 
+#### Comment Format — Lead Human, Add Technical Depth When It Helps
+
+PR reviews and issue/PR replies serve two readers at once: a **human** skimming for the verdict, and an **AI agent / engineer** who needs `file:line`-level depth to act on it. Lead with a plain-language summary for the human; put the technical depth below for whoever has to act. This mirrors the `claude.yml` bot prompts. The aim is whatever is most effective and actionable for both readers — not a fixed template.
+
+- **Human summary (lead with this):** plain language, minimal jargon — the verdict / answer / diagnosis, the bottom line, and the headline issues in plain words (what's wrong + what to do, not how). Keep it short.
+- **Technical details (add when there is real depth):** `file.py:line` refs, symbols, ```suggestion blocks, reasoning. When that depth runs more than a couple of lines, collapse it under a `<details>` block so the summary stays scannable — the blank line after `</summary>` is required for GitHub to render the markdown inside:
+
+   ```
+   <details>
+   <summary>🔍 Technical details</summary>
+
+   …depth here…
+   </details>
+   ```
+
+Use discretion — this is a guide, not a ritual. Many comments are a single plain-language part with no technical block at all; adding an empty `<details>`, a boilerplate test plan, or a security note where none is warranted is just noise. Add each section only where it genuinely helps. The one firm rule: when a 🔒 security concern or an auto-fix **Test plan** *does* apply, keep it visible — never bury it inside `<details>`.
+
 #### Security Handling Protocol (CRITICAL)
 
 **For security issues reported in public issues:**

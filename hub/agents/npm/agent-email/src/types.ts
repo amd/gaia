@@ -256,3 +256,14 @@ export interface VersionResponse {
   /** Package build version. */
   agentVersion: string;
 }
+
+/**
+ * The OpenAPI 3.x document served at `GET /openapi.json`. Loosely typed — it is
+ * the sidecar's own machine schema, not re-modeled here. Use it to drive codegen
+ * or contract checks rather than reaching for hand-written types.
+ */
+export type OpenApiDocument = {
+  openapi: string;
+  info: { title: string; version: string };
+  paths: Record<string, unknown>;
+} & Record<string, unknown>;
