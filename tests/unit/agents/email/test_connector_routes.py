@@ -1,10 +1,10 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Tests for the flag-gated mailbox-connector routes (email playground).
+"""Tests for the mailbox-connector routes (email playground).
 
 Two guarantees:
-  * the routes are mounted ONLY in playground mode (so a production sidecar
-    stays connector-free — milestone 40's "consuming app owns the connection");
+  * the routes are always mounted on the sidecar but excluded from the OpenAPI
+    contract (a playground convenience, not part of the frozen email REST API);
   * each route delegates correctly to GAIA's connector framework, including the
     grant to ``installed:email`` that makes a fresh connection usable by send.
 """
@@ -52,6 +52,25 @@ class TestConnectorRoutes:
         assert by["google"]["connected"] is True
         assert by["google"]["account_email"] == "me@gmail.com"
         assert by["microsoft"]["connected"] is False
+
+    def test_default_account_sentinel_is_hidden(self, client, monkeypatch):
+        import gaia.connectors.api as capi
+
+        monkeypatch.setattr(capi, "connected_mailbox_providers", lambda: ["microsoft"])
+        monkeypatch.setattr(
+            capi,
+            "get_connection",
+            lambda p: (
+                {"account_email": "default", "scopes": []} if p == "microsoft" else None
+            ),
+        )
+        by = {
+            p["provider"]: p
+            for p in client.get("/v1/email/connectors").json()["providers"]
+        }
+        # "default" is the store's no-email sentinel — never surfaced as an email.
+        assert by["microsoft"]["connected"] is True
+        assert by["microsoft"]["account_email"] is None
 
     def test_configure_starts_the_oauth_flow(self, client, monkeypatch):
         import gaia.connectors.handler as handler

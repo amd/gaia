@@ -530,7 +530,7 @@ function providerBlock(p){
   dot.className = "dot " + (p.connected ? "ok" : "wait"); dot.textContent = p.connected ? "✓" : "…";
   const name = document.createElement("div"); name.className = "name"; name.textContent = p.label || p.provider;
   const status = document.createElement("span"); status.className = "note"; status.style.marginLeft = "auto";
-  status.textContent = p.connected ? ("connected · " + (p.account_email || "")) : "not connected";
+  status.textContent = p.connected ? ("connected" + (p.account_email ? (" · " + p.account_email) : "")) : "not connected";
   head.appendChild(dot); head.appendChild(name); head.appendChild(status);
   if(p.connected){
     const db = document.createElement("button"); db.className = "ghost"; db.textContent = "Disconnect";
@@ -599,7 +599,8 @@ async function connectProvider(provider, btn){
   w.textContent = "Waiting for you to finish authorizing (up to 2 min)…"; out.appendChild(w);
   try{
     const st = await postJSON("/v1/email/connectors/" + provider + "/complete", { flow_id: res.flow_id });
-    out.textContent = "✓ connected: " + (st.account_email || provider);
+    const acct = (st.account_email && st.account_email !== "default") ? st.account_email : provider;
+    out.textContent = "✓ connected: " + acct;
     loadConnectors();
   }catch(e){ out.textContent = "✗ " + (e.body || e.message); btn.disabled = false; }
 }
@@ -618,18 +619,19 @@ async function disconnectProvider(provider, btn){
 // draft, which binds the send token to it, so send never has to guess.
 function populateSend(connected){
   const sel = $("send-from"); if(!sel) return;
-  const prev = sel.value;
   sel.textContent = "";
   if(!connected.length){
     const o = document.createElement("option"); o.value = ""; o.textContent = "— no mailbox connected —";
     sel.appendChild(o);
   } else {
-    for(const p of connected){
+    // Alphabetical by provider; the browser selects the first option. No
+    // remembered selection, no "default" — deterministic and simple.
+    const sorted = connected.slice().sort((a, b) => a.provider.localeCompare(b.provider));
+    for(const p of sorted){
       const o = document.createElement("option"); o.value = p.provider;
       o.textContent = (p.label || p.provider) + (p.account_email ? (" · " + p.account_email) : "");
       sel.appendChild(o);
     }
-    if(connected.some((p) => p.provider === prev)) sel.value = prev;
   }
   const has = connected.length > 0;
   if($("do-send")) $("do-send").disabled = !has;

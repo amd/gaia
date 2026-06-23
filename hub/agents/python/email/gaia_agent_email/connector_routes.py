@@ -74,17 +74,23 @@ def _require_supported(provider: str) -> None:
 async def list_email_connectors() -> Dict[str, Any]:
     """Status of the mailbox connectors the email agent can send from."""
     from gaia.connectors.api import connected_mailbox_providers, get_connection
+    from gaia.connectors.store import DEFAULT_ACCOUNT
 
     connected = set(connected_mailbox_providers())
     providers: List[Dict[str, Any]] = []
     for pid in SUPPORTED_PROVIDERS:
-        conn = get_connection(pid)
+        conn = get_connection(pid) or {}
+        # DEFAULT_ACCOUNT ("default") is the store's no-account-email sentinel —
+        # surface it as absent so the UI shows "connected", not "connected · default".
+        email = conn.get("account_email") or None
+        if email == DEFAULT_ACCOUNT:
+            email = None
         providers.append(
             {
                 "provider": pid,
                 "connected": pid in connected,
-                "account_email": (conn or {}).get("account_email"),
-                "scopes": (conn or {}).get("scopes", []),
+                "account_email": email,
+                "scopes": conn.get("scopes", []),
             }
         )
     return {"agent_id": EMAIL_AGENT_ID, "providers": providers}
