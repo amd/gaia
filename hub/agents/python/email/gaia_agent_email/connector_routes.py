@@ -52,7 +52,9 @@ class ConfigureRequest(BaseModel):
 
 
 class CompleteRequest(BaseModel):
-    flow_id: str = Field(..., min_length=1, description="flow_id returned by /configure.")
+    flow_id: str = Field(
+        ..., min_length=1, description="flow_id returned by /configure."
+    )
 
 
 def _require_supported(provider: str) -> None:

@@ -59,7 +59,10 @@ class TestConnectorRoutes:
         async def fake_configure(connector_id, config):
             assert connector_id == "google"
             assert config["client_id"] == "cid"
-            return {"flow_id": "f1", "authorization_url": "https://accounts.google.com/x"}
+            return {
+                "flow_id": "f1",
+                "authorization_url": "https://accounts.google.com/x",
+            }
 
         monkeypatch.setattr(handler, "configure", fake_configure)
         r = client.post(
@@ -98,9 +101,7 @@ class TestConnectorRoutes:
         }
 
     def test_unknown_provider_is_404(self, client):
-        r = client.post(
-            "/v1/email/connectors/yahoo/configure", json={"client_id": "x"}
-        )
+        r = client.post("/v1/email/connectors/yahoo/configure", json={"client_id": "x"})
         assert r.status_code == 404
 
 
