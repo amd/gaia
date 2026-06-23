@@ -176,7 +176,9 @@ class TestJsonExtraction:
 
     def test_extract_json_with_brace_in_string_value(self):
         """A brace inside a string value must not terminate the object early."""
-        text = 'Here is the data: {"note": "use the } symbol to close", "ok": true} Done!'
+        text = (
+            'Here is the data: {"note": "use the } symbol to close", "ok": true} Done!'
+        )
         result = extract_json_from_text(text)
         assert result == {"note": "use the } symbol to close", "ok": True}
 
