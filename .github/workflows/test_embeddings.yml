@@ -107,83 +107,33 @@ jobs:
             # v10 -- GGUF weights live in the HuggingFace hub cache -- so it was
             # a silent no-op and has been removed.
 
-            # --- Embedding-model load on the Vulkan stx runners (gaia#941) -------
-            # The nomic-embed-text-v2-moe (MoE) model crashes llama-server on the
-            # Vulkan backend on these runners: it loads + runs fine on Metal locally
-            # and LLMs load fine on Vulkan here, yet this MoE embedding model fails
-            # identically across Lemonade 10.2/10.6/10.7 -- a runner Vulkan/GPU-driver
-            # issue, not a version or model-file problem. Lemonade launches the
-            # embedder with `-ngl 99` (full GPU offload), which builds the crashing
-            # Vulkan MoE kernels. Loading with `-ngl 0` keeps compute on the CPU
-            # (embeddings are cheap) and sidesteps the broken Vulkan path.
-            $hubRoots = @(
-                "$env:USERPROFILE\.cache\huggingface\hub",
-                "C:\windows\system32\config\systemprofile\.cache\huggingface\hub"
-            )
-            if ($env:HF_HOME) { $hubRoots += (Join-Path $env:HF_HOME "hub") }
-            function Get-NomicGguf {
-                foreach ($hub in ($hubRoots | Select-Object -Unique)) {
-                    if (-not (Test-Path $hub)) { continue }
-                    $f = Get-ChildItem $hub -Recurse -File -Filter "*nomic*moe*.gguf" -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Length -gt 100MB } | Select-Object -First 1
-                    if ($f) { return $f }
-                }
-                return $null
+            # Pull embedding model (actual model used in tests)
+            Write-Host "`n=== Pulling Embedding Model ==="
+            Write-Host "Pulling nomic-embed-text-v2-moe-GGUF..."
+            try {
+                $body = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
+                $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" `
+                    -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
+                Write-Host "   [OK] Model pull initiated"
+            } catch {
+                Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
             }
 
-            # Download (if missing) + load the embedder on CPU via GAIA's own client.
-            # The bare REST /pull is registration-only on these pre-seeded runners and
-            # won't re-fetch a missing GGUF, so use LemonadeClient.load_model(
-            # auto_download=True, llamacpp_args='-ngl 0') -- a real HF download that
-            # also exercises GAIA's actual load path. -ngl 0 keeps the MoE model on the
-            # CPU, sidestepping the Vulkan kernel crash.
-            Write-Host "`n=== Download + load embedder on CPU (-ngl 0) via LemonadeClient ==="
+            # Load embedding model into memory (required in Lemonade v9.x)
+            Write-Host "`n=== Loading Embedding Model ==="
             try {
-                python -c "from gaia.llm.lemonade_client import LemonadeClient; c=LemonadeClient(); print('loading nomic on CPU (-ngl 0)...'); c.load_model('nomic-embed-text-v2-moe-GGUF', auto_download=True, prompt=False, llamacpp_args='-ngl 0', timeout=1800); print('LOADED-CPU-OK')"
-                if ($LASTEXITCODE -ne 0) { throw "LemonadeClient load returned exit code $LASTEXITCODE" }
-                $g = Get-NomicGguf
-                if ($g) { Write-Host ("[OK] cached: {0:N0} bytes  {1}" -f $g.Length, $g.Name) } else { Write-Host "[OK] load reported success" }
+                $loadRequest = @{
+                    model_name = "nomic-embed-text-v2-moe-GGUF"
+                } | ConvertTo-Json
+
+                Write-Host "Loading model: nomic-embed-text-v2-moe-GGUF"
+                $loadResponse = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" `
+                    -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 60
+                Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
             } catch {
                 Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
                 if ($_.ErrorDetails) {
                     Write-Host "Error details: $($_.ErrorDetails.Message)"
-                }
-                # Lemonade returns a generic 500 "llama-server failed to start" and
-                # hides the backend's own stderr. Surface everything we can so the
-                # real cause is debuggable (gaia#941):
-                #   1) the cached GGUF files + sizes (a truncated/corrupt download
-                #      shows a wrong size and is the leading hypothesis),
-                #   2) Lemonade's own log files (the llama-server subprocess error is
-                #      written there, NOT to the serve job's stdout -- an earlier
-                #      Receive-Job dump came back empty, so we read the log files).
-                Write-Host "`n=== Cached nomic GGUF after pull ==="
-                foreach ($hub in ($hubRoots | Select-Object -Unique)) {
-                    if (-not (Test-Path $hub)) { continue }
-                    Get-ChildItem $hub -Directory -Filter "*nomic*" -ErrorAction SilentlyContinue |
-                        Get-ChildItem -Recurse -File -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Length -gt 1MB } |
-                        ForEach-Object { Write-Host ("   {0,14:N0} bytes  {1}" -f $_.Length, $_.Name) }
-                }
-                Write-Host "`n=== Lemonade log files (most recent, tail 80) ==="
-                $logRoots = @(
-                    "$env:USERPROFILE\.cache\lemonade",
-                    "$env:LOCALAPPDATA\lemonade_server",
-                    "C:\windows\system32\config\systemprofile\AppData\Local\lemonade_server",
-                    "C:\windows\system32\config\systemprofile\.cache\lemonade",
-                    "."
-                )
-                foreach ($lr in ($logRoots | Select-Object -Unique)) {
-                    if (-not (Test-Path $lr)) { continue }
-                    Get-ChildItem $lr -Recurse -File -Filter "*.log" -ErrorAction SilentlyContinue |
-                        Sort-Object LastWriteTime -Descending | Select-Object -First 4 | ForEach-Object {
-                            Write-Host "--- $($_.FullName) (tail 80) ---"
-                            Get-Content $_.FullName -Tail 80 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-                        }
-                }
-                if ($env:LEMONADE_JOB_ID) {
-                    Write-Host "`n=== Lemonade serve job stream (often empty) ==="
-                    $jobOutput = Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                    if ($jobOutput) { $jobOutput | ForEach-Object { Write-Host $_ } } else { Write-Host "(empty)" }
                 }
                 throw "Failed to load embedding model"
             }

@@ -16,12 +16,8 @@ class TestLemonadeEmbeddings:
     """Test suite for Lemonade embeddings API."""
 
     @pytest.fixture
-    def client(self, require_lemonade):
-        """Create Lemonade client for testing.
-
-        Depends on require_lemonade so the suite SKIPS cleanly when no server is
-        running, instead of hard-failing on the first real ``embeddings()`` call.
-        """
+    def client(self):
+        """Create Lemonade client for testing."""
         return LemonadeClient()
 
     @pytest.fixture
