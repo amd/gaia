@@ -1,18 +1,21 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Flag-gated mailbox-connector routes for the email playground.
+"""Mailbox-connector routes for the email playground.
 
-Mounted on the sidecar ONLY in playground mode (``--playground`` /
-``GAIA_EMAIL_PLAYGROUND=1``). Reuses GAIA's connector framework
-(``gaia.connectors``) — the same OAuth flow the Agent UI uses — so a developer
-evaluating the agent can connect a Gmail/Outlook mailbox from the playground and
-exercise live ``/v1/email/send``.
+Always mounted on the sidecar. The playground page is itself always served, so
+gating only its connector routes would leave the page with a dead Connectors
+panel — same lifecycle for both is simpler and consistent. Reuses GAIA's
+connector framework (``gaia.connectors``) — the same OAuth flow the Agent UI
+uses — so a developer can connect a Gmail/Outlook mailbox from the playground
+and exercise live ``/v1/email/send``.
 
-Deliberately NOT part of the default sidecar surface: milestone 40 makes the
-consuming application the owner of the mailbox connection, so a production
-sidecar stays connector-free. ``gaia.connectors`` is already linked into the
+Excluded from the OpenAPI schema: a playground convenience, not part of the
+frozen email REST contract. ``gaia.connectors`` is already linked into the
 binary (the send path resolves the mailbox through it), so these routes add a
-surface, not a dependency.
+surface, not a dependency. The connection itself lives in a machine-global
+keyring store shared by every GAIA surface (Agent UI, CLI, this playground), so
+a real consuming app can establish it elsewhere and the sidecar's send just
+reads it from that shared store.
 
 OAuth completes entirely inside ``gaia.connectors.flow`` — it stands up its own
 loopback redirect listener and opens the browser — so this module hosts no
@@ -35,7 +38,9 @@ log = logging.getLogger("gaia_agent_email.connectors")
 EMAIL_AGENT_ID = "installed:email"
 SUPPORTED_PROVIDERS = ("google", "microsoft")
 
-router = APIRouter(prefix="/v1/email", tags=["email-connectors"])
+router = APIRouter(
+    prefix="/v1/email", tags=["email-connectors"], include_in_schema=False
+)
 
 
 class ConfigureRequest(BaseModel):

@@ -105,8 +105,8 @@ class TestConnectorRoutes:
         assert r.status_code == 404
 
 
-class TestSidecarGating:
-    def _build_app(self, with_connectors: bool):
+class TestSidecarMount:
+    def _build_app(self):
         # packaging/server.py is a frozen-binary script, not an importable
         # package module — load it by path.
         root = pathlib.Path(__file__).resolve()
@@ -116,12 +116,23 @@ class TestSidecarGating:
         spec = importlib.util.spec_from_file_location("email_sidecar_server", srv)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        return mod.build_app(with_connectors=with_connectors)
+        return mod.build_app()
 
-    def test_connectors_mounted_only_in_playground_mode(self):
-        on = self._build_app(with_connectors=True).openapi()["paths"]
-        off = self._build_app(with_connectors=False).openapi()["paths"]
-        assert "/v1/email/connectors" in on
-        assert "/v1/email/connectors" not in off
-        # The core email surface is present either way.
-        assert "/v1/email/triage" in off
+    def test_connectors_always_mounted(self, monkeypatch):
+        import gaia.connectors.api as capi
+
+        monkeypatch.setattr(capi, "connected_mailbox_providers", lambda: [])
+        monkeypatch.setattr(capi, "get_connection", lambda p: None)
+        client = TestClient(self._build_app())
+        # Always mounted (never 404) and the core surface is intact.
+        assert client.get("/v1/email/connectors").status_code == 200
+        assert client.get("/v1/email/playground").status_code == 200
+        assert client.post("/v1/email/triage", json={}).status_code == 422
+
+    def test_connectors_excluded_from_openapi_contract(self):
+        # Playground convenience, not part of the frozen REST contract.
+        paths = (
+            TestClient(self._build_app()).get("/openapi.json").json().get("paths", {})
+        )
+        assert "/v1/email/connectors" not in paths
+        assert "/v1/email/triage" in paths

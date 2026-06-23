@@ -29,7 +29,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 
 logging.basicConfig(
@@ -43,17 +42,20 @@ DEFAULT_PORT = 8131
 DEFAULT_HOST = "127.0.0.1"
 
 
-def build_app(with_connectors: bool = False):
+def build_app():
     """Build the minimal FastAPI app hosting the email REST surface.
 
-    ``with_connectors`` (playground mode) also mounts the flag-gated mailbox-
-    connector routes so the playground can connect Gmail/Outlook and exercise
-    live send. Off by default — a production sidecar stays connector-free (the
-    consuming application owns the mailbox connection, milestone 40).
+    Also mounts the playground's mailbox-connector routes
+    (``/v1/email/connectors*``) so the always-served playground page can connect
+    Gmail/Outlook and exercise live send. They reuse GAIA's connector framework
+    (already linked in via the send path) and are excluded from the OpenAPI
+    contract — a playground convenience, not part of the frozen email REST
+    contract.
     """
     from fastapi import FastAPI
     from gaia_agent_email import __version__ as agent_version
     from gaia_agent_email.api_routes import router as email_router
+    from gaia_agent_email.connector_routes import router as connector_router
     from gaia_agent_email.contract import SCHEMA_VERSION
 
     app = FastAPI(
@@ -73,15 +75,7 @@ def build_app(with_connectors: bool = False):
         return {"apiVersion": SCHEMA_VERSION, "agentVersion": agent_version}
 
     app.include_router(email_router)
-    if with_connectors:
-        # Playground mode only — reuse GAIA's connector framework (already
-        # linked in via the send path) so the page can connect a mailbox.
-        from gaia_agent_email.connector_routes import router as connector_router
-
-        app.include_router(connector_router)
-        log.info(
-            "playground mode: mounted mailbox-connector routes at /v1/email/connectors"
-        )
+    app.include_router(connector_router)
     return app
 
 
@@ -96,21 +90,9 @@ def main(argv=None) -> int:
         action="store_true",
         help="Print the OpenAPI JSON to stdout and exit (no server).",
     )
-    parser.add_argument(
-        "--playground",
-        action="store_true",
-        help=(
-            "Mount the playground's mailbox-connector routes (/v1/email/connectors). "
-            "Also enabled by GAIA_EMAIL_PLAYGROUND=1. Off by default — production "
-            "sidecars stay connector-free."
-        ),
-    )
     args = parser.parse_args(argv)
 
-    with_connectors = args.playground or os.environ.get(
-        "GAIA_EMAIL_PLAYGROUND", ""
-    ).strip().lower() in ("1", "true", "yes", "on")
-    app = build_app(with_connectors=with_connectors)
+    app = build_app()
 
     if args.print_openapi:
         print(json.dumps(app.openapi()))

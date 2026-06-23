@@ -134,10 +134,11 @@ _HTML = r"""<!doctype html>
     <div class="card-body">
       <div class="row" id="conn-unavailable" style="border:0;padding-top:0;display:none">
         <div class="dot wait">i</div>
-        <div class="body"><div class="name">Not available on this sidecar</div>
-          <div class="detail">Start the sidecar with <span class="kbd">--playground</span>
-            (or <span class="kbd">GAIA_EMAIL_PLAYGROUND=1</span>) to connect a mailbox and send live.
-            Triage and draft work without it.</div></div>
+        <div class="body"><div class="name">Connector routes not mounted here</div>
+          <div class="detail">This page is served somewhere without the connector routes (e.g. embedded
+            in the Agent UI, which has its own connector settings). Connect a mailbox there or with
+            <span class="kbd">gaia connectors</span> — the sidecar's send reads it from the shared
+            store. Triage and draft work without a connection.</div></div>
       </div>
       <div id="conn-live" style="display:none">
         <div class="note" style="margin:0 0 4px">Connect with your own Google/Microsoft OAuth client credentials.

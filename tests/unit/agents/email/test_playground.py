@@ -69,14 +69,14 @@ class TestPlaygroundHtml:
         assert ".innerHTML" not in render_playground_html()
 
     def test_connectors_section_degrades_gracefully(self):
-        # The Connectors section drives /v1/email/connectors, mounted ONLY in
-        # playground mode. On a plain sidecar it 404s — the page must explain how
-        # to enable it (--playground / env var) instead of breaking.
+        # The sidecar always mounts /v1/email/connectors, but if the email router
+        # is ever mounted somewhere that did not (e.g. embedded in the Agent UI),
+        # the page must degrade to an explainer rather than break.
         html = render_playground_html()
         assert "Connectors" in html
         assert "conn-providers" in html
-        assert "--playground" in html
-        assert "GAIA_EMAIL_PLAYGROUND" in html
+        assert "conn-unavailable" in html
+        assert "gaia connectors" in html
 
 
 class TestPlaygroundRoute:
