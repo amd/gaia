@@ -1625,12 +1625,12 @@ class TestEdgeCases:
             assert mode == "wal"
 
     def test_schema_version_exists(self, store):
-        """schema_version table exists with version 2."""
+        """schema_version table exists at the current version (v3, #887)."""
         if hasattr(store, "_conn"):
             cursor = store._conn.execute("SELECT version FROM schema_version")
             row = cursor.fetchone()
             assert row is not None
-            assert row[0] == 2
+            assert row[0] == 3
 
 
 # ===========================================================================
@@ -3700,15 +3700,15 @@ class TestSchemaV2Migration:
         s2.close()
         assert any(r["id"] == kid for r in results)
 
-    def test_schema_version_is_2(self, store):
-        """Schema version is updated to 2 after migration."""
+    def test_schema_version_is_current(self, store):
+        """A fresh database is stamped at the current schema version (v3, #887)."""
         with store._lock:
             cursor = store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             )
             row = cursor.fetchone()
         assert row is not None
-        assert row[0] == 2
+        assert row[0] == 3
 
 
 # ===========================================================================
@@ -4717,3 +4717,383 @@ class TestBackfillEmbeddings:
         """backfill_embeddings() on empty store returns zero counts."""
         result = store.backfill_embeddings(lambda text: b"")
         assert result == {"backfilled": 0, "total_without": 0}
+
+
+# ---------------------------------------------------------------------------
+# Procedures (v3 — procedural memory, #887)
+# ---------------------------------------------------------------------------
+
+
+def _schema_version(db_path) -> int:
+    """Read the schema_version row via an independent read-only connection."""
+    import sqlite3
+
+    con = sqlite3.connect(str(db_path))
+    try:
+        return con.execute("SELECT version FROM schema_version").fetchone()[0]
+    finally:
+        con.close()
+
+
+def _table_names(db_path) -> set:
+    """Return the set of table names via an independent connection."""
+    import sqlite3
+
+    con = sqlite3.connect(str(db_path))
+    try:
+        return {
+            r[0]
+            for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        con.close()
+
+
+class TestProceduresMigration:
+    """v2→v3 additive migration: fresh + existing DBs both reach v3 unharmed."""
+
+    def test_fresh_db_is_v3_with_procedures_table(self, tmp_path):
+        """A brand-new database opens at v3 with the procedures table present.
+
+        Cold-state check: a new user has zero procedures and a v3 schema from
+        the first open — no migration step runs for them.
+        """
+        db = tmp_path / "memory.db"
+        store = MemoryStore(db_path=db)
+        store.close()
+
+        assert _schema_version(db) == 3
+        assert "procedures" in _table_names(db)
+
+    def test_v2_db_migrates_to_v3_without_touching_existing_rows(self, tmp_path):
+        """An existing v2 DB migrates to v3 additively — no knowledge/tool row altered.
+
+        Reproduces the real initial state of an existing user (a v2 DB created
+        before procedural memory): seed rows, synthesize a v2 database by
+        dropping ``procedures`` and resetting the version, then reopen and prove
+        (a) the migration runs, (b) the table appears, and (c) every prior
+        knowledge/tool_history/conversations row is byte-identical afterward.
+        """
+        import sqlite3
+
+        db = tmp_path / "memory.db"
+
+        # Build a real DB and seed it, then snapshot the seeded rows.
+        store = MemoryStore(db_path=db)
+        store.store(category="fact", content="The sky is blue", source="tool")
+        store.store_turn("sess1", "user", "hello there")
+        store.log_tool_call("sess1", "query_documents", {"q": "policy"}, "ok", True)
+        store.close()
+
+        # Downgrade to a synthetic v2 (pre-procedures) database.
+        con = sqlite3.connect(str(db))
+        con.execute("DROP TABLE procedures")
+        con.execute("UPDATE schema_version SET version = 2")
+        con.commit()
+        knowledge_before = con.execute(
+            "SELECT id, category, content, created_at FROM knowledge ORDER BY id"
+        ).fetchall()
+        tools_before = con.execute(
+            "SELECT session_id, tool_name, success, timestamp FROM tool_history "
+            "ORDER BY id"
+        ).fetchall()
+        conv_before = con.execute(
+            "SELECT session_id, role, content FROM conversations ORDER BY id"
+        ).fetchall()
+        con.close()
+
+        assert _schema_version(db) == 2
+        assert "procedures" not in _table_names(db)
+
+        # Reopen — triggers the v2→v3 migration.
+        store2 = MemoryStore(db_path=db)
+        try:
+            assert _schema_version(db) == 3
+            assert "procedures" in _table_names(db)
+
+            con = sqlite3.connect(str(db))
+            try:
+                knowledge_after = con.execute(
+                    "SELECT id, category, content, created_at FROM knowledge "
+                    "ORDER BY id"
+                ).fetchall()
+                tools_after = con.execute(
+                    "SELECT session_id, tool_name, success, timestamp "
+                    "FROM tool_history ORDER BY id"
+                ).fetchall()
+                conv_after = con.execute(
+                    "SELECT session_id, role, content FROM conversations ORDER BY id"
+                ).fetchall()
+            finally:
+                con.close()
+
+            assert knowledge_after == knowledge_before
+            assert tools_after == tools_before
+            assert conv_after == conv_before
+        finally:
+            store2.close()
+
+    def test_v1_db_chains_through_v2_to_v3(self, tmp_path):
+        """A v1 DB (no embedding column, no procedures) chains v1→v2→v3 on open."""
+        import sqlite3
+
+        db = tmp_path / "memory.db"
+        store = MemoryStore(db_path=db)
+        store.store(category="fact", content="legacy fact", source="tool")
+        store.close()
+
+        # Synthesize a v1 database: drop the v2/v3 additions and reset version.
+        con = sqlite3.connect(str(db))
+        con.execute("DROP TABLE procedures")
+        con.execute("UPDATE schema_version SET version = 1")
+        con.commit()
+        con.close()
+
+        store2 = MemoryStore(db_path=db)
+        try:
+            assert _schema_version(db) == 3
+            assert "procedures" in _table_names(db)
+            # The v1→v2 ALTERs are re-applied idempotently; the legacy row survives.
+            rows = store2.get_by_category("fact")
+            assert any(r["content"] == "legacy fact" for r in rows)
+        finally:
+            store2.close()
+
+
+class TestProceduresCRUD:
+    """put_skill / search_skills / supersede_skill behavior."""
+
+    def _sample(self, store, **overrides):
+        kwargs = dict(
+            name="triage-support-ticket",
+            when_to_use="Triage an inbound support ticket end to end.",
+            markdown_body="# Triage\n1. step one\n## Edge cases\n- escalate",
+            tools_required=["query_documents", "read_file", "remember"],
+            tool_sequence=[{"tool": "query_documents"}, {"tool": "read_file"}],
+            success_count=4,
+            attempt_count=5,
+            provenance={"source": "synthesized", "from_sessions": ["sess_a1"]},
+        )
+        kwargs.update(overrides)
+        return store.put_skill(**kwargs)
+
+    def test_put_skill_insert_returns_proc_id(self, store):
+        """put_skill() with no skill_id inserts a new row with a proc_ id."""
+        sid = self._sample(store)
+        assert sid.startswith("proc_")
+
+    def test_search_skills_round_trips_json_fields(self, store):
+        """JSON columns (tools_required, tool_sequence, provenance) deserialize."""
+        sid = self._sample(store)
+        rows = store.search_skills(skill_id=sid)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["name"] == "triage-support-ticket"
+        assert row["tools_required"] == ["query_documents", "read_file", "remember"]
+        assert row["tool_sequence"] == [
+            {"tool": "query_documents"},
+            {"tool": "read_file"},
+        ]
+        assert row["provenance"] == {
+            "source": "synthesized",
+            "from_sessions": ["sess_a1"],
+        }
+        assert row["success_count"] == 4
+        assert row["attempt_count"] == 5
+        assert row["enabled"] is True
+        assert row["version"] == "1.0.0"
+
+    def test_put_skill_update_in_place(self, store):
+        """put_skill() with an existing skill_id updates the row, no new row."""
+        sid = self._sample(store)
+        sid2 = store.put_skill(
+            name="triage-support-ticket",
+            when_to_use="updated trigger text",
+            markdown_body="# Triage v2",
+            skill_id=sid,
+        )
+        assert sid2 == sid
+        rows = store.search_skills()
+        assert len(rows) == 1
+        assert rows[0]["when_to_use"] == "updated trigger text"
+        assert rows[0]["markdown_body"] == "# Triage v2"
+
+    def test_search_skills_enabled_only_excludes_disabled(self, store):
+        """enabled_only (default) hides disabled rows; enabled_only=False shows them."""
+        self._sample(store)
+        store.put_skill(
+            name="disabled-proc",
+            when_to_use="never recalled",
+            markdown_body="# x",
+            enabled=False,
+        )
+        assert len(store.search_skills()) == 1
+        assert len(store.search_skills(enabled_only=False)) == 2
+
+    def test_touch_skills_stamps_last_used_at(self, store):
+        """touch_skills() records last_used_at (recall telemetry for status)."""
+        sid = self._sample(store)
+        assert store.search_skills(skill_id=sid)[0]["last_used_at"] is None
+
+        updated = store.touch_skills([sid])
+
+        assert updated == 1
+        assert store.search_skills(skill_id=sid)[0]["last_used_at"] is not None
+
+    def test_touch_skills_empty_is_noop(self, store):
+        """touch_skills([]) writes nothing and returns 0 (no SQL with empty IN)."""
+        assert store.touch_skills([]) == 0
+
+    def test_get_stats_reports_procedure_counts(self, store):
+        """get_stats()['procedures'] counts total/active and last recall time.
+
+        "active" excludes both disabled rows AND superseded-but-enabled rows.
+        """
+        active = self._sample(store, name="active-proc")
+        store.put_skill(
+            name="disabled-proc", when_to_use="t", markdown_body="b", enabled=False
+        )
+        old = self._sample(store, name="old-proc")
+        new = self._sample(store, name="new-proc")
+        store.supersede_skill(old, superseded_by=new)  # old stays enabled=1
+        store.touch_skills([active])
+
+        proc = store.get_stats()["procedures"]
+
+        assert proc["total"] == 4
+        # active-proc + new-proc count as active; disabled-proc (disabled) and
+        # old-proc (superseded though still enabled) are both excluded.
+        assert proc["active"] == 2
+        assert proc["last_recalled"] is not None
+
+    def test_search_skills_by_name(self, store):
+        """search_skills(name=...) filters by exact name."""
+        self._sample(store)
+        store.put_skill(name="other-proc", when_to_use="t", markdown_body="b")
+        rows = store.search_skills(name="other-proc")
+        assert len(rows) == 1
+        assert rows[0]["name"] == "other-proc"
+
+    def test_search_skills_with_embedding_returns_blob(self, store):
+        """with_embedding=True includes the raw embedding BLOB; default omits it."""
+        blob = b"\x01" * (768 * 4)
+        sid = store.put_skill(
+            name="emb-proc", when_to_use="t", markdown_body="b", embedding=blob
+        )
+        without = store.search_skills(skill_id=sid)[0]
+        assert "embedding" not in without
+        with_emb = store.search_skills(skill_id=sid, with_embedding=True)[0]
+        assert with_emb["embedding"] == blob
+
+    def test_supersede_skill_excludes_from_default_search(self, store):
+        """supersede_skill() keeps the row but excludes it from default search."""
+        sid = self._sample(store)
+        newer = store.put_skill(
+            name="triage-support-ticket-v2", when_to_use="t", markdown_body="b"
+        )
+        assert store.supersede_skill(sid, newer) is True
+
+        # Superseded row is hidden by default, visible with include_superseded.
+        remaining = {r["id"] for r in store.search_skills()}
+        assert sid not in remaining
+        all_rows = {r["id"] for r in store.search_skills(include_superseded=True)}
+        assert sid in all_rows
+        # The row was kept, not deleted — its superseded_by points at the newer.
+        superseded = store.search_skills(
+            skill_id=sid, include_superseded=True, enabled_only=False
+        )[0]
+        assert superseded["superseded_by"] == newer
+
+    def test_supersede_skill_missing_id_returns_false(self, store):
+        """supersede_skill() on an unknown id returns False."""
+        assert store.supersede_skill("proc_missing", "proc_other") is False
+
+    @pytest.mark.parametrize("field", ["name", "when_to_use", "markdown_body"])
+    def test_put_skill_rejects_empty_required_field(self, store, field):
+        """put_skill() raises ValueError when a required text field is blank."""
+        kwargs = dict(
+            name="valid-name", when_to_use="valid trigger", markdown_body="valid body"
+        )
+        kwargs[field] = "   "
+        with pytest.raises(ValueError, match=field):
+            store.put_skill(**kwargs)
+
+    def test_put_skill_unknown_skill_id_raises(self, store):
+        """put_skill() with a non-existent skill_id fails loudly (no ghost row)."""
+        with pytest.raises(ValueError, match="not found"):
+            store.put_skill(
+                name="ghost",
+                when_to_use="t",
+                markdown_body="b",
+                skill_id="proc_does_not_exist",
+            )
+        # Nothing was inserted under the bogus id.
+        assert store.search_skills(skill_id="proc_does_not_exist") == []
+
+
+class TestIterSessions:
+    """iter_sessions(): per-session successful tool spans + first-user-turn goal."""
+
+    def test_returns_qualifying_session_with_goal_and_ordered_tools(self, store):
+        """A session with >= min_steps successes yields its goal + ordered tools."""
+        store.store_turn("sessX", "user", "Triage this support ticket please")
+        store.store_turn("sessX", "assistant", "on it")
+        store.log_tool_call("sessX", "query_documents", {"q": "a"}, "ok", True)
+        store.log_tool_call("sessX", "read_file", {"p": "b"}, "ok", True)
+        store.log_tool_call("sessX", "remember", {"k": "c"}, "ok", True)
+
+        sessions = store.iter_sessions(min_steps=3)
+        assert len(sessions) == 1
+        s = sessions[0]
+        assert s["session_id"] == "sessX"
+        assert s["goal"] == "Triage this support ticket please"
+        assert s["tools"] == ["query_documents", "read_file", "remember"]
+        assert s["success_count"] == 3
+        assert s["attempt_count"] == 3
+        assert [step["tool"] for step in s["tool_sequence"]] == [
+            "query_documents",
+            "read_file",
+            "remember",
+        ]
+
+    def test_session_below_min_steps_excluded(self, store):
+        """A session with fewer than min_steps successful calls is excluded."""
+        store.store_turn("sessY", "user", "small task")
+        store.log_tool_call("sessY", "t0", {}, "ok", True)
+        store.log_tool_call("sessY", "t1", {}, "ok", True)
+
+        assert store.iter_sessions(min_steps=3) == []
+
+    def test_failures_counted_in_attempts_not_in_tools(self, store):
+        """Failed calls raise attempt_count but never enter the success span."""
+        store.store_turn("sessZ", "user", "do work")
+        for i in range(3):
+            store.log_tool_call("sessZ", f"good{i}", {}, "ok", True)
+        store.log_tool_call("sessZ", "bad", {}, "boom", False)
+
+        s = store.iter_sessions(min_steps=3)[0]
+        assert s["success_count"] == 3
+        assert s["attempt_count"] == 4
+        assert "bad" not in s["tools"]
+
+    def test_since_watermark_excludes_older_rows(self, store):
+        """since= counts only tool calls strictly newer than the watermark."""
+        store.store_turn("sessW", "user", "goal")
+        store.log_tool_call("sessW", "old", {}, "ok", True)
+        watermark = _now_iso()
+        time.sleep(0.01)
+        for i in range(3):
+            store.log_tool_call("sessW", f"new{i}", {}, "ok", True)
+
+        # With the watermark, the single pre-watermark call is excluded, leaving
+        # exactly the 3 newer successes (still qualifying).
+        after = store.iter_sessions(since=watermark, min_steps=3)
+        assert len(after) == 1
+        assert after[0]["success_count"] == 3
+        assert "old" not in after[0]["tools"]
+        # Without the watermark all 4 successes are counted.
+        assert store.iter_sessions(min_steps=3)[0]["success_count"] == 4
+
+    def test_empty_history_returns_empty_list(self, store):
+        """No tool history → no sessions."""
+        assert store.iter_sessions(min_steps=3) == []

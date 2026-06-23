@@ -5384,6 +5384,18 @@ def _handle_memory_status():
             print(f"    Success rate:  {t['overall_success_rate']:.0%}")
             print(f"    Total errors:  {t['total_errors']}")
 
+        # Procedures section (procedural memory / skills, #887). Counts come
+        # from get_stats() COUNT(*) queries — synthesis is the only writer, so
+        # every row is "synthesized"; recall uses the enabled, non-superseded
+        # subset.
+        proc = stats["procedures"]
+        print(f"\n  Procedures (skills): {proc['total']} synthesized")
+        if proc["total"]:
+            if proc["active"] != proc["total"]:
+                print(f"    Active (recallable): {proc['active']}")
+            if proc["last_recalled"]:
+                print(f"    Last recalled: {proc['last_recalled'][:10]}")
+
         # Temporal section
         tp = stats["temporal"]
         if tp["upcoming_count"] > 0 or tp["overdue_count"] > 0:

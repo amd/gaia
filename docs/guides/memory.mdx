@@ -677,6 +677,30 @@ On startup, the agent scans for contradictory facts across sessions and resolves
 
 You don't need to do anything -- the agent keeps its own knowledge consistent.
 
+### Procedural memory (skills)
+
+Beyond remembering *facts*, the agent learns *procedures* -- the multi-step tool recipes it has already run successfully. When the same kind of goal succeeds several times with the same shape of work, GAIA distils that successful tool sequence into a reusable skill and stores it as a procedure. The next time a similar goal comes up, the agent recalls the proven recipe and reuses it instead of re-planning from scratch.
+
+This is automatic: there is no command to run and no skill to install. Synthesis runs during the startup maintenance pass, and a matching skill is injected silently into the agent's planning context.
+
+A procedure is only synthesized when **all** of these hold:
+
+- the same goal succeeded at least **3 times** (clustered by goal similarity ≥ 0.82),
+- the success rate across those attempts is at least **80%**, and
+- each successful run was a real multi-step sequence of at least **3 tool calls**.
+
+These thresholds live in `~/.gaia/memory_settings.json` under a `skill_synthesis` section, so you can tighten or relax them per machine.
+
+Synthesized skills follow the same lineage rules as facts: a better recipe **supersedes** an older one rather than overwriting it, and nothing is deleted automatically.
+
+**Off switches:**
+
+- `GAIA_MEMORY_DISABLED=1` turns off both synthesis and recall.
+- `"skill_synthesis": { "enabled": false }` in `memory_settings.json` skips synthesis while leaving the rest of memory active.
+- A procedure you disable (`enabled = 0`) or that has been superseded is never recalled.
+
+Run `gaia memory status` to see how many procedures have been synthesized.
+
 ---
 
 ## Privacy
@@ -725,7 +749,7 @@ rm ~/.gaia/memory.db
 | `gaia memory bootstrap --reset` | Delete discovery items (with confirmation) |
 | `gaia memory bootstrap --system` | Re-scan and refresh system context (OS, hardware, apps, versions) |
 | `gaia memory bootstrap --reset-system` | Clear system context entries and optionally disable auto-collection |
-| `gaia memory status` | Show memory stats (counts, categories, contexts) |
+| `gaia memory status` | Show memory stats (counts, categories, contexts, synthesized procedures) |
 
 ### System context (versions, hardware, apps)
 

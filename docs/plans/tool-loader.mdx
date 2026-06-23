@@ -9,7 +9,7 @@ title: "Dynamic Tool Loader"
 <Note>
 **Component:** Per-turn tool visibility for agents (issue [#688](https://github.com/amd/gaia/issues/688))
 **Module:** `gaia.agents.base.tool_loader`
-**Status:** **Part 0 (#1448) + Part 1 (#1449) landed.** Part 1 ships the selection mechanism behind a default-off toggle on the ChatAgent `doc` profile. Parts 2–3 (explicit escape hatch, skill signal) are still proposed.
+**Status:** **Part 0 (#1448) + Part 1 (#1449) + Part 2 (#1450) landed.** Part 1 ships the selection mechanism behind a default-off toggle on the ChatAgent `doc` profile; Part 2 adds the explicit `load_tools` escape hatch (so native tool-calling models can recover a semantic miss) plus the escape-hatch activation-rate tuning signal. Part 3 (skill signal) is still proposed.
 **Target agent (v1):** `ChatAgent` (`doc` profile), behind a default-off toggle.
 </Note>
 
@@ -297,11 +297,14 @@ backend KV prefix stays warm. When a filter is active the tools block moves
 **after** the response-format template (volatile content last); with no filter
 the legacy order and bytes are preserved exactly.
 
-**Native known gap (Amendment 2).** `_execute_tool` is never tightened, so a
-non-tool-calling model that names an unlisted tool still runs it (free recovery)
-and the loader logs `TOOL_LOADER_ESCAPE_HATCH`. Native tool-calling models have
-no such hatch until Part 2's `load_tools`; on first activation the agent logs the
-miss as a *known gap* rather than padding the loaded set.
+**Native known gap (Amendment 2) — closed by Part 2.** `_execute_tool` is never
+tightened, so a non-tool-calling model that names an unlisted tool still runs it
+(free recovery) and the loader logs `TOOL_LOADER_ESCAPE_HATCH`. In Part 1 native
+tool-calling models had no such hatch — a semantic miss could not self-recover.
+[Part 2](#part-2-explicit-escape-hatch--tuning-1450) closes the recovery gap with
+the always-on `load_tools` meta-tool (the model loads the bundle it needs and
+calls the tool on its next step), and the recall gate's native exemption is
+removed accordingly.
 
 **Approved deviations from this sketch** (flagged in the #1449 PR):
 
@@ -323,7 +326,7 @@ baseline — meaning **CORE-only is the ~60%-reduction best case** and a full
 `test_tool_loader_token_budget.py` pins these filtered costs as a static guard.
 </Warning>
 
-### Part 2 — Explicit escape hatch + tuning
+### Part 2 — Explicit escape hatch + tuning ✅ landed (#1450)
 
 - Add bundle re-surfacing + a discoverability menu of bundle names, and the
   `load_tools` meta-tool that native tool-calling models need (the free recovery
@@ -339,6 +342,50 @@ baseline — meaning **CORE-only is the ~60%-reduction best case** and a full
   needed tool was permanently unreachable.
 - **Escape-hatch activation rate** is logged per session and usable as the
   threshold-tuning signal (rising rate ⇒ τ too strict).
+
+#### How Part 2 shipped (implementation reference)
+
+**`load_tools` is always-on via CORE.** `load_tools` is added to
+[`DOC_CORE_TOOLS`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py)
+(CORE = 11), so once registered it renders in **both** the text prompt and the
+native `tools=` schema every active turn and is cap-/eviction-exempt. It is
+registered **only when the loader is active** (`self.tool_loader is not None`),
+so the default-off `doc` path stays byte-identical — the unfiltered 37-tool
+baseline is unchanged.
+
+**Recovery lands on the next model *step*, not the next user turn.** The
+`load_tools(bundle)` handler calls `ToolLoader.load_bundle`, then
+`Agent._apply_tool_filter` — the one place the active filter and the cached
+system prompt move together. Because `system_prompt` and `_openai_tools` are
+read live at every LLM call, the expanded set is visible to the very next step
+in the same query, which is what lets `smart_discovery` recover on turn 1.
+
+**`load_bundle` is cap-aware.** It resolves a bundle name (or a bare tool name,
+via the reverse index) and admits members with the same LRU-evict path `select()`
+uses — protecting CORE and the members being loaded now — so `max_tools` holds at
+all times. It emits a same-turn `TOOL_LOADER {…, "event": "load_tools", …}`
+superset line.
+
+**Menu is stable and native-only.** A compact bundle menu (name + one-line
+description, from `ToolBundle.description`) is injected into the **stable** prefix
+of the doc system prompt (before the volatile tools tail → no KV thrash), and
+**only for native tool-calling models** — non-native models already have free
+recovery and are the TTFT-sensitive path.
+
+**Tuning signal is log-derived.** The loader counts escape-hatch (free) and
+`load_tools` (explicit) activations per session and emits a `TOOL_LOADER_SESSION`
+summary on `reset_session()` (`escape_hatch_rate = (escape_hatch + load_tools) /
+turns`). `gaia.eval.tool_recall` aggregates these from the server log and reports
+the per-turn rate alongside recall — no UI-DB migration.
+
+**Recall gate flipped correctly.** `tool_recall.py` unions same-turn
+`load_tools` superset lines into that turn's loaded set and treats `load_tools`
+as always-satisfied; **only then** is the native "known gap" exemption removed,
+so a successful recovery passes the gate and a genuinely unrecovered miss fails
+it on every model.
+
+**Cap unchanged at 14** (→ 3 dynamic slots now that CORE = 11). The eval gates
+recall; bump the default only if recall or the escape-hatch rate regresses.
 
 ### Part 3 — Skill-driven signal (gated on #887)
 
@@ -407,7 +454,11 @@ via the base `_select_tools_for_turn` hook, and both render paths filter from th
 same selection. The old keyword/bundle-policy skeleton was removed; the class name
 `ToolLoader` and `reset_session()` were kept so the existing (guarded) call sites
 in `cli.py` / `chat/app.py` needed no change. Recall recovery for native
-tool-calling models (the `load_tools` meta-tool) is still **Part 2**.
+tool-calling models has shipped (Part 2, #1450): the loader exposes
+`bundle_names` / `format_bundle_menu` / `load_bundle` and per-session escape-hatch
+counters; `ChatAgent` registers the `load_tools` meta-tool and injects the
+native-only bundle menu; and `gaia.eval.tool_recall` unions mid-loop `load_tools`
+lines, drops the native exemption, and reports the escape-hatch activation rate.
 
 ## Dependencies
 

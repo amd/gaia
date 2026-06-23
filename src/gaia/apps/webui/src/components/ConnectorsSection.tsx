@@ -22,6 +22,7 @@ import {
 // Human-readable labels for well-known OAuth scope URIs.
 // Unrecognised scopes fall back to the last path segment of the URI.
 const SCOPE_LABELS: Record<string, string> = {
+    // Google / Gmail
     'https://www.googleapis.com/auth/gmail.readonly':        'Read emails',
     'https://www.googleapis.com/auth/gmail.modify':          'Organize emails (archive, label, trash)',
     'https://www.googleapis.com/auth/gmail.send':            'Send emails on your behalf',
@@ -35,6 +36,12 @@ const SCOPE_LABELS: Record<string, string> = {
     'openid':   'Identify you',
     'email':    'See your email address',
     'profile':  'See your basic profile info',
+    // Microsoft Graph — email agent scopes (#1770)
+    'https://graph.microsoft.com/Mail.ReadWrite':      'Read & organize Outlook mail (archive, label, trash)',
+    'https://graph.microsoft.com/Mail.Send':           'Send Outlook mail on your behalf',
+    'https://graph.microsoft.com/Calendars.ReadWrite': 'Create & respond to Outlook calendar events',
+    'https://graph.microsoft.com/Calendars.Read':      'View Outlook calendar events',
+    'https://graph.microsoft.com/User.Read':           'Read your basic Microsoft profile',
 };
 
 function scopeLabel(scope: string): string {

@@ -136,7 +136,7 @@ class ChatAgentConfig:
     # __init__: GAIA_DYNAMIC_TOOLS / GAIA_DYNAMIC_TOOLS_TAU / GAIA_DYNAMIC_TOOLS_MAX.
     dynamic_tools: bool = False
     dynamic_tools_threshold: float = 0.20  # inclusive cosine; calibrated #1449
-    dynamic_tools_max: int = 14  # cap (10 CORE + 4 dynamic slots)
+    dynamic_tools_max: int = 14  # cap (11 CORE + 3 dynamic slots)
 
     # Per-agent identity for the connectors activation filter (#1005).
     # Must be set BEFORE ``Agent.__init__`` runs ``_register_tools``, because
@@ -342,7 +342,6 @@ class ChatAgent(
         # None → full registry / legacy prompt. Embedding fns are injected so the
         # loader never imports MemoryMixin; they resolve lazily on first select(),
         # by which point init_memory() has probed the embedder.
-        self._dynamic_tools_native_warned = False
         self._dynamic_tools_validated = False
         self.tool_loader = self._maybe_build_tool_loader()
 
@@ -521,7 +520,6 @@ class ChatAgent(
         """Return this turn's sorted tool subset, or ``None`` for the full registry."""
         if not self._dynamic_tools_active():
             return None
-        self._maybe_warn_native_tool_gap()
         if not self._dynamic_tools_validated:
             # Fail loudly on first activation if a CORE/bundle name doesn't exist
             # in the live registry (drift). The reverse direction is the CI test.
@@ -552,22 +550,6 @@ class ChatAgent(
                 break
         combined = f"{prev}\n{user_input}" if prev else user_input
         return combined[-4000:]
-
-    def _maybe_warn_native_tool_gap(self) -> None:
-        """Log the Amendment-2 known gap once, on first activation for a native model.
-
-        Native tool-calling models have no escape hatch until Part 2's
-        ``load_tools`` lands, so a semantic miss can't self-recover. We log it as
-        a known gap rather than padding the loaded set.
-        """
-        if self._dynamic_tools_native_warned:
-            return
-        self._dynamic_tools_native_warned = True
-        if is_tool_calling_model(getattr(self, "model_id", None)):
-            logger.warning(
-                "tool_loader: native tool-calling model — no escape hatch until "
-                "Part 2; semantic misses are a known gap"
-            )
 
     def _post_process_tool_result(
         self,
@@ -891,7 +873,23 @@ No documents are currently indexed.
             return base_prompt + extras
 
         if profile == "doc":
-            # Document Q&A: RAG tools + hallucination prevention
+            # Document Q&A: RAG tools + hallucination prevention.
+            # Native-only escape-hatch menu (#1450): non-native models already
+            # self-recover via the free full-registry path and are the
+            # TTFT-sensitive case, so we don't tax them with the menu. Lives in
+            # this stable prefix (before the volatile tools tail) → no KV thrash.
+            load_tools_menu = ""
+            loader = getattr(self, "tool_loader", None)
+            if loader is not None and is_tool_calling_model(
+                getattr(self, "model_id", None)
+            ):
+                load_tools_menu = (
+                    "\n\n==== LOADABLE TOOL BUNDLES ====\n"
+                    "Your visible tools are trimmed to what this turn needs. If a "
+                    "capability you need is missing, call load_tools(bundle) with "
+                    "one of these names; its tools become available on your next "
+                    "step:\n" + loader.format_bundle_menu()
+                )
             return (
                 base_prompt
                 + indexed_docs_section
@@ -899,6 +897,7 @@ No documents are currently indexed.
                 + discovery_rules
                 + discovery_rules_tail
                 + rag_query_rules
+                + load_tools_menu
             )
 
         if profile == "file":
@@ -1191,6 +1190,52 @@ No documents are currently indexed.
             self.register_screenshot_tools()
         self._register_external_tools_conditional()
         self._register_loop_control_tools()  # set_loop_state, request_user_input
+
+        # load_tools escape hatch (#1450, Part 2) — registered ONLY when the
+        # dynamic loader is active, so the default-off doc path stays
+        # byte-identical. It is in DOC_CORE_TOOLS, so once registered it renders
+        # in both prompt paths every active turn (cap- and eviction-exempt).
+        if self.tool_loader is not None:
+
+            @tool
+            def load_tools(bundle: str) -> dict:
+                """Load a bundle of tools so you can call them on your next step.
+
+                Call this when the capability you need is not in your current
+                tool list. If a "Loadable tool bundles" menu is shown in your
+                instructions, pick a bundle name from it; otherwise pass the name
+                of the specific tool you need and its bundle is loaded. The
+                bundle's tools become available on your **next** step; then call
+                the one you need.
+
+                Args:
+                    bundle: A bundle name (e.g. "file_search", "rag_index") — from
+                        the menu when one is shown — or a specific tool name to
+                        load its owning bundle.
+
+                Returns:
+                    Dictionary with status, the resolved bundle, and the full
+                    loaded_tools list now available to call.
+                """
+                # load_tools is registered only inside ``if self.tool_loader is
+                # not None`` and the loader is never re-nulled after construction,
+                # so the loader is always live here.
+                loader = self.tool_loader
+                try:
+                    loaded = loader.load_bundle(bundle, self._tools_registry)
+                except KeyError:
+                    return {
+                        "status": "error",
+                        "error": f"Unknown bundle '{bundle}'. Choose one of: "
+                        f"{', '.join(loader.bundle_names())}",
+                    }
+                # Make the expansion visible to the next model step in this query.
+                self._apply_tool_filter(loaded)
+                return {
+                    "status": "success",
+                    "bundle": bundle,
+                    "loaded_tools": loaded,
+                }
 
         # Inline list_files — only for profiles that need file operations
         if profile in ("file", "data", "full"):
