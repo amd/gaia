@@ -78,6 +78,13 @@ class TestPlaygroundHtml:
         assert "conn-unavailable" in html
         assert "gaia connectors" in html
 
+    def test_send_has_always_present_mailbox_dropdown(self):
+        # Send picks the mailbox via an always-present dropdown, so a 2+ mailbox
+        # setup never hits the send API's "can't choose" 400.
+        html = render_playground_html()
+        assert 'id="send-from"' in html
+        assert "populateSend" in html
+
 
 class TestPlaygroundRoute:
     def test_serves_html_200(self, client):

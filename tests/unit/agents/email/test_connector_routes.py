@@ -104,6 +104,22 @@ class TestConnectorRoutes:
         r = client.post("/v1/email/connectors/yahoo/configure", json={"client_id": "x"})
         assert r.status_code == 404
 
+    def test_disconnect_removes_tokens_and_grants(self, client, monkeypatch):
+        import gaia.connectors.handler as handler
+
+        called = {}
+
+        async def fake_disconnect(connector_id, **kw):
+            called["id"] = connector_id
+
+        # Uses the framework's full disconnect (tokens + per-agent grants), not a
+        # bare connection delete — so a reconnect can't inherit stale consent.
+        monkeypatch.setattr(handler, "disconnect", fake_disconnect)
+        r = client.delete("/v1/email/connectors/google")
+        assert r.status_code == 200
+        assert r.json() == {"provider": "google", "connected": False}
+        assert called["id"] == "google"
+
 
 class TestSidecarMount:
     def _build_app(self):

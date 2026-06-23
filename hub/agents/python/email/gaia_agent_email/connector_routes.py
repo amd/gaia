@@ -141,11 +141,12 @@ async def complete_email_connector(
 
 @router.delete("/connectors/{provider}")
 async def disconnect_email_connector(provider: str) -> Dict[str, Any]:
-    """Remove the stored connection for ``provider``."""
+    """Disconnect ``provider`` — removes its stored tokens AND per-agent grants,
+    so a later reconnect can't silently inherit stale consent (#1592)."""
     _require_supported(provider)
-    from gaia.connectors.api import revoke_connection
+    from gaia.connectors.handler import disconnect
 
-    revoke_connection(provider)
+    await disconnect(provider)
     return {"provider": provider, "connected": False}
 
 
