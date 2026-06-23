@@ -104,7 +104,7 @@ jobs:
               await github.rest.issues.createComment({
                 ...context.repo,
                 issue_number: issueNumber,
-                body: `@${commenter} I couldn't assign this issue to you automatically. A maintainer will assign it shortly.`,
+                body: `@${commenter} I couldn't assign this to you automatically — GitHub only auto-assigns users it already recognizes as repo contributors. A maintainer can assign you manually; just comment here and we'll sort it out.`,
               });
               return;
             }
