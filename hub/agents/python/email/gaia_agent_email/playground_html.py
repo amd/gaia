@@ -99,7 +99,7 @@ _HTML = r"""<!doctype html>
   @keyframes pulse{50%{opacity:.35}}
   .term-line{white-space:pre-wrap;word-break:break-word}
   .term-line.ok{color:var(--ok)} .term-line.bad{color:var(--bad)} .term-line.cmd{color:var(--gold)}
-  textarea,input{width:100%;background:var(--card);border:1px solid var(--border);border-radius:9px;
+  textarea,input,select{width:100%;background:var(--card);border:1px solid var(--border);border-radius:9px;
     color:var(--text);font:inherit;font-size:13.5px;padding:9px 11px;margin-top:5px}
   textarea{min-height:96px;resize:vertical;font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:12.5px}
   label{font-size:12.5px;color:var(--muted);font-weight:600}
@@ -125,6 +125,28 @@ _HTML = r"""<!doctype html>
     <span class="badge">⬤ 100% local</span>
   </div>
   <div class="sub">Served by your local sidecar — code, data, and inference never leave this machine.</div>
+
+  <!-- Connectors (playground mode only — /v1/email/connectors) -->
+  <details class="card" id="conn-card" open>
+    <summary><span class="sum-title">Connectors</span>
+      <span class="sum-desc">connect Gmail / Outlook</span>
+      <span class="sum-stat" id="conn-stat">checking…</span><span class="chev">›</span></summary>
+    <div class="card-body">
+      <div class="row" id="conn-unavailable" style="border:0;padding-top:0;display:none">
+        <div class="dot wait">i</div>
+        <div class="body"><div class="name">Connector routes not mounted here</div>
+          <div class="detail">This page is served somewhere without the connector routes (e.g. embedded
+            in the Agent UI, which has its own connector settings). Connect a mailbox there or with
+            <span class="kbd">gaia connectors</span> — the sidecar's send reads it from the shared
+            store. Triage and draft work without a connection.</div></div>
+      </div>
+      <div id="conn-live" style="display:none">
+        <div class="note" style="margin:0 0 4px">Connect with your own Google/Microsoft OAuth client credentials.
+          Tokens are stored locally by GAIA's connector framework — nothing leaves this machine.</div>
+        <div id="conn-providers"></div>
+      </div>
+    </div>
+  </details>
 
   <!-- Stack health -->
   <details class="card" open>
@@ -180,17 +202,23 @@ _HTML = r"""<!doctype html>
     </div>
   </details>
 
-  <!-- Send (connector-gated) -->
+  <!-- Send (mailbox-aware) -->
   <details class="card">
     <summary><span class="sum-title">Send a reply</span>
-      <span class="sum-desc">connector required</span><span class="chev">›</span></summary>
+      <span class="sum-desc">picks the connected mailbox</span>
+      <span class="sum-stat" id="send-stat" style="display:none">ready</span><span class="chev">›</span></summary>
     <div class="card-body">
-      <div class="row" style="border:0;padding-top:0">
-        <div class="dot bad">⬤</div>
-        <div class="body"><div class="name">Connector required</div>
-          <div class="detail">Sending touches a live mailbox, so it needs a connected Gmail/Outlook account (OAuth).
-            Not available in this local playground yet.</div></div>
+      <div class="grid2">
+        <div><label>From mailbox</label><select id="send-from"></select></div>
+        <div><label>To</label><input id="send-to" value="sarah@example.com" /></div>
       </div>
+      <label style="display:block;margin-top:10px">Subject</label>
+      <input id="send-subject" value="Re: Prod incident follow-up" />
+      <label style="display:block;margin-top:10px">Body</label>
+      <textarea id="send-body">Reviewed — I'll reply by Friday.</textarea>
+      <div class="actions"><button id="do-send" class="primary" disabled>Draft &amp; send</button>
+        <span class="note" id="send-note">Connect a mailbox in the Connectors panel above.</span></div>
+      <div class="out" id="send-out"></div>
     </div>
   </details>
 
@@ -477,12 +505,164 @@ async function doProvision(){
     btn.disabled = false;
   }
 }
+// ---- Connectors -----------------------------------------------------------
+// The sidecar always mounts /v1/email/connectors. A 404 only happens if the
+// email router is mounted somewhere that didn't add them (e.g. the Agent UI) —
+// then we degrade to an explainer. OAuth runs inside the connector framework
+// (its own loopback callback), so the page only kicks it off and waits.
+const CONN_PROVIDERS = [
+  { id:"google", label:"Google · Gmail" },
+  { id:"microsoft", label:"Microsoft · Outlook" },
+];
+function setConnStat(text, ok){
+  const s = $("conn-stat"); if(!s) return;
+  s.textContent = text;
+  s.style.background = ok ? "var(--soft)" : "rgba(232,122,122,.14)";
+  s.style.borderColor = ok ? "var(--line)" : "rgba(232,122,122,.4)";
+  s.style.color = ok ? "var(--gold)" : "var(--bad)";
+}
+function providerBlock(p){
+  const wrap = document.createElement("div"); wrap.className = "row";
+  wrap.style.flexDirection = "column"; wrap.style.alignItems = "stretch";
+  const head = document.createElement("div");
+  head.style.display = "flex"; head.style.alignItems = "center"; head.style.gap = "10px";
+  const dot = document.createElement("div");
+  dot.className = "dot " + (p.connected ? "ok" : "wait"); dot.textContent = p.connected ? "✓" : "…";
+  const name = document.createElement("div"); name.className = "name"; name.textContent = p.label || p.provider;
+  const status = document.createElement("span"); status.className = "note"; status.style.marginLeft = "auto";
+  status.textContent = p.connected ? ("connected" + (p.account_email ? (" · " + p.account_email) : "")) : "not connected";
+  head.appendChild(dot); head.appendChild(name); head.appendChild(status);
+  if(p.connected){
+    const db = document.createElement("button"); db.className = "ghost"; db.textContent = "Disconnect";
+    db.onclick = () => disconnectProvider(p.provider, db);
+    head.appendChild(db);
+  }
+  wrap.appendChild(head);
+  const out = document.createElement("div"); out.className = "out"; out.id = "cout-" + p.provider;
+  wrap.appendChild(out);
+  if(!p.connected){
+    const grid = document.createElement("div"); grid.className = "grid2"; grid.style.marginTop = "8px";
+    function field(labelText, id, type){
+      const d = document.createElement("div");
+      const l = document.createElement("label"); l.textContent = labelText;
+      const inp = document.createElement("input"); inp.id = id; if(type) inp.type = type;
+      d.appendChild(l); d.appendChild(inp); return d;
+    }
+    grid.appendChild(field("Client ID", "ci-" + p.provider));
+    grid.appendChild(field("Client secret", "cs-" + p.provider, "password"));
+    wrap.appendChild(grid);
+    const act = document.createElement("div"); act.className = "actions";
+    const btn = document.createElement("button"); btn.textContent = "Save & Connect";
+    btn.onclick = () => connectProvider(p.provider, btn);
+    act.appendChild(btn); wrap.appendChild(act);
+  }
+  return wrap;
+}
+function renderConnectors(providers){
+  const host = $("conn-providers"); host.textContent = "";
+  for(const p of providers) host.appendChild(providerBlock(p));
+}
+async function loadConnectors(){
+  let data;
+  try{ data = await getJSON("/v1/email/connectors"); }
+  catch(e){
+    if(e.status === 404){
+      $("conn-unavailable").style.display = "flex"; $("conn-live").style.display = "none";
+      setConnStat("not mounted here", false); populateSend([]); return;
+    }
+    setConnStat("error", false); return;
+  }
+  $("conn-unavailable").style.display = "none"; $("conn-live").style.display = "block";
+  const byId = {}; for(const p of (data.providers || [])) byId[p.provider] = p;
+  const merged = CONN_PROVIDERS.map((s) =>
+    Object.assign({ provider:s.id, label:s.label, connected:false }, byId[s.id] || {}));
+  const connected = merged.filter((p) => p.connected);
+  // Consistency: only show account emails if EVERY connected mailbox has one;
+  // otherwise show none, so we never mix "Gmail · addr" with a bare "Outlook".
+  if(!(connected.length && connected.every((p) => p.account_email))){
+    for(const p of merged) p.account_email = null;
+  }
+  renderConnectors(merged);
+  setConnStat(connected.length ? (connected.length + " connected") : "none connected", connected.length > 0);
+  populateSend(connected);
+}
+async function connectProvider(provider, btn){
+  const out = $("cout-" + provider); out.className = "out show";
+  const cid = ($("ci-" + provider).value || "").trim();
+  const csec = ($("cs-" + provider).value || "").trim();
+  if(!cid){ out.textContent = "✗ client_id is required"; return; }
+  btn.disabled = true; out.textContent = "Starting OAuth…";
+  let res;
+  try{ res = await postJSON("/v1/email/connectors/" + provider + "/configure", { client_id:cid, client_secret:csec }); }
+  catch(e){ out.textContent = "✗ " + (e.body || e.message); btn.disabled = false; return; }
+  out.textContent = "";
+  const a = document.createElement("div"); a.textContent = "A browser window should have opened for consent. If not, ";
+  const link = document.createElement("a");
+  link.href = res.authorization_url; link.target = "_blank"; link.rel = "noopener"; link.textContent = "open it here";
+  a.appendChild(link); out.appendChild(a);
+  const w = document.createElement("div"); w.className = "note";
+  w.textContent = "Waiting for you to finish authorizing (up to 2 min)…"; out.appendChild(w);
+  try{
+    const st = await postJSON("/v1/email/connectors/" + provider + "/complete", { flow_id: res.flow_id });
+    const acct = (st.account_email && st.account_email !== "default") ? st.account_email : provider;
+    out.textContent = "✓ connected: " + acct;
+    loadConnectors();
+  }catch(e){ out.textContent = "✗ " + (e.body || e.message); btn.disabled = false; }
+}
+async function disconnectProvider(provider, btn){
+  const out = $("cout-" + provider); out.className = "out show"; out.textContent = "Disconnecting…";
+  btn.disabled = true;
+  try{
+    const r = await fetch("/v1/email/connectors/" + provider, { method:"DELETE", headers:{ accept:"application/json" } });
+    if(!r.ok){ throw httpError(r.status, await r.text()); }
+    loadConnectors();  // re-renders: the connect form returns for that provider
+  }catch(e){ out.textContent = "✗ " + (e.body || e.message); btn.disabled = false; }
+}
+// ---- Send (picks the connected mailbox) -----------------------------------
+// The dropdown is always present; it lists whatever mailboxes are connected and
+// is empty (send disabled) when none are. The chosen provider is passed to
+// draft, which binds the send token to it, so send never has to guess.
+function populateSend(connected){
+  const sel = $("send-from"); if(!sel) return;
+  sel.textContent = "";
+  if(!connected.length){
+    const o = document.createElement("option"); o.value = ""; o.textContent = "— no mailbox connected —";
+    sel.appendChild(o);
+  } else {
+    // Alphabetical by provider; the browser selects the first option. No
+    // remembered selection, no "default" — deterministic and simple.
+    const sorted = connected.slice().sort((a, b) => a.provider.localeCompare(b.provider));
+    for(const p of sorted){
+      const o = document.createElement("option"); o.value = p.provider;
+      o.textContent = (p.label || p.provider) + (p.account_email ? (" · " + p.account_email) : "");
+      sel.appendChild(o);
+    }
+  }
+  const has = connected.length > 0;
+  if($("do-send")) $("do-send").disabled = !has;
+  if($("send-stat")) $("send-stat").style.display = has ? "inline-block" : "none";
+  if($("send-note")) $("send-note").textContent = has ? "" : "Connect a mailbox in the Connectors panel above.";
+}
+async function doSend(){
+  const out = $("send-out"); out.className = "out show"; out.textContent = "Drafting…";
+  const provider = $("send-from").value || undefined;
+  const to = [{ email: $("send-to").value }];
+  const subject = $("send-subject").value, body = $("send-body").value;
+  try{
+    const d = await postJSON("/v1/email/draft", { to, subject, body, provider });
+    out.textContent = "Sending…";
+    const s = await postJSON("/v1/email/send", { to, subject, body, confirmation_token: d.confirmation_token, provider });
+    out.textContent = "✓ sent · id=" + (s.sent_id || "(ok)");
+  }catch(e){ out.textContent = "✗ HTTP " + e.status + ": " + (e.body || e.message); }
+}
 $("recheck").onclick = healthCheck;
 $("do-init").onclick = doInit;
 $("do-provision").onclick = doProvision;
 $("do-triage").onclick = doTriage;
 $("do-draft").onclick = doDraft;
+$("do-send").onclick = doSend;
 healthCheck();
+loadConnectors();
 </script>
 </body>
 </html>

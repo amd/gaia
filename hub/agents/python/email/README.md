@@ -83,6 +83,14 @@ up? is the model downloaded?), live **triage** and **draft** against the running
 sidecar, a button that runs the `/v1/email/init` readiness check, and copy-paste
 install shortcuts.
 
+**Connect a mailbox + live send.** The playground includes a **Connectors**
+panel: paste your own Google/Microsoft OAuth client credentials, connect
+Gmail/Outlook (the same flow `gaia connectors` and the Agent UI use), and the
+**Send** panel goes live. The connection lives in GAIA's machine-global
+connector store, so a mailbox connected anywhere (Agent UI, CLI) is usable here
+too — and vice-versa. These connector routes are excluded from the OpenAPI
+contract: a playground convenience, not part of the frozen email REST contract.
+
 ![GAIA Email Agent playground — stack health, live triage/draft, and a readiness check, all running against the local sidecar](https://hub.amd-gaia.ai/agents/email/0.2.0/playground.webp)
 
 It's served same-origin with a `Content-Security-Policy: connect-src 'self'`
