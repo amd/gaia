@@ -41,8 +41,11 @@ jobs:
           script: |
             // Require the comment to START with `.take` (a command), not merely
             // mention it in prose. Allow a trailing reason after the command.
-            const body = context.payload.comment.body.trim();
-            if (body !== '.take' && !body.startsWith('.take ') && !body.startsWith('.take\n')) {
+            // Case-insensitive to match the loose `if` gate's contains() (which
+            // is case-insensitive) — otherwise `.Take`/`.TAKE` pass the gate,
+            // burn a runner, then silently no-op here.
+            const cmd = context.payload.comment.body.trim().toLowerCase();
+            if (cmd !== '.take' && !cmd.startsWith('.take ') && !cmd.startsWith('.take\n')) {
               return;
             }
 
