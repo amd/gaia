@@ -604,8 +604,7 @@ async function connectProvider(provider, btn){
   w.textContent = "Waiting for you to finish authorizing (up to 2 min)…"; out.appendChild(w);
   try{
     const st = await postJSON("/v1/email/connectors/" + provider + "/complete", { flow_id: res.flow_id });
-    const acct = (st.account_email && st.account_email !== "default") ? st.account_email : provider;
-    out.textContent = "✓ connected: " + acct;
+    out.textContent = "✓ connected: " + (st.account_email || provider);
     loadConnectors();
   }catch(e){ out.textContent = "✗ " + (e.body || e.message); btn.disabled = false; }
 }

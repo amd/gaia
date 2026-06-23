@@ -70,26 +70,30 @@ def _require_supported(provider: str) -> None:
         )
 
 
+def _account_email(raw: Any) -> Optional[str]:
+    """Map the store's ``DEFAULT_ACCOUNT`` no-email sentinel (and empties) to
+    ``None`` so the sentinel never leaks to the UI as a literal "default".
+    Keeps that store-internal knowledge here, not on the page."""
+    from gaia.connectors.store import DEFAULT_ACCOUNT
+
+    email = raw or None
+    return None if email == DEFAULT_ACCOUNT else email
+
+
 @router.get("/connectors")
 async def list_email_connectors() -> Dict[str, Any]:
     """Status of the mailbox connectors the email agent can send from."""
     from gaia.connectors.api import connected_mailbox_providers, get_connection
-    from gaia.connectors.store import DEFAULT_ACCOUNT
 
     connected = set(connected_mailbox_providers())
     providers: List[Dict[str, Any]] = []
     for pid in SUPPORTED_PROVIDERS:
         conn = get_connection(pid) or {}
-        # DEFAULT_ACCOUNT ("default") is the store's no-account-email sentinel —
-        # surface it as absent so the UI shows "connected", not "connected · default".
-        email = conn.get("account_email") or None
-        if email == DEFAULT_ACCOUNT:
-            email = None
         providers.append(
             {
                 "provider": pid,
                 "connected": pid in connected,
-                "account_email": email,
+                "account_email": _account_email(conn.get("account_email")),
                 "scopes": conn.get("scopes", []),
             }
         )
@@ -117,6 +121,7 @@ async def configure_email_connector(
     try:
         return await configure(provider, config)
     except Exception as e:  # surface the framework's actionable error to the page
+        log.warning("connector configure failed: provider=%s err=%s", provider, e)
         raise HTTPException(status_code=400, detail=f"configure {provider}: {e}") from e
 
 
@@ -131,6 +136,9 @@ async def complete_email_connector(
     try:
         state = await complete_authorization(body.flow_id)
     except Exception as e:
+        log.warning(
+            "connector OAuth completion failed: provider=%s err=%s", provider, e
+        )
         raise HTTPException(status_code=400, detail=f"OAuth completion: {e}") from e
     # Without this grant the connection exists but the email agent can't use it
     # at send time (token access is scoped per granted agent).
@@ -138,11 +146,16 @@ async def complete_email_connector(
     try:
         grant_agent(provider, EMAIL_AGENT_ID, scopes)
     except Exception as e:
+        log.warning("connector grant failed: provider=%s err=%s", provider, e)
         raise HTTPException(
             status_code=500,
             detail=f"connected {provider} but granting to {EMAIL_AGENT_ID} failed: {e}",
         ) from e
-    return {"connected": True, **state}
+    return {
+        "connected": True,
+        **state,
+        "account_email": _account_email(state.get("account_email")),
+    }
 
 
 @router.delete("/connectors/{provider}")
