@@ -994,6 +994,38 @@ async def email_spec() -> HTMLResponse:
     return HTMLResponse(content=render_endpoint_spec_html())
 
 
+# The local-only guarantee (#1796) is enforced HERE, not promised: connect-src
+# 'self' makes the browser refuse any non-local fetch, so the page can only ever
+# reach this sidecar. Served same-origin → no CORS, no remote-controlled code.
+_PLAYGROUND_CSP = (
+    "default-src 'none'; "
+    "connect-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "base-uri 'none'; "
+    "form-action 'none'"
+)
+
+
+@router.get("/playground", response_class=HTMLResponse, include_in_schema=False)
+async def email_playground() -> HTMLResponse:
+    """Serve the self-contained, localhost-only playground page (#1796).
+
+    A GAIA-styled health-check + endpoint playground that runs entirely against
+    this local sidecar. Excluded from the OpenAPI schema — it's a human page, not
+    a contract endpoint. The CSP header makes "data never leaves the box" a
+    structural guarantee rather than a promise.
+    """
+    from gaia_agent_email.playground_html import render_playground_html
+
+    return HTMLResponse(
+        content=render_playground_html(),
+        headers={"Content-Security-Policy": _PLAYGROUND_CSP},
+    )
+
+
 __all__ = [
     "router",
     "EmailTriageService",

@@ -33,7 +33,7 @@ Do NOT commit the id into the repository.
 
 ## Cloud Console setup
 
-1. Visit <https://console.cloud.google.com/apis/credentials>.
+1. Visit [https://console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials).
 2. Create a new project (or use an existing AMD-owned one).
 3. **APIs & Services → OAuth consent screen**:
    - User Type: Internal (AMD-only) or External (broader).

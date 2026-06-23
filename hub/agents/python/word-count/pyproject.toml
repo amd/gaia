@@ -10,7 +10,10 @@ authors = [{ name = "AMD" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["amd-gaia>=0.20.0"]
+# [api] makes this runnable as a standalone REST/MCP sidecar (fastapi/uvicorn; the
+# stdio MCP server is built-in and keyring is core). Mirrors the email agent's packaging
+# so the declared api_server/mcp_server interfaces work on a bare install.
+dependencies = ["amd-gaia[api]>=0.20.0"]
 
 [project.entry-points."gaia.agent"]
 word-count = "gaia_agent_word_count:build_registration"

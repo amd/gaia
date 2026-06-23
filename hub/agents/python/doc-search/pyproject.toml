@@ -10,7 +10,10 @@ authors = [{ name = "AMD" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["amd-gaia>=0.20.0"]
+# [api] = standalone REST/MCP sidecar (fastapi/uvicorn; the stdio MCP server is built-in, keyring is core).
+# [rag] = the RAGToolsMixin deps this agent composes (faiss-cpu, sentence-transformers,
+# pdf/pptx parsers) — required, not optional, for a RAG agent.
+dependencies = ["amd-gaia[api,rag]>=0.20.0"]
 
 [project.entry-points."gaia.agent"]
 doc-search = "gaia_agent_doc_search:build_registration"

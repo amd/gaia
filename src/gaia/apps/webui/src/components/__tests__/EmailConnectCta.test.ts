@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect } from 'vitest';
-import { isAuthRequiredMessage } from '../email/EmailConnectCta';
+import { detectProvider, isAuthRequiredMessage } from '../email/EmailConnectCta';
 
 /**
  * Tests for isAuthRequiredMessage — the CTA detection function that decides
@@ -80,5 +80,54 @@ describe('isAuthRequiredMessage', () => {
         expect(
             isAuthRequiredMessage('Failed to connect to Lemonade server at port 13305.')
         ).toBe(false);
+    });
+
+    // Microsoft-side detection (#1770)
+    it('returns true for NOT_CONNECTED: microsoft prefix', () => {
+        expect(
+            isAuthRequiredMessage('NOT_CONNECTED: microsoft is not currently connected.')
+        ).toBe(true);
+    });
+
+    it('returns true when message mentions connectors → microsoft', () => {
+        expect(
+            isAuthRequiredMessage('Please go to Settings → Connectors → Microsoft and reconnect.')
+        ).toBe(true);
+    });
+
+    it('returns true when message mentions connections → microsoft (case-insensitive)', () => {
+        expect(
+            isAuthRequiredMessage('Visit Settings → Connections → Microsoft to fix this.')
+        ).toBe(true);
+    });
+});
+
+describe('detectProvider', () => {
+    it('returns google when only google is mentioned', () => {
+        expect(detectProvider('NOT_CONNECTED: google is not currently connected.')).toBe('google');
+    });
+
+    it('returns microsoft when only microsoft is mentioned', () => {
+        expect(detectProvider('NOT_CONNECTED: microsoft is not currently connected.')).toBe('microsoft');
+    });
+
+    it('returns google when gmail is mentioned', () => {
+        expect(detectProvider('Please reconnect Gmail to continue.')).toBe('google');
+    });
+
+    it('returns microsoft when outlook is mentioned', () => {
+        expect(detectProvider('Please reconnect Outlook to continue.')).toBe('microsoft');
+    });
+
+    it('returns both when both providers are mentioned', () => {
+        expect(detectProvider('Google and Microsoft accounts need reconnecting.')).toBe('both');
+    });
+
+    it('returns both for empty string', () => {
+        expect(detectProvider('')).toBe('both');
+    });
+
+    it('returns both for an ambiguous message without provider names', () => {
+        expect(detectProvider('AGENT_NOT_GRANTED: this agent is not granted.')).toBe('both');
     });
 });

@@ -134,12 +134,22 @@ function installSafetyNet({ logPath, dialogModule, appModule, homedirFn }) {
 
   appModule.on("child-process-gone", (_event, details) => {
     const reason = details && details.reason;
+    const type = details && details.type;
     // Ignore expected terminations during shutdown so the crash dialog
     // doesn't flash on a clean quit.
     if (reason === "clean-exit" || reason === "killed") return;
-    fatal(new Error(
-      `child-process-gone: type=${details && details.type} reason=${reason}`
-    ));
+    // A GPU-process crash is recoverable — Chromium relaunches the GPU process
+    // and falls back to software rendering. It fires routinely in GPU-less
+    // environments (Windows Sandbox, VMs, RDP), so log it and keep running
+    // instead of killing an otherwise-healthy app.
+    if (type === "GPU") {
+      appendLog(
+        logPath,
+        `[${new Date().toISOString()}] GPU_PROCESS_GONE reason=${reason}`
+      );
+      return;
+    }
+    fatal(new Error(`child-process-gone: type=${type} reason=${reason}`));
   });
 
   return { fatal };

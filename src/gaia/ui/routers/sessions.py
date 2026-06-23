@@ -7,6 +7,8 @@ Handles session CRUD, message retrieval/deletion, session export,
 and session-document attachments.
 """
 
+import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -27,6 +29,39 @@ from ..utils import message_to_response, session_to_response
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sessions"])
+
+
+class _SystemSseEmitter:
+    """Fan-out SSE broadcaster for system-level UI events."""
+
+    def __init__(self):
+        self._subscribers: list[asyncio.Queue] = []
+        self._lock = asyncio.Lock()
+
+    async def emit(self, event: dict) -> None:
+        async with self._lock:
+            subs = list(self._subscribers)
+        for q in subs:
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                pass  # drop for slow clients
+
+    async def subscribe(self) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=50)
+        async with self._lock:
+            self._subscribers.append(q)
+        return q
+
+    async def unsubscribe(self, q: asyncio.Queue) -> None:
+        async with self._lock:
+            try:
+                self._subscribers.remove(q)
+            except ValueError:
+                pass
+
+
+_system_emitter = _SystemSseEmitter()
 
 
 # ── Session CRUD ─────────────────────────────────────────────────────────────
@@ -70,6 +105,45 @@ async def create_session(
             status_code=500,
             detail="Failed to create session. Check server logs for details.",
         )
+
+
+@router.get("/api/sessions/events")
+async def session_events():
+    """SSE stream for system-level session events (activation etc.).
+
+    Frontend subscribes on mount; events are emitted by activate_session().
+    Event shape: {"type": "set_active_session", "session_id": "<id>"}
+    """
+    from fastapi.responses import StreamingResponse
+
+    async def generate():
+        q = await _system_emitter.subscribe()
+        try:
+            yield ": keepalive\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=30.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"  # prevent proxy timeout
+        finally:
+            await _system_emitter.unsubscribe(q)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.post("/api/sessions/{session_id}/activate", status_code=200)
+async def activate_session(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """Signal the frontend to switch to this session (MCP automation support).
+
+    Emits a set_active_session SSE event that App.tsx consumes to call
+    setCurrentSession. Used by open_session_in_browser() in the MCP bridge.
+    """
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    await _system_emitter.emit({"type": "set_active_session", "session_id": session_id})
+    return {"activated": True, "session_id": session_id}
 
 
 @router.get("/api/sessions/{session_id}", response_model=SessionResponse)

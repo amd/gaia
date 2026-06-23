@@ -300,3 +300,99 @@ def test_delete_path_document_preserves_user_file(
 def test_delete_nonexistent_returns_404(client):
     r = client.delete("/api/documents/does-not-exist")
     assert r.status_code == 404
+
+
+# ── Reindex endpoint tests ───────────────────────────────────────────────────
+
+
+@pytest.fixture
+def failed_doc(client, managed_docs_sandbox):
+    """Upload a document and force its status to 'failed' with a last_error."""
+    # Upload a real file so the DB row has a valid filepath
+    r = client.post(
+        "/api/documents/upload",
+        files={"file": ("error_doc.txt", b"content for failed doc", "text/plain")},
+    )
+    assert r.status_code == 200, r.text
+    doc = r.json()
+    doc_id = doc["id"]
+
+    # Directly set status to failed with a last_error via the DB
+    # Access the db from the app state
+    app = client.app
+    db = app.state.db
+    db.update_document_status(doc_id, "failed", last_error="RAG pipeline failure")
+    return doc
+
+
+def test_reindex_endpoint_happy_path(client, failed_doc, managed_docs_sandbox):
+    """POST /api/documents/{id}/reindex on a failed doc re-runs indexing and clears last_error."""
+    doc_id = failed_doc["id"]
+
+    with patch("gaia.ui.server._index_document", new=AsyncMock(return_value=5)):
+        r = client.post(f"/api/documents/{doc_id}/reindex")
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body.get("id") == doc_id
+
+    # Fetch doc back and verify status + last_error cleared
+    app = client.app
+    db = app.state.db
+    doc = db.get_document(doc_id)
+    assert doc is not None
+    assert doc["indexing_status"] == "complete"
+    assert doc.get("last_error") is None
+
+
+def test_reindex_unknown_id_returns_404(client):
+    """POST /api/documents/{id}/reindex on an unknown id → 404."""
+    r = client.post("/api/documents/does-not-exist/reindex")
+    assert r.status_code == 404
+    assert "detail" in r.json()
+
+
+def test_reindex_failure_sets_failed_with_last_error(
+    client, failed_doc, managed_docs_sandbox
+):
+    """When the reindex pipeline raises, status stays 'failed' and last_error is set."""
+    doc_id = failed_doc["id"]
+
+    with patch(
+        "gaia.ui.server._index_document",
+        new=AsyncMock(side_effect=RuntimeError("re-index boom")),
+    ):
+        r = client.post(f"/api/documents/{doc_id}/reindex")
+
+    # Must NOT return 200 (fail loudly)
+    assert r.status_code == 500
+
+    # DB must reflect the failure with a last_error message
+    app = client.app
+    db = app.state.db
+    doc = db.get_document(doc_id)
+    assert doc is not None
+    assert doc["indexing_status"] == "failed"
+    assert doc.get("last_error") is not None
+
+
+def test_list_documents_includes_last_error(client, managed_docs_sandbox):
+    """GET /api/documents must include last_error in the serialised response."""
+    # Upload, then fail it
+    r = client.post(
+        "/api/documents/upload",
+        files={"file": ("err.txt", b"content", "text/plain")},
+    )
+    assert r.status_code == 200
+    doc_id = r.json()["id"]
+
+    app = client.app
+    db = app.state.db
+    db.update_document_status(doc_id, "failed", last_error="serialization check")
+
+    r2 = client.get("/api/documents")
+    assert r2.status_code == 200
+    docs = r2.json()["documents"]
+    target = next((d for d in docs if d["id"] == doc_id), None)
+    assert target is not None
+    assert target.get("last_error") == "serialization check"
