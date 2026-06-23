@@ -126,6 +126,27 @@ _HTML = r"""<!doctype html>
   </div>
   <div class="sub">Served by your local sidecar — code, data, and inference never leave this machine.</div>
 
+  <!-- Connectors (playground mode only — /v1/email/connectors) -->
+  <details class="card" id="conn-card" open>
+    <summary><span class="sum-title">Connectors</span>
+      <span class="sum-desc">connect Gmail / Outlook</span>
+      <span class="sum-stat" id="conn-stat">checking…</span><span class="chev">›</span></summary>
+    <div class="card-body">
+      <div class="row" id="conn-unavailable" style="border:0;padding-top:0;display:none">
+        <div class="dot wait">i</div>
+        <div class="body"><div class="name">Not available on this sidecar</div>
+          <div class="detail">Start the sidecar with <span class="kbd">--playground</span>
+            (or <span class="kbd">GAIA_EMAIL_PLAYGROUND=1</span>) to connect a mailbox and send live.
+            Triage and draft work without it.</div></div>
+      </div>
+      <div id="conn-live" style="display:none">
+        <div class="note" style="margin:0 0 4px">Connect with your own Google/Microsoft OAuth client credentials.
+          Tokens are stored locally by GAIA's connector framework — nothing leaves this machine.</div>
+        <div id="conn-providers"></div>
+      </div>
+    </div>
+  </details>
+
   <!-- Stack health -->
   <details class="card" open>
     <summary><span class="sum-title">Stack health</span>
@@ -180,16 +201,28 @@ _HTML = r"""<!doctype html>
     </div>
   </details>
 
-  <!-- Send (connector-gated) -->
+  <!-- Send (live once a mailbox is connected) -->
   <details class="card">
     <summary><span class="sum-title">Send a reply</span>
-      <span class="sum-desc">connector required</span><span class="chev">›</span></summary>
+      <span class="sum-desc">needs a connected mailbox</span>
+      <span class="sum-stat" id="send-stat" style="display:none">ready</span><span class="chev">›</span></summary>
     <div class="card-body">
-      <div class="row" style="border:0;padding-top:0">
+      <div class="row" id="send-gate" style="border:0;padding-top:0">
         <div class="dot bad">⬤</div>
-        <div class="body"><div class="name">Connector required</div>
-          <div class="detail">Sending touches a live mailbox, so it needs a connected Gmail/Outlook account (OAuth).
-            Not available in this local playground yet.</div></div>
+        <div class="body"><div class="name">Connect a mailbox first</div>
+          <div class="detail">Sending touches a live mailbox — connect Gmail or Outlook in the Connectors section
+            above. (Triage and draft don't need a connection.)</div></div>
+      </div>
+      <div id="send-form" style="display:none">
+        <div class="grid2">
+          <div><label>To</label><input id="send-to" value="sarah@example.com" /></div>
+          <div><label>Subject</label><input id="send-subject" value="Re: Prod incident follow-up" /></div>
+        </div>
+        <label style="display:block;margin-top:10px">Body</label>
+        <textarea id="send-body">Reviewed — I'll reply by Friday.</textarea>
+        <div class="actions"><button id="do-send" class="primary">Draft &amp; send</button>
+          <span class="note" id="send-note"></span></div>
+        <div class="out" id="send-out"></div>
       </div>
     </div>
   </details>
@@ -477,12 +510,127 @@ async function doProvision(){
     btn.disabled = false;
   }
 }
+// ---- Connectors (playground mode) ----------------------------------------
+// /v1/email/connectors is mounted only when the sidecar runs with --playground
+// (or GAIA_EMAIL_PLAYGROUND=1). A 404 means a plain/production sidecar — we
+// degrade to an explainer rather than break. The OAuth itself runs inside the
+// connector framework (its own loopback callback), so the page only kicks it
+// off and waits.
+const CONN_PROVIDERS = [
+  { id:"google", label:"Google · Gmail" },
+  { id:"microsoft", label:"Microsoft · Outlook" },
+];
+function setConnStat(text, ok){
+  const s = $("conn-stat"); if(!s) return;
+  s.textContent = text;
+  s.style.background = ok ? "var(--soft)" : "rgba(232,122,122,.14)";
+  s.style.borderColor = ok ? "var(--line)" : "rgba(232,122,122,.4)";
+  s.style.color = ok ? "var(--gold)" : "var(--bad)";
+}
+function providerBlock(p){
+  const wrap = document.createElement("div"); wrap.className = "row";
+  wrap.style.flexDirection = "column"; wrap.style.alignItems = "stretch";
+  const head = document.createElement("div");
+  head.style.display = "flex"; head.style.alignItems = "center"; head.style.gap = "10px";
+  const dot = document.createElement("div");
+  dot.className = "dot " + (p.connected ? "ok" : "wait"); dot.textContent = p.connected ? "✓" : "…";
+  const name = document.createElement("div"); name.className = "name"; name.textContent = p.label || p.provider;
+  const status = document.createElement("span"); status.className = "note"; status.style.marginLeft = "auto";
+  status.textContent = p.connected ? ("connected · " + (p.account_email || "")) : "not connected";
+  head.appendChild(dot); head.appendChild(name); head.appendChild(status);
+  wrap.appendChild(head);
+  if(!p.connected){
+    const grid = document.createElement("div"); grid.className = "grid2"; grid.style.marginTop = "8px";
+    function field(labelText, id, type){
+      const d = document.createElement("div");
+      const l = document.createElement("label"); l.textContent = labelText;
+      const inp = document.createElement("input"); inp.id = id; if(type) inp.type = type;
+      d.appendChild(l); d.appendChild(inp); return d;
+    }
+    grid.appendChild(field("Client ID", "ci-" + p.provider));
+    grid.appendChild(field("Client secret", "cs-" + p.provider, "password"));
+    wrap.appendChild(grid);
+    const act = document.createElement("div"); act.className = "actions";
+    const btn = document.createElement("button"); btn.textContent = "Save & Connect";
+    btn.onclick = () => connectProvider(p.provider, btn);
+    act.appendChild(btn); wrap.appendChild(act);
+    const out = document.createElement("div"); out.className = "out"; out.id = "cout-" + p.provider;
+    wrap.appendChild(out);
+  }
+  return wrap;
+}
+function renderConnectors(providers){
+  const host = $("conn-providers"); host.textContent = "";
+  for(const p of providers) host.appendChild(providerBlock(p));
+}
+async function loadConnectors(){
+  let data;
+  try{ data = await getJSON("/v1/email/connectors"); }
+  catch(e){
+    if(e.status === 404){
+      $("conn-unavailable").style.display = "flex"; $("conn-live").style.display = "none";
+      setConnStat("playground only", false); updateSendGate([]); return;
+    }
+    setConnStat("error", false); return;
+  }
+  $("conn-unavailable").style.display = "none"; $("conn-live").style.display = "block";
+  const byId = {}; for(const p of (data.providers || [])) byId[p.provider] = p;
+  const merged = CONN_PROVIDERS.map((s) =>
+    Object.assign({ provider:s.id, label:s.label, connected:false }, byId[s.id] || {}));
+  renderConnectors(merged);
+  const connected = merged.filter((p) => p.connected).map((p) => p.provider);
+  setConnStat(connected.length ? (connected.length + " connected") : "none connected", connected.length > 0);
+  updateSendGate(connected);
+}
+async function connectProvider(provider, btn){
+  const out = $("cout-" + provider); out.className = "out show";
+  const cid = ($("ci-" + provider).value || "").trim();
+  const csec = ($("cs-" + provider).value || "").trim();
+  if(!cid){ out.textContent = "✗ client_id is required"; return; }
+  btn.disabled = true; out.textContent = "Starting OAuth…";
+  let res;
+  try{ res = await postJSON("/v1/email/connectors/" + provider + "/configure", { client_id:cid, client_secret:csec }); }
+  catch(e){ out.textContent = "✗ " + (e.body || e.message); btn.disabled = false; return; }
+  out.textContent = "";
+  const a = document.createElement("div"); a.textContent = "A browser window should have opened for consent. If not, ";
+  const link = document.createElement("a");
+  link.href = res.authorization_url; link.target = "_blank"; link.rel = "noopener"; link.textContent = "open it here";
+  a.appendChild(link); out.appendChild(a);
+  const w = document.createElement("div"); w.className = "note";
+  w.textContent = "Waiting for you to finish authorizing (up to 2 min)…"; out.appendChild(w);
+  try{
+    const st = await postJSON("/v1/email/connectors/" + provider + "/complete", { flow_id: res.flow_id });
+    out.textContent = "✓ connected: " + (st.account_email || provider);
+    loadConnectors();
+  }catch(e){ out.textContent = "✗ " + (e.body || e.message); btn.disabled = false; }
+}
+// ---- Send (live once a mailbox is connected) -----------------------------
+function updateSendGate(connected){
+  const has = connected.length > 0;
+  if($("send-gate")) $("send-gate").style.display = has ? "none" : "flex";
+  if($("send-form")) $("send-form").style.display = has ? "block" : "none";
+  if($("send-stat")) $("send-stat").style.display = has ? "inline-block" : "none";
+  if(has && $("send-note")) $("send-note").textContent = "from " + connected.join(", ");
+}
+async function doSend(){
+  const out = $("send-out"); out.className = "out show"; out.textContent = "Drafting…";
+  const to = [{ email: $("send-to").value }];
+  const subject = $("send-subject").value, body = $("send-body").value;
+  try{
+    const d = await postJSON("/v1/email/draft", { to, subject, body });
+    out.textContent = "Sending…";
+    const s = await postJSON("/v1/email/send", { to, subject, body, confirmation_token: d.confirmation_token });
+    out.textContent = "✓ sent · id=" + (s.sent_id || "(ok)");
+  }catch(e){ out.textContent = "✗ HTTP " + e.status + ": " + (e.body || e.message); }
+}
 $("recheck").onclick = healthCheck;
 $("do-init").onclick = doInit;
 $("do-provision").onclick = doProvision;
 $("do-triage").onclick = doTriage;
 $("do-draft").onclick = doDraft;
+$("do-send").onclick = doSend;
 healthCheck();
+loadConnectors();
 </script>
 </body>
 </html>

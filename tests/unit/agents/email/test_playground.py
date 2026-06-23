@@ -57,6 +57,8 @@ class TestPlaygroundHtml:
             '"/v1/email/triage"',
             '"/v1/email/draft"',
             '"/v1/email/init"',
+            '"/v1/email/send"',
+            '"/v1/email/connectors"',
         ):
             assert path in html, f"expected the page to call {path}"
 
@@ -65,6 +67,16 @@ class TestPlaygroundHtml:
         # triaged email body / model string must never be able to inject markup.
         # Pin it — the page must contain ZERO `.innerHTML` assignments.
         assert ".innerHTML" not in render_playground_html()
+
+    def test_connectors_section_degrades_gracefully(self):
+        # The Connectors section drives /v1/email/connectors, mounted ONLY in
+        # playground mode. On a plain sidecar it 404s — the page must explain how
+        # to enable it (--playground / env var) instead of breaking.
+        html = render_playground_html()
+        assert "Connectors" in html
+        assert "conn-providers" in html
+        assert "--playground" in html
+        assert "GAIA_EMAIL_PLAYGROUND" in html
 
 
 class TestPlaygroundRoute:
