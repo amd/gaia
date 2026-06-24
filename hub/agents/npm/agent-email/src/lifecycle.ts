@@ -137,14 +137,32 @@ function installCleanupHandlers(): void {
   process.on("uncaughtException", (err) => {
     reapAllSync();
     if (process.listenerCount("uncaughtException") === 1) {
-      console.error(err);
+      // Synchronous write (not console.error, which can truncate on a piped
+      // stderr before process.exit flushes). The reap already ran above.
+      try {
+        fs.writeSync(
+          2,
+          `${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+        );
+      } catch {
+        /* stderr unavailable */
+      }
       process.exit(1);
     }
   });
   process.on("unhandledRejection", (err) => {
     reapAllSync();
     if (process.listenerCount("unhandledRejection") === 1) {
-      console.error(err);
+      // Synchronous write (not console.error, which can truncate on a piped
+      // stderr before process.exit flushes). The reap already ran above.
+      try {
+        fs.writeSync(
+          2,
+          `${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+        );
+      } catch {
+        /* stderr unavailable */
+      }
       process.exit(1);
     }
   });

@@ -118,6 +118,34 @@ describe("autoCleanup: true (default) — installs process handlers", () => {
   });
 });
 
+describe("reap behavior — the installed SIGINT handler kills the sidecar tree", () => {
+  it("SIGKILLs the detached process group (-pid) when the signal handler fires", async () => {
+    // Spy on process.kill so BOTH the group-kill (killTreeSync) and the
+    // self-re-raise are intercepted and the test process is never signaled.
+    const killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((() => true) as typeof process.kill);
+    try {
+      const fakeChild = makeFakeChild(12345);
+      const { spawnSidecar } = await loadLifecycle(fakeChild);
+
+      spawnSidecar({ binaryPath: "/fake/email-agent" }); // autoCleanup default on
+
+      // The lifecycle handler is the last SIGINT listener registered.
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      expect(typeof handler).toBe("function");
+
+      handler();
+
+      // killTreeSync sends SIGKILL to the negative pid (process group) on POSIX.
+      expect(killSpy).toHaveBeenCalledWith(-12345, "SIGKILL");
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+});
+
 describe("autoCleanup: false — opts out", () => {
   it("returns a valid Sidecar without installing any process handlers", async () => {
     const fakeChild = makeFakeChild(99999);
