@@ -79,7 +79,7 @@ The interface:
 |------|-------|-------|
 | `triage(req)` | Local LLM only | Classify / summarize / extract action items + phishing signals on the message you pass. No mailbox read. |
 | `draft(req)` | Nothing external | Returns a single-use confirmation token. |
-| `send(req)` | A connected mailbox + the token | Needs a Gmail/Outlook mailbox connected in GAIA on the host. |
+| `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. |
 
 **Build everything except `send` with zero connector setup.** Every non-2xx
 response throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is no

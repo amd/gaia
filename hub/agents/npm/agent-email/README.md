@@ -140,11 +140,13 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
 
 **Everything except `send` is standalone** — you can build and verify the whole
-flow with zero connector setup. `send` is different: it transmits through the
-mailbox **connected in GAIA on the host** (under *Settings → Connectors*) and takes
-no token, so **on a headless server it returns HTTP 503** (no mailbox) until someone
-connects one on that host. For a server integration, treat `triage` and `draft` as
-your surface and handle sending out of band.
+flow with zero connector setup. `send` is different on two counts: it requires the
+single-use confirmation token from `draft` (call `draft` first; a missing/invalid
+token is rejected with **403** before anything else), and it transmits through the
+mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
+with a valid token, a headless server returns **HTTP 503** until a mailbox is
+connected. For a server integration, treat `triage` and `draft` as your surface and
+handle sending out of band.
 
 ### Lifecycle
 
@@ -201,6 +203,7 @@ timeout surfaces as `HttpError` with `status === 0` (not an HTTP code).
 |---------|---------|--------|
 | `HttpError` 502 (from `triage`) | Lemonade is down or the model is cold/missing | **Yes** — transient; back off and retry |
 | `HttpError` 0 (network/timeout) | Sidecar not reachable / crashed | **Yes** — after re-spawning the sidecar |
+| `HttpError` 403 (from `send`) | Missing/invalid confirmation token | **No** — call `draft` first and pass its token |
 | `HttpError` 503 (from `send`) | No mailbox connected on the host | **No** — configuration, not transient |
 | `HttpError` 400 | Bad request, or 2+ mailboxes connected for `send` | **No** — fix the call/config |
 | `HealthTimeoutError` / `VersionMismatchError` / `IntegrityError` | Startup faults (port taken, contract mismatch, bad binary) | **No** — fail fast at boot |

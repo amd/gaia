@@ -47,7 +47,7 @@ result.
 |----------|---------------|------|---------------|
 | `POST /v1/email/triage` | `triage()` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* |
 | `POST /v1/email/draft` | `draft()` | **Standalone** | Nothing external — wraps your `(to, subject, body)` and returns a single-use confirmation token. |
-| `POST /v1/email/send` | `send()` | **Connector** | A connected Google/Microsoft mailbox **and** a valid confirmation token. Transmits mail (`503` if no mailbox connected, `400` if 2+ are). |
+| `POST /v1/email/send` | `send()` | **Connector** | A valid `draft` confirmation token **and** a connected Google/Microsoft mailbox. The token gate fires first: no/invalid token → `403`; then `503` if no mailbox is connected, `400` if 2+ are. |
 | `GET /health` | `health()` | **Standalone** | Liveness only — does **not** check Lemonade/model. |
 | `GET /version` | `version()` | **Standalone** | Version negotiation. |
 | `GET /v1/email/health` | `emailHealth()` | **Standalone** | Router-scoped liveness (mounted-on-app case). |
