@@ -332,8 +332,11 @@ async function handleStreamingPublish(
       `Stored bytes did not match X-Gaia-Sha256=${sha256} (or the R2 put failed): ${(e as Error).message}.`
     );
   }
+  if (!stored) {
+    throw new HttpError(500, "store_error", "R2 put returned null; artifact status unknown.");
+  }
 
-  const sizeBytes = stored?.size ?? declaredLen;
+  const sizeBytes = stored.size;
   const artifact: ArtifactInfo = {
     filename,
     path: key,
