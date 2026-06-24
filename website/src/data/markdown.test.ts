@@ -142,6 +142,19 @@ describe('renderMarkdown sanitization', () => {
   // Regression: single-asterisk italic (e.g. README's *Settings → Connectors*)
   // must become <em>, not show literal asterisks — without eating **bold** or
   // mangling snake_case identifiers.
+  // Regression: a literal number that follows a code span (e.g. "`HttpError` 502")
+  // must survive — the code-span placeholder must not collide with prose digits,
+  // or "502"/"8" get replaced with codeSpans[502] = undefined.
+  it('preserves literal numbers after a code span (no placeholder collision)', () => {
+    const html = renderMarkdown('`HttpError` 502 from `triage`, also 8 GB and 0 retries.');
+    expect(html).not.toContain('undefined');
+    expect(html).toContain('502');
+    expect(html).toContain('8 GB');
+    expect(html).toContain('0 retries');
+    expect(html).toContain('<code>HttpError</code>');
+    expect(html).toContain('<code>triage</code>');
+  });
+
   // Regression: in-doc anchor links (e.g. README's [...](#browser--electron-renderer))
   // must resolve on the hub — headings need GitHub-compatible id slugs.
   it('emits GitHub-compatible heading id slugs for in-doc anchors', () => {
