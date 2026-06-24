@@ -142,6 +142,15 @@ describe('renderMarkdown sanitization', () => {
   // Regression: single-asterisk italic (e.g. README's *Settings → Connectors*)
   // must become <em>, not show literal asterisks — without eating **bold** or
   // mangling snake_case identifiers.
+  // Regression: in-doc anchor links (e.g. README's [...](#browser--electron-renderer))
+  // must resolve on the hub — headings need GitHub-compatible id slugs.
+  it('emits GitHub-compatible heading id slugs for in-doc anchors', () => {
+    const html = renderMarkdown('### Browser / Electron renderer\n\nbody');
+    expect(html).toContain('id="browser--electron-renderer"');
+    const codeHeading = renderMarkdown('## The `fetch` CLI');
+    expect(codeHeading).toContain('id="the-fetch-cli"'); // backticks dropped
+  });
+
   it('renders *italic* as <em> without clashing with **bold** or underscores', () => {
     const html = renderMarkdown('Open *Settings* but keep **bold** and `suggested_action` and plain suggested_action.');
     expect(html).toContain('<em>Settings</em>');

@@ -75,6 +75,21 @@ function isHr(line: string): boolean {
   return /^(-{3,}|\*{3,}|_{3,})$/.test(line.trim());
 }
 
+// GitHub-compatible heading slug so in-doc anchor links (`[x](#slug)`) resolve on
+// the hub the same way they do on GitHub: drop markdown markers, lowercase, strip
+// to [a-z0-9 -], collapse spaces to hyphens. The narrow charset is also safe as an
+// id attribute — it can't break out of the quotes.
+function slugify(text: string): string {
+  return text
+    .replace(/[`*]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 -]/g, '')
+    .trim()
+    // GitHub replaces each space with a hyphen individually (it does NOT collapse
+    // runs), so "Browser / Electron renderer" → "browser--electron-renderer".
+    .replace(/ /g, '-');
+}
+
 // A line that begins a non-paragraph block (or is blank). Used to stop
 // paragraph accumulation so a paragraph never swallows a heading/list/table/etc.
 // Unordered (`- `/`* `) and ordered (`1. `) list-item markers.
@@ -164,7 +179,9 @@ export function renderMarkdown(md: string): string {
     if (heading) {
       closeList();
       const level = heading[1].length;
-      html.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+      const id = slugify(heading[2]);
+      const idAttr = id ? ` id="${id}"` : '';
+      html.push(`<h${level}${idAttr}>${renderInline(heading[2])}</h${level}>`);
       i++;
       continue;
     }
