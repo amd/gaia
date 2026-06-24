@@ -4,11 +4,24 @@
 /**
  * POST /publish handler.
  *
- * Flow: authenticate -> parse multipart -> validate manifest -> enforce
- * publisher scope -> enforce version immutability -> generate server-side
- * SHA-256 -> store artifact + raw manifest + optional README + optional
- * CHANGELOG + per-agent manifest -> rebuild index.json. Every guard fails
- * loudly with a structured error.
+ * Two upload encodings, chosen by Content-Type:
+ *
+ *   multipart/form-data       Small artifacts (wheels, ~40 MB per-platform
+ *                             binaries). The whole body is buffered to compute a
+ *                             server-side SHA-256. Carries optional README +
+ *                             CHANGELOG + package_files parts.
+ *   application/octet-stream  Large whole-package zips (the four platform
+ *                             binaries + npm client + docs, 100s of MB). The raw
+ *                             body is STREAMED straight to R2 — never buffered in
+ *                             the Worker — so it can't OOM Cloudflare's 128 MB
+ *                             per-isolate memory limit (issue #1848). Metadata
+ *                             (manifest, filename, client SHA-256, package_files)
+ *                             rides in `x-gaia-*` headers; R2 verifies the
+ *                             client-supplied SHA-256 as it streams.
+ *
+ * Both paths share: authenticate -> validate manifest -> enforce publisher scope
+ * -> enforce version immutability -> store artifact + raw manifest + per-agent
+ * manifest -> rebuild index.json. Every guard fails loudly with a structured error.
  */
 
 import { assertAuthorAllowed, authenticate } from "./auth";
@@ -87,6 +100,17 @@ async function optionalPackageFiles(form: FormData): Promise<string | null> {
   const part = form.get("package_files");
   if (part == null) return null;
   const text = typeof part === "string" ? part : await (part as Blob).text();
+  return validatePackageFilesText(text, "The 'package_files' part");
+}
+
+/**
+ * Validate + canonicalize a `package_files` JSON listing, from either the
+ * multipart part or the streaming `x-gaia-package-files-b64` header. Must be
+ * `{ files: [{ name, size_bytes }] }` with at least one file; anything else
+ * fails loudly. Returns the compact re-serialization so the stored object is
+ * byte-stable regardless of input whitespace. `label` names the source in errors.
+ */
+function validatePackageFilesText(text: string, label: string): string {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -94,8 +118,8 @@ async function optionalPackageFiles(form: FormData): Promise<string | null> {
     throw new HttpError(
       400,
       "invalid_request",
-      `The 'package_files' part is not valid JSON: ${(e as Error).message}. Expected ` +
-        `{ "files": [{ "name": "...", "size_bytes": 0 }] }, or omit the part.`
+      `${label} is not valid JSON: ${(e as Error).message}. Expected ` +
+        `{ "files": [{ "name": "...", "size_bytes": 0 }] }, or omit it.`
     );
   }
   const files = (parsed as { files?: unknown }).files;
@@ -112,12 +136,29 @@ async function optionalPackageFiles(form: FormData): Promise<string | null> {
     throw new HttpError(
       400,
       "invalid_request",
-      "The 'package_files' part must be { \"files\": [{ \"name\": string, " +
+      `${label} must be { "files": [{ "name": string, ` +
         '"size_bytes": number }, ...] } with at least one file.'
     );
   }
   // Re-serialize canonically (compact) so the stored object is byte-stable.
   return JSON.stringify({ files });
+}
+
+/** Decode a base64 (`x-gaia-*-b64`) header value as UTF-8 text, failing loudly. */
+function decodeB64Header(value: string, header: string): string {
+  let binary: string;
+  try {
+    binary = atob(value);
+  } catch (e) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      `Header '${header}' is not valid base64: ${(e as Error).message}.`
+    );
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
 }
 
 export async function handlePublish(
@@ -127,17 +168,31 @@ export async function handlePublish(
 ): Promise<Response> {
   const publisher = authenticate(request, env);
 
-  const contentType = request.headers.get("content-type") ?? "";
-  if (!contentType.toLowerCase().includes("multipart/form-data")) {
-    throw new HttpError(
-      415,
-      "unsupported_media_type",
-      "POST /publish expects multipart/form-data with 'manifest' (gaia-agent.yaml " +
-        "text), 'artifact' (the wheel or binary file), and optionally 'readme' " +
-        "(README.md markdown text) and 'changelog' (CHANGELOG.md markdown text) parts."
-    );
+  const contentType = (request.headers.get("content-type") ?? "").toLowerCase();
+  if (contentType.includes("multipart/form-data")) {
+    return handleMultipartPublish(request, env, publisher, now);
   }
+  if (contentType.includes("application/octet-stream")) {
+    return handleStreamingPublish(request, env, publisher, now);
+  }
+  throw new HttpError(
+    415,
+    "unsupported_media_type",
+    "POST /publish expects either multipart/form-data (small artifacts: 'manifest', " +
+      "'artifact', optional 'readme'/'changelog'/'package_files' parts) or " +
+      "application/octet-stream (large whole-package zip: the raw zip as the body, " +
+      "with 'x-gaia-manifest-b64', 'x-gaia-artifact-filename', 'x-gaia-artifact-sha256', " +
+      "and optional 'x-gaia-package-files-b64' headers)."
+  );
+}
 
+/** Buffered multipart publish path (wheels + per-platform binaries). */
+async function handleMultipartPublish(
+  request: Request,
+  env: Env,
+  publisher: ReturnType<typeof authenticate>,
+  now: Date
+): Promise<Response> {
   let form: FormData;
   try {
     form = await request.formData();
@@ -235,13 +290,204 @@ export async function handlePublish(
     content_type: artifactFile.type || "application/octet-stream",
   };
 
-  // Store the artifact. The raw gaia-agent.yaml is written only on the first
-  // publish of a version so it stays the immutable record of that release; a
-  // later platform binary joining the same version must not rewrite it.
+  // Store the buffered artifact (server-computed SHA-256, never trusts input).
   await env.BUCKET.put(key, bytes, {
     httpMetadata: { contentType: artifact.content_type },
     sha256,
   });
+
+  return finalizeAndRespond({
+    env,
+    manifest,
+    manifestText,
+    artifact,
+    existing,
+    versionExists,
+    readmeText,
+    changelogText,
+    packageFilesText,
+    publisher,
+    now,
+  });
+}
+
+/**
+ * Streaming publish path for large whole-package zips. The raw body is piped
+ * straight to R2 — never buffered in the Worker — so a 100s-of-MB zip can't OOM
+ * Cloudflare's 128 MB per-isolate limit (issue #1848). All metadata rides in
+ * `x-gaia-*` headers; R2 verifies the client-supplied SHA-256 as it streams, so
+ * integrity is preserved with no buffering and no silent fallback.
+ */
+async function handleStreamingPublish(
+  request: Request,
+  env: Env,
+  publisher: ReturnType<typeof authenticate>,
+  now: Date
+): Promise<Response> {
+  const manifestB64 = request.headers.get("x-gaia-manifest-b64");
+  if (!manifestB64) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "Streaming publish requires the 'x-gaia-manifest-b64' header (base64 of the " +
+        "gaia-agent.yaml text)."
+    );
+  }
+  const manifestText = decodeB64Header(manifestB64, "x-gaia-manifest-b64");
+
+  const filename = request.headers.get("x-gaia-artifact-filename") ?? "";
+  if (!FILENAME_RE.test(filename)) {
+    throw new HttpError(
+      400,
+      "invalid_artifact",
+      `Header 'x-gaia-artifact-filename' is ${JSON.stringify(filename)}, which is invalid. ` +
+        `Use a single path segment of letters, digits, '.', '_', '+', '-' (e.g. 'agent-email-0.2.1.zip').`
+    );
+  }
+
+  const sha256 = (request.headers.get("x-gaia-artifact-sha256") ?? "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(sha256)) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "Header 'x-gaia-artifact-sha256' must be a 64-character lowercase hex SHA-256 of the " +
+        "artifact body; R2 verifies the streamed bytes against it."
+    );
+  }
+
+  // The body is streamed, so its size is taken from Content-Length (the limit is
+  // enforced up front here, since nothing is buffered to measure afterward).
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (!Number.isFinite(declaredLength) || declaredLength <= 0) {
+    throw new HttpError(
+      400,
+      "invalid_artifact",
+      "Streaming publish requires a positive Content-Length (the zip's byte size)."
+    );
+  }
+  const limit = maxBytes(env);
+  if (declaredLength > limit) {
+    throw new HttpError(
+      413,
+      "artifact_too_large",
+      `Artifact is ${declaredLength} bytes, over the ${limit}-byte limit.`
+    );
+  }
+
+  if (!request.body) {
+    throw new HttpError(400, "invalid_artifact", "Streaming publish has an empty request body.");
+  }
+
+  const packageFilesB64 = request.headers.get("x-gaia-package-files-b64");
+  const packageFilesText =
+    packageFilesB64 == null
+      ? null
+      : validatePackageFilesText(
+          decodeB64Header(packageFilesB64, "x-gaia-package-files-b64"),
+          "Header 'x-gaia-package-files-b64'"
+        );
+
+  const manifest = parseManifest(manifestText);
+  assertAuthorAllowed(publisher, manifest.author);
+
+  const existing = await readAgentManifest(env.BUCKET, manifest.id);
+  if (existing && existing.author !== manifest.author) {
+    throw new HttpError(
+      403,
+      "forbidden_scope",
+      `Agent '${manifest.id}' is owned by author '${existing.author}'. A publish ` +
+        `with author '${manifest.author}' cannot update it.`
+    );
+  }
+  const versionExists = Boolean(existing?.versions[manifest.version]);
+
+  const key = artifactKey(manifest.id, manifest.version, filename);
+  // Per-filename immutability — checked BEFORE consuming the body so an
+  // idempotent re-run 409s without uploading.
+  if (await env.BUCKET.head(key)) {
+    throw new HttpError(
+      409,
+      "version_exists",
+      `Artifact already exists at ${key} and is immutable. To add another ` +
+        `platform binary use a distinct filename; to change this one, bump the version.`
+    );
+  }
+
+  // Stream the body straight to R2. R2 verifies the client SHA-256 as it writes
+  // and rejects a mismatch — surface that loudly (nothing partial is committed).
+  try {
+    await env.BUCKET.put(key, request.body, {
+      httpMetadata: { contentType: "application/octet-stream" },
+      sha256,
+    });
+  } catch (e) {
+    throw new HttpError(
+      422,
+      "integrity_mismatch",
+      `The streamed artifact failed server-side SHA-256 verification against the declared ` +
+        `'x-gaia-artifact-sha256' (${sha256}). The upload was corrupted in transit or the ` +
+        `declared digest is wrong; nothing was stored. Recompute the SHA-256 and retry. ` +
+        `(${(e as Error).message})`
+    );
+  }
+
+  const artifact: ArtifactInfo = {
+    filename,
+    path: key,
+    size_bytes: declaredLength,
+    sha256,
+    content_type: "application/octet-stream",
+  };
+
+  // The large-zip path carries no README/CHANGELOG (only manifest + package_files).
+  return finalizeAndRespond({
+    env,
+    manifest,
+    manifestText,
+    artifact,
+    existing,
+    versionExists,
+    readmeText: null,
+    changelogText: null,
+    packageFilesText,
+    publisher,
+    now,
+  });
+}
+
+/**
+ * Shared tail for both publish paths: persist the per-version records (raw
+ * manifest + optional README/CHANGELOG + optional package_files), upsert the
+ * per-agent manifest, rebuild the catalog index, and build the 201 response. The
+ * artifact bytes themselves are already stored by the caller.
+ */
+async function finalizeAndRespond(args: {
+  env: Env;
+  manifest: ReturnType<typeof parseManifest>;
+  manifestText: string;
+  artifact: ArtifactInfo;
+  existing: Awaited<ReturnType<typeof readAgentManifest>>;
+  versionExists: boolean;
+  readmeText: string | null;
+  changelogText: string | null;
+  packageFilesText: string | null;
+  publisher: ReturnType<typeof authenticate>;
+  now: Date;
+}): Promise<Response> {
+  const {
+    env,
+    manifest,
+    manifestText,
+    artifact,
+    existing,
+    versionExists,
+    readmeText,
+    changelogText,
+    packageFilesText,
+    publisher,
+    now,
+  } = args;
+
   // The raw gaia-agent.yaml, README, and CHANGELOG are per-version records:
   // write them only on the first publish of a version so a later platform binary
   // joining the same version cannot rewrite them.

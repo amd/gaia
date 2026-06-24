@@ -14,11 +14,44 @@ depend on any `src/gaia` code.
 
 | Route | Auth | Purpose |
 |-------|------|---------|
-| `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Form parts: `manifest` (gaia-agent.yaml text), `artifact` (wheel/binary/zip file), optional `readme` + `changelog` (markdown, rendered on the Hub pages), and optional `package_files` (JSON `{files:[{name,size_bytes}]}` listing the contents of a whole-package `.zip` artifact — surfaced as the catalog's `package`) |
+| `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Two body encodings, chosen by `Content-Type` — see [Upload encodings](#upload-encodings) |
 | `GET /index.json` | none | Catalog of every agent (latest version only), including the latest README + CHANGELOG markdown |
 | `GET /agents/<id>/manifest.json` | none | Per-agent aggregate manifest (all versions) |
 | `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, `README.md`, or `CHANGELOG.md` |
 | `GET /health` | none | Liveness probe |
+
+### Upload encodings
+
+`POST /publish` accepts the artifact in one of two encodings, picked by the
+request `Content-Type`. Both share the same validation, scope, immutability, and
+catalog-rebuild logic — they differ only in how the artifact bytes arrive.
+
+- **`multipart/form-data`** — for wheels and the per-platform binaries (~40 MB).
+  The Worker buffers the body and computes the SHA-256 **server-side**. Parts:
+  - `manifest` — the `gaia-agent.yaml` text (required)
+  - `artifact` — the wheel/binary file (required)
+  - `readme` / `changelog` — markdown, optional (rendered on the Hub pages)
+  - `package_files` — JSON `{files:[{name,size_bytes}]}`, optional (the contents
+    of a whole-package `.zip`, surfaced as the catalog's `package`)
+
+- **`application/octet-stream`** — for the large whole-package `.zip` (all
+  platform binaries + npm client + docs, 100s of MB). The raw zip is the request
+  **body**, streamed straight to R2 — never buffered in the Worker — so it can't
+  OOM Cloudflare's 128 MB per-isolate memory limit (the bug behind the `502` in
+  [#1848](https://github.com/amd/gaia/issues/1848)). Metadata rides in headers,
+  and R2 verifies the **client-supplied** SHA-256 as it streams (a mismatch is
+  rejected with `422 integrity_mismatch`; nothing partial is committed):
+  - `x-gaia-manifest-b64` — base64 of the `gaia-agent.yaml` text (required)
+  - `x-gaia-artifact-filename` — the artifact filename (required)
+  - `x-gaia-artifact-sha256` — 64-char lowercase hex SHA-256 of the body (required)
+  - `x-gaia-package-files-b64` — base64 of the `package_files` JSON (optional)
+  - `Content-Length` — the zip's byte size; the size limit is enforced **up front**
+    from this header (over the limit → `413`), since nothing is buffered to measure
+    afterward.
+
+  The streaming path carries no `readme`/`changelog` — in a real release the
+  per-platform binaries (multipart) publish those first and create the version;
+  the zip arrives in a later POST when the version already exists.
 
 ### Publish guarantees
 

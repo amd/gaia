@@ -55,7 +55,12 @@ export class FakeR2 {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async put(key: string, value: any, options?: any): Promise<any> {
-    const bytes = toBytes(value);
+    // The streaming publish path passes `request.body` (a ReadableStream) — read
+    // it to completion, mirroring R2 consuming the stream as it stores.
+    const bytes =
+      value && typeof value.getReader === "function"
+        ? new Uint8Array(await new Response(value).arrayBuffer())
+        : toBytes(value);
     const contentType = options?.httpMetadata?.contentType ?? "application/octet-stream";
     // Honour R2's optional sha256 integrity check so tests catch mismatches.
     if (options?.sha256) {
@@ -177,6 +182,61 @@ export function publishRequest(opts: {
     headers,
     body: form,
   });
+}
+
+/**
+ * Build a POST /publish streaming request (application/octet-stream): the raw
+ * artifact as the body, with metadata in `x-gaia-*` headers. The SHA-256 header
+ * defaults to the correct digest of the body; pass `sha256` to force a mismatch.
+ */
+export async function streamingPublishRequest(opts: {
+  token?: string;
+  manifestYaml: string;
+  artifact: Uint8Array | string;
+  filename: string;
+  sha256?: string;
+  packageFiles?: string;
+  contentLength?: string;
+  omitManifest?: boolean;
+  omitSha?: boolean;
+  omitContentLength?: boolean;
+}): Promise<Request> {
+  const bytes =
+    typeof opts.artifact === "string" ? new TextEncoder().encode(opts.artifact) : opts.artifact;
+  const headers = new Headers();
+  headers.set("content-type", "application/octet-stream");
+  if (opts.token) headers.set("authorization", `Bearer ${opts.token}`);
+  if (!opts.omitManifest) headers.set("x-gaia-manifest-b64", b64Utf8(opts.manifestYaml));
+  headers.set("x-gaia-artifact-filename", opts.filename);
+  if (!opts.omitSha) {
+    headers.set("x-gaia-artifact-sha256", opts.sha256 ?? (await sha256Hex(bytes)));
+  }
+  if (opts.packageFiles !== undefined) {
+    headers.set("x-gaia-package-files-b64", b64Utf8(opts.packageFiles));
+  }
+  // Content-Length is provided by the HTTP client over the wire in production;
+  // set it explicitly here (undici doesn't auto-populate it on a stream body).
+  if (!opts.omitContentLength) {
+    headers.set("content-length", opts.contentLength ?? String(bytes.byteLength));
+  }
+  return new Request("https://hub.amd-gaia.ai/publish", {
+    method: "POST",
+    headers,
+    body: bytes,
+  });
+}
+
+/** base64 of UTF-8 text, using only Web globals (matches the Worker decoder). */
+function b64Utf8(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** A valid sample gaia-agent.yaml for tests. */

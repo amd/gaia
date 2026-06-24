@@ -5,11 +5,22 @@ Publish frozen email-agent binaries to the GAIA Agent Hub R2 Worker
 (milestone #49, issue #1648).
 
 POSTs each artifact + the agent's ``gaia-agent.yaml`` to the Worker's
-``POST /publish`` endpoint (multipart/form-data, Bearer auth). The Worker
-computes the SHA-256 server-side and stores the object immutably at
-``agents/<id>/<version>/<filename>``. A single ``<id>/<version>`` accepts
+``POST /publish`` endpoint (Bearer auth). The Worker stores the object immutably
+at ``agents/<id>/<version>/<filename>``. A single ``<id>/<version>`` accepts
 multiple per-platform binaries (each a distinct filename) — see the Worker
 README.
+
+Two upload encodings, chosen by artifact:
+
+  * Per-platform binaries (~40 MB) go as ``multipart/form-data``; the Worker
+    buffers the body and computes the SHA-256 server-side. README/CHANGELOG ride
+    along as extra parts.
+  * The whole-package ``.zip`` (all platform binaries + npm client + docs, 100s
+    of MB) is STREAMED as a raw ``application/octet-stream`` body so neither this
+    client nor the Cloudflare Worker buffers it — that buffering OOM-killed the
+    Worker (HTTP 502) on the 177 MB zip (issue #1848). Its metadata (manifest,
+    filename, our SHA-256, package-files listing) rides in ``x-gaia-*`` headers,
+    and the Worker has R2 verify our SHA-256 as it streams to storage.
 
 Idempotency (re-running a published release is a no-op):
   * 201 -> published. We assert the Worker-returned SHA-256 equals the SHA-256
@@ -42,6 +53,7 @@ inferred from the filename suffix.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -53,11 +65,20 @@ import yaml
 
 PUBLISH_PATH = "/publish"
 TOKEN_ENV = "AGENT_HUB_PUBLISH_TOKEN"
+# Read the artifact in 1 MiB chunks for hashing so a 100s-of-MB zip is never
+# fully buffered in memory on the client either.
+_CHUNK = 1024 * 1024
 
 
 def _sha256_file(path: Path) -> tuple[str, int]:
-    data = path.read_bytes()
-    return hashlib.sha256(data).hexdigest(), len(data)
+    """SHA-256 hex digest + byte size, hashed in chunks (no full read)."""
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(_CHUNK), b""):
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
 
 
 def _read_token() -> str:
@@ -118,31 +139,17 @@ def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) 
     return hashlib.sha256(resp.content).hexdigest()
 
 
-def publish_one(
-    base_url: str,
-    manifest_path: Path,
-    manifest: dict,
-    artifact_path: Path,
-    platform_key: str,
+def _post_multipart(
+    publish_url: str,
     token: str,
-    readme_bytes: bytes | None = None,
-    changelog_bytes: bytes | None = None,
-    package_files_bytes: bytes | None = None,
-) -> dict:
-    if not artifact_path.exists():
-        raise SystemExit(f"error: artifact not found: {artifact_path}")
-    filename = artifact_path.name
-    local_sha, size = _sha256_file(artifact_path)
-    agent_id = str(manifest["id"])
-    version = str(manifest["version"])
-    publish_url = f"{base_url.rstrip('/')}{PUBLISH_PATH}"
-
-    print(
-        f"[publish] {filename} ({size} bytes, sha256={local_sha[:12]}…) "
-        f"-> {agent_id}@{version}",
-        flush=True,
-    )
-
+    manifest_path: Path,
+    filename: str,
+    artifact_path: Path,
+    readme_bytes: bytes | None,
+    changelog_bytes: bytes | None,
+    package_files_bytes: bytes | None,
+) -> requests.Response:
+    """Buffered multipart POST for the smaller per-platform binaries."""
     with artifact_path.open("rb") as fh:
         files = {
             "manifest": (
@@ -172,11 +179,99 @@ def publish_one(
                 package_files_bytes,
                 "application/json",
             )
-        resp = requests.post(
+        return requests.post(
             publish_url,
             headers={"authorization": f"Bearer {token}"},
             files=files,
             timeout=300,
+        )
+
+
+def _post_streaming(
+    publish_url: str,
+    token: str,
+    manifest_path: Path,
+    filename: str,
+    local_sha: str,
+    artifact_path: Path,
+    package_files_bytes: bytes | None,
+) -> requests.Response:
+    """Stream a large whole-package zip as a raw octet-stream body (issue #1848).
+
+    The open file handle is passed as ``data=`` so ``requests`` streams it
+    straight to the socket — never loading the whole file into memory — and sets
+    ``Content-Length`` from its size. All metadata rides in ``x-gaia-*`` headers;
+    the Worker has R2 verify ``x-gaia-artifact-sha256`` against the streamed
+    bytes, so integrity is preserved with no buffering on either side.
+    """
+    headers = {
+        "authorization": f"Bearer {token}",
+        "content-type": "application/octet-stream",
+        "x-gaia-manifest-b64": base64.b64encode(manifest_path.read_bytes()).decode(
+            "ascii"
+        ),
+        "x-gaia-artifact-filename": filename,
+        "x-gaia-artifact-sha256": local_sha,
+    }
+    # The whole-package file listing rides in a header (it can't be a multipart
+    # field on a raw body); the Worker decodes it into the catalog's package.files.
+    if package_files_bytes is not None:
+        headers["x-gaia-package-files-b64"] = base64.b64encode(
+            package_files_bytes
+        ).decode("ascii")
+    with artifact_path.open("rb") as fh:
+        return requests.post(publish_url, headers=headers, data=fh, timeout=300)
+
+
+def publish_one(
+    base_url: str,
+    manifest_path: Path,
+    manifest: dict,
+    artifact_path: Path,
+    platform_key: str,
+    token: str,
+    readme_bytes: bytes | None = None,
+    changelog_bytes: bytes | None = None,
+    package_files_bytes: bytes | None = None,
+) -> dict:
+    if not artifact_path.exists():
+        raise SystemExit(f"error: artifact not found: {artifact_path}")
+    filename = artifact_path.name
+    local_sha, size = _sha256_file(artifact_path)
+    agent_id = str(manifest["id"])
+    version = str(manifest["version"])
+    publish_url = f"{base_url.rstrip('/')}{PUBLISH_PATH}"
+
+    # The whole-package zip is large enough to OOM the Worker if buffered
+    # (issue #1848) — stream it. Per-platform binaries stay on multipart.
+    is_package_zip = filename.lower().endswith(".zip")
+    kind = "stream" if is_package_zip else "multipart"
+    print(
+        f"[publish] {filename} ({size} bytes, sha256={local_sha[:12]}…, {kind}) "
+        f"-> {agent_id}@{version}",
+        flush=True,
+    )
+
+    if is_package_zip:
+        resp = _post_streaming(
+            publish_url,
+            token,
+            manifest_path,
+            filename,
+            local_sha,
+            artifact_path,
+            package_files_bytes,
+        )
+    else:
+        resp = _post_multipart(
+            publish_url,
+            token,
+            manifest_path,
+            filename,
+            artifact_path,
+            readme_bytes,
+            changelog_bytes,
+            package_files_bytes,
         )
 
     if resp.status_code == 201:

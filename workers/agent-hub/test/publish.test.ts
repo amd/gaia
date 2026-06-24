@@ -5,10 +5,22 @@ import { describe, expect, it } from "vitest";
 
 import worker from "../src/index";
 import type { AgentManifest, CatalogIndex } from "../src/types";
-import { makeEnv, publishRequest, sampleManifest } from "./fake-r2";
+import {
+  makeEnv,
+  publishRequest,
+  sampleManifest,
+  streamingPublishRequest,
+} from "./fake-r2";
 
 async function publish(env: ReturnType<typeof makeEnv>, opts: Parameters<typeof publishRequest>[0]) {
   return worker.fetch(publishRequest(opts), env as never);
+}
+
+async function publishStream(
+  env: ReturnType<typeof makeEnv>,
+  opts: Parameters<typeof streamingPublishRequest>[0]
+) {
+  return worker.fetch(await streamingPublishRequest(opts), env as never);
 }
 
 describe("POST /publish — authentication", () => {
@@ -703,6 +715,175 @@ describe("POST /publish — whole-package zip + file list", () => {
       manifestYaml: sampleManifest({ id: "bad" }),
       artifact: "z",
       filename: "bad-0.1.0.zip",
+      packageFiles: '{"files":[{"name":"x"}]}', // missing size_bytes
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_request");
+  });
+});
+
+describe("POST /publish — streaming (application/octet-stream) large zip", () => {
+  const filesJson = JSON.stringify({
+    files: [
+      { name: "binaries/email-agent-linux-x64", size_bytes: 35000000 },
+      { name: "dist/index.js", size_bytes: 4096 },
+    ],
+  });
+
+  it("streams the zip to R2, verifies the client SHA-256, and surfaces package in index.json", async () => {
+    const env = makeEnv();
+    const zip = "WHOLE-PACKAGE-ZIP-BYTES";
+    // Per real release order: the per-platform binary creates the version first.
+    const first = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", name: "Email", version: "0.1.0" }),
+      artifact: "linux-binary",
+      filename: "email-agent-linux-x64",
+    });
+    expect(first.status).toBe(201);
+
+    const res = await publishStream(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", name: "Email", version: "0.1.0" }),
+      artifact: zip,
+      filename: "agent-email-0.1.0.zip",
+      packageFiles: filesJson,
+    });
+    expect(res.status).toBe(201);
+
+    const body = (await res.json()) as any;
+    // The stored object hashes to the declared SHA the client sent.
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(zip));
+    const expected = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    expect(body.published.artifact.sha256).toBe(expected);
+    expect(body.published.artifact.size_bytes).toBe(zip.length);
+
+    expect(env.bucket.keys()).toContain("agents/email/0.1.0/agent-email-0.1.0.zip");
+    const stored = await env.bucket.get("agents/email/0.1.0/agent-email-0.1.0.zip");
+    expect(await stored!.text()).toBe(zip);
+
+    const entry = (
+      (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
+    ).agents.find((a) => a.id === "email")!;
+    expect(entry.package).toBeDefined();
+    expect(entry.package!.filename).toBe("agent-email-0.1.0.zip");
+    expect(entry.package!.size_bytes).toBe(zip.length);
+    expect(entry.package!.files).toHaveLength(2);
+  });
+
+  it("rejects a SHA-256 mismatch loudly and stores nothing (422)", async () => {
+    const env = makeEnv();
+    const res = await publishStream(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      artifact: "ZIPBYTES",
+      filename: "agent-email-0.1.0.zip",
+      // A valid-format but wrong digest → R2 rejects the streamed bytes.
+      sha256: "0".repeat(64),
+    });
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as any).error.code).toBe("integrity_mismatch");
+    // Nothing was committed for the rejected upload.
+    expect(env.bucket.keys()).toEqual([]);
+  });
+
+  it("rejects a malformed SHA-256 header before touching R2 (400)", async () => {
+    const env = makeEnv();
+    const res = await publishStream(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      artifact: "ZIPBYTES",
+      filename: "agent-email-0.1.0.zip",
+      sha256: "not-a-hex-digest",
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_request");
+    expect(env.bucket.keys()).toEqual([]);
+  });
+
+  it("enforces the size limit up front via Content-Length (413)", async () => {
+    const env = makeEnv({ maxBytes: "4" });
+    const res = await publishStream(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      artifact: "way too many bytes",
+      filename: "agent-email-0.1.0.zip",
+    });
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as any).error.code).toBe("artifact_too_large");
+    expect(env.bucket.keys()).toEqual([]);
+  });
+
+  it("requires a positive Content-Length (400)", async () => {
+    const env = makeEnv();
+    const res = await publishStream(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      artifact: "ZIPBYTES",
+      filename: "agent-email-0.1.0.zip",
+      omitContentLength: true,
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_artifact");
+  });
+
+  it("requires the manifest header (400)", async () => {
+    const env = makeEnv();
+    const res = await publishStream(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "ZIPBYTES",
+      filename: "agent-email-0.1.0.zip",
+      omitManifest: true,
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_request");
+  });
+
+  it("still enforces auth on the streaming path (401)", async () => {
+    const env = makeEnv();
+    const res = await publishStream(env, {
+      manifestYaml: sampleManifest(),
+      artifact: "ZIPBYTES",
+      filename: "agent-email-0.1.0.zip",
+    });
+    expect(res.status).toBe(401);
+    expect(env.bucket.keys()).toEqual([]);
+  });
+
+  it("still enforces per-filename immutability on the streaming path (409)", async () => {
+    const env = makeEnv();
+    const opts = {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      artifact: "ZIPBYTES",
+      filename: "agent-email-0.1.0.zip",
+    } as const;
+    expect((await publishStream(env, opts)).status).toBe(201);
+    const dup = await publishStream(env, opts);
+    expect(dup.status).toBe(409);
+    expect(((await dup.json()) as any).error.code).toBe("version_exists");
+  });
+
+  it("rejects a path-traversal filename header (400)", async () => {
+    const env = makeEnv();
+    const res = await publishStream(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      artifact: "ZIPBYTES",
+      filename: "../../etc/passwd",
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_artifact");
+  });
+
+  it("rejects a malformed package-files header (400)", async () => {
+    const env = makeEnv();
+    const res = await publishStream(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      artifact: "ZIPBYTES",
+      filename: "agent-email-0.1.0.zip",
       packageFiles: '{"files":[{"name":"x"}]}', // missing size_bytes
     });
     expect(res.status).toBe(400);
