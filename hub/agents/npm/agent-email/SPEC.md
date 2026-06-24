@@ -67,6 +67,27 @@ verify the whole surface with zero connector setup.
 configured model is pulled. The only real readiness signal today is a `triage` (or
 any LLM call) returning `200`.
 
+### Request shapes
+
+Recipients and senders are **address objects**, not bare strings:
+`{ email: string, name?: string }`. This applies to `triage`'s `message.from` and
+`principal`, and to `draft`/`send`'s `to` (a non-empty array of them). Passing a
+plain string for `to` is a `422` validation error.
+
+`draft` proposes a reply and mints a single-use `confirmation_token` bound to that
+exact message; `send` echoes it back. A full round-trip:
+
+```ts
+const { draft, confirmation_token } = await client.draft({
+  to: [{ email: "you@example.com" }],
+  subject: "Re: Prod incident",
+  body: "On it — fix lands today.",
+});
+// `draft` is { to, subject, body }; the token authorizes exactly this payload.
+const sent = await client.send({ ...draft, confirmation_token });
+console.log(sent.sent_id);
+```
+
 ## Lifecycle helpers
 
 `startSidecar(opts)` does spawn → `waitForHealth` → `checkVersion` in one call and

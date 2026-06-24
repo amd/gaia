@@ -128,8 +128,11 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   NOT that triage will work. The real readiness signal is a `triage` returning 200.
 - **HTTP 502 from `triage`** → Lemonade isn't running/reachable, or the model isn't
   pulled. It is not a bug in this package.
-- **`send` has no token parameter.** It uses the mailbox connected in GAIA on the
-  host; you cannot pass OAuth through the API. Triage and draft work anywhere.
+- **Addresses are objects, not strings.** `to` (and `triage`'s `from` / `principal`)
+  are `{ email, name? }`; `to` is a non-empty array of them. A plain string → 422.
+- **`send` needs the draft `confirmation_token`** (missing/invalid → 403), but it
+  takes **no OAuth token** — the mailbox is resolved from the host's GAIA connector
+  store (no mailbox connected → 503). Triage and draft need no connector.
 - **Always `shutdown`** — otherwise the sidecar's child process is orphaned.
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.

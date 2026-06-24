@@ -136,7 +136,7 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | Call | Needs | Does |
 |------|-------|------|
 | `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. |
-| `draft(req)` | Nothing external | Wraps your `(to, subject, body)` and returns a single-use confirmation token. |
+| `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. |
 | `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
 
 **Everything except `send` is standalone** — you can build and verify the whole
