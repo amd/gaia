@@ -91,7 +91,7 @@ connector store, so a mailbox connected anywhere (Agent UI, CLI) is usable here
 too — and vice-versa. These connector routes are excluded from the OpenAPI
 contract: a playground convenience, not part of the frozen email REST contract.
 
-![GAIA Email Agent playground — stack health, live triage/draft, and a readiness check, all running against the local sidecar](https://hub.amd-gaia.ai/agents/email/0.2.0/playground.webp)
+![GAIA Email Agent playground — stack health, live triage/draft, and a readiness check, all running against the local sidecar](https://hub.amd-gaia.ai/agents/email/0.2.1/playground.webp)
 
 It's served same-origin with a `Content-Security-Policy: connect-src 'self'`
 header, so the page can only ever reach your local sidecar — email content never

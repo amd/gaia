@@ -255,6 +255,117 @@ def test_record_tool_use_logs_escape_hatch_for_unloaded():
     assert any("TOOL_LOADER_ESCAPE_HATCH" in r.getMessage() for r in records)
 
 
+# ── SKILL tier (Part 3, #1451) ─────────────────────────────────────────────
+
+
+def test_skill_tool_admitted_ahead_of_semantic_at_cap():
+    """At cap, a SKILL tool wins the last slot over a higher-scored semantic tool.
+
+    One free slot, two candidates: the recalled recipe's ``x`` (no semantic
+    match) and ``hi`` (semantic 0.9). SKILL is admitted before semantic, so ``x``
+    takes the slot and the higher-scored ``hi`` is skipped — the precise
+    realization of "ahead of semantic" (precedence CORE > SKILL > SEMANTIC).
+    """
+    tools = ["x", "hi"]
+    embed = _make_embed_fn(tools, {"q": {"x": 0.0, "hi": 0.9}})
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=1)
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loaded = loader.select("q", _registry(tools), skill_tools=["x"])
+    assert loaded == ["x"]  # SKILL took the only slot
+    payload = _selection_payload(records)
+    assert payload["skill"] == ["x"]
+    assert "hi" in payload["skipped_at_cap"]  # higher-scored semantic, skipped
+
+
+def test_skill_tool_avoids_escape_hatch_activation():
+    """Pre-loading the recipe's tool keeps the escape-hatch counter at 0.
+
+    ``needed`` has no semantic match, so without the SKILL signal it would be
+    absent and executing it would log the escape hatch. The recalled recipe
+    pre-loads it, so the same execution is a normal recency update.
+    """
+    tools = ["needed"]
+    embed = _make_embed_fn(tools, {"q": {"needed": 0.0}})
+
+    # Control: no skill signal → tool absent → execution escape-hatches.
+    control = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
+    assert control.select("q", _registry(tools)) == []
+    control.record_tool_use("needed")
+    assert control._escape_hatch_count == 1
+
+    # SKILL signal pre-loads it → execution is a plain recency update.
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
+    assert loader.select("q", _registry(tools), skill_tools=["needed"]) == ["needed"]
+    loader.record_tool_use("needed")
+    assert loader._escape_hatch_count == 0
+
+
+def test_skill_signal_absent_is_byte_identical():
+    """``skill_tools`` None / [] / omitted give the same loaded set and log bytes.
+
+    Graceful absence: the SKILL signal off must be byte-for-byte Parts 0-2 — same
+    loaded set, same ``TOOL_LOADER`` payload, and no ``skill`` key.
+    """
+    tools = ["c1", "d1"]
+    scores = {"q": {"c1": 0.0, "d1": 0.7}}
+
+    def _run(**kwargs):
+        embed = _make_embed_fn(tools, scores)
+        loader = ToolLoader(frozenset({"c1"}), [], embed, threshold=0.55, max_tools=14)
+        with _capture("gaia.agents.base.tool_loader") as records:
+            loaded = loader.select("q", _registry(tools), **kwargs)
+        return loaded, _selection_payload(records)
+
+    base_loaded, base_payload = _run()
+    none_loaded, none_payload = _run(skill_tools=None)
+    empty_loaded, empty_payload = _run(skill_tools=[])
+
+    assert base_loaded == none_loaded == empty_loaded == ["c1", "d1"]
+    assert base_payload == none_payload == empty_payload
+    assert "skill" not in base_payload
+
+
+def test_skill_tool_not_in_registry_is_dropped():
+    """A recalled tool absent from the registry is dropped, not raised."""
+    tools = ["d1"]
+    embed = _make_embed_fn(tools, {"q": {"d1": 0.7}})
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loaded = loader.select("q", _registry(tools), skill_tools=["ghost"])
+    assert "ghost" not in loaded
+    assert loaded == ["d1"]  # semantic match still loads
+    assert "skill" not in _selection_payload(records)  # ghost dropped, nothing fired
+
+
+def test_skill_tool_in_core_is_noop():
+    """A recalled tool already in CORE is not double-admitted nor SKILL-logged."""
+    tools = ["c1", "d1"]
+    embed = _make_embed_fn(tools, {"q": {"c1": 0.0, "d1": 0.0}})
+    loader = ToolLoader(frozenset({"c1"}), [], embed, threshold=0.55, max_tools=14)
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loaded = loader.select("q", _registry(tools), skill_tools=["c1"])
+    assert loaded == ["c1"]
+    payload = _selection_payload(records)
+    assert payload["admitted"] == ["c1"]  # admitted once, by CORE
+    assert "skill" not in payload  # CORE already covered it; SKILL did not fire
+
+
+def test_skill_log_key_present_only_when_skill_fires():
+    """The ``skill`` log key appears only on a turn the SKILL signal contributes."""
+    tools = ["x"]
+    embed = _make_embed_fn(tools, {"q": {"x": 0.0}})
+    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
+
+    with _capture("gaia.agents.base.tool_loader") as fired:
+        loader.select("q", _registry(tools), skill_tools=["x"])
+    assert _selection_payload(fired)["skill"] == ["x"]
+
+    # A later turn with no recall must not carry the key (x already loaded).
+    with _capture("gaia.agents.base.tool_loader") as quiet:
+        loader.select("q", _registry(tools), skill_tools=[])
+    assert "skill" not in _selection_payload(quiet)
+
+
 # ── load_bundle / menu / counters (Part 2, #1450) ──────────────────────────
 
 

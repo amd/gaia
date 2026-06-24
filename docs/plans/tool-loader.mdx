@@ -9,7 +9,7 @@ title: "Dynamic Tool Loader"
 <Note>
 **Component:** Per-turn tool visibility for agents (issue [#688](https://github.com/amd/gaia/issues/688))
 **Module:** `gaia.agents.base.tool_loader`
-**Status:** **Part 0 (#1448) + Part 1 (#1449) + Part 2 (#1450) landed.** Part 1 ships the selection mechanism behind a default-off toggle on the ChatAgent `doc` profile; Part 2 adds the explicit `load_tools` escape hatch (so native tool-calling models can recover a semantic miss) plus the escape-hatch activation-rate tuning signal. Part 3 (skill signal) is still proposed.
+**Status:** **Part 0 (#1448) + Part 1 (#1449) + Part 2 (#1450) + Part 3 (#1451) landed.** Part 1 ships the selection mechanism behind a default-off toggle on the ChatAgent `doc` profile; Part 2 adds the explicit `load_tools` escape hatch (so native tool-calling models can recover a semantic miss) plus the escape-hatch activation-rate tuning signal; Part 3 adds the skill-driven signal — the `tools_required` of a recalled learned procedure (#887) load ahead of the semantic results.
 **Target agent (v1):** `ChatAgent` (`doc` profile), behind a default-off toggle.
 </Note>
 
@@ -45,8 +45,8 @@ against the 12K number — measure first, then justify on TTFT and slope.
 ## Decided design
 
 A semantic selector over a CORE floor, with a model-driven safety net — plus a
-skill-driven signal added later once #887 lands (see
-[Part 3](#part-3-skill-driven-signal-gated-on-887)). Keyword matching is
+skill-driven signal layered on once #887 landed (see
+[Part 3](#part-3-skill-driven-signal-landed-1451)). Keyword matching is
 **explicitly out** — it is too brittle to maintain and was the source of repeated
 review failures on the prior attempts (#811 / #922 / #957 / #958).
 
@@ -387,12 +387,12 @@ it on every model.
 **Cap unchanged at 14** (→ 3 dynamic slots now that CORE = 11). The eval gates
 recall; bump the default only if recall or the escape-hatch rate regresses.
 
-### Part 3 — Skill-driven signal (gated on #887)
+### Part 3 — Skill-driven signal ✅ landed (#1451)
 
-A third selection signal, added **only after** [#887](https://github.com/amd/gaia/issues/887)
-(skill auto-synthesis) lands. A *skill* is a procedure the agent distilled from
-its own successful multi-step runs; each `SKILL.md` declares the exact
-`tools_required` for that recipe in its YAML frontmatter.
+A third selection signal, unblocked once [#887](https://github.com/amd/gaia/issues/887)
+(skill auto-synthesis) landed (PR #1794, refined by #1818/#1828). A *skill* is a
+procedure the agent distilled from its own successful multi-step runs; each
+stored procedure declares the exact `tools_required` for that recipe.
 
 - When `recall_skill(goal)` matches the user's goal, union in the matched skills'
   `tools_required` **ahead of** semantic results.
@@ -408,9 +408,12 @@ its own successful multi-step runs; each `SKILL.md` declares the exact
 - **Additive, not a reshape.** It slots in as one more input to the same
   selector: `loaded = CORE ∪ SKILL ∪ SEMANTIC ∪ escape-hatch`. Precedence is
   CORE > SKILL > SEMANTIC. Nothing in Parts 0–2 changes.
-- **Soft dependency.** Until #887 ships, this signal returns `[]` cleanly and the
-  loader runs on CORE + semantic exactly as in Parts 1–2 — so Parts 1–2 must not
-  assume it exists.
+- **Graceful absence is feature-detected, not import-guarded.** When no procedure
+  has been synthesized yet — the state every new user is in — the `procedures`
+  corpus is empty, so `recall_skill` returns `[]` at its `index.ntotal == 0`
+  guard and the loader runs on CORE + semantic exactly as in Parts 1–2. The
+  signal checks the *populated corpus at runtime*, never catches a missing
+  module, so the regression test exercises the real fall-through path.
 
 **Success criteria:**
 - When a skill matches the goal, its `tools_required` are loaded **ahead of**
@@ -420,6 +423,53 @@ its own successful multi-step runs; each `SKILL.md` declares the exact
 - **Graceful absence** — with #887 disabled/absent, the signal returns `[]` and
   Parts 0–2 behavior is byte-for-byte unchanged (regression test).
 - **No regression** when no skill matches the goal (falls through to semantic).
+
+#### How Part 3 shipped (implementation reference)
+
+**The loader stays memory-agnostic.** `recall_skill` and `Skill` are *not*
+imported into `tool_loader.py` (that would be an upward dependency). Instead
+`ChatAgent` — the composition layer — flattens the recalled procedures'
+`tools_required` into a `List[str]` and passes it to `select()` via a new
+keyword-only `skill_tools` param. The loader admits **plain tool names**; it
+never learns what a skill is.
+
+**Recall runs once per turn; the loader reuses the cache (zero extra TTFT
+cost).** `recall_skill` already runs once per turn in
+`MemoryMixin._refresh_recalled_skills` (before tool selection, via the
+`process_query` → `super()` ordering). Part 3 refactors that method to cache the
+matched `Skill` objects in `self._recalled_skills` alongside the rendered
+prompt; `_recalled_skill_tools()` reads that cache. So the SKILL signal adds
+**no** second embed/FAISS call — TTFT is the whole point of the loader.
+
+**Precedence is realized by admission order, not set union.** `select()` admits
+CORE first (cap-exempt), then the SKILL tools (cap-**bound**, in recall order,
+deduped, no bundle pull-in — the exact recipe), then the semantic candidates.
+Because `new_candidates` is computed after, it naturally excludes skill-admitted
+tools. A fat recipe is cap-bound like any non-CORE tool, so it can never exceed
+`max_tools`; an idle skill tool LRU-evicts next turn, and recall re-runs each
+turn so the set self-heals.
+
+**Graceful absence is feature-detected.** `_recalled_skill_tools()` returns `[]`
+whenever `self._recalled_skills` is empty — the state of every new user (empty
+`procedures` corpus → `recall_skill` `[]`). With `skill_tools` `None`/empty the
+loaded set **and** the `TOOL_LOADER` log line are byte-identical to a
+CORE+SEMANTIC build (the `skill` key is emitted only when the signal fires).
+
+**The query asymmetry is intentional.** The semantic query is *previous +
+current* user message (Part 1), but the SKILL signal derives from the **clean
+current goal** that `recall_skill` matched — skill recall matches a goal-shaped
+trigger, not a conversation window, so the prior turn would blur the match.
+
+**Where the criteria are proven.** The *mechanism* (ahead-of-semantic,
+escape-hatch avoided, graceful absence, no double recall) is proven
+deterministically in
+[`test_tool_loader_selection.py`](https://github.com/amd/gaia/blob/main/tests/unit/test_tool_loader_selection.py)
+and `test_memory_mixin.py` (pure-numpy embedder, no model/Lemonade/GPU). The
+*metric* (precision lift / no-regression) is the
+`gaia eval agent --category tool_selection` run vs the committed
+`scorecard_tool_selection.json` baseline — a cold eval runs from an empty corpus,
+so it proves Part 3 = Parts 0–2 (the no-regression criterion); the precision lift
+needs a seeded procedure matching a scenario goal.
 
 ## Open questions — resolved in Part 1
 
@@ -459,6 +509,12 @@ tool-calling models has shipped (Part 2, #1450): the loader exposes
 counters; `ChatAgent` registers the `load_tools` meta-tool and injects the
 native-only bundle menu; and `gaia.eval.tool_recall` unions mid-loop `load_tools`
 lines, drops the native exemption, and reports the escape-hatch activation rate.
+The skill-driven tier has shipped (Part 3, #1451): `select()` takes a keyword-only
+`skill_tools` list and admits it after CORE and ahead of the semantic candidates;
+`ChatAgent._select_tools_for_turn` feeds it `MemoryMixin._recalled_skill_tools()`,
+which flattens the `tools_required` of the procedures `recall_skill` matched this
+turn — reusing the per-turn recall cache, so the tier adds no extra embed/FAISS
+cost and stays byte-identical to Parts 1–2 whenever no procedure matches.
 
 ## Dependencies
 
@@ -468,7 +524,9 @@ lines, drops the native exemption, and reports the escape-hatch activation rate.
   **user-controllable** — when the user turns it off, the loader reverts to the
   legacy all-tools path (see
   [When memory is off](#when-memory-is-off-all-tools-load-the-legacy-path)).
-- **#887 (procedural memory / skills)** — *not landed.* Provides `recall_skill`
-  and `SKILL.md` `tools_required` frontmatter. The skill tier is **deferred to
-  [Part 3](#part-3-skill-driven-signal-gated-on-887)**, not in v1 (Parts 0–2);
-  it slots in additively once #887 lands and returns `[]` cleanly until then.
+- **#887 (procedural memory / skills)** — *landed* (PR #1794, refined by
+  #1818/#1828). Provides `recall_skill` and the per-procedure `tools_required`.
+  The skill tier shipped on top of it as
+  [Part 3](#part-3-skill-driven-signal-landed-1451); when the `procedures` corpus
+  is empty (every new user) `recall_skill` returns `[]`, so the loader runs on
+  CORE + semantic exactly as in Parts 0–2.
