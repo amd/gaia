@@ -87,12 +87,30 @@ silent null.
 
 ## 5. From a renderer (Electron / browser)
 
+The sidecar serves **same-origin only — no CORS**. A renderer on a different origin
+**cannot** fetch `http://127.0.0.1:8131` directly; the browser blocks it. So:
+
+- **Recommended:** spawn the sidecar in the Electron **main** process (step 3) and
+  expose `triage`/`draft` to the renderer over your own IPC. Don't call the sidecar
+  from the renderer directly.
+- The `./client` entry (zero Node built-ins) is only usable from a **same-origin or
+  proxied** page:
+
 ```ts
 import { EmailClient } from "@amd-gaia/agent-email/client";
-
 const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131" });
-const res = await client.triage({ payload: { /* … */ } });
 ```
+
+## Running in a server / long-lived app
+
+- **`fetchBinary` is a build step**, not per request (network + SHA verify). Run it
+  once; `resolveBinaryPath` at runtime.
+- **Spawn once at boot**, hold the `Sidecar` handle for the process lifetime — never
+  per request.
+- **Low concurrency.** One local Lemonade model slot, so parallel `triage` calls
+  serialize. Cap inflight calls.
+- **Wire `shutdown` into `SIGTERM`/`SIGINT`** so the sidecar's child is reaped. The
+  package does not restart a crashed sidecar.
 
 ## Prerequisites — the agent needs a local model
 

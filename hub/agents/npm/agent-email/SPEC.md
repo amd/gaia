@@ -18,10 +18,20 @@ Three tiers, all on the user's machine:
   **local** Lemonade for the actual LLM inference. With none reachable,
   `POST /v1/email/triage` returns HTTP 502.
 
-Once a sidecar is running, anything that speaks HTTP can drive it — including a
-browser or Electron renderer via the [`./client`](#browser--electron-renderer)
-entry, which carries zero Node built-ins. You only need Node to *launch and
-supervise* the binary, not to *talk to* it.
+Once a sidecar is running, any Node process can drive it over local HTTP. The
+sidecar serves **same-origin only and sends no CORS headers**, so a browser or
+Electron renderer reaches it through the app's main process, not a direct
+cross-origin fetch — see [Browser / Electron renderer](#browser--electron-renderer-client).
+
+## Concurrency & deployment
+
+Run **one sidecar per host**, spawned once at process start — not one per request.
+It accepts concurrent HTTP requests, but inference runs on a **single local
+Lemonade model slot**, so parallel `triage` calls serialize behind one another;
+cap inflight calls on your side rather than fanning out. The package does not
+supervise or restart a crashed sidecar — watch `sidecar.child` `exit` and
+re-`startSidecar` if you need resilience, and wire `shutdown` into `SIGTERM`/
+`SIGINT` so the frozen binary's child is always reaped.
 
 ## REST API
 
@@ -118,20 +128,26 @@ package's REST API yet** — only triage / draft / send are.
 
 The default entry (`.`) pulls in Node built-ins (`node:fs`, `node:child_process`,
 `node:crypto`) to fetch and spawn the binary, so it can't be bundled for a browser
-or an Electron renderer. For those, import the browser-safe, client-only subpath
-and talk to an already-running sidecar over HTTP:
+or an Electron renderer. The browser-safe `./client` subpath re-exports only
+zero-Node-dependency symbols — `EmailClient`, every error class, `SCHEMA_VERSION`,
+and all request/response types — so it *bundles* for a renderer.
+
+But the sidecar serves **same-origin only and sends no CORS headers**, so a
+renderer on a different origin cannot `fetch` `http://127.0.0.1:8131` directly. Two
+working patterns:
+
+- **Electron (recommended):** spawn and own the sidecar in your **main** process
+  (the `.` entry), and expose `triage`/`draft` to the renderer over your own IPC.
+- **Same-origin / proxied:** use `./client` from a page that already shares the
+  sidecar's origin, or behind a proxy you control.
 
 ```ts
 import { EmailClient } from "@amd-gaia/agent-email/client";
 
+// Same-origin or proxied path only — not a cross-origin fetch at 127.0.0.1:8131.
 const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131" });
 const res = await client.triage({ payload: { /* … */ } });
 ```
-
-`./client` re-exports only zero-Node-dependency symbols — `EmailClient`, every
-error class, `SCHEMA_VERSION`, and all request/response types. The desktop-app
-pattern: spawn the sidecar once from your **main/Node** process (the `.` entry),
-then drive it from the renderer via `./client`.
 
 ## Module format
 

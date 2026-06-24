@@ -60,7 +60,7 @@ Usage:
 
 fetch options:
   --out <dir>         Resources dir to write the verified binary into (required)
-  --base-url <url>    Override the download base URL (real R2 URL pending #1648)
+  --base-url <url>    Override the download base URL from binaries.lock.json
   --platform <key>    Override platform key (e.g. linux-x64). Default: this host
   --force             Re-download even if a verified binary already exists
   --runtime           Opt-in marker for runtime fetch (build-time is supported)
@@ -68,9 +68,10 @@ fetch options:
 Notes:
   * No binaries are committed. fetch verifies SHA-256 against binaries.lock.json
     and FAILS LOUDLY on any mismatch.
-  * Until R2 is wired (#1648) the lock ships placeholder hashes, so fetch is
-    intentionally blocked. Pass --base-url and a lock with real hashes, or build
-    the binary locally (hub/agents/python/email/packaging/freeze.py).
+  * If the lock has a placeholder hash for a platform, fetch is blocked for it so
+    a bad binary can never be trusted. Build the binary locally
+    (hub/agents/python/email/packaging/freeze.py) and point the lifecycle helpers
+    at it directly.
 `;
 
 async function cmdFetch(args: ParsedArgs): Promise<number> {

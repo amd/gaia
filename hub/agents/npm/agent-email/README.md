@@ -44,9 +44,10 @@ Three tiers, all on the user's machine — no cloud, no separate GAIA install:
 - **Lemonade Server** is the one runtime dependency: the sidecar calls a **local**
   Lemonade for inference. With none reachable, `triage` returns HTTP 502.
 
-Once it's running, anything that speaks HTTP can drive it — including a browser or
-Electron renderer via the [`./client`](#browser--electron-renderer) entry. You only
-need Node to *launch* the binary, not to *talk to* it.
+Once it's running, any Node process can drive it over local HTTP. A browser or
+Electron **renderer** reaches it through your app's main process — the sidecar is
+same-origin only (no CORS), so a renderer can't call it cross-origin directly (see
+[Browser / Electron](#browser--electron-renderer)).
 
 ## Install
 
@@ -89,14 +90,25 @@ await shutdown(sidecar); // kills the whole process tree
 
 ### Browser / Electron renderer
 
-The `.` entry uses Node built-ins to fetch and spawn the binary, so it can't be
-bundled for a browser or an Electron renderer. Spawn the sidecar once from your
-**main/Node** process, then drive it from the renderer over HTTP via the
-zero-Node-dependency `./client` entry:
+The `.` entry uses Node built-ins, so it can't be bundled for a browser or an
+Electron renderer. The sidecar also serves **same-origin only — it sends no CORS
+headers** — so a renderer on a different origin (`file://`, a dev server, an
+`app://` scheme) **cannot call `http://127.0.0.1:8131` directly**; the browser
+blocks it. Don't design around a direct renderer→sidecar fetch.
+
+**Recommended (Electron):** spawn and own the sidecar in your **main** process via
+the `.` entry, and expose `triage`/`draft` to the renderer over your own IPC. The
+renderer never touches the sidecar.
+
+The browser-safe `./client` entry (zero Node built-ins, so it bundles for a
+renderer) is for the case where the renderer *does* have a same-origin or
+app-proxied path to the sidecar:
 
 ```ts
 import { EmailClient } from "@amd-gaia/agent-email/client";
 
+// Only from a same-origin page, or behind a proxy you control — not a
+// cross-origin fetch straight at 127.0.0.1:8131.
 const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131" });
 const res = await client.triage({ payload: { /* … */ } });
 ```
@@ -128,9 +140,11 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
 
 **Everything except `send` is standalone** — you can build and verify the whole
-flow with zero connector setup. `send` uses the mailbox connected in GAIA on the
-host (configured under *Settings → Connectors*); there is no way to pass a token
-through the API, so it only works where the mailbox is already connected.
+flow with zero connector setup. `send` is different: it transmits through the
+mailbox **connected in GAIA on the host** (under *Settings → Connectors*) and takes
+no token, so **on a headless server it returns HTTP 503** (no mailbox) until someone
+connects one on that host. For a server integration, treat `triage` and `draft` as
+your surface and handle sending out of band.
 
 ### Lifecycle
 
@@ -150,22 +164,66 @@ Mailbox and calendar **actions** beyond send (read, archive, label, RSVP, create
 events) are part of the full agent but not yet exposed through this package — see
 [`SPEC.md`](./SPEC.md) for the complete surface.
 
+## Running in production
+
+This is a long-lived local resource, not a per-request one. Wire it like this:
+
+- **Fetch at build time, not per request.** `fetchBinary` does network I/O and
+  SHA-256 verification — run it once in your build / postinstall step, ship the
+  verified binary, then `resolveBinaryPath` at runtime.
+- **Spawn once at boot.** Call `startSidecar` during app startup and hold the
+  `Sidecar` handle for the process lifetime. Never spawn per request.
+- **Keep concurrency low.** The sidecar accepts concurrent HTTP requests, but
+  inference runs on a **single local Lemonade model slot** — parallel `triage`
+  calls queue behind one another. Cap inflight calls (a small queue / concurrency
+  limit) rather than fanning out.
+- **Pick a port you own.** `port` is yours to choose; if it's already taken,
+  `startSidecar` fails its health wait (`HealthTimeoutError`) — run with
+  `DEBUG=agent-email` to see the bind error.
+- **Supervise it yourself.** The package does not restart a crashed sidecar. If you
+  need resilience, watch `sidecar.child` for `exit` and re-`startSidecar`.
+- **Shut it down on exit.** Wire `shutdown` into your termination path so the
+  frozen binary's child process is always reaped:
+
+```ts
+const sidecar = await startSidecar({ binaryPath, port: 8131 });
+for (const sig of ["SIGTERM", "SIGINT"]) {
+  process.once(sig, () => shutdown(sidecar).finally(() => process.exit(0)));
+}
+```
+
+### Errors & retries
+
+Every non-2xx throws `HttpError` (`status`, `url`, `bodyText`); a network failure or
+timeout surfaces as `HttpError` with `status === 0` (not an HTTP code).
+
+| Failure | Meaning | Retry? |
+|---------|---------|--------|
+| `HttpError` 502 (from `triage`) | Lemonade is down or the model is cold/missing | **Yes** — transient; back off and retry |
+| `HttpError` 0 (network/timeout) | Sidecar not reachable / crashed | **Yes** — after re-spawning the sidecar |
+| `HttpError` 503 (from `send`) | No mailbox connected on the host | **No** — configuration, not transient |
+| `HttpError` 400 | Bad request, or 2+ mailboxes connected for `send` | **No** — fix the call/config |
+| `HealthTimeoutError` / `VersionMismatchError` / `IntegrityError` | Startup faults (port taken, contract mismatch, bad binary) | **No** — fail fast at boot |
+
 ## Playground
 
 Once the sidecar is running, open
 [http://127.0.0.1:8131/v1/email/playground](http://127.0.0.1:8131/v1/email/playground)
 — a zero-setup, **localhost-only** page with a stack-health check, live triage and
 draft, and a Connectors panel to connect Gmail/Outlook and try a live send. It's
-served same-origin under a strict CSP, so email content never leaves the machine.
+served same-origin under a strict CSP, so the page can only ever reach your local
+sidecar: triage and draft stay on-device, while a `send` transmits to your mail
+provider by definition.
 
 ## Requirements
 
 - **Platforms:** Windows x64, Linux x64, macOS Apple Silicon (`darwin-arm64`).
-- **Memory:** 8 GB RAM.
+- **Memory:** 8 GB RAM — sized for the default local model (`Gemma-4-E4B-it-GGUF`)
+  running in Lemonade, not the sidecar itself.
 - **Lemonade:** the sidecar calls a local Lemonade endpoint (default
   `http://localhost:13305`); cloud hosts are rejected at startup.
 - **Footprint:** one ~31 MB native binary, no Python runtime. (Model weights are
-  managed separately by Lemonade.)
+  downloaded and managed separately by Lemonade.)
 
 ## Troubleshooting
 

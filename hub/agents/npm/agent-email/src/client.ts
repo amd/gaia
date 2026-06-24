@@ -4,7 +4,7 @@
  * Typed REST client for the GAIA email agent sidecar.
  *
  * Wraps every HTTP endpoint the frozen sidecar serves:
- *   POST /v1/email/triage    (the frozen #1262 contract)
+ *   POST /v1/email/triage    (the frozen triage contract)
  *   POST /v1/email/draft      (mint a confirmation token)
  *   POST /v1/email/send       (send — gated on a valid token)
  *   GET  /health              (root liveness — what the standalone sidecar serves)
