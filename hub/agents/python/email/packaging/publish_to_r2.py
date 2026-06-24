@@ -127,6 +127,7 @@ def publish_one(
     token: str,
     readme_bytes: bytes | None = None,
     changelog_bytes: bytes | None = None,
+    package_files_bytes: bytes | None = None,
 ) -> dict:
     if not artifact_path.exists():
         raise SystemExit(f"error: artifact not found: {artifact_path}")
@@ -163,6 +164,14 @@ def publish_one(
         # `changelog`, rendered as a Changelog section on the hub agent page.
         if changelog_bytes is not None:
             files["changelog"] = ("CHANGELOG.md", changelog_bytes, "text/markdown")
+        # The whole-package file listing rides with the zip artifact — it becomes
+        # the catalog entry's `package.files` (the hub's file-list display).
+        if package_files_bytes is not None:
+            files["package_files"] = (
+                "package-files.json",
+                package_files_bytes,
+                "application/json",
+            )
         resp = requests.post(
             publish_url,
             headers={"authorization": f"Bearer {token}"},
@@ -243,6 +252,13 @@ def main(argv=None) -> int:
         "(POSTed as the multipart 'changelog' part the Worker accepts).",
     )
     parser.add_argument(
+        "--package-files",
+        type=Path,
+        help='Path to a package-files.json ({"files":[{name,size_bytes}]}) to '
+        "attach to the zip artifact (POSTed as the 'package_files' part). It "
+        "becomes the catalog's package.files (the hub's file-list display).",
+    )
+    parser.add_argument(
         "--summary-out",
         type=Path,
         help="Write a JSON array of {platform,filename,executable,sha256,size}.",
@@ -279,10 +295,29 @@ def main(argv=None) -> int:
             flush=True,
         )
 
+    package_files_bytes = None
+    if args.package_files is not None:
+        if not args.package_files.exists():
+            raise SystemExit(
+                f"error: --package-files path not found: {args.package_files}."
+            )
+        package_files_bytes = args.package_files.read_bytes()
+        print(
+            f"[publish] attaching package file list: {args.package_files} "
+            f"({len(package_files_bytes)} bytes)",
+            flush=True,
+        )
+
     results = []
     for raw in args.artifact:
         path, key = _parse_artifact_arg(raw)
-        platform_key = key or _infer_platform_key(path.name)
+        # A .zip is the whole-package artifact (not a platform binary); it has no
+        # platform key to infer, so default it to "package".
+        platform_key = key or (
+            "package"
+            if path.name.lower().endswith(".zip")
+            else _infer_platform_key(path.name)
+        )
         results.append(
             publish_one(
                 args.base_url,
@@ -293,6 +328,7 @@ def main(argv=None) -> int:
                 token,
                 readme_bytes=readme_bytes,
                 changelog_bytes=changelog_bytes,
+                package_files_bytes=package_files_bytes,
             )
         )
 

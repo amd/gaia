@@ -157,11 +157,13 @@ export function publishRequest(opts: {
   contentType?: string;
   readme?: string;
   changelog?: string;
+  packageFiles?: string;
 }): Request {
   const form = new FormData();
   form.set("manifest", opts.manifestYaml);
   if (opts.readme !== undefined) form.set("readme", opts.readme);
   if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
+  if (opts.packageFiles !== undefined) form.set("package_files", opts.packageFiles);
   const bytes = typeof opts.artifact === "string" ? new TextEncoder().encode(opts.artifact) : opts.artifact;
   form.set(
     "artifact",

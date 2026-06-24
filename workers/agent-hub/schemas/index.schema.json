@@ -145,6 +145,31 @@
         "playground_url": {
           "type": "string",
           "description": "Localhost playground URL served by the agent's sidecar; absent otherwise."
+        },
+        "package": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Whole-package download (all platform binaries + client + docs) as a single zip plus its file listing. Present only when a package_files manifest was published for the latest version.",
+          "required": ["filename", "size_bytes", "files"],
+          "properties": {
+            "filename": {
+              "type": "string",
+              "description": "Zip artifact filename under the version dir, e.g. \"agent-email-0.2.1.zip\"."
+            },
+            "size_bytes": { "type": "integer", "minimum": 0 },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "size_bytes"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "size_bytes": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
         }
       }
     }
