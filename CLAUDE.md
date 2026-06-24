@@ -653,6 +653,10 @@ Browse the directory rather than a partial list here.
 
 When responding to GitHub issues and pull requests, follow these guidelines:
 
+**Automated PR-review policy lives in [`REVIEW.md`](REVIEW.md)** (the tunable review rubric:
+correctness-first severity, the nit cap, skip rules, and length caps). This section sets the
+shared tone/format the rubric builds on; keep the two consistent when editing either.
+
 ### Documentation Structure
 
 **External Site:** https://amd-gaia.ai
