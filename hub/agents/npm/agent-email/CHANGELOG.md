@@ -5,6 +5,23 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## 0.2.2
+
+Release-reliability fix. The 0.2.1 tag published the per-platform binaries to the
+Agent Hub but its npm publish never completed: the Hub Worker buffered the entire
+upload in memory, so the new ~177 MB whole-package zip exceeded Cloudflare's
+128 MB per-Worker memory limit and the publish step 502'd before npm. 0.2.2 fixes
+that and is the first complete publish of the 0.2.1 feature set. No agent
+wire-contract change — `SCHEMA_VERSION` stays `2.0` and the client + REST/MCP
+surface are unchanged.
+
+### Fixed
+
+- **Whole-package zip + npm publish now complete.** The Agent Hub Worker
+  (`POST /publish`) streams large `application/octet-stream` uploads straight to
+  R2 with server-side SHA-256 verification instead of reading the whole body into
+  memory, so the ~177 MB whole-package zip publishes without OOMing the Worker.
+
 ## 0.2.1
 
 Adds the one-command `playground` launcher and automatic sidecar cleanup, and
