@@ -14,8 +14,10 @@
  */
 
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { fetchBinary } from "./fetch.js";
 import { shutdown, startSidecar } from "./lifecycle.js";
@@ -130,25 +132,50 @@ function openBrowser(url: string): void {
         : process.platform === "win32"
           ? ["cmd", ["/c", "start", "", url]]
           : ["xdg-open", [url]];
-    spawn(cmd, args as string[], { stdio: "ignore", detached: true }).unref();
+    const child = spawn(cmd, args as string[], { stdio: "ignore", detached: true });
+    // A missing opener (headless / container / WSL without wslu) is reported via
+    // an async 'error' event, NOT a sync throw — swallow it here, or Node re-throws
+    // it as an uncaughtException and the sidecar auto-reaper tears everything down.
+    child.on("error", () => {
+      /* non-fatal: the URL was already printed above */
+    });
+    child.unref();
   } catch {
     /* non-fatal: the URL is printed regardless */
   }
 }
 
+/**
+ * Resolve + validate the `--port` flag. Returns the port, or an actionable error
+ * string for the friendly `exit 2` path. Rejects out-of-range ports and 4001
+ * (which `spawnSidecar` reserves and would otherwise surface as a generic crash).
+ */
+export function resolvePlaygroundPort(
+  raw: string | boolean | undefined,
+): { port: number } | { error: string } {
+  const port = typeof raw === "string" ? Number(raw) : 8131;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535 || port === 4001) {
+    return {
+      error: `--port must be a port in 1..65535 and not 4001 (got ${String(raw)})`,
+    };
+  }
+  return { port };
+}
+
+/** Default cache dir for the fetched binary (keeps a throwaway run out of cwd). */
+export const DEFAULT_PLAYGROUND_CACHE = path.join(os.tmpdir(), "amd-gaia-agent-email");
+
 async function cmdPlayground(args: ParsedArgs): Promise<number> {
-  const port =
-    typeof args.flags.port === "string" ? Number(args.flags.port) : 8131;
-  if (!Number.isInteger(port) || port <= 0) {
-    process.stderr.write(`error: --port must be a positive integer (got ${String(args.flags.port)})\n`);
+  const parsed = resolvePlaygroundPort(args.flags.port);
+  if ("error" in parsed) {
+    process.stderr.write(`error: ${parsed.error}\n`);
     return 2;
   }
+  const { port } = parsed;
   // Cache the binary in a temp dir by default so a throwaway `npx ... playground`
   // run doesn't litter the cwd; fetchBinary is a cache-hit on the second run.
   const outDir =
-    typeof args.flags.out === "string"
-      ? args.flags.out
-      : path.join(os.tmpdir(), "amd-gaia-agent-email");
+    typeof args.flags.out === "string" ? args.flags.out : DEFAULT_PLAYGROUND_CACHE;
 
   process.stdout.write(`[agent-email] fetching the sidecar binary -> ${outDir}\n`);
   const { binaryPath } = await fetchBinary({
@@ -157,7 +184,9 @@ async function cmdPlayground(args: ParsedArgs): Promise<number> {
   });
 
   process.stdout.write(`[agent-email] starting the sidecar on 127.0.0.1:${port} ...\n`);
-  const sidecar = await startSidecar({ binaryPath, port });
+  // Own the lifecycle here (autoCleanup off) so the graceful shutdown below
+  // actually runs — the default auto-reaper would SIGKILL the tree first.
+  const sidecar = await startSidecar({ binaryPath, port, autoCleanup: false });
 
   const url = `http://127.0.0.1:${port}/v1/email/playground`;
   process.stdout.write(`\n  ▸ Playground: ${url}\n`);
@@ -165,14 +194,19 @@ async function cmdPlayground(args: ParsedArgs): Promise<number> {
   process.stdout.write(`    Press Ctrl+C to stop the sidecar.\n\n`);
   if (!args.flags["no-open"]) openBrowser(url);
 
-  // Stay alive until interrupted, then shut the sidecar down cleanly.
+  // Stay alive until interrupted, then shut the sidecar down cleanly. We own all
+  // the signals the auto-reaper would have handled (it's off, above).
   await new Promise<void>((resolve) => {
+    let stopping = false;
     const stop = (): void => {
+      if (stopping) return; // a second signal shouldn't re-enter shutdown
+      stopping = true;
       process.stdout.write("\n[agent-email] stopping the sidecar ...\n");
       void shutdown(sidecar).finally(resolve);
     };
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+      process.once(sig, stop);
+    }
   });
   return 0;
 }
@@ -215,14 +249,26 @@ async function main(): Promise<number> {
   }
 }
 
-main()
-  .then((code) => process.exit(code))
-  .catch((e) => {
-    // Fail loudly with an actionable message; never swallow.
-    if (e instanceof AgentEmailError) {
-      process.stderr.write(`[agent-email] ${e.name}: ${e.message}\n`);
-    } else {
-      process.stderr.write(`[agent-email] unexpected error: ${(e as Error).stack ?? e}\n`);
-    }
-    process.exit(1);
-  });
+/** True when this file is the entry point (so importing it for tests is a no-op). */
+function invokedDirectly(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+
+if (invokedDirectly()) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((e) => {
+      // Fail loudly with an actionable message; never swallow.
+      if (e instanceof AgentEmailError) {
+        process.stderr.write(`[agent-email] ${e.name}: ${e.message}\n`);
+      } else {
+        process.stderr.write(`[agent-email] unexpected error: ${(e as Error).stack ?? e}\n`);
+      }
+      process.exit(1);
+    });
+}
