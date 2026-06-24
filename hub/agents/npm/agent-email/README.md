@@ -250,7 +250,7 @@ provider by definition.
 | `/health` is green but `triage` fails | `health()` is **liveness-only** — it doesn't check Lemonade or the model. The real readiness signal is a `triage` returning 200. |
 | `npm install` fails with `UNABLE_TO_GET_ISSUER_CERT` | Corporate TLS proxy. Reinstall with Node's system CA store: `NODE_OPTIONS=--use-system-ca npm install` (Node ≥ 22). |
 | `require(...)` throws `ERR_REQUIRE_ESM` | The package is ESM-only. Use `import`, or `await import("@amd-gaia/agent-email")` from CommonJS. |
-| Sidecar process lingers after exit | Always call `shutdown(sidecar)` — it kills the whole process tree (the frozen binary spawns a child). |
+| Sidecar process lingers after exit | Auto-cleanup reaps it on exit/crash/signal by default; a lingering sidecar means `autoCleanup: false` (call `shutdown(sidecar)` yourself) or a hard `SIGKILL` of the host. |
 | `IntegrityError` / `VersionMismatchError` on start | The downloaded binary failed its SHA-256 check, or its contract MAJOR differs from the client. Clear `resources/` and re-`fetchBinary`, and make sure the package version matches the binary. |
 
 Set `DEBUG=agent-email` for verbose spawn/fetch/health logs (on stderr).
