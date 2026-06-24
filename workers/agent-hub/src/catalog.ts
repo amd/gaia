@@ -10,6 +10,7 @@ import {
   listAgentIds,
   readAgentManifest,
   readChangelog,
+  readPackageFiles,
   readReadme,
   writeIndex,
 } from "./storage";
@@ -94,16 +95,27 @@ export function upsertVersion(
 }
 
 /**
- * Build the catalog entry for one agent manifest. `readme` and `changelog` are
- * the latest version's markdown ("" if none was published).
+ * Build the catalog entry for one agent manifest. `readme`/`changelog` are the
+ * latest version's markdown ("" if none was published); `packageFiles` is the
+ * whole-package zip's file listing (null if no package zip was published).
  */
 export function toIndexEntry(
   agent: AgentManifest,
   readme: string,
-  changelog: string
+  changelog: string,
+  packageFiles: { files: { name: string; size_bytes: number }[] } | null
 ): IndexEntry {
   const latest = agent.versions[agent.latest_version];
   const req = agent.requirements;
+  // The whole-package download is the published `.zip` artifact of the latest
+  // version, paired with its file listing. Only surface it when both exist.
+  const zip = (latest?.artifacts ?? [latest?.artifact]).find(
+    (a) => a && a.filename.toLowerCase().endsWith(".zip")
+  );
+  const pkg =
+    packageFiles && zip
+      ? { filename: zip.filename, size_bytes: zip.size_bytes, files: packageFiles.files }
+      : undefined;
   return {
     id: agent.id,
     name: agent.name,
@@ -136,6 +148,7 @@ export function toIndexEntry(
     // undefined serializes to "key absent" — only present when the manifest set it.
     npm_package: agent.npm_package,
     playground_url: agent.playground_url,
+    package: pkg,
   };
 }
 
@@ -154,7 +167,8 @@ export async function rebuildIndex(
     if (!agent) continue;
     const readme = await readReadme(bucket, id, agent.latest_version);
     const changelog = await readChangelog(bucket, id, agent.latest_version);
-    entries.push(toIndexEntry(agent, readme, changelog));
+    const packageFiles = await readPackageFiles(bucket, id, agent.latest_version);
+    entries.push(toIndexEntry(agent, readme, changelog, packageFiles));
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));
 

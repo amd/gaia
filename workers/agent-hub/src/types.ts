@@ -195,6 +195,28 @@ export interface IndexEntry {
   npm_package?: string;
   /** Localhost playground URL served by the agent's sidecar; absent otherwise. */
   playground_url?: string;
+  /**
+   * Whole-package download: a single zip (all platform binaries + client + docs)
+   * plus its file listing. Present only when a `package_files` manifest was
+   * published for the latest version.
+   */
+  package?: PackageInfo;
+}
+
+/** One file inside the whole-package zip (for the hub's file-list display). */
+export interface PackageFile {
+  name: string;
+  size_bytes: number;
+}
+
+/** The downloadable whole-package zip + its contents. */
+export interface PackageInfo {
+  /** Zip artifact filename, e.g. "agent-email-0.2.1.zip" (downloaded from the version dir). */
+  filename: string;
+  /** Zip size in bytes; 0 if the artifact isn't found. */
+  size_bytes: number;
+  /** Files contained in the zip (sorted), for the hub's file list. */
+  files: PackageFile[];
 }
 
 /** The top-level catalog served at GET /index.json. */

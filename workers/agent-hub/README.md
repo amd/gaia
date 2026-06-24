@@ -14,7 +14,7 @@ depend on any `src/gaia` code.
 
 | Route | Auth | Purpose |
 |-------|------|---------|
-| `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Form parts: `manifest` (gaia-agent.yaml text), `artifact` (wheel/binary file), optional `readme` (README.md markdown) and `changelog` (CHANGELOG.md markdown) — both rendered on the website Hub pages |
+| `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Form parts: `manifest` (gaia-agent.yaml text), `artifact` (wheel/binary/zip file), optional `readme` + `changelog` (markdown, rendered on the Hub pages), and optional `package_files` (JSON `{files:[{name,size_bytes}]}` listing the contents of a whole-package `.zip` artifact — surfaced as the catalog's `package`) |
 | `GET /index.json` | none | Catalog of every agent (latest version only), including the latest README + CHANGELOG markdown |
 | `GET /agents/<id>/manifest.json` | none | Per-agent aggregate manifest (all versions) |
 | `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, `README.md`, or `CHANGELOG.md` |
@@ -91,10 +91,13 @@ schemas live in [`schemas/`](./schemas):
   `min_disk_gb`, `min_context_size`, `platforms`, `npu` as
   `"required"`/`"optional"`, `gpu_vram_gb`), `readme` (latest version's README
   markdown, `""` if none was published), `changelog` (latest version's CHANGELOG
-  markdown, `""` if none was published), and the optional `npm_package` /
+  markdown, `""` if none was published), the optional `npm_package` /
   `playground_url` (present only when the manifest declares them — they drive the
-  hub page's npm install method and playground launcher). This shape is the
-  build-time contract for the website Hub pages (`website/src/data/catalog.ts`).
+  hub page's npm install method and playground launcher), and the optional
+  `package` (`{ filename, size_bytes, files: [{name, size_bytes}] }` — the
+  whole-package `.zip` download + its file listing, present only when a
+  `package_files` manifest was published). This shape is the build-time contract
+  for the website Hub pages (`website/src/data/catalog.ts`).
 - [`schemas/manifest.schema.json`](./schemas/manifest.schema.json) —
   `GET /agents/<id>/manifest.json`. Full display metadata plus a `versions` map;
   each version carries `published_at`, `publisher`, `deprecated`, an `artifact`

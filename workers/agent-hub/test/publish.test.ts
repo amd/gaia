@@ -620,6 +620,62 @@ describe("POST /publish — npm_package & playground_url", () => {
   });
 });
 
+describe("POST /publish — whole-package zip + file list", () => {
+  const filesJson = JSON.stringify({
+    files: [
+      { name: "binaries/email-agent-linux-x64", size_bytes: 35000000 },
+      { name: "dist/index.js", size_bytes: 4096 },
+      { name: "README.md", size_bytes: 13000 },
+    ],
+  });
+
+  it("surfaces package { filename, size_bytes, files } in index.json when a zip + package_files are published", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "sidecar" }),
+      artifact: "ZIPBYTES",
+      filename: "agent-sidecar-0.1.0.zip",
+      packageFiles: filesJson,
+    });
+    const entry = (
+      (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
+    ).agents.find((a) => a.id === "sidecar")!;
+    expect(entry.package).toBeDefined();
+    expect(entry.package!.filename).toBe("agent-sidecar-0.1.0.zip");
+    expect(entry.package!.size_bytes).toBe("ZIPBYTES".length);
+    expect(entry.package!.files).toHaveLength(3);
+    expect(entry.package!.files[0].name).toBe("binaries/email-agent-linux-x64");
+  });
+
+  it("omits package when no package_files manifest is published (even if a .zip exists)", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "plain" }),
+      artifact: "z",
+      filename: "plain-0.1.0.zip",
+    });
+    const entry = (
+      (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
+    ).agents.find((a) => a.id === "plain")!;
+    expect(entry.package).toBeUndefined();
+  });
+
+  it("rejects a malformed package_files part (400)", async () => {
+    const env = makeEnv();
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "bad" }),
+      artifact: "z",
+      filename: "bad-0.1.0.zip",
+      packageFiles: '{"files":[{"name":"x"}]}', // missing size_bytes
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_request");
+  });
+});
+
 describe("POST /publish — security tier & deprecation", () => {
   it("records the security_tier in the per-agent manifest and index", async () => {
     const env = makeEnv();

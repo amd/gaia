@@ -60,6 +60,13 @@ export interface Agent {
   // (e.g. "http://127.0.0.1:8131/v1/email/playground"). Only resolves once the
   // package is installed and the sidecar is running — a best-effort dev link.
   playground_url?: string;
+  // Whole-package download: a single zip (all platform binaries + client + docs)
+  // and its file listing. Present only when the latest version published one.
+  package?: {
+    filename: string;
+    size_bytes: number;
+    files: { name: string; size_bytes: number }[];
+  };
 }
 
 interface CatalogFile {
@@ -180,6 +187,18 @@ const SECURITY_TIER_LABELS: Record<SecurityTier, string> = {
 
 export function securityTierLabel(tier: SecurityTier): string {
   return SECURITY_TIER_LABELS[tier] ?? tier;
+}
+
+/**
+ * Absolute URL of an agent's whole-package zip, served from the same hub origin
+ * as the catalog (`${HUB_CATALOG_URL}/agents/<id>/<version>/<filename>`). Returns
+ * null when the agent has no published package zip. Build-time only.
+ */
+export function packageDownloadUrl(agent: Agent): string | null {
+  if (!agent.package) return null;
+  const base = process.env.HUB_CATALOG_URL;
+  if (!base) return null;
+  return `${base.replace(/\/+$/, '')}/agents/${agent.id}/${agent.latest_version}/${agent.package.filename}`;
 }
 
 /** Human-readable download size, e.g. "2.3 MB". */

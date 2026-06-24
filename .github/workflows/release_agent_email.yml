@@ -502,6 +502,38 @@ jobs:
           npm ci
           npm run build
 
+      - name: Assemble + publish the whole-package zip (all platforms + client + docs)
+        shell: bash
+        env:
+          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.version }}"
+          STAGE="agent-email-${VER}"
+          rm -rf "${STAGE}" "agent-email-${VER}.zip" package-files.json
+          mkdir -p "${STAGE}/binaries" "${STAGE}/dist"
+          # All platform binaries (whatever was published this run — Intel may be absent).
+          cp bins/email-agent-* "${STAGE}/binaries/"
+          # npm client + docs + the real (post-publish) lock + manifest + license.
+          cp -r "${PKG_DIR}/dist/." "${STAGE}/dist/"
+          cp "${PKG_DIR}/README.md" "${PKG_DIR}/SPEC.md" "${PKG_DIR}/SKILL.md" \
+             "${PKG_DIR}/CHANGELOG.md" "${PKG_DIR}/binaries.lock.json" \
+             "${PKG_DIR}/LICENSE" "${STAGE}/"
+          cp "${MANIFEST}" "${STAGE}/gaia-agent.yaml"
+          # Deterministic zip (sorted, no extra metadata).
+          ( cd "${STAGE}/.." && zip -rX "agent-email-${VER}.zip" "agent-email-${VER}" >/dev/null )
+          # File listing for the hub's package file-list display.
+          python hub/agents/python/email/packaging/gen_package_files.py "${STAGE}" package-files.json
+          echo "=== package contents ===" && (cd "${STAGE}" && find . -type f | sort)
+          # Publish the zip as the version's package artifact + its file listing.
+          python hub/agents/python/email/packaging/publish_to_r2.py \
+            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --manifest "${MANIFEST}" \
+            --artifact "agent-email-${VER}.zip=package" \
+            --package-files package-files.json
+
       - name: Verify every published object via the real fetch CLI
         working-directory: ${{ env.PKG_DIR }}
         shell: bash

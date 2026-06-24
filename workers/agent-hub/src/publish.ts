@@ -18,6 +18,7 @@ import { parseManifest } from "./manifest";
 import {
   artifactKey,
   changelogKey,
+  packageFilesKey,
   rawManifestKey,
   readAgentManifest,
   readmeKey,
@@ -76,6 +77,49 @@ async function optionalMarkdownPart(
   return text;
 }
 
+/**
+ * Read + validate the optional `package_files` part: the listing of files inside
+ * the published whole-package zip. Must be JSON of shape
+ * `{ files: [{ name, size_bytes }] }`. Absent → null (no package zip). A
+ * present-but-malformed part fails loudly rather than storing junk.
+ */
+async function optionalPackageFiles(form: FormData): Promise<string | null> {
+  const part = form.get("package_files");
+  if (part == null) return null;
+  const text = typeof part === "string" ? part : await (part as Blob).text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      `The 'package_files' part is not valid JSON: ${(e as Error).message}. Expected ` +
+        `{ "files": [{ "name": "...", "size_bytes": 0 }] }, or omit the part.`
+    );
+  }
+  const files = (parsed as { files?: unknown }).files;
+  if (
+    !Array.isArray(files) ||
+    files.length === 0 ||
+    !files.every(
+      (f) =>
+        f &&
+        typeof (f as Record<string, unknown>).name === "string" &&
+        typeof (f as Record<string, unknown>).size_bytes === "number"
+    )
+  ) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "The 'package_files' part must be { \"files\": [{ \"name\": string, " +
+        '"size_bytes": number }, ...] } with at least one file.'
+    );
+  }
+  // Re-serialize canonically (compact) so the stored object is byte-stable.
+  return JSON.stringify({ files });
+}
+
 export async function handlePublish(
   request: Request,
   env: Env,
@@ -122,6 +166,10 @@ export async function handlePublish(
   // pages). Both are optional; an empty part is rejected (omit it instead).
   const readmeText = await optionalMarkdownPart(form, "readme", "README.md");
   const changelogText = await optionalMarkdownPart(form, "changelog", "CHANGELOG.md");
+  // Optional whole-package file listing (the zip's contents, for the hub's file
+  // list). The zip itself rides in as a normal `artifact`; this is just the
+  // manifest of what's inside it.
+  const packageFilesText = await optionalPackageFiles(form);
 
   const manifest = parseManifest(manifestText);
   assertAuthorAllowed(publisher, manifest.author);
@@ -209,6 +257,11 @@ export async function handlePublish(
     if (changelogText != null) {
       await env.BUCKET.put(changelogKey(manifest.id, manifest.version), changelogText, {
         httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (packageFilesText != null) {
+      await env.BUCKET.put(packageFilesKey(manifest.id, manifest.version), packageFilesText, {
+        httpMetadata: { contentType: "application/json; charset=utf-8" },
       });
     }
   }

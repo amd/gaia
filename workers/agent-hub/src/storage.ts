@@ -42,6 +42,10 @@ export function changelogKey(id: string, version: string): string {
   return `${versionDir(id, version)}CHANGELOG.md`;
 }
 
+export function packageFilesKey(id: string, version: string): string {
+  return `${versionDir(id, version)}package-files.json`;
+}
+
 /**
  * Read the README markdown for one published version. Returns "" when no
  * README was published for that version — the catalog's documented default,
@@ -70,6 +74,22 @@ export async function readChangelog(
   const obj = await bucket.get(changelogKey(id, version));
   if (!obj) return "";
   return obj.text();
+}
+
+/**
+ * Read the whole-package file listing (`{ files: [{name, size_bytes}] }`) for one
+ * version, or null when none was published — the `package_files` form part on
+ * POST /publish is optional, so its absence is the documented "no package zip"
+ * default, not an error.
+ */
+export async function readPackageFiles(
+  bucket: R2Bucket,
+  id: string,
+  version: string
+): Promise<{ files: { name: string; size_bytes: number }[] } | null> {
+  const obj = await bucket.get(packageFilesKey(id, version));
+  if (!obj) return null;
+  return (await obj.json()) as { files: { name: string; size_bytes: number }[] };
 }
 
 /** Read and parse the per-agent manifest, or null if the agent doesn't exist. */
