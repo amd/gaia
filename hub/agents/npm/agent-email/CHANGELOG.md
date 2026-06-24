@@ -5,6 +5,19 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## [Unreleased]
+
+### Added
+
+- **Automatic sidecar cleanup (`autoCleanup`, default on).** `startSidecar` /
+  `spawnSidecar` now reap the frozen sidecar's detached process tree when the host
+  process exits, crashes (`uncaughtException` / `unhandledRejection`), or is
+  interrupted (`SIGINT` / `SIGTERM` / `SIGHUP`) — so a skipped or missed
+  `shutdown()` no longer leaves the binary running and holding its port. Pass
+  `autoCleanup: false` to manage the lifecycle yourself; `shutdown()` stays the
+  graceful, awaited path. A hard `SIGKILL` of the host process is the one case no
+  in-process handler can catch.
+
 ## 0.2.1
 
 Documentation/packaging release — no client API or wire-contract change

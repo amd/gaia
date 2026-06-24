@@ -44,7 +44,7 @@ const sidecar = await startSidecar({ binaryPath, port: 8131 });
 
 // ... use sidecar.client ...
 
-await shutdown(sidecar); // kills the whole process tree — always call this
+await shutdown(sidecar); // graceful stop — auto-cleanup also reaps on exit
 ```
 
 - `fetchBinary` writes a verified binary into `outDir`. SHA-256 is mandatory; a
@@ -52,8 +52,9 @@ await shutdown(sidecar); // kills the whole process tree — always call this
   to run once.
 - `startSidecar` throws if the binary can't start, never becomes healthy, or the
   contract MAJOR version mismatches — and cleans up so a failed start leaks nothing.
-- Always `shutdown(sidecar)` on exit. The frozen binary spawns a child; only the
-  process-tree kill in `shutdown` reaps it.
+- The sidecar is auto-reaped when your process exits, crashes, or is signalled
+  (default `autoCleanup`), so a missed `shutdown` won't orphan the frozen binary's
+  child. `shutdown(sidecar)` is the graceful, awaited stop; `autoCleanup: false` opts out.
 
 ## 4. Call the typed client
 
@@ -109,8 +110,9 @@ const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131" });
   per request.
 - **Low concurrency.** One local Lemonade model slot, so parallel `triage` calls
   serialize. Cap inflight calls.
-- **Wire `shutdown` into `SIGTERM`/`SIGINT`** so the sidecar's child is reaped. The
-  package does not restart a crashed sidecar.
+- **Cleanup is automatic** (default `autoCleanup`): the sidecar's child is reaped on
+  exit/crash/signal. Call `shutdown` for a graceful stop, or `autoCleanup: false` to
+  wire signals yourself. The package does not restart a crashed sidecar.
 
 ## Prerequisites — the agent needs a local model
 
@@ -133,7 +135,9 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 - **`send` needs the draft `confirmation_token`** (missing/invalid → 403), but it
   takes **no OAuth token** — the mailbox is resolved from the host's GAIA connector
   store (no mailbox connected → 503). Triage and draft need no connector.
-- **Always `shutdown`** — otherwise the sidecar's child process is orphaned.
+- **Cleanup is automatic by default** — the sidecar is reaped on exit/crash/signal;
+  only `autoCleanup: false` (or a hard `SIGKILL` of your process) can orphan the
+  child. `shutdown` stays the graceful stop.
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.
 
