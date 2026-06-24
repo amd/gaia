@@ -120,4 +120,22 @@ describe('renderMarkdown sanitization', () => {
     expect(html).not.toContain('**'); // no leftover literal markers
     expect((html.match(/<p[\s>]/g) || []).length).toBe(1); // joined into one paragraph
   });
+
+  // Regression: a README's numbered steps (e.g. Prerequisites) must render as an
+  // <ol>, not collapse into a run-on paragraph with literal "1." / "2." text.
+  it('renders an ordered list as <ol>, not a paragraph', () => {
+    const html = renderMarkdown('Before it works:\n\n1. Start Lemonade.\n2. Pull the model.\n');
+    expect(html).toContain('<ol>');
+    expect(html).toContain('</ol>');
+    expect((html.match(/<li>/g) || []).length).toBe(2);
+    expect(html).not.toMatch(/<p[^>]*>\s*1\./); // no literal "1." leaking into prose
+    expect(html).not.toContain('<ul>'); // ordered, not unordered
+  });
+
+  it('keeps ordered and unordered lists separate (switching marker starts a new list)', () => {
+    const html = renderMarkdown('- bullet a\n- bullet b\n\n1. step one\n2. step two\n');
+    expect(html).toContain('<ul>');
+    expect(html).toContain('<ol>');
+    expect((html.match(/<li>/g) || []).length).toBe(4);
+  });
 });

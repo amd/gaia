@@ -3,8 +3,8 @@
 
 // Minimal, dependency-free Markdown → HTML renderer for the subset used in agent
 // READMEs and CHANGELOGs: headings, fenced code blocks, inline code, bold,
-// blockquotes, unordered lists, links, images, tables, horizontal rules, and
-// paragraphs.
+// blockquotes, ordered and unordered lists, links, images, tables, horizontal
+// rules, and paragraphs.
 //
 // PRESENTATION lives in the page stylesheet, not here. This renderer emits clean
 // SEMANTIC HTML (<h2>, <p>, <pre>, <table>, …) with no styling classes; the
@@ -73,13 +73,18 @@ function isHr(line: string): boolean {
 
 // A line that begins a non-paragraph block (or is blank). Used to stop
 // paragraph accumulation so a paragraph never swallows a heading/list/table/etc.
+// Unordered (`- `/`* `) and ordered (`1. `) list-item markers.
+const UL_ITEM = /^[-*]\s+/;
+const OL_ITEM = /^\d+\.\s+/;
+
 function isBlockStart(line: string): boolean {
   return (
     line.trim() === '' ||
     line.startsWith('```') ||
     line.startsWith('>') ||
     /^(#{1,4})\s+/.test(line) ||
-    /^[-*]\s+/.test(line) ||
+    UL_ITEM.test(line) ||
+    OL_ITEM.test(line) ||
     isHr(line) ||
     /^\s*\|.*\|\s*$/.test(line)
   );
@@ -120,12 +125,12 @@ export function renderMarkdown(md: string): string {
   const lines = md.replace(/\r\n/g, '\n').split('\n');
   const html: string[] = [];
   let i = 0;
-  let listOpen = false;
+  let listType: 'ul' | 'ol' | null = null;
 
   const closeList = () => {
-    if (listOpen) {
-      html.push('</ul>');
-      listOpen = false;
+    if (listType) {
+      html.push(`</${listType}>`);
+      listType = null;
     }
   };
 
@@ -209,14 +214,19 @@ export function renderMarkdown(md: string): string {
       continue;
     }
 
-    // Unordered list item (with lazy continuation: soft-wrapped follow-on lines
-    // fold into the same <li> instead of leaking out as a sibling paragraph).
-    if (/^[-*]\s+/.test(line)) {
-      if (!listOpen) {
-        html.push('<ul>');
-        listOpen = true;
+    // List item — ordered (`1. `) or unordered (`- `/`* `). Lazy continuation
+    // folds soft-wrapped follow-on lines into the same <li> instead of leaking
+    // out as a sibling paragraph. Switching marker type starts a new list.
+    const ulItem = UL_ITEM.test(line);
+    const olItem = !ulItem && OL_ITEM.test(line);
+    if (ulItem || olItem) {
+      const wantType = ulItem ? 'ul' : 'ol';
+      if (listType && listType !== wantType) closeList();
+      if (!listType) {
+        html.push(`<${wantType}>`);
+        listType = wantType;
       }
-      const item: string[] = [line.replace(/^[-*]\s+/, '')];
+      const item: string[] = [line.replace(ulItem ? UL_ITEM : OL_ITEM, '')];
       i++;
       while (i < lines.length && !isBlockStart(lines[i])) {
         item.push(lines[i].trim());
