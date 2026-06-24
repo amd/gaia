@@ -42,6 +42,7 @@ inferred from the filename suffix.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -53,11 +54,21 @@ import yaml
 
 PUBLISH_PATH = "/publish"
 TOKEN_ENV = "AGENT_HUB_PUBLISH_TOKEN"
+_CHUNK = 1 << 20  # 1 MiB read chunks for streaming sha256
 
 
 def _sha256_file(path: Path) -> tuple[str, int]:
-    data = path.read_bytes()
-    return hashlib.sha256(data).hexdigest(), len(data)
+    """Hash a file in chunks — never loads the full content into memory."""
+    h = hashlib.sha256()
+    size = 0
+    with path.open("rb") as fh:
+        while True:
+            chunk = fh.read(_CHUNK)
+            if not chunk:
+                break
+            h.update(chunk)
+            size += len(chunk)
+    return h.hexdigest(), size
 
 
 def _read_token() -> str:
@@ -116,6 +127,109 @@ def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) 
             f"HTTP {resp.status_code}. Cannot verify idempotency; failing loudly."
         )
     return hashlib.sha256(resp.content).hexdigest()
+
+
+def _b64(data: bytes) -> str:
+    """Base64-encode bytes to ASCII string."""
+    return base64.b64encode(data).decode("ascii")
+
+
+def publish_streaming(
+    base_url: str,
+    manifest_path: Path,
+    manifest: dict,
+    artifact_path: Path,
+    platform_key: str,
+    token: str,
+    package_files_bytes: bytes | None = None,
+) -> dict:
+    """Stream the artifact as a raw request body (application/octet-stream).
+
+    Used for the whole-package zip (~177 MB) to avoid buffering the full file
+    in memory, which would exceed Cloudflare's ~128 MB per-Worker memory limit.
+    Metadata travels in X-Gaia-* headers. The file handle is passed directly to
+    requests so it streams chunk-by-chunk without loading the full content.
+    """
+    if not artifact_path.exists():
+        raise SystemExit(f"error: artifact not found: {artifact_path}")
+    filename = artifact_path.name
+    local_sha, size = _sha256_file(artifact_path)
+    agent_id = str(manifest["id"])
+    version = str(manifest["version"])
+    publish_url = f"{base_url.rstrip('/')}{PUBLISH_PATH}"
+
+    print(
+        f"[publish] {filename} ({size} bytes, sha256={local_sha[:12]}…) "
+        f"-> {agent_id}@{version} [streaming]",
+        flush=True,
+    )
+
+    manifest_bytes = manifest_path.read_bytes()
+    headers = {
+        "authorization": f"Bearer {token}",
+        "content-type": "application/octet-stream",
+        "content-length": str(size),
+        # Stored object content-type (the package artifact is a zip). The
+        # request body itself is octet-stream; this is the metadata the Worker
+        # persists on the R2 object.
+        "x-gaia-content-type": "application/zip",
+        "x-gaia-manifest": _b64(manifest_bytes),
+        "x-gaia-filename": filename,
+        "x-gaia-sha256": local_sha,
+    }
+    if package_files_bytes is not None:
+        headers["x-gaia-package-files"] = _b64(package_files_bytes)
+
+    with artifact_path.open("rb") as fh:
+        resp = requests.post(
+            publish_url,
+            headers=headers,
+            data=fh,  # streams chunk-by-chunk; never loads full file
+            timeout=600,
+        )
+
+    if resp.status_code == 201:
+        body = resp.json()
+        server_sha = body.get("published", {}).get("artifact", {}).get("sha256")
+        if server_sha != local_sha:
+            raise SystemExit(
+                f"error: integrity check FAILED for {filename}: Worker stored "
+                f"sha256={server_sha} but local sha256={local_sha}. The upload was "
+                "corrupted in transit; failing loudly."
+            )
+        n = body.get("published", {}).get("version_artifacts", "?")
+        print(
+            f"[publish] OK 201 — stored, server sha256 verified. "
+            f"{agent_id}@{version} now has {n} artifact(s).",
+            flush=True,
+        )
+    elif resp.status_code == 409:
+        remote_sha = _download_sha256(base_url, agent_id, version, filename)
+        if remote_sha != local_sha:
+            raise SystemExit(
+                f"error: {filename} is already published at {agent_id}@{version} "
+                f"with a DIFFERENT sha256 (remote={remote_sha}, local={local_sha}). "
+                "Published artifacts are immutable — bump the version to change it."
+            )
+        print(
+            f"[publish] OK 409 — already published with identical bytes "
+            f"(idempotent no-op).",
+            flush=True,
+        )
+    else:
+        raise SystemExit(
+            f"error: publish of {filename} failed: HTTP {resp.status_code} "
+            f"{resp.text[:500]}"
+        )
+
+    executable = "email-agent.exe" if filename.endswith(".exe") else "email-agent"
+    return {
+        "platform": platform_key,
+        "filename": filename,
+        "executable": executable,
+        "sha256": local_sha,
+        "size": size,
+    }
 
 
 def publish_one(
@@ -318,19 +432,34 @@ def main(argv=None) -> int:
             if path.name.lower().endswith(".zip")
             else _infer_platform_key(path.name)
         )
-        results.append(
-            publish_one(
-                args.base_url,
-                args.manifest,
-                manifest,
-                path,
-                platform_key,
-                token,
-                readme_bytes=readme_bytes,
-                changelog_bytes=changelog_bytes,
-                package_files_bytes=package_files_bytes,
+        if platform_key == "package":
+            # Whole-package zip: stream directly to R2 to avoid buffering ~177 MB
+            # in memory (Cloudflare Workers hard ~128 MB per-request limit).
+            results.append(
+                publish_streaming(
+                    args.base_url,
+                    args.manifest,
+                    manifest,
+                    path,
+                    platform_key,
+                    token,
+                    package_files_bytes=package_files_bytes,
+                )
             )
-        )
+        else:
+            results.append(
+                publish_one(
+                    args.base_url,
+                    args.manifest,
+                    manifest,
+                    path,
+                    platform_key,
+                    token,
+                    readme_bytes=readme_bytes,
+                    changelog_bytes=changelog_bytes,
+                    package_files_bytes=package_files_bytes,
+                )
+            )
 
     if args.summary_out:
         args.summary_out.write_text(json.dumps(results, indent=2), encoding="utf-8")

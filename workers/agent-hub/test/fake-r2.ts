@@ -14,15 +14,36 @@ interface StoredObject {
   uploaded: Date;
 }
 
-function toBytes(value: string | ArrayBuffer | ArrayBufferView | Uint8Array): Uint8Array {
+async function toBytesAsync(
+  value: string | ArrayBuffer | ArrayBufferView | Uint8Array | ReadableStream
+): Promise<Uint8Array> {
   if (typeof value === "string") return new TextEncoder().encode(value);
   if (value instanceof Uint8Array) return new Uint8Array(value);
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) {
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   }
+  // ReadableStream — consume chunk-by-chunk (streaming path).
+  if (value instanceof ReadableStream) {
+    const reader = value.getReader();
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const { done, value: chunk } = await reader.read();
+      if (done) break;
+      chunks.push(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
+    }
+    const total = chunks.reduce((n, c) => n + c.byteLength, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      out.set(c, offset);
+      offset += c.byteLength;
+    }
+    return out;
+  }
   throw new TypeError("Unsupported R2 put value type in fake-r2.");
 }
+
 
 function makeBody(obj: StoredObject) {
   const bytes = obj.bytes;
@@ -55,7 +76,7 @@ export class FakeR2 {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async put(key: string, value: any, options?: any): Promise<any> {
-    const bytes = toBytes(value);
+    const bytes = await toBytesAsync(value);
     const contentType = options?.httpMetadata?.contentType ?? "application/octet-stream";
     // Honour R2's optional sha256 integrity check so tests catch mismatches.
     if (options?.sha256) {
@@ -176,6 +197,44 @@ export function publishRequest(opts: {
     method: "POST",
     headers,
     body: form,
+  });
+}
+
+/**
+ * Build a POST /publish application/octet-stream (streaming) request.
+ * The artifact bytes become the raw body; metadata travels in X-Gaia-* headers.
+ */
+export function streamPublishRequest(opts: {
+  token?: string;
+  manifestYaml: string;
+  bytes: Uint8Array | string;
+  filename: string;
+  sha256: string;
+  packageFiles?: string;
+  contentType?: string;
+}): Request {
+  const bodyBytes =
+    typeof opts.bytes === "string" ? new TextEncoder().encode(opts.bytes) : opts.bytes;
+
+  function b64(text: string): string {
+    return btoa(unescape(encodeURIComponent(text)));
+  }
+
+  const headers = new Headers();
+  if (opts.token) headers.set("authorization", `Bearer ${opts.token}`);
+  headers.set("content-type", opts.contentType ?? "application/octet-stream");
+  headers.set("content-length", String(bodyBytes.byteLength));
+  headers.set("x-gaia-manifest", b64(opts.manifestYaml));
+  headers.set("x-gaia-filename", opts.filename);
+  headers.set("x-gaia-sha256", opts.sha256);
+  if (opts.packageFiles !== undefined) headers.set("x-gaia-package-files", b64(opts.packageFiles));
+
+  return new Request("https://hub.amd-gaia.ai/publish", {
+    method: "POST",
+    headers,
+    body: bodyBytes,
+    // @ts-expect-error — duplex is needed for streaming in some environments
+    duplex: "half",
   });
 }
 
