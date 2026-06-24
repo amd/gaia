@@ -5,6 +5,23 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## 0.2.1
+
+Documentation/packaging release — no client API or wire-contract change
+(`SCHEMA_VERSION` stays `2.0`). Republishes so the live hub catalog picks up the
+current README.
+
+### Changed
+
+- **This README is now the single canonical agent README** (hub + npm). The
+  release workflow publishes it to both, so the hub page and the npm listing no
+  longer drift — the architecture diagram and the GAIA/npm install flow show up on
+  `hub.amd-gaia.ai/hub/email`.
+- **Architecture diagram loads from an in-repo raw image** instead of a
+  version-pinned hub URL that the publish pipeline didn't populate, so it renders on
+  GitHub and npm before the binaries are uploaded.
+- **Agent version is shown on the hub cards** (listing + featured + detail).
+
 ## 0.2.0
 
 ### Changed (breaking)

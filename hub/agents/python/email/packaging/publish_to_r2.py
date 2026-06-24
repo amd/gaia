@@ -126,6 +126,7 @@ def publish_one(
     platform_key: str,
     token: str,
     readme_bytes: bytes | None = None,
+    changelog_bytes: bytes | None = None,
 ) -> dict:
     if not artifact_path.exists():
         raise SystemExit(f"error: artifact not found: {artifact_path}")
@@ -158,6 +159,10 @@ def publish_one(
         # ignore the unknown part.
         if readme_bytes is not None:
             files["readme"] = ("README.md", readme_bytes, "text/markdown")
+        # The CHANGELOG rides along the same way — it becomes the catalog entry's
+        # `changelog`, rendered as a Changelog section on the hub agent page.
+        if changelog_bytes is not None:
+            files["changelog"] = ("CHANGELOG.md", changelog_bytes, "text/markdown")
         resp = requests.post(
             publish_url,
             headers={"authorization": f"Bearer {token}"},
@@ -232,6 +237,12 @@ def main(argv=None) -> int:
         "(POSTed as the multipart 'readme' part the Worker accepts).",
     )
     parser.add_argument(
+        "--changelog",
+        type=Path,
+        help="Path to CHANGELOG.md to publish as the agent's catalog changelog "
+        "(POSTed as the multipart 'changelog' part the Worker accepts).",
+    )
+    parser.add_argument(
         "--summary-out",
         type=Path,
         help="Write a JSON array of {platform,filename,executable,sha256,size}.",
@@ -254,6 +265,20 @@ def main(argv=None) -> int:
             flush=True,
         )
 
+    changelog_bytes = None
+    if args.changelog is not None:
+        if not args.changelog.exists():
+            raise SystemExit(
+                f"error: --changelog path not found: {args.changelog}. Pass the "
+                "agent's CHANGELOG.md, or omit --changelog to publish without one."
+            )
+        changelog_bytes = args.changelog.read_bytes()
+        print(
+            f"[publish] attaching changelog: {args.changelog} "
+            f"({len(changelog_bytes)} bytes)",
+            flush=True,
+        )
+
     results = []
     for raw in args.artifact:
         path, key = _parse_artifact_arg(raw)
@@ -267,6 +292,7 @@ def main(argv=None) -> int:
                 platform_key,
                 token,
                 readme_bytes=readme_bytes,
+                changelog_bytes=changelog_bytes,
             )
         )
 

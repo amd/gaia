@@ -84,7 +84,15 @@ permissions:
 env:
   PKG_DIR: hub/agents/npm/agent-email
   MANIFEST: hub/agents/python/email/gaia-agent.yaml
-  README: hub/agents/python/email/README.md
+  # Single canonical README for the agent: the npm client README (architecture
+  # diagram, install/usage, ./client) is the richer, actively-maintained one, so
+  # it's what gets published to the hub AND npm. The python-side README is being
+  # retired with the agent-structure reorg. (Takes effect on the NEXT release —
+  # the catalog snapshots the README at publish time.)
+  README: hub/agents/npm/agent-email/README.md
+  # Same canonical-doc story for the changelog: the npm CHANGELOG.md is what the
+  # hub renders as the agent's Changelog section (and ships in the npm tarball).
+  CHANGELOG: hub/agents/npm/agent-email/CHANGELOG.md
   FREEZE_DIST: hub/agents/python/email/packaging/dist
   # Hub key prefix (mirrors the Worker's agents/<id> layout). The Worker owns the
   # bucket binding; CI never talks to R2 directly — it POSTs to /publish.
@@ -450,6 +458,7 @@ jobs:
             --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
             --manifest "${MANIFEST}" \
             --readme "${README}" \
+            --changelog "${CHANGELOG}" \
             "${args[@]}" \
             --summary-out published.json
           echo "=== publish summary ==="

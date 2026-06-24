@@ -517,7 +517,19 @@ class ChatAgent(
         )
 
     def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
-        """Return this turn's sorted tool subset, or ``None`` for the full registry."""
+        """Return this turn's sorted tool subset, or ``None`` for the full registry.
+
+        The SKILL signal (#1451) and the semantic query use deliberately
+        different inputs: ``skill_tools`` derives from the **clean current goal**
+        (``_refresh_recalled_skills`` ran recall on ``user_input`` alone, before
+        this hook), while the semantic ``query`` is previous + current. The
+        asymmetry is intentional — skill recall matches a goal-shaped trigger,
+        not a conversation window, so feeding it the prior turn would blur the
+        match; semantic selection wants the prior turn for context like
+        "summarize it". ``_recalled_skill_tools`` is ``[]`` on every off-state
+        (no recall / memory disabled), so the loader runs on CORE + semantic
+        exactly as in Parts 1-2.
+        """
         if not self._dynamic_tools_active():
             return None
         if not self._dynamic_tools_validated:
@@ -526,7 +538,9 @@ class ChatAgent(
             self.tool_loader.validate_registry(self._tools_registry)
             self._dynamic_tools_validated = True
         query = self._build_tool_selection_query(user_input)
-        return self.tool_loader.select(query, self._tools_registry)
+        return self.tool_loader.select(
+            query, self._tools_registry, skill_tools=self._recalled_skill_tools()
+        )
 
     def _on_tool_invoked(self, tool_name: str) -> None:
         """Record tool-use recency for the loader's LRU (no-op when inactive)."""

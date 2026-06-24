@@ -3605,54 +3605,116 @@ class TestRecallSkill:
         ] == ["proc-tau"]
 
 
+def _recalled_skill(name, body, when_to_use="trigger", tools_required=None):
+    """A Skill object as recall_skill would return it (for the pure renderer)."""
+    from gaia.agents.base.skill_synthesis import Skill
+
+    return Skill(
+        name=name,
+        when_to_use=when_to_use,
+        body=body,
+        tools_required=tools_required if tools_required is not None else [],
+    )
+
+
 class TestRecalledSkillPromptBuilder:
-    """MemoryMixin._build_recalled_skills_prompt — bounded injection rendering."""
+    """MemoryMixin._build_recalled_skills_prompt — bounded injection rendering.
 
-    def test_no_recall_returns_empty_string(self, mixin_host):
-        """No match → empty injection so the system prompt stays byte-identical."""
-        pytest.importorskip("faiss")
-        assert mixin_host._build_recalled_skills_prompt("goal") == ""
+    The renderer is pure over the already-recalled skills (#1451): the recall and
+    the single settings read happen once upstream in _recall_skills_for_turn (see
+    TestRecallOnceProcedureCache), feeding both this prompt and the loader's
+    _recalled_skill_tools signal. These tests pin the rendering byte-for-byte.
+    """
 
-    def test_off_state_skips_settings_file_read(self, mixin_host):
-        """Empty procedures index → no per-turn memory_settings.json read.
+    @staticmethod
+    def _config():
+        from gaia.agents.base.skill_synthesis import load_synthesis_config
 
-        The zero-procedure / GAIA_MEMORY_DISABLED case must stay zero-cost: the
-        guard short-circuits before load_synthesis_config(_load_memory_settings()).
-        """
-        pytest.importorskip("faiss")
-        with patch("gaia.agents.base.memory._load_memory_settings") as mock_settings:
-            assert mixin_host._build_recalled_skills_prompt("goal") == ""
-        mock_settings.assert_not_called()
+        return load_synthesis_config()
+
+    def test_no_skills_returns_empty_string(self, mixin_host):
+        """Empty recall → empty injection so the system prompt stays byte-identical."""
+        assert mixin_host._build_recalled_skills_prompt([], None) == ""
 
     def test_short_body_kept_intact(self, mixin_host):
         """A body under the cap is injected verbatim, no truncation marker."""
-        pytest.importorskip("faiss")
         body = "# Short\n1. step\n## Edge cases\n- e"
-        _seed_procedure(mixin_host, name="short-proc", body=body)
 
-        prompt = mixin_host._build_recalled_skills_prompt("goal")
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("short-proc", body)], self._config()
+        )
 
         assert "RECALLED PROCEDURES" in prompt
         assert "short-proc" in prompt
         assert body in prompt
         assert "(truncated)" not in prompt
 
-    def test_long_body_truncated_at_cap_full_body_retained(self, mixin_host):
-        """A body over the cap is truncated at injection; the row keeps it whole."""
-        pytest.importorskip("faiss")
+    def test_long_body_truncated_at_cap(self, mixin_host):
+        """A body over the cap is truncated at injection (the row keeps it whole)."""
         from gaia.agents.base.skill_synthesis import MAX_RECALL_BODY_CHARS
 
         long_body = "# Big\n" + ("x" * 5000) + "\n## Edge cases\n- e"
-        _seed_procedure(mixin_host, name="big-proc", body=long_body)
 
-        prompt = mixin_host._build_recalled_skills_prompt("goal")
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("big-proc", long_body)], self._config()
+        )
 
         assert "… (truncated)" in prompt
         # The injected body carries at most MAX_RECALL_BODY_CHARS of the content.
         assert prompt.count("x") <= MAX_RECALL_BODY_CHARS
-        # The FULL body is retained in the procedures row, untouched.
-        rows = mixin_host._memory_store.search_skills(name="big-proc")
-        assert rows[0]["markdown_body"] == long_body
+
+
+class TestRecallOnceProcedureCache:
+    """_refresh_recalled_skills recalls once and caches both consumers (#1451).
+
+    The tool-loader SKILL signal reuses the per-turn recall cache rather than
+    issuing a second recall_skill (embed + FAISS) call — that reuse is what keeps
+    Part 3 free on TTFT, so it is guarded here.
+    """
+
+    def test_refresh_caches_recalled_skills_for_the_loader(self, mixin_host):
+        """The matched Skill objects are cached, and their tools flatten+dedupe."""
+        pytest.importorskip("faiss")
+        _seed_procedure(
+            mixin_host,
+            name="triage-proc",
+            body="# B\n1. s\n## Edge cases\n- e",
+            tools_required=["query_documents", "read_file"],
+        )
+
+        mixin_host._refresh_recalled_skills("triage this ticket")
+
+        assert [s.name for s in mixin_host._recalled_skills] == ["triage-proc"]
+        assert mixin_host._recalled_skill_tools() == ["query_documents", "read_file"]
+
+    def test_recall_runs_once_for_both_consumers(self, mixin_host):
+        """recall_skill fires exactly once per turn; both consumers read the cache."""
+        pytest.importorskip("faiss")
+        _seed_procedure(mixin_host, name="proc-x", tools_required=["read_file"])
+
+        with patch.object(
+            mixin_host, "recall_skill", wraps=mixin_host.recall_skill
+        ) as spy:
+            mixin_host._refresh_recalled_skills("a goal")
+        assert spy.call_count == 1
+
+        # Both consumers now read the cached result — no second recall.
+        assert mixin_host._recalled_skill_tools() == ["read_file"]
+        assert mixin_host.get_recalled_skills_system_prompt()  # non-empty
+        assert spy.call_count == 1
+
+    def test_off_state_caches_empty_and_skips_settings_read(self, mixin_host):
+        """Empty index → no settings read, empty caches (the zero-cost off-state)."""
+        pytest.importorskip("faiss")
+        assert mixin_host._proc_faiss_index.ntotal == 0
+
+        with patch("gaia.agents.base.memory._load_memory_settings") as mock_settings:
+            mixin_host._refresh_recalled_skills("any goal")
+
+        mock_settings.assert_not_called()
+        assert mixin_host._recalled_skills == []
+        assert mixin_host._recalled_skill_tools() == []
+        assert mixin_host._recalled_skill_prompt == ""
 
 
 class _ComposingAgent(FakeAgent):

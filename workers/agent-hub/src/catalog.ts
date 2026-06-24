@@ -9,6 +9,7 @@ import { compareSemver } from "./manifest";
 import {
   listAgentIds,
   readAgentManifest,
+  readChangelog,
   readReadme,
   writeIndex,
 } from "./storage";
@@ -86,15 +87,21 @@ export function upsertVersion(
     // Tracks the latest version exactly: if the new latest drops the message
     // (e.g. un-deprecated), a stale message must not survive.
     deprecation_message: useNew ? manifest.deprecation_message : existing?.deprecation_message,
+    npm_package: useNew ? manifest.npm_package : existing?.npm_package,
+    playground_url: useNew ? manifest.playground_url : existing?.playground_url,
     versions,
   };
 }
 
 /**
- * Build the catalog entry for one agent manifest. `readme` is the README
- * markdown of the latest version ("" if none was published).
+ * Build the catalog entry for one agent manifest. `readme` and `changelog` are
+ * the latest version's markdown ("" if none was published).
  */
-export function toIndexEntry(agent: AgentManifest, readme: string): IndexEntry {
+export function toIndexEntry(
+  agent: AgentManifest,
+  readme: string,
+  changelog: string
+): IndexEntry {
   const latest = agent.versions[agent.latest_version];
   const req = agent.requirements;
   return {
@@ -125,6 +132,10 @@ export function toIndexEntry(agent: AgentManifest, readme: string): IndexEntry {
       gpu_vram_gb: req.gpu_vram_gb,
     },
     readme,
+    changelog,
+    // undefined serializes to "key absent" — only present when the manifest set it.
+    npm_package: agent.npm_package,
+    playground_url: agent.playground_url,
   };
 }
 
@@ -142,7 +153,8 @@ export async function rebuildIndex(
     const agent = await readAgentManifest(bucket, id);
     if (!agent) continue;
     const readme = await readReadme(bucket, id, agent.latest_version);
-    entries.push(toIndexEntry(agent, readme));
+    const changelog = await readChangelog(bucket, id, agent.latest_version);
+    entries.push(toIndexEntry(agent, readme, changelog));
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));
 

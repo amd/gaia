@@ -59,6 +59,14 @@
       "type": "string",
       "description": "Only present when the latest version's manifest declares one."
     },
+    "npm_package": {
+      "type": "string",
+      "description": "npm package name when the agent is distributed via npm; absent otherwise."
+    },
+    "playground_url": {
+      "type": "string",
+      "description": "Localhost playground URL served by the agent's sidecar; absent otherwise."
+    },
     "versions": {
       "type": "object",
       "description": "Map of version string -> published version entry.",
