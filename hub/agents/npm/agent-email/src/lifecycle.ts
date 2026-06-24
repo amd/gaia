@@ -97,10 +97,12 @@ export interface Sidecar {
 // The sidecar is spawned detached (its own process group), so a parent Ctrl+C,
 // crash, or plain exit does NOT propagate to it — without this it keeps running
 // and holds its port. We install process handlers once and SIGKILL the tree
-// synchronously on the way out. `process.on("exit")` covers normal exit,
-// process.exit(), and uncaught exceptions; the signal handlers cover Ctrl+C / kill
-// (which never emit "exit"). A hard SIGKILL of the parent is the one case no
-// in-process handler can catch.
+// synchronously on the way out. `process.on("exit")` covers normal exit and
+// process.exit(); the SIGINT/SIGTERM/SIGHUP handlers cover Ctrl+C / kill (which
+// never emit "exit"); and the uncaughtException/unhandledRejection handlers
+// cover a hard crash (which doesn't reliably emit "exit" before the process is
+// gone). A hard SIGKILL of the parent is the one case no in-process handler can
+// catch.
 const liveSidecars = new Set<Sidecar>();
 let cleanupInstalled = false;
 const CLEANUP_SIGNALS: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
@@ -129,16 +131,19 @@ function installCleanupHandlers(): void {
   if (cleanupInstalled) return;
   cleanupInstalled = true;
   process.on("exit", reapAllSync);
+  // Reap, then preserve Node's default crash behavior (print + non-zero exit)
+  // only when we're the sole listener; if the consumer registered their own
+  // handler it runs too and owns the exit decision.
   process.on("uncaughtException", (err) => {
     reapAllSync();
-    if (process.listenerCount("uncaughtException") <= 1) {
+    if (process.listenerCount("uncaughtException") === 1) {
       console.error(err);
       process.exit(1);
     }
   });
   process.on("unhandledRejection", (err) => {
     reapAllSync();
-    if (process.listenerCount("unhandledRejection") <= 1) {
+    if (process.listenerCount("unhandledRejection") === 1) {
       console.error(err);
       process.exit(1);
     }
@@ -146,10 +151,10 @@ function installCleanupHandlers(): void {
   for (const sig of CLEANUP_SIGNALS) {
     const handler = (): void => {
       reapAllSync();
-      // Only-listener → restore default disposition and re-raise so the process
-      // still terminates (Ctrl+C). If the consumer also listens, we've already
-      // reaped; leave their handler to decide how to exit.
-      if (process.listenerCount(sig) <= 1) {
+      // Sole listener → restore default disposition and re-raise so the process
+      // still terminates (Ctrl+C). If a consumer handler also exists, we've
+      // reaped; their handler owns the exit decision.
+      if (process.listenerCount(sig) === 1) {
         process.removeListener(sig, handler);
         process.kill(process.pid, sig);
       }
