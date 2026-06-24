@@ -88,6 +88,24 @@ const sent = await client.send({ ...draft, confirmation_token });
 console.log(sent.sent_id);
 ```
 
+### Triage response shape
+
+`triage` returns `{ schema_version, request_kind, result }`. The `result`
+(`EmailTriageResult`) is what you route on:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `category` | `"URGENT" \| "NEEDS_RESPONSE" \| "FYI" \| "PROMOTIONAL" \| "PERSONAL"` | The five buckets — **uppercase wire strings** (`res.result.category === "URGENT"`). |
+| `is_spam`, `is_phishing` | `boolean` | Independent signals (a message can be neither, either, or both). |
+| `summary` | `string` | Plain-text summary of the message/thread. |
+| `action_items` | `ActionItem[]` | Each `{ description, due_hint?, type?: "text" \| "link", url? }`; may be empty. |
+| `suggested_action` | `"reply" \| "none" \| "archive"` | `"reply"` for URGENT/NEEDS_RESPONSE, `"archive"` for PROMOTIONAL, else `"none"`. |
+| `draft` | `DraftReply \| null` | A proposed reply (`{ to, subject, body }`) when one is suggested. |
+| `usage` | `TriageUsage \| null` | LLM token/latency metrics; `null` on the heuristic-only path. |
+
+The full request/response types are exported from the package (`src/types.ts`) for
+exact field-level reference.
+
 ## Lifecycle helpers
 
 `startSidecar(opts)` does spawn → `waitForHealth` → `checkVersion` in one call and
