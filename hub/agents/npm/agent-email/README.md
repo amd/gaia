@@ -184,24 +184,28 @@ This is a long-lived local resource, not a per-request one. Wire it like this:
   `DEBUG=agent-email` to see the bind error.
 - **Supervise it yourself.** The package does not restart a crashed sidecar. If you
   need resilience, watch `sidecar.child` for `exit` and re-`startSidecar`.
-- **Shut it down on exit — including on a crash.** Wire `shutdown` into your
-  termination path so the frozen binary's detached child is always reaped. Cover
-  a hard crash (`uncaughtException` / `unhandledRejection`), not just the
-  termination signals — an uncaught throw otherwise leaves the sidecar running
-  and holding its port:
+- **Cleanup is automatic.** By default the sidecar is reaped when your process
+  goes away — normal exit, `process.exit()`, an uncaught exception, or
+  `SIGINT`/`SIGTERM`/`SIGHUP` (Ctrl+C) — so the frozen binary's detached child
+  never leaks and never keeps holding its port. No signal wiring required. For a
+  graceful, *awaited* shutdown that lets in-flight work finish, call
+  `shutdown(sidecar)` (the automatic reaper is a `SIGKILL` backstop on top of it):
 
 ```ts
 const sidecar = await startSidecar({ binaryPath, port: 8131 });
-
-const reap = (code = 0) => shutdown(sidecar).finally(() => process.exit(code));
-for (const sig of ["SIGTERM", "SIGINT"]) process.once(sig, () => reap(0));
-process.once("uncaughtException", (err) => { console.error(err); reap(1); });
-process.once("unhandledRejection", (err) => { console.error(err); reap(1); });
+// … use sidecar.client …
+await shutdown(sidecar); // optional & graceful; auto-cleanup also runs on exit
 ```
 
-  Funnel any other shutdown through `reap()` as well: a direct `process.exit()`
-  elsewhere bypasses these handlers (and a synchronous `process.on("exit")` hook
-  can't `await shutdown`), so route exits through one path.
+  To own the lifecycle yourself, pass `autoCleanup: false` and wire the signals.
+  (A hard `SIGKILL` of your process can't be intercepted by anyone, so the safest
+  guarantee is the default in-process reaper.)
+
+```ts
+const sidecar = await startSidecar({ binaryPath, port: 8131, autoCleanup: false });
+const reap = (code = 0) => shutdown(sidecar).finally(() => process.exit(code));
+for (const sig of ["SIGTERM", "SIGINT"]) process.once(sig, () => reap(0));
+```
 
 ### Errors & retries
 
