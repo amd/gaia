@@ -563,6 +563,38 @@ jobs:
             done
           done
 
+      - name: Verify the published package zip is fetchable at the edge
+        shell: bash
+        env:
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          # The package zip rides the `artifact` path (server- + locally-SHA-verified
+          # on upload by publish_to_r2.py), but it is NOT in binaries.lock.json, so the
+          # fetch CLI above doesn't cover it. Round-trip it through the public origin so
+          # a non-propagated / edge-blocked zip fails the release instead of shipping a
+          # 404 download button. Bytes were already proven on upload; here we gate on a
+          # 200 with a Content-Length matching the local zip. Same bounded edge retry.
+          VER="${{ steps.ver.outputs.version }}"
+          BASE="${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}"
+          ZIP="${GITHUB_WORKSPACE}/agent-email-${VER}.zip"
+          URL="${BASE}/agents/email/${VER}/agent-email-${VER}.zip"
+          local_size="$(stat -c%s "${ZIP}" 2>/dev/null || stat -f%z "${ZIP}")"
+          echo "verifying package zip: ${URL} (expecting ${local_size} bytes)"
+          attempt=1; max=5
+          while true; do
+            remote_size="$(curl -fsSL -o /dev/null -w '%{size_download}' "${URL}" || echo "")"
+            if [ "${remote_size}" = "${local_size}" ]; then
+              echo "package zip verified (${remote_size} bytes)."; break
+            fi
+            if [ "${attempt}" -ge "${max}" ]; then
+              echo "::error::package zip verify failed after ${max} attempts (got '${remote_size}', want ${local_size}) — the zip never became fetchable/correct at ${URL}."
+              exit 1
+            fi
+            echo "attempt ${attempt}/${max}: got '${remote_size}', want ${local_size} — retrying in 10s."
+            attempt=$((attempt + 1)); sleep 10
+          done
+
       - name: Upgrade npm (trusted publishing support)
         run: npm install -g npm@latest
 

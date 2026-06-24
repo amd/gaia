@@ -259,11 +259,20 @@ export async function handlePublish(
         httpMetadata: { contentType: "text/markdown; charset=utf-8" },
       });
     }
-    if (packageFilesText != null) {
-      await env.BUCKET.put(packageFilesKey(manifest.id, manifest.version), packageFilesText, {
-        httpMetadata: { contentType: "application/json; charset=utf-8" },
-      });
-    }
+  }
+
+  // The package file listing rides the whole-package zip POST, which in a real
+  // release lands AFTER the per-platform binaries have already created this
+  // version — so it must NOT be gated on `!versionExists` (that path only runs on
+  // the first POST). Write it once, keyed per version; a re-POST of the immutable
+  // zip 409s on the artifact above before reaching here, so this can't be rewritten.
+  if (
+    packageFilesText != null &&
+    !(await env.BUCKET.head(packageFilesKey(manifest.id, manifest.version)))
+  ) {
+    await env.BUCKET.put(packageFilesKey(manifest.id, manifest.version), packageFilesText, {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+    });
   }
 
   const versionEntry = makeVersionEntry(manifest, artifact, publisher.publisher, now.toISOString());

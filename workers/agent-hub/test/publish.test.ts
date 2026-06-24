@@ -648,6 +648,40 @@ describe("POST /publish — whole-package zip + file list", () => {
     expect(entry.package!.files[0].name).toBe("binaries/email-agent-linux-x64");
   });
 
+  it("stores package_files on a LATER POST after the version already exists (real release order)", async () => {
+    // The real release publishes the per-platform binaries first (creating the
+    // version), THEN the whole-package zip + package_files in a separate POST. So
+    // the listing arrives when versionExists is already true — it must still be
+    // stored, or the catalog never gets `package` and the file list never renders.
+    const env = makeEnv();
+    const yaml = sampleManifest({ id: "email", name: "Email", version: "0.1.0" });
+
+    const first = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: yaml,
+      artifact: "linux-binary",
+      filename: "email-agent-linux-x64",
+    });
+    expect(first.status).toBe(201);
+
+    // Second POST: the whole-package zip + the file listing, version now exists.
+    const second = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: yaml,
+      artifact: "ZIPBYTES",
+      filename: "agent-email-0.1.0.zip",
+      packageFiles: filesJson,
+    });
+    expect(second.status).toBe(201);
+
+    const entry = (
+      (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
+    ).agents.find((a) => a.id === "email")!;
+    expect(entry.package).toBeDefined();
+    expect(entry.package!.filename).toBe("agent-email-0.1.0.zip");
+    expect(entry.package!.files).toHaveLength(3);
+  });
+
   it("omits package when no package_files manifest is published (even if a .zip exists)", async () => {
     const env = makeEnv();
     await publish(env, {
