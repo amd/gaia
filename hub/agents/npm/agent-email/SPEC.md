@@ -30,8 +30,10 @@ It accepts concurrent HTTP requests, but inference runs on a **single local
 Lemonade model slot**, so parallel `triage` calls serialize behind one another;
 cap inflight calls on your side rather than fanning out. The package does not
 supervise or restart a crashed sidecar — watch `sidecar.child` `exit` and
-re-`startSidecar` if you need resilience, and wire `shutdown` into `SIGTERM`/
-`SIGINT` so the frozen binary's child is always reaped.
+re-`startSidecar` if you need resilience. It **does** auto-reap the sidecar when
+your process exits, crashes, or is interrupted (default `autoCleanup`); call
+`shutdown` for a graceful, awaited stop, or pass `autoCleanup: false` to manage
+signals yourself.
 
 ## REST API
 
@@ -118,7 +120,7 @@ control, the steps are exported individually:
 - `waitForHealth(baseUrl, { timeoutMs })` → poll `/health`; throws `HealthTimeoutError` on timeout (never assumes ready).
 - `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
 - `verifySha256(buf, expected, label)` → throws `IntegrityError` on mismatch.
-- `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX — the frozen one-file binary orphans a child otherwise).
+- `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The default auto-reaper does the same on process exit/crash/signal, so only a hard `SIGKILL` of the host can still orphan the child.
 
 ## The `fetch` CLI
 

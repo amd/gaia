@@ -184,14 +184,27 @@ This is a long-lived local resource, not a per-request one. Wire it like this:
   `DEBUG=agent-email` to see the bind error.
 - **Supervise it yourself.** The package does not restart a crashed sidecar. If you
   need resilience, watch `sidecar.child` for `exit` and re-`startSidecar`.
-- **Shut it down on exit.** Wire `shutdown` into your termination path so the
-  frozen binary's child process is always reaped:
+- **Cleanup is automatic.** By default the sidecar is reaped when your process
+  goes away — normal exit, `process.exit()`, an uncaught exception, or
+  `SIGINT`/`SIGTERM`/`SIGHUP` (Ctrl+C) — so the frozen binary's detached child
+  never leaks and never keeps holding its port. No signal wiring required. For a
+  graceful, *awaited* shutdown that lets in-flight work finish, call
+  `shutdown(sidecar)` (the automatic reaper is a `SIGKILL` backstop on top of it):
 
 ```ts
 const sidecar = await startSidecar({ binaryPath, port: 8131 });
-for (const sig of ["SIGTERM", "SIGINT"]) {
-  process.once(sig, () => shutdown(sidecar).finally(() => process.exit(0)));
-}
+// … use sidecar.client …
+await shutdown(sidecar); // optional & graceful; auto-cleanup also runs on exit
+```
+
+  To own the lifecycle yourself, pass `autoCleanup: false` and wire the signals.
+  (A hard `SIGKILL` of your process can't be intercepted by anyone, so the safest
+  guarantee is the default in-process reaper.)
+
+```ts
+const sidecar = await startSidecar({ binaryPath, port: 8131, autoCleanup: false });
+const reap = (code = 0) => shutdown(sidecar).finally(() => process.exit(code));
+for (const sig of ["SIGTERM", "SIGINT"]) process.once(sig, () => reap(0));
 ```
 
 ### Errors & retries
@@ -237,7 +250,7 @@ provider by definition.
 | `/health` is green but `triage` fails | `health()` is **liveness-only** — it doesn't check Lemonade or the model. The real readiness signal is a `triage` returning 200. |
 | `npm install` fails with `UNABLE_TO_GET_ISSUER_CERT` | Corporate TLS proxy. Reinstall with Node's system CA store: `NODE_OPTIONS=--use-system-ca npm install` (Node ≥ 22). |
 | `require(...)` throws `ERR_REQUIRE_ESM` | The package is ESM-only. Use `import`, or `await import("@amd-gaia/agent-email")` from CommonJS. |
-| Sidecar process lingers after exit | Always call `shutdown(sidecar)` — it kills the whole process tree (the frozen binary spawns a child). |
+| Sidecar process lingers after exit | Auto-cleanup reaps it on exit/crash/signal by default; a lingering sidecar means `autoCleanup: false` (call `shutdown(sidecar)` yourself) or a hard `SIGKILL` of the host. |
 | `IntegrityError` / `VersionMismatchError` on start | The downloaded binary failed its SHA-256 check, or its contract MAJOR differs from the client. Clear `resources/` and re-`fetchBinary`, and make sure the package version matches the binary. |
 
 Set `DEBUG=agent-email` for verbose spawn/fetch/health logs (on stderr).
