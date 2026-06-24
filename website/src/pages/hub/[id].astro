@@ -111,11 +111,11 @@ const terminalLines = [
       <div class="min-w-0" data-doc-tabs>
         {changelogHtml && (
           <div role="tablist" aria-label={`${agent.name} documentation`} class="flex gap-1 border-b border-g-border mb-7">
-            <button type="button" role="tab" data-doc-tab="readme" aria-selected="true" class="doc-tab">README</button>
-            <button type="button" role="tab" data-doc-tab="changelog" aria-selected="false" class="doc-tab">Changelog</button>
+            <button type="button" role="tab" id="doctab-readme" aria-controls="docpanel-readme" data-doc-tab="readme" aria-selected="true" tabindex="0" class="doc-tab">README</button>
+            <button type="button" role="tab" id="doctab-changelog" aria-controls="docpanel-changelog" data-doc-tab="changelog" aria-selected="false" tabindex="-1" class="doc-tab">Changelog</button>
           </div>
         )}
-        <article role="tabpanel" data-doc-panel="readme" class="doc max-w-[70ch]">
+        <article role="tabpanel" id="docpanel-readme" aria-labelledby="doctab-readme" data-doc-panel="readme" class="doc max-w-[70ch]">
           <h2 class="sr-only">About {agent.name}</h2>
           <div set:html={readmeHtml} />
           <div class="mt-10">
@@ -123,7 +123,7 @@ const terminalLines = [
           </div>
         </article>
         {changelogHtml && (
-          <article role="tabpanel" data-doc-panel="changelog" class="doc max-w-[70ch]" hidden>
+          <article role="tabpanel" id="docpanel-changelog" aria-labelledby="doctab-changelog" data-doc-panel="changelog" class="doc max-w-[70ch]" hidden>
             <div set:html={changelogHtml} />
           </article>
         )}
@@ -277,18 +277,30 @@ const terminalLines = [
     });
   }
 
-  // Doc tabs: switch between the README and Changelog panels.
+  // Doc tabs: switch between the README and Changelog panels. Mirrors the
+  // InstallMethods tab pattern — roving tabindex + ArrowLeft/Right, ARIA-correct.
   const tabRoot = document.querySelector('[data-doc-tabs]');
   if (tabRoot) {
     const tabs = Array.from(tabRoot.querySelectorAll<HTMLButtonElement>('[data-doc-tab]'));
     const panels = Array.from(tabRoot.querySelectorAll<HTMLElement>('[data-doc-panel]'));
-    for (const tab of tabs) {
-      tab.addEventListener('click', () => {
-        const key = tab.getAttribute('data-doc-tab');
-        for (const t of tabs) t.setAttribute('aria-selected', String(t === tab));
-        for (const p of panels) p.hidden = p.getAttribute('data-doc-panel') !== key;
+    const select = (key: string | null) => {
+      for (const t of tabs) {
+        const on = t.getAttribute('data-doc-tab') === key;
+        t.setAttribute('aria-selected', String(on));
+        t.tabIndex = on ? 0 : -1;
+      }
+      for (const p of panels) p.hidden = p.getAttribute('data-doc-panel') !== key;
+    };
+    tabs.forEach((tab, idx) => {
+      tab.addEventListener('click', () => select(tab.getAttribute('data-doc-tab')));
+      tab.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+        e.preventDefault();
+        const next = tabs[(idx + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
+        select(next.getAttribute('data-doc-tab'));
+        next.focus();
       });
-    }
+    });
   }
 </script>
 
