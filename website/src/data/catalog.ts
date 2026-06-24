@@ -48,6 +48,18 @@ export interface Agent {
   deprecation_message?: string;
   requirements: AgentRequirements;
   readme: string;
+  // CHANGELOG.md markdown of the latest version; "" if none was published.
+  // Optional at the type level so the site stays resilient to an older index.json
+  // served before the hub Worker that adds this field is redeployed.
+  changelog?: string;
+  // npm package name (e.g. "@amd-gaia/agent-email") when the agent is
+  // distributed as an npm client + frozen sidecar. Present → npm is the install
+  // path. Absent → the agent installs via pip/GAIA (language-driven).
+  npm_package?: string;
+  // Localhost URL of the agent's interactive playground, served by its sidecar
+  // (e.g. "http://127.0.0.1:8131/v1/email/playground"). Only resolves once the
+  // package is installed and the sidecar is running — a best-effort dev link.
+  playground_url?: string;
 }
 
 interface CatalogFile {
@@ -205,12 +217,28 @@ export interface InstallMethod {
 }
 
 /**
- * Install methods for an agent, derived from the MANIFEST (its `language`) —
- * never from README markup. Every agent installs through the GAIA app; Python
- * agents also ship a pip package; source install is always available. The hub
- * index has no per-channel field today, so language is the source of truth.
+ * Install methods for an agent, derived from the MANIFEST — never from README
+ * markup. We only ever show channels that actually work:
+ *
+ *  - An agent with `npm_package` (the email sidecar) is distributed as an npm
+ *    client + frozen binary, NOT a PyPI wheel. npm is its single supported path,
+ *    so we show only that — no broken `pip install` (there's no wheel) and no
+ *    unverified source build.
+ *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
+ *    source build (language-driven, the long-standing default).
  */
 export function installMethods(agent: Agent): InstallMethod[] {
+  if (agent.npm_package) {
+    return [
+      {
+        key: 'npm',
+        label: 'npm',
+        command: `npm i ${agent.npm_package}`,
+        note: 'Installs the client and fetches the local sidecar binary on first run. Runs 100% locally on AMD Ryzen AI.',
+      },
+    ];
+  }
+
   const methods: InstallMethod[] = [
     {
       key: 'gaia',

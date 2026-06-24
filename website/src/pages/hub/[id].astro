@@ -29,14 +29,23 @@ export async function getStaticPaths() {
 
 const { id } = Astro.params;
 const agent = (await getAgent(id!))!;
-const installCmd = `gaia agent install ${agent.id}`;
+
+// npm-distributed agents (the email sidecar) install via npm, not the GAIA app /
+// pip. Surface only the path that actually works — see installMethods().
+const isNpm = !!agent.npm_package;
+const npmUrl = agent.npm_package ? `https://www.npmjs.com/package/${agent.npm_package}` : '';
+const installCmd = isNpm ? `npm i ${agent.npm_package}` : `gaia agent install ${agent.id}`;
 const deepLink = `gaia://hub/install/${agent.id}`;
 const readmeHtml = renderMarkdown(agent.readme);
+// Optional — older index.json (served before the hub Worker adds the field) has
+// no changelog; render the section only when there's content.
+const changelogHtml = agent.changelog ? renderMarkdown(agent.changelog) : '';
 const req = agent.requirements;
 const terminalLines = [
   { prompt: true, text: installCmd },
   { muted: true, text: `✓ ${agent.name} ${agent.latest_version} installed` },
-  { prompt: true, text: `gaia ${agent.id}` },
+  // Non-npm agents launch via the CLI; the npm client is embedded by the host app.
+  ...(isNpm ? [] : [{ prompt: true, text: `gaia ${agent.id}` }]),
 ];
 ---
 
@@ -64,13 +73,21 @@ const terminalLines = [
             Deprecated{agent.deprecation_message ? ` — ${agent.deprecation_message}` : ''}
           </p>
         )}
-        <div class="mt-6 flex flex-wrap items-center gap-3">
-          <a href={deepLink} class="rounded-md bg-g-gold px-6 py-3 text-sm font-semibold text-black hover:brightness-110 transition">
-            Open in GAIA
-          </a>
-        </div>
-        <p class="mt-2 text-xs text-g-muted">
-          Don't have GAIA yet? <a href="https://amd-gaia.ai/docs" class="text-g-gold-text hover:underline">Get started →</a>
+        {!isNpm && (
+          <div class="mt-6 flex flex-wrap items-center gap-3">
+            <a href={deepLink} class="rounded-md bg-g-gold px-6 py-3 text-sm font-semibold text-black hover:brightness-110 transition">
+              Open in GAIA
+            </a>
+          </div>
+        )}
+        <p class="mt-4 text-xs text-g-muted">
+          {isNpm ? (
+            // The playground needs install + a running sidecar, so its launcher lives
+            // in the README's Playground section, not as a hero button.
+            <span>Install with npm below, then drive it from your app. <a href={npmUrl} class="text-g-gold-text hover:underline">View on npm →</a></span>
+          ) : (
+            <span>Don't have GAIA yet? <a href="https://amd-gaia.ai/docs" class="text-g-gold-text hover:underline">Get started →</a></span>
+          )}
         </p>
       </div>
     </header>
@@ -91,7 +108,7 @@ const terminalLines = [
 
     <!-- Body: README + manifest-driven cards -->
     <div class="mt-12 grid lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
-      <article class="readme min-w-0 max-w-[70ch]">
+      <article class="doc min-w-0 max-w-[70ch]">
         <h2 class="sr-only">About {agent.name}</h2>
         <div set:html={readmeHtml} />
         <div class="mt-10">
@@ -118,9 +135,11 @@ const terminalLines = [
             <div class="flex justify-between py-2 border-b border-g-border">
               <dt class="text-g-muted">Version</dt><dd class="font-mono">{agent.latest_version}</dd>
             </div>
-            <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">Size</dt><dd class="font-mono">{formatBytes(agent.download_size_bytes)}</dd>
-            </div>
+            {agent.download_size_bytes > 0 && (
+              <div class="flex justify-between py-2 border-b border-g-border">
+                <dt class="text-g-muted">Size</dt><dd class="font-mono">{formatBytes(agent.download_size_bytes)}</dd>
+              </div>
+            )}
             <div class="flex justify-between py-2 border-b border-g-border">
               <dt class="text-g-muted">Author</dt><dd>{agent.author}</dd>
             </div>
@@ -140,15 +159,21 @@ const terminalLines = [
         <section class="rounded-xl border border-g-border bg-g-surface p-5">
           <Eyebrow class="mb-2">Requirements</Eyebrow>
           <dl class="text-[13px]">
-            <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">Memory</dt><dd class="font-mono">{req.min_memory_gb} GB</dd>
-            </div>
-            <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">Disk</dt><dd class="font-mono">{req.min_disk_gb} GB</dd>
-            </div>
-            <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">Context</dt><dd class="font-mono">{req.min_context_size.toLocaleString()}</dd>
-            </div>
+            {req.min_memory_gb > 0 && (
+              <div class="flex justify-between py-2 border-b border-g-border">
+                <dt class="text-g-muted">Memory</dt><dd class="font-mono">{req.min_memory_gb} GB</dd>
+              </div>
+            )}
+            {req.min_disk_gb > 0 && (
+              <div class="flex justify-between py-2 border-b border-g-border">
+                <dt class="text-g-muted">Disk</dt><dd class="font-mono">{req.min_disk_gb} GB</dd>
+              </div>
+            )}
+            {req.min_context_size > 0 && (
+              <div class="flex justify-between py-2 border-b border-g-border">
+                <dt class="text-g-muted">Context</dt><dd class="font-mono">{req.min_context_size.toLocaleString()}</dd>
+              </div>
+            )}
             <div class="flex justify-between py-2 border-b border-g-border">
               <dt class="text-g-muted">NPU</dt><dd>{npuLabel(req.npu)}</dd>
             </div>
@@ -182,21 +207,102 @@ const terminalLines = [
       </aside>
     </div>
 
+    {changelogHtml && (
+      <section class="mt-16 border-t border-g-border pt-12" aria-label="Changelog">
+        <Eyebrow class="mb-4">Changelog</Eyebrow>
+        <div class="doc max-w-[70ch]" set:html={changelogHtml} />
+      </section>
+    )}
+
   </main>
   <Footer />
+
+  <!-- Fullscreen image lightbox for rendered README/CHANGELOG diagrams. -->
+  <div
+    id="doc-lightbox"
+    class="fixed inset-0 z-[100] hidden cursor-zoom-out items-center justify-center bg-black/90 p-6 backdrop-blur-sm"
+    aria-hidden="true"
+    role="dialog"
+    aria-label="Image preview"
+  >
+    <img id="doc-lightbox-img" src="" alt="" class="max-h-full max-w-full rounded-lg shadow-2xl" />
+  </div>
 </Layout>
 
+<script>
+  // Click any rendered doc image to view it fullscreen; click anywhere or press
+  // Escape to close. Sources are already scheme-allowlisted by the markdown
+  // renderer, so reusing img.src here carries no new injection surface.
+  const box = document.getElementById('doc-lightbox');
+  const boxImg = document.getElementById('doc-lightbox-img') as HTMLImageElement | null;
+  if (box && boxImg) {
+    const open = (src: string, alt: string) => {
+      boxImg.src = src;
+      boxImg.alt = alt;
+      box.classList.remove('hidden');
+      box.classList.add('flex');
+      box.setAttribute('aria-hidden', 'false');
+    };
+    const close = () => {
+      box.classList.add('hidden');
+      box.classList.remove('flex');
+      box.setAttribute('aria-hidden', 'true');
+      boxImg.removeAttribute('src');
+    };
+    // Only standalone diagrams are zoomable (matches the .doc p > img:only-child
+    // CSS) — inline badges stay at natural size and aren't clickable.
+    document.querySelectorAll<HTMLImageElement>('.doc p > img:only-child').forEach((img) => {
+      img.addEventListener('click', () => open(img.src, img.alt));
+    });
+    box.addEventListener('click', close);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !box.classList.contains('hidden')) close();
+    });
+  }
+</script>
+
 <style is:global>
-  /* README typography on tokens (replaces the old .readme styles) */
-  .readme h1, .readme h2, .readme h3 { @apply font-semibold tracking-tight mt-8 mb-3; }
-  .readme h1 { @apply text-2xl; }
-  .readme h2 { @apply text-xl; }
-  .readme h3 { @apply text-base; }
-  .readme p { @apply text-[14.5px] leading-relaxed text-g-muted my-3; }
-  .readme a { @apply text-g-gold-text hover:underline; }
-  .readme code { @apply font-mono text-[12.5px] bg-g-surface border border-g-border rounded px-1 py-0.5; }
-  .readme pre { @apply bg-[#0c0c0e] text-[#e8e8e6] border border-g-border rounded-lg p-4 overflow-x-auto my-4; }
-  .readme pre code { @apply bg-transparent border-0 p-0 text-[12.5px]; }
-  .readme ul { @apply list-disc pl-5 my-3 text-[14.5px] text-g-muted space-y-1; }
-  .readme blockquote { @apply border-l-2 border-g-gold/50 pl-4 text-g-muted italic my-4; }
+  /* Documentation prose theme for rendered README + CHANGELOG markdown.
+     Mirrors the amd-gaia.ai (Mintlify) docs: clear heading hierarchy with a
+     ruled h2, comfortable line-height, readable body contrast, chip-style inline
+     code, a dark code card, and bordered tables. The markdown renderer emits
+     classless semantic tags (website/src/data/markdown.ts) so this stylesheet is
+     the single source of truth for how hub markdown looks. */
+  .doc { @apply text-[15px] leading-[1.75] text-g-text/90; }
+  .doc > :first-child { @apply mt-0; }
+
+  .doc h1 { @apply mt-0 mb-4 text-3xl font-bold tracking-tight text-g-text; }
+  .doc h2 { @apply mt-10 mb-4 border-b border-g-border pb-2 text-xl font-semibold tracking-tight text-g-text; }
+  .doc h3 { @apply mt-8 mb-3 text-base font-semibold text-g-text; }
+  .doc h4 { @apply mt-6 mb-2 text-[15px] font-semibold text-g-text; }
+
+  .doc p { @apply my-4 leading-[1.75] text-g-text/90; }
+  .doc strong { @apply font-semibold text-g-text; }
+  .doc em { @apply italic; }
+  .doc a { @apply font-medium text-g-gold-text underline decoration-g-gold/40 underline-offset-2 transition-colors hover:decoration-g-gold; }
+
+  .doc ul { @apply my-4 list-disc space-y-2 pl-6 marker:text-g-muted; }
+  .doc ol { @apply my-4 list-decimal space-y-2 pl-6 marker:text-g-muted; }
+  .doc li { @apply leading-[1.7] text-g-text/90; }
+  .doc li > ul, .doc li > ol { @apply my-2; }
+
+  .doc code { @apply rounded-md border border-g-border bg-g-surface px-1.5 py-0.5 font-mono text-[0.85em] text-g-text; }
+  .doc pre { @apply my-5 overflow-x-auto rounded-xl border border-g-border bg-[#0c0c0e] p-4; }
+  .doc pre code { @apply border-0 bg-transparent p-0 font-mono text-[13px] leading-relaxed text-[#e8e8e6]; }
+
+  .doc table { @apply my-6 block w-full overflow-x-auto border-collapse text-left text-[14px]; }
+  .doc th { @apply border-b border-g-border bg-g-surface px-3 py-2 text-left font-semibold text-g-text; }
+  .doc td { @apply border-b border-g-border px-3 py-2 align-top text-g-text/85; }
+  .doc tbody tr:last-child td { @apply border-0; }
+
+  .doc blockquote { @apply my-5 border-l-2 border-g-gold/50 bg-g-surface/40 px-4 py-2 italic text-g-muted; }
+  /* Default image: natural size, capped to the column. Keeps inline badges
+     (e.g. a shields.io version pill, which sits in a paragraph with other text)
+     from being blown up to full width. */
+  .doc img { @apply my-5 max-w-full rounded-lg border border-g-border; }
+  /* A standalone image — the only child of its paragraph — is a diagram or
+     screenshot: fill the column (they read small at natural size) and zoom to
+     fullscreen on click (see the lightbox script below). */
+  .doc p > img:only-child { @apply w-full cursor-zoom-in transition-colors hover:border-g-gold/50; }
+  .doc hr { @apply my-8 border-0 border-t border-g-border; }
 </style>

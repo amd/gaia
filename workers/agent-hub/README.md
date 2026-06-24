@@ -14,10 +14,10 @@ depend on any `src/gaia` code.
 
 | Route | Auth | Purpose |
 |-------|------|---------|
-| `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Form parts: `manifest` (gaia-agent.yaml text), `artifact` (wheel/binary file), optional `readme` (README.md markdown — rendered on the website Hub pages) |
-| `GET /index.json` | none | Catalog of every agent (latest version only), including the latest README markdown |
+| `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Form parts: `manifest` (gaia-agent.yaml text), `artifact` (wheel/binary file), optional `readme` (README.md markdown) and `changelog` (CHANGELOG.md markdown) — both rendered on the website Hub pages |
+| `GET /index.json` | none | Catalog of every agent (latest version only), including the latest README + CHANGELOG markdown |
 | `GET /agents/<id>/manifest.json` | none | Per-agent aggregate manifest (all versions) |
-| `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, or `README.md` |
+| `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, `README.md`, or `CHANGELOG.md` |
 | `GET /health` | none | Liveness probe |
 
 ### Publish guarantees
@@ -56,6 +56,7 @@ index.json                                     # lightweight catalog (all agents
 agents/<id>/manifest.json                       # per-agent aggregate (all versions)
 agents/<id>/<version>/gaia-agent.yaml           # exact manifest uploaded for this version
 agents/<id>/<version>/README.md                 # README markdown for this version (if published)
+agents/<id>/<version>/CHANGELOG.md              # CHANGELOG markdown for this version (if published)
 agents/<id>/<version>/<filename>                # the artifact (wheel or binary)
 ```
 
@@ -88,8 +89,9 @@ schemas live in [`schemas/`](./schemas):
   `tools_count`, `models`, `min_gaia_version`, `permissions`, `deprecated`,
   `deprecation_message` (only when set), full `requirements` (`min_memory_gb`,
   `min_disk_gb`, `min_context_size`, `platforms`, `npu` as
-  `"required"`/`"optional"`, `gpu_vram_gb`), and `readme` (latest version's
-  README markdown, `""` if none was published). This shape is the build-time
+  `"required"`/`"optional"`, `gpu_vram_gb`), `readme` (latest version's README
+  markdown, `""` if none was published), and `changelog` (latest version's
+  CHANGELOG markdown, `""` if none was published). This shape is the build-time
   contract for the website Hub pages (`website/src/data/catalog.ts`).
 - [`schemas/manifest.schema.json`](./schemas/manifest.schema.json) —
   `GET /agents/<id>/manifest.json`. Full display metadata plus a `versions` map;
@@ -128,7 +130,8 @@ curl -X POST http://localhost:8787/publish \
   -H "Authorization: Bearer dev-token" \
   -F "manifest=@hub/agents/python/chat/gaia-agent.yaml" \
   -F "artifact=@dist/gaia_agent_chat-0.1.0-py3-none-any.whl" \
-  -F "readme=@hub/agents/python/chat/README.md;type=text/markdown"
+  -F "readme=@hub/agents/python/chat/README.md;type=text/markdown" \
+  -F "changelog=@hub/agents/python/chat/CHANGELOG.md;type=text/markdown"
 
 curl http://localhost:8787/index.json
 ```

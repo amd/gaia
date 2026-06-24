@@ -185,6 +185,8 @@ export interface IndexEntry {
   requirements: IndexRequirements;
   /** README.md markdown of the latest version; empty string if none was published. */
   readme: string;
+  /** CHANGELOG.md markdown of the latest version; empty string if none was published. */
+  changelog: string;
 }
 
 /** The top-level catalog served at GET /index.json. */

@@ -46,6 +46,8 @@
     "binaries.lock.json",
     "README.md",
     "CHANGELOG.md",
+    "SPEC.md",
+    "SKILL.md",
     "LICENSE"
   ],
   "engines": {

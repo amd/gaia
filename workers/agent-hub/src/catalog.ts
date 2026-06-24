@@ -9,6 +9,7 @@ import { compareSemver } from "./manifest";
 import {
   listAgentIds,
   readAgentManifest,
+  readChangelog,
   readReadme,
   writeIndex,
 } from "./storage";
@@ -91,10 +92,14 @@ export function upsertVersion(
 }
 
 /**
- * Build the catalog entry for one agent manifest. `readme` is the README
- * markdown of the latest version ("" if none was published).
+ * Build the catalog entry for one agent manifest. `readme` and `changelog` are
+ * the latest version's markdown ("" if none was published).
  */
-export function toIndexEntry(agent: AgentManifest, readme: string): IndexEntry {
+export function toIndexEntry(
+  agent: AgentManifest,
+  readme: string,
+  changelog: string
+): IndexEntry {
   const latest = agent.versions[agent.latest_version];
   const req = agent.requirements;
   return {
@@ -125,6 +130,7 @@ export function toIndexEntry(agent: AgentManifest, readme: string): IndexEntry {
       gpu_vram_gb: req.gpu_vram_gb,
     },
     readme,
+    changelog,
   };
 }
 
@@ -142,7 +148,8 @@ export async function rebuildIndex(
     const agent = await readAgentManifest(bucket, id);
     if (!agent) continue;
     const readme = await readReadme(bucket, id, agent.latest_version);
-    entries.push(toIndexEntry(agent, readme));
+    const changelog = await readChangelog(bucket, id, agent.latest_version);
+    entries.push(toIndexEntry(agent, readme, changelog));
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));
 

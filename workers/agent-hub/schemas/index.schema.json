@@ -44,7 +44,8 @@
         "permissions",
         "deprecated",
         "requirements",
-        "readme"
+        "readme",
+        "changelog"
       ],
       "properties": {
         "id": {
@@ -132,6 +133,10 @@
         "readme": {
           "type": "string",
           "description": "README.md markdown of the latest version; empty string if none was published."
+        },
+        "changelog": {
+          "type": "string",
+          "description": "CHANGELOG.md markdown of the latest version; empty string if none was published."
         }
       }
     }

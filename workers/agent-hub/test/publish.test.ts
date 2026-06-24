@@ -504,6 +504,88 @@ describe("POST /publish — README", () => {
   });
 });
 
+describe("POST /publish — CHANGELOG", () => {
+  it("stores the changelog, serves it on the download route, and includes it in index.json", async () => {
+    const env = makeEnv();
+    const changelog = "# Changelog\n\n## 0.1.0\n\n- Initial release.\n";
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+      changelog,
+    });
+    expect(res.status).toBe(201);
+    expect(env.bucket.keys()).toContain("agents/chat/0.1.0/CHANGELOG.md");
+
+    // Served by the existing GET /agents/... download route.
+    const get = await worker.fetch(
+      new Request("https://hub.amd-gaia.ai/agents/chat/0.1.0/CHANGELOG.md"),
+      env as never
+    );
+    expect(get.status).toBe(200);
+    expect(get.headers.get("content-type")).toContain("text/markdown");
+    expect(await get.text()).toBe(changelog);
+
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    expect(index.agents.find((a) => a.id === "chat")!.changelog).toBe(changelog);
+  });
+
+  it("defaults changelog to \"\" in index.json when none is published", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+    });
+    expect(env.bucket.keys()).not.toContain("agents/chat/0.1.0/CHANGELOG.md");
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    expect(index.agents.find((a) => a.id === "chat")!.changelog).toBe("");
+  });
+
+  it("rejects an empty changelog part (400) — omit it instead", async () => {
+    const env = makeEnv();
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+      changelog: "   ",
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_request");
+    expect(env.bucket.keys()).toEqual([]);
+  });
+
+  it("index.json carries the latest version's changelog", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ version: "0.1.0" }),
+      artifact: "v1",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+      changelog: "## 0.1.0\n- first",
+    });
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ version: "0.2.0" }),
+      artifact: "v2",
+      filename: "gaia_agent_chat-0.2.0-py3-none-any.whl",
+      changelog: "## 0.2.0\n- second",
+    });
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    expect(index.agents[0].changelog).toBe("## 0.2.0\n- second");
+
+    // Both versions' changelogs remain individually downloadable.
+    const v1 = await worker.fetch(
+      new Request("https://hub.amd-gaia.ai/agents/chat/0.1.0/CHANGELOG.md"),
+      env as never
+    );
+    expect(await v1.text()).toBe("## 0.1.0\n- first");
+  });
+});
+
 describe("POST /publish — security tier & deprecation", () => {
   it("records the security_tier in the per-agent manifest and index", async () => {
     const env = makeEnv();
