@@ -198,11 +198,11 @@ jobs:
 
             ## Suggested Changes Policy
 
-            **Prefer actionable ```suggestion blocks** for the findings you do report — they give immediate value — but keep volume within the rubric's nit cap.
+            **Prefer actionable `suggestion` blocks** for the findings you do report — they give immediate value — but keep volume within the rubric's nit cap.
 
             **What to skip and the nit budget live in the rubric** (`/tmp/review-rubric.md`): do not re-flag anything CI's `python util/lint.py --all` already enforces (black formatting, isort import order, trailing whitespace, EOF newlines), do not flag copyright / SPDX / license boilerplate (open-source project — contributors retain their copyright), and keep nits within the rubric's cap. If the rubric is unavailable, apply those same skips from memory and hold nits to a short bounded list.
 
-            **Provide a ```suggestion for genuinely useful, low-risk fixes:**
+            **Provide a `suggestion` block for genuinely useful, low-risk fixes:**
             - ✅ Simple typos in comments or docstrings
             - ✅ Hardcoded values that should use constants
             - ✅ Logging improvements (e.g., truncating verbose output)
