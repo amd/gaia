@@ -42,6 +42,7 @@ inferred from the filename suffix.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -130,8 +131,6 @@ def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) 
 
 def _b64(data: bytes) -> str:
     """Base64-encode bytes to ASCII string."""
-    import base64
-
     return base64.b64encode(data).decode("ascii")
 
 
@@ -170,6 +169,10 @@ def publish_streaming(
         "authorization": f"Bearer {token}",
         "content-type": "application/octet-stream",
         "content-length": str(size),
+        # Stored object content-type (the package artifact is a zip). The
+        # request body itself is octet-stream; this is the metadata the Worker
+        # persists on the R2 object.
+        "x-gaia-content-type": "application/zip",
         "x-gaia-manifest": _b64(manifest_bytes),
         "x-gaia-filename": filename,
         "x-gaia-sha256": local_sha,

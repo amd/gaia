@@ -153,7 +153,9 @@ function decodeBase64Utf8(b64: string): string {
 /**
  * Shared publish tail: write ancillary objects → update catalog → rebuild index → 201.
  *
- * Called by both the multipart and streaming paths once the artifact is stored.
+ * Currently called only by the streaming path; the multipart path inlines an
+ * equivalent tail (which also writes the optional README/CHANGELOG parts).
+ * Keep the two in sync until the multipart path is migrated here.
  */
 async function finishPublish(
   env: Env,
@@ -276,7 +278,9 @@ async function handleStreamingPublish(
   const manifest = parseManifest(manifestText);
   assertAuthorAllowed(publisher, manifest.author);
 
-  // Size guard without buffering: trust Content-Length for the pre-flight check.
+  // Size guard without buffering. Content-Length is advisory (a client could
+  // under-declare it); R2's own object-size limit is the real ceiling, and the
+  // streamed body is never buffered in the Worker regardless.
   const declaredLenRaw = request.headers.get("content-length");
   const declaredLen = declaredLenRaw ? Number(declaredLenRaw) : NaN;
   if (!declaredLen || declaredLen <= 0 || !Number.isFinite(declaredLen)) {
