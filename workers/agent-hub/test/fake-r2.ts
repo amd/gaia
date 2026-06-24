@@ -44,15 +44,6 @@ async function toBytesAsync(
   throw new TypeError("Unsupported R2 put value type in fake-r2.");
 }
 
-function toBytes(value: string | ArrayBuffer | ArrayBufferView | Uint8Array): Uint8Array {
-  if (typeof value === "string") return new TextEncoder().encode(value);
-  if (value instanceof Uint8Array) return new Uint8Array(value);
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  }
-  throw new TypeError("Unsupported R2 put value type in fake-r2.");
-}
 
 function makeBody(obj: StoredObject) {
   const bytes = obj.bytes;
