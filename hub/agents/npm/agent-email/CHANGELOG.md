@@ -5,7 +5,11 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
-## [Unreleased]
+## 0.2.1
+
+Adds the one-command `playground` launcher and automatic sidecar cleanup, and
+makes this README the single canonical agent README (hub + npm). No wire-contract
+change (`SCHEMA_VERSION` stays `2.0`).
 
 ### Added
 
@@ -22,12 +26,6 @@ bump is always at least a package MINOR bump with a migration note.
   `autoCleanup: false` to manage the lifecycle yourself; `shutdown()` stays the
   graceful, awaited path. A hard `SIGKILL` of the host process is the one case no
   in-process handler can catch.
-
-## 0.2.1
-
-Documentation/packaging release — no client API or wire-contract change
-(`SCHEMA_VERSION` stays `2.0`). Republishes so the live hub catalog picks up the
-current README.
 
 ### Changed
 
