@@ -1,6 +1,6 @@
 # @amd-gaia/agent-email
 
-[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.0** · last updated **2026-06-24**
+[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.0** · last updated **2026-06-23**
 
 Embed the **GAIA email agent** in your JS/TS app. It triages, organizes, replies
 to, and schedules from Gmail and Outlook — with every email body analyzed
@@ -225,8 +225,9 @@ provider by definition.
   running in Lemonade, not the sidecar itself.
 - **Lemonade:** the sidecar calls a local Lemonade endpoint (default
   `http://localhost:13305`); cloud hosts are rejected at startup.
-- **Footprint:** one ~31 MB native binary, no Python runtime. (Model weights are
-  downloaded and managed separately by Lemonade.)
+- **Footprint:** one self-contained native binary (~30–45 MB depending on
+  platform), no Python runtime. (Model weights are downloaded and managed
+  separately by Lemonade.)
 
 ## Troubleshooting
 
