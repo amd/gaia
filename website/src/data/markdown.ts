@@ -4,7 +4,7 @@
 // Minimal, dependency-free Markdown → HTML renderer for the subset used in agent
 // READMEs and CHANGELOGs: headings, fenced code blocks, inline code, bold,
 // blockquotes, ordered and unordered lists, links, images, tables, horizontal
-// rules, and paragraphs.
+// rules, bold, italic, and paragraphs.
 //
 // PRESENTATION lives in the page stylesheet, not here. This renderer emits clean
 // SEMANTIC HTML (<h2>, <p>, <pre>, <table>, …) with no styling classes; the
@@ -42,6 +42,10 @@ function renderInline(text: string): string {
 
   out = escapeHtml(out);
   out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // Single-asterisk italic, AFTER bold so `**x**` is already consumed (no `*`
+  // remains inside the emitted <strong>). Underscores are intentionally NOT
+  // treated as emphasis so identifiers like `suggested_action` survive intact.
+  out = out.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
   // Images: ![alt](src). Run BEFORE links so the inner `[alt](src)` isn't half
   // consumed by the link rule. Same untrusted-source stance as links: the src is
   // scheme-allowlisted to https or repo-relative paths (no data:/javascript:),

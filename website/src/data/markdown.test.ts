@@ -138,4 +138,16 @@ describe('renderMarkdown sanitization', () => {
     expect(html).toContain('<ol>');
     expect((html.match(/<li>/g) || []).length).toBe(4);
   });
+
+  // Regression: single-asterisk italic (e.g. README's *Settings → Connectors*)
+  // must become <em>, not show literal asterisks — without eating **bold** or
+  // mangling snake_case identifiers.
+  it('renders *italic* as <em> without clashing with **bold** or underscores', () => {
+    const html = renderMarkdown('Open *Settings* but keep **bold** and `suggested_action` and plain suggested_action.');
+    expect(html).toContain('<em>Settings</em>');
+    expect(html).toContain('<strong>bold</strong>');
+    expect(html).not.toMatch(/\*[A-Za-z]/); // no leftover literal asterisk emphasis
+    expect(html).toContain('suggested_action'); // underscores are not emphasis
+    expect(html).not.toContain('<em>action'); // _action_ was NOT italicized
+  });
 });
