@@ -87,6 +87,8 @@ export function upsertVersion(
     // Tracks the latest version exactly: if the new latest drops the message
     // (e.g. un-deprecated), a stale message must not survive.
     deprecation_message: useNew ? manifest.deprecation_message : existing?.deprecation_message,
+    npm_package: useNew ? manifest.npm_package : existing?.npm_package,
+    playground_url: useNew ? manifest.playground_url : existing?.playground_url,
     versions,
   };
 }
@@ -131,6 +133,9 @@ export function toIndexEntry(
     },
     readme,
     changelog,
+    // undefined serializes to "key absent" — only present when the manifest set it.
+    npm_package: agent.npm_package,
+    playground_url: agent.playground_url,
   };
 }
 

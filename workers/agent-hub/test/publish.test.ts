@@ -586,6 +586,40 @@ describe("POST /publish — CHANGELOG", () => {
   });
 });
 
+describe("POST /publish — npm_package & playground_url", () => {
+  it("carries npm_package and playground_url through to index.json", async () => {
+    const env = makeEnv();
+    const yaml =
+      sampleManifest({ id: "sidecar" }) +
+      'npm_package: "@amd-gaia/agent-sidecar"\n' +
+      'playground_url: "http://127.0.0.1:8131/v1/x/playground"\n';
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: yaml,
+      artifact: "wheel",
+      filename: "gaia_agent_sidecar-0.1.0-py3-none-any.whl",
+    });
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    const entry = index.agents.find((a) => a.id === "sidecar")!;
+    expect(entry.npm_package).toBe("@amd-gaia/agent-sidecar");
+    expect(entry.playground_url).toBe("http://127.0.0.1:8131/v1/x/playground");
+  });
+
+  it("omits both fields when the manifest doesn't declare them", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "plain" }),
+      artifact: "wheel",
+      filename: "gaia_agent_plain-0.1.0-py3-none-any.whl",
+    });
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    const entry = index.agents.find((a) => a.id === "plain")!;
+    expect(entry.npm_package).toBeUndefined();
+    expect(entry.playground_url).toBeUndefined();
+  });
+});
+
 describe("POST /publish — security tier & deprecation", () => {
   it("records the security_tier in the per-agent manifest and index", async () => {
     const env = makeEnv();

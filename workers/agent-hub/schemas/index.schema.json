@@ -137,6 +137,14 @@
         "changelog": {
           "type": "string",
           "description": "CHANGELOG.md markdown of the latest version; empty string if none was published."
+        },
+        "npm_package": {
+          "type": "string",
+          "description": "npm package name when the agent is distributed via npm (e.g. \"@amd-gaia/agent-email\"); absent otherwise."
+        },
+        "playground_url": {
+          "type": "string",
+          "description": "Localhost playground URL served by the agent's sidecar; absent otherwise."
         }
       }
     }

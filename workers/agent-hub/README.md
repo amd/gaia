@@ -90,9 +90,11 @@ schemas live in [`schemas/`](./schemas):
   `deprecation_message` (only when set), full `requirements` (`min_memory_gb`,
   `min_disk_gb`, `min_context_size`, `platforms`, `npu` as
   `"required"`/`"optional"`, `gpu_vram_gb`), `readme` (latest version's README
-  markdown, `""` if none was published), and `changelog` (latest version's
-  CHANGELOG markdown, `""` if none was published). This shape is the build-time
-  contract for the website Hub pages (`website/src/data/catalog.ts`).
+  markdown, `""` if none was published), `changelog` (latest version's CHANGELOG
+  markdown, `""` if none was published), and the optional `npm_package` /
+  `playground_url` (present only when the manifest declares them — they drive the
+  hub page's npm install method and playground launcher). This shape is the
+  build-time contract for the website Hub pages (`website/src/data/catalog.ts`).
 - [`schemas/manifest.schema.json`](./schemas/manifest.schema.json) —
   `GET /agents/<id>/manifest.json`. Full display metadata plus a `versions` map;
   each version carries `published_at`, `publisher`, `deprecated`, an `artifact`

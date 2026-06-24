@@ -80,6 +80,8 @@ export interface ParsedManifest {
   interfaces: Interfaces;
   deprecated: boolean;
   deprecation_message?: string;
+  npm_package?: string;
+  playground_url?: string;
 }
 
 /** Metadata for one stored artifact (computed server-side). */
@@ -141,6 +143,8 @@ export interface AgentManifest {
   latest_version: string;
   deprecated: boolean;
   deprecation_message?: string;
+  npm_package?: string;
+  playground_url?: string;
   versions: Record<string, VersionEntry>;
 }
 
@@ -187,6 +191,10 @@ export interface IndexEntry {
   readme: string;
   /** CHANGELOG.md markdown of the latest version; empty string if none was published. */
   changelog: string;
+  /** npm package name when the agent is distributed via npm; absent otherwise. */
+  npm_package?: string;
+  /** Localhost playground URL served by the agent's sidecar; absent otherwise. */
+  playground_url?: string;
 }
 
 /** The top-level catalog served at GET /index.json. */
