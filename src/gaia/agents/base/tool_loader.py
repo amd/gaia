@@ -9,14 +9,22 @@ prompt renderers (text and native) surface to the model.
 
 Selection model (binding — see the design sketch in #688)
 --------------------------------------------------------
-Per turn the loader computes ``CORE ∪ SEMANTIC(query)`` then pulls in whole
-bundles for any semantically-matched member, and accumulates the result into a
-session-scoped *loaded set* that only grows ("expand-on-new-match"). Because
-the loaded set is monotonic and the output is sorted, non-expansion turns
-serialize byte-identically, so the model backend's KV prefix cache stays warm.
+Per turn the loader computes ``CORE ∪ SKILL ∪ SEMANTIC(query)`` then pulls in
+whole bundles for any semantically-matched member, and accumulates the result
+into a session-scoped *loaded set* that only grows ("expand-on-new-match").
+Because the loaded set is monotonic and the output is sorted, non-expansion
+turns serialize byte-identically, so the model backend's KV prefix cache stays
+warm.
 
 * **CORE** — a small always-on set, admitted unconditionally and exempt from
   the cap and from eviction.
+* **SKILL** — the exact ``tools_required`` of any learned procedure the host
+  recalled for this goal (procedural memory, #887/#1451), passed in as plain
+  tool names via ``select(skill_tools=...)``. Admitted **after CORE, ahead of
+  semantic** (precedence ``CORE > SKILL > SEMANTIC``), cap-bound (NOT
+  cap-exempt) and with no bundle pull-in — a high-precision booster that fires
+  only for goals solved before. Empty/absent on every off-state, leaving the
+  loaded set byte-identical to a CORE+SEMANTIC build.
 * **SEMANTIC** — cosine similarity (dot product over L2-normalized embeddings)
   of the query against ``"{name}: {description}"`` for every registered tool;
   a tool matches at ``score >= threshold`` (inclusive).
@@ -100,6 +108,7 @@ class _Selection:
     scores: Dict[str, float] = field(default_factory=dict)
     matched: List[str] = field(default_factory=list)
     bundle_pulled: List[str] = field(default_factory=list)
+    skill: List[str] = field(default_factory=list)
     admitted: List[str] = field(default_factory=list)
     evicted: List[str] = field(default_factory=list)
     skipped_at_cap: List[str] = field(default_factory=list)
@@ -196,11 +205,31 @@ class ToolLoader:
                 "the name — selection must account for every registered tool."
             )
 
-    def select(self, query: str, registry: Dict[str, dict]) -> Optional[List[str]]:
+    def select(
+        self,
+        query: str,
+        registry: Dict[str, dict],
+        *,
+        skill_tools: Optional[Sequence[str]] = None,
+    ) -> Optional[List[str]]:
         """Return the sorted loaded set for this turn, or ``None`` if disabled.
 
         ``None`` is the fail-safe signal: the session is disabled (embedder
         down) and the caller must render the full registry / legacy prompt.
+
+        Args:
+            query: The selection query (previous + current user message).
+            registry: The live tool registry (source of truth for execution).
+            skill_tools: The SKILL signal — exact tool names from a learned
+                procedure the host recalled for this goal (#1451), in recall
+                order. Plain strings (the loader never imports memory). Admitted
+                after CORE and **ahead of** the semantic candidates (precedence
+                ``CORE > SKILL > SEMANTIC``), cap-bound and with no bundle
+                pull-in. ``None`` / empty is the graceful-absence path: the
+                loaded set and the ``TOOL_LOADER`` log are byte-identical to a
+                CORE+SEMANTIC build (no ``skill`` key emitted). Names absent from
+                *registry* are dropped (mirrors bundle-absent handling), not
+                raised.
         """
         if self._session_disabled:
             return None
@@ -253,13 +282,43 @@ class ToolLoader:
                     candidate_scores.get(member, 0.0), new_score
                 )
 
-        # Step 5: admission. CORE first (unconditional, cap-exempt). Then new
+        # Step 5: admission. CORE first (unconditional, cap-exempt). Then SKILL
+        # (the recalled recipe, cap-bound, ahead of semantic), then new
         # candidates by (descending score, ascending name).
         admitted_this_turn: set[str] = set()
         for name in sorted(self._core):
             if name in registry and name not in self._loaded:
                 self._admit(name, sel)
                 admitted_this_turn.add(name)
+
+        # SKILL tier: admit the recalled recipe's tools in recall order, deduped,
+        # before any semantic candidate — SKILL > SEMANTIC by admission order.
+        # Cap-bound (mirrors the semantic loop): under cap admit, at cap LRU-evict
+        # a non-CORE/non-this-turn tool or skip. No bundle pull-in (exact recipe).
+        # Self-heals each turn: recall re-runs, so an idle recipe tool LRU-evicts.
+        seen_skill: set[str] = set()
+        for name in skill_tools or ():
+            if (
+                name in self._core
+                or name in self._loaded
+                or name not in registry
+                or name in seen_skill
+            ):
+                continue
+            seen_skill.add(name)
+            sel.skill.append(name)
+            if len(self._loaded) < self._max_tools:
+                self._admit(name, sel)
+                admitted_this_turn.add(name)
+                continue
+            victim = self._pick_eviction_victim(admitted_this_turn)
+            if victim is None:
+                sel.skipped_at_cap.append(name)
+                continue
+            del self._loaded[victim]
+            sel.evicted.append(victim)
+            self._admit(name, sel)
+            admitted_this_turn.add(name)
 
         new_candidates = [
             n
@@ -496,24 +555,24 @@ class ToolLoader:
         self, query: str, sel: _Selection, loaded_sorted: List[str]
     ) -> None:
         """Emit one structured ``TOOL_LOADER`` INFO line (Part-2 tuning data)."""
-        logger.info(
-            "TOOL_LOADER %s",
-            json.dumps(
-                {
-                    "turn": self._turn,
-                    "query_sha": _sha256(query)[:12],
-                    "threshold": self._threshold,
-                    "max_tools": self._max_tools,
-                    "scores": {k: round(v, 4) for k, v in sel.scores.items()},
-                    "matched": sorted(sel.matched),
-                    "bundle_pulled": sorted(sel.bundle_pulled),
-                    "admitted": sorted(sel.admitted),
-                    "evicted": sorted(sel.evicted),
-                    "skipped_at_cap": sorted(sel.skipped_at_cap),
-                    "loaded": loaded_sorted,
-                }
-            ),
-        )
+        payload = {
+            "turn": self._turn,
+            "query_sha": _sha256(query)[:12],
+            "threshold": self._threshold,
+            "max_tools": self._max_tools,
+            "scores": {k: round(v, 4) for k, v in sel.scores.items()},
+            "matched": sorted(sel.matched),
+            "bundle_pulled": sorted(sel.bundle_pulled),
+            "admitted": sorted(sel.admitted),
+            "evicted": sorted(sel.evicted),
+            "skipped_at_cap": sorted(sel.skipped_at_cap),
+            "loaded": loaded_sorted,
+        }
+        # SKILL key only when the signal fired this turn — keeps the off-state
+        # (no recall) log bytes byte-identical to Parts 0-2 (#1451).
+        if sel.skill:
+            payload["skill"] = sorted(sel.skill)
+        logger.info("TOOL_LOADER %s", json.dumps(payload))
 
     def _log_session_summary(self) -> None:
         """Emit one ``TOOL_LOADER_SESSION`` INFO line — the τ-tuning signal.
