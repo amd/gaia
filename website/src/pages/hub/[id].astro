@@ -106,15 +106,28 @@ const terminalLines = [
       </div>
     </section>
 
-    <!-- Body: README + manifest-driven cards -->
+    <!-- Body: tabbed docs (README / Changelog) + manifest-driven cards -->
     <div class="mt-12 grid lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
-      <article class="doc min-w-0 max-w-[70ch]">
-        <h2 class="sr-only">About {agent.name}</h2>
-        <div set:html={readmeHtml} />
-        <div class="mt-10">
-          <TerminalBlock lines={terminalLines} typing />
-        </div>
-      </article>
+      <div class="min-w-0" data-doc-tabs>
+        {changelogHtml && (
+          <div role="tablist" aria-label={`${agent.name} documentation`} class="flex gap-1 border-b border-g-border mb-7">
+            <button type="button" role="tab" data-doc-tab="readme" aria-selected="true" class="doc-tab">README</button>
+            <button type="button" role="tab" data-doc-tab="changelog" aria-selected="false" class="doc-tab">Changelog</button>
+          </div>
+        )}
+        <article role="tabpanel" data-doc-panel="readme" class="doc max-w-[70ch]">
+          <h2 class="sr-only">About {agent.name}</h2>
+          <div set:html={readmeHtml} />
+          <div class="mt-10">
+            <TerminalBlock lines={terminalLines} typing />
+          </div>
+        </article>
+        {changelogHtml && (
+          <article role="tabpanel" data-doc-panel="changelog" class="doc max-w-[70ch]" hidden>
+            <div set:html={changelogHtml} />
+          </article>
+        )}
+      </div>
 
       <aside class="space-y-5">
         <!-- Security tier card -->
@@ -207,13 +220,6 @@ const terminalLines = [
       </aside>
     </div>
 
-    {changelogHtml && (
-      <section class="mt-16 border-t border-g-border pt-12" aria-label="Changelog">
-        <Eyebrow class="mb-4">Changelog</Eyebrow>
-        <div class="doc max-w-[70ch]" set:html={changelogHtml} />
-      </section>
-    )}
-
   </main>
   <Footer />
 
@@ -230,6 +236,17 @@ const terminalLines = [
 </Layout>
 
 <script>
+  import Prism from 'prismjs';
+  import 'prismjs/components/prism-javascript';
+  import 'prismjs/components/prism-typescript';
+  import 'prismjs/components/prism-bash';
+  import 'prismjs/components/prism-json';
+
+  // Syntax-highlight rendered code blocks. The renderer emits
+  // <code class="language-*">; Prism reads textContent (already HTML-escaped) and
+  // restyles, so no new injection surface. Runs once for both doc tab panels.
+  Prism.highlightAll();
+
   // Click any rendered doc image to view it fullscreen; click anywhere or press
   // Escape to close. Sources are already scheme-allowlisted by the markdown
   // renderer, so reusing img.src here carries no new injection surface.
@@ -258,6 +275,20 @@ const terminalLines = [
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !box.classList.contains('hidden')) close();
     });
+  }
+
+  // Doc tabs: switch between the README and Changelog panels.
+  const tabRoot = document.querySelector('[data-doc-tabs]');
+  if (tabRoot) {
+    const tabs = Array.from(tabRoot.querySelectorAll<HTMLButtonElement>('[data-doc-tab]'));
+    const panels = Array.from(tabRoot.querySelectorAll<HTMLElement>('[data-doc-panel]'));
+    for (const tab of tabs) {
+      tab.addEventListener('click', () => {
+        const key = tab.getAttribute('data-doc-tab');
+        for (const t of tabs) t.setAttribute('aria-selected', String(t === tab));
+        for (const p of panels) p.hidden = p.getAttribute('data-doc-panel') !== key;
+      });
+    }
   }
 </script>
 
@@ -305,4 +336,37 @@ const terminalLines = [
      fullscreen on click (see the lightbox script below). */
   .doc p > img:only-child { @apply w-full cursor-zoom-in transition-colors hover:border-g-gold/50; }
   .doc hr { @apply my-8 border-0 border-t border-g-border; }
+
+  /* Doc tabs (README / Changelog) */
+  .doc-tab {
+    @apply -mb-px border-b-2 border-transparent px-4 py-2 text-sm font-medium text-g-muted transition-colors hover:text-g-text;
+  }
+  .doc-tab[aria-selected="true"] {
+    @apply border-g-gold text-g-text;
+  }
+
+  /* Prism syntax-highlight tokens, tuned for the dark code card (.doc pre). */
+  .doc pre .token.comment,
+  .doc pre .token.prolog,
+  .doc pre .token.doctype,
+  .doc pre .token.cdata { color: #6a6a72; font-style: italic; }
+  .doc pre .token.punctuation { color: #9aa0aa; }
+  .doc pre .token.keyword,
+  .doc pre .token.boolean,
+  .doc pre .token.atrule { color: #c792ea; }
+  .doc pre .token.string,
+  .doc pre .token.char,
+  .doc pre .token.inserted,
+  .doc pre .token.attr-value { color: #c3e88d; }
+  .doc pre .token.function,
+  .doc pre .token.class-name { color: #82aaff; }
+  .doc pre .token.number,
+  .doc pre .token.constant,
+  .doc pre .token.symbol { color: #f78c6c; }
+  .doc pre .token.property,
+  .doc pre .token.tag,
+  .doc pre .token.attr-name { color: #ffcb6b; }
+  .doc pre .token.operator,
+  .doc pre .token.entity,
+  .doc pre .token.url { color: #89ddff; }
 </style>

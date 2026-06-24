@@ -132,9 +132,12 @@ export function renderMarkdown(md: string): string {
   while (i < lines.length) {
     const line = lines[i];
 
-    // Fenced code block
+    // Fenced code block. The info string (```ts) becomes a `language-*` class for
+    // the client-side highlighter; sanitized to [a-z0-9-] so it can't break out
+    // of the attribute (the body is still escaped, as everywhere).
     if (line.startsWith('```')) {
       closeList();
+      const lang = line.slice(3).trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
       const body: string[] = [];
       i++;
       while (i < lines.length && !lines[i].startsWith('```')) {
@@ -142,7 +145,8 @@ export function renderMarkdown(md: string): string {
         i++;
       }
       i++; // skip closing fence
-      html.push(`<pre><code>${escapeHtml(body.join('\n'))}</code></pre>`);
+      const cls = lang ? ` class="language-${lang}"` : '';
+      html.push(`<pre><code${cls}>${escapeHtml(body.join('\n'))}</code></pre>`);
       continue;
     }
 
