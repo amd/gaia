@@ -151,6 +151,35 @@ URL literal in `src/gaia/`; dropping `/docs/` from a runtime string is a CI fail
 not a cleanup. Only the site root and install scripts (`/install.ps1`, `/install.sh`)
 are allowlisted without the prefix.
 
+#### IMPORTANT: A functional change must update EVERY doc that describes it — not just one
+
+When a change alters an agent's behavior, public API, request/response contract,
+defaults, lifecycle, or error codes, the same claim is almost always repeated
+across several **bundled** docs. Update them **together** in the same change, or the
+package ships documentation that contradicts itself — and the contradiction goes
+live the moment that version publishes.
+
+For a hub agent package (`hub/agents/{npm,python}/<id>/`), the doc surfaces that
+must stay in sync are:
+
+- **`README.md`** — the canonical, integrator-facing doc (rendered on the hub + npm)
+- **`SPEC.md`** — the full technical reference
+- **`SKILL.md`** — the AI-assistant integration playbook (Claude Code, etc.)
+- **`CHANGELOG.md`** — the version entry describing the change
+- any runtime/contract spec it ships — `spec_html.py`, `specification.html`,
+  `openapi.*.json`
+
+**Before calling the change done, grep the old claim/symbol/status-code across all
+of these.** A behavior described in three docs must be corrected in three docs; the
+CHANGELOG must name it. The same rule applies to the doc *site* (`docs/`) when the
+change touches a documented surface.
+
+Canonical miss (#1841): an agent gained auto-reap of its sidecar on parent exit and
+the PR updated `README.md` to "cleanup is automatic" — but left `SPEC.md` and
+`SKILL.md` still saying "always call `shutdown` or the child is orphaned." Both were
+slated to publish in the same release, so the package would have shipped
+self-contradicting lifecycle docs.
+
 ### Code Reuse and Base Classes
 
 **Always extend existing base classes and reuse core functionality.** The `src/gaia/agents/base/` directory provides foundational components:
