@@ -138,8 +138,16 @@ describe("reap behavior — the installed SIGINT handler kills the sidecar tree"
 
       handler();
 
-      // killTreeSync sends SIGKILL to the negative pid (process group) on POSIX.
-      expect(killSpy).toHaveBeenCalledWith(-12345, "SIGKILL");
+      // killTreeSync forks per platform: taskkill on Windows, a negative-pid
+      // process-group SIGKILL on POSIX. Assert the branch for the test host.
+      if (process.platform === "win32") {
+        const { spawnSync } = vi.mocked(await import("node:child_process"));
+        expect(spawnSync).toHaveBeenCalledWith(
+          "taskkill", ["/PID", "12345", "/T", "/F"], { stdio: "ignore" },
+        );
+      } else {
+        expect(killSpy).toHaveBeenCalledWith(-12345, "SIGKILL");
+      }
     } finally {
       killSpy.mockRestore();
     }
