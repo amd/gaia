@@ -226,10 +226,12 @@ const terminalLines = [
   <!-- Fullscreen image lightbox for rendered README/CHANGELOG diagrams. -->
   <div
     id="doc-lightbox"
-    class="fixed inset-0 z-[100] hidden cursor-zoom-out items-center justify-center bg-black/90 p-6 backdrop-blur-sm"
+    class="fixed inset-0 z-[100] hidden cursor-zoom-out items-center justify-center bg-black/90 p-6 backdrop-blur-sm focus:outline-none"
     aria-hidden="true"
     role="dialog"
-    aria-label="Image preview"
+    aria-modal="true"
+    aria-label="Image preview (press Escape to close)"
+    tabindex="-1"
   >
     <img id="doc-lightbox-img" src="" alt="" class="max-h-full max-w-full rounded-lg shadow-2xl" />
   </div>
@@ -253,27 +255,41 @@ const terminalLines = [
   const box = document.getElementById('doc-lightbox');
   const boxImg = document.getElementById('doc-lightbox-img') as HTMLImageElement | null;
   if (box && boxImg) {
-    const open = (src: string, alt: string) => {
-      boxImg.src = src;
-      boxImg.alt = alt;
+    let lastFocused: HTMLElement | null = null;
+    const isOpen = () => !box.classList.contains('hidden');
+    const open = (trigger: HTMLImageElement) => {
+      lastFocused = trigger; // restore focus here on close
+      boxImg.src = trigger.src;
+      boxImg.alt = trigger.alt;
       box.classList.remove('hidden');
       box.classList.add('flex');
       box.setAttribute('aria-hidden', 'false');
+      box.focus(); // move focus into the dialog
     };
     const close = () => {
       box.classList.add('hidden');
       box.classList.remove('flex');
       box.setAttribute('aria-hidden', 'true');
       boxImg.removeAttribute('src');
+      lastFocused?.focus(); // restore focus to the image that opened it
     };
     // Only standalone diagrams are zoomable (matches the .doc p > img:only-child
-    // CSS) — inline badges stay at natural size and aren't clickable.
+    // CSS) — inline badges stay at natural size and aren't clickable. Make them
+    // keyboard-operable (focusable + Enter/Space) since they're now interactive.
     document.querySelectorAll<HTMLImageElement>('.doc p > img:only-child').forEach((img) => {
-      img.addEventListener('click', () => open(img.src, img.alt));
+      img.tabIndex = 0;
+      img.setAttribute('role', 'button');
+      img.addEventListener('click', () => open(img));
+      img.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(img); }
+      });
     });
     box.addEventListener('click', close);
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !box.classList.contains('hidden')) close();
+      if (!isOpen()) return;
+      if (e.key === 'Escape') close();
+      // The dialog has no other focusable children, so trap Tab on the dialog.
+      else if (e.key === 'Tab') { e.preventDefault(); box.focus(); }
     });
   }
 
