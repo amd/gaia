@@ -12,7 +12,7 @@ downloads and SHA-256-verifies the right native binary for your platform, and
 helpers to spawn, health-check, and shut down the sidecar. It ships **no Python** —
 the agent runs as a frozen, self-contained REST sidecar your app launches and owns.
 
-> Using an AI coding assistant? This package ships a [`SKILL.md`](./SKILL.md) — load
+> Using an AI coding assistant? This package ships a [`SKILL.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SKILL.md) — load
 > it into Claude Code (or similar) for a focused, copy-paste integration playbook.
 
 ## What the agent does
@@ -164,7 +164,7 @@ When you need finer control, the steps are exported individually:
 
 Mailbox and calendar **actions** beyond send (read, archive, label, RSVP, create
 events) are part of the full agent but not yet exposed through this package — see
-[`SPEC.md`](./SPEC.md) for the complete surface.
+[`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.
 
 ## Running in production
 
@@ -244,9 +244,9 @@ Set `DEBUG=agent-email` for verbose spawn/fetch/health logs (on stderr).
 
 ## Reference
 
-- [`SPEC.md`](./SPEC.md) — full API, lifecycle helpers, connectors, module format, and platforms.
-- [`SKILL.md`](./SKILL.md) — load into Claude Code (or similar) for a step-by-step integration playbook.
-- [`CHANGELOG.md`](./CHANGELOG.md) — version history.
+- [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) — full API, lifecycle helpers, connectors, module format, and platforms.
+- [`SKILL.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SKILL.md) — load into Claude Code (or similar) for a step-by-step integration playbook.
+- [`CHANGELOG.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/CHANGELOG.md) — version history.
 
 ## License
 
