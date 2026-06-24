@@ -4,9 +4,9 @@
  * Build-time binary fetcher.
  *
  * Resolves the current platform → looks up the artifact in `binaries.lock.json`
- * → downloads it from a configurable base URL (an R2 bucket; overridable until
- * #1648 wires the real URL) → **verifies its SHA-256 against the lock and fails
- * loudly on any mismatch** → writes it to a resources dir → `chmod +x` on POSIX.
+ * → downloads it from the lock's base URL (overridable) → **verifies its SHA-256
+ * against the lock and fails loudly on any mismatch** → writes it to a resources
+ * dir → `chmod +x` on POSIX.
  *
  * The SHA verify is the security boundary: a tampered or truncated download is
  * rejected before it can ever be spawned. There is NO "use it anyway" path.
@@ -36,8 +36,8 @@ export interface FetchOptions {
   /** Directory the verified binary is written into. Required. */
   outDir: string;
   /**
-   * Override the lock's `baseUrl`. Useful while real R2 wiring is pending
-   * (#1648), or to point at a local mirror. Trailing slash optional.
+   * Override the lock's `baseUrl` (e.g. to point at a local mirror). Trailing
+   * slash optional.
    */
   baseUrl?: string;
   /** Override the platform key (defaults to the current host). */
@@ -121,17 +121,17 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
 
   if (!baseUrl) {
     throw new PlatformError(
-      "no download base URL. binaries.lock.json has no baseUrl and none was " +
-        "passed. Pass { baseUrl } (real R2 URL is pending #1648).",
+      "no download base URL: binaries.lock.json has no baseUrl and none was " +
+        "passed. Pass { baseUrl } to point at where the binaries are hosted.",
     );
   }
   if (isPlaceholderSha(entry.sha256)) {
     throw new PlatformError(
-      `binaries.lock.json has a PLACEHOLDER sha256 for '${platformKey}' ` +
-        `(${entry.sha256}). Real artifact hashes are wired in #1648. ` +
-        "Until then, fetch is intentionally blocked so a bad binary can never be trusted. " +
-        "For local development against the frozen binary, build it with freeze.py and " +
-        "point the lifecycle helpers directly at it (resolveBinaryPath / spawnSidecar).",
+      `binaries.lock.json has a placeholder sha256 for '${platformKey}' ` +
+        `(${entry.sha256}), so no binary is published for it in this build. Fetch ` +
+        "is blocked so a bad binary can never be trusted. To run against a locally " +
+        "built binary, point the lifecycle helpers at it directly (resolveBinaryPath " +
+        "/ spawnSidecar).",
     );
   }
 
@@ -162,7 +162,7 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
     if (!res.ok) {
       throw new Error(
         `download failed: HTTP ${res.status} ${res.statusText} for ${url}. ` +
-          "Check the base URL (real R2 URL pending #1648) and that the artifact is published.",
+          "Check the base URL and that the artifact is published for this platform.",
       );
     }
     buf = Buffer.from(await res.arrayBuffer());

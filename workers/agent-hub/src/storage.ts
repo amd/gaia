@@ -9,6 +9,7 @@
  *   agents/<id>/manifest.json               per-agent aggregate manifest
  *   agents/<id>/<version>/gaia-agent.yaml   raw uploaded manifest, per version
  *   agents/<id>/<version>/README.md         README markdown, per version (optional)
+ *   agents/<id>/<version>/CHANGELOG.md      changelog markdown, per version (optional)
  *   agents/<id>/<version>/<filename>        the artifact (wheel or binary)
  */
 
@@ -37,6 +38,10 @@ export function readmeKey(id: string, version: string): string {
   return `${versionDir(id, version)}README.md`;
 }
 
+export function changelogKey(id: string, version: string): string {
+  return `${versionDir(id, version)}CHANGELOG.md`;
+}
+
 /**
  * Read the README markdown for one published version. Returns "" when no
  * README was published for that version — the catalog's documented default,
@@ -48,6 +53,21 @@ export async function readReadme(
   version: string
 ): Promise<string> {
   const obj = await bucket.get(readmeKey(id, version));
+  if (!obj) return "";
+  return obj.text();
+}
+
+/**
+ * Read the CHANGELOG markdown for one published version. Returns "" when no
+ * changelog was published for that version — the catalog's documented default,
+ * not an error (the `changelog` form part is optional on POST /publish).
+ */
+export async function readChangelog(
+  bucket: R2Bucket,
+  id: string,
+  version: string
+): Promise<string> {
+  const obj = await bucket.get(changelogKey(id, version));
   if (!obj) return "";
   return obj.text();
 }

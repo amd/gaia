@@ -132,20 +132,6 @@ def build_rules() -> list[Rule]:
             re.compile(r'("baseUrl":\s*"https?://[^"]*?/agents/email/)([^"/]+)(/?")'),
             "baseUrl",
         ),
-        # python README image: .../agents/email/<v>/playground.webp
-        Rule(
-            "python README image",
-            EMAIL_ROOT / "README.md",
-            re.compile(r"(/agents/email/)([^\"/\s)]+)(/playground\.webp)"),
-            "playground.webp image URL",
-        ),
-        # npm README image: .../agents/email/<v>/architecture.webp
-        Rule(
-            "npm README image",
-            NPM_ROOT / "README.md",
-            re.compile(r"(/agents/email/)([^\"/\s)]+)(/architecture\.webp)"),
-            "architecture.webp image URL",
-        ),
         # npm assets/architecture.html: <span ... id="ver">v<v></span> badge.
         Rule(
             "npm architecture.html badge",

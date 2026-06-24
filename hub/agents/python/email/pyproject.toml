@@ -8,7 +8,6 @@ version = "0.2.1"
 description = "GAIA email triage agent — read, triage, organize, and reply to Gmail/Outlook locally"
 authors = [{ name = "AMD" }]
 license = { text = "MIT" }
-readme = "README.md"
 requires-python = ">=3.10"
 # Depend on the [api] extra (not bare amd-gaia) so a consuming app's
 # `pip install gaia-agent-email` pulls the REST-server deps (fastapi/uvicorn)

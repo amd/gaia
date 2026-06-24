@@ -5,10 +5,10 @@
  * check the contract version, and shut it down cleanly (killing the whole
  * process tree).
  *
- * Tree-kill matters: the spike (packaging/README.md, gotcha 6) showed a PyInstaller
- * one-file build spawns a child uvicorn process that `child.kill()` on the
- * parent does NOT reap — leaving the port held. We always kill the tree
- * (`taskkill /F /T` on Windows; a detached process-group kill on POSIX).
+ * Tree-kill matters: a PyInstaller one-file build spawns a child uvicorn process
+ * that `child.kill()` on the parent does NOT reap — leaving the port held. We
+ * always kill the tree (`taskkill /F /T` on Windows; a detached process-group
+ * kill on POSIX).
  */
 
 import { type ChildProcess, spawn } from "node:child_process";

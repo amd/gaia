@@ -6,9 +6,9 @@
  *
  * Flow: authenticate -> parse multipart -> validate manifest -> enforce
  * publisher scope -> enforce version immutability -> generate server-side
- * SHA-256 -> store artifact + raw manifest + optional README + per-agent
- * manifest -> rebuild index.json. Every guard fails loudly with a structured
- * error.
+ * SHA-256 -> store artifact + raw manifest + optional README + optional
+ * CHANGELOG + per-agent manifest -> rebuild index.json. Every guard fails
+ * loudly with a structured error.
  */
 
 import { assertAuthorAllowed, authenticate } from "./auth";
@@ -17,6 +17,7 @@ import { HttpError, json } from "./http";
 import { parseManifest } from "./manifest";
 import {
   artifactKey,
+  changelogKey,
   rawManifestKey,
   readAgentManifest,
   readmeKey,
@@ -48,6 +49,33 @@ function maxBytes(env: Env): number {
   return n;
 }
 
+/**
+ * Read an optional markdown form part (readme/changelog). Returns null when the
+ * part is absent (the documented "" catalog default downstream), the LF-
+ * normalized text when present, and fails loudly on a present-but-empty part —
+ * an empty file is a mistake, so reject it rather than store a blank doc.
+ */
+async function optionalMarkdownPart(
+  form: FormData,
+  field: string,
+  label: string
+): Promise<string | null> {
+  const part = form.get(field);
+  if (part == null) return null;
+  // Multipart string fields are CRLF-normalized by the form encoding —
+  // canonicalize to LF so stored markdown is byte-stable either way.
+  const text = (typeof part === "string" ? part : await (part as Blob).text()).replace(/\r\n/g, "\n");
+  if (text.trim() === "") {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      `The '${field}' part is empty. Send the ${label} markdown text, or omit the ` +
+        `part entirely if the agent has none.`
+    );
+  }
+  return text;
+}
+
 export async function handlePublish(
   request: Request,
   env: Env,
@@ -62,7 +90,7 @@ export async function handlePublish(
       "unsupported_media_type",
       "POST /publish expects multipart/form-data with 'manifest' (gaia-agent.yaml " +
         "text), 'artifact' (the wheel or binary file), and optionally 'readme' " +
-        "(README.md markdown text) parts."
+        "(README.md markdown text) and 'changelog' (CHANGELOG.md markdown text) parts."
     );
   }
 
@@ -90,23 +118,10 @@ export async function handlePublish(
   }
   const artifactFile = artifactPart as File;
 
-  // Optional README markdown for this version (rendered on the Hub pages).
-  const readmePart = form.get("readme");
-  let readmeText: string | null = null;
-  if (readmePart != null) {
-    readmeText = typeof readmePart === "string" ? readmePart : await (readmePart as Blob).text();
-    // Multipart string fields are CRLF-normalized by the form encoding —
-    // canonicalize to LF so stored READMEs are byte-stable either way.
-    readmeText = readmeText.replace(/\r\n/g, "\n");
-    if (readmeText.trim() === "") {
-      throw new HttpError(
-        400,
-        "invalid_request",
-        "The 'readme' part is empty. Send the README.md markdown text, or omit the " +
-          "part entirely if the agent has no README."
-      );
-    }
-  }
+  // Optional README + CHANGELOG markdown for this version (rendered on the Hub
+  // pages). Both are optional; an empty part is rejected (omit it instead).
+  const readmeText = await optionalMarkdownPart(form, "readme", "README.md");
+  const changelogText = await optionalMarkdownPart(form, "changelog", "CHANGELOG.md");
 
   const manifest = parseManifest(manifestText);
   assertAuthorAllowed(publisher, manifest.author);
@@ -179,15 +194,20 @@ export async function handlePublish(
     httpMetadata: { contentType: artifact.content_type },
     sha256,
   });
-  // The raw gaia-agent.yaml and README are per-version records: write them only
-  // on the first publish of a version so a later platform binary joining the
-  // same version cannot rewrite them.
+  // The raw gaia-agent.yaml, README, and CHANGELOG are per-version records:
+  // write them only on the first publish of a version so a later platform binary
+  // joining the same version cannot rewrite them.
   if (!versionExists) {
     await env.BUCKET.put(rawManifestKey(manifest.id, manifest.version), manifestText, {
       httpMetadata: { contentType: "application/x-yaml; charset=utf-8" },
     });
     if (readmeText != null) {
       await env.BUCKET.put(readmeKey(manifest.id, manifest.version), readmeText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (changelogText != null) {
+      await env.BUCKET.put(changelogKey(manifest.id, manifest.version), changelogText, {
         httpMetadata: { contentType: "text/markdown; charset=utf-8" },
       });
     }
