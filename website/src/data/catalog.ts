@@ -58,10 +58,17 @@ interface CatalogFile {
 
 async function fetchLiveCatalog(baseUrl: string): Promise<CatalogFile> {
   const url = `${baseUrl.replace(/\/+$/, '')}/index.json`;
+  // Cache-bust the edge. A release publishes the new index.json moments before the
+  // website redeploy runs, but the Cloudflare edge in front of hub.amd-gaia.ai can
+  // still serve a stale copy (the deploy races the cache invalidation) — which would
+  // build the site from the previous version's catalog. A unique per-build query
+  // param + `no-store` forces a fresh origin fetch, so every build reflects the
+  // just-published catalog. Build-time only, so there's no runtime cost.
+  const fetchUrl = `${url}?t=${Date.now()}`;
   console.log(`[catalog] HUB_CATALOG_URL is set — fetching live catalog from ${url}`);
   let res: Response;
   try {
-    res = await fetch(url);
+    res = await fetch(fetchUrl, { cache: 'no-store' });
   } catch (e) {
     throw new Error(
       `[catalog] Failed to fetch the live catalog from ${url}: ${(e as Error).message}. ` +

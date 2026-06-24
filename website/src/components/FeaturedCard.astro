@@ -26,6 +26,7 @@ const { agent, eyebrow = 'Featured' } = Astro.props;
         <AgentIcon name={agent.icon} class="w-5 h-5" />
       </span>
       <span class="text-xl font-bold tracking-tight text-g-text">{agent.name}</span>
+      <span class="font-mono text-[12px] text-g-muted">v{agent.latest_version}</span>
     </div>
     <p class="text-[14px] text-g-muted max-w-md mb-6">{agent.description}</p>
     <!-- Static chip, not a copy button — the whole card is a link; nested buttons are invalid HTML. -->
