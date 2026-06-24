@@ -5,10 +5,19 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
-## [Unreleased]
+## 0.2.1
+
+Adds the one-command `playground` launcher and automatic sidecar cleanup, and
+makes this README the single canonical agent README (hub + npm). No wire-contract
+change (`SCHEMA_VERSION` stays `2.0`).
 
 ### Added
 
+- **`npx @amd-gaia/agent-email playground` — one-command launcher.** Fetches the
+  binary, starts the sidecar, and opens the browser to `/v1/email/playground`,
+  running until Ctrl+C. `--port <n>` to bind elsewhere, `--no-open` to skip the
+  browser, `--out <dir>` to choose the binary cache. Makes "try the agent" a single
+  command instead of fetch → spawn → find-the-URL.
 - **Automatic sidecar cleanup (`autoCleanup`, default on).** `startSidecar` /
   `spawnSidecar` now reap the frozen sidecar's detached process tree when the host
   process exits, crashes (`uncaughtException` / `unhandledRejection`), or is
@@ -17,12 +26,6 @@ bump is always at least a package MINOR bump with a migration note.
   `autoCleanup: false` to manage the lifecycle yourself; `shutdown()` stays the
   graceful, awaited path. A hard `SIGKILL` of the host process is the one case no
   in-process handler can catch.
-
-## 0.2.1
-
-Documentation/packaging release — no client API or wire-contract change
-(`SCHEMA_VERSION` stays `2.0`). Republishes so the live hub catalog picks up the
-current README.
 
 ### Changed
 

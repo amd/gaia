@@ -122,18 +122,26 @@ control, the steps are exported individually:
 - `verifySha256(buf, expected, label)` → throws `IntegrityError` on mismatch.
 - `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The default auto-reaper does the same on process exit/crash/signal, so only a hard `SIGKILL` of the host can still orphan the child.
 
-## The `fetch` CLI
+## CLI
+
+```bash
+npx @amd-gaia/agent-email playground          # fetch + run the sidecar, open the playground
+npx @amd-gaia/agent-email fetch --out resources
+npx @amd-gaia/agent-email version             # show manifest + current platform
+npx @amd-gaia/agent-email help
+```
+
+`playground` is the zero-to-running shortcut: it `fetchBinary`s into a temp cache
+(`--out` to override), `startSidecar`s on `--port` (default 8131), opens the default
+browser to `/v1/email/playground` (`--no-open` to skip), and runs until Ctrl+C.
+The command owns the sidecar lifecycle itself (`autoCleanup: false`) and shuts it
+down on `SIGINT`/`SIGTERM`/`SIGHUP` or on any startup error. Lemonade still has to
+be running for live triage — the page itself reports if it isn't.
 
 `fetch` is the supported, build-time path. It resolves
 `${process.platform}-${process.arch}`, downloads that platform's artifact from the
 base URL in `binaries.lock.json`, **verifies its SHA-256 against the lock and fails
 loudly on any mismatch**, writes it to `--out`, and `chmod +x`'s it on POSIX.
-
-```bash
-npx @amd-gaia/agent-email fetch --out resources
-npx @amd-gaia/agent-email version     # show manifest + current platform
-npx @amd-gaia/agent-email help
-```
 
 | Flag | Meaning |
 |------|---------|

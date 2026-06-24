@@ -1,6 +1,6 @@
 # @amd-gaia/agent-email
 
-[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.0** · last updated **2026-06-23**
+[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.0** · last updated **2026-06-24**
 
 Embed the **GAIA email agent** in your JS/TS app. It triages, organizes, replies
 to, and schedules from Gmail and Outlook — with every email body analyzed
@@ -223,13 +223,20 @@ timeout surfaces as `HttpError` with `status === 0` (not an HTTP code).
 
 ## Playground
 
-Once the sidecar is running, open
+One command fetches the binary, starts the sidecar, and opens the playground:
+
+```bash
+npx @amd-gaia/agent-email playground
+```
+
+It serves a zero-setup, **localhost-only** page at
 [http://127.0.0.1:8131/v1/email/playground](http://127.0.0.1:8131/v1/email/playground)
-— a zero-setup, **localhost-only** page with a stack-health check, live triage and
-draft, and a Connectors panel to connect Gmail/Outlook and try a live send. It's
-served same-origin under a strict CSP, so the page can only ever reach your local
-sidecar: triage and draft stay on-device, while a `send` transmits to your mail
-provider by definition.
+— a stack-health check, live triage and draft, and a Connectors panel to connect
+Gmail/Outlook and try a live send. It's served same-origin under a strict CSP, so
+the page can only ever reach your local sidecar: triage and draft stay on-device,
+while a `send` transmits to your mail provider by definition. Press Ctrl+C to stop
+(`--port <n>` to bind elsewhere, `--no-open` to skip auto-opening the browser,
+`--out <dir>` to choose where the binary is cached).
 
 ## Requirements
 

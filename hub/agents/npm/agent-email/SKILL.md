@@ -148,5 +148,10 @@ A green path looks like: `fetchBinary` succeeds → `startSidecar` resolves →
 `triage` 502s, start Lemonade and pull the model, then retry — the rest of your
 integration is fine.
 
+To eyeball the agent by hand without writing any code, run
+`npx @amd-gaia/agent-email playground` — it fetches the binary, starts the sidecar,
+and opens an interactive page where you can fire triage/draft and see a stack-health
+check.
+
 For the full endpoint list, lifecycle internals, and connector details, see
 `SPEC.md` next to this file.
