@@ -159,7 +159,13 @@ const terminalLines = [
               <dt class="text-g-muted">Author</dt><dd>{agent.author}</dd>
             </div>
             <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">Language</dt><dd>{languageLabel(agent.language)}</dd>
+              <dt class="text-g-muted">Language</dt>
+              <dd class="text-right">
+                {languageLabel(agent.language)}
+                {/* npm/binary agents ship as a self-contained compiled binary — no
+                    Python runtime on the host. Surface that here; "Python" alone is misleading. */}
+                {isNpm && <span class="block text-[11px] text-g-muted">Ships as native binary — no Python needed</span>}
+              </dd>
             </div>
             <div class="flex justify-between py-2 border-b border-g-border">
               <dt class="text-g-muted">Category</dt><dd>{categoryLabel(agent.category)}</dd>
