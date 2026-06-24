@@ -188,27 +188,38 @@ async function cmdPlayground(args: ParsedArgs): Promise<number> {
   // actually runs — the default auto-reaper would SIGKILL the tree first.
   const sidecar = await startSidecar({ binaryPath, port, autoCleanup: false });
 
-  const url = `http://127.0.0.1:${port}/v1/email/playground`;
-  process.stdout.write(`\n  ▸ Playground: ${url}\n`);
-  process.stdout.write(`    (Lemonade must be running for live triage — the page tells you if it isn't.)\n`);
-  process.stdout.write(`    Press Ctrl+C to stop the sidecar.\n\n`);
-  if (!args.flags["no-open"]) openBrowser(url);
+  // autoCleanup is off, so nothing reaps the sidecar on a throw until the signal
+  // handlers below are installed. A throw in that window (e.g. EPIPE from a stdout
+  // write into a closed pipe — `npx … playground | head`) would orphan it, so guard
+  // the whole post-start region and shut down on the way out.
+  try {
+    const url = `http://127.0.0.1:${port}/v1/email/playground`;
+    process.stdout.write(`\n  ▸ Playground: ${url}\n`);
+    process.stdout.write(`    (Lemonade must be running for live triage — the page tells you if it isn't.)\n`);
+    process.stdout.write(`    Press Ctrl+C to stop the sidecar.\n\n`);
+    if (!args.flags["no-open"]) openBrowser(url);
 
-  // Stay alive until interrupted, then shut the sidecar down cleanly. We own all
-  // the signals the auto-reaper would have handled (it's off, above).
-  await new Promise<void>((resolve) => {
-    let stopping = false;
-    const stop = (): void => {
-      if (stopping) return; // a second signal shouldn't re-enter shutdown
-      stopping = true;
-      process.stdout.write("\n[agent-email] stopping the sidecar ...\n");
-      void shutdown(sidecar).finally(resolve);
-    };
-    for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-      process.once(sig, stop);
-    }
-  });
-  return 0;
+    // Stay alive until interrupted, then shut the sidecar down cleanly. We own all
+    // the signals the auto-reaper would have handled (it's off, above).
+    await new Promise<void>((resolve) => {
+      let stopping = false;
+      const stop = (): void => {
+        if (stopping) return; // a second signal shouldn't re-enter shutdown
+        stopping = true;
+        process.stdout.write("\n[agent-email] stopping the sidecar ...\n");
+        void shutdown(sidecar)
+          .catch(() => undefined)
+          .finally(resolve);
+      };
+      for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+        process.once(sig, stop);
+      }
+    });
+    return 0;
+  } catch (e) {
+    await shutdown(sidecar).catch(() => undefined);
+    throw e;
+  }
 }
 
 function cmdVersion(): number {
