@@ -9,6 +9,11 @@ bump is always at least a package MINOR bump with a migration note.
 
 ### Added
 
+- **`npx @amd-gaia/agent-email playground` — one-command launcher.** Fetches the
+  binary, starts the sidecar, and opens the browser to `/v1/email/playground`,
+  running until Ctrl+C. `--port <n>` to bind elsewhere, `--no-open` to skip the
+  browser, `--out <dir>` to choose the binary cache. Makes "try the agent" a single
+  command instead of fetch → spawn → find-the-URL.
 - **Automatic sidecar cleanup (`autoCleanup`, default on).** `startSidecar` /
   `spawnSidecar` now reap the frozen sidecar's detached process tree when the host
   process exits, crashes (`uncaughtException` / `unhandledRejection`), or is

@@ -13,7 +13,12 @@
  * marker but build-time fetch remains the recommended flow.
  */
 
+import { spawn } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
+
 import { fetchBinary } from "./fetch.js";
+import { shutdown, startSidecar } from "./lifecycle.js";
 import { currentPlatformKey, loadLock } from "./platform.js";
 import { AgentEmailError } from "./errors.js";
 
@@ -25,7 +30,7 @@ interface ParsedArgs {
 // Flags that take a value (`--out <dir>`); everything else is a boolean switch.
 // Being explicit avoids the footgun where `--base-url --force` silently swallows
 // the next flag as a value (or drops the value).
-const VALUE_FLAGS = new Set(["out", "base-url", "platform"]);
+const VALUE_FLAGS = new Set(["out", "base-url", "platform", "port"]);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const out: ParsedArgs = { _: [], flags: {} };
@@ -54,9 +59,16 @@ function parseArgs(argv: string[]): ParsedArgs {
 const HELP = `@amd-gaia/agent-email — GAIA email agent binary fetcher + client
 
 Usage:
+  agent-email playground [options]          Fetch + run the sidecar and open the playground
   agent-email fetch --out <dir> [options]   Download + SHA-256 verify the binary
   agent-email version                       Print package + lock manifest info
   agent-email help                          Show this help
+
+playground options:
+  --port <n>          Bind port (default 8131)
+  --out <dir>         Where to cache the binary (default: a temp dir)
+  --base-url <url>    Override the download base URL from binaries.lock.json
+  --no-open           Don't auto-open the browser; just print the URL
 
 fetch options:
   --out <dir>         Resources dir to write the verified binary into (required)
@@ -109,6 +121,62 @@ async function cmdFetch(args: ParsedArgs): Promise<number> {
   return 0;
 }
 
+/** Best-effort cross-platform "open this URL in the default browser". */
+function openBrowser(url: string): void {
+  try {
+    const [cmd, args] =
+      process.platform === "darwin"
+        ? ["open", [url]]
+        : process.platform === "win32"
+          ? ["cmd", ["/c", "start", "", url]]
+          : ["xdg-open", [url]];
+    spawn(cmd, args as string[], { stdio: "ignore", detached: true }).unref();
+  } catch {
+    /* non-fatal: the URL is printed regardless */
+  }
+}
+
+async function cmdPlayground(args: ParsedArgs): Promise<number> {
+  const port =
+    typeof args.flags.port === "string" ? Number(args.flags.port) : 8131;
+  if (!Number.isInteger(port) || port <= 0) {
+    process.stderr.write(`error: --port must be a positive integer (got ${String(args.flags.port)})\n`);
+    return 2;
+  }
+  // Cache the binary in a temp dir by default so a throwaway `npx ... playground`
+  // run doesn't litter the cwd; fetchBinary is a cache-hit on the second run.
+  const outDir =
+    typeof args.flags.out === "string"
+      ? args.flags.out
+      : path.join(os.tmpdir(), "amd-gaia-agent-email");
+
+  process.stdout.write(`[agent-email] fetching the sidecar binary -> ${outDir}\n`);
+  const { binaryPath } = await fetchBinary({
+    outDir,
+    baseUrl: typeof args.flags["base-url"] === "string" ? args.flags["base-url"] : undefined,
+  });
+
+  process.stdout.write(`[agent-email] starting the sidecar on 127.0.0.1:${port} ...\n`);
+  const sidecar = await startSidecar({ binaryPath, port });
+
+  const url = `http://127.0.0.1:${port}/v1/email/playground`;
+  process.stdout.write(`\n  ▸ Playground: ${url}\n`);
+  process.stdout.write(`    (Lemonade must be running for live triage — the page tells you if it isn't.)\n`);
+  process.stdout.write(`    Press Ctrl+C to stop the sidecar.\n\n`);
+  if (!args.flags["no-open"]) openBrowser(url);
+
+  // Stay alive until interrupted, then shut the sidecar down cleanly.
+  await new Promise<void>((resolve) => {
+    const stop = (): void => {
+      process.stdout.write("\n[agent-email] stopping the sidecar ...\n");
+      void shutdown(sidecar).finally(resolve);
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+  return 0;
+}
+
 function cmdVersion(): number {
   const lock = loadLock();
   process.stdout.write(
@@ -131,6 +199,8 @@ async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0] ?? "help";
   switch (cmd) {
+    case "playground":
+      return cmdPlayground(args);
     case "fetch":
       return cmdFetch(args);
     case "version":

@@ -223,13 +223,19 @@ timeout surfaces as `HttpError` with `status === 0` (not an HTTP code).
 
 ## Playground
 
-Once the sidecar is running, open
+One command fetches the binary, starts the sidecar, and opens the playground:
+
+```bash
+npx @amd-gaia/agent-email playground
+```
+
+It serves a zero-setup, **localhost-only** page at
 [http://127.0.0.1:8131/v1/email/playground](http://127.0.0.1:8131/v1/email/playground)
-— a zero-setup, **localhost-only** page with a stack-health check, live triage and
-draft, and a Connectors panel to connect Gmail/Outlook and try a live send. It's
-served same-origin under a strict CSP, so the page can only ever reach your local
-sidecar: triage and draft stay on-device, while a `send` transmits to your mail
-provider by definition.
+— a stack-health check, live triage and draft, and a Connectors panel to connect
+Gmail/Outlook and try a live send. It's served same-origin under a strict CSP, so
+the page can only ever reach your local sidecar: triage and draft stay on-device,
+while a `send` transmits to your mail provider by definition. Press Ctrl+C to stop
+(`--port <n>` to bind elsewhere, `--no-open` to skip auto-opening the browser).
 
 ## Requirements
 
