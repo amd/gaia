@@ -184,15 +184,24 @@ This is a long-lived local resource, not a per-request one. Wire it like this:
   `DEBUG=agent-email` to see the bind error.
 - **Supervise it yourself.** The package does not restart a crashed sidecar. If you
   need resilience, watch `sidecar.child` for `exit` and re-`startSidecar`.
-- **Shut it down on exit.** Wire `shutdown` into your termination path so the
-  frozen binary's child process is always reaped:
+- **Shut it down on exit — including on a crash.** Wire `shutdown` into your
+  termination path so the frozen binary's detached child is always reaped. Cover
+  a hard crash (`uncaughtException` / `unhandledRejection`), not just the
+  termination signals — an uncaught throw otherwise leaves the sidecar running
+  and holding its port:
 
 ```ts
 const sidecar = await startSidecar({ binaryPath, port: 8131 });
-for (const sig of ["SIGTERM", "SIGINT"]) {
-  process.once(sig, () => shutdown(sidecar).finally(() => process.exit(0)));
-}
+
+const reap = (code = 0) => shutdown(sidecar).finally(() => process.exit(code));
+for (const sig of ["SIGTERM", "SIGINT"]) process.once(sig, () => reap(0));
+process.once("uncaughtException", (err) => { console.error(err); reap(1); });
+process.once("unhandledRejection", (err) => { console.error(err); reap(1); });
 ```
+
+  Funnel any other shutdown through `reap()` as well: a direct `process.exit()`
+  elsewhere bypasses these handlers (and a synchronous `process.on("exit")` hook
+  can't `await shutdown`), so route exits through one path.
 
 ### Errors & retries
 
