@@ -503,6 +503,11 @@ jobs:
           npm run build
 
       - name: Assemble + publish the whole-package zip (all platforms + client + docs)
+        # Best-effort: the whole-package zip bundles all platform binaries (~177 MB),
+        # which exceeds Cloudflare's 100 MB request-body limit on /publish (502). Until
+        # the zip is uploaded straight to R2 (bypassing the Worker), don't let it block
+        # the npm publish + website redeploy. The package-download card is a nice-to-have.
+        continue-on-error: true
         shell: bash
         env:
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
@@ -564,6 +569,9 @@ jobs:
           done
 
       - name: Verify the published package zip is fetchable at the edge
+        # Best-effort to match the publish step above — if the oversized zip wasn't
+        # uploaded, don't fail the release on a missing edge object.
+        continue-on-error: true
         shell: bash
         env:
           GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
