@@ -248,12 +248,13 @@ const terminalLines = [
           </dl>
         </section>
 
-        {agent.package && (
-          <!-- Package contents: the client, docs, and every platform binary -->
+        {agent.package && packageFiles.length > 0 && (
+          <!-- Package contents: the client, docs, and every platform binary. Gated on
+               files.length too so the "Browse the contents →" jump always has a Files tab. -->
           <section class="rounded-xl border border-g-border bg-g-surface p-5">
             <Eyebrow class="mb-2">Package</Eyebrow>
             <p class="text-[12px] leading-relaxed text-g-muted">
-              The client, docs, and every platform binary — {agent.package.files.length} files in all.
+              The client, docs, and every platform binary — {packageFiles.length} files in all.
             </p>
             <button
               type="button"
