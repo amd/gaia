@@ -521,6 +521,25 @@ which flattens the `tools_required` of the procedures `recall_skill` matched thi
 turn — reusing the per-turn recall cache, so the tier adds no extra embed/FAISS
 cost and stays byte-identical to Parts 1–2 whenever no procedure matches.
 
+## How #800 (scratchpad/memory collision) is resolved
+
+#800 tracked a feared collision between `scratchpad.query_data` and
+`memory.recall`. The loader resolves it by **design asymmetry**, and the literal
+pair never actually arises: scratchpad tools are registered only for the
+`data`/`full` profiles (`chat/agent.py`), never `doc` — the only profile the
+loader is wired to. The doc-profile analog the loader does arbitrate is
+`analyze_data_file` (the structured-data tool) vs `recall`:
+
+- `recall` ∈ **CORE** (`tool_bundles.py` `DOC_CORE_TOOLS`) — always loaded, cap-
+  and eviction-exempt: persistent recall is always relevant.
+- `analyze_data_file` ∈ the conditional **`data` bundle** — loaded only when the
+  turn's query semantically clears τ.
+
+So the two co-occur only when the turn justifies the data tool; recall is never
+the gated side. Pinned by `tests/unit/test_tool_loader_disambiguation.py`
+(deterministic, real CORE/bundle config) and the live
+`eval/scenarios/tool_selection/data_vs_recall_disambiguation.yaml` scenario.
+
 ## Dependencies
 
 - **#606 (memory v2)** — *landed.* Provides `MemoryMixin._embed_text`
