@@ -1,6 +1,6 @@
 ---
 name: "gaia-build-agent"
-description: "Build a new GAIA agent with the SDK end-to-end: scaffold the package, write the Agent subclass, register @tool functions, compose reusable tool mixins, set the model + system prompt, and test it locally — then hand off to publishing. Use when creating a NEW agent (a Python class inheriting from the base Agent) for the GAIA repo or a user-authored package, not for tuning an existing agent's prompt (prompt-engineer), adding one tool to an existing class (python-developer), or shipping/releasing an already-built agent (that's the gaia-build-agent → publish hand-off to the agent-hub-release skill + docs/guides/hub-publishing.mdx). Pairs with the agent-hub-release skill: this one BUILDS, that one PUBLISHES."
+description: "Build a new GAIA agent with the SDK end-to-end: scaffold the package, write the Agent subclass, register @tool functions, compose reusable tool mixins, set the model + system prompt, and test it locally — then hand off to publishing. Use when creating a NEW agent (a Python class inheriting from the base Agent) for the GAIA repo or a user-authored package, not for tuning an existing agent's prompt (prompt-engineer), adding one tool to an existing class (python-developer), or shipping/releasing an already-built agent (use the agent-hub-release skill + docs/guides/hub-publishing.mdx). Pairs with the agent-hub-release skill: this one BUILDS, that one PUBLISHES."
 ---
 
 # Building a GAIA Agent
@@ -26,9 +26,10 @@ the publish skill).
 
 ## Steps
 
-1. **Scaffold.** `gaia agent init my-agent` generates a starter package (the
-   BuilderAgent). For a hub package, `gaia agent init` under
-   `hub/agents/python/<id>/` — mirror an existing one (e.g. `analyst`, `browser`).
+1. **Scaffold.** `gaia agent init my-agent` generates a starter package. For a
+   publishable hub package, scaffold into the hub tree —
+   `gaia agent init <id> -o hub/agents/python/` — and mirror an existing one
+   (e.g. `analyst`, `browser`).
 
 2. **Write the `Agent` subclass.** Inherit from `Agent` (or a closer base like the
    chat/docqa agents). Set the model with `model_id` — omit it only if the
@@ -50,8 +51,12 @@ the publish skill).
    to use which tool, and the output contract. This is an LLM-affecting surface, so
    it's covered by the eval rule below.
 
-6. **Register the agent.** Add it to [`src/gaia/agents/registry.py`](../../../src/gaia/agents/registry.py)
-   (and a `gaia <cmd>` subparser in `src/gaia/cli.py` if it's a CLI command).
+6. **Make it discoverable.** An **in-core** agent is added to
+   [`src/gaia/agents/registry.py`](../../../src/gaia/agents/registry.py) (and a
+   `gaia <cmd>` subparser in `src/gaia/cli.py` if it's a CLI command). A **hub
+   package** is **auto-discovered from its `gaia-agent.yaml` manifest** — no
+   `registry.py` edit; just make sure the manifest's `python.entry_module` /
+   `entry_class` point at your class.
 
 7. **Test it — actually run it.** Unit tests with a mocked LLM for tool logic
    (`tests/`), then run the **real CLI** a user would (`gaia <cmd> ...` or
