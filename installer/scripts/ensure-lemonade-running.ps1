@@ -73,7 +73,7 @@ foreach ($cfg in @(
 # (Re)register a Scheduled Task that runs the server as SYSTEM, auto-starting at
 # boot and restarting on failure. Force overwrites any prior definition.
 try {
-    $action    = New-ScheduledTaskAction -Execute $ServerExe -Argument "--no-tray --port $Port"
+    $action    = New-ScheduledTaskAction -Execute $ServerExe -Argument "--port $Port"
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
