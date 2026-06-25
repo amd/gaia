@@ -127,6 +127,8 @@ def publish_one(
     token: str,
     readme_bytes: bytes | None = None,
     changelog_bytes: bytes | None = None,
+    spec_bytes: bytes | None = None,
+    skill_bytes: bytes | None = None,
     package_files_bytes: bytes | None = None,
 ) -> dict:
     if not artifact_path.exists():
@@ -164,6 +166,12 @@ def publish_one(
         # `changelog`, rendered as a Changelog section on the hub agent page.
         if changelog_bytes is not None:
             files["changelog"] = ("CHANGELOG.md", changelog_bytes, "text/markdown")
+        # SPEC.md + SKILL.md ride along the same way — they become the catalog
+        # entry's `spec` / `skill`, rendered as their own doc tabs on the hub page.
+        if spec_bytes is not None:
+            files["spec"] = ("SPEC.md", spec_bytes, "text/markdown")
+        if skill_bytes is not None:
+            files["skill"] = ("SKILL.md", skill_bytes, "text/markdown")
         # The whole-package file listing rides with the zip artifact — it becomes
         # the catalog entry's `package.files` (the hub's file-list display).
         if package_files_bytes is not None:
@@ -252,6 +260,18 @@ def main(argv=None) -> int:
         "(POSTed as the multipart 'changelog' part the Worker accepts).",
     )
     parser.add_argument(
+        "--spec",
+        type=Path,
+        help="Path to SPEC.md to publish as the agent's catalog spec "
+        "(POSTed as the multipart 'spec' part the Worker accepts).",
+    )
+    parser.add_argument(
+        "--skill",
+        type=Path,
+        help="Path to SKILL.md to publish as the agent's catalog skill "
+        "(POSTed as the multipart 'skill' part the Worker accepts).",
+    )
+    parser.add_argument(
         "--package-files",
         type=Path,
         help='Path to a package-files.json ({"files":[{name,size_bytes}]}) to '
@@ -295,6 +315,32 @@ def main(argv=None) -> int:
             flush=True,
         )
 
+    spec_bytes = None
+    if args.spec is not None:
+        if not args.spec.exists():
+            raise SystemExit(
+                f"error: --spec path not found: {args.spec}. Pass the agent's "
+                "SPEC.md, or omit --spec to publish without one."
+            )
+        spec_bytes = args.spec.read_bytes()
+        print(
+            f"[publish] attaching spec: {args.spec} ({len(spec_bytes)} bytes)",
+            flush=True,
+        )
+
+    skill_bytes = None
+    if args.skill is not None:
+        if not args.skill.exists():
+            raise SystemExit(
+                f"error: --skill path not found: {args.skill}. Pass the agent's "
+                "SKILL.md, or omit --skill to publish without one."
+            )
+        skill_bytes = args.skill.read_bytes()
+        print(
+            f"[publish] attaching skill: {args.skill} ({len(skill_bytes)} bytes)",
+            flush=True,
+        )
+
     package_files_bytes = None
     if args.package_files is not None:
         if not args.package_files.exists():
@@ -328,6 +374,8 @@ def main(argv=None) -> int:
                 token,
                 readme_bytes=readme_bytes,
                 changelog_bytes=changelog_bytes,
+                spec_bytes=spec_bytes,
+                skill_bytes=skill_bytes,
                 package_files_bytes=package_files_bytes,
             )
         )

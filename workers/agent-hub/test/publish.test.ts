@@ -586,6 +586,69 @@ describe("POST /publish — CHANGELOG", () => {
   });
 });
 
+describe("POST /publish — SPEC & SKILL doc tabs", () => {
+  it("stores spec + skill, serves them, and includes them in index.json", async () => {
+    const env = makeEnv();
+    const spec = "# Spec\n\nThe wire contract is 2.0.\n";
+    const skill = "# Skill\n\nSpawn the sidecar, then call triage.\n";
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+      spec,
+      skill,
+    });
+    expect(res.status).toBe(201);
+    expect(env.bucket.keys()).toContain("agents/chat/0.1.0/SPEC.md");
+    expect(env.bucket.keys()).toContain("agents/chat/0.1.0/SKILL.md");
+
+    // Served by the existing GET /agents/... download route, as markdown.
+    const getSpec = await worker.fetch(
+      new Request("https://hub.amd-gaia.ai/agents/chat/0.1.0/SPEC.md"),
+      env as never
+    );
+    expect(getSpec.status).toBe(200);
+    expect(getSpec.headers.get("content-type")).toContain("text/markdown");
+    expect(await getSpec.text()).toBe(spec);
+
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    const entry = index.agents.find((a) => a.id === "chat")!;
+    expect(entry.spec).toBe(spec);
+    expect(entry.skill).toBe(skill);
+  });
+
+  it('defaults spec + skill to "" in index.json when none are published', async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+    });
+    expect(env.bucket.keys()).not.toContain("agents/chat/0.1.0/SPEC.md");
+    const entry = (
+      (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
+    ).agents.find((a) => a.id === "chat")!;
+    expect(entry.spec).toBe("");
+    expect(entry.skill).toBe("");
+  });
+
+  it("rejects an empty spec part (400) — omit it instead", async () => {
+    const env = makeEnv();
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+      spec: "   ",
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_request");
+    expect(env.bucket.keys()).toEqual([]);
+  });
+});
+
 describe("POST /publish — npm_package & playground_url", () => {
   it("carries npm_package and playground_url through to index.json", async () => {
     const env = makeEnv();

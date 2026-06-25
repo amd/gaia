@@ -12,6 +12,8 @@ import {
   readChangelog,
   readPackageFiles,
   readReadme,
+  readSkill,
+  readSpec,
   writeIndex,
 } from "./storage";
 import type {
@@ -103,7 +105,9 @@ export function toIndexEntry(
   agent: AgentManifest,
   readme: string,
   changelog: string,
-  packageFiles: { files: { name: string; size_bytes: number }[] } | null
+  packageFiles: { files: { name: string; size_bytes: number }[] } | null,
+  spec = "",
+  skill = ""
 ): IndexEntry {
   const latest = agent.versions[agent.latest_version];
   const req = agent.requirements;
@@ -145,6 +149,8 @@ export function toIndexEntry(
     },
     readme,
     changelog,
+    spec,
+    skill,
     // undefined serializes to "key absent" — only present when the manifest set it.
     npm_package: agent.npm_package,
     playground_url: agent.playground_url,
@@ -168,7 +174,9 @@ export async function rebuildIndex(
     const readme = await readReadme(bucket, id, agent.latest_version);
     const changelog = await readChangelog(bucket, id, agent.latest_version);
     const packageFiles = await readPackageFiles(bucket, id, agent.latest_version);
-    entries.push(toIndexEntry(agent, readme, changelog, packageFiles));
+    const spec = await readSpec(bucket, id, agent.latest_version);
+    const skill = await readSkill(bucket, id, agent.latest_version);
+    entries.push(toIndexEntry(agent, readme, changelog, packageFiles, spec, skill));
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));
 
