@@ -101,6 +101,30 @@ describe('SettingsPage — Dynamic Tools toggle (#1798)', () => {
         expect(screen.getByText(/GAIA_DYNAMIC_TOOLS/)).toBeInTheDocument();
     });
 
+    it('guards against a double-click while a save is in flight (single PUT)', async () => {
+        // Hold the first save open so the toggle stays mid-save between clicks.
+        let resolveSave!: (value: Settings) => void;
+        mockedApi.updateSettings.mockImplementationOnce(
+            () => new Promise<Settings>((resolve) => { resolveSave = resolve; }),
+        );
+
+        render(<SettingsPage />);
+        const toggle = await waitFor(getDynamicToolsToggle);
+
+        // First click starts the save; the toggle disables (savingDynamicTools).
+        await userEvent.click(toggle);
+        await waitFor(() => expect(getDynamicToolsToggle()).toBeDisabled());
+
+        // Second click while the save is pending must be a no-op, not a second PUT.
+        await userEvent.click(getDynamicToolsToggle());
+
+        // Let the in-flight save settle.
+        resolveSave(makeSettings({ dynamic_tools: true }));
+
+        await waitFor(() => expect(getDynamicToolsToggle()).toBeChecked());
+        expect(mockedApi.updateSettings).toHaveBeenCalledTimes(1);
+    });
+
     it('reverts and surfaces an error when the save fails (no silent fallback)', async () => {
         mockedApi.updateSettings.mockRejectedValue(new Error('network down'));
         render(<SettingsPage />);
