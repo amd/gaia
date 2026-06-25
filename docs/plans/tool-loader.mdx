@@ -266,6 +266,11 @@ A malformed `*_TAU` / `*_MAX` value raises at construction (no silent default).
 The loader is built **only** for `prompt_profile == "doc"` with the toggle on;
 otherwise `self.tool_loader is None` and the agent stays on the legacy path.
 
+As of #1798 the `dynamic_tools` enable knob is also reachable as a **Beta** toggle
+in the Agent UI **Settings** panel (default off). `GAIA_DYNAMIC_TOOLS` still wins
+when set — the toggle then reflects the effective value and disables — so τ and
+the cap stay env-only tuning.
+
 **CORE (10, always-on, cap- & eviction-exempt)** — defined in
 [`tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py):
 `remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`,

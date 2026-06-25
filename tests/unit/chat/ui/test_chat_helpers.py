@@ -407,7 +407,7 @@ class TestSessionAgentKwargsShape:
     hit on casual chat turns — see the commit that added this test.
     """
 
-    def test_returns_exactly_the_four_session_fields(self):
+    def test_returns_exactly_the_session_fields(self):
         from gaia.ui._chat_helpers import _session_agent_kwargs
 
         kwargs = _session_agent_kwargs(
@@ -421,7 +421,30 @@ class TestSessionAgentKwargsShape:
             "library_documents",
             "allowed_paths",
             "ui_session_id",
+            "dynamic_tools",
         }
+
+    def test_dynamic_tools_defaults_off_and_forwards_when_set(self):
+        """The Beta tool-loader toggle (#1798) defaults off and round-trips
+        through the helper — the field that makes the UI toggle apply."""
+        from gaia.ui._chat_helpers import _session_agent_kwargs
+
+        off = _session_agent_kwargs(
+            rag_file_paths=[],
+            library_paths=[],
+            allowed=["/root"],
+            session_id="s",
+        )
+        assert off["dynamic_tools"] is False
+
+        on = _session_agent_kwargs(
+            rag_file_paths=[],
+            library_paths=[],
+            allowed=["/root"],
+            session_id="s",
+            dynamic_tools=True,
+        )
+        assert on["dynamic_tools"] is True
 
     def test_empty_rag_file_paths_propagates_to_rag_documents(self):
         """Invariant checked by ``test_streaming_registered_agent_does_not_double_index``.

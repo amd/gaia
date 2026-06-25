@@ -370,7 +370,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             def _run() -> str:
                 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
-                config = ChatAgentConfig(max_steps=5, silent_mode=True, debug=False)
+                # Beta dynamic tool loader (#1798). Inert here: scheduled runs
+                # use the default "full" prompt profile and the loader only
+                # activates on the "doc" profile — wired for future-proofing so
+                # this path doesn't silently diverge if that ever changes.
+                dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
+                config = ChatAgentConfig(
+                    max_steps=5,
+                    silent_mode=True,
+                    debug=False,
+                    dynamic_tools=dynamic_tools,
+                )
                 agent = ChatAgent(config)
                 result = agent.process_query(prompt)
                 if isinstance(result, dict):
