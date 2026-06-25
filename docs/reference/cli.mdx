@@ -1520,6 +1520,19 @@ A **missing** config file is fine — GAIA falls back to built-in defaults. A
 to recover, rather than silently reverting to defaults.
 </Note>
 
+### Using a custom config file
+
+Point GAIA at a config file anywhere on disk with `GAIA_CONFIG_FILE` (or set
+just the directory with `GAIA_CONFIG_DIR`). This is handy for per-project
+configs or keeping work and personal defaults separate — every `gaia` command,
+including `gaia config` itself, honors it:
+
+```bash
+# Write to and read from a custom location
+GAIA_CONFIG_FILE=./project.gaia.json gaia config set default_model Qwen3.5-35B-A3B-GGUF
+GAIA_CONFIG_FILE=./project.gaia.json gaia llm "hello"   # uses that file's default_model
+```
+
 ---
 
 ## Model Management

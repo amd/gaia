@@ -79,6 +79,36 @@ class TestDefaultModelConfig:
         with pytest.raises(GaiaConfigError):
             GaiaConfig.load()
 
+    def test_load_unreadable_raises(self, tmp_path, monkeypatch):
+        # A path that exists but can't be read as a file (here: a directory)
+        # is an OSError, which must surface as a loud GaiaConfigError.
+        from gaia import config as config_mod
+        from gaia.config import GaiaConfig, GaiaConfigError
+
+        a_dir = tmp_path / "config.json"
+        a_dir.mkdir()
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", a_dir)
+
+        with pytest.raises(GaiaConfigError) as exc:
+            GaiaConfig.load()
+        assert str(a_dir) in str(exc.value)
+
+    def test_empty_default_model_resolves_to_builtin(self):
+        # An empty string is falsy and must not shadow the built-in default.
+        from gaia.config import GaiaConfig
+
+        cfg = GaiaConfig(default_model="")
+        assert cfg.resolve_model(None, "builtin") == "builtin"
+
+    def test_none_default_model_round_trips(self, tmp_path, monkeypatch):
+        from gaia import config as config_mod
+        from gaia.config import GaiaConfig
+
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
+        GaiaConfig(profile="npu").save()  # default_model stays None
+        assert GaiaConfig.load().default_model is None
+
 
 # ── resolve_model precedence ──────────────────────────────────────────────
 
@@ -149,6 +179,30 @@ class TestConfigCLI:
             _run_main(["config", "set", "bogus", "x"], monkeypatch, tmp_path)
         assert exc.value.code != 0
         assert "Unknown config key" in capsys.readouterr().err
+
+    def test_get_unknown_key_exits_nonzero(self, monkeypatch, tmp_path, capsys):
+        with pytest.raises(SystemExit) as exc:
+            _run_main(["config", "get", "bogus"], monkeypatch, tmp_path)
+        assert exc.value.code != 0
+        assert "Unknown config key" in capsys.readouterr().err
+
+    def test_get_unset_value_prints_empty(self, monkeypatch, tmp_path, capsys):
+        # default_model is unset → `get` prints an empty line, not "None".
+        _run_main(["config", "get", "default_model"], monkeypatch, tmp_path)
+        out = capsys.readouterr().out
+        assert out.strip() == ""
+        assert "None" not in out
+
+    def test_no_subaction_exits_nonzero(self, monkeypatch, tmp_path, capsys):
+        with pytest.raises(SystemExit) as exc:
+            _run_main(["config"], monkeypatch, tmp_path)
+        assert exc.value.code != 0
+        assert "No config action" in capsys.readouterr().err
+
+    def test_show_marks_unset_default_model(self, monkeypatch, tmp_path, capsys):
+        _run_main(["config", "show"], monkeypatch, tmp_path)
+        out = capsys.readouterr().out
+        assert "default_model = (unset)" in out
 
 
 # ── CLI default_model injection into model-bearing commands ───────────────
@@ -267,6 +321,32 @@ class TestModelInjection:
             main()
         assert exc.value.code != 0
         assert str(bad) in capsys.readouterr().err
+
+    def test_llm_uses_config_default_model(self, monkeypatch, tmp_path):
+        # `gaia llm` is dispatched separately from run_cli, so capture the
+        # model at the llm-app boundary instead.
+        from gaia import config as config_mod
+        from gaia.config import GaiaConfig
+
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
+        GaiaConfig(default_model="Configured-GGUF").save()
+
+        monkeypatch.setattr(
+            "gaia.cli.initialize_lemonade_for_agent", lambda **kw: (True, None)
+        )
+        captured = {}
+
+        def fake_llm(**kwargs):
+            captured.update(kwargs)
+            return "ok"
+
+        monkeypatch.setattr("gaia.apps.llm.app.main", fake_llm)
+        monkeypatch.setattr(sys, "argv", ["gaia", "llm", "hello"])
+        from gaia.cli import main
+
+        main()
+        assert captured.get("model") == "Configured-GGUF"
 
 
 # ── Config-file location is overridable via environment variables ─────────
