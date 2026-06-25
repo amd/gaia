@@ -72,6 +72,23 @@ describe('SettingsPage — Dynamic Tools toggle (#1798)', () => {
         await waitFor(() => expect(getDynamicToolsToggle()).toBeChecked());
     });
 
+    it('toggles when the visible row/label is clicked, not just the hidden input', async () => {
+        // Regression: the checkbox is visually hidden (width:0/height:0) and the
+        // track is a sibling <span>. Clicking the visible control only works if a
+        // <label> forwards the click to the input. Clicking the input element
+        // directly (as the other tests do) would pass even if that wiring is
+        // missing — so click the visible label text here, the way a user does.
+        render(<SettingsPage />);
+        await waitFor(getDynamicToolsToggle);
+
+        await userEvent.click(screen.getByText('Enable dynamic tool loading'));
+
+        await waitFor(() =>
+            expect(mockedApi.updateSettings).toHaveBeenCalledWith({ dynamic_tools: true }),
+        );
+        await waitFor(() => expect(getDynamicToolsToggle()).toBeChecked());
+    });
+
     it('is disabled and reflects the env value when locked', async () => {
         mockedApi.getSettings.mockResolvedValue(
             makeSettings({ dynamic_tools: true, dynamic_tools_locked: true }),

@@ -472,7 +472,10 @@ export function SettingsPage() {
                         Trim each turn&rsquo;s tool list to a semantically-matched subset to
                         speed up the first response. Currently affects the Doc Agent only.
                     </p>
-                    <div className="setting-row">
+                    {/* <label> wraps the row so a click on the text or the track
+                        forwards to the visually-hidden checkbox (matches the
+                        working connector/grant toggles). */}
+                    <label className="setting-row">
                         <span>Enable dynamic tool loading</span>
                         <span className="toggle-switch">
                             <input
@@ -484,7 +487,7 @@ export function SettingsPage() {
                             />
                             <span className="toggle-track" />
                         </span>
-                    </div>
+                    </label>
                     {dynamicToolsLocked && (
                         <p className="model-status-hint">
                             Controlled by <code>GAIA_DYNAMIC_TOOLS</code> &mdash; unset that
