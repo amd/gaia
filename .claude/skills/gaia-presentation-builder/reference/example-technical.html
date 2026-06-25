@@ -285,7 +285,7 @@ pre.code{ font-family:var(--mono); font-size:15px; line-height:1.5; background:v
 { "sent": true, "sent_id": "msg_xyz789",
   "subject": "Re: Q3 budget review", "to": ["bob@example.com"] }
 
-// GET /v1/email/health  →  {"service": "email-agent", "status": "ok"}
+// GET /v1/email/health  →  {"service": "gaia-agent-email", "status": "ok"}
 // GET /v1/email/version →  {"apiVersion": "2.0", "agentVersion": "0.2.2"}</pre>
   </div>
 </section>
@@ -440,7 +440,7 @@ pre.code{ font-family:var(--mono); font-size:15px; line-height:1.5; background:v
       <li><code>prompt_tokens</code> — sum of input tokens across classify + summarize LLM calls</li>
       <li><code>completion_tokens</code> — sum of output tokens across LLM calls</li>
       <li><code>total_tokens</code> — prompt + completion</li>
-      <li><code>tokens_per_second</code> — aggregate decode throughput (total output tokens / total decode time); null on the heuristic-only path where no LLM call is made</li>
+      <li><code>tokens_per_second</code> — aggregate decode throughput (total output tokens / total decode time); defaults to 0.0 when no LLM decode occurs (e.g. the heuristic-only path)</li>
     </ul>
   </div>
 </section>
