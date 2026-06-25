@@ -4,11 +4,11 @@
 
 .DESCRIPTION
     GitHub Actions terminates any process a job spawns when the job ends, so a
-    server started inline never survives to the next job. This launches the
-    version-matched Lemonade server -- via the `lemonade-server` shim so it binds
-    $Port, not the tray launcher's default -- as a Windows **Scheduled Task**
-    instead: the Task Scheduler owns it, not the job, so it persists across jobs
-    and reboots. The task also auto-starts at boot.
+    server started inline never survives to the next job. This launches
+    LemonadeServer.exe with `--port $Port` (so it binds $Port regardless of a
+    stale config.json) as a Windows **Scheduled Task** instead: the Task Scheduler
+    owns it, not the job, so it persists across jobs and reboots. The task also
+    auto-starts at boot.
 
     Idempotent + self-healing:
       - If a healthy server is already on $Port, returns immediately.
@@ -18,8 +18,7 @@
     Use -ForceRestart to recycle the server even if it's currently healthy.
 
 .PARAMETER Port           Server port (default 13305).
-.PARAMETER ServerExe      Path to LemonadeServer.exe (used to locate the sibling
-                          `lemonade-server` shim). Defaults to LEMONADE_SERVER_PATH.
+.PARAMETER ServerExe      Path to LemonadeServer.exe. Defaults to LEMONADE_SERVER_PATH.
 .PARAMETER WarmModel      Model to pull so the backend is warm (default Gemma-4-E4B-it-GGUF).
 .PARAMETER ForceRestart   Restart the task even if the server is already healthy.
 #>
@@ -43,13 +42,13 @@ if (-not $ForceRestart -and (Test-Health)) {
     exit 0
 }
 
-# Resolve the launcher. v10.x ships two server binaries side-by-side:
-#   - LemonadeServer.exe  -- tray/launcher; ignores the legacy `serve --port`
-#                            args, so it always binds its own default port.
-#   - lemonade-server.exe -- shim that correctly translates `serve --no-tray
-#                            --port N` into the new server invocation.
-# We must launch the shim, or the server comes up on the wrong port and the
-# health check below (on $Port) never passes -- see installer/scripts/start-lemonade.ps1.
+# Resolve the server binary. In v10.x the server is LemonadeServer.exe; the
+# legacy `lemonade-server` shim was deprecated in v10.5 and is no longer
+# installed, so we launch LemonadeServer.exe directly. There is no `serve`
+# subcommand -- the listen port lives in config.json, and a stale config in this
+# profile (e.g. a pre-v10.1 default of 8000) is what pins the server to the wrong
+# port. We pass `--port` to override it AND clear the stale config so the 13305
+# default regenerates. Cross-check installer/scripts/start-lemonade.ps1.
 if (-not $ServerExe -or -not (Test-Path $ServerExe)) {
     $ServerExe = (Get-ChildItem `
         "C:\Users\*\AppData\Local\lemonade_server\bin\LemonadeServer.exe", `
@@ -57,29 +56,24 @@ if (-not $ServerExe -or -not (Test-Path $ServerExe)) {
         "C:\Program Files*\Lemonade Server\bin\LemonadeServer.exe" `
         -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
 }
+if (-not $ServerExe) { Write-Host "ERROR: LemonadeServer.exe not found on the runner."; exit 1 }
+Write-Host "Server binary: $ServerExe"
 
-# The shim sits next to LemonadeServer.exe; fall back to PATH then the repo venv.
-$shimNextToExe = if ($ServerExe) { Join-Path (Split-Path $ServerExe) "lemonade-server.exe" } else { $null }
-$ServerShim = $null
-foreach ($cand in @(
-    $shimNextToExe,
-    (Get-Command lemonade-server -ErrorAction SilentlyContinue).Source,
-    ".\.venv\Scripts\lemonade-server.exe"
-)) { if ($cand -and (Test-Path $cand)) { $ServerShim = (Resolve-Path $cand).Path; break } }
-if (-not $ServerShim) {
-    $ServerShim = (Get-ChildItem `
-        "C:\Users\*\AppData\Local\lemonade_server\bin\lemonade-server.exe", `
-        "C:\windows\system32\config\systemprofile\AppData\Local\lemonade_server\bin\lemonade-server.exe", `
-        "C:\Program Files*\Lemonade Server\bin\lemonade-server.exe" `
-        -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+# Clear any stale config.json so it can't keep pinning the server to an old port.
+# The SYSTEM scheduled task reads the SYSTEM profile cache. --port below also
+# overrides, but a clean config is the documented path back to the 13305 default.
+# Best-effort: missing files are expected and fine.
+foreach ($cfg in @(
+    "C:\windows\system32\config\systemprofile\.cache\lemonade\config.json",
+    "C:\windows\system32\config\systemprofile\AppData\Local\lemonade_server\config.json"
+)) {
+    if (Test-Path $cfg) { Write-Host "Removing stale config: $cfg"; Remove-Item $cfg -Force -ErrorAction SilentlyContinue }
 }
-if (-not $ServerShim) { Write-Host "ERROR: lemonade-server shim not found on the runner."; exit 1 }
-Write-Host "Server shim: $ServerShim"
 
 # (Re)register a Scheduled Task that runs the server as SYSTEM, auto-starting at
 # boot and restarting on failure. Force overwrites any prior definition.
 try {
-    $action    = New-ScheduledTaskAction -Execute $ServerShim -Argument "serve --no-tray --port $Port"
+    $action    = New-ScheduledTaskAction -Execute $ServerExe -Argument "--no-tray --port $Port"
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
