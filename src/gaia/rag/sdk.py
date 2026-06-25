@@ -1620,8 +1620,8 @@ These positions indicate where to split the text."""
         a ZIP container like .pptx).
 
         Known omissions: header/footer text (separate XML parts, usually
-        repeated boilerplate) and embedded images.
-        # TODO(#1072): VLM extraction for images embedded in .docx files.
+        repeated boilerplate) and embedded images (TODO #1072: VLM extraction
+        for images embedded in .docx files).
 
         Returns:
             The extracted text as a single string.
