@@ -38,11 +38,44 @@ const npmUrl = agent.npm_package ? `https://www.npmjs.com/package/${agent.npm_pa
 const installCmd = isNpm ? `npm i ${agent.npm_package}` : `gaia agent install ${agent.id}`;
 const deepLink = `gaia://hub/install/${agent.id}`;
 const readmeHtml = renderMarkdown(agent.readme);
-// Optional — older index.json (served before the hub Worker adds the field) has
-// no changelog; render the section only when there's content.
+// Optional docs — older index.json (served before the hub Worker adds a field) may
+// lack these; render a tab only when there's content.
 const changelogHtml = agent.changelog ? renderMarkdown(agent.changelog) : '';
+const specHtml = agent.spec ? renderMarkdown(agent.spec) : '';
+const skillHtml = agent.skill ? renderMarkdown(agent.skill) : '';
 const req = agent.requirements;
 const pkgUrl = packageDownloadUrl(agent);
+
+// Package contents → a directory listing for the Files tab. Group each file by its
+// top-level folder (root files under "/"), sorted folders-first then root.
+const packageFiles = agent.package?.files ?? [];
+const fileGroups = (() => {
+  const map = new Map<string, { base: string; size_bytes: number }[]>();
+  for (const f of packageFiles) {
+    const slash = f.name.indexOf('/');
+    const dir = slash === -1 ? '/' : f.name.slice(0, slash);
+    const base = slash === -1 ? f.name : f.name.slice(slash + 1);
+    if (!map.has(dir)) map.set(dir, []);
+    map.get(dir)!.push({ base, size_bytes: f.size_bytes });
+  }
+  return [...map.entries()]
+    .map(([dir, files]) => ({
+      dir,
+      files: files.sort((a, b) => a.base.localeCompare(b.base)),
+      size: files.reduce((s, f) => s + f.size_bytes, 0),
+    }))
+    .sort((a, b) => (a.dir === '/' ? 1 : b.dir === '/' ? -1 : a.dir.localeCompare(b.dir)));
+})();
+
+// Doc tabs that actually have content (README is always present). The Files tab is
+// the package's directory listing; it only appears once a whole-package zip ships.
+const docTabs = [
+  { key: 'readme', label: 'README' },
+  ...(specHtml ? [{ key: 'spec', label: 'Spec' }] : []),
+  ...(skillHtml ? [{ key: 'skill', label: 'Skill' }] : []),
+  ...(changelogHtml ? [{ key: 'changelog', label: 'Changelog' }] : []),
+  ...(packageFiles.length ? [{ key: 'files', label: 'Files' }] : []),
+];
 const terminalLines = [
   { prompt: true, text: installCmd },
   { muted: true, text: `✓ ${agent.name} ${agent.latest_version} installed` },
@@ -108,13 +141,23 @@ const terminalLines = [
       </div>
     </section>
 
-    <!-- Body: tabbed docs (README / Changelog) + manifest-driven cards -->
+    <!-- Body: tabbed docs (README / Spec / Skill / Changelog / Files) + cards -->
     <div class="mt-12 grid lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
       <div class="min-w-0" data-doc-tabs>
-        {changelogHtml && (
-          <div role="tablist" aria-label={`${agent.name} documentation`} class="flex gap-1 border-b border-g-border mb-7">
-            <button type="button" role="tab" id="doctab-readme" aria-controls="docpanel-readme" data-doc-tab="readme" aria-selected="true" tabindex="0" class="doc-tab">README</button>
-            <button type="button" role="tab" id="doctab-changelog" aria-controls="docpanel-changelog" data-doc-tab="changelog" aria-selected="false" tabindex="-1" class="doc-tab">Changelog</button>
+        {docTabs.length > 1 && (
+          <div role="tablist" aria-label={`${agent.name} documentation`} class="flex gap-1 border-b border-g-border mb-7 overflow-x-auto">
+            {docTabs.map((t, i) => (
+              <button
+                type="button"
+                role="tab"
+                id={`doctab-${t.key}`}
+                aria-controls={`docpanel-${t.key}`}
+                data-doc-tab={t.key}
+                aria-selected={i === 0 ? 'true' : 'false'}
+                tabindex={i === 0 ? 0 : -1}
+                class="doc-tab"
+              >{t.label}</button>
+            ))}
           </div>
         )}
         <article role="tabpanel" id="docpanel-readme" aria-labelledby="doctab-readme" data-doc-panel="readme" class="doc max-w-[70ch]">
@@ -124,10 +167,55 @@ const terminalLines = [
             <TerminalBlock lines={terminalLines} typing />
           </div>
         </article>
+        {specHtml && (
+          <article role="tabpanel" id="docpanel-spec" aria-labelledby="doctab-spec" data-doc-panel="spec" class="doc max-w-[70ch]" hidden>
+            <div set:html={specHtml} />
+          </article>
+        )}
+        {skillHtml && (
+          <article role="tabpanel" id="docpanel-skill" aria-labelledby="doctab-skill" data-doc-panel="skill" class="doc max-w-[70ch]" hidden>
+            <div set:html={skillHtml} />
+          </article>
+        )}
         {changelogHtml && (
           <article role="tabpanel" id="docpanel-changelog" aria-labelledby="doctab-changelog" data-doc-panel="changelog" class="doc max-w-[70ch]" hidden>
             <div set:html={changelogHtml} />
           </article>
+        )}
+        {packageFiles.length > 0 && (
+          <section role="tabpanel" id="docpanel-files" aria-labelledby="doctab-files" data-doc-panel="files" hidden>
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <h2 class="text-xl font-semibold tracking-tight">Package contents</h2>
+              {pkgUrl && agent.package && (
+                <a
+                  href={pkgUrl}
+                  download={agent.package.filename}
+                  class="flex items-center gap-2 rounded-md border border-g-gold/40 bg-g-bg/40 px-3 py-1.5 text-[12px] font-medium text-g-gold-text hover:border-g-gold/70 transition-colors"
+                >Download .zip <span class="font-mono text-g-muted">{formatBytes(agent.package.size_bytes)}</span></a>
+              )}
+            </div>
+            <p class="mt-2 mb-5 text-[13px] text-g-muted">
+              {packageFiles.length} files across {fileGroups.length} {fileGroups.length === 1 ? 'folder' : 'folders'} — the client, docs, and every platform binary, in one archive.
+            </p>
+            <div class="overflow-hidden rounded-xl border border-g-border font-mono text-[12.5px]">
+              {fileGroups.map((g) => (
+                <div>
+                  <div class="flex items-center justify-between gap-3 border-b border-g-border bg-g-surface px-4 py-2">
+                    <span class="font-semibold text-g-text">{g.dir === '/' ? '/' : `${g.dir}/`}</span>
+                    <span class="flex-none text-[11px] text-g-muted">{g.files.length} {g.files.length === 1 ? 'file' : 'files'} · {formatBytes(g.size)}</span>
+                  </div>
+                  <ul>
+                    {g.files.map((f) => (
+                      <li class="flex items-baseline justify-between gap-3 border-b border-g-border/40 px-4 py-1.5 last:border-0">
+                        <span class="truncate text-g-text/85" title={f.base}>{f.base}</span>
+                        <span class="flex-none text-[11px] text-g-muted">{formatBytes(f.size_bytes)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </section>
         )}
       </div>
 
@@ -191,19 +279,11 @@ const terminalLines = [
             <p class="mt-2 text-[12px] leading-relaxed text-g-muted">
               One archive — the client, docs, and every platform binary. Runs on any supported OS.
             </p>
-            <details class="mt-3">
-              <summary class="cursor-pointer text-[12px] text-g-muted hover:text-g-text">
-                {agent.package.files.length} files
-              </summary>
-              <ul class="mt-2 max-h-64 space-y-1 overflow-y-auto pr-1 text-[11px] font-mono text-g-muted">
-                {agent.package.files.map((f) => (
-                  <li class="flex items-baseline justify-between gap-2">
-                    <span class="truncate" title={f.name}>{f.name}</span>
-                    <span class="flex-none text-g-muted/70">{formatBytes(f.size_bytes)}</span>
-                  </li>
-                ))}
-              </ul>
-            </details>
+            <button
+              type="button"
+              data-doc-goto="files"
+              class="mt-3 text-[12px] font-medium text-g-gold-text hover:underline"
+            >View all {agent.package.files.length} files →</button>
           </section>
         )}
 
@@ -392,6 +472,17 @@ const terminalLines = [
         next.focus();
       });
     });
+
+    // Cross-links elsewhere on the page (e.g. the Package card's "View all files")
+    // that jump to a specific doc tab and scroll it into view.
+    document.querySelectorAll<HTMLElement>('[data-doc-goto]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.getAttribute('data-doc-goto');
+        select(key);
+        tabRoot.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        tabs.find((t) => t.getAttribute('data-doc-tab') === key)?.focus();
+      });
+    });
   }
 
   // Playground card: copy the launch command, and probe the LOCAL sidecar so the
@@ -497,7 +588,7 @@ const terminalLines = [
   .doc p > img:only-child { @apply w-full cursor-zoom-in transition-colors hover:border-g-gold/50; }
   .doc hr { @apply my-8 border-0 border-t border-g-border; }
 
-  /* Doc tabs (README / Changelog) */
+  /* Doc tabs (README / Spec / Skill / Changelog / Files) */
   .doc-tab {
     @apply -mb-px border-b-2 border-transparent px-4 py-2 text-sm font-medium text-g-muted transition-colors hover:text-g-text;
   }

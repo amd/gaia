@@ -93,6 +93,10 @@ env:
   # Same canonical-doc story for the changelog: the npm CHANGELOG.md is what the
   # hub renders as the agent's Changelog section (and ships in the npm tarball).
   CHANGELOG: hub/agents/npm/agent-email/CHANGELOG.md
+  # SPEC.md (technical reference) + SKILL.md (AI-integration playbook) are rendered
+  # as their own doc tabs on the hub page (catalog entry's `spec` / `skill`).
+  SPEC: hub/agents/npm/agent-email/SPEC.md
+  SKILL: hub/agents/npm/agent-email/SKILL.md
   FREEZE_DIST: hub/agents/python/email/packaging/dist
   # Hub key prefix (mirrors the Worker's agents/<id> layout). The Worker owns the
   # bucket binding; CI never talks to R2 directly — it POSTs to /publish.
@@ -459,6 +463,8 @@ jobs:
             --manifest "${MANIFEST}" \
             --readme "${README}" \
             --changelog "${CHANGELOG}" \
+            --spec "${SPEC}" \
+            --skill "${SKILL}" \
             "${args[@]}" \
             --summary-out published.json
           echo "=== publish summary ==="

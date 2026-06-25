@@ -52,6 +52,11 @@ export interface Agent {
   // Optional at the type level so the site stays resilient to an older index.json
   // served before the hub Worker that adds this field is redeployed.
   changelog?: string;
+  // SPEC.md (technical reference) + SKILL.md (AI-integration playbook) markdown of
+  // the latest version, rendered as their own doc tabs. "" / absent if none was
+  // published. Optional for the same older-index.json resilience as `changelog`.
+  spec?: string;
+  skill?: string;
   // npm package name (e.g. "@amd-gaia/agent-email") when the agent is
   // distributed as an npm client + frozen sidecar. Present → npm is the install
   // path. Absent → the agent installs via pip/GAIA (language-driven).
