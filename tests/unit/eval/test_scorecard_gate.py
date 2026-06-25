@@ -5,10 +5,13 @@
 import datetime
 from pathlib import Path
 
-import pytest
 import yaml
 
-from gaia.eval.release_scorecard import ResultPayload, compute_aggregate, render_scorecard
+from gaia.eval.release_scorecard import (
+    ResultPayload,
+    compute_aggregate,
+    render_scorecard,
+)
 from gaia.eval.scorecard_gate import main
 
 # ---------------------------------------------------------------------------
@@ -212,23 +215,21 @@ class TestWorkflowYaml:
             / "workflows"
             / "release_agent_email.yml"
         )
-        assert workflow_path.exists(), (
-            f"Workflow file not found: {workflow_path}"
-        )
+        assert workflow_path.exists(), f"Workflow file not found: {workflow_path}"
         content = workflow_path.read_text()
         parsed = yaml.safe_load(content)
 
         assert "jobs" in parsed, "Workflow has no 'jobs' key"
-        assert "publish" in parsed["jobs"], (
-            "Workflow has no 'publish' job — add it or check the job name"
-        )
+        assert (
+            "publish" in parsed["jobs"]
+        ), "Workflow has no 'publish' job — add it or check the job name"
         needs = parsed["jobs"]["publish"].get("needs", [])
         # needs can be a string or a list
         if isinstance(needs, str):
             needs = [needs]
-        assert "scorecard-gate" in needs, (
-            f"'publish' job must list 'scorecard-gate' in its needs; got: {needs}"
-        )
+        assert (
+            "scorecard-gate" in needs
+        ), f"'publish' job must list 'scorecard-gate' in its needs; got: {needs}"
 
 
 # ---------------------------------------------------------------------------

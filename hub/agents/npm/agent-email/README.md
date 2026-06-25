@@ -2,6 +2,8 @@
 
 [![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.0** · last updated **2026-06-24**
 
+**Eval scorecard:** see [`./scorecards/0.2.4.md`](./scorecards/0.2.4.md) for the per-version accuracy metrics, dataset details, and aggregate score for v0.2.4.
+
 Embed the **GAIA email agent** in your JS/TS app. It triages, organizes, replies
 to, and schedules from Gmail and Outlook — with every email body analyzed
 **locally on AMD Ryzen AI** via Lemonade. No message content is sent to a cloud

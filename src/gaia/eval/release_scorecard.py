@@ -25,7 +25,7 @@ Usage pattern::
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -170,7 +170,9 @@ def render_scorecard(payload: ResultPayload) -> str:
         "inherited_from": payload.inherited_from,
     }
 
-    fm_text = yaml.dump(front, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    fm_text = yaml.dump(
+        front, default_flow_style=False, sort_keys=False, allow_unicode=True
+    )
 
     # Human-readable body with worked recompute
     metric_lines = "\n".join(
@@ -178,9 +180,7 @@ def render_scorecard(payload: ResultPayload) -> str:
         for c in components
     )
     total_w = sum(c["weight"] for c in components)
-    worked = " + ".join(
-        f"({c['value']:.4f} × {c['weight']:.1f})" for c in components
-    )
+    worked = " + ".join(f"({c['value']:.4f} × {c['weight']:.1f})" for c in components)
 
     body = f"""# {payload.agent_name} — Eval Scorecard v{payload.agent_version}
 
@@ -253,7 +253,7 @@ def parse_scorecard(source) -> dict:
 
     # Split on first pair of '---' delimiters
     if not text.startswith("---"):
-        raise ValueError(f"Scorecard does not start with '---' front matter")
+        raise ValueError("Scorecard does not start with '---' front matter")
 
     # Find the closing '---' (first occurrence after the opening line)
     rest = text[3:]  # strip opening ---

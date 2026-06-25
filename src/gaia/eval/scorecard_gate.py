@@ -57,22 +57,16 @@ def _read_version_from_manifest(manifest_path: Path) -> str:
     try:
         text = manifest_path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise ValueError(
-            f"Cannot read manifest {manifest_path}: {exc}"
-        ) from exc
+        raise ValueError(f"Cannot read manifest {manifest_path}: {exc}") from exc
 
     try:
         data = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
-        raise ValueError(
-            f"Invalid YAML in manifest {manifest_path}: {exc}"
-        ) from exc
+        raise ValueError(f"Invalid YAML in manifest {manifest_path}: {exc}") from exc
 
     version = data.get("version")
     if not version:
-        raise ValueError(
-            f"Manifest {manifest_path} has no 'version:' field."
-        )
+        raise ValueError(f"Manifest {manifest_path} has no 'version:' field.")
     return str(version)
 
 
@@ -230,9 +224,7 @@ def main(argv=None) -> int:
         return 1
 
     if prev_score is None:
-        print(
-            f"ERROR: Prior scorecard {prev_path} has no 'aggregate.value' field."
-        )
+        print(f"ERROR: Prior scorecard {prev_path} has no 'aggregate.value' field.")
         return 1
 
     if float(candidate_score) < float(prev_score):

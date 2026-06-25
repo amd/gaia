@@ -109,10 +109,12 @@ def _is_judged(scenario: dict) -> bool:
     if acc is None:
         return False
     try:
+        import math
+
         f = float(acc)
     except (TypeError, ValueError):
         return False
-    return 0.0 <= f <= 1.0 and f == f  # also rejects NaN via f==f
+    return 0.0 <= f <= 1.0 and math.isfinite(f)
 
 
 def build_payload(benchmark_dir: Path, ground_truth_path: Path):
@@ -189,7 +191,7 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path):
     metrics = [
         {"name": "category_accuracy", "value": float(category_accuracy), "weight": 1.0}
     ]
-    _components, agg_value = compute_aggregate(metrics)  # noqa: F841
+    compute_aggregate(metrics)  # validate metrics; aggregate embedded in render_scorecard
 
     import datetime
 

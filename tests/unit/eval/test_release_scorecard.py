@@ -5,7 +5,6 @@
 import datetime
 import importlib.util
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -78,9 +77,7 @@ class TestSchemaValidator:
     def test_required_top_level_keys_include_expected_sections(self):
         # schema_version, agent, recipe, results, aggregate must be required
         for section in ("schema_version", "agent", "recipe", "results", "aggregate"):
-            assert section in REQUIRED_FIELDS, (
-                f"'{section}' must be in REQUIRED_FIELDS"
-            )
+            assert section in REQUIRED_FIELDS, f"'{section}' must be in REQUIRED_FIELDS"
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +142,9 @@ class TestGeneratorRoundTrip:
         lines = text.splitlines()
         # Find second occurrence of '---'
         closing = [i for i, l in enumerate(lines) if l == "---" and i > 0]
-        assert closing, "Rendered scorecard must contain a closing '---' after the first"
+        assert (
+            closing
+        ), "Rendered scorecard must contain a closing '---' after the first"
 
     def test_body_after_front_matter_is_non_empty(self):
         payload = _make_payload()
@@ -175,16 +174,14 @@ class TestDistinctCountFields:
         text = render_scorecard(payload)
         parsed = parse_scorecard(text)
         assert "results" in parsed, "'results' section missing from parsed scorecard"
-        assert "test_cases_run" in parsed["results"], (
-            "'results.test_cases_run' must be a distinct field"
-        )
+        assert (
+            "test_cases_run" in parsed["results"]
+        ), "'results.test_cases_run' must be a distinct field"
         assert "recipe" in parsed, "'recipe' section missing from parsed scorecard"
-        assert "dataset" in parsed["recipe"], (
-            "'recipe.dataset' sub-section missing"
-        )
-        assert "size" in parsed["recipe"]["dataset"], (
-            "'recipe.dataset.size' must be a distinct field"
-        )
+        assert "dataset" in parsed["recipe"], "'recipe.dataset' sub-section missing"
+        assert (
+            "size" in parsed["recipe"]["dataset"]
+        ), "'recipe.dataset.size' must be a distinct field"
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +204,9 @@ class TestLooseCoupling:
             "or 'gaia.eval.quality_metrics' in m or 'gaia_agent_email' in m]; "
             "assert not bad, bad"
         )
-        r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True)
+        r = subprocess.run(
+            [_sys.executable, "-c", code], capture_output=True, text=True
+        )
         assert r.returncode == 0, r.stderr
 
 
@@ -306,7 +305,13 @@ class TestInheritedFromNone:
 
 class TestLatestVersionBelow:
     def _seed_dir(self, tmp_path):
-        for name in ("0.1.0.md", "0.2.3.md", "0.10.0.md", "README.md", "not-a-version.md"):
+        for name in (
+            "0.1.0.md",
+            "0.2.3.md",
+            "0.10.0.md",
+            "README.md",
+            "not-a-version.md",
+        ):
             (tmp_path / name).write_text("# placeholder")
         return tmp_path
 
@@ -376,9 +381,9 @@ class TestEmailAdapter:
         payload = mod.build_payload(benchmark_dir, gt_path)
 
         expected_mean = round((0.4167 + 0.5000) / 2, 10)
-        assert payload.metrics[0]["value"] == pytest.approx(expected_mean), (
-            f"Expected metric value {expected_mean}, got {payload.metrics[0]['value']}"
-        )
+        assert payload.metrics[0]["value"] == pytest.approx(
+            expected_mean
+        ), f"Expected metric value {expected_mean}, got {payload.metrics[0]['value']}"
 
     def test_build_payload_test_cases_run(self, tmp_path):
         mod = self._load_gen_scorecard()
@@ -429,8 +434,16 @@ class TestEmailAdapter:
         empty_scorecard = {
             "run_id": "no-quality",
             "scenarios": [
-                {"category": "Gemma-4-E4B-it-GGUF", "status": "PASS", "total_emails": 0},
-                {"category": "Gemma-4-E4B-it-GGUF", "status": "PASS", "total_emails": 0},
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 0,
+                },
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 0,
+                },
             ],
         }
         (benchmark_dir / "email_benchmark_scorecard.json").write_text(
