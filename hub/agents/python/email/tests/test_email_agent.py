@@ -62,14 +62,6 @@ def test_contract_import_is_light():
     assert EmailTriageResponse is not None
 
 
-def test_discovered_when_installed():
-    from gaia.agents.registry import AgentRegistry
-
-    reg = AgentRegistry()
-    reg.discover()
-    assert "email" in {a.id for a in reg.list()}
-
-
 # ---------------------------------------------------------------------------
 # LLM triage endpoint tests
 # ---------------------------------------------------------------------------

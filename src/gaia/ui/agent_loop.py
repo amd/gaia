@@ -353,6 +353,12 @@ class AgentLoop:
                         db, session.get("document_ids", [])
                     )
                     allowed = _helpers._compute_allowed_paths(rag_paths + lib_paths)
+                    # Beta dynamic tool loader (#1798). Inert here: autonomous
+                    # ticks use the default "full" prompt profile and the loader
+                    # only activates on the "doc" profile — wired for future-
+                    # proofing so this path stays in lock-step with server.py's
+                    # scheduled-prompt build if that ever changes.
+                    dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
                     config = ChatAgentConfig(
                         model_id=model_id,
                         streaming=False,
@@ -360,6 +366,7 @@ class AgentLoop:
                         debug=False,
                         allowed_paths=allowed,
                         ui_session_id=session_id,
+                        dynamic_tools=dynamic_tools,
                     )
                     agent = ChatAgent(config)
                     _helpers._register_agent_memory_ops(agent)

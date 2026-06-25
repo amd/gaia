@@ -140,4 +140,77 @@ describe("EmailClient", () => {
     const client = new EmailClient({ baseUrl: "http://127.0.0.1:9", fetchImpl });
     await expect(client.health()).rejects.toBeInstanceOf(HttpError);
   });
+
+  it("hits the router-scoped health/version paths", async () => {
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(async (url) => {
+      seen.push(String(url));
+      return String(url).endsWith("/version")
+        ? jsonResponse({ apiVersion: "2.0", agentVersion: "0.2.0" })
+        : jsonResponse({ status: "ok", service: "gaia-agent-email" });
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131", fetchImpl });
+    const h = await client.emailHealth();
+    const v = await client.emailVersion();
+    expect(h.status).toBe("ok");
+    expect(v.apiVersion).toBe("2.0");
+    expect(seen).toEqual([
+      "http://127.0.0.1:8131/v1/email/health",
+      "http://127.0.0.1:8131/v1/email/version",
+    ]);
+  });
+
+  it("fetches the OpenAPI document as a parsed object", async () => {
+    const doc = {
+      openapi: "3.1.0",
+      info: { title: "GAIA Email Agent Sidecar", version: "0.2.0" },
+      paths: { "/v1/email/triage": {} },
+    };
+    const fetchImpl = vi.fn(async (url) => {
+      expect(String(url)).toBe("http://x/openapi.json");
+      return jsonResponse(doc);
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const api = await client.openapi();
+    expect(api.openapi).toBe("3.1.0");
+    expect(api.paths["/v1/email/triage"]).toBeDefined();
+  });
+
+  it("returns the spec page as raw HTML (not JSON-parsed)", async () => {
+    const html = "<!doctype html><html><body><h1>Email Triage Agent</h1></body></html>";
+    const fetchImpl = vi.fn(async (url, init) => {
+      expect(String(url)).toBe("http://x/v1/email/spec");
+      expect((init?.headers as Record<string, string>)?.accept).toBe("text/html");
+      return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const out = await client.spec();
+    expect(out).toBe(html); // returned verbatim, no JSON.parse
+  });
+
+  it("spec() still raises HttpError on a non-2xx", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response("nope", { status: 404 }),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await expect(client.spec()).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("invokes fetch bound to globalThis (browser 'Illegal invocation' guard)", async () => {
+    // Regression: a browser's `fetch` throws "Illegal invocation" when called
+    // as a method on any object other than window/globalThis. EmailClient must
+    // bind the impl; a non-arrow fn captures its call-time `this`. Node tests
+    // pass without the bind (which is why the original bug slipped through), so
+    // this asserts the binding directly.
+    let calledThis: unknown = "unset";
+    const fetchImpl = function (this: unknown) {
+      calledThis = this;
+      return Promise.resolve(
+        jsonResponse({ status: "ok", service: "gaia-agent-email" }),
+      );
+    } as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await client.health();
+    expect(calledThis).toBe(globalThis);
+  });
 });

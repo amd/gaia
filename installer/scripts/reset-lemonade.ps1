@@ -209,16 +209,13 @@ if (-not $serverExe) {
 }
 Log "Server binary: $serverExe"
 
-$lemServer = (Get-Command lemonade-server -ErrorAction SilentlyContinue).Source
-Log "lemonade-server on PATH: $lemServer"
-
+# v10.5 removed the `lemonade-server` shim, so launch LemonadeServer.exe directly
+# with a bare `--port` (there is no `serve` subcommand). Without --port it binds
+# whatever stale config.json says rather than $Port.
 $proc = $null
-if ($lemServer) {
-    Log "Starting via 'lemonade-server serve --no-tray --port $Port'"
-    $proc = Start-Process -FilePath "lemonade-server" -ArgumentList "serve", "--no-tray", "--port", "$Port" -PassThru -WindowStyle Hidden
-} elseif ($serverExe) {
-    Log "No lemonade-server shim; starting LemonadeServer.exe directly"
-    $proc = Start-Process -FilePath $serverExe -PassThru -WindowStyle Hidden
+if ($serverExe) {
+    Log "Starting LemonadeServer.exe with --port $Port"
+    $proc = Start-Process -FilePath $serverExe -ArgumentList "--port", "$Port" -PassThru -WindowStyle Hidden
 } else {
     Log "ERROR: no server binary found after install"; exit 1
 }

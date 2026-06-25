@@ -30,7 +30,7 @@ The **GAIA Agent UI** desktop app is the primary install path for end users. It 
 **See the full [Installation guide](/guides/install)** for step-by-step instructions per platform, first-launch setup details, update and uninstall instructions, and privacy information. If something goes wrong, the [installation troubleshooting guide](/reference/install-troubleshooting) covers every common failure mode.
 </Note>
 
-After installing the desktop app, skip ahead to [Build Your First Agent](#build-your-first-agent) below if you want to dive straight into coding — the app takes care of the rest.
+After installing the desktop app, launch it and start chatting with agents right away — no terminal required. To **write your own** custom Python agent (the [Build Your First Agent](#build-your-first-agent) tutorial below), first complete one of the **developer install paths** in the next section: they create the Python environment and project directory that the tutorial saves your agent file into. The desktop app on its own doesn't provide a place to run a Python script.
 
 ---
 
@@ -460,7 +460,7 @@ Choose your platform and installation type:
   Make sure your virtual environment is still activated (you should see `(.venv)` in your prompt). If commands aren't working as expected, try prefixing them with [`uv run`](https://docs.astral.sh/uv/reference/cli/#uv-run).
 </Warning>
 
-Using your text editor, create a file named `my_agent.py` in your project directory:
+Using your text editor, create a file named `my_agent.py` in the project directory you created during install — `my-gaia-project` for the PyPI paths, or the cloned `gaia` folder for the clone paths. This is the same folder where you ran `uv venv` and activated `(.venv)`.
 
 ```python
 import platform
@@ -486,11 +486,21 @@ When users ask about time or system details, use the get_system_info tool."""
                 "python": platform.python_version()
             }
 
-# Use the agent
-agent = MyAgent()
+# Use the agent. model_id pins the ~4B model that `gaia init` already
+# downloaded; omit it and the agent base defaults to a much larger model
+# that won't fit on most machines.
+agent = MyAgent(model_id="Gemma-4-E4B-it-GGUF")
 result = agent.process_query("What time is it and what system am I on?")
 print(result.get("result"))
 ```
+
+<Note>
+  **Why `model_id`?** Without it, the `Agent` base class defaults to a large
+  ~20GB model that `gaia init --profile minimal` never downloaded — on a typical
+  16–32GB machine it fails to load with `failed to fit params to free device
+  memory`. `Gemma-4-E4B-it-GGUF` is the tool-calling model every `gaia init`
+  profile installs, so it's already on disk and runs comfortably.
+</Note>
 
 <sub>
   **View full source:** [`agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) · [`tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tools.py)

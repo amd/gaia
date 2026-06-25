@@ -4,8 +4,8 @@
  * TypeScript mirror of the GAIA email agent REST contract.
  *
  * These types are **hand-written** to mirror two Python sources:
- *  - `hub/agents/python/email/gaia_agent_email/contract.py` — the frozen #1262
- *    triage request/response contract (single source of truth).
+ *  - `hub/agents/python/email/gaia_agent_email/contract.py` — the frozen triage
+ *    request/response contract (single source of truth).
  *  - `hub/agents/python/email/gaia_agent_email/api_routes.py` — the local
  *    (non-frozen) draft/send handshake models.
  *
@@ -19,15 +19,15 @@
  * Wire note: `EmailMessage.from` is the JSON key on the wire (Python aliases its
  * `from_` field to `from`), so this interface uses `from` directly.
  *
- * Schema 2.0 (#1615): five-bucket EmailCategory, suggested_action, TriageUsage,
- * typed ActionItem (type/url discriminator).
+ * Schema 2.0: five-bucket EmailCategory, suggested_action, TriageUsage, typed
+ * ActionItem (type/url discriminator).
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
 export const SCHEMA_VERSION = "2.0" as const;
 
 /**
- * The five-bucket triage taxonomy (schema 2.0, #1615 — contract.py: EmailCategory).
+ * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
  * Values are the exact JSON wire strings the server emits.
  */
 export type EmailCategory =
@@ -189,8 +189,8 @@ export interface EmailTriageResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Draft / send handshake (api_routes.py — LOCAL, not part of the frozen #1262
-// contract; the send-confirmation gate per #1264).
+// Draft / send handshake (api_routes.py — LOCAL, not part of the frozen triage
+// contract; the send-confirmation gate).
 // ---------------------------------------------------------------------------
 
 /** Propose a reply and obtain a confirmation token (api_routes.py: EmailDraftRequest). */
@@ -256,3 +256,14 @@ export interface VersionResponse {
   /** Package build version. */
   agentVersion: string;
 }
+
+/**
+ * The OpenAPI 3.x document served at `GET /openapi.json`. Loosely typed — it is
+ * the sidecar's own machine schema, not re-modeled here. Use it to drive codegen
+ * or contract checks rather than reaching for hand-written types.
+ */
+export type OpenApiDocument = {
+  openapi: string;
+  info: { title: string; version: string };
+  paths: Record<string, unknown>;
+} & Record<string, unknown>;

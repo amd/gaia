@@ -755,6 +755,64 @@ class TestSystemStatus:
         )
 
 
+class TestDynamicToolsSetting:
+    """/api/settings round-trip + env lock for the Beta dynamic tool loader (#1798)."""
+
+    def test_cold_state_defaults_to_off(self, client, monkeypatch):
+        """Fresh DB (no dynamic_tools key) + no env var ⇒ off, unlocked —
+        byte-identical to the pre-#1798 default-off path."""
+        monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+        data = client.get("/api/settings").json()
+        assert data["dynamic_tools"] is False
+        assert data["dynamic_tools_locked"] is False
+
+    def test_put_true_round_trips(self, client, monkeypatch):
+        """PUT {dynamic_tools: true} persists and a fresh GET reflects it."""
+        monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+        put = client.put("/api/settings", json={"dynamic_tools": True}).json()
+        assert put["dynamic_tools"] is True
+        assert put["dynamic_tools_locked"] is False
+        get = client.get("/api/settings").json()
+        assert get["dynamic_tools"] is True
+
+    def test_put_false_round_trips(self, client, monkeypatch):
+        monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+        client.put("/api/settings", json={"dynamic_tools": True})
+        client.put("/api/settings", json={"dynamic_tools": False})
+        assert client.get("/api/settings").json()["dynamic_tools"] is False
+
+    def test_omitting_field_leaves_persisted_value_unchanged(self, client, monkeypatch):
+        """A PUT that omits dynamic_tools must not clobber the persisted value
+        (model_fields_set guard, mirroring context_size/agent_mode)."""
+        monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+        client.put("/api/settings", json={"dynamic_tools": True})
+        client.put("/api/settings", json={"custom_model": ""})  # unrelated field
+        assert client.get("/api/settings").json()["dynamic_tools"] is True
+
+    def test_env_var_wins_and_locks_regardless_of_persisted(self, client, monkeypatch):
+        """GAIA_DYNAMIC_TOOLS set ⇒ GET returns the env value + locked=True,
+        even when the persisted setting says otherwise."""
+        client.put("/api/settings", json={"dynamic_tools": False})
+        monkeypatch.setenv("GAIA_DYNAMIC_TOOLS", "1")
+        data = client.get("/api/settings").json()
+        assert data["dynamic_tools"] is True
+        assert data["dynamic_tools_locked"] is True
+
+    def test_put_persists_intent_even_while_locked(self, client, monkeypatch):
+        """While locked, PUT returns the env-won effective value but still
+        persists the user's intent for when the env var is later unset."""
+        monkeypatch.setenv("GAIA_DYNAMIC_TOOLS", "1")
+        put = client.put("/api/settings", json={"dynamic_tools": False}).json()
+        # Effective value is env-won (locked); intent is persisted underneath.
+        assert put["dynamic_tools"] is True
+        assert put["dynamic_tools_locked"] is True
+        monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+        # Env gone → the persisted False intent now wins, unlocked.
+        unlocked = client.get("/api/settings").json()
+        assert unlocked["dynamic_tools"] is False
+        assert unlocked["dynamic_tools_locked"] is False
+
+
 class TestSessionEndpoints:
     """Tests for /api/sessions/* endpoints."""
 

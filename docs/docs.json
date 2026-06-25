@@ -382,7 +382,8 @@
             "pages": [
               "integrations/vscode",
               "integrations/mcp",
-              "integrations/n8n"
+              "integrations/n8n",
+              "integrations/guard-proxy"
             ]
           },
           {
@@ -422,6 +423,7 @@
             "pages": [
               "plans/agent-hub",
               "plans/agent-hub-ui",
+              "plans/agent-ui-hub-publish",
               "plans/email-agent-packaging",
               "spec/agent-hub-restructure",
               "spec/agent-skills",
