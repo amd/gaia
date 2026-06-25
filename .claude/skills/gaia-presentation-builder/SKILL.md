@@ -69,6 +69,18 @@ generic prose.
   in print, all chrome hidden. Do not edit these rules per-deck.
 - The viewer JS is screen-only; it is disabled under `@media print`.
 
+## Worked examples
+
+Both examples were generated from the GAIA email agent hub package
+(`hub/agents/python/email/`) and demonstrate the full pipeline end-to-end.
+Eval-metric slides intentionally show labeled `⚠ PLACEHOLDER` values because no
+benchmark results existed in the source at generation time.
+
+- **Technical tier (12 slides):** `reference/example-technical.html` — architecture,
+  request/response contract, packaging table, methodology, code blocks.
+- **Executive tier (7 slides):** `reference/example-executive.html` — outcome, timeline,
+  risk, and cost; no code, no architecture diagrams.
+
 ## Checklist before reporting done
 
 - [ ] One self-contained HTML file per tier; no external refs (`grep -c 'https\?://' ` is 0).
