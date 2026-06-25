@@ -22,6 +22,8 @@ import {
   rawManifestKey,
   readAgentManifest,
   readmeKey,
+  skillKey,
+  specKey,
   writeAgentManifest,
 } from "./storage";
 import type { ArtifactInfo, Env } from "./types";
@@ -166,6 +168,11 @@ export async function handlePublish(
   // pages). Both are optional; an empty part is rejected (omit it instead).
   const readmeText = await optionalMarkdownPart(form, "readme", "README.md");
   const changelogText = await optionalMarkdownPart(form, "changelog", "CHANGELOG.md");
+  // Optional SPEC.md (technical reference) + SKILL.md (AI-integration playbook),
+  // rendered as their own doc tabs on the hub page. Same per-version, first-POST
+  // semantics as README/CHANGELOG.
+  const specText = await optionalMarkdownPart(form, "spec", "SPEC.md");
+  const skillText = await optionalMarkdownPart(form, "skill", "SKILL.md");
   // Optional whole-package file listing (the zip's contents, for the hub's file
   // list). The zip itself rides in as a normal `artifact`; this is just the
   // manifest of what's inside it.
@@ -256,6 +263,16 @@ export async function handlePublish(
     }
     if (changelogText != null) {
       await env.BUCKET.put(changelogKey(manifest.id, manifest.version), changelogText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (specText != null) {
+      await env.BUCKET.put(specKey(manifest.id, manifest.version), specText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (skillText != null) {
+      await env.BUCKET.put(skillKey(manifest.id, manifest.version), skillText, {
         httpMetadata: { contentType: "text/markdown; charset=utf-8" },
       });
     }
