@@ -84,17 +84,18 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
     },
     {
         label: 'Microsoft Office',
-        extensions: new Set(['.doc', '.docx', '.ppt', '.xls']),
+        extensions: new Set(['.doc', '.ppt', '.xls']),
         message:
-            'Word, legacy PowerPoint (.ppt), and legacy Excel (.xls) files are ' +
-            'not yet supported — GAIA does not currently ship parsers for these ' +
-            'formats. Modern PowerPoint (.pptx) is supported.',
+            'Legacy Office formats (.doc, legacy PowerPoint .ppt, legacy Excel ' +
+            '.xls) are not supported — GAIA reads only the modern XML-based ' +
+            'formats. Modern Word (.docx), PowerPoint (.pptx), and Excel (.xlsx) ' +
+            'are supported.',
         alternatives: [
+            'Re-save as .docx — GAIA indexes modern Word documents directly',
             'Save modern PowerPoint as .pptx — GAIA indexes .pptx directly',
-            'Save Word as PDF, then index the PDF',
             'Re-save legacy .xls workbooks as .xlsx — GAIA supports modern Excel files',
         ],
-        featureTitle: 'Support Microsoft Office (doc, docx, ppt, xls) indexing',
+        featureTitle: 'Support legacy Microsoft Office (doc, ppt, xls) indexing',
     },
 ];
 
@@ -117,11 +118,11 @@ export function getUnsupportedCategory(extension: string): FileTypeCategory | nu
  * ``src/gaia/ui/utils.py``. Only list extensions that have a real extractor
  * in ``src/gaia/rag/sdk.py::_extract_text_from_file`` — listing one without
  * a backend handler causes the RAG pipeline to index binary garbage.
- * .pptx IS supported (python-pptx ships with GAIA); .doc/.docx/.ppt and
- * legacy .xls are intentionally excluded.
+ * .pptx and .docx ARE supported (python-pptx / python-docx ship with GAIA);
+ * legacy .doc/.ppt/.xls are intentionally excluded.
  */
 export const SUPPORTED_EXTENSIONS = new Set([
-    '.pdf', '.pptx', '.txt', '.md', '.csv', '.json', '.xlsx',
+    '.pdf', '.pptx', '.docx', '.txt', '.md', '.csv', '.json', '.xlsx',
     '.html', '.htm', '.xml', '.svg',
     '.yaml', '.yml', '.py', '.js', '.ts', '.java', '.c', '.cpp',
     '.h', '.rs', '.go', '.rb', '.sh', '.bat', '.ps1', '.log',

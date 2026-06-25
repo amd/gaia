@@ -46,15 +46,17 @@ logger = logging.getLogger(__name__)
 # etc.) and poisons retrieval quality.
 #
 # Notable intentional exclusions (no parser ships with GAIA today):
-#   .doc/.docx/.ppt — need python-docx / python-pptx (legacy .ppt)
+#   .doc/.ppt — legacy binary formats; python-docx/python-pptx read only the
+#               modern XML formats (.docx/.pptx)
 #   .xls (legacy BIFF) — openpyxl only handles .xlsx; would raise on open
-# NOTE: .pptx IS supported — python-pptx ships with GAIA since v0.21.
-# See ``_UNSUPPORTED_CATEGORIES`` below for the user-facing rejection hint.
+# NOTE: .pptx and .docx ARE supported — python-pptx and python-docx ship with
+# GAIA. See ``_UNSUPPORTED_CATEGORIES`` below for the user-facing rejection hint.
 # Image formats are tracked by issue #730 (VLM-based indexing).
 ALLOWED_EXTENSIONS = frozenset(
     {
         ".pdf",
         ".pptx",
+        ".docx",
         ".txt",
         ".md",
         ".csv",
@@ -292,12 +294,12 @@ def sanitize_document_path(user_path: str) -> Path:
                 "Tip: Export your data to CSV or JSON format, then index those files.",
             ),
             "office": (
-                {".doc", ".docx", ".ppt", ".xls"},
-                "Microsoft Word, legacy PowerPoint (.ppt), and legacy Excel (.xls) files "
-                "are not yet supported — GAIA does not currently ship the "
-                "parsers needed to extract text from these formats. "
-                "Tip: Save as PDF from Word, or re-save .xls as "
-                ".xlsx — GAIA supports PDFs, PPTX, and modern .xlsx workbooks.",
+                {".doc", ".ppt", ".xls"},
+                "Legacy Microsoft Office formats (.doc, legacy PowerPoint .ppt, "
+                "and legacy Excel .xls) are not supported — GAIA reads only the "
+                "modern XML-based Office formats. "
+                "Tip: Re-save as .docx, .pptx, or .xlsx — GAIA supports PDFs, "
+                "modern Word (.docx), PowerPoint (.pptx), and Excel (.xlsx).",
             ),
         }
 

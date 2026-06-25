@@ -148,6 +148,7 @@ setup(
             "pymupdf>=1.24.0",
             "pypdf",
             "python-pptx>=0.6.21",
+            "python-docx>=1.1.0",
             "sentence-transformers",
             "safetensors",
             # torch is pinned lower-bound only. The "audio" extra caps
@@ -234,6 +235,7 @@ setup(
             "pymupdf>=1.24.0",
             "pypdf",
             "python-pptx>=0.6.21",
+            "python-docx>=1.1.0",
             "sentence-transformers",
         ],
         "lint": [

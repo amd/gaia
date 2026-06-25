@@ -1601,6 +1601,137 @@ These positions indicate where to split the text."""
             self.log.error(f"Error reading Excel file {xlsx_path}: {e}")
             raise
 
+    def _extract_text_from_docx(self, docx_path: str) -> str:
+        """Extract text from a Word (.docx) document using python-docx.
+
+        Walks the document body in order so paragraphs and tables stay
+        interleaved. Paragraph text is collected from every ``w:t`` node so
+        runs nested in hyperlinks and **content controls** (``w:sdt`` — the
+        fields used by form/template documents) are captured, not just the
+        direct runs that ``Paragraph.text`` exposes. Table cells (including
+        tables nested inside a cell) and block-level content controls are
+        recursed into.
+
+        Corrupt / non-.docx files and a missing ``python-docx`` install raise
+        actionable errors, mirroring :meth:`_extract_text_from_pptx` (.docx is
+        a ZIP container like .pptx).
+
+        Known omissions: header/footer text (separate XML parts, usually
+        repeated boilerplate) and embedded images.
+        # TODO(#1072): VLM extraction for images embedded in .docx files.
+
+        Returns:
+            The extracted text as a single string.
+        """
+        file_name = Path(docx_path).name
+
+        try:
+            from docx import Document  # pylint: disable=import-outside-toplevel
+            from docx.oxml.ns import qn  # pylint: disable=import-outside-toplevel
+        except ImportError as e:
+            raise ImportError(
+                "python-docx is required for Word document processing. "
+                "Install it with: uv pip install python-docx"
+            ) from e
+
+        # Guard against zip bombs: .docx is a ZIP container. Check the total
+        # uncompressed size is sane before handing it to python-docx.
+        try:
+            with zipfile.ZipFile(docx_path, "r") as zf:
+                total_uncompressed = sum(info.file_size for info in zf.infolist())
+                max_uncompressed = 500 * 1024 * 1024  # 500 MB
+                if total_uncompressed > max_uncompressed:
+                    msg = (
+                        f"Word file too large after decompression: {file_name}\n"
+                        f"Uncompressed size: {total_uncompressed / (1024*1024):.0f} MB "
+                        f"(limit: {max_uncompressed / (1024*1024):.0f} MB)\n"
+                        "The file may be a zip bomb or contain very large embedded media.\n"
+                        "Suggestions:\n"
+                        "  1. Remove unnecessary images/media to reduce file size\n"
+                        "  2. Save as PDF and index the PDF instead"
+                    )
+                    self.log.error(
+                        f"DOCX zip bomb guard: {docx_path} "
+                        f"({total_uncompressed} bytes uncompressed)"
+                    )
+                    raise ValueError(msg)
+        except zipfile.BadZipFile as e:
+            msg = (
+                f"Could not read Word file: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a valid .docx file.\n"
+                "Suggestions:\n"
+                "  1. Re-download or re-export the document\n"
+                "  2. Try opening the file in Word to confirm it is readable\n"
+                "  3. Save as PDF and index the PDF instead"
+            )
+            self.log.error(f"Corrupted DOCX (bad zip): {docx_path}: {e}")
+            raise ValueError(msg) from e
+
+        try:
+            doc = Document(docx_path)
+        except Exception as e:
+            msg = (
+                f"Could not read Word file: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a valid .docx file.\n"
+                "Suggestions:\n"
+                "  1. Re-download or re-export the document\n"
+                "  2. Try opening the file in Word to confirm it is readable\n"
+                "  3. Save as PDF and index the PDF instead"
+            )
+            self.log.error(f"Corrupted DOCX {docx_path}: {e}")
+            raise ValueError(msg) from e
+
+        try:
+            w_p, w_tbl, w_sdt = qn("w:p"), qn("w:tbl"), qn("w:sdt")
+            w_sdt_content = qn("w:sdtContent")
+            w_t, w_tr, w_tc = qn("w:t"), qn("w:tr"), qn("w:tc")
+
+            def _paragraph_text(p_elem):
+                # Join every ``w:t`` descendant — captures runs nested in
+                # hyperlinks and inline content controls that Paragraph.text
+                # (direct runs only) would silently drop.
+                return "".join(node.text or "" for node in p_elem.iter(w_t)).strip()
+
+            def _emit(elem, parts):
+                # Recursively walk a block element in document order, appending
+                # text fragments. Unknown tags (section props, etc.) are skipped.
+                if elem.tag == w_p:
+                    para_text = _paragraph_text(elem)
+                    if para_text:
+                        parts.append(para_text)
+                elif elem.tag == w_tbl:
+                    for row in elem.findall(w_tr):
+                        cells = []
+                        for cell in row.findall(w_tc):
+                            cell_parts = []
+                            for cell_child in cell:
+                                _emit(cell_child, cell_parts)
+                            cells.append(" ".join(cell_parts).strip())
+                        if any(cells):
+                            parts.append(" | ".join(cells))
+                elif elem.tag == w_sdt:
+                    # Block-level content control — descend into its content.
+                    content = elem.find(w_sdt_content)
+                    if content is not None:
+                        for sdt_child in content:
+                            _emit(sdt_child, parts)
+
+            parts = []
+            for child in doc.element.body:
+                _emit(child, parts)
+
+            text = "\n".join(parts)
+
+            if self.config.show_stats:
+                print(f"  ✅ Loaded Word file ({len(text):,} chars)")
+            self.log.info(f"📄 Extracted {len(text):,} characters from Word file")
+            return text
+        except Exception as e:
+            self.log.error(f"Error reading Word file {docx_path}: {e}")
+            raise
+
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
         Extract text from file based on type.
@@ -1645,6 +1776,10 @@ These positions indicate where to split the text."""
         # Excel files
         elif file_type in [".xlsx", ".xls"]:
             return self._extract_text_from_xlsx(file_path), metadata
+
+        # Word files
+        elif file_type == ".docx":
+            return self._extract_text_from_docx(file_path), metadata
 
         # Code files (treat as text for Q&A purposes)
         elif file_type in [
