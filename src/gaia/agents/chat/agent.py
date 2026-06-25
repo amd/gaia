@@ -46,6 +46,21 @@ from gaia.vlm.mixin import VLMToolsMixin
 logger = get_logger(__name__)
 
 
+def dynamic_tools_env_override() -> Optional[bool]:
+    """Parse the ``GAIA_DYNAMIC_TOOLS`` override, or ``None`` when it is unset.
+
+    Returns the parsed boolean (truthy set ``1``/``true``/``yes``/``on``,
+    case-insensitive) when the env var is set, else ``None`` to signal "no
+    override — fall back to the persisted/config value". The UI settings
+    router reuses this so the env-wins precedence and the truthy set never
+    drift between the agent resolver and the toggle that surfaces it.
+    """
+    raw = os.getenv("GAIA_DYNAMIC_TOOLS")
+    if raw is None:
+        return None
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass
 class ChatAgentConfig:
     """Configuration for ChatAgent."""
@@ -460,10 +475,10 @@ class ChatAgent(
 
     def _resolve_dynamic_tools_enabled(self) -> bool:
         """Toggle: ``GAIA_DYNAMIC_TOOLS`` (truthy) wins over the config field."""
-        raw = os.getenv("GAIA_DYNAMIC_TOOLS")
-        if raw is None:
-            return bool(self.config.dynamic_tools)
-        return raw.strip().lower() in ("1", "true", "yes", "on")
+        override = dynamic_tools_env_override()
+        if override is not None:
+            return override
+        return bool(self.config.dynamic_tools)
 
     def _resolve_dynamic_tools_threshold(self) -> float:
         """Threshold: ``GAIA_DYNAMIC_TOOLS_TAU`` wins; malformed value fails loudly."""
