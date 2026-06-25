@@ -4,9 +4,9 @@ This doc records the spike decision and actionable follow-ups for integrating th
 
 **Scope**: map capabilities → packaged interface → UI surface; decide among Options A/B/C (or hybrid); inventory in-process glue to remove; propose sequenced follow-up issues; call out key tests (token keyring race, draft/send token flow).
 
-**Outcome (short)**: hybrid approach - ship Inbox (A) on frozen REST immediately, preserve full conversational UX by proxying the packaged agent loop over the packaged `pipe/cli` surface (C), and add a small, targeted contract extension (B) for long-running / batch ops (pre-scan, batch-archive, calendar, search) via new REST or MCP endpoints with an `apiVersion` bump. This minimizes immediate UX regression, keeps the agent logic unchanged, and scopes contract changes to a small set of additive endpoints that are independently reviewable.
+**Outcome (short)**: hybrid approach - ship Inbox (A) on frozen REST immediately, preserve full conversational UX by proxying the packaged agent loop over the packaged `pipe/cli` surface (C), and add a small, targeted contract extension (B) for long-running / batch ops (pre-scan, batch-archive, calendar, search) via new REST or MCP endpoints with a contract version bump. This minimizes immediate UX regression, keeps the agent logic unchanged, and scopes contract changes to a small set of additive endpoints that are independently reviewable.
 
-**Rationale**: the frozen REST already covers triage/draft/send; shipping an Inbox view (A) unlocks immediate dogfood and limits risk. Preserving conversational chat requires exposing the agent loop - the package already exposes `pipe/cli` so proxying it is lower cost than reauthoring the loop into REST. Batch/long-running operations are best served by explicit endpoints (REST or MCP tools) so the UI can orchestrate progress / cancel / undo; those require an `apiVersion` bump and re-freeze.
+**Rationale**: the frozen REST already covers triage/draft/send; shipping an Inbox view (A) unlocks immediate dogfood and limits risk. Preserving conversational chat requires exposing the agent loop - the package already exposes `pipe/cli` so proxying it is lower cost than reauthoring the loop into REST. Batch/long-running operations are best served by explicit endpoints (REST or MCP tools) so the UI can orchestrate progress / cancel / undo; those require a contract version bump and re-freeze.
 
 **Capability → Packaged-Interface → UI Surface**
 
@@ -15,7 +15,7 @@ This doc records the spike decision and actionable follow-ups for integrating th
 - **Draft reply**: **Interface**: REST `/v1/email/draft` (single-use confirmation token) + `/v1/email/send` - **UI**: Draft composer embedded in Inbox card (thread-aware). UI must persist/propagate draft token across compose/send flow.
 - **Phishing detection**: **Interface**: REST `triage.is_phishing` - **UI**: prominent phishing banner in MessageCard and inbox filter.
 - **Full-thread comprehension**: **Interface**: REST `triage` accepts `ThreadInput` - **UI**: Thread view (Inbox → open thread) with thread-level summary and per-message breakdown.
-- **Batch archiving**: **Interface**: NOT exposed by frozen REST/MCP today - **Recommended Interface**: Add REST `/v1/email/batch_archive` or MCP `organize_tools.archive_thread_batch` (see tradeoffs) — **UI**: Inbox bulk-select + archive CTA with progress + undo.
+- **Batch archiving**: **Interface**: NOT exposed by frozen REST/MCP today - **Recommended Interface**: Add REST `/v1/email/batch_archive` or MCP `organize_tools.archive_thread_batch` (see tradeoffs) - **UI**: Inbox bulk-select + archive CTA with progress + undo.
 
 Agent-loop-only features (tools in `gaia_agent_email/tools/*`):
 - **Inbox pre-scan** (pre-scan_inbox): currently agent-loop-only (long-running). Recommended: exposed as REST `/v1/email/pre_scan` (returns a job id + SSE/progress) or as an MCP streaming tool. **UI**: Inbox pre-scan card / initial onboarding CTA.
@@ -27,11 +27,11 @@ Agent-loop-only features (tools in `gaia_agent_email/tools/*`):
 Interface assignment summary (recommended):
 - Use existing frozen REST for immediate launches (triage, summary, draft, send, health, version).
 - Use packaged `pipe/cli` (agent loop) proxied by the UI process for conversational chat (no agent logic change). Implement a small proxy daemon in the npm client / UI process that spawns the packaged binary and tunnels stdin/stdout over WebSocket to the frontend.
-- Add a minimal set of additive REST/MCP endpoints for long-running or batch ops (pre-scan, batch_archive, calendar, search, quarantine, preferences). These require `apiVersion` bump and a short re-freeze cycle.
+- Add a minimal set of additive REST/MCP endpoints for long-running or batch ops (pre-scan, batch_archive, calendar, search, quarantine, preferences). These require a contract version bump (see note below on where the contract version lives) and a short re-freeze cycle.
 
 API versioning and re-freeze impact
 
-- Any added endpoints or changed request/response shapes must be additive and bump `apiVersion` in `gaia-agent.yaml` (e.g., from `v1` → `v1.1` or `v2` per policy). The UI must detect and fail-loud on mismatches.
+- Any added endpoints or changed request/response shapes must be additive. Bump the packaged agent's contract version by updating `API_VERSION` (which aliases `SCHEMA_VERSION`) in `hub/agents/python/email/gaia_agent_email/version.py` (the single source of truth for the REST contract version; currently `2.0`). `SCHEMA_VERSION` is defined in `hub/agents/python/email/gaia_agent_email/contract.py`. The agent's `/v1/email/version` route serves this value as `apiVersion`. Note: `gaia-agent.yaml`'s `version` is the package build/version (e.g. `0.2.2`) and is distinct from the REST contract version; do not conflate them. The UI must detect and fail-loud on contract mismatches.
 - Re-freeze impact: packaging pipeline will need to produce a new frozen binary + npm thin client update. Keep changes scoped to a few endpoints to minimize freeze time.
 
 Send/draft flow note
@@ -40,14 +40,14 @@ Send/draft flow note
 
 In-process wiring to remove (confirmed on `main`)
 
-- **Remove**: UI in-process agent construction + mail session-specific providers: [src/gaia/ui/_chat_helpers.py](src/gaia/ui/_chat_helpers.py) - `_session_mail_provider` and factory call sites.
-- **Remove**: tool→SSE render mapping for pre-scan: [src/gaia/ui/sse_handler.py](src/gaia/ui/sse_handler.py) entries `_RENDER_TOOL_TO_LANG["pre_scan_inbox"]` and `_capture_render_payload` wiring.
-- **Remove**: email-agent eviction / special-case agent handling in sessions router: [src/gaia/ui/routers/sessions.py](src/gaia/ui/routers/sessions.py).
+- **Remove**: UI in-process agent construction + mail session-specific providers: `src/gaia/ui/_chat_helpers.py` - `_session_mail_provider` and factory call sites.
+- **Remove**: tool→SSE render mapping for pre-scan: `src/gaia/ui/sse_handler.py` entries `_RENDER_TOOL_TO_LANG["pre_scan_inbox"]` and `_capture_render_payload` wiring.
+- **Remove**: email-specific session special-casing in `src/gaia/ui/routers/sessions.py` (for example, `mail_provider`-driven model rebuild or other email-only session hooks). Do **not** remove the generic `evict_session_agent` lifecycle hook used by sessions across agents.
 
 Keep (transport-agnostic UI/DB pieces)
 
-- `mail_provider` session column/models/routers: [src/gaia/ui/database.py](src/gaia/ui/database.py) (mail_provider column), [src/gaia/ui/models.py](src/gaia/ui/models.py), [src/gaia/ui/routers/sessions.py](src/gaia/ui/routers/sessions.py) (session persistence behavior) — keep as-is.
-- Connector grant migration and formatting helpers: [src/gaia/connectors/grants.py](src/gaia/connectors/grants.py), [src/gaia/connectors/formatting.py](src/gaia/connectors/formatting.py).
+- `mail_provider` session column/models/routers: `src/gaia/ui/database.py` (mail_provider column), `src/gaia/ui/models.py`, `src/gaia/ui/routers/sessions.py` (session persistence behavior) — keep as-is.
+- Connector grant migration and formatting helpers: `src/gaia/connectors/grants.py`, `src/gaia/connectors/formatting.py`.
 - Frontend rendering components: `EmailPreScanCard`, `EmailConnectCta`, `MessageBubble` — keep and wire to new Inbox view.
 
 Key cross-process token caveat (keyring)
@@ -72,7 +72,7 @@ Sequenced follow-up issues (suggested, each scoped to one PR)
 
 4. Batch & long-running ops contract extension
 - Title: `email: add pre_scan / batch_archive / calendar / search endpoints to packaged sidecar`.
-- Scope: Add additive endpoints (REST or MCP), bump `apiVersion`, coordinate freeze. Keep each endpoint as its own PR (pre_scan, batch_archive, calendar, search). Tests: smoke endpoints + SSE/progress where applicable.
+- Scope: Add additive endpoints (REST or MCP), bump the packaged agent contract version (update `API_VERSION`/`SCHEMA_VERSION`), coordinate freeze. Keep each endpoint as its own PR (pre_scan, batch_archive, calendar, search). Tests: smoke endpoints + SSE/progress where applicable.
 
 5. Token keyring coordination test & mitigation
 - Title: `email: validate sidecar keyring refresh coordination`.
@@ -83,7 +83,7 @@ Sequenced follow-up issues (suggested, each scoped to one PR)
 - Scope: Remove `_session_mail_provider` construction, SSE pre-scan mapping, special eviction handling; ensure tests and UI use packaged surfaces. Run CI, manual dogfood.
 
 7. Documentation & packaging
-- Title: `docs: document email sidecar APIVersion, migration guide`.
+- Title: `docs: document email sidecar contract/API version, migration guide`.
 - Scope: Release notes, UI migration steps, new APIVersion details for integrators.
 
 Proof-of-concept (optional)
