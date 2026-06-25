@@ -66,6 +66,7 @@ ul.points li::before{ content:""; position:absolute; left:0; top:.55em; width:10
 /* ── Code / contract (technical tier only) ── */
 pre.code{ font-family:var(--mono); font-size:15px; line-height:1.5; background:var(--surface);
   border:1px solid var(--line); border-radius:8px; padding:18px 20px; overflow:hidden; white-space:pre-wrap; }
+code{ font-family:var(--mono); font-size:.92em; }
 
 /* ── Loud placeholder + DRAFT banner ── */
 .placeholder{ display:inline-flex; align-items:center; gap:6px; font-weight:700;

@@ -57,7 +57,7 @@ generic prose.
 **Executive** — leadership audience:
 - Leads with outcome, impact, timeline, risk, cost. Distilled but still concrete (real
   numbers/outcomes only).
-- **Forbidden: no code blocks, no architecture diagrams, no methodology sections.**
+- **Forbidden: code blocks, architecture diagrams, methodology sections.**
 - Materially fewer slides than the technical tier (typically 5–7). Must select *different
   facts* — not the technical deck truncated or renamed.
 
@@ -77,7 +77,7 @@ Eval-metric slides intentionally show labeled `⚠ PLACEHOLDER` values because n
 benchmark results existed in the source at generation time.
 
 - **Technical tier (12 slides):** `reference/example-technical.html` — architecture,
-  request/response contract, packaging table, methodology, code blocks.
+  request/response contract, packaging table, token-usage schema, code blocks.
 - **Executive tier (7 slides):** `reference/example-executive.html` — outcome, timeline,
   risk, and cost; no code, no architecture diagrams.
 
