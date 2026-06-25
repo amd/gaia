@@ -27,10 +27,15 @@ on:
   merge_group:
   workflow_dispatch:
 
-# Cancel in-progress runs when a new run is triggered
+# Serialize ALL Windows/Lemonade integration runs against each other. They share
+# one persistent Lemonade server (a global scheduled task on the self-hosted `stx`
+# runner) that ensure-lemonade-running.ps1 force-restarts, so any two concurrent
+# runs -- across both workflows AND across branches -- evict each other's server.
+# A CONSTANT group makes that shared server a true mutex; cancel-in-progress: false
+# queues runs instead of aborting one mid-warmup.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  group: windows-lemonade-stx
+  cancel-in-progress: false
 
 permissions:
   contents: read
