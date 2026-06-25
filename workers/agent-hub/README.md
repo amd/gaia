@@ -14,90 +14,11 @@ depend on any `src/gaia` code.
 
 | Route | Auth | Purpose |
 |-------|------|---------|
-| `POST /publish` | Bearer | Publish a new agent version. Two Content-Type paths — see *Publish protocol* below. |
-| `GET /index.json` | none | Catalog of every agent (latest version only), including the latest README + CHANGELOG markdown |
+| `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Form parts: `manifest` (gaia-agent.yaml text), `artifact` (wheel/binary/zip file), optional `readme` + `changelog` + `spec` + `skill` (markdown, rendered as the Hub page's doc tabs), and optional `package_files` (JSON `{files:[{name,size_bytes}]}` listing the contents of a whole-package `.zip` artifact — surfaced as the catalog's `package`) |
+| `GET /index.json` | none | Catalog of every agent (latest version only), including the latest README + CHANGELOG + SPEC + SKILL markdown |
 | `GET /agents/<id>/manifest.json` | none | Per-agent aggregate manifest (all versions) |
-| `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, `README.md`, or `CHANGELOG.md` |
+| `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, `README.md`, `CHANGELOG.md`, `SPEC.md`, or `SKILL.md` |
 | `GET /health` | none | Liveness probe |
-
-### Publish protocol
-
-`POST /publish` accepts two Content-Type variants, routed by the first bytes of
-the header value:
-
-#### `multipart/form-data` — per-platform binaries and wheels (existing path)
-
-Used for artifacts that fit comfortably under Cloudflare's per-Worker memory
-budget (~40 MB platform binaries, Python wheels). The artifact is buffered
-server-side to compute the SHA-256.
-
-Form parts:
-| Part | Required | Description |
-|------|----------|-------------|
-| `manifest` | ✓ | `gaia-agent.yaml` text |
-| `artifact` | ✓ | The wheel or binary file |
-| `readme` | | README.md markdown (rendered on Hub pages) |
-| `changelog` | | CHANGELOG.md markdown (rendered on Hub pages) |
-| `package_files` | | JSON `{"files":[{"name":"…","size_bytes":0}]}` — file listing of a whole-package zip |
-
-Example:
-```bash
-curl -X POST https://hub.amd-gaia.ai/publish \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "manifest=@gaia-agent.yaml" \
-  -F "artifact=@email-agent-linux-x64"
-```
-
-#### `application/octet-stream` — whole-package zip (streaming path)
-
-Used for large artifacts (the ~177 MB whole-package zip) that would exceed
-Cloudflare's ~128 MB per-Worker memory limit if buffered. The raw request body
-is streamed directly to R2 without buffering; metadata travels in headers.
-
-Required headers:
-| Header | Description |
-|--------|-------------|
-| `X-Gaia-Manifest` | Base64 of `gaia-agent.yaml` bytes (UTF-8-safe) |
-| `X-Gaia-Filename` | Artifact filename (validated against `FILENAME_RE`) |
-| `X-Gaia-Sha256` | Client-computed lowercase hex SHA-256 (R2 verifies on store) |
-| `Content-Length` | Exact byte count (used for the pre-flight size guard) |
-
-Optional headers:
-| Header | Description |
-|--------|-------------|
-| `X-Gaia-Package-Files` | Base64 of `package-files.json` bytes |
-| `X-Gaia-Content-Type` | Artifact content-type (default `application/octet-stream`) |
-
-Integrity is enforced by passing `sha256` to `R2.put()` — R2 verifies the
-streamed bytes against the provided hash and throws if they disagree; the Worker
-catches this and returns `400 integrity_check_failed`.
-
-Example:
-```bash
-SHA=$(sha256sum agent-email-0.1.0.zip | awk '{print $1}')
-curl -X POST https://hub.amd-gaia.ai/publish \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/octet-stream" \
-  -H "Content-Length: $(stat -c%s agent-email-0.1.0.zip)" \
-  -H "X-Gaia-Manifest: $(base64 -w0 gaia-agent.yaml)" \
-  -H "X-Gaia-Filename: agent-email-0.1.0.zip" \
-  -H "X-Gaia-Sha256: $SHA" \
-  --data-binary @agent-email-0.1.0.zip
-```
-
-Both paths return the same `201` body shape:
-```json
-{
-  "published": {
-    "id": "email",
-    "version": "0.1.0",
-    "artifact": { "filename": "…", "path": "…", "size_bytes": 0, "sha256": "…", "content_type": "…" },
-    "version_artifacts": 1,
-    "latest_version": "0.1.0"
-  },
-  "catalog_agents": 1
-}
-```
 
 ### Publish guarantees
 
@@ -136,6 +57,8 @@ agents/<id>/manifest.json                       # per-agent aggregate (all versi
 agents/<id>/<version>/gaia-agent.yaml           # exact manifest uploaded for this version
 agents/<id>/<version>/README.md                 # README markdown for this version (if published)
 agents/<id>/<version>/CHANGELOG.md              # CHANGELOG markdown for this version (if published)
+agents/<id>/<version>/SPEC.md                   # SPEC markdown for this version (if published)
+agents/<id>/<version>/SKILL.md                  # SKILL markdown for this version (if published)
 agents/<id>/<version>/<filename>                # the artifact (wheel or binary)
 ```
 
@@ -170,7 +93,8 @@ schemas live in [`schemas/`](./schemas):
   `min_disk_gb`, `min_context_size`, `platforms`, `npu` as
   `"required"`/`"optional"`, `gpu_vram_gb`), `readme` (latest version's README
   markdown, `""` if none was published), `changelog` (latest version's CHANGELOG
-  markdown, `""` if none was published), the optional `npm_package` /
+  markdown, `""` if none was published), `spec` + `skill` (latest version's SPEC.md
+  / SKILL.md markdown, `""` if none was published), the optional `npm_package` /
   `playground_url` (present only when the manifest declares them — they drive the
   hub page's npm install method and playground launcher), and the optional
   `package` (`{ filename, size_bytes, files: [{name, size_bytes}] }` — the
@@ -209,24 +133,13 @@ in plain Node without Miniflare.
 # Terminal 1
 PUBLISH_TOKENS='{"dev-token":{"publisher":"AMD","authors":["AMD"]}}' npm run dev
 
-# Terminal 2 — multipart (per-platform binary or wheel)
+# Terminal 2
 curl -X POST http://localhost:8787/publish \
   -H "Authorization: Bearer dev-token" \
   -F "manifest=@hub/agents/python/chat/gaia-agent.yaml" \
   -F "artifact=@dist/gaia_agent_chat-0.1.0-py3-none-any.whl" \
   -F "readme=@hub/agents/python/chat/README.md;type=text/markdown" \
   -F "changelog=@hub/agents/python/chat/CHANGELOG.md;type=text/markdown"
-
-# Terminal 2 — streaming octet-stream (whole-package zip)
-SHA=$(sha256sum dist/agent-email-0.1.0.zip | awk '{print $1}')
-curl -X POST http://localhost:8787/publish \
-  -H "Authorization: Bearer dev-token" \
-  -H "Content-Type: application/octet-stream" \
-  -H "Content-Length: $(stat -f%z dist/agent-email-0.1.0.zip)" \
-  -H "X-Gaia-Manifest: $(base64 -i hub/agents/python/email/gaia-agent.yaml)" \
-  -H "X-Gaia-Filename: agent-email-0.1.0.zip" \
-  -H "X-Gaia-Sha256: $SHA" \
-  --data-binary @dist/agent-email-0.1.0.zip
 
 curl http://localhost:8787/index.json
 ```

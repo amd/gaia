@@ -191,6 +191,10 @@ export interface IndexEntry {
   readme: string;
   /** CHANGELOG.md markdown of the latest version; empty string if none was published. */
   changelog: string;
+  /** SPEC.md (technical reference) markdown of the latest version; "" if none was published. */
+  spec: string;
+  /** SKILL.md (AI-integration playbook) markdown of the latest version; "" if none was published. */
+  skill: string;
   /** npm package name when the agent is distributed via npm; absent otherwise. */
   npm_package?: string;
   /** Localhost playground URL served by the agent's sidecar; absent otherwise. */
