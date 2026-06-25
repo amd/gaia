@@ -594,10 +594,11 @@ class InitCommand:
             try:
                 from gaia.config import GaiaConfig
 
-                config = GaiaConfig(
-                    profile=self.profile,
-                    default_device="npu" if self.profile == "npu" else "gpu",
-                )
+                # Load-then-update so a user-set default_model (or any future
+                # field) survives re-running `gaia init`.
+                config = GaiaConfig.load()
+                config.profile = self.profile
+                config.default_device = "npu" if self.profile == "npu" else "gpu"
                 config.save()
             except Exception as e:
                 log.warning(f"Failed to save config: {e}")

@@ -2804,6 +2804,30 @@ Examples:
 
     connectors_cli.add_subparser(subparsers)
 
+    # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
+    # users don't have to pass --model on every chat/llm/prompt (issue #98).
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Manage persistent GAIA config (~/.gaia/config.json)",
+    )
+    config_subparsers = config_parser.add_subparsers(
+        dest="config_action", help="Config action"
+    )
+    config_subparsers.add_parser(
+        "show", help="Show current config and the config file path"
+    )
+    config_get_parser = config_subparsers.add_parser(
+        "get", help="Get a config value, e.g. `gaia config get default_model`"
+    )
+    config_get_parser.add_argument("key", help="Config key to read")
+    config_set_parser = config_subparsers.add_parser(
+        "set",
+        help="Set a config value, e.g. `gaia config set default_model Qwen3.5-35B-A3B-GGUF`",
+    )
+    config_set_parser.add_argument("key", help="Config key to set")
+    config_set_parser.add_argument("value", help="Value to assign")
+    config_parser.set_defaults(action="config")
+
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
     init_parser = subparsers.add_parser(
@@ -2933,6 +2957,29 @@ def main():
 
     if hasattr(args, "logging_level"):
         log_manager.set_level("gaia", getattr(logging, args.logging_level))
+
+    # Apply the persistent default_model (issue #98) for model-bearing commands.
+    # Precedence: explicit --model flag > config default_model > built-in default.
+    # An explicit `chat --device` requests a device-specific model, so it keeps
+    # precedence over the config default there.
+    if (
+        args.action in ("prompt", "chat", "llm")
+        and getattr(args, "model", None) is None
+    ):
+        from gaia.config import GaiaConfig, GaiaConfigError
+
+        try:
+            _cfg = GaiaConfig.load()
+        except GaiaConfigError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(1)
+        # builtin_default=None: leave args.model unset when no config default so
+        # each command keeps applying its own built-in default downstream.
+        if not (args.action == "chat" and getattr(args, "device", None)):
+            resolved = _cfg.resolve_model(args.model, None)
+            if resolved:
+                args.model = resolved
+                log.debug("Using default_model from config: %s", resolved)
 
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
@@ -4216,6 +4263,11 @@ Let me know your answer!
         handle_mcp_command(args)
         return
 
+    # Handle Config command
+    if args.action == "config":
+        handle_config_command(args)
+        return
+
     # Handle Cache command
     if args.action == "cache":
         handle_cache_command(args)
@@ -5214,6 +5266,58 @@ def handle_knowledge_command(args):
         sys.exit(1)
     finally:
         client.close()
+
+
+def handle_config_command(args):
+    """Handle `gaia config show|get|set` (persistent ~/.gaia/config.json)."""
+    from gaia.config import GAIA_CONFIG_FILE, GaiaConfig, GaiaConfigError
+
+    action = getattr(args, "config_action", None)
+    if not action:
+        print(
+            "No config action specified. Use: gaia config show|get|set",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        cfg = GaiaConfig.load()
+    except GaiaConfigError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "show":
+        exists = GAIA_CONFIG_FILE.exists()
+        print(f"Config file: {GAIA_CONFIG_FILE}")
+        print(
+            "  (file exists)"
+            if exists
+            else "  (file not created yet — showing built-in defaults)"
+        )
+        for key in cfg.field_names():
+            value = cfg.get(key)
+            print(f"  {key} = {value if value is not None else '(unset)'}")
+        return
+
+    if action == "get":
+        try:
+            value = cfg.get(args.key)
+        except GaiaConfigError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(1)
+        print(value if value is not None else "")
+        return
+
+    if action == "set":
+        try:
+            cfg.set(args.key, args.value)
+        except GaiaConfigError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(1)
+        cfg.save()
+        print(f"✅ Set {args.key} = {args.value}")
+        print(f"   Saved to {GAIA_CONFIG_FILE}")
+        return
 
 
 def handle_cache_command(args):
