@@ -194,15 +194,21 @@ class TestDistinctCountFields:
 
 class TestLooseCoupling:
     def test_no_benchmark_or_agent_modules_imported(self):
-        # Import is already done at top of file; check sys.modules
-        contaminated = [
-            m
-            for m in sys.modules
-            if "benchmark" in m or "gaia_agent_email" in m
-        ]
-        assert not contaminated, (
-            f"release_scorecard import pulled in harness/agent modules: {contaminated}"
+        # Clean interpreter: importing release_scorecard must not pull in the
+        # eval harness or any agent package. Scanning the test process's own
+        # sys.modules gives false positives (e.g. the pytest_benchmark plugin),
+        # so check in a fresh subprocess instead.
+        import subprocess
+        import sys as _sys
+
+        code = (
+            "import sys, gaia.eval.release_scorecard; "
+            "bad=[m for m in sys.modules if 'gaia.eval.benchmark' in m "
+            "or 'gaia.eval.quality_metrics' in m or 'gaia_agent_email' in m]; "
+            "assert not bad, bad"
         )
+        r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
 
 
 # ---------------------------------------------------------------------------
