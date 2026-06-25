@@ -5,6 +5,16 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## 0.2.4
+
+First fully-published release of this feature set. The whole-package zip download
+(#1843) is temporarily disabled: the ~177 MB all-platforms zip exceeds Cloudflare's
+edge upload limit, so the publish step rejected it (413) and blocked every prior
+attempt (0.2.1–0.2.3). The worker-side streaming approach was reverted; 0.2.4 ships
+the per-platform binaries + this npm client without the combined zip. Per-platform
+binaries remain individually downloadable from the Hub. No agent wire-contract
+change — `SCHEMA_VERSION` stays `2.0`.
+
 ## 0.2.3
 
 Re-cut of 0.2.2 after the Agent Hub worker was redeployed with the large-artifact

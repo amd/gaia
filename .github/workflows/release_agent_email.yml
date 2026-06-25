@@ -503,6 +503,9 @@ jobs:
           npm run build
 
       - name: Assemble + publish the whole-package zip (all platforms + client + docs)
+        # DISABLED: the ~177 MB all-platforms zip exceeds Cloudflare's edge upload
+        # limit (POST returns 413). Revive via presigned-to-R2 or per-platform zips.
+        if: false
         shell: bash
         env:
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
@@ -564,6 +567,7 @@ jobs:
           done
 
       - name: Verify the published package zip is fetchable at the edge
+        if: false  # disabled together with the whole-package zip publish above
         shell: bash
         env:
           GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
