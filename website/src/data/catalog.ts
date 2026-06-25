@@ -258,7 +258,7 @@ export function installMethods(agent: Agent): InstallMethod[] {
         key: 'npm',
         label: 'npm',
         command: `npm i ${agent.npm_package}`,
-        note: 'Installs the client and fetches the local sidecar binary on first run. Runs 100% locally on AMD Ryzen AI.',
+        note: '',
       },
     ];
   }

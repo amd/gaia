@@ -18,26 +18,30 @@ const methods = installMethods(agent);
 ---
 
 <div data-install-methods>
-  <div
-    role="tablist"
-    aria-label={`How to install ${agent.name}`}
-    class="inline-flex flex-wrap gap-1 rounded-lg border border-g-border bg-g-surface p-1"
-  >
-    {methods.map((m, i) => (
-      <button
-        type="button"
-        role="tab"
-        id={`im-tab-${m.key}`}
-        aria-controls={`im-panel-${m.key}`}
-        aria-selected={i === 0 ? 'true' : 'false'}
-        tabindex={i === 0 ? 0 : -1}
-        data-im-tab={m.key}
-        class="im-tab rounded-md px-3.5 py-1.5 text-[13px] font-medium text-g-muted transition-colors hover:text-g-text aria-selected:bg-g-gold aria-selected:font-semibold aria-selected:text-black"
-      >
-        {m.label}
-      </button>
-    ))}
-  </div>
+  {/* The switcher only makes sense with 2+ methods. A single-method agent (e.g.
+      an npm-only sidecar) just shows its command — no lone, inert tab button. */}
+  {methods.length > 1 && (
+    <div
+      role="tablist"
+      aria-label={`How to install ${agent.name}`}
+      class="inline-flex flex-wrap gap-1 rounded-lg border border-g-border bg-g-surface p-1"
+    >
+      {methods.map((m, i) => (
+        <button
+          type="button"
+          role="tab"
+          id={`im-tab-${m.key}`}
+          aria-controls={`im-panel-${m.key}`}
+          aria-selected={i === 0 ? 'true' : 'false'}
+          tabindex={i === 0 ? 0 : -1}
+          data-im-tab={m.key}
+          class="im-tab rounded-md px-3.5 py-1.5 text-[13px] font-medium text-g-muted transition-colors hover:text-g-text aria-selected:bg-g-gold aria-selected:font-semibold aria-selected:text-black"
+        >
+          {m.label}
+        </button>
+      ))}
+    </div>
+  )}
 
   {methods.map((m, i) => (
     <div
@@ -58,7 +62,7 @@ const methods = installMethods(agent);
         <span class="min-w-0 flex-1 truncate">{m.command}</span>
         <span class="im-copy-label flex-none select-none text-[11px] text-g-muted transition-colors group-hover:text-g-gold-text">copy</span>
       </button>
-      <p class="mt-2 text-[12.5px] text-g-muted">{m.note}</p>
+      {m.note && <p class="mt-2 text-[12.5px] text-g-muted">{m.note}</p>}
     </div>
   ))}
 </div>
