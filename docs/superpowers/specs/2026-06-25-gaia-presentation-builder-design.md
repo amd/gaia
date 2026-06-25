@@ -66,6 +66,18 @@ slide at a time (a screen-viewer model) which fights reliable print pagination. 
 a static stacked-slides layout that scrolls on screen and prints one slide per page, plus
 the tiny print-disabled viewer above.
 
+## Discoverability / auto-triggering
+
+Claude Code decides whether to invoke a skill from its `SKILL.md` **frontmatter
+`description`**. This skill must therefore ship a description that fires whenever the user
+asks to **generate a presentation / deck / slides** from a document — including phrasings
+like "make a deck", "turn this README into slides", "build a technical/executive
+presentation", "pitch deck from this spec". The description is a required, explicitly
+authored deliverable (not boilerplate): it names the trigger phrases, the two tiers, and
+the HTML-that-prints-to-PDF output, so a fresh session reaches for this skill instead of
+hand-rolling slides. Triggering accuracy is part of acceptance — verified by confirming
+the description matches realistic presentation requests.
+
 ## Architecture
 
 The skill is **prompt-driven**, not a deterministic script: slide selection is a
