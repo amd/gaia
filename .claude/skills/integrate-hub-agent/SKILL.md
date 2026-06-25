@@ -80,8 +80,10 @@ The package is a **GAIA framework plugin**, not a sidecar. Shape:
    it exposes (`cli` / `api_server` / `mcp_server` / `pipe`) — drive it through whichever
    the app uses, plus any required env/config. For **in-process** embedding, the base
    `Agent` entry point is `process_query(text) -> dict`; construct the agent directly
-   (its package exports the class + a `*Config`) or resolve it by id with
-   `AgentRegistry().create_agent("<id>")`. Confirm the exact entry against the agent's
+   (its package exports the class + a `*Config`) or resolve it by id with the registry —
+   which must be populated first: `r = AgentRegistry(); r.discover(); r.create_agent("<id>")`
+   (`discover()` scans the `gaia.agent` entry points; without it the registry is empty
+   and `create_agent` raises `ValueError`). Confirm the exact entry against the agent's
    own source (Step 4) rather than assuming — config knobs vary per agent.
 
 The npm sidecar/binary lifecycle (fetch-binary, spawn, shutdown, typed HTTP client)
