@@ -117,7 +117,7 @@ def _is_judged(scenario: dict) -> bool:
     return 0.0 <= f <= 1.0 and math.isfinite(f)
 
 
-def build_payload(benchmark_dir: Path, ground_truth_path: Path):
+def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
     """Build a :class:`~gaia.eval.release_scorecard.ResultPayload` from benchmark output.
 
     A scenario is **judged** iff it has a ``quality`` dict AND
@@ -127,6 +127,9 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path):
     Args:
         benchmark_dir: Directory written by ``gaia eval benchmark --output-dir``.
         ground_truth_path: Path to ``ground_truth.json`` (the labeled corpus).
+        limit: The ``--limit`` value used for the eval run, recorded in
+            ``config["limit"]`` for cross-version comparability. The benchmark
+            ``scorecard.json`` does not persist this, so it must be passed in.
 
     Returns:
         Populated :class:`~gaia.eval.release_scorecard.ResultPayload`.
@@ -188,6 +191,12 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path):
             f"No 'version:' field found in {agent_yaml_path}."
         )
 
+    # Model id: benchmark output records it as the per-scenario `category`.
+    # Fall back to the manifest's first declared model.
+    scenario_model = scenarios[0].get("category") if scenarios else None
+    manifest_models = agent_data.get("models") or [None]
+    model = scenario_model or manifest_models[0]
+
     metrics = [
         {"name": "category_accuracy", "value": float(category_accuracy), "weight": 1.0}
     ]
@@ -211,10 +220,10 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path):
         ),
         config={
             "harness": "gaia eval benchmark",
-            "model": data.get("model", agent_data.get("models", [None])[0]),
+            "model": model,
             "corpus": "tests/fixtures/email/synthetic_inbox.mbox",
             "ground_truth": str(ground_truth_path),
-            "limit": data.get("limit"),
+            "limit": limit,
         },
         test_cases_run=test_cases_run,
         metrics=metrics,
@@ -253,6 +262,16 @@ def main(argv=None) -> int:
             "(default: hub/agents/npm/agent-email/scorecards/)."
         ),
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "The --limit value passed to 'gaia eval benchmark' for this run. "
+            "Recorded in config.limit for cross-version comparability "
+            "(the benchmark output does not persist it)."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -260,7 +279,7 @@ def main(argv=None) -> int:
     gt_path = Path(args.ground_truth).resolve()
 
     try:
-        payload = build_payload(benchmark_dir, gt_path)
+        payload = build_payload(benchmark_dir, gt_path, limit=args.limit)
     except (ValueError, FileNotFoundError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
@@ -280,7 +299,7 @@ def main(argv=None) -> int:
         f"Scorecard written: {out_path}\n"
         f"  Version: {payload.agent_version}\n"
         f"  Aggregate: {payload.metrics[0]['value']:.4f} category_accuracy "
-        f"(over {len([s for s in [payload] if True])} — {payload.test_cases_run} emails judged)\n"
+        f"({payload.test_cases_run} emails judged)\n"
         f"  Dataset size: {payload.dataset_size} labeled examples"
     )
     return 0
