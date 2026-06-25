@@ -1,15 +1,136 @@
 ---
-title: Telegram Adapter
+title: "Telegram Adapter"
+description: "Connect GAIA agents to Telegram — receive messages and stream responses back to users."
+icon: "paper-plane"
 ---
 
-# Telegram Adapter
+<Info>
+  **First time here?** Complete the [Setup](/setup) guide first to install GAIA and its dependencies.
+</Info>
 
-This guide describes how to configure the GAIA Telegram adapter to receive messages from Telegram users and stream responses back.
+The Telegram adapter lets you talk to GAIA from the Telegram app on any device. It runs a bot that receives messages, runs each one through a local GAIA chat session, and streams the response back to the chat — so your phone becomes a front-end for the same agent you run on your desktop.
 
-Key points:
+It's a **messaging adapter**, not a separate agent: every conversation is backed by the standard [Agent SDK](/sdk/sdks/chat), so RAG, memory, and tool use behave exactly as they do in `gaia chat`. Each Telegram user gets their own isolated session, and photos or files sent to the bot are saved locally for the agent to process.
 
-- Install `python-telegram-bot` in your environment.
-- Configure a bot token via the Telegram BotFather and pass it to `run_telegram(token=...)`.
-- The adapter supports background daemon mode and per-user sessions.
+## Prerequisites
 
-See `src/gaia/messaging/telegram.py` for the implementation details and configuration options.
+<Steps>
+  <Step title="Install the Telegram extra">
+    The adapter depends on `python-telegram-bot`, which ships in the `telegram` extra:
+
+    ```bash
+    uv pip install -e ".[telegram]"
+    ```
+  </Step>
+
+  <Step title="Create a bot and get its token">
+    In Telegram, open a chat with [@BotFather](https://t.me/BotFather), send `/newbot`, and follow the prompts. BotFather returns a **bot token** that looks like `123456789:ABCdef...`. Keep it secret — anyone with the token can control your bot.
+  </Step>
+
+  <Step title="Make sure a local model is available">
+    The adapter runs inference through your local Lemonade backend, the same as `gaia chat`. If you haven't set up a model yet, run `gaia init` first.
+  </Step>
+</Steps>
+
+## Quick Start
+
+Start the adapter in the foreground, passing the token from BotFather:
+
+```bash
+gaia telegram start --token 123456789:ABCdef...
+```
+
+The bot begins polling Telegram immediately. Open your bot in the Telegram app, send it a message, and you'll get a streamed reply. Press `Ctrl+C` to stop.
+
+<Note>
+  The token is supplied **only** via `--token` — there is no environment variable for it. Wrap the command in a script or shell history that keeps the token out of shared logs.
+</Note>
+
+## Core Usage
+
+### Run in the background
+
+Use `--background` to run the adapter as a daemon. It writes a PID file to `~/.gaia/telegram.pid`, logs to `~/.gaia/telegram.log`, and exposes a health endpoint on `127.0.0.1:8765`:
+
+```bash
+gaia telegram start --token 123456789:ABCdef... --background
+```
+
+### Restrict who can use the bot
+
+By default the bot replies to **anyone** who messages it. Pass `--allowed-users` with a comma-separated list of numeric Telegram user IDs to lock it down:
+
+```bash
+gaia telegram start \
+  --token 123456789:ABCdef... \
+  --allowed-users 11111111,22222222 \
+  --background
+```
+
+<Tip>
+  To find your own Telegram user ID, message [@userinfobot](https://t.me/userinfobot). Messages from anyone not on the allow-list are ignored.
+</Tip>
+
+### Check status and stop
+
+```bash
+# Show whether the background adapter is running (queries the health endpoint)
+gaia telegram status
+
+# Stop the background adapter gracefully
+gaia telegram stop
+
+# Force-stop if a graceful shutdown doesn't complete
+gaia telegram stop --force
+```
+
+`gaia telegram status` checks `127.0.0.1:8765` by default. If you changed the health binding, point it at the right host and port with `--health-host` and `--health-port`.
+
+### Command reference
+
+| Command | Key options | Purpose |
+|---------|-------------|---------|
+| `gaia telegram start` | `--token` (required), `--allowed-users`, `--background` | Start polling Telegram |
+| `gaia telegram stop` | `--force` | Stop the background adapter |
+| `gaia telegram status` | `--health-host`, `--health-port` | Report adapter health |
+
+## How It Works
+
+- **Per-user sessions** — the adapter keeps one Agent SDK session per Telegram user ID, so conversation history and memory stay separated between users.
+- **Streaming replies** — responses stream back into the Telegram chat as the model generates them.
+- **Attachments** — photos and files sent to the bot are saved to a temporary path so the agent can read or analyze them.
+- **Local inference** — all model calls go through your local Lemonade backend; message content is processed on your machine.
+
+Implementation lives in [`src/gaia/messaging/telegram.py`](https://github.com/amd/gaia/blob/main/src/gaia/messaging/telegram.py).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Document Q&A" icon="message" href="/guides/chat">
+    The chat agent that backs every Telegram session — RAG, memory, and tools.
+  </Card>
+
+  <Card title="Agent Memory" icon="brain" href="/guides/memory">
+    Give your Telegram bot a persistent memory across conversations.
+  </Card>
+
+  <Card title="Agent UI" icon="desktop" href="/guides/agent-ui">
+    The desktop front-end for the same agents.
+  </Card>
+
+  <Card title="All Guides" icon="book" href="/guides">
+    Browse every GAIA agent and adapter.
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
