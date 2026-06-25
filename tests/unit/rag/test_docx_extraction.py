@@ -240,6 +240,100 @@ class TestDocxRichContent:
 
         assert "the documentation" in text
 
+    def test_tabs_and_breaks_become_whitespace(self, rag, tmp_path):
+        """w:tab / w:br must inject whitespace so adjacent runs don't glue.
+
+        A naive ``w:t``-only join turns a tab-separated label/value pair into
+        an unsearchable concatenation (``Column1Column2``).
+        """
+        doc = Document()
+        para = doc.add_paragraph()
+        para._p.append(
+            parse_xml(
+                f"<w:r {nsdecls('w')}><w:t>Column1</w:t><w:tab/>"
+                f"<w:t>Column2</w:t><w:br/><w:t>NextLine</w:t></w:r>"
+            )
+        )
+        docx_path = tmp_path / "tabs.docx"
+        doc.save(str(docx_path))
+
+        text = rag._extract_text_from_docx(str(docx_path))
+
+        assert "Column1Column2" not in text
+        assert "Column1" in text and "Column2" in text and "NextLine" in text
+
+    def test_intra_word_runs_not_split(self, rag, tmp_path):
+        """Runs split mid-word (formatting boundaries) must NOT gain spaces."""
+        doc = Document()
+        para = doc.add_paragraph()
+        # "Hel" + "lo Wor" + "ld" — formatting splits, not word boundaries.
+        para._p.append(parse_xml(f"<w:r {nsdecls('w')}><w:t>Hel</w:t></w:r>"))
+        para._p.append(
+            parse_xml(
+                f'<w:r {nsdecls("w")}><w:t xml:space="preserve">lo Wor</w:t></w:r>'
+            )
+        )
+        para._p.append(parse_xml(f"<w:r {nsdecls('w')}><w:t>ld</w:t></w:r>"))
+        docx_path = tmp_path / "intraword.docx"
+        doc.save(str(docx_path))
+
+        text = rag._extract_text_from_docx(str(docx_path))
+
+        assert "Hello World" in text
+
+    def test_textbox_text_captured_once(self, rag, tmp_path):
+        """DrawingML textbox text is captured exactly once (mc:Fallback skipped).
+
+        Word writes a shape as mc:AlternateContent with a DrawingML mc:Choice
+        and a VML mc:Fallback that carries the SAME text — a recursive w:t walk
+        would otherwise emit it twice and produce garbage duplicate tokens.
+        """
+        doc = Document()
+        para = doc.add_paragraph("Body before. ")
+        # Minimal AlternateContent: Choice (DrawingML) + Fallback (VML) both
+        # carry the same text, exactly as Word writes a textbox/shape. The
+        # walker must descend into Choice and skip Fallback.
+        ns = (
+            'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+            'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+        )
+        alt = parse_xml(
+            f"<w:r {ns}><mc:AlternateContent>"
+            f'<mc:Choice Requires="wps">'
+            f"<w:p><w:r><w:t>TEXTBOX_CONTENT</w:t></w:r></w:p></mc:Choice>"
+            f"<mc:Fallback>"
+            f"<w:p><w:r><w:t>TEXTBOX_CONTENT</w:t></w:r></w:p></mc:Fallback>"
+            f"</mc:AlternateContent></w:r>"
+        )
+        para._p.append(alt)
+        docx_path = tmp_path / "textbox.docx"
+        doc.save(str(docx_path))
+
+        text = rag._extract_text_from_docx(str(docx_path))
+
+        assert text.count("TEXTBOX_CONTENT") == 1
+        assert "Body before." in text
+
+    def test_sdt_wrapped_table_row_captured(self, rag, tmp_path):
+        """A row wrapped in a repeating-section content control is not dropped."""
+        doc = Document()
+        table = doc.add_table(rows=1, cols=1)
+        table.cell(0, 0).text = "PlainRow"
+        # Wrap a second row in a w:sdt directly under the table element.
+        sdt_row = parse_xml(
+            f"<w:sdt {nsdecls('w')}><w:sdtContent>"
+            f"<w:tr><w:tc><w:p><w:r><w:t>WRAPPED_ROW</w:t></w:r></w:p></w:tc></w:tr>"
+            f"</w:sdtContent></w:sdt>"
+        )
+        table._tbl.append(sdt_row)
+        docx_path = tmp_path / "sdt_row.docx"
+        doc.save(str(docx_path))
+
+        text = rag._extract_text_from_docx(str(docx_path))
+
+        assert "PlainRow" in text
+        assert "WRAPPED_ROW" in text
+
 
 # ---------------------------------------------------------------------------
 # Tests — Edge Cases / Errors

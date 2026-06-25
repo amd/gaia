@@ -1605,12 +1605,15 @@ These positions indicate where to split the text."""
         """Extract text from a Word (.docx) document using python-docx.
 
         Walks the document body in order so paragraphs and tables stay
-        interleaved. Paragraph text is collected from every ``w:t`` node so
-        runs nested in hyperlinks and **content controls** (``w:sdt`` — the
-        fields used by form/template documents) are captured, not just the
-        direct runs that ``Paragraph.text`` exposes. Table cells (including
-        tables nested inside a cell) and block-level content controls are
-        recursed into.
+        interleaved. Paragraph text is collected by walking the inline tree,
+        so runs nested in hyperlinks, **content controls** (``w:sdt`` — the
+        fields used by form/template documents), and textboxes are captured —
+        not just the direct runs that ``Paragraph.text`` exposes. Tabs and
+        line/page breaks become whitespace so adjacent words don't glue
+        together, and the ``mc:Fallback`` (VML) twin of a DrawingML textbox is
+        skipped so shape text isn't emitted twice. Table cells (including
+        tables nested in a cell, and rows/cells wrapped in repeating-section
+        content controls) and block-level content controls are recursed into.
 
         Corrupt / non-.docx files and a missing ``python-docx`` install raise
         actionable errors, mirroring :meth:`_extract_text_from_pptx` (.docx is
@@ -1667,6 +1670,16 @@ These positions indicate where to split the text."""
             )
             self.log.error(f"Corrupted DOCX (bad zip): {docx_path}: {e}")
             raise ValueError(msg) from e
+        except OSError as e:
+            # Missing file, a directory, or an unreadable path — surface an
+            # actionable error instead of a raw OSError traceback.
+            msg = (
+                f"Could not read Word file: {file_name}\n"
+                f"Reason: {e}\n"
+                "Check that the path exists and points to a readable .docx file."
+            )
+            self.log.error(f"Cannot open DOCX {docx_path}: {e}")
+            raise ValueError(msg) from e
 
         try:
             doc = Document(docx_path)
@@ -1686,13 +1699,51 @@ These positions indicate where to split the text."""
         try:
             w_p, w_tbl, w_sdt = qn("w:p"), qn("w:tbl"), qn("w:sdt")
             w_sdt_content = qn("w:sdtContent")
-            w_t, w_tr, w_tc = qn("w:t"), qn("w:tr"), qn("w:tc")
+            w_tr, w_tc = qn("w:tr"), qn("w:tc")
+            w_t, w_tab = qn("w:t"), qn("w:tab")
+            w_br, w_cr = qn("w:br"), qn("w:cr")
+            # ``mc`` (markup-compatibility) isn't in python-docx's prefix map,
+            # so qn() can't resolve it — use the namespace URI directly.
+            mc_fallback = (
+                "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
+                "Fallback"
+            )
+
+            def _para_runs(elem, out):
+                # Walk a paragraph's inline tree in document order, translating
+                # leaf elements to text. Descends through runs, hyperlinks,
+                # inline content controls (w:sdt), and textbox content so their
+                # text is captured — but skips ``mc:Fallback`` (the VML twin of
+                # a DrawingML textbox) so shape text is not emitted twice.
+                for child in elem:
+                    tag = child.tag
+                    if tag == w_t:
+                        out.append(child.text or "")
+                    elif tag == w_tab:
+                        out.append("\t")
+                    elif tag in (w_br, w_cr):
+                        out.append("\n")
+                    elif tag == mc_fallback:
+                        continue
+                    else:
+                        _para_runs(child, out)
 
             def _paragraph_text(p_elem):
-                # Join every ``w:t`` descendant — captures runs nested in
-                # hyperlinks and inline content controls that Paragraph.text
-                # (direct runs only) would silently drop.
-                return "".join(node.text or "" for node in p_elem.iter(w_t)).strip()
+                out = []
+                _para_runs(p_elem, out)
+                return "".join(out).strip()
+
+            def _iter_children(elem, wanted):
+                # Yield direct ``wanted`` children, transparently descending
+                # through w:sdt wrappers (repeating-section / row / cell content
+                # controls keep their rows and cells inside w:sdtContent).
+                for child in elem:
+                    if child.tag == wanted:
+                        yield child
+                    elif child.tag == w_sdt:
+                        content = child.find(w_sdt_content)
+                        if content is not None:
+                            yield from _iter_children(content, wanted)
 
             def _emit(elem, parts):
                 # Recursively walk a block element in document order, appending
@@ -1702,9 +1753,9 @@ These positions indicate where to split the text."""
                     if para_text:
                         parts.append(para_text)
                 elif elem.tag == w_tbl:
-                    for row in elem.findall(w_tr):
+                    for row in _iter_children(elem, w_tr):
                         cells = []
-                        for cell in row.findall(w_tc):
+                        for cell in _iter_children(row, w_tc):
                             cell_parts = []
                             for cell_child in cell:
                                 _emit(cell_child, cell_parts)
