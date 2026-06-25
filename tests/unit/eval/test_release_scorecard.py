@@ -79,6 +79,46 @@ class TestSchemaValidator:
         for section in ("schema_version", "agent", "recipe", "results", "aggregate"):
             assert section in REQUIRED_FIELDS, f"'{section}' must be in REQUIRED_FIELDS"
 
+    def test_missing_nested_aggregate_value_flagged(self):
+        payload = _make_payload()
+        parsed = parse_scorecard(render_scorecard(payload))
+        # Complete card stays valid
+        assert validate_scorecard(parsed) == []
+        # Removing a nested required field flags it
+        del parsed["aggregate"]["value"]
+        errors = validate_scorecard(parsed)
+        assert errors, "Expected missing 'aggregate.value' to be flagged"
+        assert any("aggregate.value" in e for e in errors), errors
+
+    def test_missing_nested_agent_version_flagged(self):
+        payload = _make_payload()
+        parsed = parse_scorecard(render_scorecard(payload))
+        del parsed["agent"]["version"]
+        errors = validate_scorecard(parsed)
+        assert errors, "Expected missing 'agent.version' to be flagged"
+        assert any("agent.version" in e for e in errors), errors
+
+    def test_missing_nested_dataset_size_flagged(self):
+        payload = _make_payload()
+        parsed = parse_scorecard(render_scorecard(payload))
+        del parsed["recipe"]["dataset"]["size"]
+        errors = validate_scorecard(parsed)
+        assert any("recipe.dataset.size" in e for e in errors), errors
+
+    def test_empty_metrics_list_flagged(self):
+        payload = _make_payload()
+        parsed = parse_scorecard(render_scorecard(payload))
+        parsed["results"]["metrics"] = []
+        errors = validate_scorecard(parsed)
+        assert any("metrics" in e for e in errors), errors
+
+    def test_non_dict_section_flagged_not_crash(self):
+        payload = _make_payload()
+        parsed = parse_scorecard(render_scorecard(payload))
+        parsed["agent"] = "not-a-dict"
+        errors = validate_scorecard(parsed)
+        assert errors, "Expected a non-dict 'agent' section to be flagged"
+
 
 # ---------------------------------------------------------------------------
 # 2. Aggregate computation
@@ -191,16 +231,20 @@ class TestDistinctCountFields:
 
 class TestLooseCoupling:
     def test_no_benchmark_or_agent_modules_imported(self):
-        # Clean interpreter: importing release_scorecard must not pull in the
-        # eval harness or any agent package. Scanning the test process's own
-        # sys.modules gives false positives (e.g. the pytest_benchmark plugin),
-        # so check in a fresh subprocess instead.
+        # Importing release_scorecard must not pull in the eval harness or any
+        # agent package. Run in a fresh subprocess and baseline sys.modules
+        # BEFORE the import, so we measure only what the import itself adds —
+        # not pytest plugins or editable-install path finders that the
+        # interpreter registers at startup regardless of any import.
         import subprocess
         import sys as _sys
 
         code = (
-            "import sys, gaia.eval.release_scorecard; "
-            "bad=[m for m in sys.modules if 'gaia.eval.benchmark' in m "
+            "import sys; "
+            "before=set(sys.modules); "
+            "import gaia.eval.release_scorecard; "
+            "added=set(sys.modules)-before; "
+            "bad=[m for m in added if 'gaia.eval.benchmark' in m "
             "or 'gaia.eval.quality_metrics' in m or 'gaia_agent_email' in m]; "
             "assert not bad, bad"
         )

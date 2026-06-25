@@ -283,9 +283,73 @@ def validate_scorecard(parsed: dict) -> list:
     """
     errors: list[str] = []
 
+    # Top-level required keys
     for key in REQUIRED_FIELDS:
         if key not in parsed:
             errors.append(f"Missing required field: '{key}'")
+
+    def _section(name: str):
+        """Return the section dict if present and a dict, else record an error."""
+        value = parsed.get(name)
+        if name in parsed and not isinstance(value, dict):
+            errors.append(
+                f"Field '{name}' must be a mapping, got {type(value).__name__}"
+            )
+            return None
+        return value if isinstance(value, dict) else None
+
+    # agent.{name, version}
+    agent = _section("agent")
+    if agent is not None:
+        for sub in ("name", "version"):
+            if sub not in agent:
+                errors.append(f"Missing required field: 'agent.{sub}'")
+
+    # recipe.{dataset.{reference, size}, methodology, config}
+    recipe = _section("recipe")
+    if recipe is not None:
+        for sub in ("methodology", "config"):
+            if sub not in recipe:
+                errors.append(f"Missing required field: 'recipe.{sub}'")
+        dataset = recipe.get("dataset")
+        if "dataset" not in recipe:
+            errors.append("Missing required field: 'recipe.dataset'")
+        elif not isinstance(dataset, dict):
+            errors.append(
+                f"Field 'recipe.dataset' must be a mapping, got {type(dataset).__name__}"
+            )
+        else:
+            for sub in ("reference", "size"):
+                if sub not in dataset:
+                    errors.append(f"Missing required field: 'recipe.dataset.{sub}'")
+
+    # results.{test_cases_run, metrics}
+    results = _section("results")
+    if results is not None:
+        if "test_cases_run" not in results:
+            errors.append("Missing required field: 'results.test_cases_run'")
+        metrics = results.get("metrics")
+        if "metrics" not in results:
+            errors.append("Missing required field: 'results.metrics'")
+        elif not isinstance(metrics, list) or not metrics:
+            errors.append("Field 'results.metrics' must be a non-empty list")
+        else:
+            for i, metric in enumerate(metrics):
+                if not isinstance(metric, dict):
+                    errors.append(f"Field 'results.metrics[{i}]' must be a mapping")
+                    continue
+                for sub in ("name", "value"):
+                    if sub not in metric:
+                        errors.append(
+                            f"Missing required field: 'results.metrics[{i}].{sub}'"
+                        )
+
+    # aggregate.{name, formula, value}
+    aggregate = _section("aggregate")
+    if aggregate is not None:
+        for sub in ("name", "formula", "value"):
+            if sub not in aggregate:
+                errors.append(f"Missing required field: 'aggregate.{sub}'")
 
     return errors
 
