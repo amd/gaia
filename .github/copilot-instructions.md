@@ -48,4 +48,4 @@ When guidance conflicts, follow this order:
 
 - Never expose secrets, tokens, or credentials.
 - If a public discussion appears to report a security issue, direct the reporter to GitHub Security Advisories instead of discussing exploit details in public.
-- Tag `@kovtcharov-amd` on security concerns raised in review or issue triage.
+- Tag the security maintainer on any security concerns raised in review or issue triage.
