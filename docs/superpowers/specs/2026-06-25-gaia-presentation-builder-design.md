@@ -1,7 +1,26 @@
 # GAIA Presentation Builder — Design
 
 **Date:** 2026-06-25
-**Status:** Approved (brainstorm) — pending spec review before implementation plan
+**Status:** Implemented, then revised per review (see Revision below)
+
+## Revision (2026-06-25, post-implementation review)
+
+The original design was a **single** skill (`gaia-presentation-builder`) with a `--tier`
+flag selecting technical vs. executive. Per review, this was split into **two
+single-purpose skills** for sharper auto-triggering and to avoid one skill doing two jobs:
+
+- **`gaia-technical-presentation`** — engineering audience (technical tier only).
+- **`gaia-executive-presentation`** — leadership audience (executive tier only).
+- **`gaia-presentation-assets/`** — a shared (non-skill) directory holding the design system
+  (`deck.css`, `fonts.css`, `deck-viewer.js`, `slide-blocks.html`, `tools/build_fonts.py`);
+  both skills inline it verbatim, so there is a single source of truth and no duplication.
+
+Other revisions: the output subfolder `decks/` was renamed **`presentations/`**; each skill's
+"before reporting done" checklist gained a **"does the presentation satisfy the user's stated
+goal?"** verification. The two-tier intent, credibility contract, self-contained/print
+requirements, and acceptance criteria below are unchanged — they now apply per skill (each
+skill owns one tier). Where the text below says "select per tier" / "both tiers", read it as
+"the skill's own tier".
 
 ## Problem
 
@@ -37,15 +56,15 @@ to PDF via a `@media print` profile (exactly one slide per printed page).
 
 | Topic | Decision |
 |---|---|
-| Skill name | `gaia-presentation-builder` (human title: "GAIA Presentation Builder") |
-| Location | `.claude/skills/gaia-presentation-builder/` — `SKILL.md` + `assets/` + `reference/`, matching the repo's existing `SKILL.md`-with-frontmatter convention (`gaia-testing`, `gaia-release`) |
+| Skill names | `gaia-technical-presentation` + `gaia-executive-presentation` (two skills; see Revision) |
+| Location | `.claude/skills/gaia-technical-presentation/` and `.claude/skills/gaia-executive-presentation/` (each `SKILL.md` + `reference/`), plus shared `.claude/skills/gaia-presentation-assets/` (`assets/` + `tools/`), matching the repo's `SKILL.md`-with-frontmatter convention (`gaia-testing`, `gaia-release`) |
 | Input form | A repo **file path** (`.md` / `.mdx` / `.json` / `.html` / `.txt`) at minimum; pasted text accepted as a fallback. Stated explicitly in `SKILL.md`. |
 | Fonts | **Embed** Archivo + Hanken Grotesk as base64 woff2 inlined in CSS (offline, keeps brand identity). No Google Fonts CDN. |
 | PDF export | Skill emits **print-ready HTML only**. It does not run a headless export and does not document a print command (inherent to the browser). |
 | On-screen viewer | Keep a **tiny inlined viewer** (~30 lines JS, no CDN): arrow-key navigation + page counter on screen, **fully disabled under `@media print`**. |
 | Missing metrics | **Ask upfront** for known eval/benchmark results, then fall back to **clearly-labeled placeholders** for anything still missing; report the placeholder list at the end. |
 | Placeholder style | **Loud + watermarked**: tinted `⚠ PLACEHOLDER — provide value` chip on the value AND a deck-level `DRAFT — contains placeholders` banner on any deck that has them. |
-| Output path | `<source-dir>/decks/<source-stem>.<tier>.html` — deterministic, overwrite-in-place, no timestamps / random IDs (clean re-runs). |
+| Output path | `<source-dir>/presentations/<source-stem>.<tier>.html` — deterministic, overwrite-in-place, no timestamps / random IDs (clean re-runs). |
 | First test source | The email agent hub package, `hub/agents/python/email/` (contract/architecture-rich: `openapi.email.json`, `specification.html`, `gaia-agent.yaml`, packaging docs, tests). |
 
 ## Reference template
@@ -87,14 +106,21 @@ pipeline, and `assets/` supplies the deterministic presentation layer.
 ### Components
 
 ```
-.claude/skills/gaia-presentation-builder/
-├── SKILL.md                 # frontmatter (name/description) + the pipeline + the credibility contract
-├── assets/
-│   ├── deck.css             # design tokens, slide shell, placeholder/banner styles, @media print profile
-│   ├── fonts.css            # base64-embedded Archivo + Hanken Grotesk woff2
-│   └── slide-blocks.html    # copy-paste slide patterns: title, section, metric, chart (inline SVG), quote, timeline, close
-└── reference/
-    └── example-technical.html, example-executive.html   # worked example built from the email package
+.claude/skills/
+├── gaia-presentation-assets/          # shared design system (NOT a skill — no SKILL.md)
+│   ├── README.md                      # explains it's shared assets for the two skills
+│   ├── assets/
+│   │   ├── deck.css                   # design tokens, slide shell, placeholder/banner styles, @media print
+│   │   ├── fonts.css                  # base64-embedded Archivo + Hanken Grotesk woff2
+│   │   ├── deck-viewer.js             # screen-only viewer (arrow-nav + page counter); disabled in print
+│   │   └── slide-blocks.html          # copy-paste slide patterns (title, metric, chart, code, timeline, …)
+│   └── tools/build_fonts.py           # regenerates fonts.css from the reference template (deterministic)
+├── gaia-technical-presentation/
+│   ├── SKILL.md                       # technical tier only: pipeline + credibility contract + tier rules
+│   └── reference/example-technical.html
+└── gaia-executive-presentation/
+    ├── SKILL.md                       # executive tier only: pipeline + credibility contract + prohibitions
+    └── reference/example-executive.html
 ```
 
 - **`SKILL.md`** — what it does, how it's invoked, the input forms it accepts, the

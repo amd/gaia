@@ -2,6 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Post-implementation revision (2026-06-25):** This plan was executed as a single
+> `gaia-presentation-builder` skill (one SKILL.md + `assets/` + `reference/`), then split per
+> review into **two skills** — `gaia-technical-presentation` and `gaia-executive-presentation`
+> — sharing a non-skill `gaia-presentation-assets/` directory (the design system). The output
+> subfolder was renamed `decks/` → `presentations/`, and each skill's done-checklist gained a
+> "does the presentation satisfy the user's stated goal?" item. The task code/assets below are
+> unchanged in substance — only the directory layout and the per-skill split differ. See the
+> design spec's Revision section for the authoritative end state.
+
 **Goal:** Build a reusable Claude Code skill, `gaia-presentation-builder`, that turns a source document into two-tier (technical/executive) slide decks as self-contained HTML that prints to PDF one-slide-per-page.
 
 **Architecture:** A prompt-driven skill (`SKILL.md` instructs Claude through a read → inventory → ask → select → emit pipeline) backed by deterministic presentation assets (`deck.css` with a `@media print` profile, base64-embedded brand fonts, a slide-pattern library, and a tiny print-disabled viewer). Slide *content selection* is the model's credibility judgment; *layout/print* is fixed CSS the generated HTML inlines verbatim.
