@@ -16,8 +16,15 @@ conscious bundling decision in the same change.
 
 from __future__ import annotations
 
-from gaia.agents.chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
-from gaia.eval.tool_cost import build_doc_agent_skeleton
+import pytest
+
+# DOC_BUNDLES ships with the standalone gaia-agent-chat wheel (#1102); skip the
+# whole module when a framework-only env lacks it.
+pytest.importorskip("gaia_agent_chat")
+
+from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS  # noqa: E402
+
+from gaia.eval.tool_cost import build_doc_agent_skeleton  # noqa: E402
 
 
 def _bundle_union() -> set[str]:
@@ -41,7 +48,8 @@ def test_core_and_bundles_cover_doc_registry_exactly():
 
     assert not uncovered, (
         f"doc-profile tools not covered by CORE or any bundle: {uncovered}. "
-        "Add each to a bundle (or CORE) in src/gaia/agents/chat/tool_bundles.py "
+        "Add each to a bundle (or CORE) in "
+        "hub/agents/python/chat/gaia_agent_chat/tool_bundles.py "
         "— an uncovered tool would never be surfaced by the loader."
     )
     assert not dangling, (
