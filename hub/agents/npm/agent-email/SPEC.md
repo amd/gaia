@@ -115,10 +115,12 @@ exact field-level reference.
 `search({ query?, labels?, max_results? })` lists messages from the connected
 mailbox and returns `{ schema_version, query, count, messages, next_page_token }`.
 It is **read-only** — no body is read in full, nothing is modified, no confirmation
-token is involved. Both `query` and `labels` are optional; with neither, it lists
-the INBOX. `max_results` is `1–100` (default `25`); each match is hydrated with a
-per-message fetch, so the cap bounds that fan-out. To page, pass the response's
-`next_page_token` back as the request's `page_token`. Each `messages[]` item:
+token is involved. Both `query` and `labels` are optional: a `query` searches **all
+mail** (Gmail search semantics), `labels` filter to those labels, and with **neither**
+it lists the INBOX. `max_results` is `1–100` (default `25`); each match is hydrated
+with a per-message fetch, so the cap bounds that fan-out. To page, pass the
+response's `next_page_token` back as the request's `page_token`. Each `messages[]`
+item:
 
 | Field | Type | Notes |
 |-------|------|-------|

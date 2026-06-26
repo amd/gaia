@@ -1354,8 +1354,8 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       <h4>Request body — EmailSearchRequest</h4>
       <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
         <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.1"</code>; a mismatch lets a consumer fail loudly.</td></tr>
-        <tr><td><code>query</code></td><td>string <span class="opt">optional</span></td><td>Gmail-style query (e.g. <code>from:alice is:unread</code>). Omit to list the inbox without a text filter.</td></tr>
-        <tr><td><code>labels</code></td><td>list[string] <span class="opt">optional</span></td><td>Label ids to filter by (e.g. <code>["INBOX","UNREAD"]</code>). Omit → defaults to <code>INBOX</code>.</td></tr>
+        <tr><td><code>query</code></td><td>string <span class="opt">optional</span></td><td>Gmail-style query (e.g. <code>from:alice is:unread</code>). A query searches <b>all mail</b>; omit it to list by label (the <code>INBOX</code> when labels are also omitted).</td></tr>
+        <tr><td><code>labels</code></td><td>list[string] <span class="opt">optional</span></td><td>Label ids to filter by (e.g. <code>["INBOX","UNREAD"]</code>). Omit to apply no label filter; when <code>query</code> is also omitted, the search defaults to <code>INBOX</code>.</td></tr>
         <tr><td><code>max_results</code></td><td>int <span class="opt">optional</span></td><td>Max messages to return, <code>1–100</code> (default <code>25</code>). Each match is hydrated with a per-message fetch, so the count is capped.</td></tr>
         <tr><td><code>page_token</code></td><td>string <span class="opt">optional</span></td><td>Opaque pagination cursor from a prior response's <code>next_page_token</code>. Omit to fetch the first page.</td></tr>
       </tbody></table>

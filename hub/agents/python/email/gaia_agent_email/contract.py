@@ -378,8 +378,9 @@ class EmailSearchRequest(_Strict):
     (``search_messages``) on the REST contract so the Agent UI can drive it
     through the package (#1781).
 
-    Both ``query`` and ``labels`` are optional — with neither, the backend
-    lists the INBOX (bounded by ``max_results``).
+    Both ``query`` and ``labels`` are optional. A ``query`` searches **all
+    mail** (Gmail search semantics); ``labels`` filter to those labels; with
+    **neither**, the search lists the INBOX (bounded by ``max_results``).
     """
 
     schema_version: str = Field(
@@ -389,15 +390,17 @@ class EmailSearchRequest(_Strict):
     query: Optional[str] = Field(
         default=None,
         description=(
-            "Gmail-style search query (e.g. 'from:alice is:unread'). None lists "
-            "the inbox without a text filter."
+            "Gmail-style search query (e.g. 'from:alice is:unread'). A query "
+            "searches all mail; omit it to list by label (or the INBOX when "
+            "labels are also omitted)."
         ),
     )
     labels: Optional[List[str]] = Field(
         default=None,
         description=(
-            "Label ids to filter by (e.g. ['INBOX', 'UNREAD']). None defaults to "
-            "the INBOX label."
+            "Label ids to filter by (e.g. ['INBOX', 'UNREAD']). Omit to apply no "
+            "label filter; when query is also omitted, the search defaults to "
+            "the INBOX."
         ),
     )
     max_results: int = Field(

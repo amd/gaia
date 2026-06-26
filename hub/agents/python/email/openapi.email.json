@@ -271,7 +271,7 @@
       },
       "EmailSearchRequest": {
         "additionalProperties": false,
-        "description": "Search the connected mailbox for messages by Gmail-style query / labels.\n\nRead-only: this lists messages already in the mailbox; it never sends,\nmodifies, or triages. It restores the agent's in-loop inbox-search tool\n(``search_messages``) on the REST contract so the Agent UI can drive it\nthrough the package (#1781).\n\nBoth ``query`` and ``labels`` are optional — with neither, the backend\nlists the INBOX (bounded by ``max_results``).",
+        "description": "Search the connected mailbox for messages by Gmail-style query / labels.\n\nRead-only: this lists messages already in the mailbox; it never sends,\nmodifies, or triages. It restores the agent's in-loop inbox-search tool\n(``search_messages``) on the REST contract so the Agent UI can drive it\nthrough the package (#1781).\n\nBoth ``query`` and ``labels`` are optional. A ``query`` searches **all\nmail** (Gmail search semantics); ``labels`` filter to those labels; with\n**neither**, the search lists the INBOX (bounded by ``max_results``).",
         "properties": {
           "labels": {
             "anyOf": [
@@ -285,7 +285,7 @@
                 "type": "null"
               }
             ],
-            "description": "Label ids to filter by (e.g. ['INBOX', 'UNREAD']). None defaults to the INBOX label.",
+            "description": "Label ids to filter by (e.g. ['INBOX', 'UNREAD']). Omit to apply no label filter; when query is also omitted, the search defaults to the INBOX.",
             "title": "Labels"
           },
           "max_results": {
@@ -317,7 +317,7 @@
                 "type": "null"
               }
             ],
-            "description": "Gmail-style search query (e.g. 'from:alice is:unread'). None lists the inbox without a text filter.",
+            "description": "Gmail-style search query (e.g. 'from:alice is:unread'). A query searches all mail; omit it to list by label (or the INBOX when labels are also omitted).",
             "title": "Query"
           },
           "schema_version": {

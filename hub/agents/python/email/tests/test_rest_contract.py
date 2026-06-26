@@ -300,9 +300,31 @@ def test_search_empty_body_lists_inbox(client):
     body = resp.json()
     assert body["count"] == 0
     assert body["messages"] == []
-    # No query/labels → backend invoked with both None (it defaults to INBOX).
+    # No query/labels → the route forces INBOX so the default lists the inbox.
+    # (Live Gmail with no labelIds returns ALL mail — the route must not rely on
+    # the fake's INBOX default, which would mask that divergence.)
     assert fake.calls == [
-        {"query": None, "label_ids": None, "max_results": 25, "page_token": None}
+        {"query": None, "label_ids": ["INBOX"], "max_results": 25, "page_token": None}
+    ]
+
+
+def test_search_with_query_is_not_inbox_scoped(client):
+    # A query searches ALL mail (Gmail search semantics / agent parity) — the
+    # route must NOT silently inject an INBOX label when a query is present.
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={"query": "from:alice"})
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 200, resp.text
+    assert fake.calls == [
+        {
+            "query": "from:alice",
+            "label_ids": None,
+            "max_results": 25,
+            "page_token": None,
+        }
     ]
 
 

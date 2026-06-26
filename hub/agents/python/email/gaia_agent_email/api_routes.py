@@ -845,9 +845,18 @@ def _search_inbox(
     """
     from gaia_agent_email.tools.read_tools import _format_message_for_llm
 
+    # With neither a query nor explicit labels, scope to the INBOX so the
+    # empty-search default actually lists the inbox. Without this, live Gmail
+    # sends no ``labelIds`` and returns ALL mail (the fake defaults to INBOX,
+    # which would mask the divergence in tests). A query, by contrast, searches
+    # all mail — matching the agent's in-loop ``search_messages``.
+    effective_labels = labels
+    if not query and not labels:
+        effective_labels = ["INBOX"]
+
     listing = backend.list_messages(
         query=query,
-        label_ids=labels,
+        label_ids=effective_labels,
         max_results=max_results,
         page_token=page_token,
     )
