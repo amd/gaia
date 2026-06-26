@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import threading
@@ -53,6 +54,7 @@ from typing import Any, Dict, List, Literal, NoReturn, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from gaia_agent_email.contract import (
+    ActionItem,
     CalendarCreateEventRequest,
     CalendarEvent,
     CalendarEventDateTime,
@@ -61,7 +63,6 @@ from gaia_agent_email.contract import (
     CalendarEventsResponse,
     CalendarRespondRequest,
     CalendarRespondResponse,
-    ActionItem,
     DraftReply,
     EmailActionConfirmRequest,
     EmailActionConfirmResponse,
@@ -917,6 +918,7 @@ def _search_inbox(
         messages=items,
         next_page_token=listing.get("nextPageToken"),
     )
+
 
 # ---------------------------------------------------------------------------
 # Mailbox-action backend + action-log DB (archive / quarantine, #1779)

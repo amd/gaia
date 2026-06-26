@@ -279,9 +279,7 @@ def test_search_conforms_to_spec(client, committed_spec):
 
     assert resp.status_code == 200, resp.text
 
-    schema_name = _schema_name_from_response(
-        committed_spec, "post", "/v1/email/search"
-    )
+    schema_name = _schema_name_from_response(committed_spec, "post", "/v1/email/search")
     required = _required_keys(committed_spec, schema_name)
     body = resp.json()
 
@@ -524,6 +522,75 @@ def test_calendar_create_invalid_payload_returns_422(client):
 
 
 # ---------------------------------------------------------------------------
+# Mailbox actions — archive / quarantine + reversal (schema 2.1, #1779)
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_conforms_to_spec(client, committed_spec):
+    """POST /confirm returns a body conforming to EmailActionConfirmResponse."""
+    resp = client.post(
+        "/v1/email/confirm", json={"action": "archive", "message_id": "m-conf-1"}
+    )
+    assert resp.status_code == 200
+
+    schema_name = _schema_name_from_response(
+        committed_spec, "post", "/v1/email/confirm"
+    )
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+    for key in required:
+        assert key in body, f"required key {key!r} missing from /confirm response"
+    assert body["action"] == "archive"
+    assert body["message_id"] == "m-conf-1"
+    assert isinstance(body["confirmation_token"], str) and body["confirmation_token"]
+
+
+def test_archive_without_token_returns_403(client):
+    """POST /archive without a confirmation token returns the documented 403 gate."""
+    resp = client.post("/v1/email/archive", json={"message_id": "m-1"})
+    assert resp.status_code == 403
+    detail = resp.json()["detail"].lower()
+    assert "confirm" in detail or "token" in detail
+
+
+def test_quarantine_without_token_returns_403(client):
+    """POST /quarantine without a confirmation token returns the documented 403 gate."""
+    resp = client.post(
+        "/v1/email/quarantine", json={"message_id": "m-1", "is_phishing": True}
+    )
+    assert resp.status_code == 403
+    detail = resp.json()["detail"].lower()
+    assert "confirm" in detail or "token" in detail
+
+
+def test_unarchive_invalid_payload_returns_422(client):
+    """POST /unarchive without the required batch_id returns 422 (no DB touched)."""
+    resp = client.post("/v1/email/unarchive", json={})
+    assert resp.status_code == 422
+
+
+def test_unquarantine_invalid_payload_returns_422(client):
+    """POST /unquarantine without the required action_id returns 422 (no DB touched)."""
+    resp = client.post("/v1/email/unquarantine", json={})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Inbox pre-scan (schema 2.1, #1778)
+# ---------------------------------------------------------------------------
+
+
+def test_prescan_without_mailbox_returns_503(client):
+    """POST /prescan with no mailbox connected fails loud with the documented 503.
+
+    Pre-scan reads the live inbox, so its backend dependency resolves first and
+    rejects an unconnected host with 503 (never a silent empty card).
+    """
+    resp = client.post("/v1/email/prescan", json={"max_messages": 5})
+    assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
 # 6. All documented paths are covered
 # ---------------------------------------------------------------------------
 
@@ -542,10 +609,17 @@ def test_all_documented_paths_covered(committed_spec):
     expected = {
         ("post", "/v1/email/triage"),
         ("post", "/v1/email/search"),
+        ("post", "/v1/email/prescan"),
         ("post", "/v1/email/draft"),
         ("post", "/v1/email/send"),
         ("get", "/v1/email/health"),
         ("get", "/v1/email/version"),
+        # Mailbox actions (schema 2.1, #1779).
+        ("post", "/v1/email/confirm"),
+        ("post", "/v1/email/archive"),
+        ("post", "/v1/email/unarchive"),
+        ("post", "/v1/email/quarantine"),
+        ("post", "/v1/email/unquarantine"),
         # Calendar surface (schema 2.1, #1780).
         ("get", "/v1/email/calendar/events"),
         ("post", "/v1/email/calendar/events"),

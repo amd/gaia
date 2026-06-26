@@ -909,9 +909,9 @@ def test_calendar_view_missing_scope_fails_loud_with_reconnect_cta(client, monke
     to HTTP 403 and surface the actionable reconnect message, not a silent empty
     calendar or an opaque 500.
     """
-    from gaia.connectors.errors import ScopeMismatchError
-
     from gaia_agent_email import api_routes as email_routes
+
+    from gaia.connectors.errors import ScopeMismatchError
 
     class _ScopeDeniedCalendar:
         def list_events(
@@ -934,9 +934,9 @@ def test_calendar_view_missing_scope_fails_loud_with_reconnect_cta(client, monke
 
 def test_calendar_create_config_error_is_503(client, monkeypatch):
     """A ConfigurationError from the backend maps to 503 (after the gate passes)."""
-    from gaia.connectors.errors import ConfigurationError
-
     from gaia_agent_email import api_routes as email_routes
+
+    from gaia.connectors.errors import ConfigurationError
 
     class _MisconfiguredCalendar:
         def create_event(
