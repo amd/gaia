@@ -72,10 +72,6 @@ jobs:
             $serverJob = Start-Job -ScriptBlock {
                 # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
                 $env:GGML_VK_DISABLE_COOPMAT = "1"
-                # Debug logging so the (otherwise swallowed) llama-server backend
-                # output is captured in the job stream -- lets us record the exact
-                # crash if the MoE embedding load aborts (see retry block below).
-                $env:LEMONADE_LOG_LEVEL = "debug"
                 & lemonade-server serve --host localhost --port 13305 --no-tray 2>&1
             }
             Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
@@ -127,39 +123,23 @@ jobs:
                 Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
             }
 
-            # Load embedding model into memory, WITH RETRY. The
-            # nomic-embed-text-v2-moe MoE model intermittently aborts
-            # llama-server startup on the AMD Vulkan backend -- a transient
-            # GPU-driver-state fault (upstream llama.cpp #16301 / lemonade #612,
-            # not a GAIA defect; the load succeeds once the GPU state settles).
-            # On every failed attempt we dump the server job's debug output to
-            # capture the exact (otherwise-swallowed) llama-server crash.
+            # Load embedding model into memory (required in Lemonade v9.x)
             Write-Host "`n=== Loading Embedding Model ==="
-            $loadRequest = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
-            $loaded = $false
-            for ($attempt = 1; $attempt -le 3 -and -not $loaded; $attempt++) {
-                try {
-                    Write-Host "Loading model (attempt $attempt/3): nomic-embed-text-v2-moe-GGUF"
-                    $loadResponse = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" `
-                        -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 60
-                    Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
-                    $loaded = $true
-                } catch {
-                    Write-Host "[WARN] Model load attempt $attempt failed: $($_.Exception.Message)"
-                    if ($_.ErrorDetails) {
-                        Write-Host "Error details: $($_.ErrorDetails.Message)"
-                    }
-                    # Capture the swallowed llama-server crash from the debug stream.
-                    Write-Host "----- Lemonade server debug output (attempt $attempt) -----"
-                    if ($env:LEMONADE_JOB_ID) {
-                        $jobOut = Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                        if ($jobOut) { $jobOut | Select-Object -Last 150 | ForEach-Object { Write-Host $_ } }
-                    }
-                    if ($attempt -lt 3) { Write-Host "Retrying in 12s..."; Start-Sleep -Seconds 12 }
+            try {
+                $loadRequest = @{
+                    model_name = "nomic-embed-text-v2-moe-GGUF"
+                } | ConvertTo-Json
+
+                Write-Host "Loading model: nomic-embed-text-v2-moe-GGUF"
+                $loadResponse = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" `
+                    -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 60
+                Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
+            } catch {
+                Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
+                if ($_.ErrorDetails) {
+                    Write-Host "Error details: $($_.ErrorDetails.Message)"
                 }
-            }
-            if (-not $loaded) {
-                throw "Failed to load embedding model after 3 attempts"
+                throw "Failed to load embedding model"
             }
 
             # Wait for llamacpp backend to fully initialize (increased from 10s)
