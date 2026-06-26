@@ -142,10 +142,15 @@ DEFAULT_REQUEST_TIMEOUT = 900
 DEFAULT_MODEL_LOAD_TIMEOUT = 12000
 
 # Resilience to the transient AMD-Vulkan "llama-server failed to start" fault:
-# the same load succeeds on a retry once the GPU/driver state settles. Default
-# to a small, explicit, bounded retry (callers can override via load_model()).
-DEFAULT_MODEL_LOAD_RETRIES = 2
-MODEL_LOAD_RETRY_BACKOFF = 8  # seconds between retries (lets GPU state settle)
+# the same load succeeds on a retry once the GPU/driver state settles. The fault
+# is "windowed" (a bad period of consecutive failures that then clears), so the
+# retry uses an ESCALATING backoff to give a short window time to pass. Bounded
+# and explicit (callers can override via load_model(load_retries=)). With 3
+# retries the backoff is 8s, 16s, 24s (~48s total) before failing loudly -- a
+# one-time model load can afford that; a longer active window needs an upstream
+# fix, not unbounded waiting.
+DEFAULT_MODEL_LOAD_RETRIES = 3
+MODEL_LOAD_RETRY_BACKOFF = 8  # base seconds; escalates as backoff * attempt
 
 
 # =========================================================================
@@ -2866,7 +2871,8 @@ class LemonadeClient:
             load_retries: Number of times to retry on a TRANSIENT backend-startup
                          failure (``llama-server failed to start``) before giving
                          up. The same load typically succeeds once the GPU/driver
-                         state settles. Default 2; pass 0 to disable. Only the
+                         state settles, with an escalating backoff (8s, 16s,
+                         24s...). Default 3; pass 0 to disable. Only the
                          transient fault is retried — corrupt/missing-model errors
                          fail through to their normal handling immediately.
 
@@ -2904,13 +2910,14 @@ class LemonadeClient:
             # errors are excluded and fall straight through.
             if load_retries > 0 and self._is_transient_load_error(e):
                 for retry_num in range(1, load_retries + 1):
+                    backoff = MODEL_LOAD_RETRY_BACKOFF * retry_num
                     self.log.warning(
                         f"{_emoji('⚠️', '[RETRY]')} Transient load failure for "
                         f"'{model_name}' (retry {retry_num}/{load_retries}): "
                         f"{original_error}. Backing off "
-                        f"{MODEL_LOAD_RETRY_BACKOFF}s for the backend to recover..."
+                        f"{backoff}s for the backend to recover..."
                     )
-                    time.sleep(MODEL_LOAD_RETRY_BACKOFF)
+                    time.sleep(backoff)
                     try:
                         response = self._send_request(
                             "post", url, request_data, timeout=timeout
