@@ -16,20 +16,26 @@ try:
 except ImportError:
     Observer = None
 
+from gaia_agent_chat.session import SessionManager
+from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
+
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import EMBEDDING_MODEL, MemoryMixin
+
+# dynamic_tools_env_override is re-exported so callers importing it from
+# gaia_agent_chat.agent keep working; its canonical home is the core tool_loader
+# so the UI settings router shares it without depending on this wheel (#1102).
+from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
 from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.tools import FileToolsMixin
-from gaia_agent_chat.session import SessionManager
-from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
     BrowserToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
+    FileToolsMixin,
     RAGToolsMixin,
     ScreenshotToolsMixin,
     ShellToolsMixin,
@@ -44,21 +50,6 @@ from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
 
 logger = get_logger(__name__)
-
-
-def dynamic_tools_env_override() -> Optional[bool]:
-    """Parse the ``GAIA_DYNAMIC_TOOLS`` override, or ``None`` when it is unset.
-
-    Returns the parsed boolean (truthy set ``1``/``true``/``yes``/``on``,
-    case-insensitive) when the env var is set, else ``None`` to signal "no
-    override — fall back to the persisted/config value". The UI settings
-    router reuses this so the env-wins precedence and the truthy set never
-    drift between the agent resolver and the toggle that surfaces it.
-    """
-    raw = os.getenv("GAIA_DYNAMIC_TOOLS")
-    if raw is None:
-        return None
-    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 @dataclass

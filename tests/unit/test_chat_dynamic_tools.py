@@ -23,6 +23,12 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); skip the
+# whole module when a framework-only env lacks it. Must run BEFORE the optional-
+# dep stubbing below — otherwise a skip would leave MagicMock stand-ins for
+# faiss/sentence_transformers in sys.modules and poison later modules in the run.
+pytest.importorskip("gaia_agent_chat")
+
 # Stub heavy optional deps only when genuinely absent (mirrors the budget test).
 _stubbed: list[str] = []
 for _mod in ("faiss", "sentence_transformers", "pdfplumber", "pypdf", "pypdfium2"):
@@ -30,10 +36,6 @@ for _mod in ("faiss", "sentence_transformers", "pdfplumber", "pypdf", "pypdfium2
         continue
     sys.modules[_mod] = MagicMock()
     _stubbed.append(_mod)
-
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); skip the
-# whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent_chat")
 
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
