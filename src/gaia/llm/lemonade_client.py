@@ -141,6 +141,12 @@ DEFAULT_REQUEST_TIMEOUT = 900
 # Increased for large model downloads and loading (10x increase for streaming stability)
 DEFAULT_MODEL_LOAD_TIMEOUT = 12000
 
+# Resilience to the transient AMD-Vulkan "llama-server failed to start" fault:
+# the same load succeeds on a retry once the GPU/driver state settles. Default
+# to a small, explicit, bounded retry (callers can override via load_model()).
+DEFAULT_MODEL_LOAD_RETRIES = 2
+MODEL_LOAD_RETRY_BACKOFF = 8  # seconds between retries (lets GPU state settle)
+
 
 # =========================================================================
 # Model Types and Agent Profiles
@@ -1268,6 +1274,17 @@ class LemonadeClient:
         "corrupted download",
     )
 
+    # Phrases that signal a TRANSIENT backend-startup failure — the same load
+    # typically succeeds on a retry once the GPU/driver state settles. The
+    # canonical case is the AMD Vulkan iGPU intermittently aborting
+    # ``llama-server`` startup for some models (upstream llama.cpp #16301 /
+    # lemonade #612, not a GAIA defect). Deliberately narrow: a corrupt or
+    # missing-model failure is NOT transient and must not be retried here.
+    _TRANSIENT_LOAD_PHRASES = (
+        "llama-server failed to start",
+        "llama_server failed to start",
+    )
+
     def _is_corrupt_download_error(self, error: Union[str, Dict, Exception]) -> bool:
         """
         Check if an error indicates a corrupt or incomplete model download.
@@ -1287,6 +1304,19 @@ class LemonadeClient:
         error_message = (error_info.get("message") or "").lower()
 
         return any(phrase in error_message for phrase in self._CORRUPT_DOWNLOAD_PHRASES)
+
+    def _is_transient_load_error(self, error: Union[str, Dict, Exception]) -> bool:
+        """Check whether a load failure is a transient backend-startup fault.
+
+        See :attr:`_TRANSIENT_LOAD_PHRASES`. A corrupt-download failure is
+        explicitly excluded so the destructive repair path always wins over a
+        plain retry.
+        """
+        if self._is_corrupt_download_error(error):
+            return False
+        error_info = self._extract_error_info(error)
+        error_message = (error_info.get("message") or "").lower()
+        return any(phrase in error_message for phrase in self._TRANSIENT_LOAD_PHRASES)
 
     def _execute_with_auto_download(
         self, api_call: Callable, model: str, auto_download: bool = True
@@ -2805,6 +2835,7 @@ class LemonadeClient:
         ctx_size: Optional[int] = None,
         save_options: bool = False,
         prompt: bool = True,
+        load_retries: int = DEFAULT_MODEL_LOAD_RETRIES,
     ) -> Dict[str, Any]:
         """
         Load a model on the server.
@@ -2829,6 +2860,12 @@ class LemonadeClient:
                          Model will use these settings on future loads.
             prompt: If True, prompt user before downloading (default: True).
                    Set to False to download automatically without user confirmation.
+            load_retries: Number of times to retry on a TRANSIENT backend-startup
+                         failure (``llama-server failed to start``) before giving
+                         up. The same load typically succeeds once the GPU/driver
+                         state settles. Default 2; pass 0 to disable. Only the
+                         transient fault is retried — corrupt/missing-model errors
+                         fail through to their normal handling immediately.
 
         Returns:
             Dict containing the status of the load operation
@@ -2856,6 +2893,39 @@ class LemonadeClient:
             return response
         except Exception as e:
             original_error = str(e)
+
+            # Transient backend-startup fault (e.g. the AMD Vulkan iGPU
+            # intermittently aborting llama-server): retry the SAME load a
+            # bounded number of times before any other handling — it usually
+            # succeeds once the GPU/driver state settles. Corrupt/missing-model
+            # errors are excluded and fall straight through.
+            if load_retries > 0 and self._is_transient_load_error(e):
+                for retry_num in range(1, load_retries + 1):
+                    self.log.warning(
+                        f"{_emoji('⚠️', '[RETRY]')} Transient load failure for "
+                        f"'{model_name}' (retry {retry_num}/{load_retries}): "
+                        f"{original_error}. Backing off "
+                        f"{MODEL_LOAD_RETRY_BACKOFF}s for the backend to recover..."
+                    )
+                    time.sleep(MODEL_LOAD_RETRY_BACKOFF)
+                    try:
+                        response = self._send_request(
+                            "post", url, request_data, timeout=timeout
+                        )
+                        self.log.info(
+                            f"{_emoji('✅', '[OK]')} Loaded {model_name} after "
+                            f"{retry_num} retr{'y' if retry_num == 1 else 'ies'}"
+                        )
+                        self.model = model_name
+                        return response
+                    except Exception as retry_err:  # noqa: BLE001
+                        e = retry_err
+                        original_error = str(retry_err)
+                        if not self._is_transient_load_error(retry_err):
+                            break
+                # Retries exhausted (or the error changed nature): fall through
+                # to the existing handling below with the latest error, which
+                # re-raises with context. Fail-loudly is preserved.
 
             # Check if this is a corrupt/incomplete download error
             is_corrupt = self._is_corrupt_download_error(e)

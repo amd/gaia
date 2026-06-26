@@ -690,6 +690,119 @@ class TestLemonadeClientMock(unittest.TestCase):
             # Restore original log level
             logger.setLevel(original_level)
 
+    # ------------------------------------------------------------------
+    # Transient "llama-server failed to start" load retry
+    # ------------------------------------------------------------------
+
+    _TRANSIENT_LOAD_BODY = {
+        "error": {
+            "code": "model_load_error",
+            "message": (
+                f"Failed to load model '{TEST_MODEL}': llama-server failed to start"
+            ),
+            "type": "model_load_error",
+        }
+    }
+
+    def test_is_transient_load_error_classification(self):
+        """Only the backend-startup fault counts as transient."""
+        self.assertTrue(
+            self.client._is_transient_load_error("llama-server failed to start")
+        )
+        # Corrupt-download and missing-model failures are NOT transient.
+        self.assertFalse(
+            self.client._is_transient_load_error("download validation failed")
+        )
+        self.assertFalse(self.client._is_transient_load_error("model not found"))
+
+    @responses.activate
+    def test_load_model_retries_transient_then_succeeds(self):
+        """A transient backend-startup failure is retried and recovers."""
+        logger = logging.getLogger("gaia.llm.lemonade_client")
+        original_level = logger.level
+        logger.setLevel(logging.CRITICAL)
+        try:
+            success = {"status": "success", "message": f"Loaded model: {TEST_MODEL}"}
+            # First call fails transiently, the retry succeeds.
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json=self._TRANSIENT_LOAD_BODY,
+                status=500,
+            )
+            responses.add(responses.POST, f"{API_BASE}/load", json=success, status=200)
+            with patch("gaia.llm.lemonade_client.time.sleep") as mock_sleep:
+                result = self.client.load_model(model_name=TEST_MODEL)
+            self.assertEqual(result, success)
+            self.assertEqual(len(responses.calls), 2)  # initial + one retry
+            mock_sleep.assert_called_once()  # backed off once before retrying
+        finally:
+            logger.setLevel(original_level)
+
+    @responses.activate
+    def test_load_model_retries_exhausted_raises_loudly(self):
+        """Persistent transient failure re-raises with context after retries."""
+        logger = logging.getLogger("gaia.llm.lemonade_client")
+        original_level = logger.level
+        logger.setLevel(logging.CRITICAL)
+        try:
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json=self._TRANSIENT_LOAD_BODY,
+                status=500,
+            )
+            with patch("gaia.llm.lemonade_client.time.sleep"):
+                with self.assertRaises(LemonadeClientError) as ctx:
+                    self.client.load_model(model_name=TEST_MODEL, load_retries=2)
+            self.assertIn("llama-server failed to start", str(ctx.exception))
+            # 1 initial attempt + 2 retries = 3 load calls.
+            self.assertEqual(len(responses.calls), 3)
+        finally:
+            logger.setLevel(original_level)
+
+    @responses.activate
+    def test_load_model_no_retry_when_disabled(self):
+        """load_retries=0 fails immediately without retrying or sleeping."""
+        logger = logging.getLogger("gaia.llm.lemonade_client")
+        original_level = logger.level
+        logger.setLevel(logging.CRITICAL)
+        try:
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json=self._TRANSIENT_LOAD_BODY,
+                status=500,
+            )
+            with patch("gaia.llm.lemonade_client.time.sleep") as mock_sleep:
+                with self.assertRaises(LemonadeClientError):
+                    self.client.load_model(model_name=TEST_MODEL, load_retries=0)
+            self.assertEqual(len(responses.calls), 1)  # no retry
+            mock_sleep.assert_not_called()
+        finally:
+            logger.setLevel(original_level)
+
+    @responses.activate
+    def test_load_model_does_not_retry_non_transient(self):
+        """A non-transient 500 (e.g. generic) is NOT retried."""
+        logger = logging.getLogger("gaia.llm.lemonade_client")
+        original_level = logger.level
+        logger.setLevel(logging.CRITICAL)
+        try:
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json={"error": "Internal server error"},
+                status=500,
+            )
+            with patch("gaia.llm.lemonade_client.time.sleep") as mock_sleep:
+                with self.assertRaises(LemonadeClientError):
+                    self.client.load_model(model_name=TEST_MODEL, load_retries=2)
+            self.assertEqual(len(responses.calls), 1)  # failed immediately
+            mock_sleep.assert_not_called()
+        finally:
+            logger.setLevel(original_level)
+
     @responses.activate
     def test_unload_model_scoped_vs_global(self):
         """unload_model(name) targets only that model; unload_model() stays global.
