@@ -36,7 +36,7 @@ Design notes
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Literal, Optional, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Union, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -57,7 +57,7 @@ CATEGORY_PERSONAL = "PERSONAL"
 # Bump on ANY breaking change to the shapes below. Echoed in both request and
 # response so a consumer can detect a mismatch loudly instead of silently
 # mis-parsing. The first frozen revision is "1.0".
-SCHEMA_VERSION = "2.0"
+SCHEMA_VERSION = "2.1"
 
 
 class _Strict(BaseModel):
@@ -364,6 +364,141 @@ class EmailTriageResponse(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# INBOX PRE-SCAN (#1778) — a read-only, lightweight triage over recent inbox
+# messages, reshaped into the scannable card envelope the Agent UI renders
+# (``kind="email_pre_scan"``). Restores the in-process ``pre_scan_inbox``
+# capability lost in the #1653 REST rip-out — over the package's REST surface,
+# reusing the agent's own ``pre_scan_inbox_impl`` classification path.
+# ---------------------------------------------------------------------------
+
+
+class PreScanItem(_Strict):
+    """One surfaced inbox message in a pre-scan section.
+
+    ``why`` carries the rationale for urgent/actionable rows; ``reason`` carries
+    it for suggested-archive rows. The frontend card reads ``reason ?? why``, so
+    exactly one is populated per row depending on the section.
+    """
+
+    message_id: str = Field(..., description="Provider message id (opaque).")
+    thread_id: Optional[str] = Field(
+        default=None, description="Provider thread id this message belongs to."
+    )
+    sender: str = Field(
+        default="", description="Raw 'From' header of the message (display + address)."
+    )
+    subject: str = Field(default="", description="Subject line.")
+    why: Optional[str] = Field(
+        default=None,
+        description="Rationale for an urgent/actionable row (the heuristic reason).",
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        description="Rationale for a suggested-archive row (the heuristic reason).",
+    )
+
+
+class PreScanPreferencesApplied(_Strict):
+    """The session sender/category preferences that shaped this pre-scan.
+
+    Always present (with empty defaults) so the frontend schema can lock in now;
+    the stateless REST surface leaves these empty today, but the field carries a
+    stable shape for a future preference-aware caller.
+    """
+
+    priority_senders: List[str] = Field(
+        default_factory=list, description="Senders always treated as urgent."
+    )
+    low_priority_senders: List[str] = Field(
+        default_factory=list, description="Senders always treated as low-priority."
+    )
+    category_defaults: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-category default action (e.g. {'FYI': 'archive'}).",
+    )
+
+
+class PreScanTotals(_Strict):
+    """Pre-cap counts per bucket — the true totals before the per-section caps
+    are applied to the surfaced lists. Lets the card show "N surfaced" honestly.
+    """
+
+    urgent: int = Field(default=0, description="Total urgent messages found.")
+    actionable: int = Field(default=0, description="Total actionable messages found.")
+    informational: int = Field(
+        default=0, description="Total informational (FYI/PERSONAL) messages found."
+    )
+    suggested_archives: int = Field(
+        default=0, description="Total suggested-archive messages found."
+    )
+
+
+class EmailPreScanRequest(_Strict):
+    """Request envelope for an inbox pre-scan (#1778). Read-only."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION,
+        description="Contract version. Mismatch lets a consumer fail loudly.",
+    )
+    max_messages: int = Field(
+        default=25,
+        ge=1,
+        le=100,
+        description=(
+            "How many recent inbox messages to scan. Bounded so a caller can't "
+            "request an unbounded mailbox sweep."
+        ),
+    )
+
+
+class EmailPreScanResult(_Strict):
+    """The aggregate pre-scan envelope the ``EmailPreScanCard`` renders.
+
+    This is the exact payload the chat surface detects via
+    ``kind == "email_pre_scan"`` — produced by the agent's
+    ``pre_scan_inbox_impl`` (same classification path), not re-implemented here.
+    """
+
+    kind: Literal["email_pre_scan"] = Field(
+        default="email_pre_scan",
+        description="Discriminator the chat surface detects to render the card.",
+    )
+    urgent: List[PreScanItem] = Field(
+        default_factory=list, description="Top urgent messages (capped)."
+    )
+    actionable: List[PreScanItem] = Field(
+        default_factory=list, description="Top messages needing a response (capped)."
+    )
+    informational_count: int = Field(
+        default=0,
+        description="Count of informational (FYI/PERSONAL) messages — not listed.",
+    )
+    suggested_archives: List[PreScanItem] = Field(
+        default_factory=list,
+        description="Promotional / low-priority messages suggested for archive (capped).",
+    )
+    suggested_drafts: List[Any] = Field(
+        default_factory=list,
+        description="Reserved for future LLM-driven draft generation; empty today.",
+    )
+    preferences_applied: Optional[PreScanPreferencesApplied] = Field(
+        default=None, description="Session preferences that shaped this pre-scan."
+    )
+    totals: Optional[PreScanTotals] = Field(
+        default=None, description="Pre-cap totals per bucket."
+    )
+
+
+class EmailPreScanResponse(_Strict):
+    """Top-level pre-scan response envelope (#1778)."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    result: EmailPreScanResult = Field(..., description="The pre-scan envelope.")
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -402,6 +537,12 @@ __all__ = [
     "TriageUsage",
     "EmailTriageResult",
     "EmailTriageResponse",
+    "PreScanItem",
+    "PreScanPreferencesApplied",
+    "PreScanTotals",
+    "EmailPreScanRequest",
+    "EmailPreScanResult",
+    "EmailPreScanResponse",
     "parse_request",
     "parse_response",
 ]

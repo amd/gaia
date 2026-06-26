@@ -136,11 +136,14 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | Call | Needs | Does |
 |------|-------|------|
 | `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. |
+| `prescan(req?)` | A connected Gmail/Outlook mailbox | Reads recent inbox messages and returns the triage-card envelope (urgent / needs-response / suggested-archive rows + an informational count). Read-only — nothing is archived, marked, or sent. |
 | `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. |
 | `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
 
-**Everything except `send` is standalone** — you can build and verify the whole
-flow with zero connector setup. `send` is different on two counts: it requires the
+**`triage` and `draft` are standalone** — you can build and verify that flow with
+zero connector setup. `prescan` reads the live inbox, so it needs a connected
+Gmail/Outlook mailbox (it returns **HTTP 503** with none connected, **400** with two)
+but no token. `send` is different on two counts: it requires the
 single-use confirmation token from `draft` (call `draft` first; a missing/invalid
 token is rejected with **403** before anything else), and it transmits through the
 mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even

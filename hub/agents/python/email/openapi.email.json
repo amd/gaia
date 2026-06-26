@@ -269,6 +269,122 @@
         "title": "EmailMessage",
         "type": "object"
       },
+      "EmailPreScanRequest": {
+        "additionalProperties": false,
+        "description": "Request envelope for an inbox pre-scan (#1778). Read-only.",
+        "properties": {
+          "max_messages": {
+            "default": 25,
+            "description": "How many recent inbox messages to scan. Bounded so a caller can't request an unbounded mailbox sweep.",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Messages",
+            "type": "integer"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Contract version. Mismatch lets a consumer fail loudly.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "title": "EmailPreScanRequest",
+        "type": "object"
+      },
+      "EmailPreScanResponse": {
+        "additionalProperties": false,
+        "description": "Top-level pre-scan response envelope (#1778).",
+        "properties": {
+          "result": {
+            "$ref": "#/components/schemas/EmailPreScanResult",
+            "description": "The pre-scan envelope."
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "EmailPreScanResponse",
+        "type": "object"
+      },
+      "EmailPreScanResult": {
+        "additionalProperties": false,
+        "description": "The aggregate pre-scan envelope the ``EmailPreScanCard`` renders.\n\nThis is the exact payload the chat surface detects via\n``kind == \"email_pre_scan\"`` — produced by the agent's\n``pre_scan_inbox_impl`` (same classification path), not re-implemented here.",
+        "properties": {
+          "actionable": {
+            "description": "Top messages needing a response (capped).",
+            "items": {
+              "$ref": "#/components/schemas/PreScanItem"
+            },
+            "title": "Actionable",
+            "type": "array"
+          },
+          "informational_count": {
+            "default": 0,
+            "description": "Count of informational (FYI/PERSONAL) messages — not listed.",
+            "title": "Informational Count",
+            "type": "integer"
+          },
+          "kind": {
+            "const": "email_pre_scan",
+            "default": "email_pre_scan",
+            "description": "Discriminator the chat surface detects to render the card.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "preferences_applied": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreScanPreferencesApplied"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Session preferences that shaped this pre-scan."
+          },
+          "suggested_archives": {
+            "description": "Promotional / low-priority messages suggested for archive (capped).",
+            "items": {
+              "$ref": "#/components/schemas/PreScanItem"
+            },
+            "title": "Suggested Archives",
+            "type": "array"
+          },
+          "suggested_drafts": {
+            "description": "Reserved for future LLM-driven draft generation; empty today.",
+            "items": {},
+            "title": "Suggested Drafts",
+            "type": "array"
+          },
+          "totals": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreScanTotals"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pre-cap totals per bucket."
+          },
+          "urgent": {
+            "description": "Top urgent messages (capped).",
+            "items": {
+              "$ref": "#/components/schemas/PreScanItem"
+            },
+            "title": "Urgent",
+            "type": "array"
+          }
+        },
+        "title": "EmailPreScanResult",
+        "type": "object"
+      },
       "EmailSendRequest": {
         "additionalProperties": false,
         "description": "Send a reply. Requires a valid confirmation token for this payload.",
@@ -396,7 +512,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.0",
+            "default": "2.1",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -426,7 +542,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.0",
+            "default": "2.1",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -558,6 +674,134 @@
           }
         },
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "PreScanItem": {
+        "additionalProperties": false,
+        "description": "One surfaced inbox message in a pre-scan section.\n\n``why`` carries the rationale for urgent/actionable rows; ``reason`` carries\nit for suggested-archive rows. The frontend card reads ``reason ?? why``, so\nexactly one is populated per row depending on the section.",
+        "properties": {
+          "message_id": {
+            "description": "Provider message id (opaque).",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Rationale for a suggested-archive row (the heuristic reason).",
+            "title": "Reason"
+          },
+          "sender": {
+            "default": "",
+            "description": "Raw 'From' header of the message (display + address).",
+            "title": "Sender",
+            "type": "string"
+          },
+          "subject": {
+            "default": "",
+            "description": "Subject line.",
+            "title": "Subject",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider thread id this message belongs to.",
+            "title": "Thread Id"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Rationale for an urgent/actionable row (the heuristic reason).",
+            "title": "Why"
+          }
+        },
+        "required": [
+          "message_id"
+        ],
+        "title": "PreScanItem",
+        "type": "object"
+      },
+      "PreScanPreferencesApplied": {
+        "additionalProperties": false,
+        "description": "The session sender/category preferences that shaped this pre-scan.\n\nAlways present (with empty defaults) so the frontend schema can lock in now;\nthe stateless REST surface leaves these empty today, but the field carries a\nstable shape for a future preference-aware caller.",
+        "properties": {
+          "category_defaults": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Per-category default action (e.g. {'FYI': 'archive'}).",
+            "title": "Category Defaults",
+            "type": "object"
+          },
+          "low_priority_senders": {
+            "description": "Senders always treated as low-priority.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Low Priority Senders",
+            "type": "array"
+          },
+          "priority_senders": {
+            "description": "Senders always treated as urgent.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Priority Senders",
+            "type": "array"
+          }
+        },
+        "title": "PreScanPreferencesApplied",
+        "type": "object"
+      },
+      "PreScanTotals": {
+        "additionalProperties": false,
+        "description": "Pre-cap counts per bucket — the true totals before the per-section caps\nare applied to the surfaced lists. Lets the card show \"N surfaced\" honestly.",
+        "properties": {
+          "actionable": {
+            "default": 0,
+            "description": "Total actionable messages found.",
+            "title": "Actionable",
+            "type": "integer"
+          },
+          "informational": {
+            "default": 0,
+            "description": "Total informational (FYI/PERSONAL) messages found.",
+            "title": "Informational",
+            "type": "integer"
+          },
+          "suggested_archives": {
+            "default": 0,
+            "description": "Total suggested-archive messages found.",
+            "title": "Suggested Archives",
+            "type": "integer"
+          },
+          "urgent": {
+            "default": 0,
+            "description": "Total urgent messages found.",
+            "title": "Urgent",
+            "type": "integer"
+          }
+        },
+        "title": "PreScanTotals",
         "type": "object"
       },
       "SingleEmailInput": {
@@ -770,7 +1014,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.0"
+    "version": "2.1"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -833,6 +1077,48 @@
           }
         },
         "summary": "Email Health",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/prescan": {
+      "post": {
+        "description": "Pre-scan the connected inbox into the scannable triage card envelope.\n\nLists the ``max_messages`` most-recent inbox messages via the connected\nmailbox backend and returns the aggregate pre-scan summary the Agent UI's\n``EmailPreScanCard`` renders — top urgent / actionable rows, an\ninformational count, and suggested archives, each with a heuristic reason.\nRead-only: nothing is archived, marked, or sent.\n\nClassification reuses the agent's ``pre_scan_inbox_impl`` (the same\nheuristic path the agent loop runs) — categories are not re-implemented\nhere. The backend is resolved by :func:`get_prescan_backend`, which fails\nloudly on zero or ambiguous mailboxes.",
+        "operationId": "prescan_inbox_v1_email_prescan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailPreScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailPreScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prescan Inbox",
         "tags": [
           "email"
         ]

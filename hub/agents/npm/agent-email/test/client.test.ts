@@ -11,6 +11,7 @@ import type {
   EmailTriageResponse,
   EmailDraftResponse,
   EmailSendResponse,
+  EmailPreScanResponse,
 } from "../src/types.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -118,6 +119,60 @@ describe("EmailClient", () => {
     });
     expect(s.sent).toBe(true);
     expect(s.sent_id).toBe("sent-1");
+  });
+
+  it("pre-scans the inbox and parses the card envelope", async () => {
+    const preScanRes: EmailPreScanResponse = {
+      schema_version: "2.1",
+      result: {
+        kind: "email_pre_scan",
+        urgent: [
+          { message_id: "u1", sender: "boss@corp.com", subject: "Prod down", why: "urgent label" },
+        ],
+        actionable: [],
+        informational_count: 3,
+        suggested_archives: [
+          { message_id: "a1", thread_id: "t-a1", sender: "deals@shop.com", subject: "Sale", reason: "promotional" },
+        ],
+        suggested_drafts: [],
+        preferences_applied: { priority_senders: [], low_priority_senders: [], category_defaults: {} },
+        totals: { urgent: 1, actionable: 0, informational: 3, suggested_archives: 1 },
+      },
+    };
+    const fetchImpl = vi.fn(async (url, init) => {
+      expect(String(url)).toBe("http://x/v1/email/prescan");
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body)).max_messages).toBe(10);
+      return jsonResponse(preScanRes);
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const res = await client.prescan({ max_messages: 10 });
+    expect(res.schema_version).toBe("2.1");
+    expect(res.result.kind).toBe("email_pre_scan");
+    expect(res.result.urgent[0]?.message_id).toBe("u1");
+    expect(res.result.informational_count).toBe(3);
+    expect(res.result.suggested_archives[0]?.reason).toBe("promotional");
+    expect(res.result.totals?.suggested_archives).toBe(1);
+  });
+
+  it("pre-scans with an empty body (server defaults max_messages)", async () => {
+    const fetchImpl = vi.fn(async (_url, init) => {
+      expect(JSON.parse(String(init?.body))).toEqual({});
+      return jsonResponse({
+        schema_version: "2.1",
+        result: {
+          kind: "email_pre_scan",
+          urgent: [],
+          actionable: [],
+          informational_count: 0,
+          suggested_archives: [],
+          suggested_drafts: [],
+        },
+      });
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const res = await client.prescan();
+    expect(res.result.kind).toBe("email_pre_scan");
   });
 
   it("raises HttpError on a non-2xx (no silent fallback)", async () => {

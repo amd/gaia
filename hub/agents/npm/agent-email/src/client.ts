@@ -5,6 +5,7 @@
  *
  * Wraps every HTTP endpoint the frozen sidecar serves:
  *   POST /v1/email/triage    (the frozen triage contract)
+ *   POST /v1/email/prescan    (read-only inbox pre-scan → triage-card envelope)
  *   POST /v1/email/draft      (mint a confirmation token)
  *   POST /v1/email/send       (send — gated on a valid token)
  *   GET  /health              (root liveness — what the standalone sidecar serves)
@@ -30,6 +31,8 @@ import { stripTrailingSlashes } from "./url.js";
 import type {
   EmailDraftRequest,
   EmailDraftResponse,
+  EmailPreScanRequest,
+  EmailPreScanResponse,
   EmailSendRequest,
   EmailSendResponse,
   EmailTriageRequest,
@@ -80,6 +83,19 @@ export class EmailClient {
   /** Triage a single email or a full thread (POST /v1/email/triage). */
   async triage(request: EmailTriageRequest): Promise<EmailTriageResponse> {
     return this.post<EmailTriageResponse>("/v1/email/triage", request);
+  }
+
+  /**
+   * Pre-scan the connected inbox into the triage-card envelope (POST
+   * /v1/email/prescan). Read-only: lists recent inbox messages and returns the
+   * aggregate summary (urgent / actionable / suggested archives + counts) the
+   * Agent UI's pre-scan card renders. The request defaults `max_messages` to 25
+   * server-side, so `{}` is a valid body.
+   */
+  async prescan(
+    request: EmailPreScanRequest = {},
+  ): Promise<EmailPreScanResponse> {
+    return this.post<EmailPreScanResponse>("/v1/email/prescan", request);
   }
 
   /** Propose a reply and mint a confirmation token (POST /v1/email/draft). */

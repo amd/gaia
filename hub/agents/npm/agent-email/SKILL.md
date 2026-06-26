@@ -79,10 +79,12 @@ The interface:
 | Call | Needs | Notes |
 |------|-------|-------|
 | `triage(req)` | Local LLM only | Classify / summarize / extract action items + phishing signals on the message you pass. No mailbox read. |
+| `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`: urgent / actionable / suggested-archive rows + an informational count). No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. |
 | `draft(req)` | Nothing external | Returns a single-use confirmation token. |
 | `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. |
 
-**Build everything except `send` with zero connector setup.** Every non-2xx
+**Build `triage` and `draft` with zero connector setup** (`prescan` and `send`
+need a connected mailbox). Every non-2xx
 response throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is no
 silent null.
 
@@ -134,7 +136,8 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   are `{ email, name? }`; `to` is a non-empty array of them. A plain string → 422.
 - **`send` needs the draft `confirmation_token`** (missing/invalid → 403), but it
   takes **no OAuth token** — the mailbox is resolved from the host's GAIA connector
-  store (no mailbox connected → 503). Triage and draft need no connector.
+  store (no mailbox connected → 503). `prescan` resolves the mailbox the same way
+  (503 with none, 400 with 2+). Triage and draft need no connector.
 - **Cleanup is automatic by default** — the sidecar is reaped on exit/crash/signal;
   only `autoCleanup: false` (or a hard `SIGKILL` of your process) can orphan the
   child. `shutdown` stays the graceful stop.

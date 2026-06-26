@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.0**.
+[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.1**.
 
 ## Architecture
 
@@ -38,8 +38,8 @@ signals yourself.
 ## REST API
 
 `EmailClient` is a typed wrapper over the sidecar's HTTP surface. Methods:
-`triage`, `draft`, `send`, `health`, `version`, `emailHealth`, `emailVersion`,
-`spec`, `openapi`. `health`/`version` hit the **root** routes (the standalone
+`triage`, `prescan`, `draft`, `send`, `health`, `version`, `emailHealth`,
+`emailVersion`, `spec`, `openapi`. `health`/`version` hit the **root** routes (the standalone
 sidecar); `emailHealth`/`emailVersion` hit the **`/v1/email`-scoped** mirrors (for
 when the router is mounted on a product app). Every non-2xx response throws
 `HttpError` (carrying `status`, `url`, `bodyText`) — never a silent empty/null
@@ -48,6 +48,7 @@ result.
 | Endpoint | Client method | Auth | What it needs |
 |----------|---------------|------|---------------|
 | `POST /v1/email/triage` | `triage()` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* |
+| `POST /v1/email/prescan` | `prescan()` | **Connector** | Reads recent inbox messages from the connected Google/Microsoft mailbox and returns the read-only triage-card envelope (`kind: "email_pre_scan"`). `503` if no mailbox is connected, `400` if 2+ are. Heuristic-only — no Lemonade call. |
 | `POST /v1/email/draft` | `draft()` | **Standalone** | Nothing external — wraps your `(to, subject, body)` and returns a single-use confirmation token. |
 | `POST /v1/email/send` | `send()` | **Connector** | A valid `draft` confirmation token **and** a connected Google/Microsoft mailbox. The token gate fires first: no/invalid token → `403`; then `503` if no mailbox is connected, `400` if 2+ are. |
 | `GET /health` | `health()` | **Standalone** | Liveness only — does **not** check Lemonade/model. |
@@ -58,8 +59,9 @@ result.
 | `GET /openapi.json` | `openapi()` | **Standalone** | Machine-readable OpenAPI document. |
 
 `GET /docs` (Swagger UI) and `GET /redoc` are also served but are browser UIs, not
-wrapped by the client. **Everything except `send` is standalone** — integrate and
-verify the whole surface with zero connector setup.
+wrapped by the client. **`triage` and `draft` are standalone** — integrate and
+verify them with zero connector setup; `prescan` and `send` need a connected
+mailbox.
 
 ### Readiness vs liveness
 
@@ -169,9 +171,11 @@ machine where the mailbox is already connected in GAIA. Triage and draft, which
 need no connector, work anywhere.
 
 The full GAIA email agent also reads and acts on the live mailbox and calendar
-(list/search messages, archive, label, mark spam, RSVP, create events). Those
-actions are connector-gated by definition and are **not exposed through this
-package's REST API yet** — only triage / draft / send are.
+(archive, label, mark spam, RSVP, create events). Those actions are
+connector-gated by definition and are **not exposed through this package's REST
+API yet** — only triage / prescan / draft / send are. (`prescan` is the one
+read-only mailbox call on the surface: it lists recent inbox messages but never
+mutates them.)
 
 ## Browser / Electron renderer (`./client`)
 
@@ -215,7 +219,7 @@ editors autocomplete but your code never imports them.
 
 TypeScript types in `src/types.ts` mirror two Python sources of truth:
 
-- `contract.py` — the triage request/response contract (`SCHEMA_VERSION = "2.0"`).
+- `contract.py` — the triage + pre-scan request/response contract (`SCHEMA_VERSION = "2.1"`).
 - `api_routes.py` — the local draft/send confirmation handshake models.
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is

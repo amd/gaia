@@ -5,6 +5,15 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## Unreleased (2.1)
+
+- **Inbox pre-scan over REST** (#1778): new `prescan(req?)` client method →
+  `POST /v1/email/prescan`. Reads recent inbox messages from the connected
+  mailbox and returns the triage-card envelope (`kind: "email_pre_scan"` —
+  urgent / actionable / suggested-archive rows + an informational count) the
+  Agent UI's pre-scan card renders. Read-only; reuses the agent's own
+  `pre_scan_inbox` classification path. Contract `SCHEMA_VERSION` → `2.1`.
+
 ## 0.2.5
 
 Sending from a mailbox connected with identity-only scopes now returns an

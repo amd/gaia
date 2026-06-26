@@ -3,7 +3,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script>(function(){try{var t=localStorage.getItem('amd-site-theme');if(!t)t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
-<title>Email Agent — Capability &amp; API Specification · v2.0</title>
+<title>Email Agent — Capability &amp; API Specification · v2.1</title>
 <link rel="icon" href="data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'&gt;&lt;rect width='32' height='32' rx='5' fill='%23111114'/&gt;&lt;g fill='none' stroke='%23c9a24a' stroke-width='2.4' stroke-linecap='round'&gt;&lt;path d='M8 9 L15 16 L8 23'/&gt;&lt;path d='M16 9 L23 16 L16 23'/&gt;&lt;/g&gt;&lt;/svg&gt;">
 <style>
   /* Self-hosted latin webfonts, base64-embedded so this spec is a single
@@ -297,7 +297,7 @@
       <div class="chip"><div class="k">Inference</div><div class="v">100% on-device</div></div>
       <div class="chip"><div class="k">Milestone</div><div class="v g"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a></div></div>
     </div>
-    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.0</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-11</b> &nbsp;·&nbsp; <b style="color:var(--ink)">schema 1.0</b> implemented · <b style="color:var(--ink)">2.0</b> proposed &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
+    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.1</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-26</b> &nbsp;·&nbsp; <b style="color:var(--ink)">schema 1.0</b> implemented · <b style="color:var(--ink)">2.0</b> proposed &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
     <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 1.0</b> (4-bucket triage). <b style="color:var(--ink)">Schema 2.0</b> — a 5-bucket taxonomy plus a <code>suggested_action</code> verb — is proposed (see the API reference); it is breaking, so consumers opt in.</div>
   </div>
 </section>
@@ -398,7 +398,8 @@
         <tr><td><b>4</b> · Phishing detection</td><td>✓ <span class="opt">(flag in triage)</span></td><td>✓</td><td>✓ <span class="opt">(+ quarantine)</span></td></tr>
         <tr><td><b>6</b> · Full-thread comprehension</td><td>✓ <span class="opt">(thread payload)</span></td><td>✓</td><td>✓</td></tr>
         <tr><td><b>7</b> · Send a reply</td><td>✓ <code>/v1/email/send</code></td><td>✓ <code>send_email</code></td><td>✓</td></tr>
-        <tr><td><b>5, 8, 9, 10–12</b> · pre-scan, organize, calendar &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td><b>5</b> · Inbox pre-scan</td><td>✓ <code>/v1/email/prescan</code> <span class="opt">(read-only)</span></td><td>—</td><td>✓</td></tr>
+        <tr><td><b>8, 9, 10–12</b> · organize, calendar &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -448,6 +449,16 @@
         "body": "Thanks Dana — signing today, MSA back before Friday EOD.",
         "confirmation_token": "9f1c…a7e2" }'
 # → { "sent_id": "msg-abc123", "sent": true }</pre>
+    <p class="body-t"><b>Inbox pre-scan</b> (read-only) — list recent inbox mail and get the triage-card envelope the Agent UI renders. Needs a connected mailbox (<code>503</code> with none, <code>400</code> with 2+); no Lemonade call:</p>
+    <pre class="code">curl -s http://localhost:8080/v1/email/prescan \
+  -H "Content-Type: application/json" \
+  -d '{ "max_messages": 25 }'
+# → { "schema_version": "2.1",
+#     "result": { "kind": "email_pre_scan",
+#                 "urgent": [ … ], "actionable": [ … ],
+#                 "informational_count": 7,
+#                 "suggested_archives": [ … ], "suggested_drafts": [],
+#                 "totals": { "urgent": 2, "actionable": 3, "informational": 7, "suggested_archives": 4 } } }</pre>
   </div>
 </section>
 

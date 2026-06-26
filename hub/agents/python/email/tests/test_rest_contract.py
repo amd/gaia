@@ -43,6 +43,7 @@ from gaia_agent_email.version import AGENT_VERSION, API_VERSION  # noqa: E402
 # Maps (method, path) -> the component schema name the handler declares.
 _EXPECTED_RESPONSE_MODELS = {
     ("post", "/v1/email/triage"): "EmailTriageResponse",
+    ("post", "/v1/email/prescan"): "EmailPreScanResponse",
     ("post", "/v1/email/draft"): "EmailDraftResponse",
     ("post", "/v1/email/send"): "EmailSendResponse",
     ("get", "/v1/email/health"): "HealthResponse",
@@ -170,3 +171,153 @@ def test_version_endpoint_rejects_unknown_field_loudly(client):
     # shape carries exactly the two documented keys (no silent extras).
     body = client.get("/v1/email/version").json()
     assert set(body) == {"apiVersion", "agentVersion"}
+
+
+# ---------------------------------------------------------------------------
+# 6. Inbox pre-scan (#1778) — fake backend via app.dependency_overrides;
+#    no live mailbox, no LLM (the heuristic path classifies these messages).
+# ---------------------------------------------------------------------------
+
+
+def _gmail_message(
+    msg_id: str,
+    *,
+    subject: str,
+    sender: str,
+    label_ids: list[str],
+    snippet: str = "",
+) -> dict:
+    """Build a minimal Gmail-API-v1-shaped message the pre-scan path reads."""
+    return {
+        "id": msg_id,
+        "threadId": f"t-{msg_id}",
+        "labelIds": label_ids,
+        "snippet": snippet,
+        "payload": {
+            "headers": [
+                {"name": "Subject", "value": subject},
+                {"name": "From", "value": sender},
+            ],
+            "mimeType": "text/plain",
+            "body": {"data": ""},
+        },
+    }
+
+
+class _FakePreScanBackend:
+    """In-memory backend exposing just the read calls pre_scan_inbox_impl uses."""
+
+    def __init__(self, messages: list[dict]):
+        self._messages = {m["id"]: m for m in messages}
+
+    def list_messages(self, *, label_ids=None, max_results=25, **_):  # noqa: ANN001
+        ids = list(self._messages)[:max_results]
+        return {
+            "messages": [
+                {"id": i, "threadId": self._messages[i]["threadId"]} for i in ids
+            ],
+            "nextPageToken": None,
+        }
+
+    def get_message(self, message_id: str) -> dict:
+        return self._messages[message_id]
+
+
+@pytest.fixture
+def prescan_client() -> TestClient:
+    """A client whose pre-scan backend is a fake (a promotional message that
+    the heuristic confidently buckets as a suggested archive, plus a plain
+    informational message)."""
+    from gaia_agent_email.api_routes import get_prescan_backend
+
+    app = export_openapi.build_app()
+    backend = _FakePreScanBackend(
+        [
+            _gmail_message(
+                "m1",
+                subject="50% off this weekend!",
+                sender="deals@shop.example",
+                label_ids=["INBOX", "CATEGORY_PROMOTIONS"],
+            ),
+            _gmail_message(
+                "m2",
+                subject="Project sync notes",
+                sender="alice@corp.example",
+                label_ids=["INBOX"],
+                snippet="Sharing the notes from today's sync.",
+            ),
+        ]
+    )
+    app.dependency_overrides[get_prescan_backend] = lambda: backend
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_prescan_returns_card_envelope_shape(prescan_client):
+    resp = prescan_client.post("/v1/email/prescan", json={"max_messages": 10})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["schema_version"] == SCHEMA_VERSION
+    result = body["result"]
+    # The envelope is exactly what EmailPreScanCard consumes.
+    assert result["kind"] == "email_pre_scan"
+    assert set(result) == {
+        "kind",
+        "urgent",
+        "actionable",
+        "informational_count",
+        "suggested_archives",
+        "suggested_drafts",
+        "preferences_applied",
+        "totals",
+    }
+    for section in ("urgent", "actionable", "suggested_archives"):
+        assert isinstance(result[section], list)
+    assert isinstance(result["informational_count"], int)
+    assert result["suggested_drafts"] == []
+    # The promotional message is surfaced as a suggested archive with a reason;
+    # the plain message lands in the informational count (not listed).
+    archives = result["suggested_archives"]
+    assert any(item["message_id"] == "m1" for item in archives)
+    archived = next(item for item in archives if item["message_id"] == "m1")
+    assert archived["reason"]  # heuristic rationale present
+    assert archived["thread_id"] == "t-m1"
+    assert result["totals"]["suggested_archives"] >= 1
+
+
+def test_prescan_rejects_unknown_request_field_loudly(prescan_client):
+    # _Strict request model forbids extras → 422, never silently ignored.
+    resp = prescan_client.post(
+        "/v1/email/prescan", json={"max_messages": 5, "bogus": True}
+    )
+    assert resp.status_code == 422
+
+
+def test_prescan_no_mailbox_connected_fails_loud(monkeypatch):
+    # The real resolver must fail loud (503) when no mailbox is connected —
+    # never a silent empty pre-scan.
+    from fastapi import HTTPException
+    from gaia_agent_email.api_routes import get_prescan_backend
+
+    monkeypatch.setattr(
+        "gaia_agent_email.api_routes.connected_mailbox_providers", lambda: []
+    )
+    with pytest.raises(HTTPException) as exc:
+        get_prescan_backend()
+    assert exc.value.status_code == 503
+
+
+def test_prescan_ambiguous_mailbox_fails_loud(monkeypatch):
+    # Two connected mailboxes → 400, never a silent guess of which to scan.
+    from fastapi import HTTPException
+    from gaia_agent_email.api_routes import get_prescan_backend
+
+    monkeypatch.setattr(
+        "gaia_agent_email.api_routes.connected_mailbox_providers",
+        lambda: ["google", "microsoft"],
+    )
+    with pytest.raises(HTTPException) as exc:
+        get_prescan_backend()
+    assert exc.value.status_code == 400
