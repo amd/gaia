@@ -253,7 +253,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
             "init_params": {
                 "silent_mode": True,
                 # Only kwargs recognised by ChatAgentConfig will be applied;
-                # see ChatAgentConfig in src/hub/agents/python/chat/gaia_agent_chat/agent.py.
+                # see ChatAgentConfig in hub/agents/python/chat/gaia_agent_chat/agent.py.
                 "rag_documents": ["./company_docs"],
             },
             "description": "Document Q&A agent backed by RAG",
@@ -674,7 +674,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
 ## Source Code Reference
 
 <CardGroup cols={2}>
-  <Card title="ChatAgent" icon="code" href="https://github.com/amd/gaia/blob/main/src/hub/agents/python/chat/gaia_agent_chat/agent.py">
+  <Card title="ChatAgent" icon="code" href="https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/agent.py">
     Main agent implementation with session management and file monitoring
   </Card>
 

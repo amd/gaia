@@ -1,7 +1,7 @@
 # Agent Core Loop — Architecture Review & Improvement Roadmap
 
 **Date:** 2026-03-22
-**Scope:** `src/gaia/agents/base/agent.py` + `src/hub/agents/python/chat/gaia_agent_chat/agent.py`
+**Scope:** `src/gaia/agents/base/agent.py` + `hub/agents/python/chat/gaia_agent_chat/agent.py`
 **Context:** Analysis driven by failures surfaced in the Agent UI eval benchmark (34-scenario suite).
 
 ---
