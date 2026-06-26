@@ -210,19 +210,16 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
         dataset_reference="tests/fixtures/email/ground_truth.json",
         dataset_description=(
             "Synthetic email corpus for GAIA email-triage evaluation "
-            "(FakeGmailBackend, 4-category priority labels: "
-            "informational / actionable / urgent / low priority)"
+            "(FakeGmailBackend, schema-2.0 triage taxonomy: "
+            "fyi / needs_response / promotional / urgent / personal)"
         ),
         dataset_size=dataset_size,
         methodology=(
             "gaia eval benchmark — category classification accuracy "
             "(case-insensitive exact match of the agent's triage label vs the "
-            "ground-truth priority label) over a synthetic labeled corpus via "
-            "FakeGmailBackend; no LLM judge. NOTE: the agent's triage taxonomy "
-            "(fyi / needs_response / promotional / urgent) and the corpus "
-            "priority labels currently overlap only on 'urgent', so this "
-            "exact-match metric understates triage usefulness — the corpus "
-            "labels are stale vs the schema-2.0 taxonomy, tracked in amd/gaia#1874"
+            "ground-truth label) over a synthetic labeled corpus via "
+            "FakeGmailBackend; no LLM judge. The corpus uses the schema-2.0 "
+            "triage taxonomy, aligned with the agent's output labels (#1874)"
         ),
         config={
             "harness": "gaia eval benchmark",
