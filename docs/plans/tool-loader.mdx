@@ -3,7 +3,7 @@ title: "Dynamic Tool Loader"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/base/tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) · bundles [`src/gaia/agents/chat/tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py)
+  **Source Code:** [`src/gaia/agents/base/tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) · bundles [`hub/agents/python/chat/gaia_agent_chat/tool_bundles.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/tool_bundles.py)
 </Info>
 
 <Note>
@@ -272,7 +272,7 @@ when set — the toggle then reflects the effective value and disables — so τ
 the cap stay env-only tuning.
 
 **CORE (10, always-on, cap- & eviction-exempt)** — defined in
-[`tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py):
+[`tool_bundles.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/tool_bundles.py):
 `remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`,
 `read_file`, `query_documents`, `query_specific_file`, `set_loop_state`,
 `request_user_input`.
@@ -351,7 +351,7 @@ baseline — meaning **CORE-only is the ~60%-reduction best case** and a full
 #### How Part 2 shipped (implementation reference)
 
 **`load_tools` is always-on via CORE.** `load_tools` is added to
-[`DOC_CORE_TOOLS`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py)
+[`DOC_CORE_TOOLS`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/tool_bundles.py)
 (CORE = 11), so once registered it renders in **both** the text prompt and the
 native `tools=` schema every active turn and is cap-/eviction-exempt. It is
 registered **only when the loader is active** (`self.tool_loader is not None`),
@@ -481,7 +481,7 @@ needs a seeded procedure matching a scenario goal.
 These were open in the design sketch; Part 1 (#1449) decided them as follows:
 
 1. **Bundle definitions and CORE membership** — *decided.* CORE = 10 names and 12
-   bundles, in [`tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py)
+   bundles, in [`tool_bundles.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/tool_bundles.py)
    (see [How Part 1 shipped](#part-1-selection-dual-path-filtering-landed-1449)),
    pinned to cover the 37-tool `doc` registry exactly.
 2. **Similarity threshold τ / cap** — *decided.* τ = `0.20` inclusive, cap = `14`

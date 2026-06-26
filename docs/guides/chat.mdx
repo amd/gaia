@@ -208,7 +208,7 @@ gaia chat --index document.pdf --debug
 
 ```python Python Debug
 # Python SDK with debug — ChatAgent takes a single ChatAgentConfig
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 config = ChatAgentConfig(
     rag_documents=['document.pdf'],
@@ -322,7 +322,7 @@ is set, the UI toggle reflects the effective value and disables itself — which
 handy for the eval harness:
 
 ```python
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 agent = ChatAgent(ChatAgentConfig(prompt_profile="doc", dynamic_tools=True))
 ```

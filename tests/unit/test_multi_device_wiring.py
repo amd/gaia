@@ -254,14 +254,16 @@ class TestAgentThreadsDevice:
 
 class TestChatAgentConfigDeviceField:
     def test_config_has_device_and_ctx(self):
-        from gaia.agents.chat.agent import ChatAgentConfig
+        pytest.importorskip("gaia_agent_chat")
+        from gaia_agent_chat.agent import ChatAgentConfig
 
         cfg = ChatAgentConfig(device="npu", min_context_size=4096)
         assert cfg.device == "npu"
         assert cfg.min_context_size == 4096
 
     def test_config_device_defaults_none(self):
-        from gaia.agents.chat.agent import ChatAgentConfig
+        pytest.importorskip("gaia_agent_chat")
+        from gaia_agent_chat.agent import ChatAgentConfig
 
         cfg = ChatAgentConfig()
         assert cfg.device is None

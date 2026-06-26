@@ -141,7 +141,7 @@ Get a working agent running to understand the basic flow.
 
     ```python title="my_chat_agent.py"
     import json
-    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
     # Create agent with a document
     config = ChatAgentConfig(
@@ -383,7 +383,7 @@ flowchart TD
 <CodeGroup>
 ```python Example: Multiple Mixins
 from gaia.agents.base.agent import Agent
-from gaia.agents.chat.tools import RAGToolsMixin, FileToolsMixin
+from gaia.agents.tools import RAGToolsMixin, FileToolsMixin
 
 class MyAgent(Agent, RAGToolsMixin, FileToolsMixin):
     def _register_tools(self):

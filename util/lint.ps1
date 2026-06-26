@@ -347,7 +347,7 @@ function Invoke-ImportTests {
         @{Import="from gaia.agents.base import tool"; Desc="Tool decorator"; Optional=$false},
 
         # Specialized Agents
-        @{Import="from gaia.agents.chat import ChatAgent"; Desc="Chat agent"; Optional=$false},
+        @{Import="from gaia_agent_chat import ChatAgent"; Desc="Chat agent"; Optional=$true},
         @{Import="from gaia.agents.code import CodeAgent"; Desc="Code agent"; Optional=$false},
         @{Import="from gaia.agents.jira import JiraAgent"; Desc="Jira agent"; Optional=$false},
         @{Import="from gaia.agents.docker import DockerAgent"; Desc="Docker agent"; Optional=$false},

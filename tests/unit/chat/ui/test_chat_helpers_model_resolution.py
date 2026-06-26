@@ -18,6 +18,8 @@ import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from gaia.ui.database import SESSION_DEFAULT_MODEL as _DB_DEFAULT
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -503,11 +505,12 @@ class TestBuiltinChatAgentUnchanged:
         fake_agent.indexed_files = set()
         fake_agent.rag = None
 
+        pytest.importorskip("gaia_agent_chat")
         with (
             patch("gaia.ui._chat_helpers._agent_registry", registry),
             patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
-            patch("gaia.agents.chat.agent.ChatAgent", return_value=fake_agent),
-            patch("gaia.agents.chat.agent.ChatAgentConfig"),
+            patch("gaia_agent_chat.agent.ChatAgent", return_value=fake_agent),
+            patch("gaia_agent_chat.agent.ChatAgentConfig"),
         ):
             _call_non_streaming(session, db, agent_type_override=None)
 

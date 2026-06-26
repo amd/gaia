@@ -832,10 +832,10 @@ def _resolve_dynamic_tools_setting(db: ChatDatabase) -> tuple[bool, bool]:
     Delegates the env parse to ``dynamic_tools_env_override`` so the UI and
     ``ChatAgent._resolve_dynamic_tools_enabled`` share one truthy set.
     """
-    # Function-local import keeps the agents layer off the router's import
-    # path (no cycle, no module-load cost): ui/ → agents/chat/ stays a lazy,
-    # downward dependency.
-    from gaia.agents.chat.agent import dynamic_tools_env_override
+    # Function-local import keeps the agents layer off the router's import path
+    # (no cycle, no module-load cost). The helper lives in the core tool_loader
+    # (not the chat wheel) so this core UI setting works without gaia-agent-chat.
+    from gaia.agents.base.tool_loader import dynamic_tools_env_override
 
     persisted = db.get_setting("dynamic_tools", "false") == "true"
     override = dynamic_tools_env_override()

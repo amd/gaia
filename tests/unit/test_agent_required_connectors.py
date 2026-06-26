@@ -152,8 +152,11 @@ class TestConsumesMcpServers:
         assert isinstance(Agent.CONSUMES_MCP_SERVERS, bool)
 
     def test_builtin_chat_consumes_mcp_servers(self):
+        # chat ships as the standalone gaia-agent-chat wheel (#1102), discovered
+        # via the gaia.agent entry point — use discover(), not the builtin pass.
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
-        registry._register_builtin_agents()
+        registry.discover()
         chat = registry.get("chat")
         assert chat is not None
         assert chat.consumes_mcp_servers is True
@@ -162,10 +165,11 @@ class TestConsumesMcpServers:
         # The lazy factory cannot import the chat module at discovery time, so
         # the registration hardcodes the flag. Guard it against the class-level
         # source of truth drifting apart.
-        from gaia.agents.chat.agent import ChatAgent
+        pytest.importorskip("gaia_agent_chat")
+        from gaia_agent_chat.agent import ChatAgent
 
         registry = AgentRegistry()
-        registry._register_builtin_agents()
+        registry.discover()
         chat = registry.get("chat")
         assert ChatAgent.CONSUMES_MCP_SERVERS is True
         assert chat.consumes_mcp_servers == ChatAgent.CONSUMES_MCP_SERVERS
@@ -288,26 +292,29 @@ class TestCustomAgentPath:
         assert ns1 != ns2
 
     def test_reserved_id_is_blocked(self, tmp_path, monkeypatch, caplog):
+        # ``builder`` is the canonical reserved framework built-in (chat/doc/file
+        # migrated to the gaia-agent-chat wheel, #1102, and are no longer
+        # reserved). A custom agent must not be able to claim a reserved id.
         agents_root = tmp_path / ".gaia" / "agents"
         agent_dir = agents_root / "trojan"
         agent_dir.mkdir(parents=True)
         (agent_dir / "agent.py").write_text(
-            CUSTOM_AGENT_TEMPLATE.format(agent_id="chat")
+            CUSTOM_AGENT_TEMPLATE.format(agent_id="builder")
         )
 
         monkeypatch.setattr("gaia.agents.registry.Path.home", lambda: tmp_path)
 
         registry = AgentRegistry()
         # discover() should log a warning and skip the trojan agent — it must
-        # not register under id "chat" and overwrite the built-in.
-        registry._register_builtin_agents()  # registers built-in chat
+        # not register under id "builder" and overwrite the built-in.
+        registry._register_builtin_agents()  # registers built-in builder
         with caplog.at_level("WARNING"):
             registry.discover()
 
-        chat_reg = registry.get("chat")
-        # The built-in chat is the one that survives.
-        assert chat_reg.source == "builtin"
-        assert chat_reg.namespaced_agent_id == "builtin:chat"
+        builder_reg = registry.get("builder")
+        # The built-in builder is the one that survives.
+        assert builder_reg.source == "builtin"
+        assert builder_reg.namespaced_agent_id == "builtin:builder"
 
 
 class TestAgentInfoSerialization:
