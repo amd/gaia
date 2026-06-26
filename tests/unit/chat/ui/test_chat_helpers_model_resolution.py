@@ -440,7 +440,7 @@ class TestDeviceModelOverride:
         kwargs = captured["kwargs"]
         assert kwargs.get("model_id") == "gemma4-it-e2b-FLM"
         assert kwargs.get("device") == "npu"
-        assert kwargs.get("min_context_size") == 4096
+        assert kwargs.get("min_context_size") == 32768
 
     def test_explicit_npu_overrides_session_pinned_model(self):
         """A non-GPU device wins even over a session-pinned model (it can't run there)."""

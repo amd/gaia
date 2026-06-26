@@ -77,13 +77,13 @@ def test_message_count_matches_target(mbox_obj: mailbox.mbox, labels: dict) -> N
 
 
 def test_category_coverage_and_counts(labels: dict) -> None:
-    # Categories use the production taxonomy strings: the low bucket is
-    # "low priority" (space), NOT "low_priority".
+    # Categories use the schema-2.0 five-bucket taxonomy strings (#1615),
+    # matching gaia_agent_email.tools.triage_heuristics.ALL_CATEGORIES.
     category_counts = Counter(meta["category"] for meta in labels.values())
-    assert category_counts["urgent"] >= 20
-    assert category_counts["actionable"] >= 45
-    assert category_counts["informational"] >= 55
-    assert category_counts["low priority"] >= 30
+    assert category_counts["URGENT"] >= 20
+    assert category_counts["NEEDS_RESPONSE"] >= 45
+    assert category_counts["FYI"] >= 55
+    assert category_counts["PROMOTIONAL"] >= 30
 
     spam_count = sum(1 for meta in labels.values() if meta["is_spam"])
     phishing_count = sum(1 for meta in labels.values() if meta["is_phishing"])
@@ -173,12 +173,40 @@ def test_ground_truth_required_fields(labels: dict) -> None:
         assert required.issubset(meta.keys())
 
 
+def test_corpus_vocab_matches_scorer_taxonomy(labels: dict) -> None:
+    """Guard against taxonomy drift (#1874): every committed ground-truth label
+    must be a valid schema-2.0 category, and the scorer's attention axis must be
+    drawn from that same taxonomy. The eval scorer compares case-insensitively,
+    so compare on the lower-cased vocabulary.
+    """
+    from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
+
+    from gaia.eval.quality_metrics import NEEDS_ATTENTION_CATEGORIES
+
+    taxonomy = {c.lower() for c in ALL_CATEGORIES}
+    corpus_vocab = {meta["category"].lower() for meta in labels.values()}
+    assert corpus_vocab <= taxonomy, (
+        f"corpus labels {sorted(corpus_vocab)} drifted from schema-2.0 taxonomy "
+        f"{sorted(taxonomy)} — regenerate ground_truth.json"
+    )
+    assert NEEDS_ATTENTION_CATEGORIES <= taxonomy, (
+        f"scorer attention axis {sorted(NEEDS_ATTENTION_CATEGORIES)} is not a "
+        f"subset of the taxonomy {sorted(taxonomy)}"
+    )
+
+
 def test_meta_block_present(gt: dict) -> None:
     assert "_meta" in gt
     meta = gt["_meta"]
     assert meta["fixture"] == "synthetic_inbox.mbox"
     assert meta["fixture_kind"] == "synthetic"
-    assert meta["taxonomy"] == ["urgent", "actionable", "informational", "low priority"]
+    assert meta["taxonomy"] == [
+        "URGENT",
+        "NEEDS_RESPONSE",
+        "FYI",
+        "PROMOTIONAL",
+        "PERSONAL",
+    ]
 
 
 def test_generator_determinism_verify_mode() -> None:

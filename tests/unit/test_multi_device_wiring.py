@@ -274,12 +274,12 @@ class TestChatAgentConfigDeviceField:
 class TestResolveDeviceModelUI:
     """``resolve_device_model`` is the heart of the UI dropdown fix."""
 
-    def test_npu_resolves_to_flm_model_and_4k_ctx(self):
+    def test_npu_resolves_to_flm_model_and_32k_ctx(self):
         from gaia.ui._chat_helpers import resolve_device_model
 
         model, ctx = resolve_device_model("chat", "npu", None)
         assert model == "gemma4-it-e2b-FLM"
-        assert ctx == 4096
+        assert ctx == 32768
 
     def test_gpu_resolves_to_gguf_model_and_32k_ctx(self):
         from gaia.ui._chat_helpers import resolve_device_model

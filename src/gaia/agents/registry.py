@@ -276,7 +276,7 @@ DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
         recipe="flm",
         backend="flm:npu",
         verified=True,
-        ctx_size=4096,
+        ctx_size=32768,
     ),
 ]
 
