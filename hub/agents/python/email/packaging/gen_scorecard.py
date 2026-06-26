@@ -221,8 +221,8 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
             "FakeGmailBackend; no LLM judge. NOTE: the agent's triage taxonomy "
             "(fyi / needs_response / promotional / urgent) and the corpus "
             "priority labels currently overlap only on 'urgent', so this "
-            "exact-match metric understates triage usefulness — taxonomy "
-            "calibration is tracked in amd/gaia#1266"
+            "exact-match metric understates triage usefulness — the corpus "
+            "labels are stale vs the schema-2.0 taxonomy, tracked in amd/gaia#1874"
         ),
         config={
             "harness": "gaia eval benchmark",

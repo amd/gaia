@@ -230,7 +230,28 @@ The gate calls `latest_version_below(scorecards_dir, version)`, which:
 
 The version is read from `gaia-agent.yaml` (via `--manifest`) or passed explicitly (via `--version`).
 
+## Keeping the scorecard current (the update / reject loop)
+
+The scorecard must move with the agent: when LLM-affecting code changes, the eval is re-run and the committed scorecard refreshed — **upward**. A regression is blocked.
+
+Two enforcement points work together:
+
+1. **Reject-on-worse (always on, GitHub-hosted).** The `scorecard-gate` job in `release_agent_<id>.yml` runs on every release. It only parses committed files (no eval), so it runs on a standard runner and **fails the build** if the committed scorecard regressed below the prior version or is missing. This is the hard gate.
+2. **Run-and-refresh (self-hosted AMD).** `gaia eval benchmark` needs Lemonade on AMD hardware, so it cannot run on GitHub-hosted runners — it runs on the `[self-hosted, lemonade-eval]` pool. The `Email Agent Eval — scorecard refresh` workflow (`.github/workflows/email_scorecard_refresh.yml`) runs on demand (and on pushes touching the email agent), re-runs the eval, regenerates the scorecard, then:
+   - **score ≥ committed** → commits the refreshed scorecard back to the branch (the PR carries the improved number);
+   - **score < committed** → fails loudly (the regression must be investigated, or consciously overridden with `--allow-regression`).
+
+So a PR that changes the agent gets its scorecard refreshed (better) or rejected (worse) automatically on the AMD runner, and the release gate is the backstop on hosted CI. Locally, `gen_scorecard.py` + `scorecard_gate.py` reproduce both steps (see the **`adding-eval-scorecard` skill**).
+
+<Warning>
+  The refresh job needs `contents: write` and runs only on the repo's own branches — a fork PR's `GITHUB_TOKEN` is read-only and cannot auto-commit. For a fork PR, run the eval locally/on AMD hardware and commit the scorecard manually; the release gate still enforces no-regression.
+</Warning>
+
 ## Adding a scorecard for a new agent
+
+<Tip>
+  **Use the [`adding-eval-scorecard` skill](https://github.com/amd/gaia/tree/main/.claude/skills/adding-eval-scorecard/SKILL.md).** In Claude Code, invoke it instead of following these steps by hand — it carries the exact commands, the harness→payload→generator flow, the headless-eval gotchas (keyring/PYTHONPATH/tool-timeout), and the verification evidence to capture. The steps below are the reference the skill automates.
+</Tip>
 
 1. Create the `scorecards/` directory beside the agent's canonical README.
 2. Write a `packaging/gen_scorecard.py` adapter (see `hub/agents/python/email/packaging/gen_scorecard.py` for a reference).
