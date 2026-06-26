@@ -388,7 +388,7 @@
     </div>
 
     <h3 style="margin-top:40px">Capability → surface</h3>
-    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7) plus the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window. The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
+    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). <b>REST</b> additionally exposes the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window (MCP does not surface these; they otherwise run through the full agent). The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
     <table class="tbl">
       <thead><tr><th>Capability</th><th>REST</th><th>MCP</th><th>Agent</th></tr></thead>
       <tbody>
@@ -398,8 +398,8 @@
         <tr><td><b>4</b> · Phishing detection</td><td>✓ <span class="opt">(flag in triage)</span></td><td>✓</td><td>✓ <span class="opt">(+ quarantine)</span></td></tr>
         <tr><td><b>6</b> · Full-thread comprehension</td><td>✓ <span class="opt">(thread payload)</span></td><td>✓</td><td>✓</td></tr>
         <tr><td><b>7</b> · Send a reply</td><td>✓ <code>/v1/email/send</code></td><td>✓ <code>send_email</code></td><td>✓</td></tr>
-        <tr><td><b>8</b> · Archive (+ undo)</td><td>✓ <code>/v1/email/archive</code> · <code>/unarchive</code></td><td>✓ <code>archive_message</code></td><td>✓</td></tr>
-        <tr><td><b>9</b> · Quarantine (+ undo)</td><td>✓ <code>/v1/email/quarantine</code> · <code>/unquarantine</code></td><td>✓ <code>quarantine_phishing_message</code></td><td>✓</td></tr>
+        <tr><td><b>8</b> · Archive (+ undo)</td><td>✓ <code>/v1/email/archive</code> · <code>/unarchive</code></td><td>—</td><td>✓ <code>archive_message</code></td></tr>
+        <tr><td><b>9</b> · Quarantine (+ undo)</td><td>✓ <code>/v1/email/quarantine</code> · <code>/unquarantine</code> <span class="opt">(Gmail)</span></td><td>—</td><td>✓ <code>quarantine_phishing_message</code></td></tr>
         <tr><td><b>5, 10–12</b> · pre-scan, calendar &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>

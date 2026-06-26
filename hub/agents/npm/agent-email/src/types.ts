@@ -21,6 +21,8 @@
  *
  * Schema 2.0: five-bucket EmailCategory, suggested_action, TriageUsage, typed
  * ActionItem (type/url discriminator).
+ * Schema 2.1: mailbox actions — archive / phishing-quarantine + their reversal
+ * and the confirm-token handshake (#1779). Additive; triage shapes unchanged.
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
