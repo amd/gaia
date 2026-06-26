@@ -24,11 +24,6 @@ chat:
   - changed-files:
     - any-glob-to-any-file: ['src/gaia/chat/**/*', 'docs/guides/chat.md', 'docs/sdk/sdks/chat.md']
 
-# Code agent specific (use "agents" for general agent changes)
-code-agent:
-  - changed-files:
-    - any-glob-to-any-file: ['src/gaia/agents/code_agent.py', 'docs/guides/code.md', 'docs/spec/code-*']
-
 # MCP changes
 mcp:
   - changed-files:
@@ -53,16 +48,6 @@ audio:
 talk:
   - changed-files:
     - any-glob-to-any-file: ['src/gaia/talk/**/*', 'docs/guides/talk.md', 'docs/sdk/agents/talk.md']
-
-# Blender agent changes
-blender:
-  - changed-files:
-    - any-glob-to-any-file: ['src/gaia/agents/blender_agent.py', 'docs/guides/blender.md', 'docs/spec/blender-agent.md']
-
-# Jira agent changes
-jira:
-  - changed-files:
-    - any-glob-to-any-file: ['src/gaia/agents/jira_agent.py', 'src/gaia/apps/jira/**/*', 'docs/guides/jira.md', 'docs/spec/jira-agent.md']
 
 # ---------------------------------------------------------------------------
 # Hub agents (hub/agents/python/<id>, hub/agents/npm/<id>). One label per
@@ -112,7 +97,7 @@ agent::fileio:
 
 agent::jira:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/jira/**/*', 'docs/guides/jira.mdx']
+    - any-glob-to-any-file: ['hub/agents/python/jira/**/*', 'src/gaia/apps/jira/**/*', 'docs/guides/jira.mdx']
 
 agent::routing:
   - changed-files:
