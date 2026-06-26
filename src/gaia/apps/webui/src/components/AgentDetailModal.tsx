@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useCallback } from 'react';
-import { Wrench, Cpu, Shield, X, HardDrive, CheckCircle2, FlaskConical, AlertTriangle } from 'lucide-react';
+import { Wrench, Cpu, Shield, X, HardDrive, CheckCircle2, FlaskConical, AlertTriangle, BarChart2 } from 'lucide-react';
 import { getAgentIcon } from './agentIcons';
 import type { AgentInfo } from '../types';
 
@@ -168,6 +168,30 @@ export function AgentDetailModal({ agent, onClose, onStartChat }: AgentDetailMod
                                 {tags.map((tag) => (
                                     <span key={tag} className="agent-detail-tag">{tag}</span>
                                 ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Eval scorecard */}
+                    {agent.eval_score != null && (
+                        <div className="agent-detail-section">
+                            <div className="agent-detail-section-title">Eval scorecard</div>
+                            <div className="agent-detail-meta-item">
+                                <BarChart2 size={14} />
+                                <div>
+                                    <div className="agent-detail-meta-label">Eval score</div>
+                                    <div className="agent-detail-meta-value">
+                                        {agent.eval_score} / 100
+                                        {agent.eval_scorecard_url && (
+                                            <> &mdash; <a
+                                                href={agent.eval_scorecard_url}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                style={{ color: 'var(--accent)', textDecoration: 'underline', fontSize: 12 }}
+                                            >View scorecard</a></>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     )}

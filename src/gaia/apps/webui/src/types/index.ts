@@ -117,6 +117,10 @@ export interface AgentInfo {
     avatar_url?: string;
     /** True when the publisher has deprecated this agent. */
     deprecated?: boolean;
+    /** Public URL of the eval scorecard markdown; absent when none was published. */
+    eval_scorecard_url?: string;
+    /** Aggregate eval score (0–100) from the latest published scorecard; absent when none. */
+    eval_score?: number;
 }
 
 /** Derived card state for the Agent Hub (issue #1097). */
