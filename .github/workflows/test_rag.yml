@@ -194,23 +194,15 @@ jobs:
                 Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
             }
 
-            # Load embedding model into memory (required in Lemonade v9.x)
-            Write-Host "`n=== Loading Embedding Model ==="
-            try {
-                $loadRequest = @{
-                    model_name = "nomic-embed-text-v2-moe-GGUF"
-                } | ConvertTo-Json
-
-                Write-Host "Loading model: nomic-embed-text-v2-moe-GGUF"
-                $loadResponse = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" `
-                    -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 60
-                Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
-            } catch {
-                Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
-                if ($_.ErrorDetails) {
-                    Write-Host "Error details: $($_.ErrorDetails.Message)"
-                }
-                throw "Failed to load embedding model"
+            # Load the embedding model THROUGH GAIA's LemonadeClient so this
+            # integration test exercises the production load path -- including
+            # the bounded retry that absorbs the transient AMD-Vulkan
+            # "llama-server failed to start" fault. A raw REST /load here would
+            # bypass that resilience and flake on the first transient hit.
+            Write-Host "`n=== Loading Embedding Model (via gaia.llm.LemonadeClient, with retry) ==="
+            python -c "from gaia.llm.lemonade_client import LemonadeClient; LemonadeClient().load_model('nomic-embed-text-v2-moe-GGUF', prompt=False); print('[OK] embedding model loaded via LemonadeClient')"
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to load embedding model via LemonadeClient"
             }
 
             # Wait for llamacpp backend to fully initialize (increased from 10s)
