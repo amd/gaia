@@ -1,60 +1,91 @@
-# Design: Email Agent in the Agent UI — dual user/dev modes
+# Design: Email Agent in the Agent UI — frozen sidecar + dual user/dev modes
 
 **Date:** 2026-06-26
-**Status:** Draft (v2 — topology corrected after code review) — pending user review
-**Related:** epic #1767 (Email in the Agent UI), #1768 (`/v1/email/*` REST surface),
-npm pkg `@amd-gaia/agent-email` (`hub/agents/npm/agent-email`), Python agent
+**Status:** Draft (v3.1 — sidecar direction, bulletproofed) — pending user review
+**Decision (2026-06-26):** The Agent UI's email backend is the **out-of-process
+frozen sidecar** (the published Hub product), lazily downloaded on demand. Dev mode
+runs the same contract from local Python source for fast iteration. This **reopens
+the in-process decision in epic #1767** — see "Relationship to #1767" — and needs
+maintainer + @itomek sign-off before build.
+**Related:** #1767 (epic), #1768 (`/v1/email/*` REST surface), #1778/#1779/#1780/#1781
+(REST capability build-out), npm pkg `@amd-gaia/agent-email`, Python agent
 `hub/agents/python/email`
 
 ## Problem
 
-We want the GAIA Agent UI to triage the user's **personal Gmail**, with two things
-true at once:
+Triage the user's **personal Gmail** through the Agent UI, with:
+1. **Users** — stable, no-Python: the agent runs as the frozen sidecar; the core
+   backend ships without heavy email deps, and the install stays **lightweight** —
+   only the email sidecar is downloaded, on demand.
+2. **Developers** — improve the agent and see changes **live**, no
+   freeze → `npm publish` → version-bump → re-integrate patch loop.
 
-1. **Users** get a stable, no-Python experience — the agent ships as the frozen
-   `@amd-gaia/agent-email` sidecar binary, with no heavy email deps in the core
-   backend.
-2. **Developers** can improve the agent and see changes **live**, without the
-   freeze → `npm publish` → version-bump → re-integrate patch loop that makes
-   iteration painful today.
+## Why a sidecar (not the simpler in-process editable install)
 
-## How the UI actually wires email today (verified)
+A code review fairly asked: an editable install (`uv pip install -e`) already gives
+in-process hot-iteration — why add a sidecar? Three reasons the sidecar earns its
+place, beyond iteration speed:
 
-This is the ground truth the design must respect — an earlier draft got it wrong.
+1. **It validates the shipped product.** User mode runs the *exact* frozen binary
+   published to the Agent Hub (pinned via `binaries.lock.json`). The Agent UI
+   becomes a first-class consumer of the real artifact — so product regressions
+   surface in our own app, not just in a downstream integrator's. Editable-install
+   never exercises the thing customers actually run.
+2. **It keeps the core backend lightweight.** The email agent's heavy deps stay out
+   of the core wheel/installer; the sidecar is fetched **only when email is used**,
+   and **only the one platform binary** is downloaded — nothing else.
+3. **Crash isolation.** A fault in email tooling can't take down the chat backend.
 
-- The frontend has **no email REST client**. It surfaces email triage through the
+Dev mode (uvicorn-from-source) and user mode (frozen binary) therefore serve two
+distinct purposes — **fast iteration** and **product validation** — over one shared
+REST contract.
+
+## Ground truth: how the UI wires email today (verified)
+
+- The frontend has **no email REST client**. Email triage is surfaced via the
   **chat pipeline**: the chat agent calls a tool (`pre_scan_inbox`), the result is
-  emitted as a structured payload on the chat SSE stream
-  (`src/gaia/ui/sse_handler.py:472`), and the renderer draws it as
-  `EmailPreScanCard` inside `MessageBubble` (`MessageBubble.tsx:727`).
-- The email agent runs **in-process** in the Python UI backend: `_chat_helpers.py`
-  constructs it via the session agent factory (`:1300`, `:1776`, passing
-  `mail_provider`) and runs it through the chat loop.
-- `src/gaia/ui/server.py:599-601` *also* mounts `gaia_agent_email`'s `/v1/email/*`
-  router in-process — but that is a **separate external/programmatic surface**
-  (#1768), not what the UI's own rendering uses.
-- The agent reads the user's mailbox itself via the connectors framework, using the
-  Google grant at `~/.gaia/connectors/grants.json` (`src/gaia/connectors/grants.py:53`).
+  emitted on the chat SSE stream (`sse_handler.py:472`), and the renderer draws
+  `EmailPreScanCard` in `MessageBubble` (`MessageBubble.tsx:727`).
+- The agent runs **in-process** in the Python backend via the session agent factory
+  (`_chat_helpers.py:1300,1776`, passing `mail_provider`); `agent_type=email`
+  selects it.
+- `server.py:599-601` mounts `gaia_agent_email`'s `/v1/email/*` router in-process —
+  a separate external/programmatic surface (#1768), not what the UI renders from.
+- The agent reads the mailbox itself via connectors, using the Google grant at
+  `~/.gaia/connectors/grants.json` (`grants.py:53`); OAuth secrets resolve via the
+  OS keyring, not the JSON ledger.
 
-**Consequences for the design:**
-- The seam for user/dev mode is the **chat agent's email-tool layer in the Python
-  backend** — not the renderer, and not Electron main.
-- The lifecycle host is the **Python UI backend**, which already owns the chat loop
-  and the grant. **No Node.js backend is required** — the frozen sidecar is a
-  self-contained HTTP executable the Python backend can spawn and call directly.
-  (The npm package remains the integration path for *external* Node/Electron apps;
-  it is just not GAIA's own consumption path.)
+## ⚠️ Precondition: the REST contract is not yet sufficient for the UI
 
-## Key insight — one REST seam, two interchangeable backends
+The sidecar's contract **today** (verified) is:
+
+| UI capability | REST route today | Status |
+|---|---|---|
+| triage a pasted email/thread | `POST /v1/email/triage` | ✅ exists |
+| draft / send | `POST /v1/email/draft` · `/send` | ✅ exists |
+| health / version / spec / playground | `GET /health` `/version` `/spec` `/playground` | ✅ exists |
+| connector configure/complete/list/remove | `/v1/email/connectors/*` | ✅ exists |
+| **inbox pre-scan** (`email_pre_scan` card) | — | ❌ in flight (pre-scan REST) |
+| **inbox search** | — | ❌ #1781 |
+| **archive / quarantine** | — | ❌ #1779 |
+| **calendar** | — | ❌ #1780 |
+
+Critically, `/triage` takes the email **in the request body** — it does not scan the
+mailbox. The UI's headline feature, the `email_pre_scan` card, is produced **only**
+by the agent-loop tool that scans the inbox (`agent.py:663-717`, `read_tools.py:572`).
+So the **sidecar cannot serve the UI's inbox features until those become REST
+routes** — work that is in flight (#1779/#1780/#1781 + inbox pre-scan REST). **This
+design is sequenced behind them.** Each new route is a contract change governed by
+the npm version guard (`lifecycle.ts:checkVersion`).
+
+## Key seam — one REST contract, two interchangeable backends
 
 The frozen binary is PyInstaller wrapping `packaging/server.py`'s `build_app()`, so
-the binary and the raw Python source serve a **byte-identical** contract at
-`http://127.0.0.1:8131/v1/email/*`. Anything answering that URL is interchangeable.
-
-Because the agent owns its own mailbox connection and reads the shared
-`~/.gaia/connectors/grants.json`, **personal Gmail works identically in both
-modes**. The user authenticates Google once; the mode only swaps *which process*
-answers the REST calls.
+once the routes above exist, the **binary and the raw Python source serve an
+identical contract** at `http://127.0.0.1:<sidecar-port>/v1/email/*`. The agent owns
+its mailbox connection and reads the shared `~/.gaia/connectors/grants.json`, so
+**personal Gmail works identically in both modes** — the mode only swaps which
+*process* answers the calls.
 
 ## Architecture
 
@@ -62,129 +93,142 @@ answers the REST calls.
 Agent UI renderer  (UNCHANGED — renders email_pre_scan cards from chat SSE)
    │  chat SSE
    ▼
-Python UI backend  (port 4200 — owns chat loop, SSE, grant)
-   │  chat agent calls email tools
+Python UI backend  (port 4200 — owns chat loop, SSE, connector OAuth, grant writes)
+   │  agent_type=email → Email proxy agent
    ▼
-Email proxy tools  (thin HTTP shims, in the chat agent's tool layer — NEW)
-   │  POST http://127.0.0.1:8131/v1/email/*
+Email proxy agent + tools  (chat agent tool layer — NEW; replaces in-process agent)
+   │  POST http://127.0.0.1:<sidecar-port>/v1/email/*
    ▼
-EmailSidecarManager  (Python, in the UI backend — NEW)
+EmailSidecarManager  (Python, in the UI backend — NEW; spawn/health/shutdown/port)
    │  reads GAIA_EMAIL_AGENT_MODE
-   ├─ user mode → spawn frozen binary    (lazy-fetched to ~/.gaia cache)
-   └─ dev  mode → spawn uvicorn --reload  (local Python source)
+   ├─ user mode → frozen binary   (lazy-fetched on first email use via npm pkg CLI)
+   └─ dev  mode → uvicorn --reload (local Python source)
         │
         ▼  both serve the identical contract
-   sidecar :8131  ──reads──> ~/.gaia/connectors/grants.json ──> user's Gmail
+   sidecar  ──reads (no writes)──> ~/.gaia/connectors/grants.json ──> user's Gmail
 ```
 
-The renderer and the SSE card pipeline are untouched: the proxy tools return the
-same `pre_scan_inbox` envelope the in-process agent returns today, so
-`sse_handler.py` and `EmailPreScanCard` keep working unchanged.
+The renderer and SSE card pipeline are untouched: the proxy agent's tools return the
+same envelopes (e.g. `pre_scan_inbox`), so `sse_handler.py` and `EmailPreScanCard`
+keep working once the pre-scan REST route exists.
 
-**Both modes go through the same HTTP path** — only the *served process* differs.
-This is deliberate: it avoids the "works in dev, breaks for users" masking failure
-where an in-process dev path and an out-of-process prod path diverge. Process
-isolation (the thing #1767 cares about) is then identical in both modes.
+**Both modes use the same HTTP path** — only the served process differs. Production
+is now out-of-process too, so dev and prod share the same isolation topology (no
+in-process/out-of-process divergence).
 
 ### Components
 
-| Unit | Home | Responsibility | Depends on |
-|------|------|----------------|------------|
-| `EmailSidecarManager` | `src/gaia/ui/` (Python backend) | Pick mode, spawn the right process, wait for `/health`, expose base URL, tree-kill on shutdown | `subprocess`, the frozen binary / uvicorn |
-| Email proxy tools | chat agent tool layer | Forward `pre_scan_inbox`/triage/draft to the sidecar; return the existing envelope | `EmailSidecarManager` base URL |
-| Mode config | `GAIA_EMAIL_AGENT_MODE` env (`user` default / `dev`) | Select backend | — |
+| Unit | Home | Responsibility |
+|------|------|----------------|
+| `EmailSidecarManager` | `src/gaia/ui/` (Python backend) | mode select; lazy-spawn binary/uvicorn on first email use; health-poll; tree-kill on shutdown; own an ephemeral per-instance port |
+| Email proxy agent + tools | chat agent tool layer (`agent_type=email`) | forward triage/draft/send/pre-scan/etc. to the sidecar; return the existing envelopes unchanged |
+| Binary fetch | **npm pkg CLI** (`npx @amd-gaia/agent-email fetch`) as a subprocess | keep the SHA-256/lock-file integrity check in its canonical TS impl (`fetch.ts`) — **do not re-implement the security boundary in Python** |
+| Mode config | `GAIA_EMAIL_AGENT_MODE` env (`user` default / `dev`) | select backend |
 
-### User mode (default)
-Lazy-fetch the frozen binary into a **`~/.gaia/agents/email/` cache** on first run
-(R2 + lock-file verified) → spawn → poll `GET /health` → tree-kill on backend exit
-(`taskkill /F /T` on Windows; detached process-group kill on POSIX). Cache means
-offline after first fetch and no installer/build-pipeline change. A failed fetch
-fails loudly (no fallback to dev mode). The core backend ships **without** the
-email agent's Python deps.
+## Resolved design decisions
 
-### Dev mode
-Spawn uvicorn's **CLI with an import string** so hot-reload works:
+1. **Proxy *agent*, not loose tools.** Reuse the existing `agent_type=email` session
+   machinery: replace the in-process `EmailTriageAgent` constructed in
+   `_chat_helpers.py` with a thin **proxy agent** whose tools call the sidecar and
+   return the same envelopes. This preserves session construction, `mail_provider`
+   plumbing, and the SSE card path with the smallest diff.
+2. **Lightweight, lazy, scoped download.** The sidecar is fetched **on first email
+   use** (not at app startup), **only the current platform's binary**, into a
+   `~/.gaia/agents/email/` cache (cache-hit skips re-download; offline thereafter).
+   The core install bundles **no** email sidecar. This establishes a reusable
+   *lazy-per-agent-sidecar* pattern, but scope here is **email only** (YAGNI).
+3. **User mode pins the published artifact.** Fetch verifies against the shipped
+   `binaries.lock.json`, so the UI exercises the exact Hub-published binary
+   (dogfooding). A failed/integrity-mismatched fetch fails loudly — never falls back
+   to dev mode or to in-process.
+4. **The sidecar is the single `/v1/email` surface; remove the in-process mount.**
+   The in-process `server.py:599-601` mount (#1768) becomes redundant once the UI is
+   sidecar-only and contradicts the lightweight-core goal (it imports the email
+   wheel into core). Remove it from core; the sidecar itself serves the external
+   `/v1/email` surface. Coordinate the removal with the #1768 owner.
 
+### Dev mode enabler (one small, owned change)
+Hot-reload needs uvicorn's import-string form, which needs a **module-level app**
+that does not exist today (it lives inside `build_app()`/`main()`):
+
+```python
+# hub/agents/python/email/packaging/server.py — add at module scope:
+app = build_app()        # build_app also mounts /v1/email/connectors/* — fine for dev
 ```
-python -m uvicorn packaging.server:app --reload --host 127.0.0.1 --port 8131
-# cwd = hub/agents/python/email   (app = build_app() exists at module scope)
+```bash
+python -m uvicorn packaging.server:app --reload --host 127.0.0.1 --port <port>
 ```
+Edit any `.py` / prompt / tool → uvicorn reloads in ~1s → next chat action hits new
+code. Dev mode assumes the source env is set up; if uvicorn/the package can't be
+imported, fail loudly with `uv pip install -e hub/agents/python/email` — no silent
+auto-install, no fallback. Dev mode is source-checkout only.
 
-> `packaging/server.py`'s `__main__` calls `uvicorn.run(app, …)` with the *app
-> object*, which cannot hot-reload — dev mode must use the import-string CLI form
-> above (no change to `server.py` required).
+## Lifecycle, port & ownership (review fixes)
+- **Reuse, don't reinvent:** `lifecycle.ts`/`fetch.ts` already implement
+  SHA-verified fetch, tree-kill, health-poll, version-check, auto-reap. User-mode
+  fetch goes through the npm CLI; Python owns only spawn + health + tree-kill (not a
+  security boundary).
+- **Port:** a fixed `8131` breaks two concurrent `gaia chat --ui` instances. The
+  manager binds an **ephemeral port per backend instance** and passes it to the
+  proxy agent. **Never 4001.**
+- **One backend for the UI:** the UI talks only to the sidecar (decision 4).
 
-Edit any `.py` / prompt / tool → uvicorn reloads in ~1s → the next chat action hits
-new code. **No freeze, no publish, no version bump, no UI rebuild.** Dev mode
-assumes the source env is set up; if uvicorn or the package can't be imported, fail
-loudly with `uv pip install -e hub/agents/python/email` — no silent auto-install,
-no fallback to user mode. Dev mode only applies to a source checkout (the packaged
-app has no Python source).
+## Auth & grants (review fixes)
+- **Single writer:** all connector OAuth flows stay on the **Python backend**; the
+  sidecar **reads** the grant + resolves keyring secrets but does **not** run OAuth
+  writes (its `/connectors/{provider}/complete` write route is **not** exposed to
+  the UI). This avoids cross-process writes to `grants.json`, whose concurrency
+  guard is per-process only (`grants.py:56-61`).
+- **Bundling verified:** `freeze.py:119` collects `gaia.connectors`, so the binary
+  can read the grant. Cold-start test must assert a **real keyring token resolve**
+  from the frozen binary, not merely that `gaia.connectors` imports.
 
-## Data flow (both modes, identical)
-1. User asks the chat agent to triage (e.g. "what's in my inbox").
-2. Chat agent calls the `pre_scan_inbox` proxy tool.
-3. Tool POSTs to `http://127.0.0.1:8131/v1/email/*`.
-4. Sidecar (binary or uvicorn) reads the `~/.gaia` grant, calls Gmail, returns the
-   envelope.
-5. Tool returns the envelope unchanged → `sse_handler` injects it → renderer draws
-   the `EmailPreScanCard`.
-
-## Error handling (fail loudly — no silent fallbacks)
-- Binary missing/un-fetchable in user mode → surface `BinaryNotFoundError` with its
-  actionable fetch hint; never silently fall back to dev mode.
-- `/health` not ready within timeout → loud error with the sidecar's last stderr.
-- Lemonade unreachable → sidecar already returns HTTP 502; surface verbatim.
-- Dev mode requested but source/uvicorn missing → loud startup error naming the
-  expected path + the `uv pip install -e` remedy.
-- Port 8131 in use → fail with the conflicting-process hint. **Never touch 4001.**
+## Error handling (fail loudly)
+- Binary missing/integrity-fail in user mode → loud error with the fetch remedy;
+  never fall back to dev/in-process.
+- `/health` timeout → loud error with the sidecar's last stderr.
+- Lemonade unreachable → sidecar returns HTTP 502; surface verbatim.
+- Dev mode without source/uvicorn → loud error naming the path + `uv pip install -e`.
+- Sidecar port in use → fail with the conflicting-process hint.
 
 ## Testing
-- **Unit:** `EmailSidecarManager` mode selection + spawn-arg *shape* (assert dev mode
-  uses the `--reload` import-string form; user mode uses the cached binary path),
-  health-poll, tree-kill on shutdown.
-- **Integration:** with a running sidecar (both modes), `GET /health` then a real
-  `pre_scan_inbox` round-trip through the proxy tool — proves the *call is valid*,
-  not just invoked.
-- **Cold-start:** confirm the frozen binary bundles `gaia.connectors` so user mode
-  reads the grant — verify from an empty-state machine, not a warm box.
-- **Card pipeline:** assert the proxy tool's envelope still triggers the
-  `email_pre_scan` SSE injection and `EmailPreScanCard` render.
-- **Prompt/LLM changes** still require `gaia eval agent` (email category) vs.
-  baseline before "done" — iteration speed ≠ skipping verification.
+- **Unit:** mode selection + spawn-arg *shape* (dev → `--reload` import-string;
+  user → cached binary path); health-poll; tree-kill on shutdown; ephemeral-port
+  wiring to the proxy agent; lazy-fetch only on first email use.
+- **Integration:** with a running sidecar (both modes) `GET /health` then a real
+  inbox pre-scan round-trip through the proxy agent — proves the *call is valid*.
+- **Dogfood/product check:** user mode launches the binary resolved from
+  `binaries.lock.json` and a smoke triage succeeds — proves the *shipped* artifact
+  works end-to-end in the UI.
+- **Cold-start:** frozen binary resolves a real keyring token from an empty-state
+  machine (not a warm box).
+- **Card pipeline:** the proxy agent's envelope still triggers `email_pre_scan` SSE
+  injection + `EmailPreScanCard` render.
+- **Prompt/LLM changes:** `gaia eval agent` (email category) vs. baseline before
+  "done."
 
-## Resolved decisions
-1. **Host:** the Python UI backend, not a new Node backend and not Electron main —
-   that's where the chat loop, the grant, and the existing in-process integration
-   already live. (Electron main *could* optionally own just the sidecar *process*
-   supervision since it already manages subprocesses, but splitting spawn from
-   routing adds coordination/race complexity for no clear gain; keep both in the
-   backend.)
-2. **Faithful modes:** both modes use the same HTTP-proxy path; only the served
-   process differs (binary vs uvicorn-source). No in-process dev shortcut, to avoid
-   dev/prod divergence.
-3. **Frozen binary on disk:** lazy-fetched to a `~/.gaia/agents/email/` cache; loud
-   failure on fetch error.
-4. **Dev env:** assume ready; fail loud with `uv pip install -e …` otherwise.
+## Sequencing
+1. **Blocked on** the REST capability build-out (inbox pre-scan + #1779/#1780/#1781)
+   — the sidecar can't serve the UI's inbox features until those routes exist.
+2. Land the dev-mode enabler (`app = build_app()` at module scope).
+3. Build `EmailSidecarManager` + the email proxy agent; wire user/dev modes + lazy
+   on-demand fetch.
+4. Switch `agent_type=email` sessions from the in-process agent to the proxy agent
+   (`_chat_helpers.py`); remove the in-process #1768 mount (with #1768 owner).
+5. Tests (incl. the dogfood/product check) + a short dev-mode doc.
 
-## Scope / YAGNI
-- **In:** `EmailSidecarManager`, mode flag, both spawn paths, the proxy tool shims,
-  health + shutdown, tests, a short dev-mode doc.
-- **Out (follow-ups):** Settings-UI toggle (env flag is enough now); generalizing
-  the manager to other hub agents; Outlook/multi-mailbox specifics (the agent owns
-  those).
+## Relationship to epic #1767 (must reconcile before build)
+#1767 **chose the in-process router mount** and **explicitly rejected the
+frozen-binary sidecar for the UI**; its capstone PR #1785 was **closed unmerged on
+2026-06-26**, so the in-process path is abandoned in code but the *decision* stands
+on paper. This plan **pivots to the sidecar**, justified by product validation +
+lightweight core + isolation (above). Its variant also answers #1767's stated
+objection — #1767 rejected the sidecar as "needs a Node host / breaks browser mode,"
+but here the **Python backend** spawns it, so it works in browser mode with no Node
+host. **Action: get maintainer + @itomek sign-off to supersede #1767's in-process
+decision before implementation.**
 
-## Relationship to epic #1767
-#1767 rips out the *in-process* email agent. Concretely this design **replaces** the
-in-process agent factory path in `_chat_helpers.py` (and the in-process
-`/v1/email/*` mount in `server.py:599-601`) with: (a) the sidecar-spawning
-`EmailSidecarManager`, and (b) email proxy tools the chat agent calls. The two
-efforts should land together so the UI ends with exactly one email backend — the
-out-of-process sidecar. Sequencing/ownership to be coordinated with @itomek (PR
-#1785).
-
-## Open question for reviewer
-- Should the chat agent's email capability be a single "proxy agent" that maps all
-  its tools to sidecar calls, or a small set of proxy tools composed onto the
-  existing chat agent? (Affects how `agent_type=email` sessions are constructed in
-  `_chat_helpers.py`.)
+## Remaining decision for sign-off
+- Confirm removal of the #1768 in-process `/v1/email` external mount once the UI is
+  sidecar-only (decision 4), vs. keeping it as a distinct external surface. This is
+  the only open architectural choice; everything else is resolved above.
