@@ -151,8 +151,10 @@ class TestAllowRegression:
 
         result = main(
             [
-                "--scorecard", str(candidate),
-                "--baseline-file", str(baseline),
+                "--scorecard",
+                str(candidate),
+                "--baseline-file",
+                str(baseline),
                 "--allow-regression",
             ]
         )
@@ -169,8 +171,10 @@ class TestAllowRegression:
 
         main(
             [
-                "--scorecard", str(candidate),
-                "--baseline-file", str(baseline),
+                "--scorecard",
+                str(candidate),
+                "--baseline-file",
+                str(baseline),
                 "--allow-regression",
             ]
         )
@@ -188,8 +192,10 @@ class TestBaselineFileMissing:
         candidate = _write_card(tmp_path, "1.0.0", accuracy=0.6)
         result = main(
             [
-                "--scorecard", str(candidate),
-                "--baseline-file", str(tmp_path / "nonexistent-SCORECARD.md"),
+                "--scorecard",
+                str(candidate),
+                "--baseline-file",
+                str(tmp_path / "nonexistent-SCORECARD.md"),
             ]
         )
         assert result == 1
@@ -291,9 +297,12 @@ class TestCliErrorHandling:
         candidate = _write_card(tmp_path, "1.0.0", accuracy=0.6)
         result = main(
             [
-                "--scorecard", str(candidate),
-                "--baseline-file", str(candidate),
-                "--baseline-ref", "v1.0.0",
+                "--scorecard",
+                str(candidate),
+                "--baseline-file",
+                str(candidate),
+                "--baseline-ref",
+                "v1.0.0",
             ]
         )
         assert result == 1

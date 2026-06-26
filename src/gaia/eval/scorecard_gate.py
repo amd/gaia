@@ -89,10 +89,11 @@ def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
 
     git_path = rel.as_posix()
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603 (git is trusted here)
             ["git", "show", f"{ref}:{git_path}"],
             capture_output=True,
             text=True,
+            check=False,
         )
     except FileNotFoundError as exc:
         raise ValueError(f"git not found: {exc}") from exc
@@ -246,9 +247,9 @@ def main(argv=None) -> int:
     prev_errors = validate_scorecard(prev_parsed)
     if prev_errors:
         print(
-            f"ERROR: Baseline SCORECARD.md is invalid:\n"
+            "ERROR: Baseline SCORECARD.md is invalid:\n"
             + "\n".join(f"  - {e}" for e in prev_errors)
-            + f"\n  Fix the baseline scorecard before releasing."
+            + "\n  Fix the baseline scorecard before releasing."
         )
         return 1
 
@@ -258,15 +259,15 @@ def main(argv=None) -> int:
     if candidate_score is None:
         print(
             f"ERROR: Candidate SCORECARD.md at {candidate_path} has no "
-            f"'aggregate.value' field.\n"
-            f"  Fix the scorecard front matter before releasing."
+            "'aggregate.value' field.\n"
+            "  Fix the scorecard front matter before releasing."
         )
         return 1
 
     if prev_score is None:
         print(
-            f"ERROR: Baseline SCORECARD.md has no 'aggregate.value' field.\n"
-            f"  Fix the baseline scorecard before releasing."
+            "ERROR: Baseline SCORECARD.md has no 'aggregate.value' field.\n"
+            "  Fix the baseline scorecard before releasing."
         )
         return 1
 
