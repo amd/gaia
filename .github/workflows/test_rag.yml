@@ -158,14 +158,16 @@ jobs:
                 }
             }
 
-            # Pull the LLM + VLM via GAIA's LemonadeClient (the embedder is
-            # pulled+loaded below). CI should drive Lemonade through our client,
-            # not raw REST.
-            Write-Host "`n=== Pulling LLM + VLM via LemonadeClient ==="
+            # Pre-pull the LLM + VLM via GAIA's LemonadeClient (the embedder is
+            # pulled+loaded below). Pulls are a non-fatal pre-warm -- tolerate a
+            # transient failure and continue (the model auto-downloads on load),
+            # matching the original behavior. CI drives Lemonade through our
+            # client, not raw REST.
+            Write-Host "`n=== Pre-pulling LLM + VLM via LemonadeClient ==="
             python tests/ci_lemonade_check.py --model Qwen3-4B-Instruct-2507-GGUF --pull-only
-            if ($LASTEXITCODE -ne 0) { throw "Failed to pull Qwen3-4B-Instruct-2507-GGUF via LemonadeClient" }
+            if ($LASTEXITCODE -ne 0) { Write-Host "   [WARN] LLM pre-pull failed; continuing (auto-downloads on load)" }
             python tests/ci_lemonade_check.py --model Qwen3-VL-4B-Instruct-GGUF --pull-only
-            if ($LASTEXITCODE -ne 0) { throw "Failed to pull Qwen3-VL-4B-Instruct-GGUF via LemonadeClient" }
+            if ($LASTEXITCODE -ne 0) { Write-Host "   [WARN] VLM pre-pull failed; continuing (auto-downloads on load)" }
 
             # Load + verify the embedding model THROUGH GAIA's LemonadeClient so
             # CI exercises the production load path -- including the bounded
