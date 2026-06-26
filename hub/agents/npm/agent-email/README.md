@@ -1,6 +1,6 @@
 # @amd-gaia/agent-email
 
-[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.0** · last updated **2026-06-24**
+[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.1** · last updated **2026-06-26**
 
 Embed the **GAIA email agent** in your JS/TS app. It triages, organizes, replies
 to, and schedules from Gmail and Outlook — with every email body analyzed
@@ -136,11 +136,14 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | Call | Needs | Does |
 |------|-------|------|
 | `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. |
+| `search(req)` | A connected Gmail/Outlook mailbox | Searches the connected inbox (**read-only**) by Gmail-style `query`/`labels` and returns message metadata — id, subject, sender, snippet, labels. No message is read in full or modified; no confirmation token needed. |
 | `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. |
 | `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
 
-**Everything except `send` is standalone** — you can build and verify the whole
-flow with zero connector setup. `send` is different on two counts: it requires the
+**`triage` and `draft` are standalone** — you can build and verify them with zero
+connector setup. `search` needs a connected mailbox (it reads the live inbox) but
+**no** confirmation token, since it only lists. `send` is different on two counts:
+it requires the
 single-use confirmation token from `draft` (call `draft` first; a missing/invalid
 token is rejected with **403** before anything else), and it transmits through the
 mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
@@ -162,8 +165,9 @@ When you need finer control, the steps are exported individually:
 | `checkVersion(client)` | Throw if the sidecar's contract MAJOR differs from the client's. |
 | `shutdown(sidecar)` | Kill the whole process tree. |
 
-Mailbox and calendar **actions** beyond send (read, archive, label, RSVP, create
-events) are part of the full agent but not yet exposed through this package — see
+Inbox **search** is read-only and exposed via `search`. Mailbox and calendar
+**mutations** beyond send (archive, label, RSVP, create events) are part of the
+full agent but not yet exposed through this package — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.
 
 ## Running in production

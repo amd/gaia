@@ -10,6 +10,7 @@ import type {
   EmailTriageRequest,
   EmailTriageResponse,
   EmailDraftResponse,
+  EmailSearchResponse,
   EmailSendResponse,
 } from "../src/types.js";
 
@@ -70,6 +71,54 @@ describe("EmailClient", () => {
     expect(res.result.action_items[0]?.type).toBe("text");
     expect(res.result.suggested_action).toBe("reply");
     expect(res.result.usage?.total_tokens).toBe(160);
+  });
+
+  it("sends a typed inbox-search request and parses the typed response", async () => {
+    const searchResponse: EmailSearchResponse = {
+      schema_version: "2.1",
+      query: "is:unread",
+      count: 1,
+      messages: [
+        {
+          id: "m1",
+          thread_id: "t-m1",
+          subject: "Prod incident",
+          from: "Sarah Chen <sarah@example.com>",
+          to: "me@example.com",
+          date: "Mon, 01 Jan 2026 10:00:00 +0000",
+          snippet: "please review",
+          label_ids: ["INBOX", "UNREAD"],
+        },
+      ],
+      next_page_token: null,
+    };
+    const fetchImpl = vi.fn(async (url, init) => {
+      expect(String(url)).toBe("http://127.0.0.1:8131/v1/email/search");
+      expect(init?.method).toBe("POST");
+      const parsed = JSON.parse(String(init?.body));
+      expect(parsed.query).toBe("is:unread");
+      expect(parsed.max_results).toBe(10);
+      return jsonResponse(searchResponse);
+    }) as unknown as typeof fetch;
+
+    const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131", fetchImpl });
+    const res = await client.search({ query: "is:unread", max_results: 10 });
+    expect(res.count).toBe(1);
+    expect(res.messages[0]?.id).toBe("m1");
+    // Wire alias: the sender is `from`, not `from_`.
+    expect(res.messages[0]?.from).toBe("Sarah Chen <sarah@example.com>");
+    expect(res.messages[0]?.label_ids).toEqual(["INBOX", "UNREAD"]);
+    expect(res.next_page_token).toBeNull();
+  });
+
+  it("surfaces a 503 from search (no mailbox connected) as HttpError", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ detail: "No mailbox connected" }, 503),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await expect(client.search({ query: "x" })).rejects.toMatchObject({
+      status: 503,
+    });
   });
 
   it("normalizes a trailing slash in baseUrl", async () => {

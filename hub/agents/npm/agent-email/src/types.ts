@@ -21,10 +21,11 @@
  *
  * Schema 2.0: five-bucket EmailCategory, suggested_action, TriageUsage, typed
  * ActionItem (type/url discriminator).
+ * Schema 2.1: adds the read-only inbox-search surface (POST /v1/email/search).
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.0" as const;
+export const SCHEMA_VERSION = "2.1" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
@@ -186,6 +187,62 @@ export interface EmailTriageResponse {
   request_kind: "single" | "thread";
   /** The structured analysis. */
   result: EmailTriageResult;
+}
+
+// ---------------------------------------------------------------------------
+// Inbox search (contract.py — read-only mailbox search, schema 2.1, #1781).
+// ---------------------------------------------------------------------------
+
+/** Search the connected mailbox (contract.py: EmailSearchRequest). */
+export interface EmailSearchRequest {
+  /** Contract version. Defaults to SCHEMA_VERSION; mismatch fails loudly. */
+  schema_version?: string;
+  /** Gmail-style query (e.g. "from:alice is:unread"). Omit to list the inbox. */
+  query?: string | null;
+  /** Label ids to filter by (e.g. ["INBOX", "UNREAD"]). Omit → INBOX. */
+  labels?: string[] | null;
+  /** Max messages to return (1–100). Default 25. */
+  max_results?: number;
+  /** Opaque pagination cursor from a prior response's `next_page_token`. */
+  page_token?: string | null;
+}
+
+/**
+ * One message in a search result — inbox-list metadata, not the full body
+ * (contract.py: EmailSearchResultItem). `from`/`to`/`date` are raw header
+ * strings (the wire key for the sender is `from`, mirroring EmailMessage).
+ */
+export interface EmailSearchResultItem {
+  /** Provider message id (opaque). */
+  id: string;
+  /** Provider thread id this message belongs to. */
+  thread_id?: string | null;
+  /** Subject line. */
+  subject: string;
+  /** Raw "From" header string. JSON key is `from` on the wire. */
+  from: string;
+  /** Raw "To" header string. */
+  to: string;
+  /** Raw "Date" header string. */
+  date: string;
+  /** Provider-supplied short preview of the body. */
+  snippet: string;
+  /** Label ids on the message. */
+  label_ids: string[];
+}
+
+/** Top-level inbox-search response (contract.py: EmailSearchResponse). */
+export interface EmailSearchResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** Echoes the request query (null when unset). */
+  query?: string | null;
+  /** Number of messages returned. */
+  count: number;
+  /** Matching messages (newest-first). */
+  messages: EmailSearchResultItem[];
+  /** Opaque token to fetch the next page, or null when no more. */
+  next_page_token?: string | null;
 }
 
 // ---------------------------------------------------------------------------

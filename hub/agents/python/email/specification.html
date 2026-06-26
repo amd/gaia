@@ -398,7 +398,8 @@
         <tr><td><b>4</b> · Phishing detection</td><td>✓ <span class="opt">(flag in triage)</span></td><td>✓</td><td>✓ <span class="opt">(+ quarantine)</span></td></tr>
         <tr><td><b>6</b> · Full-thread comprehension</td><td>✓ <span class="opt">(thread payload)</span></td><td>✓</td><td>✓</td></tr>
         <tr><td><b>7</b> · Send a reply</td><td>✓ <code>/v1/email/send</code></td><td>✓ <code>send_email</code></td><td>✓</td></tr>
-        <tr><td><b>5, 8, 9, 10–12</b> · pre-scan, organize, calendar &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td><b>8</b> · Inbox search <span class="opt">(read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>)</span></td><td>✓ <code>/v1/email/search</code></td><td>—</td><td>✓ <code>search_messages</code></td></tr>
+        <tr><td><b>5, 9, 10–12</b> · pre-scan, organize, calendar &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -1345,6 +1346,29 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
         <tr><td><code>subject</code></td><td>string</td><td>Subject of the sent message.</td></tr>
         <tr><td><code>sent</code></td><td>bool</td><td>Always true on success.</td></tr>
       </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-search">
+      <span class="badge">POST</span><span class="path">/v1/email/search</span>
+      <p class="desc">Search the connected mailbox (<b>read-only</b>) by Gmail-style query / labels (<a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>). Returns inbox-list metadata for each match — id, thread, subject, from, snippet, labels — <b>not</b> the message body. No mail is sent or modified; no <code>confirmation_token</code> is involved. Restores the agent's in-loop inbox search on the REST contract so the Agent UI drives it through the package.</p>
+      <h4>Request body — EmailSearchRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.1"</code>; a mismatch lets a consumer fail loudly.</td></tr>
+        <tr><td><code>query</code></td><td>string <span class="opt">optional</span></td><td>Gmail-style query (e.g. <code>from:alice is:unread</code>). Omit to list the inbox without a text filter.</td></tr>
+        <tr><td><code>labels</code></td><td>list[string] <span class="opt">optional</span></td><td>Label ids to filter by (e.g. <code>["INBOX","UNREAD"]</code>). Omit → defaults to <code>INBOX</code>.</td></tr>
+        <tr><td><code>max_results</code></td><td>int <span class="opt">optional</span></td><td>Max messages to return, <code>1–100</code> (default <code>25</code>). Each match is hydrated with a per-message fetch, so the count is capped.</td></tr>
+        <tr><td><code>page_token</code></td><td>string <span class="opt">optional</span></td><td>Opaque pagination cursor from a prior response's <code>next_page_token</code>. Omit to fetch the first page.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailSearchResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>query</code></td><td>string | null</td><td>Echoes the request query (null when unset).</td></tr>
+        <tr><td><code>count</code></td><td>int</td><td>Number of messages returned.</td></tr>
+        <tr><td><code>messages</code></td><td>list[EmailSearchResultItem]</td><td>Matching messages (newest-first). Each is <code>{ id, thread_id, subject, from, to, date, snippet, label_ids }</code> — header values are raw strings, not parsed <code>EmailAddress</code> objects.</td></tr>
+        <tr><td><code>next_page_token</code></td><td>string | null</td><td>Opaque token to fetch the next page, or null when no more.</td></tr>
+      </tbody></table>
+      <h4>Mailbox resolution</h4>
+      <p class="body-t">The mailbox is the one connected in GAIA (<i>Settings → Connectors</i>). Fails loud on an ambiguous count — never silently picks: <b>0</b> connected → <code>503</code>, <b>2+</b> connected → <code>400</code>, exactly one → that mailbox.</p>
     </div>
 
     <h3 style="margin-top:40px">Errors &amp; status codes</h3>

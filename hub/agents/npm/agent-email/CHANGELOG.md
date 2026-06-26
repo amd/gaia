@@ -5,6 +5,18 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## Unreleased (2.1)
+
+Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change, so
+`checkVersion` (MAJOR-only) keeps accepting 2.0 clients.
+
+- **Inbox search on the REST contract** (#1781): new read-only `POST /v1/email/search`
+  / `client.search(req)`. The Agent UI lost live inbox search in the in-process
+  agent rip-out (#1653); this restores it through the package. Lists messages
+  matching a Gmail-style `query`/`labels` from the connected mailbox and returns
+  metadata only (id, subject, sender, snippet, labels) — no body, no confirmation
+  token. Needs a connected mailbox (`503` if none, `400` if 2+).
+
 ## 0.2.5
 
 Sending from a mailbox connected with identity-only scopes now returns an

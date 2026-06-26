@@ -43,6 +43,7 @@ from gaia_agent_email.version import AGENT_VERSION, API_VERSION  # noqa: E402
 # Maps (method, path) -> the component schema name the handler declares.
 _EXPECTED_RESPONSE_MODELS = {
     ("post", "/v1/email/triage"): "EmailTriageResponse",
+    ("post", "/v1/email/search"): "EmailSearchResponse",
     ("post", "/v1/email/draft"): "EmailDraftResponse",
     ("post", "/v1/email/send"): "EmailSendResponse",
     ("get", "/v1/email/health"): "HealthResponse",
@@ -170,3 +171,219 @@ def test_version_endpoint_rejects_unknown_field_loudly(client):
     # shape carries exactly the two documented keys (no silent extras).
     body = client.get("/v1/email/version").json()
     assert set(body) == {"apiVersion", "agentVersion"}
+
+
+# ---------------------------------------------------------------------------
+# 6. Inbox search (#1781) — read-only; backend injected via dependency_overrides
+# ---------------------------------------------------------------------------
+
+import base64  # noqa: E402
+
+from fastapi import HTTPException  # noqa: E402
+from gaia_agent_email import api_routes  # noqa: E402
+
+
+def _gmail_message(
+    mid: str, *, subject: str, frm: str, to: str, snippet: str, labels
+) -> dict:
+    """A minimal Gmail-API-v1-shaped message the production header/body
+    decoder (via ``_format_message_for_llm``) can parse."""
+    data = base64.urlsafe_b64encode(b"Body text the search list drops.").decode()
+    return {
+        "id": mid,
+        "threadId": f"t-{mid}",
+        "snippet": snippet,
+        "labelIds": list(labels),
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "Subject", "value": subject},
+                {"name": "From", "value": frm},
+                {"name": "To", "value": to},
+                {"name": "Date", "value": "Mon, 01 Jan 2026 10:00:00 +0000"},
+            ],
+            "body": {"data": data.rstrip("=")},
+        },
+    }
+
+
+class _FakeSearchBackend:
+    """Inject-only fake exposing the two read methods the search route uses.
+
+    Records the exact ``list_messages`` call so a test can assert the route
+    forwards query/labels/max_results/page_token to the backend
+    (boundary-validity, not just invocation).
+    """
+
+    def __init__(self, messages):
+        self._messages = {m["id"]: m for m in messages}
+        self.calls: list[dict] = []
+
+    def list_messages(
+        self, *, query=None, label_ids=None, max_results=25, page_token=None
+    ):
+        self.calls.append(
+            {
+                "query": query,
+                "label_ids": list(label_ids) if label_ids else None,
+                "max_results": max_results,
+                "page_token": page_token,
+            }
+        )
+        ids = list(self._messages)
+        page = ids[:max_results]
+        return {
+            "messages": [
+                {"id": i, "threadId": self._messages[i]["threadId"]} for i in page
+            ],
+            "nextPageToken": "next-tok" if len(ids) > max_results else None,
+        }
+
+    def get_message(self, message_id: str):
+        return self._messages[message_id]
+
+
+def test_search_returns_messages_via_injected_backend(client):
+    fake = _FakeSearchBackend(
+        [
+            _gmail_message(
+                "m1",
+                subject="Prod incident",
+                frm="Sarah Chen <sarah@example.com>",
+                to="me@example.com",
+                snippet="please review",
+                labels=["INBOX", "UNREAD"],
+            )
+        ]
+    )
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post(
+            "/v1/email/search", json={"query": "is:unread", "max_results": 10}
+        )
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["schema_version"] == SCHEMA_VERSION
+    assert body["query"] == "is:unread"
+    assert body["count"] == 1
+    msg = body["messages"][0]
+    assert msg["id"] == "m1"
+    assert msg["thread_id"] == "t-m1"
+    assert msg["subject"] == "Prod incident"
+    # Wire alias: raw 'From' header under the key `from`, never `from_`.
+    assert msg["from"] == "Sarah Chen <sarah@example.com>"
+    assert "from_" not in msg
+    assert msg["snippet"] == "please review"
+    assert msg["label_ids"] == ["INBOX", "UNREAD"]
+    # The route must forward the query + max_results to the backend verbatim.
+    assert fake.calls == [
+        {
+            "query": "is:unread",
+            "label_ids": None,
+            "max_results": 10,
+            "page_token": None,
+        }
+    ]
+
+
+def test_search_empty_body_lists_inbox(client):
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={})
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["count"] == 0
+    assert body["messages"] == []
+    # No query/labels → backend invoked with both None (it defaults to INBOX).
+    assert fake.calls == [
+        {"query": None, "label_ids": None, "max_results": 25, "page_token": None}
+    ]
+
+
+def test_search_forwards_labels_and_caps_max_results(client):
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post(
+            "/v1/email/search",
+            json={"labels": ["STARRED"], "max_results": 5},
+        )
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 200, resp.text
+    assert fake.calls == [
+        {
+            "query": None,
+            "label_ids": ["STARRED"],
+            "max_results": 5,
+            "page_token": None,
+        }
+    ]
+
+
+def test_search_forwards_page_token_for_pagination(client):
+    # The next_page_token a response returns must be usable as the next
+    # request's page_token — otherwise pagination is a dead-end.
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post(
+            "/v1/email/search",
+            json={"query": "is:unread", "page_token": "next-tok"},
+        )
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 200, resp.text
+    assert fake.calls == [
+        {
+            "query": "is:unread",
+            "label_ids": None,
+            "max_results": 25,
+            "page_token": "next-tok",
+        }
+    ]
+
+
+def test_search_rejects_unknown_field_loudly(client):
+    # _Strict contract: an unknown field is a 422, never silently dropped.
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={"q": "oops"})
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 422
+
+
+def test_search_rejects_out_of_range_max_results(client):
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={"max_results": 0})
+        resp_hi = client.post("/v1/email/search", json={"max_results": 101})
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 422
+    assert resp_hi.status_code == 422
+
+
+def test_get_search_backend_no_mailbox_fails_loud_503(monkeypatch):
+    monkeypatch.setattr(api_routes, "connected_mailbox_providers", lambda: [])
+    with pytest.raises(HTTPException) as ei:
+        api_routes.get_search_backend()
+    assert ei.value.status_code == 503
+
+
+def test_get_search_backend_ambiguous_fails_loud_400(monkeypatch):
+    monkeypatch.setattr(
+        api_routes, "connected_mailbox_providers", lambda: ["google", "microsoft"]
+    )
+    with pytest.raises(HTTPException) as ei:
+        api_routes.get_search_backend()
+    assert ei.value.status_code == 400

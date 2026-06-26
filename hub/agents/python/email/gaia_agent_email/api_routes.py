@@ -50,7 +50,7 @@ import secrets
 import threading
 from typing import Any, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from gaia_agent_email.contract import (
     ActionItem,
@@ -58,6 +58,9 @@ from gaia_agent_email.contract import (
     EmailAddress,
     EmailCategory,
     EmailMessage,
+    EmailSearchRequest,
+    EmailSearchResponse,
+    EmailSearchResultItem,
     EmailTriageRequest,
     EmailTriageResponse,
     EmailTriageResult,
@@ -78,8 +81,8 @@ from gaia.connectors.api import connected_mailbox_providers
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
-    ConnectorsError,
     ConnectionRevokedError,
+    ConnectorsError,
     ScopeMismatchError,
 )
 from gaia.logger import get_logger
@@ -264,6 +267,7 @@ class EmailTriageService:
         real chat call, where their messages are specific).
         """
         import requests
+
         from gaia.llm.lemonade_client import _get_lemonade_config
 
         if base_url:
@@ -767,6 +771,111 @@ def _resolve_backend_for_provider(provider: Optional[str]):
 
 
 # ---------------------------------------------------------------------------
+# Search-backend dependency (injectable for tests; fail-loud in production)
+# ---------------------------------------------------------------------------
+
+
+def get_search_backend():
+    """Resolve the read/search backend from the connected OAuth mailbox.
+
+    Read-only mirror of :func:`get_send_backend`: inbox search lists messages
+    from whichever mailbox the user connected via Settings → Connectors. Wired
+    as a FastAPI ``Depends`` so the contract test injects a fake via
+    ``app.dependency_overrides``; production fails loudly when the mailbox count
+    is ambiguous — it never silently picks one:
+
+      - 0 connected → HTTP 503 (actionable: go connect a mailbox)
+      - 2+ connected → HTTP 400 (actionable: search can't choose which inbox)
+      - exactly 1 → build the matching live backend
+    """
+    providers = connected_mailbox_providers()
+    if not providers:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No mailbox connected — connect Google or Microsoft in "
+                "Settings → Connectors before searching the inbox."
+            ),
+        )
+    if len(providers) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Multiple mailboxes connected ({', '.join(providers)}); the "
+                "search API can't choose which inbox to search. Search from the "
+                "agent/UI, or disconnect all but one mailbox."
+            ),
+        )
+    provider = providers[0]
+    if provider == "google":
+        from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
+
+        return LiveGmailBackend(_get_gmail_token)
+    if provider == "microsoft":
+        from gaia_agent_email.outlook_backend import (
+            LiveOutlookBackend,
+            _get_outlook_token,
+        )
+
+        return LiveOutlookBackend(_get_outlook_token)
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Connected mailbox provider '{provider}' has no search backend. "
+            "Expected 'google' or 'microsoft'."
+        ),
+    )
+
+
+def _search_inbox(
+    backend: Any,
+    *,
+    query: Optional[str],
+    labels: Optional[List[str]],
+    max_results: int,
+    page_token: Optional[str] = None,
+) -> EmailSearchResponse:
+    """List/search mailbox messages and hydrate each into inbox-list metadata.
+
+    Reuses the agent's ``_format_message_for_llm`` so the headers the REST
+    surface returns match exactly what the in-loop search tool surfaces — no
+    parallel header-parsing to drift. The body is intentionally dropped: this is
+    a list view, not a read. Imported lazily so the OpenAPI export stays
+    dependency-light (it never pulls the live-mail machinery).
+    """
+    from gaia_agent_email.tools.read_tools import _format_message_for_llm
+
+    listing = backend.list_messages(
+        query=query,
+        label_ids=labels,
+        max_results=max_results,
+        page_token=page_token,
+    )
+    items: List[EmailSearchResultItem] = []
+    for stub in listing.get("messages", []):
+        msg = backend.get_message(stub["id"])
+        formatted = _format_message_for_llm(msg)
+        items.append(
+            EmailSearchResultItem(
+                id=formatted["id"],
+                thread_id=formatted["thread_id"],
+                subject=formatted["subject"],
+                from_=formatted["from"],
+                to=formatted["to"],
+                date=formatted["date"],
+                snippet=formatted["snippet"],
+                label_ids=formatted["label_ids"],
+            )
+        )
+    return EmailSearchResponse(
+        query=query,
+        count=len(items),
+        messages=items,
+        next_page_token=listing.get("nextPageToken"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Send / draft request & response models (LOCAL — contract.py is frozen and
 # triage-only; the send handshake is not part of the #1262 contract).
 # ---------------------------------------------------------------------------
@@ -901,6 +1010,40 @@ async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
         ) from e
 
 
+@router.post("/search", response_model=EmailSearchResponse)
+async def search_inbox(
+    request: EmailSearchRequest,
+    backend: Any = Depends(get_search_backend),
+) -> EmailSearchResponse:
+    """Search the connected mailbox (read-only) — #1781.
+
+    Lists messages matching ``query``/``labels`` from the connected Gmail or
+    Outlook mailbox and returns inbox-list metadata (id, thread, subject, from,
+    to, date, snippet, labels) — not the message body. No mail is sent or
+    modified. This restores the agent's in-loop inbox-search capability on the
+    REST contract so the Agent UI can drive it through the package.
+
+    The mailbox is resolved by :func:`get_search_backend` (fail-loud on 0 or
+    ambiguous mailbox counts). Backend auth / config / transport errors surface
+    as actionable 4xx/5xx, never a silent empty result.
+    """
+    try:
+        return await asyncio.to_thread(
+            _search_inbox,
+            backend,
+            query=request.query,
+            labels=request.labels,
+            max_results=request.max_results,
+            page_token=request.page_token,
+        )
+    except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except ConnectorsError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
 @router.post("/draft", response_model=EmailDraftResponse)
 async def draft_reply(request: EmailDraftRequest) -> EmailDraftResponse:
     """Propose a reply and mint a confirmation token bound to its payload.
@@ -954,7 +1097,10 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
         backend = _resolve_backend_for_provider(bound_provider or request.provider)
         to_header = ", ".join(_format_address(a) for a in request.to)
         result = await asyncio.to_thread(
-            backend.send_message, to=to_header, subject=request.subject, body=request.body
+            backend.send_message,
+            to=to_header,
+            subject=request.subject,
+            body=request.body,
         )
     except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -1046,6 +1192,7 @@ __all__ = [
     "ConfirmationStore",
     "confirmation_store",
     "get_send_backend",
+    "get_search_backend",
     "EmailDraftRequest",
     "EmailDraftResponse",
     "EmailSendRequest",

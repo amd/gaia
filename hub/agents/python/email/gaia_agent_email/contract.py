@@ -57,7 +57,9 @@ CATEGORY_PERSONAL = "PERSONAL"
 # Bump on ANY breaking change to the shapes below. Echoed in both request and
 # response so a consumer can detect a mismatch loudly instead of silently
 # mis-parsing. The first frozen revision is "1.0".
-SCHEMA_VERSION = "2.0"
+# 2.1 adds the read-only inbox-search surface (#1781) — additive, no triage
+# shape change.
+SCHEMA_VERSION = "2.1"
 
 
 class _Strict(BaseModel):
@@ -364,6 +366,111 @@ class EmailTriageResponse(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# INBOX SEARCH — read-only mailbox search (#1781)
+# ---------------------------------------------------------------------------
+
+
+class EmailSearchRequest(_Strict):
+    """Search the connected mailbox for messages by Gmail-style query / labels.
+
+    Read-only: this lists messages already in the mailbox; it never sends,
+    modifies, or triages. It restores the agent's in-loop inbox-search tool
+    (``search_messages``) on the REST contract so the Agent UI can drive it
+    through the package (#1781).
+
+    Both ``query`` and ``labels`` are optional — with neither, the backend
+    lists the INBOX (bounded by ``max_results``).
+    """
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION,
+        description="Contract version. Mismatch lets a consumer fail loudly.",
+    )
+    query: Optional[str] = Field(
+        default=None,
+        description=(
+            "Gmail-style search query (e.g. 'from:alice is:unread'). None lists "
+            "the inbox without a text filter."
+        ),
+    )
+    labels: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Label ids to filter by (e.g. ['INBOX', 'UNREAD']). None defaults to "
+            "the INBOX label."
+        ),
+    )
+    max_results: int = Field(
+        default=25,
+        ge=1,
+        le=100,
+        description=(
+            "Max messages to return (1-100). Each match is hydrated with a "
+            "per-message fetch, so the count is capped to bound that fan-out."
+        ),
+    )
+    page_token: Optional[str] = Field(
+        default=None,
+        description=(
+            "Opaque pagination cursor from a previous response's "
+            "``next_page_token``. None fetches the first page."
+        ),
+    )
+
+
+class EmailSearchResultItem(_Strict):
+    """One message in a search result — inbox-list metadata, not the full body.
+
+    Header values (``from_``/``to``/``date``) are the raw, provider-decoded
+    header strings exactly as the agent's read tools surface them — not parsed
+    into ``EmailAddress`` objects, because list headers can carry multiple or
+    malformed addresses a strict parse would reject. Fetch the full message via
+    the triage path when you need the body.
+    """
+
+    id: str = Field(..., description="Provider message id (opaque).")
+    thread_id: Optional[str] = Field(
+        default=None, description="Provider thread id this message belongs to."
+    )
+    subject: str = Field(default="", description="Subject line.")
+    from_: str = Field(
+        default="",
+        alias="from",
+        description="Raw 'From' header string. Aliased to 'from' on the wire.",
+    )
+    to: str = Field(default="", description="Raw 'To' header string.")
+    date: str = Field(default="", description="Raw 'Date' header string.")
+    snippet: str = Field(
+        default="", description="Provider-supplied short preview of the body."
+    )
+    label_ids: List[str] = Field(
+        default_factory=list, description="Label ids on the message."
+    )
+
+    # Accept both the wire alias ('from') and the python name ('from_').
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class EmailSearchResponse(_Strict):
+    """Top-level inbox-search response envelope (#1781)."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    query: Optional[str] = Field(
+        default=None, description="Echoes the request query (None when unset)."
+    )
+    count: int = Field(..., description="Number of messages returned.")
+    messages: List[EmailSearchResultItem] = Field(
+        default_factory=list, description="Matching messages (newest-first)."
+    )
+    next_page_token: Optional[str] = Field(
+        default=None,
+        description="Opaque token to fetch the next page, or null when no more.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -402,6 +509,9 @@ __all__ = [
     "TriageUsage",
     "EmailTriageResult",
     "EmailTriageResponse",
+    "EmailSearchRequest",
+    "EmailSearchResultItem",
+    "EmailSearchResponse",
     "parse_request",
     "parse_response",
 ]

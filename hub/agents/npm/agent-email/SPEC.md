@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.0**.
+[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.1**.
 
 ## Architecture
 
@@ -48,6 +48,7 @@ result.
 | Endpoint | Client method | Auth | What it needs |
 |----------|---------------|------|---------------|
 | `POST /v1/email/triage` | `triage()` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* |
+| `POST /v1/email/search` | `search()` | **Connector** | Read-only inbox search. A connected Google/Microsoft mailbox (`503` if none, `400` if 2+); **no** confirmation token. Lists messages matching `query`/`labels` and returns metadata only (no body). |
 | `POST /v1/email/draft` | `draft()` | **Standalone** | Nothing external — wraps your `(to, subject, body)` and returns a single-use confirmation token. |
 | `POST /v1/email/send` | `send()` | **Connector** | A valid `draft` confirmation token **and** a connected Google/Microsoft mailbox. The token gate fires first: no/invalid token → `403`; then `503` if no mailbox is connected, `400` if 2+ are. |
 | `GET /health` | `health()` | **Standalone** | Liveness only — does **not** check Lemonade/model. |
@@ -58,8 +59,9 @@ result.
 | `GET /openapi.json` | `openapi()` | **Standalone** | Machine-readable OpenAPI document. |
 
 `GET /docs` (Swagger UI) and `GET /redoc` are also served but are browser UIs, not
-wrapped by the client. **Everything except `send` is standalone** — integrate and
-verify the whole surface with zero connector setup.
+wrapped by the client. **`triage` and `draft` are standalone**; `search` and `send`
+need a connected mailbox (`search` reads the inbox, `send` transmits) — integrate
+and verify triage/draft with zero connector setup.
 
 ### Readiness vs liveness
 
@@ -107,6 +109,32 @@ console.log(sent.sent_id);
 
 The full request/response types are exported from the package (`src/types.ts`) for
 exact field-level reference.
+
+### Inbox search shape
+
+`search({ query?, labels?, max_results? })` lists messages from the connected
+mailbox and returns `{ schema_version, query, count, messages, next_page_token }`.
+It is **read-only** — no body is read in full, nothing is modified, no confirmation
+token is involved. Both `query` and `labels` are optional; with neither, it lists
+the INBOX. `max_results` is `1–100` (default `25`); each match is hydrated with a
+per-message fetch, so the cap bounds that fan-out. To page, pass the response's
+`next_page_token` back as the request's `page_token`. Each `messages[]` item:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | `string` | Provider message id (opaque) — pass to the agent/triage path to read in full. |
+| `thread_id` | `string \| null` | Provider thread id. |
+| `subject` | `string` | Subject line. |
+| `from` | `string` | Raw `From` header (e.g. `"Sarah Chen <sarah@example.com>"`) — a **string**, not an address object, unlike triage's `from`. |
+| `to` | `string` | Raw `To` header. |
+| `date` | `string` | Raw `Date` header. |
+| `snippet` | `string` | Provider-supplied short preview. |
+| `label_ids` | `string[]` | Label ids on the message. |
+
+```ts
+const { messages } = await client.search({ query: "is:unread", max_results: 20 });
+for (const m of messages) console.log(m.subject, "—", m.from);
+```
 
 ## Lifecycle helpers
 
@@ -215,7 +243,7 @@ editors autocomplete but your code never imports them.
 
 TypeScript types in `src/types.ts` mirror two Python sources of truth:
 
-- `contract.py` — the triage request/response contract (`SCHEMA_VERSION = "2.0"`).
+- `contract.py` — the triage + inbox-search request/response contract (`SCHEMA_VERSION = "2.1"`).
 - `api_routes.py` — the local draft/send confirmation handshake models.
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is

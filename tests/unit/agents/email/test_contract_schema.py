@@ -331,13 +331,13 @@ def test_result_summary_required():
 
 
 def test_schema_version_unchanged_by_multi_inbox():
-    """Schema 2.0 (#1615) is the current frozen contract version.
+    """Schema 2.1 (#1781) is the current frozen contract version.
 
-    The REST /triage endpoint version is "2.0" after the 5-bucket taxonomy
-    upgrade. If this fails, someone changed the version unexpectedly; that
+    2.1 added the read-only inbox-search surface — additive, no triage shape
+    change. If this fails, someone changed the version unexpectedly; that
     requires an explicit version negotiation, not a drive-by edit.
     """
-    assert SCHEMA_VERSION == "2.0"
+    assert SCHEMA_VERSION == "2.1"
 
 
 def test_triage_result_gained_no_new_required_field():

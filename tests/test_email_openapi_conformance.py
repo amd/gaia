@@ -197,7 +197,7 @@ def test_triage_conforms_to_spec(client, committed_spec):
     for key in required:
         assert key in body, f"required key {key!r} missing from /triage response"
 
-    assert body.get("schema_version") == "2.0"
+    assert body.get("schema_version") == API_VERSION
     assert body.get("request_kind") == "single"
     assert "result" in body
     result = body["result"]
@@ -208,6 +208,105 @@ def test_triage_conforms_to_spec(client, committed_spec):
 def test_triage_invalid_payload_returns_422(client):
     """POST /triage with a malformed body returns 422 (documented validation error)."""
     resp = client.post("/v1/email/triage", json={"schema_version": "2.0"})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 3.5 /search — conformance (mailbox backend injected; no live mail)
+# ---------------------------------------------------------------------------
+
+
+def _gmail_search_message() -> dict:
+    """A minimal Gmail-API-v1-shaped message the search route can hydrate."""
+    import base64
+
+    data = base64.urlsafe_b64encode(b"Body the search list drops.").decode().rstrip("=")
+    return {
+        "id": "s1",
+        "threadId": "t-s1",
+        "snippet": "please review",
+        "labelIds": ["INBOX", "UNREAD"],
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "Subject", "value": "Prod incident"},
+                {"name": "From", "value": "Sarah Chen <sarah@example.com>"},
+                {"name": "To", "value": "me@example.com"},
+                {"name": "Date", "value": "Mon, 01 Jan 2026 10:00:00 +0000"},
+            ],
+            "body": {"data": data},
+        },
+    }
+
+
+class _FakeSearchBackend:
+    """Inject-only fake exposing the two read methods the search route uses."""
+
+    def __init__(self, messages):
+        self._messages = {m["id"]: m for m in messages}
+
+    def list_messages(
+        self, *, query=None, label_ids=None, max_results=25, page_token=None
+    ):
+        ids = list(self._messages)[:max_results]
+        return {
+            "messages": [
+                {"id": i, "threadId": self._messages[i]["threadId"]} for i in ids
+            ],
+            "nextPageToken": None,
+        }
+
+    def get_message(self, message_id):
+        return self._messages[message_id]
+
+
+def test_search_conforms_to_spec(client, committed_spec):
+    """POST /search returns a body conforming to the EmailSearchResponse schema.
+
+    The mailbox backend is injected via ``app.dependency_overrides`` so no live
+    mail is touched — the running server still exercises the real route.
+    """
+    from gaia_agent_email.api_routes import get_search_backend
+
+    fake = _FakeSearchBackend([_gmail_search_message()])
+    client.app.dependency_overrides[get_search_backend] = lambda: fake
+    try:
+        resp = client.post(
+            "/v1/email/search", json={"query": "is:unread", "max_results": 10}
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_search_backend, None)
+
+    assert resp.status_code == 200, resp.text
+
+    schema_name = _schema_name_from_response(
+        committed_spec, "post", "/v1/email/search"
+    )
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+
+    for key in required:
+        assert key in body, f"required key {key!r} missing from /search response"
+
+    assert body["schema_version"] == API_VERSION
+    assert body["count"] == 1
+    item = body["messages"][0]
+    assert item["id"] == "s1"
+    # Wire alias: the sender is `from`, not `from_`.
+    assert item["from"] == "Sarah Chen <sarah@example.com>"
+    assert item["label_ids"] == ["INBOX", "UNREAD"]
+
+
+def test_search_invalid_payload_returns_422(client):
+    """POST /search with an unknown field returns 422 (strict contract)."""
+    from gaia_agent_email.api_routes import get_search_backend
+
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={"q": "oops"})
+    finally:
+        client.app.dependency_overrides.pop(get_search_backend, None)
     assert resp.status_code == 422
 
 
@@ -303,6 +402,7 @@ def test_all_documented_paths_covered(committed_spec):
     }
     expected = {
         ("post", "/v1/email/triage"),
+        ("post", "/v1/email/search"),
         ("post", "/v1/email/draft"),
         ("post", "/v1/email/send"),
         ("get", "/v1/email/health"),

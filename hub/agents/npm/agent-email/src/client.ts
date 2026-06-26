@@ -5,6 +5,7 @@
  *
  * Wraps every HTTP endpoint the frozen sidecar serves:
  *   POST /v1/email/triage    (the frozen triage contract)
+ *   POST /v1/email/search     (read-only inbox search)
  *   POST /v1/email/draft      (mint a confirmation token)
  *   POST /v1/email/send       (send — gated on a valid token)
  *   GET  /health              (root liveness — what the standalone sidecar serves)
@@ -30,6 +31,8 @@ import { stripTrailingSlashes } from "./url.js";
 import type {
   EmailDraftRequest,
   EmailDraftResponse,
+  EmailSearchRequest,
+  EmailSearchResponse,
   EmailSendRequest,
   EmailSendResponse,
   EmailTriageRequest,
@@ -80,6 +83,16 @@ export class EmailClient {
   /** Triage a single email or a full thread (POST /v1/email/triage). */
   async triage(request: EmailTriageRequest): Promise<EmailTriageResponse> {
     return this.post<EmailTriageResponse>("/v1/email/triage", request);
+  }
+
+  /**
+   * Search the connected mailbox, read-only (POST /v1/email/search). Returns
+   * inbox-list metadata (id, thread, subject, from, snippet, labels) for
+   * messages matching the query/labels — not the message body. Requires a
+   * mailbox connected on the host; no mailbox → 503, two+ → 400.
+   */
+  async search(request: EmailSearchRequest): Promise<EmailSearchResponse> {
+    return this.post<EmailSearchResponse>("/v1/email/search", request);
   }
 
   /** Propose a reply and mint a confirmation token (POST /v1/email/draft). */

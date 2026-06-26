@@ -4,9 +4,9 @@
 HTML spec generator for the Email Triage Agent REST endpoints (issue #1263).
 
 ``render_endpoint_spec_html()`` returns a single self-contained HTML page
-documenting the three email REST endpoints and the frozen #1262 contract
-request/response shapes. It derives field rows directly from the contract
-pydantic models so the spec stays in sync with the contract automatically.
+documenting the email REST endpoints (triage, search, draft, send) and the
+frozen #1262 contract request/response shapes. It derives field rows directly
+from the contract pydantic models so the spec stays in sync automatically.
 
 No external assets — inline CSS only. No LLM, no network calls.
 """
@@ -18,8 +18,6 @@ import webbrowser
 from pathlib import Path
 from typing import Any, List, Optional, Tuple, Type, Union, get_args, get_origin
 
-from pydantic import BaseModel
-
 from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
@@ -27,12 +25,16 @@ from gaia_agent_email.contract import (
     EmailAddress,
     EmailCategory,
     EmailMessage,
+    EmailSearchRequest,
+    EmailSearchResponse,
+    EmailSearchResultItem,
     EmailTriageRequest,
     EmailTriageResponse,
     EmailTriageResult,
     SingleEmailInput,
     ThreadInput,
 )
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -364,6 +366,22 @@ def render_endpoint_spec_html() -> str:
         EmailSendResponse,
     )
 
+    search_block = _endpoint_block(
+        path="/v1/email/search",
+        description=(
+            "Search the connected mailbox (read-only, #1781) by Gmail-style "
+            "query / labels. Returns inbox-list metadata (id, thread, subject, "
+            "from, snippet, labels) for each match — not the message body, and "
+            "nothing is sent or modified. The mailbox is the one connected in "
+            "GAIA; an ambiguous count fails loud (0 -> 503, 2+ -> 400)."
+        ),
+        request_sections=[("EmailSearchRequest", EmailSearchRequest)],
+        response_sections=[
+            ("EmailSearchResponse", EmailSearchResponse),
+            ("EmailSearchResultItem", EmailSearchResultItem),
+        ],
+    )
+
     draft_block = _endpoint_block(
         path="/v1/email/draft",
         description=(
@@ -412,6 +430,8 @@ def render_endpoint_spec_html() -> str:
 <h2>Endpoints</h2>
 
 {triage_block}
+
+{search_block}
 
 {draft_block}
 

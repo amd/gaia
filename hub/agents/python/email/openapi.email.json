@@ -269,6 +269,187 @@
         "title": "EmailMessage",
         "type": "object"
       },
+      "EmailSearchRequest": {
+        "additionalProperties": false,
+        "description": "Search the connected mailbox for messages by Gmail-style query / labels.\n\nRead-only: this lists messages already in the mailbox; it never sends,\nmodifies, or triages. It restores the agent's in-loop inbox-search tool\n(``search_messages``) on the REST contract so the Agent UI can drive it\nthrough the package (#1781).\n\nBoth ``query`` and ``labels`` are optional — with neither, the backend\nlists the INBOX (bounded by ``max_results``).",
+        "properties": {
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Label ids to filter by (e.g. ['INBOX', 'UNREAD']). None defaults to the INBOX label.",
+            "title": "Labels"
+          },
+          "max_results": {
+            "default": 25,
+            "description": "Max messages to return (1-100). Each match is hydrated with a per-message fetch, so the count is capped to bound that fan-out.",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Results",
+            "type": "integer"
+          },
+          "page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque pagination cursor from a previous response's ``next_page_token``. None fetches the first page.",
+            "title": "Page Token"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Gmail-style search query (e.g. 'from:alice is:unread'). None lists the inbox without a text filter.",
+            "title": "Query"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Contract version. Mismatch lets a consumer fail loudly.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "title": "EmailSearchRequest",
+        "type": "object"
+      },
+      "EmailSearchResponse": {
+        "additionalProperties": false,
+        "description": "Top-level inbox-search response envelope (#1781).",
+        "properties": {
+          "count": {
+            "description": "Number of messages returned.",
+            "title": "Count",
+            "type": "integer"
+          },
+          "messages": {
+            "description": "Matching messages (newest-first).",
+            "items": {
+              "$ref": "#/components/schemas/EmailSearchResultItem"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque token to fetch the next page, or null when no more.",
+            "title": "Next Page Token"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Echoes the request query (None when unset).",
+            "title": "Query"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "title": "EmailSearchResponse",
+        "type": "object"
+      },
+      "EmailSearchResultItem": {
+        "additionalProperties": false,
+        "description": "One message in a search result — inbox-list metadata, not the full body.\n\nHeader values (``from_``/``to``/``date``) are the raw, provider-decoded\nheader strings exactly as the agent's read tools surface them — not parsed\ninto ``EmailAddress`` objects, because list headers can carry multiple or\nmalformed addresses a strict parse would reject. Fetch the full message via\nthe triage path when you need the body.",
+        "properties": {
+          "date": {
+            "default": "",
+            "description": "Raw 'Date' header string.",
+            "title": "Date",
+            "type": "string"
+          },
+          "from": {
+            "default": "",
+            "description": "Raw 'From' header string. Aliased to 'from' on the wire.",
+            "title": "From",
+            "type": "string"
+          },
+          "id": {
+            "description": "Provider message id (opaque).",
+            "title": "Id",
+            "type": "string"
+          },
+          "label_ids": {
+            "description": "Label ids on the message.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Label Ids",
+            "type": "array"
+          },
+          "snippet": {
+            "default": "",
+            "description": "Provider-supplied short preview of the body.",
+            "title": "Snippet",
+            "type": "string"
+          },
+          "subject": {
+            "default": "",
+            "description": "Subject line.",
+            "title": "Subject",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider thread id this message belongs to.",
+            "title": "Thread Id"
+          },
+          "to": {
+            "default": "",
+            "description": "Raw 'To' header string.",
+            "title": "To",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "EmailSearchResultItem",
+        "type": "object"
+      },
       "EmailSendRequest": {
         "additionalProperties": false,
         "description": "Send a reply. Requires a valid confirmation token for this payload.",
@@ -396,7 +577,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.0",
+            "default": "2.1",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -426,7 +607,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.0",
+            "default": "2.1",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -770,7 +951,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.0"
+    "version": "2.1"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -833,6 +1014,48 @@
           }
         },
         "summary": "Email Health",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/search": {
+      "post": {
+        "description": "Search the connected mailbox (read-only) — #1781.\n\nLists messages matching ``query``/``labels`` from the connected Gmail or\nOutlook mailbox and returns inbox-list metadata (id, thread, subject, from,\nto, date, snippet, labels) — not the message body. No mail is sent or\nmodified. This restores the agent's in-loop inbox-search capability on the\nREST contract so the Agent UI can drive it through the package.\n\nThe mailbox is resolved by :func:`get_search_backend` (fail-loud on 0 or\nambiguous mailbox counts). Backend auth / config / transport errors surface\nas actionable 4xx/5xx, never a silent empty result.",
+        "operationId": "search_inbox_v1_email_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Inbox",
         "tags": [
           "email"
         ]
