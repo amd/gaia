@@ -48,8 +48,8 @@
     "CHANGELOG.md",
     "SPEC.md",
     "SKILL.md",
-    "LICENSE",
-    "scorecards/"
+    "SCORECARD.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"

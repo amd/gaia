@@ -33,7 +33,7 @@ aggregate:
     value: 0.4
     weight: 1.0
   value: 40.0
-generated_at: '2026-06-26T16:47:13.735478+00:00'
+generated_at: '2026-06-26T17:29:34.631236+00:00'
 inherited_from: null
 ---
 # Email Triage — Eval Scorecard v0.2.4
@@ -66,3 +66,25 @@ round(100 × ((0.4000 × 1.0)) / 1.0, 2) = 40.0
 
 A reader can reproduce this value from the `aggregate.components` in the front
 matter alone — no eval-harness access needed.
+
+## Reproduction
+
+Run the following commands from the repository root:
+
+```sh
+# Step 1: run the benchmark (requires a running Lemonade Server on :13305)
+PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
+GAIA_AGENT_TOOL_TIMEOUT=120 \
+PYTHONPATH="$(pwd)" \
+gaia eval benchmark --limit 25
+
+# Step 2: generate the scorecard from the benchmark output
+PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
+PYTHONPATH="$(pwd)" \
+python hub/agents/python/email/packaging/gen_scorecard.py \
+    --benchmark-dir /private/tmp/claude-501/-Users-tomasz-src-amd-gaia--claude-worktrees-sleepy-chatelet-2b818a/314bd25e-fbc0-4ab7-aab0-a8825585e5ef/scratchpad/email-eval-relabeled \
+    --ground-truth tests/fixtures/email/ground_truth.json \
+    --limit 25
+```
+
+See [eval-scorecard docs](https://amd-gaia.ai/docs/reference/eval-scorecard) and the [`adding-eval-scorecard` skill](.claude/skills/adding-eval-scorecard/SKILL.md) for the full setup guide.
