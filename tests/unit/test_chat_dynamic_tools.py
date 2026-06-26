@@ -95,6 +95,39 @@ def test_env_toggle_overrides_config(monkeypatch):
     assert a._maybe_build_tool_loader() is None
 
 
+def test_env_override_helper_none_when_unset(monkeypatch):
+    """``dynamic_tools_env_override`` returns ``None`` so callers fall back to
+    the persisted/config value — the single source of truth the UI router and
+    the agent resolver both read (#1798)."""
+    from gaia.agents.chat.agent import dynamic_tools_env_override
+
+    monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+    assert dynamic_tools_env_override() is None
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("1", True),
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("on", True),
+        ("0", False),
+        ("false", False),
+        ("no", False),
+        ("", False),
+    ],
+)
+def test_env_override_helper_parses_truthy_set(monkeypatch, raw, expected):
+    """Same truthy set the resolver used to inline — pinned so the UI toggle
+    and the agent never disagree on what counts as "on"."""
+    from gaia.agents.chat.agent import dynamic_tools_env_override
+
+    monkeypatch.setenv("GAIA_DYNAMIC_TOOLS", raw)
+    assert dynamic_tools_env_override() is expected
+
+
 def test_env_threshold_and_max_overrides(monkeypatch):
     a = _bare_agent(config=ChatAgentConfig(prompt_profile="doc", dynamic_tools=True))
     monkeypatch.setenv("GAIA_DYNAMIC_TOOLS_TAU", "0.42")
@@ -154,6 +187,70 @@ def test_active_state_delegates_to_loader_select():
         result = a._select_tools_for_turn("read the file")
     assert result is sentinel
     loader.select.assert_called_once()
+
+
+# ── SKILL signal wiring (Part 3, #1451) ───────────────────────────────────
+
+
+def _skill(name: str, tools: list[str]):
+    """A minimal recalled Skill carrying ``tools_required``."""
+    from gaia.agents.base.skill_synthesis import Skill
+
+    return Skill(name=name, when_to_use="trigger", body="# body", tools_required=tools)
+
+
+def test_recalled_skill_tools_flattens_and_dedupes_in_order():
+    """tools_required flatten in recall rank then declaration order, deduped."""
+    a = _bare_agent(
+        _recalled_skills=[
+            _skill("s1", ["read_file", "query_documents"]),
+            _skill("s2", ["query_documents", "summarize"]),  # dup dropped
+        ]
+    )
+    assert a._recalled_skill_tools() == ["read_file", "query_documents", "summarize"]
+
+
+def test_recalled_skill_tools_empty_on_graceful_absence():
+    """No recall (attr unset or empty list) → no SKILL signal at the agent layer."""
+    assert _bare_agent()._recalled_skill_tools() == []  # attr never set
+    assert _bare_agent(_recalled_skills=[])._recalled_skill_tools() == []
+
+
+def test_select_passes_skill_tools_kwarg_to_loader():
+    """_select_tools_for_turn hands loader.select the flattened skill_tools kwarg.
+
+    Contract-shape assert at the ChatAgent→loader boundary: the kwarg is present,
+    a list[str], and the flattened+deduped recipe — not merely "select was
+    called".
+    """
+    loader = MagicMock()
+    loader.session_disabled = False
+    loader.select.return_value = ["c1"]
+    a = _bare_agent(
+        tool_loader=loader,
+        _recalled_skills=[_skill("s1", ["read_file", "query_documents"])],
+    )
+    with patch.object(
+        ChatAgent, "_tools_registry", new_callable=lambda: property(lambda self: {})
+    ):
+        a._select_tools_for_turn("read the report")
+    _, kwargs = loader.select.call_args
+    assert kwargs["skill_tools"] == ["read_file", "query_documents"]
+    assert isinstance(kwargs["skill_tools"], list)
+
+
+def test_select_skill_tools_empty_kwarg_on_graceful_absence():
+    """With no recalled skills, select still gets skill_tools=[] (graceful absence)."""
+    loader = MagicMock()
+    loader.session_disabled = False
+    loader.select.return_value = ["c1"]
+    a = _bare_agent(tool_loader=loader)  # no _recalled_skills set
+    with patch.object(
+        ChatAgent, "_tools_registry", new_callable=lambda: property(lambda self: {})
+    ):
+        a._select_tools_for_turn("anything")
+    _, kwargs = loader.select.call_args
+    assert kwargs["skill_tools"] == []
 
 
 # ── selection query builder ───────────────────────────────────────────────

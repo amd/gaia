@@ -15,12 +15,13 @@ resolves on a ``MemoryMixin`` host via the MRO.
 Spec: docs/plans/skill-synthesis.mdx
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from gaia.agents.base.skill_synthesis import (
     Skill,
+    SynthesisConfig,
     cluster_by_goal,
     distill_cluster,
     extract_sequences,
@@ -39,7 +40,7 @@ class ProceduralMemoryMixin:
     MemoryMixin host via MRO. Relies on host state/methods that
     MemoryMixin.init_memory and MemoryMixin define: self._memory_store,
     self._proc_faiss_index, self._proc_faiss_id_map, self._recalled_skill_prompt,
-    self._embed_text, self.chat, self.rebuild_system_prompt.
+    self._recalled_skills, self._embed_text, self.chat, self.rebuild_system_prompt.
     """
 
     # ==================================================================
@@ -288,26 +289,29 @@ class ProceduralMemoryMixin:
                 )
         return skills
 
-    def _build_recalled_skills_prompt(self, goal: str) -> str:
-        """Render the recalled-procedure system-prompt section for ``goal``.
+    def _recall_skills_for_turn(
+        self, goal: str
+    ) -> Tuple[List[Skill], Optional[SynthesisConfig]]:
+        """Recall the procedures matching ``goal`` once, with the resolved config.
 
-        Calls ``recall_skill`` and formats the matches into a bounded prompt
-        block.  Each body is capped at ``max_recall_body_chars`` (default 1500)
-        with an explicit ``… (truncated)`` marker; the full body always stays in
-        the ``procedures`` row.  Returns ``""`` when nothing is recalled so the
-        composed system prompt is byte-identical to a no-procedure build.
+        The single per-turn recall pass shared by both consumers:
+        ``_refresh_recalled_skills`` renders the prompt from the returned skills,
+        and ``_recalled_skill_tools`` reads them for the tool-loader SKILL signal
+        (#1451).  Recalling here once keeps that signal free — no second
+        ``recall_skill`` (embed + FAISS) call, so the loader adds zero TTFT cost.
 
-        Any failure degrades to ``""`` (boundary translation): the per-turn
-        injection is an enhancement, so a recall hiccup must never crash the
-        user's query — mirrors ``get_memory_dynamic_context``.
+        Off-states return ``([], None)`` so neither consumer fires:
+
+        * zero-cost off-state — no procedures (new user) or memory disabled
+          (``GAIA_MEMORY_DISABLED`` -> no store -> index never built) -> the
+          empty-index guard short-circuits before the per-turn
+          ``memory_settings.json`` read (mirrors ``recall_skill``);
+        * a recall hiccup (embedder down mid-turn) -> logged + ``([], config)``,
+          so the turn degrades to the pre-synthesis behavior, never crashes.
         """
-        # Zero-cost off-state: no procedures (new user) or memory disabled
-        # (GAIA_MEMORY_DISABLED -> no store -> index never built) means there is
-        # nothing to recall, so short-circuit before the per-turn settings-file
-        # read. Mirrors recall_skill's own empty-index guard.
         index = getattr(self, "_proc_faiss_index", None)
         if index is None or index.ntotal == 0:
-            return ""
+            return [], None
 
         from gaia.agents.base.memory import (
             _load_memory_settings,  # deferred (cycle break)
@@ -319,8 +323,28 @@ class ProceduralMemoryMixin:
         try:
             skills = self.recall_skill(goal, similarity_tau=config.similarity_tau)
         except Exception as e:
-            logger.debug("[MemoryMixin] recalled-skill prompt build failed: %s", e)
-            return ""
+            logger.debug(
+                "[MemoryMixin] per-turn skill recall failed "
+                "(turn degrades to pre-synthesis): %s",
+                e,
+            )
+            return [], config
+        return skills, config
+
+    def _build_recalled_skills_prompt(
+        self, skills: List[Skill], config: Optional[SynthesisConfig]
+    ) -> str:
+        """Render the recalled-procedure system-prompt section from ``skills``.
+
+        Pure renderer over the already-recalled ``skills`` (and the ``config``
+        resolved alongside them by ``_recall_skills_for_turn``) — the recall and
+        the single settings read happen once upstream and feed both this prompt
+        and the loader's ``_recalled_skill_tools`` signal.  Each body is capped at
+        ``config.max_recall_body_chars`` (default 1500) with an explicit
+        ``… (truncated)`` marker; the full body always stays in the
+        ``procedures`` row.  Returns ``""`` when ``skills`` is empty, so the
+        composed system prompt is byte-identical to a no-procedure build.
+        """
         if not skills:
             return ""
 
@@ -342,6 +366,26 @@ class ProceduralMemoryMixin:
         )
         return header + "\n\n" + "\n\n".join(blocks)
 
+    def _recalled_skill_tools(self) -> List[str]:
+        """Return the recalled skills' ``tools_required``, flattened and deduped.
+
+        The tool loader's SKILL signal (#1451): the exact tools the procedure(s)
+        recalled this turn used, in recall rank then declaration order, each kept
+        once.  Reads the per-turn cache ``_refresh_recalled_skills`` populated
+        from a single ``recall_skill`` pass — no extra embed/FAISS work, so the
+        signal adds no TTFT cost.  ``[]`` on every off-state (no recall this turn,
+        memory disabled, or the cache never initialized), so the loader runs on
+        CORE + semantic exactly as in Parts 1-2.
+        """
+        tools: List[str] = []
+        seen: set[str] = set()
+        for skill in getattr(self, "_recalled_skills", []):
+            for tool in skill.tools_required:
+                if tool not in seen:
+                    seen.add(tool)
+                    tools.append(tool)
+        return tools
+
     def get_recalled_skills_system_prompt(self) -> str:
         """Contribute the recalled-procedure block to the composed system prompt.
 
@@ -353,7 +397,14 @@ class ProceduralMemoryMixin:
         return getattr(self, "_recalled_skill_prompt", "")
 
     def _refresh_recalled_skills(self, goal: str) -> None:
-        """Recompute the recalled-skill injection for ``goal``, recomposing on change.
+        """Recompute the per-turn recalled-skill state for ``goal``.
+
+        Recalls the matching procedures **once** and caches both consumers'
+        inputs: ``self._recalled_skills`` (the matched ``Skill`` objects, read by
+        the tool loader through ``_recalled_skill_tools`` — #1451) and the
+        rendered ``self._recalled_skill_prompt`` (the system-prompt block, read by
+        ``get_recalled_skills_system_prompt`` — #887).  The single recall keeps
+        the loader's SKILL signal free (no second ``recall_skill``).
 
         Mirrors ``Agent._refresh_active_tool_filter``: it swaps the cached
         injection and rebuilds the system prompt **only when the recalled set
@@ -361,7 +412,9 @@ class ProceduralMemoryMixin:
         and the backend's KV-cache prefix — untouched.  Called per turn from the
         ``process_query`` override with the clean user goal.
         """
-        new_prompt = self._build_recalled_skills_prompt(goal)
+        skills, config = self._recall_skills_for_turn(goal)
+        self._recalled_skills = skills
+        new_prompt = self._build_recalled_skills_prompt(skills, config)
         if new_prompt != getattr(self, "_recalled_skill_prompt", ""):
             self._recalled_skill_prompt = new_prompt
             # rebuild_system_prompt() recomposes via _compose_system_prompt(),

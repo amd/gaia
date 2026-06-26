@@ -5,6 +5,74 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## 0.2.4
+
+First fully-published release of this feature set. The whole-package zip download
+(#1843) is temporarily disabled: the ~177 MB all-platforms zip exceeds Cloudflare's
+edge upload limit, so the publish step rejected it (413) and blocked every prior
+attempt (0.2.1–0.2.3). The worker-side streaming approach was reverted; 0.2.4 ships
+the per-platform binaries + this npm client without the combined zip. Per-platform
+binaries remain individually downloadable from the Hub. No agent wire-contract
+change — `SCHEMA_VERSION` stays `2.0`.
+
+## 0.2.3
+
+Re-cut of 0.2.2 after the Agent Hub worker was redeployed with the large-artifact
+streaming fix. 0.2.2 published its per-platform binaries but its whole-package zip
+and npm publish never completed (the live worker hadn't yet picked up the fix);
+0.2.3 is the first fully-published release of this feature set. No agent
+wire-contract change — `SCHEMA_VERSION` stays `2.0`.
+
+## 0.2.2
+
+Release-reliability fix. The 0.2.1 tag published the per-platform binaries to the
+Agent Hub but its npm publish never completed: the Hub Worker buffered the entire
+upload in memory, so the new ~177 MB whole-package zip exceeded Cloudflare's
+128 MB per-Worker memory limit and the publish step 502'd before npm. 0.2.2 fixes
+that and is the first complete publish of the 0.2.1 feature set. No agent
+wire-contract change — `SCHEMA_VERSION` stays `2.0` and the client + REST/MCP
+surface are unchanged.
+
+### Fixed
+
+- **Whole-package zip + npm publish now complete.** The Agent Hub Worker
+  (`POST /publish`) streams large `application/octet-stream` uploads straight to
+  R2 with server-side SHA-256 verification instead of reading the whole body into
+  memory, so the ~177 MB whole-package zip publishes without OOMing the Worker.
+
+## 0.2.1
+
+Adds the one-command `playground` launcher and automatic sidecar cleanup, and
+makes this README the single canonical agent README (hub + npm). No wire-contract
+change (`SCHEMA_VERSION` stays `2.0`).
+
+### Added
+
+- **`npx @amd-gaia/agent-email playground` — one-command launcher.** Fetches the
+  binary, starts the sidecar, and opens the browser to `/v1/email/playground`,
+  running until Ctrl+C. `--port <n>` to bind elsewhere, `--no-open` to skip the
+  browser, `--out <dir>` to choose the binary cache. Makes "try the agent" a single
+  command instead of fetch → spawn → find-the-URL.
+- **Automatic sidecar cleanup (`autoCleanup`, default on).** `startSidecar` /
+  `spawnSidecar` now reap the frozen sidecar's detached process tree when the host
+  process exits, crashes (`uncaughtException` / `unhandledRejection`), or is
+  interrupted (`SIGINT` / `SIGTERM` / `SIGHUP`) — so a skipped or missed
+  `shutdown()` no longer leaves the binary running and holding its port. Pass
+  `autoCleanup: false` to manage the lifecycle yourself; `shutdown()` stays the
+  graceful, awaited path. A hard `SIGKILL` of the host process is the one case no
+  in-process handler can catch.
+
+### Changed
+
+- **This README is now the single canonical agent README** (hub + npm). The
+  release workflow publishes it to both, so the hub page and the npm listing no
+  longer drift — the architecture diagram and the GAIA/npm install flow show up on
+  `hub.amd-gaia.ai/hub/email`.
+- **Architecture diagram loads from an in-repo raw image** instead of a
+  version-pinned hub URL that the publish pipeline didn't populate, so it renders on
+  GitHub and npm before the binaries are uploaded.
+- **Agent version is shown on the hub cards** (listing + featured + detail).
+
 ## 0.2.0
 
 ### Changed (breaking)

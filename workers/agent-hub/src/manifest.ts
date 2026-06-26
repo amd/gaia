@@ -211,6 +211,8 @@ export function parseManifest(yamlText: string): ParsedManifest {
     interfaces: parseInterfaces(d.interfaces),
     deprecated: optBool(d.deprecated, "deprecated") ?? false,
     deprecation_message: optStr(d.deprecation_message, "deprecation_message"),
+    npm_package: optStr(d.npm_package, "npm_package"),
+    playground_url: optStr(d.playground_url, "playground_url"),
   };
 }
 

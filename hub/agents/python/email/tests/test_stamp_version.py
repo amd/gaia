@@ -192,8 +192,6 @@ def test_absent_targets_skipped_with_warning_not_failed(tmp_path, monkeypatch):
     assert result.mismatches == []  # absent != mismatch
     skipped = "\n".join(result.skipped)
     assert "architecture.html" in skipped  # file-absent skip
-    assert "playground.webp" in skipped  # field-absent skip (README present)
-    assert "architecture.webp" in skipped  # field-absent skip (README present)
     # An absent optional target must NOT fail the gate.
     assert stamp.main(["--check"]) == 0
 

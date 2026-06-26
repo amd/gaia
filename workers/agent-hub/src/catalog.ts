@@ -9,7 +9,11 @@ import { compareSemver } from "./manifest";
 import {
   listAgentIds,
   readAgentManifest,
+  readChangelog,
+  readPackageFiles,
   readReadme,
+  readSkill,
+  readSpec,
   writeIndex,
 } from "./storage";
 import type {
@@ -86,17 +90,36 @@ export function upsertVersion(
     // Tracks the latest version exactly: if the new latest drops the message
     // (e.g. un-deprecated), a stale message must not survive.
     deprecation_message: useNew ? manifest.deprecation_message : existing?.deprecation_message,
+    npm_package: useNew ? manifest.npm_package : existing?.npm_package,
+    playground_url: useNew ? manifest.playground_url : existing?.playground_url,
     versions,
   };
 }
 
 /**
- * Build the catalog entry for one agent manifest. `readme` is the README
- * markdown of the latest version ("" if none was published).
+ * Build the catalog entry for one agent manifest. `readme`/`changelog` are the
+ * latest version's markdown ("" if none was published); `packageFiles` is the
+ * whole-package zip's file listing (null if no package zip was published).
  */
-export function toIndexEntry(agent: AgentManifest, readme: string): IndexEntry {
+export function toIndexEntry(
+  agent: AgentManifest,
+  readme: string,
+  changelog: string,
+  packageFiles: { files: { name: string; size_bytes: number }[] } | null,
+  spec = "",
+  skill = ""
+): IndexEntry {
   const latest = agent.versions[agent.latest_version];
   const req = agent.requirements;
+  // The whole-package download is the published `.zip` artifact of the latest
+  // version, paired with its file listing. Only surface it when both exist.
+  const zip = (latest?.artifacts ?? [latest?.artifact]).find(
+    (a) => a && a.filename.toLowerCase().endsWith(".zip")
+  );
+  const pkg =
+    packageFiles && zip
+      ? { filename: zip.filename, size_bytes: zip.size_bytes, files: packageFiles.files }
+      : undefined;
   return {
     id: agent.id,
     name: agent.name,
@@ -125,6 +148,13 @@ export function toIndexEntry(agent: AgentManifest, readme: string): IndexEntry {
       gpu_vram_gb: req.gpu_vram_gb,
     },
     readme,
+    changelog,
+    spec,
+    skill,
+    // undefined serializes to "key absent" — only present when the manifest set it.
+    npm_package: agent.npm_package,
+    playground_url: agent.playground_url,
+    package: pkg,
   };
 }
 
@@ -142,7 +172,11 @@ export async function rebuildIndex(
     const agent = await readAgentManifest(bucket, id);
     if (!agent) continue;
     const readme = await readReadme(bucket, id, agent.latest_version);
-    entries.push(toIndexEntry(agent, readme));
+    const changelog = await readChangelog(bucket, id, agent.latest_version);
+    const packageFiles = await readPackageFiles(bucket, id, agent.latest_version);
+    const spec = await readSpec(bucket, id, agent.latest_version);
+    const skill = await readSkill(bucket, id, agent.latest_version);
+    entries.push(toIndexEntry(agent, readme, changelog, packageFiles, spec, skill));
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));
 

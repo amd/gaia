@@ -46,6 +46,21 @@ from gaia.vlm.mixin import VLMToolsMixin
 logger = get_logger(__name__)
 
 
+def dynamic_tools_env_override() -> Optional[bool]:
+    """Parse the ``GAIA_DYNAMIC_TOOLS`` override, or ``None`` when it is unset.
+
+    Returns the parsed boolean (truthy set ``1``/``true``/``yes``/``on``,
+    case-insensitive) when the env var is set, else ``None`` to signal "no
+    override — fall back to the persisted/config value". The UI settings
+    router reuses this so the env-wins precedence and the truthy set never
+    drift between the agent resolver and the toggle that surfaces it.
+    """
+    raw = os.getenv("GAIA_DYNAMIC_TOOLS")
+    if raw is None:
+        return None
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass
 class ChatAgentConfig:
     """Configuration for ChatAgent."""
@@ -460,10 +475,10 @@ class ChatAgent(
 
     def _resolve_dynamic_tools_enabled(self) -> bool:
         """Toggle: ``GAIA_DYNAMIC_TOOLS`` (truthy) wins over the config field."""
-        raw = os.getenv("GAIA_DYNAMIC_TOOLS")
-        if raw is None:
-            return bool(self.config.dynamic_tools)
-        return raw.strip().lower() in ("1", "true", "yes", "on")
+        override = dynamic_tools_env_override()
+        if override is not None:
+            return override
+        return bool(self.config.dynamic_tools)
 
     def _resolve_dynamic_tools_threshold(self) -> float:
         """Threshold: ``GAIA_DYNAMIC_TOOLS_TAU`` wins; malformed value fails loudly."""
@@ -517,7 +532,19 @@ class ChatAgent(
         )
 
     def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
-        """Return this turn's sorted tool subset, or ``None`` for the full registry."""
+        """Return this turn's sorted tool subset, or ``None`` for the full registry.
+
+        The SKILL signal (#1451) and the semantic query use deliberately
+        different inputs: ``skill_tools`` derives from the **clean current goal**
+        (``_refresh_recalled_skills`` ran recall on ``user_input`` alone, before
+        this hook), while the semantic ``query`` is previous + current. The
+        asymmetry is intentional — skill recall matches a goal-shaped trigger,
+        not a conversation window, so feeding it the prior turn would blur the
+        match; semantic selection wants the prior turn for context like
+        "summarize it". ``_recalled_skill_tools`` is ``[]`` on every off-state
+        (no recall / memory disabled), so the loader runs on CORE + semantic
+        exactly as in Parts 1-2.
+        """
         if not self._dynamic_tools_active():
             return None
         if not self._dynamic_tools_validated:
@@ -526,7 +553,9 @@ class ChatAgent(
             self.tool_loader.validate_registry(self._tools_registry)
             self._dynamic_tools_validated = True
         query = self._build_tool_selection_query(user_input)
-        return self.tool_loader.select(query, self._tools_registry)
+        return self.tool_loader.select(
+            query, self._tools_registry, skill_tools=self._recalled_skill_tools()
+        )
 
     def _on_tool_invoked(self, tool_name: str) -> None:
         """Record tool-use recency for the loader's LRU (no-op when inactive)."""
