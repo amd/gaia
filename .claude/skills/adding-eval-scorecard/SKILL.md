@@ -8,7 +8,7 @@ description: "Adopt the per-agent eval scorecard for a GAIA hub agent: write the
 Adopt the release **eval scorecard** ([`docs/reference/eval-scorecard.mdx`](../../../docs/reference/eval-scorecard.mdx)) for one hub agent. The system is `harness → result payload → generator → scorecard`, with a standalone presence+regression release gate. The **email agent is the reference implementation** — mirror it.
 
 **Core modules (do not modify; reuse):**
-- `src/gaia/eval/release_scorecard.py` — `ResultPayload`, `compute_aggregate`, `render_scorecard`, `write_scorecard`, `validate_scorecard`, `carry_forward`, `latest_version_below`. Harness-agnostic (stdlib + PyYAML only).
+- `src/gaia/eval/release_scorecard.py` — `ResultPayload`, `compute_aggregate`, `render_scorecard`, `write_scorecard`, `validate_scorecard`, `carry_forward`. Harness-agnostic (stdlib + PyYAML only).
 - `src/gaia/eval/scorecard_gate.py` — the standalone gate (`python -m gaia.eval.scorecard_gate`).
 - Reference adapter: `hub/agents/python/email/packaging/gen_scorecard.py`.
 
@@ -18,7 +18,7 @@ This is a **phased checklist with a hard gate at the real-eval step** — the sc
 
 1. **Version source of truth** = the `version:` field in `<agent>/gaia-agent.yaml`. Never invent a parallel scheme.
 2. **Canonical README** (where the scorecard is linked + surfaced): for an npm-published agent it is the npm client README (e.g. `hub/agents/npm/<id>/README.md`), NOT a `packaging/README.md`. For a Python-only agent it is `hub/agents/python/<id>/README.md`. Confirm which by checking what `release_agent_<id>.yml` publishes (`README:` env) — the published README is the one to link.
-3. **doc-root** = the directory holding that canonical README. Scorecards live at `<doc-root>/scorecards/<version>.md`.
+3. **doc-root** = the directory holding that canonical README. The scorecard lives at `<doc-root>/SCORECARD.md` — a **single file updated in place**, versioned via the publish snapshot (same as README.md). **There is no `scorecards/` directory.**
 4. **Eval vehicle**: what existing harness produces this agent's accuracy metric? (email → `gaia eval benchmark` over `tests/fixtures/email/`.) If none exists, STOP and surface that — propose the minimal harness before building; do not invent numbers.
 
 ## Phase 2 — Write the adapter (harness → payload)
@@ -26,11 +26,12 @@ This is a **phased checklist with a hard gate at the real-eval step** — the sc
 Copy `hub/agents/python/email/packaging/gen_scorecard.py` as the template. The adapter:
 - imports ONLY `gaia.eval.release_scorecard` (never the harness or agent package — preserve loose coupling);
 - reads the harness output, builds a `ResultPayload`;
+- populates `reproduction_command` with the **exact shell commands** to reproduce this scorecard, including all required env vars (`PYTHON_KEYRING_BACKEND`, `GAIA_AGENT_TOOL_TIMEOUT`, `PYTHONPATH`);
 - defines **"judged"** explicitly and **raises loudly** if zero results are judged (no silent 0.0);
 - records **dataset size** (total labeled examples) and **test_cases_run** (subset executed) as DISTINCT fields;
 - stores **repo-relative** paths only (never a local absolute path — it ships in a published artifact);
 - records the eval `limit`/config so future regression checks are comparable;
-- writes to `<doc-root>/scorecards/<version>.md`.
+- writes to `<doc-root>/SCORECARD.md` (the single file; `--output-dir` overrides to a directory, but the filename is always `SCORECARD.md`).
 
 Add an offline unit test against a committed sample harness-output fixture (see `tests/fixtures/eval/email_benchmark_scorecard.json` + `tests/unit/eval/test_release_scorecard.py::TestEmailAdapter`) so the adapter is testable without a live model.
 
@@ -50,8 +51,10 @@ PYTHONPATH="$(pwd)" \
     --ground-truth tests/fixtures/email/ground_truth.json \
     --limit 25 --output-dir <persistent-dir>
 
+PYTHONPATH="$(pwd)" \
 <venv>/bin/python hub/agents/python/email/packaging/gen_scorecard.py \
     --benchmark-dir <persistent-dir> --limit 25
+# → writes hub/agents/npm/agent-email/SCORECARD.md in place
 ```
 
 **Headless gotchas (see memory `project-email-benchmark-headless-gotchas`):**
@@ -63,23 +66,33 @@ PYTHONPATH="$(pwd)" \
 
 ## Phase 4 — Surface, link, and gate
 
-1. **Link + surface** from the canonical README: a one-line `Eval scorecard (vX.Y.Z): aggregate N/100 … ([./scorecards/X.Y.Z.md](./scorecards/X.Y.Z.md))`. The relative link must resolve in-repo.
-2. **npm `files`**: if the agent publishes on npm, add `scorecards/` to `package.json` `files` so the link resolves on the published package too.
-3. **Hub display**: a published scorecard surfaces on the agent's hub page / Agent UI detail view (see `workers/agent-hub` + `AgentDetailModal.tsx`); ensure the publish step uploads the scorecard alongside the README.
+1. **Link + surface** from the canonical README: a one-line `Eval scorecard (vX.Y.Z): aggregate N/100 … ([./SCORECARD.md](./SCORECARD.md))`. The relative link must resolve in-repo.
+2. **npm `files`**: if the agent publishes on npm, add `SCORECARD.md` to `package.json` `files`. **Do not** add a `scorecards/` directory — only the single current file ships.
+3. **Hub display**: a published scorecard surfaces on the agent's hub page / Agent UI detail view (see `workers/agent-hub` + `AgentDetailModal.tsx`); ensure the publish step passes `--eval-scorecard <doc-root>/SCORECARD.md` to `publish_to_r2.py`.
 4. **Release gate**: add a `scorecard-gate` job to `release_agent_<id>.yml` and list it in `publish.needs`. The job runs on a GitHub-hosted runner (it only parses committed files — no eval):
    ```bash
+   # Presence-only (no previous tag yet):
    python -m gaia.eval.scorecard_gate \
-     --scorecards-dir <doc-root>/scorecards \
-     --manifest hub/agents/python/<id>/gaia-agent.yaml
+     --scorecard <doc-root>/SCORECARD.md
+
+   # With best-effort previous-release baseline (recommended for CI):
+   PREV="$(git describe --tags --abbrev=0 --match 'agent-pkg-<id>-*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+   if [ -n "$PREV" ]; then
+     python -m gaia.eval.scorecard_gate \
+       --scorecard <doc-root>/SCORECARD.md --baseline-ref "$PREV"
+   else
+     python -m gaia.eval.scorecard_gate \
+       --scorecard <doc-root>/SCORECARD.md
+   fi
    ```
-   The job must NOT have `continue-on-error`, an `environment:`, or a `permissions:` override (inherits `contents: read`; needs no secrets).
-5. **Auto-update/reject loop**: for re-running on agent changes and refreshing the committed scorecard, see `eval-scorecard.mdx` "Keeping the scorecard current" and the self-hosted refresh workflow — reject-on-worse is the gate; better-or-equal refreshes the committed card.
+   The job must NOT have `continue-on-error`, an `environment:`, or a `permissions:` override (inherits `contents: read`; needs no secrets). Fetch full history (`fetch-depth: 0`) so `git describe` resolves.
+5. **Auto-update/reject loop**: for re-running on agent changes and refreshing the committed scorecard, see `eval-scorecard.mdx` "Keeping the scorecard current" and the self-hosted refresh workflow — reject-on-worse is the gate; better-or-equal refreshes the committed `SCORECARD.md`.
 
 ## Phase 5 — Verify (evidence before "done")
 
-Run and capture: the generated `<version>.md`; the gate **passing** on it (exit 0); the gate **blocking** a manufactured regression (exit 1) and a missing card (exit 1); a by-hand recompute of the aggregate from `aggregate.components` matching the recorded value. Run `python util/lint.py --all` and the eval unit tests. These are the PR's real-world proof.
+Run and capture: the generated `SCORECARD.md`; the gate **passing** on it (exit 0); the gate **blocking** a manufactured regression (exit 1, via `--baseline-file` with a higher-scoring card) and a missing card (exit 1); a by-hand recompute of the aggregate from `aggregate.components` matching the recorded value. Run `python util/lint.py --all` and the eval unit tests. These are the PR's real-world proof.
 
 ## Versioning
 
-- **Patch** release → `carry_forward(prev_path, new_version)` (copies results verbatim, sets `inherited_from`); do NOT re-run the eval.
+- **Patch** release → `carry_forward(prev_scorecard_path, new_version)` reads the version from the front matter of the current `SCORECARD.md` (not from the filename) and copies results verbatim, sets `inherited_from`; do NOT re-run the eval.
 - **Minor/major** release → re-run the eval (Phase 3); `carry_forward` refuses a non-patch bump with a "re-run" error.

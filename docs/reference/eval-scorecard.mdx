@@ -1,6 +1,6 @@
 ---
 title: "Release Eval Scorecard"
-description: "Per-agent, per-version eval scorecard: schema, storage convention, aggregate formula, versioning policy, and release gate."
+description: "Per-agent eval scorecard: schema, storage convention, aggregate formula, versioning policy, reproduction, and release gate."
 icon: "chart-bar"
 ---
 
@@ -14,17 +14,18 @@ icon: "chart-bar"
 
 ## Overview
 
-Each published hub agent ships a **release scorecard** — a versioned Markdown file that records:
+Each published hub agent ships a **release scorecard** — a single `SCORECARD.md` file (updated in place per release, versioned via the publish snapshot, the same way `README.md` works) that records:
 
 - The **eval recipe**: dataset reference, methodology, configuration, and metric definitions.
 - The **measured results**: per-metric values, number of test cases actually run, and dataset size.
 - A single **named aggregate score**: a deterministic, recomputable percentage so a reviewer can verify the number without re-running the eval.
+- A **Reproduction section**: the exact commands to reproduce the result from scratch.
 
 Scorecards are committed alongside the agent's README and linked from it. A standalone **release gate** (`scorecard_gate.py`) blocks packaging when the scorecard is missing or when its aggregate score strictly regresses below the prior version's.
 
 ## File format
 
-Scorecard files are **Markdown with YAML front matter** (`.md`). The front matter holds all machine-readable fields; the body is a human-readable summary with a worked recomputation.
+Scorecard files are **Markdown with YAML front matter** (`.md`). The front matter holds all machine-readable fields; the body is a human-readable summary with a worked recomputation and a Reproduction section.
 
 ```
 ---
@@ -35,7 +36,7 @@ agent:
 recipe:
   dataset:
     reference: tests/fixtures/email/ground_truth.json
-    description: Synthetic email corpus (FakeGmailBackend, 4-category priority labels)
+    description: Synthetic email corpus (FakeGmailBackend, schema-2.0 triage taxonomy)
     size: 220
   methodology: gaia eval benchmark — category_accuracy (case-insensitive exact match)
   config:
@@ -43,26 +44,31 @@ recipe:
     model: Gemma-4-E4B-it-GGUF
     limit: 25
 results:
-  test_cases_run: 24
+  test_cases_run: 25
   metrics:
     - name: category_accuracy
-      value: 0.4584
+      value: 0.40
       weight: 1.0
 aggregate:
   name: weighted_accuracy
   formula: "round(100 * sum(weight_i * value_i) / sum(weight_i), 2)"
   components:
     - metric: category_accuracy
-      value: 0.4584
+      value: 0.40
       weight: 1.0
-  value: 45.84
-generated_at: "2026-06-25T10:00:00+00:00"
+  value: 40.0
+generated_at: "2026-06-26T16:47:13+00:00"
 inherited_from: null
 ---
 
 # Email Triage — Eval Scorecard v0.2.4
 
-**Aggregate score: 45.84** (out of 100)
+**Aggregate score: 40.0** (out of 100)
+...
+
+## Reproduction
+
+Run the following commands from the repository root:
 ...
 ```
 
@@ -111,7 +117,7 @@ where each `valueᵢ` is a metric value in [0, 1] and each `weightᵢ` defaults 
 The result is a **percentage in [0, 100]**. For a single metric with weight 1.0:
 
 ```
-round(100 × 0.4584, 2) = 45.84
+round(100 × 0.40, 2) = 40.0
 ```
 
 A reader can reproduce this value from `aggregate.components` alone — no eval-harness access needed.
@@ -119,15 +125,15 @@ The `aggregate.formula` field in the front matter states the formula in human-re
 
 ## Storage convention
 
-Scorecards live in a `scorecards/` subdirectory beside the agent's canonical README:
+Each agent package ships a **single `SCORECARD.md`** file, updated in place per release — the same way `README.md` works. Per-version uniqueness comes from the publish snapshot (R2 stores the file at `agents/<id>/<version>/SCORECARD.md`; the npm package ships only the current version's `SCORECARD.md`).
 
 ```
 <doc-root>/
-  README.md              ← canonical README (links to scorecard)
-  scorecards/
-    0.1.0.md
-    0.2.3.md
-    0.2.4.md             ← latest
+  README.md              ← canonical README (links to SCORECARD.md)
+  SCORECARD.md           ← current version's scorecard, updated in place
+  SPEC.md
+  SKILL.md
+  CHANGELOG.md
 ```
 
 The `doc-root` is the location of the agent's canonical README:
@@ -135,35 +141,39 @@ The `doc-root` is the location of the agent's canonical README:
 | Agent | doc-root |
 |-------|----------|
 | Email Triage (`@amd-gaia/agent-email`) | `hub/agents/npm/agent-email/` |
-| Hello World | `hub/agents/python/hello-world/` |
 
-The relative link `./scorecards/<version>.md` resolves both in-repo and when the directory is published as an npm package.
+The relative link `./SCORECARD.md` resolves both in-repo and when the directory is published as an npm package. The npm `files` array includes `SCORECARD.md` (not a `scorecards/` directory).
 
 ## Versioning policy
 
 ### Patch releases — carry forward
 
-For a **patch release** (same `major.minor`, `patch` incremented), the prior version's results are carried forward verbatim using `carry_forward()`:
+For a **patch release** (same `major.minor`, `patch` incremented), the prior version's results are carried forward verbatim using `carry_forward()`. Pass the path to the agent's current `SCORECARD.md`:
 
 ```python
 from gaia.eval.release_scorecard import carry_forward, write_scorecard
 from pathlib import Path
 
 new_payload = carry_forward(
-    prev_path=Path("scorecards/0.2.3.md"),
-    new_version="0.2.4",
+    prev_scorecard_path=Path("hub/agents/npm/agent-email/SCORECARD.md"),
+    new_version="0.2.5",
 )
-# new_payload.inherited_from == "0.2.3"
-write_scorecard(new_payload, Path("scorecards/0.2.4.md"))
+# new_payload.inherited_from == "0.2.4"  (read from front matter, not filename)
+write_scorecard(new_payload, Path("hub/agents/npm/agent-email/SCORECARD.md"))
 ```
 
-The resulting scorecard has `inherited_from: "0.2.3"` and identical `results` and `aggregate` fields. The aggregate score is unchanged, so the release gate's equal-score case passes.
+The resulting scorecard has `inherited_from: "0.2.4"` and identical `results` and `aggregate` fields. The aggregate score is unchanged, so the release gate's equal-score case passes.
+
+`carry_forward()` reads the prior version from the `agent.version` field in the front matter — **not** from the filename.
 
 ### Minor / major releases — re-run required
 
 For a **minor or major bump**, `carry_forward()` raises `ValueError` with a "re-run" message. Run the eval fresh and generate a new scorecard:
 
 ```bash
+PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
+GAIA_AGENT_TOOL_TIMEOUT=120 \
+PYTHONPATH="$(pwd)" \
 gaia eval benchmark \
   --model Gemma-4-E4B-it-GGUF \
   --mbox-path tests/fixtures/email/synthetic_inbox.mbox \
@@ -171,33 +181,44 @@ gaia eval benchmark \
   --limit 25 \
   --output-dir /tmp/email-eval
 
+PYTHONPATH="$(pwd)" \
 python hub/agents/python/email/packaging/gen_scorecard.py \
-  --benchmark-dir /tmp/email-eval
+  --benchmark-dir /tmp/email-eval \
+  --limit 25
 ```
+
+This writes `hub/agents/npm/agent-email/SCORECARD.md` in place.
 
 ## Release gate
 
 `scorecard_gate.py` is a standalone script that exits non-zero on failure:
 
 ```bash
+# Presence-only check (first adoption or no baseline specified):
 python -m gaia.eval.scorecard_gate \
-  --scorecards-dir hub/agents/npm/agent-email/scorecards \
-  --manifest hub/agents/python/email/gaia-agent.yaml
+  --scorecard hub/agents/npm/agent-email/SCORECARD.md
+
+# Regression check against a specific prior scorecard file (unit tests / local):
+python -m gaia.eval.scorecard_gate \
+  --scorecard hub/agents/npm/agent-email/SCORECARD.md \
+  --baseline-file /tmp/prev-SCORECARD.md
+
+# Regression check against a prior release tag (CI):
+python -m gaia.eval.scorecard_gate \
+  --scorecard hub/agents/npm/agent-email/SCORECARD.md \
+  --baseline-ref agent-pkg-email-v0.2.3
 ```
 
-Or with an explicit version:
-
-```bash
-python -m gaia.eval.scorecard_gate \
-  --scorecards-dir hub/agents/npm/agent-email/scorecards \
-  --version 0.2.4
-```
+`--baseline-file` and `--baseline-ref` are mutually exclusive. If the file doesn't exist at the given ref, the gate treats it as first adoption (presence-only pass).
 
 ### Gate logic
 
-1. **Presence check**: `<scorecards-dir>/<version>.md` must exist and be valid. → exit 1 if not.
-2. **Locate prior**: find the greatest semver strictly below `<version>` in `<scorecards-dir>`. If none → **first adoption**, exit 0 (presence-only pass).
-3. **Regression check**: if `candidate.aggregate.value < prior.aggregate.value` (strict) → exit 1.
+1. **Presence check**: `--scorecard` path must exist and be a valid scorecard. → exit 1 if not.
+2. **Baseline resolution**:
+   - `--baseline-file`: read the given file directly (no git access; suitable for unit tests).
+   - `--baseline-ref`: resolve via `git show <ref>:<scorecard-path>`. If the file does not exist at that ref → **first adoption**, exit 0.
+   - Neither specified: **first adoption**, exit 0 (presence-only pass).
+3. **Regression check**: if `candidate.aggregate.value < baseline.aggregate.value` (strict) → exit 1.
 4. Equal or greater → exit 0.
 
 ### Exit codes
@@ -205,8 +226,9 @@ python -m gaia.eval.scorecard_gate \
 | Case | Exit code |
 |------|-----------|
 | Missing or invalid candidate scorecard | `1` |
-| Strict regression vs prior version | `1` |
-| No prior version (first adoption) | `0` |
+| Strict regression vs baseline | `1` |
+| No baseline (first adoption) | `0` |
+| File absent at `--baseline-ref` | `0` |
 | Equal score (patch carry-forward) | `0` |
 | Score improved | `0` |
 
@@ -215,29 +237,18 @@ python -m gaia.eval.scorecard_gate \
 When a regression is intentional (e.g. a dataset correction or methodology change), use `--allow-regression`. The gate prints a GHA `::warning::` annotation naming both versions and scores, then exits 0:
 
 ```
-::warning::Scorecard regression allowed by --allow-regression: 0.2.3=65.0 → 0.2.4=45.84
-WARNING: Regression override active. Prior version 0.2.3 scored 65.0; candidate 0.2.4 scored 45.84. ...
+::warning::Scorecard regression allowed by --allow-regression: v0.2.3=65.0 → v0.2.4=40.0
+WARNING: Regression override active. Prior version v0.2.3 scored 65.0; candidate v0.2.4 scored 40.0. ...
 ```
-
-### How the gate resolves "previous version"
-
-The gate calls `latest_version_below(scorecards_dir, version)`, which:
-
-1. Lists all `*.md` files in `scorecards_dir`.
-2. Keeps only those whose **stem** matches the anchored regex `^\d+\.\d+\.\d+$` (skips `README.md`, `.gitkeep`, prerelease tags, etc.).
-3. Compares versions as **integer tuples** `(major, minor, patch)` — so `0.10.0 > 0.2.9` correctly.
-4. Returns the greatest version strictly below the candidate, or `None`.
-
-The version is read from `gaia-agent.yaml` (via `--manifest`) or passed explicitly (via `--version`).
 
 ## Keeping the scorecard current (the update / reject loop)
 
-The scorecard must move with the agent: when LLM-affecting code changes, the eval is re-run and the committed scorecard refreshed — **upward**. A regression is blocked.
+The scorecard must move with the agent: when LLM-affecting code changes, the eval is re-run and the committed `SCORECARD.md` refreshed — **upward**. A regression is blocked.
 
 Two enforcement points work together:
 
 1. **Reject-on-worse (always on, GitHub-hosted).** The `scorecard-gate` job in `release_agent_<id>.yml` runs on every release. It only parses committed files (no eval), so it runs on a standard runner and **fails the build** if the committed scorecard regressed below the prior version or is missing. This is the hard gate.
-2. **Run-and-refresh (self-hosted AMD).** `gaia eval benchmark` needs Lemonade on AMD hardware, so it cannot run on GitHub-hosted runners — it runs on the `[self-hosted, lemonade-eval]` pool. The `Email Agent Eval — scorecard refresh` workflow (`.github/workflows/email_scorecard_refresh.yml`) runs on demand (and on pushes touching the email agent), re-runs the eval, regenerates the scorecard, then:
+2. **Run-and-refresh (self-hosted AMD).** `gaia eval benchmark` needs Lemonade on AMD hardware, so it cannot run on GitHub-hosted runners — it runs on the `[self-hosted, lemonade-eval]` pool. The `Email Agent Eval — scorecard refresh` workflow (`.github/workflows/email_scorecard_refresh.yml`) runs on demand (and on pushes touching the email agent), re-runs the eval, regenerates `SCORECARD.md`, then:
    - **score ≥ committed** → commits the refreshed scorecard back to the branch (the PR carries the improved number);
    - **score < committed** → fails loudly (the regression must be investigated, or consciously overridden with `--allow-regression`).
 
@@ -253,9 +264,8 @@ So a PR that changes the agent gets its scorecard refreshed (better) or rejected
   **Use the [`adding-eval-scorecard` skill](https://github.com/amd/gaia/tree/main/.claude/skills/adding-eval-scorecard/SKILL.md).** In Claude Code, invoke it instead of following these steps by hand — it carries the exact commands, the harness→payload→generator flow, the headless-eval gotchas (keyring/PYTHONPATH/tool-timeout), and the verification evidence to capture. The steps below are the reference the skill automates.
 </Tip>
 
-1. Create the `scorecards/` directory beside the agent's canonical README.
-2. Write a `packaging/gen_scorecard.py` adapter (see `hub/agents/python/email/packaging/gen_scorecard.py` for a reference).
-3. Run the eval and call the adapter → commit the resulting `<version>.md`.
-4. Link the scorecard from the README: `./scorecards/<version>.md`.
-5. Add `scorecards/` to the npm `package.json` `files` array (if published on npm).
-6. Wire `scorecard_gate` into the release workflow (see `release_agent_email.yml` for the job topology).
+1. Write a `packaging/gen_scorecard.py` adapter (see `hub/agents/python/email/packaging/gen_scorecard.py` for a reference). The adapter should populate `reproduction_command` with the exact commands needed to reproduce the scorecard.
+2. Run the eval and call the adapter → commit the resulting `SCORECARD.md` to `<doc-root>/SCORECARD.md`.
+3. Link the scorecard from the README: `./SCORECARD.md`.
+4. Add `SCORECARD.md` to the npm `package.json` `files` array (if published on npm); do **not** add a `scorecards/` directory.
+5. Wire `scorecard_gate` into the release workflow (see `release_agent_email.yml` for the job topology). Use `--scorecard <path>/SCORECARD.md` and `--baseline-ref <prev-tag>` (best-effort).
