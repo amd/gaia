@@ -11,6 +11,8 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - 'src/gaia/agents/builder/**'
       - 'src/gaia/agents/base/agent.py'
       - 'src/gaia/eval/behavior_harness.py'
