@@ -1,6 +1,6 @@
 id: email
 name: Email Triage
-version: 0.2.4
+version: 0.2.5
 description: "GAIA email triage agent — read, triage, organize, and reply to Gmail/Outlook locally"
 author: AMD
 license: MIT
