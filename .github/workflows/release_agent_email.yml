@@ -475,6 +475,12 @@ jobs:
             case "$f" in *.json) continue ;; esac
             args+=(--artifact "$f")
           done
+          VER="${{ steps.ver.outputs.version }}"
+          scorecard_args=()
+          SCORECARD="hub/agents/npm/agent-email/scorecards/${VER}.md"
+          if [ -f "${SCORECARD}" ]; then
+            scorecard_args+=(--eval-scorecard "${SCORECARD}")
+          fi
           python hub/agents/python/email/packaging/publish_to_r2.py \
             --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
             --manifest "${MANIFEST}" \
@@ -482,6 +488,7 @@ jobs:
             --changelog "${CHANGELOG}" \
             --spec "${SPEC}" \
             --skill "${SKILL}" \
+            "${scorecard_args[@]}" \
             "${args[@]}" \
             --summary-out published.json
           echo "=== publish summary ==="

@@ -389,7 +389,7 @@ def merge_with_registry(
 
         language = entry.get("language", "python")
         security_tier = entry.get("security_tier", "experimental")
-        by_id[agent_id] = {
+        merged: Dict[str, Any] = {
             "id": agent_id,
             "name": entry.get("name", agent_id),
             "description": entry.get("description", ""),
@@ -407,6 +407,13 @@ def merge_with_registry(
             "status": status,
             "source": (reg.source if reg is not None else "hub"),
         }
+        # Optional eval scorecard fields — absent from older catalog entries and
+        # from builtin/custom agents that haven't run a benchmark yet.
+        if "eval_score" in entry:
+            merged["eval_score"] = entry["eval_score"]
+        if "eval_scorecard_url" in entry:
+            merged["eval_scorecard_url"] = entry["eval_scorecard_url"]
+        by_id[agent_id] = merged
 
     # 2. Registry-only agents (builtins / custom not published to the hub).
     for agent_id, reg in registered.items():

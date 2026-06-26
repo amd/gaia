@@ -199,6 +199,10 @@ export interface IndexEntry {
   npm_package?: string;
   /** Localhost playground URL served by the agent's sidecar; absent otherwise. */
   playground_url?: string;
+  /** Public URL of the eval scorecard markdown for the latest version; absent when none was published. */
+  eval_scorecard_url?: string;
+  /** Aggregate eval score (0–100) parsed from the latest version's scorecard front matter; absent when none was published or parseable. */
+  eval_score?: number;
   /**
    * Whole-package download: a single zip (all platform binaries + client + docs)
    * plus its file listing. Present only when a `package_files` manifest was
