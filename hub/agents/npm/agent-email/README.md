@@ -137,6 +137,7 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 |------|-------|------|
 | `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. |
 | `search(req)` | A connected Gmail/Outlook mailbox | Searches the connected inbox (**read-only**) by Gmail-style `query`/`labels` and returns message metadata — id, subject, sender, snippet, labels. No message is read in full or modified; no confirmation token needed. |
+| `prescan(req?)` | A connected Gmail/Outlook mailbox | Reads recent inbox messages and returns the triage-card envelope (urgent / needs-response / suggested-archive rows + an informational count). Read-only — nothing is archived, marked, or sent. |
 | `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. |
 | `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
 | `confirmAction(req)` | Nothing external | Mints a single-use token for a destructive action (`"archive"` / `"quarantine"`), bound to that exact `(action, message_id)`. |
@@ -150,15 +151,16 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | `respondToCalendarEvent(req)` | A connected mailbox + calendar scope | RSVPs `accepted`/`declined`/`tentative` to an existing invite. |
 
 **`triage`, `draft`, `confirmAction`, and `previewCalendarEvent` are standalone** — you
-can build and verify those flows with zero connector setup. `search` needs a connected
-mailbox (it reads the live inbox) but **no** confirmation token, since it only lists.
-The mutating calls — `send`, `archive`, `quarantine`, and `createCalendarEvent` — are
-different on two counts: each requires a single-use confirmation token (call `draft` for
-`send`, `confirmAction` for `archive`/`quarantine`, or `previewCalendarEvent` for
-`createCalendarEvent`; a missing/invalid token is rejected with **403** before anything
-else), and each acts on the mailbox **connected in GAIA on the host** (under *Settings →
-Connectors*) — so even with a valid token, a headless server returns **HTTP 503** until a
-mailbox is connected. `archive`/`quarantine` are reversible within a 30-second window via
+can build and verify those flows with zero connector setup. The read-only `search` and
+`prescan` need a connected mailbox (they read the live inbox) but **no** confirmation
+token (`503` with none connected, `400` with two). The mutating calls — `send`,
+`archive`, `quarantine`, and `createCalendarEvent` — are different on two counts: each
+requires a single-use confirmation token (call `draft` for `send`, `confirmAction` for
+`archive`/`quarantine`, or `previewCalendarEvent` for `createCalendarEvent`; a
+missing/invalid token is rejected with **403** before anything else), and each acts on
+the mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
+with a valid token, a headless server returns **HTTP 503** until a mailbox is connected.
+`archive`/`quarantine` are reversible within a 30-second window via
 `unarchive`/`unquarantine` (which are *not* gated — they restore, never destroy); the
 calendar actions additionally need the account's calendar scope (a missing scope fails
 loud with **403** and the reconnect CTA). For a server integration, treat the standalone

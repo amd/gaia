@@ -26,7 +26,7 @@
  *   - mailbox actions: archive / phishing-quarantine + their reversal and the
  *     confirm-token handshake (#1779)
  *   - calendar view/create/respond (#1780)
- *   - inbox pre-scan (#1778)
+ *   - inbox pre-scan (POST /v1/email/prescan, #1778)
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
@@ -248,6 +248,82 @@ export interface EmailSearchResponse {
   messages: EmailSearchResultItem[];
   /** Opaque token to fetch the next page, or null when no more. */
   next_page_token?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Inbox pre-scan (contract.py — schema 2.1, #1778). A read-only, lightweight
+// triage over recent inbox messages, reshaped into the card envelope the Agent
+// UI renders (`kind: "email_pre_scan"`).
+// ---------------------------------------------------------------------------
+
+/** One surfaced inbox message in a pre-scan section (contract.py: PreScanItem). */
+export interface PreScanItem {
+  /** Provider message id (opaque). */
+  message_id: string;
+  /** Provider thread id this message belongs to. */
+  thread_id?: string | null;
+  /** Raw "From" header of the message (display + address). */
+  sender: string;
+  /** Subject line. */
+  subject: string;
+  /** Rationale for an urgent/actionable row. */
+  why?: string | null;
+  /** Rationale for a suggested-archive row. */
+  reason?: string | null;
+}
+
+/** Session preferences that shaped a pre-scan (contract.py: PreScanPreferencesApplied). */
+export interface PreScanPreferencesApplied {
+  /** Senders always treated as urgent. */
+  priority_senders: string[];
+  /** Senders always treated as low-priority. */
+  low_priority_senders: string[];
+  /** Per-category default action (e.g. { FYI: "archive" }). */
+  category_defaults: Record<string, string>;
+}
+
+/** Pre-cap counts per bucket (contract.py: PreScanTotals). */
+export interface PreScanTotals {
+  urgent: number;
+  actionable: number;
+  informational: number;
+  suggested_archives: number;
+}
+
+/** Request envelope for an inbox pre-scan (contract.py: EmailPreScanRequest). */
+export interface EmailPreScanRequest {
+  /** Contract version. Defaults to SCHEMA_VERSION; mismatch fails loudly. */
+  schema_version?: string;
+  /** How many recent inbox messages to scan (1–100). Default 25. */
+  max_messages?: number;
+}
+
+/** The aggregate pre-scan envelope the card renders (contract.py: EmailPreScanResult). */
+export interface EmailPreScanResult {
+  /** Discriminator the chat surface detects to render the card. */
+  kind: "email_pre_scan";
+  /** Top urgent messages (capped). */
+  urgent: PreScanItem[];
+  /** Top messages needing a response (capped). */
+  actionable: PreScanItem[];
+  /** Count of informational (FYI/PERSONAL) messages — not listed. */
+  informational_count: number;
+  /** Promotional / low-priority messages suggested for archive (capped). */
+  suggested_archives: PreScanItem[];
+  /** Reserved for future LLM-driven draft generation; empty today. */
+  suggested_drafts: unknown[];
+  /** Session preferences that shaped this pre-scan. */
+  preferences_applied?: PreScanPreferencesApplied | null;
+  /** Pre-cap totals per bucket. */
+  totals?: PreScanTotals | null;
+}
+
+/** Top-level pre-scan response envelope (contract.py: EmailPreScanResponse). */
+export interface EmailPreScanResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** The pre-scan envelope. */
+  result: EmailPreScanResult;
 }
 
 // ---------------------------------------------------------------------------

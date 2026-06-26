@@ -298,7 +298,7 @@
       <div class="chip"><div class="k">Milestone</div><div class="v g"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a></div></div>
     </div>
     <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.1</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-26</b> &nbsp;·&nbsp; contract <b style="color:var(--ink)">schema 2.1</b> implemented &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
-    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 2.1</b>: a 5-bucket triage taxonomy plus a <code>suggested_action</code> verb (schema 2.0), and the calendar surface — view / create / respond on the REST contract (schema 2.1, <a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>).</div>
+    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 2.1</b>: a 5-bucket triage taxonomy plus a <code>suggested_action</code> verb (schema 2.0), and the schema-2.1 REST surfaces — inbox search (<a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>), inbox pre-scan (<a class="iss" href="https://github.com/amd/gaia/issues/1778" target="_blank" rel="noopener">#1778</a>), archive / quarantine mailbox actions (<a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>), and calendar view / create / respond (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>).</div>
   </div>
 </section>
 
@@ -398,11 +398,12 @@
         <tr><td><b>4</b> · Phishing detection</td><td>✓ <span class="opt">(flag in triage)</span></td><td>✓</td><td>✓ <span class="opt">(+ quarantine)</span></td></tr>
         <tr><td><b>6</b> · Full-thread comprehension</td><td>✓ <span class="opt">(thread payload)</span></td><td>✓</td><td>✓</td></tr>
         <tr><td><b>7</b> · Send a reply</td><td>✓ <code>/v1/email/send</code></td><td>✓ <code>send_email</code></td><td>✓</td></tr>
+        <tr><td><b>5</b> · Inbox pre-scan</td><td>✓ <code>/v1/email/prescan</code> <span class="opt">(read-only)</span></td><td>—</td><td>✓ <code>pre_scan_inbox</code></td></tr>
         <tr><td><b>8</b> · Archive (+ undo)</td><td>✓ <code>/v1/email/archive</code> · <code>/unarchive</code></td><td>—</td><td>✓ <code>archive_message</code></td></tr>
         <tr><td><b>9</b> · Quarantine (+ undo)</td><td>✓ <code>/v1/email/quarantine</code> · <code>/unquarantine</code> <span class="opt">(Gmail)</span></td><td>—</td><td>✓ <code>quarantine_phishing_message</code></td></tr>
         <tr><td>Inbox search <span class="opt">(read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>)</span></td><td>✓ <code>/v1/email/search</code></td><td>—</td><td>✓ <code>search_messages</code></td></tr>
         <tr><td>Calendar · view / create / respond <span class="opt">(of capability <b>12</b>)</span></td><td>✓ <code>/v1/email/calendar/*</code> <span class="opt">(2.1)</span></td><td>—</td><td>✓</td></tr>
-        <tr><td><b>5</b> · pre-scan &nbsp;·&nbsp; calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -452,6 +453,16 @@
         "body": "Thanks Dana — signing today, MSA back before Friday EOD.",
         "confirmation_token": "9f1c…a7e2" }'
 # → { "sent_id": "msg-abc123", "sent": true }</pre>
+    <p class="body-t"><b>Inbox pre-scan</b> (read-only) — list recent inbox mail and get the triage-card envelope the Agent UI renders. Needs a connected mailbox (<code>503</code> with none, <code>400</code> with 2+); no Lemonade call:</p>
+    <pre class="code">curl -s http://localhost:8080/v1/email/prescan \
+  -H "Content-Type: application/json" \
+  -d '{ "max_messages": 25 }'
+# → { "schema_version": "2.1",
+#     "result": { "kind": "email_pre_scan",
+#                 "urgent": [ … ], "actionable": [ … ],
+#                 "informational_count": 7,
+#                 "suggested_archives": [ … ], "suggested_drafts": [],
+#                 "totals": { "urgent": 2, "actionable": 3, "informational": 7, "suggested_archives": 4 } } }</pre>
   </div>
 </section>
 
@@ -1630,7 +1641,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
 <footer class="footer">
   <div class="wrap">
     <p>
-      GAIA Email Agent — Capability &amp; API Specification &nbsp;·&nbsp; <b>v2.1</b> &nbsp;·&nbsp; updated <b>2026-06-26</b> &nbsp;·&nbsp; documents contract <b>schema 2.1</b> (5-bucket triage + REST calendar) &nbsp;·&nbsp; status as of <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)<br>
+      GAIA Email Agent — Capability &amp; API Specification &nbsp;·&nbsp; <b>v2.1</b> &nbsp;·&nbsp; updated <b>2026-06-26</b> &nbsp;·&nbsp; documents contract <b>schema 2.1</b> (5-bucket triage + REST search / pre-scan / archive · quarantine / calendar) &nbsp;·&nbsp; status as of <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)<br>
       Source of truth:
       <a href="https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/contract.py" target="_blank" rel="noopener">contract.py</a> ·
       <a href="https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/api_routes.py" target="_blank" rel="noopener">api_routes.py</a> ·

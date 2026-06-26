@@ -80,6 +80,7 @@ The interface:
 |------|-------|-------|
 | `triage(req)` | Local LLM only | Classify / summarize / extract action items + phishing signals on the message you pass. No mailbox read. |
 | `search(req)` | A connected mailbox | Read-only inbox search by `query`/`labels`; returns message metadata (id, subject, sender, snippet, labels), no body. No token. No mailbox → 503, two+ → 400. |
+| `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`: urgent / actionable / suggested-archive rows + an informational count). No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. |
 | `draft(req)` | Nothing external | Returns a single-use confirmation token. |
 | `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. |
 | `confirmAction(req)` | Nothing external | Mints a single-use token for `"archive"`/`"quarantine"`, bound to the `(action, message_id)`. |
@@ -93,14 +94,15 @@ The interface:
 | `respondToCalendarEvent(req)` | Connected calendar | RSVP `accepted`/`declined`/`tentative` to an existing invite. |
 
 **Build the standalone surface (`triage`, `draft`, `confirmAction`,
-`previewCalendarEvent`) with zero connector setup.** `search` reads the live inbox (a
-connected mailbox, no token); `send`, the mailbox actions (`archive` / `quarantine`),
-and the calendar actions (view / create / respond) need a connected mailbox whose
-relevant scope was granted. Mint the gate token with `draft` (for `send`),
-`confirmAction` (for `archive` / `quarantine`), or `previewCalendarEvent` (for
-`createCalendarEvent`); `archive` and `quarantine` are reversible inside a 30s window
-via the ungated `unarchive` / `unquarantine`. Every non-2xx response throws
-`HttpError` (`status`, `url`, `bodyText`) — handle it; there is no silent null.
+`previewCalendarEvent`) with zero connector setup.** The read-only `search` and
+`prescan` read the live inbox (a connected mailbox, no token); `send`, the mailbox
+actions (`archive` / `quarantine`), and the calendar actions (view / create / respond)
+need a connected mailbox whose relevant scope was granted. Mint the gate token with
+`draft` (for `send`), `confirmAction` (for `archive` / `quarantine`), or
+`previewCalendarEvent` (for `createCalendarEvent`); `archive` and `quarantine` are
+reversible inside a 30s window via the ungated `unarchive` / `unquarantine`. Every
+non-2xx response throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is
+no silent null.
 
 ## 5. From a renderer (Electron / browser)
 
@@ -150,7 +152,8 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   are `{ email, name? }`; `to` is a non-empty array of them. A plain string → 422.
 - **`send` needs the draft `confirmation_token`** (missing/invalid → 403), but it
   takes **no OAuth token** — the mailbox is resolved from the host's GAIA connector
-  store (no mailbox connected → 503). Triage and draft need no connector.
+  store (no mailbox connected → 503). The read-only `search` / `prescan` resolve the
+  mailbox the same way (503 with none, 400 with 2+). Triage and draft need no connector.
 - **`archive` / `quarantine` are gated like `send`**, but their token comes from
   `confirmAction` (not `draft`) and is bound to the `(action, message_id)` — a token
   for one can't authorize the other. Undo with `unarchive` (pass the returned

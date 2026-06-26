@@ -37,6 +37,12 @@ Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change
   exactly like `send` — mint a token with `previewCalendarEvent`, echo it to
   `createCalendarEvent`; without a valid payload-bound token the create is
   rejected (403). Additive and same-major (2.x), so a 2.0 client keeps working.
+- **Inbox pre-scan over REST** (#1778): new `prescan(req?)` client method →
+  `POST /v1/email/prescan`. Reads recent inbox messages from the connected
+  mailbox and returns the triage-card envelope (`kind: "email_pre_scan"` —
+  urgent / actionable / suggested-archive rows + an informational count) the
+  Agent UI's pre-scan card renders. Read-only; reuses the agent's own
+  `pre_scan_inbox` classification path. Contract `SCHEMA_VERSION` → `2.1`.
 
 ## 0.2.5
 

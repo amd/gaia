@@ -38,9 +38,10 @@ signals yourself.
 ## REST API
 
 `EmailClient` is a typed wrapper over the sidecar's HTTP surface. Methods:
-`triage`, `draft`, `send`, `listCalendarEvents`, `previewCalendarEvent`,
-`createCalendarEvent`, `respondToCalendarEvent`, `health`, `version`,
-`emailHealth`, `emailVersion`, `spec`, `openapi`. `health`/`version` hit the **root** routes (the standalone
+`triage`, `search`, `prescan`, `draft`, `send`, `confirmAction`, `archive`,
+`unarchive`, `quarantine`, `unquarantine`, `listCalendarEvents`,
+`previewCalendarEvent`, `createCalendarEvent`, `respondToCalendarEvent`, `health`,
+`version`, `emailHealth`, `emailVersion`, `spec`, `openapi`. `health`/`version` hit the **root** routes (the standalone
 sidecar); `emailHealth`/`emailVersion` hit the **`/v1/email`-scoped** mirrors (for
 when the router is mounted on a product app). Every non-2xx response throws
 `HttpError` (carrying `status`, `url`, `bodyText`) — never a silent empty/null
@@ -50,6 +51,7 @@ result.
 |----------|---------------|------|---------------|
 | `POST /v1/email/triage` | `triage()` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* |
 | `POST /v1/email/search` | `search()` | **Connector** | Read-only inbox search. A connected Google/Microsoft mailbox (`503` if none, `400` if 2+); **no** confirmation token. Lists messages matching `query`/`labels` and returns metadata only (no body). |
+| `POST /v1/email/prescan` | `prescan()` | **Connector** | Reads recent inbox messages from the connected Google/Microsoft mailbox and returns the read-only triage-card envelope (`kind: "email_pre_scan"`). `503` if no mailbox is connected, `400` if 2+ are. Heuristic-only — no Lemonade call. |
 | `POST /v1/email/draft` | `draft()` | **Standalone** | Nothing external — wraps your `(to, subject, body)` and returns a single-use confirmation token. |
 | `POST /v1/email/send` | `send()` | **Connector** | A valid `draft` confirmation token **and** a connected Google/Microsoft mailbox. The token gate fires first: no/invalid token → `403`; then `503` if no mailbox is connected, `400` if 2+ are. |
 | `POST /v1/email/confirm` | `confirmAction()` | **Standalone** | Nothing external — mints a single-use token for `"archive"`/`"quarantine"`, bound to that exact `(action, message_id)`. |
@@ -71,9 +73,10 @@ result.
 `GET /docs` (Swagger UI) and `GET /redoc` are also served but are browser UIs, not
 wrapped by the client. **The standalone surface is `triage`, `draft`, `confirmAction`,
 and `previewCalendarEvent`** (plus the probes) — integrate and verify those flows with
-zero connector setup. `search` reads the live inbox (a connected mailbox, but no token);
-the mutating calls (`send`, `archive`, `quarantine`, `createCalendarEvent`) and the
-reversals/calendar views need a connected mailbox whose relevant scope was granted.
+zero connector setup. The read-only `search` and `prescan` read the live inbox (a
+connected mailbox, but no token); the mutating calls (`send`, `archive`, `quarantine`,
+`createCalendarEvent`) and the reversals/calendar views need a connected mailbox whose
+relevant scope was granted.
 
 ### Mailbox actions (archive / quarantine, schema 2.1)
 
@@ -252,13 +255,15 @@ connection through this package's API**, so connector-backed calls only work on 
 machine where the mailbox is already connected in GAIA. Triage and draft, which
 need no connector, work anywhere.
 
-Calendar **view / create / respond** are exposed through this package's REST API as
-of `SCHEMA_VERSION` 2.1 (`listCalendarEvents` / `previewCalendarEvent` /
-`createCalendarEvent` / `respondToCalendarEvent`). The full GAIA email agent also
-reads and acts on the live **mailbox** (list/search messages, archive, label, mark
-spam). Those mailbox actions are connector-gated by definition and are **not exposed
-through this package's REST API yet** — the package surface is triage / draft / send
-plus the calendar endpoints.
+As of `SCHEMA_VERSION` 2.1 this package's REST API exposes the read-only inbox
+**search** and **pre-scan** (`search` / `prescan`), the **archive** and
+phishing-**quarantine** mailbox actions plus their undo (`confirmAction` / `archive` /
+`unarchive` / `quarantine` / `unquarantine`), and calendar **view / create / respond**
+(`listCalendarEvents` / `previewCalendarEvent` / `createCalendarEvent` /
+`respondToCalendarEvent`). The full GAIA email agent does more on the live mailbox
+(label, move, mark spam) and calendar (detect / conflicts); those remaining actions are
+connector-gated by definition and are **not exposed through this package's REST API
+yet**.
 
 ## Browser / Electron renderer (`./client`)
 

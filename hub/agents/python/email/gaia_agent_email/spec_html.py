@@ -37,6 +37,9 @@ from gaia_agent_email.contract import (
     EmailArchiveResponse,
     EmailCategory,
     EmailMessage,
+    EmailPreScanRequest,
+    EmailPreScanResponse,
+    EmailPreScanResult,
     EmailQuarantineRequest,
     EmailQuarantineResponse,
     EmailSearchRequest,
@@ -49,6 +52,7 @@ from gaia_agent_email.contract import (
     EmailUnarchiveResponse,
     EmailUnquarantineRequest,
     EmailUnquarantineResponse,
+    PreScanItem,
     SingleEmailInput,
     ThreadInput,
 )
@@ -376,6 +380,25 @@ def render_endpoint_spec_html() -> str:
         f"</div>"
     )
 
+    prescan_block = _endpoint_block(
+        path="/v1/email/prescan",
+        description=(
+            "Inbox pre-scan (#1778). Lists the most-recent inbox messages from "
+            "the connected mailbox and returns the aggregate triage-card "
+            "envelope the Agent UI renders — top urgent / actionable rows, an "
+            "informational count, and suggested archives, each with a heuristic "
+            "reason. Read-only: nothing is archived, marked, or sent. "
+            "Classification reuses the agent's pre_scan_inbox path. Fails loudly "
+            "when no mailbox is connected (503) or 2+ are (400)."
+        ),
+        request_sections=[("EmailPreScanRequest", EmailPreScanRequest)],
+        response_sections=[
+            ("EmailPreScanResponse", EmailPreScanResponse),
+            ("EmailPreScanResult", EmailPreScanResult),
+            ("PreScanItem", PreScanItem),
+        ],
+    )
+
     # /draft and /send are derived from the REST route models (the same
     # pydantic classes the endpoints actually use) via _endpoint_block, so the
     # tables cannot drift from the live request/response shapes. Imported
@@ -574,6 +597,8 @@ def render_endpoint_spec_html() -> str:
 <h2>Endpoints</h2>
 
 {triage_block}
+
+{prescan_block}
 
 {search_block}
 
