@@ -624,23 +624,39 @@ async function disconnectProvider(provider, btn){
 function populateSend(connected){
   const sel = $("send-from"); if(!sel) return;
   sel.textContent = "";
+  // List every connected mailbox so it's always selectable — send-capability is
+  // surfaced per selection (and a send to a mailbox without mail-send access
+  // returns an actionable error) rather than hiding the mailbox here.
+  const canSendById = {};
+  const sorted = connected.slice().sort((a, b) => a.provider.localeCompare(b.provider));
+  for(const p of sorted){
+    canSendById[p.provider] = !!p.can_send;
+    const o = document.createElement("option"); o.value = p.provider;
+    o.textContent = (p.label || p.provider) + (p.account_email ? (" · " + p.account_email) : "")
+      + (p.can_send ? "" : " · needs mail access");
+    sel.appendChild(o);
+  }
   if(!connected.length){
     const o = document.createElement("option"); o.value = ""; o.textContent = "— no mailbox connected —";
     sel.appendChild(o);
-  } else {
-    // Alphabetical by provider; the browser selects the first option. No
-    // remembered selection, no "default" — deterministic and simple.
-    const sorted = connected.slice().sort((a, b) => a.provider.localeCompare(b.provider));
-    for(const p of sorted){
-      const o = document.createElement("option"); o.value = p.provider;
-      o.textContent = (p.label || p.provider) + (p.account_email ? (" · " + p.account_email) : "");
-      sel.appendChild(o);
+  }
+  function refresh(){
+    const canSend = !!canSendById[sel.value];
+    const hasConnected = connected.length > 0;
+    if($("do-send")) $("do-send").disabled = !hasConnected;
+    if($("send-stat")) $("send-stat").style.display = canSend ? "inline-block" : "none";
+    if($("send-note")){
+      if(!hasConnected){
+        $("send-note").textContent = "Connect a mailbox in the Connectors panel above.";
+      } else if(canSend){
+        $("send-note").textContent = "";
+      } else {
+        $("send-note").textContent = "This mailbox is missing mail-send access — reconnect to enable sending.";
+      }
     }
   }
-  const has = connected.length > 0;
-  if($("do-send")) $("do-send").disabled = !has;
-  if($("send-stat")) $("send-stat").style.display = has ? "inline-block" : "none";
-  if($("send-note")) $("send-note").textContent = has ? "" : "Connect a mailbox in the Connectors panel above.";
+  sel.onchange = refresh;
+  refresh();
 }
 async function doSend(){
   const out = $("send-out"); out.className = "out show"; out.textContent = "Drafting…";
